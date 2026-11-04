@@ -1670,29 +1670,38 @@ let lastDeliveryAt: string | null = null
    snapshot admits the restored task (and any ancestors restored with it). */
 const pendingRestoreIssueIds = new Set<string>()
 /* Draft-only uploads a discarded draft let go of while edits were paused
-   (removeAttachment's deferWhilePaused), with the task each belongs to.
-   The pause would refuse their delete, so it waits for the snapshot to
+   (removeAttachment's deferWhilePaused), with the task each belongs to
+   and, for a task the workspace does not hold, its organization. The
+   pause would refuse their delete, so it waits for the snapshot to
    recover (reapPausedUploads). A reload forgets them, and a later
    description save drops them a day after their upload, as it does a
    closed tab's leftovers (convex/model/descriptionImages.ts). */
-const reapAfterPause = new Map<string, string>()
+const reapAfterPause = new Map<string, { task: string; org?: string }>()
 
 /* Deletes the uploads reapAfterPause holds once edits resume, except one a
    description took meanwhile, which the server's description saves settle
-   from then on. An upload of a task the workspace does not hold goes only
-   while the window's own answer shows that task, whose saved text must not
-   name it either; otherwise it stays for the server to drop. */
+   from then on. An upload of a task the workspace does not hold goes while
+   the window's own answer shows that task, unless its saved text names
+   it, and once the window shows another task or none, in the organization
+   kept with it, since only this session's draft ever held it and that
+   draft let go of it. While the window shows the task from an answer that
+   is not current, it stays for the server to drop. */
 function reapPausedUploads() {
   // one pause can end while the other still holds
   if (snapshotTrouble || savePause()) return
   const ids = [...reapAfterPause]
   reapAfterPause.clear()
-  for (const [id, task] of ids) {
+  for (const [id, { task, org }] of ids) {
     const rec = rows.attachments.get(id)
     if (!rec) {
-      const shown = task === watchedComments && !rows.issues.has(task) ? paintedAnswer() : null
+      if (rows.issues.has(task)) continue
+      if (task !== watchedComments) {
+        if (org) void PLANNER.removeAttachment(id, { task, org })
+        continue
+      }
+      const shown = paintedAnswer()
       if (shown && !String(shown.task.description ?? '').includes(id))
-        void PLANNER.removeAttachment(id, { task })
+        void PLANNER.removeAttachment(id, { task, org })
       continue
     }
     const issue = rows.issues.get(rec.issue_id)
@@ -5959,19 +5968,21 @@ function refuseUpload(id: string, name: string) {
     the window shows from its own answer or of a held task whose file has
     not arrived yet, or an upload of task `opts.task` that no list holds. It
     sends files.removeAttachment to that task's organization without a
-    paint. The attachments answer drops the row when the write commits,
-    before the write resolves (lib/convexOrdering.test.ts), so the row
-    shows busy until then, and a refusal toasts and leaves it. */
+    paint, which `opts.org` names for an upload of a task the store no
+    longer holds or watches, as once the window that showed it closed. The
+    attachments answer drops the row when the write commits, before the
+    write resolves (lib/convexOrdering.test.ts), so the row shows busy
+    until then, and a refusal toasts and leaves it. */
 function removeUnheldAttachment(
   attId: string,
-  opts: { deferWhilePaused?: boolean; task?: string },
+  opts: { deferWhilePaused?: boolean; task?: string; org?: string },
 ): Promise<boolean> {
   const listed = sectionAttachment(attId)
   const task = listed?.row.issue_id ?? opts.task
-  const org = listed?.org ?? (task ? orgOfTask(task) : undefined)
+  const org = listed?.org ?? (task ? (orgOfTask(task) ?? opts.org) : undefined)
   if (!task || !org) return Promise.resolve(false)
   if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
-    reapAfterPause.set(attId, task)
+    reapAfterPause.set(attId, { task, org })
     return Promise.resolve(false)
   }
   if (refusePausedEdit()) return Promise.resolve(false)
@@ -9707,16 +9718,17 @@ export const PLANNER = {
       upload only a discarded draft held, a paused delete says nothing and
       runs once edits resume (reapPausedUploads). A file the workspace does
       not hold is removed without a paint (removeUnheldAttachment), and
-      `task` names the task of an upload no list holds. Resolves whether the
-      server removed it. */
+      `task` names the task of an upload no list holds, with `org` its
+      organization, which the uploader kept. Resolves whether the server
+      removed it. */
   removeAttachment: (
     attId: string,
-    opts: { deferWhilePaused?: boolean; task?: string } = {},
+    opts: { deferWhilePaused?: boolean; task?: string; org?: string } = {},
   ): Promise<boolean> => {
     const rec = rows.attachments.get(attId)
     if (!rec) return removeUnheldAttachment(attId, opts)
     if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
-      reapAfterPause.set(attId, rec.issue_id)
+      reapAfterPause.set(attId, { task: rec.issue_id })
       return Promise.resolve(false)
     }
     if (refusePausedEdit()) return Promise.resolve(false)

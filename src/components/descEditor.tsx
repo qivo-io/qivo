@@ -166,27 +166,44 @@ const liveEditors = new Map<
     in the committed description, wherever it still is. A failed upload (no
     `attId`), or a reference that would take the committed description over
     TEXT_MAX, removes the image instead, and the attachment is deleted again
-    when no text keeps it. The task is the workspace's, or the one the
-    window shows from its own answer (P.taskShown), whose committed text
-    never holds a placeholder, since such a description is not saved
-    (commit). */
-function finishUpload(uuid: string, src: string, attId: string | null, alt: string) {
+    when no text keeps it, in the task's organization `org`, which the
+    store may no longer know once the window that showed the task closed.
+    The task is the workspace's, or the one the window shows from its own
+    answer (P.taskShown), whose committed text holds a placeholder only
+    when it was saved while the workspace held the task, since such a
+    description is not saved from the answer (commit). */
+function finishUpload(
+  uuid: string,
+  org: string | undefined,
+  src: string,
+  attId: string | null,
+  alt: string,
+) {
   const token = `![Uploading image…](${src})`
-  // the task's handle now, which may have moved since the upload began
-  const issueKey = P.shownHandleOf(uuid)
-  const it = issueKey ? P.taskShown(issueKey) : undefined
-  const committed = !!it && typeof it.description === 'string' && it.description.includes(token)
-  const patched = (repl: string) => it.description.split(token).join(repl).trim()
+  // the task's handle and committed text now, as the handle may have
+  // moved since the upload began
+  const committedNow = () => {
+    const issueKey = P.shownHandleOf(uuid)
+    const it = issueKey ? P.taskShown(issueKey) : undefined
+    const text = it && typeof it.description === 'string' ? it.description : ''
+    return { issueKey, text, holds: text.includes(token) }
+  }
+  const patched = (text: string, repl: string) => text.split(token).join(repl).trim()
   const ref = attId ? `![${alt}](att:${attId})` : ''
+  const before = committedNow()
   // the image reference is longer than its placeholder, so it can take saved
   // text over TEXT_MAX. Then the image leaves the draft and the saved text
   // alike, or the store would refuse the patch and leave the placeholder for
   // good, and the draft would keep an image it cannot save
-  const overflow = committed && patched(ref).length > TEXT_MAX
+  const overflow = before.holds && patched(before.text, ref).length > TEXT_MAX
   const live = liveEditors.get(uuid)
   const inDraft = live ? live(src, attId && !overflow ? { attId, alt } : null) : false
+  // Read again. The live editor may have saved a draft that waited for
+  // this upload, whose paint shows at once and holds the image already,
+  // and patching the text read before would overwrite that save.
+  const { issueKey, text, holds: committed } = committedNow()
   if (committed && issueKey)
-    P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
+    P.updateIssue(issueKey, { description: patched(text, overflow ? '' : ref) || null })
   if (overflow) {
     toast(
       `Image not added. The description would go over the ${grouped(TEXT_MAX)} character limit.`,
@@ -195,7 +212,7 @@ function finishUpload(uuid: string, src: string, attId: string | null, alt: stri
   // in neither the draft nor the committed text (the paste was discarded
   // before the upload landed), or too long to keep, so drop the attachment
   if (attId && (overflow || (!inDraft && !committed)))
-    void P.removeAttachment(attId, { deferWhilePaused: true, task: uuid })
+    void P.removeAttachment(attId, { deferWhilePaused: true, task: uuid, org })
 }
 
 /* Whether description text `text` still holds an image placeholder whose
@@ -386,6 +403,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // shows from its own answer, which waits for the upload (commit)
   const saveAfterUploadRef = useRef(false)
   const sessionUploadsRef = useRef<string[]>([])
+  // the organization of each of them by its id, which their removal
+  // still reaches once the store no longer holds or watches the task, as
+  // after the window that showed it from its own answer closed
+  const uploadOrgsRef = useRef(new Map<string, string>())
   // the cap this text saves under, and the draft's trimmed length as the
   // store sends it, taken once typing rests (a serialize per keystroke would
   // cost a long text too much)
@@ -804,7 +825,12 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     const storeDesc = it && typeof it.description === 'string' ? it.description : ''
     sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => {
       if (!rawRef.current.includes(id) && !storeDesc.includes(id))
-        void P.removeAttachment(id, { deferWhilePaused: true, task: it?.uuid ?? taskUuid })
+        void P.removeAttachment(id, {
+          deferWhilePaused: true,
+          task: it?.uuid ?? taskUuid,
+          org: uploadOrgsRef.current.get(id),
+        })
+      uploadOrgsRef.current.delete(id)
       return false
     })
   }
@@ -1226,8 +1252,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       return
     }
     // the task's uuid, which an upload follows if the task's handle moves:
-    // the workspace's task, or the one the window shows from its own answer
-    const uuid = issueKey === null ? undefined : P.taskShown(issueKey)?.uuid
+    // the workspace's task, or the one the window shows from its own answer,
+    // and its organization, which its uploads' removal reaches
+    const shown = issueKey === null ? undefined : P.taskShown(issueKey)
+    const uuid = shown?.uuid
+    const org = shown?.org
     if (!uuid) {
       toast('Create the task before adding images.')
       return
@@ -1271,15 +1300,18 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           // description's length
           const alt = [...name.replace(/[[\]()\n\\]/g, '_')].slice(0, 60).join('')
           const key = P.shownHandleOf(uuid)
-          if (!key) return finishUpload(uuid, src, null, alt)
+          if (!key) return finishUpload(uuid, org, src, null, alt)
           return P.addAttachment(key, file, { inline: true }).then(
             (attId: string | null) => {
-              if (attId) sessionUploadsRef.current.push(attId)
-              finishUpload(uuid, src, attId, alt)
+              if (attId) {
+                sessionUploadsRef.current.push(attId)
+                if (org) uploadOrgsRef.current.set(attId, org)
+              }
+              finishUpload(uuid, org, src, attId, alt)
               // finishUpload(null) is the existing "this one didn't make it" path;
               // reaching it matters more than the reason
             },
-            () => finishUpload(uuid, src, null, alt),
+            () => finishUpload(uuid, org, src, null, alt),
           )
           // and one image failing must never strand the rest of the queue
         })

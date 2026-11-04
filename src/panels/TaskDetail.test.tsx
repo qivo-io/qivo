@@ -11,8 +11,9 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 /* The task window on a task the workspace does not hold, on the real store:
    from the window's own read of the task (convex/taskWindow.ts task,
    P.taskDetail), answered by hand, editable from that answer, each write
-   sending the values the window showed, and an archived task's read-only
-   window. Mira leads Work, where the family task
+   sending the values the window showed, an image pasted into its
+   description saved once it has uploaded, and an archived task's
+   read-only window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
    tasks (QN-40 on) are on the server but not in the workspace: in a task
    window still to arrive while it loads in stages (`loading`), else not in
@@ -1048,6 +1049,181 @@ describe('the task window as the workspace and the answer disagree', { timeout: 
     await act(async () => publish(snap))
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(picker()).toBeNull()
+  })
+})
+
+describe('an image pasted into a description shown from its answer', { timeout: 30_000 }, () => {
+  const STILL_UPLOADING = 'An image is still uploading. The description saves once it has finished.'
+  const image = () => new File(['png'], 'photo.png', { type: 'image/png' })
+  /* Pastes `file` into the description `editor`, as a person does. */
+  const paste = (editor: Awaited<ReturnType<typeof editorOf>>, file: File) =>
+    act(async () => {
+      editor.view.pasteHTML('', {
+        clipboardData: { files: [file], getData: () => '' },
+        preventDefault: () => {},
+      } as unknown as ClipboardEvent)
+    })
+  /* The family task as the workspace holds it, and a delivery of the
+     workspace without it. */
+  const fam = () => {
+    const row = snap.issues.find((t) => t.id === FAM)
+    if (!row) throw new Error('missing the family task')
+    return row
+  }
+  const withoutFam = () => {
+    const left = structuredClone(snap)
+    left.issues = left.issues.filter((t) => t.id !== FAM)
+    return left
+  }
+  /* Holds the upload's URL until `finish` or `fail` lets it go, and answers
+     its attach with the row the server stores and every other write with
+     null. `finish` answers the attachment's id. The image's address is
+     minted without one, so it shows as unavailable. */
+  function holdUpload() {
+    const upload: { resolve?: (url: string) => void; reject?: (error: unknown) => void } = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ storageId: 'st-1' }) })),
+    )
+    network.query.mockImplementation((ref) =>
+      Promise.resolve(
+        getFunctionName(ref) === 'files:mintUrls' ? { attachments: {}, avatars: {} } : null,
+      ),
+    )
+    network.mutation.mockImplementation((ref, args) => {
+      const name = getFunctionName(ref)
+      if (name === 'files:uploadUrl')
+        return new Promise((resolve, reject) => Object.assign(upload, { resolve, reject }))
+      if (name === 'files:attach')
+        return Promise.resolve({
+          attachment: {
+            id: args.id,
+            issue_id: args.issue_id,
+            name: args.name,
+            mime: args.mime,
+            size_bytes: 3,
+            storage_id: 'st-1',
+            inline: true,
+            created_at: AT,
+          },
+        })
+      return Promise.resolve(null)
+    })
+    const asked = () =>
+      vi.waitFor(() => {
+        if (!upload.resolve) throw new Error('the upload has not asked for its URL')
+      })
+    const settle = (step: () => void) =>
+      act(async () => {
+        step()
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    return {
+      asked,
+      finish: async () => {
+        await asked()
+        await settle(() => upload.resolve?.('https://convex.example/upload'))
+        const attach = await vi.waitFor(() => {
+          const found = sentArgs('files:attach').at(-1)
+          if (!found) throw new Error('the upload did not attach')
+          return found
+        })
+        await settle(() => {})
+        return String(attach.id)
+      },
+      fail: async () => {
+        await asked()
+        await settle(() => upload.reject?.(new Error('Server Error')))
+      },
+    }
+  }
+  /* The descriptions the window saved, in order. */
+  const descriptions = () =>
+    sentArgs('issues:update').map(({ patch }) =>
+      String((patch as { description?: string }).description),
+    )
+  /* Whether description `text` holds the image `attId`, the words typed
+     with it, and no placeholder. */
+  const holdsImage = (text: string | undefined, attId: string) =>
+    !!text?.includes(`(att:${attId})`) && text.includes('Twice.') && !text.includes('uploading:')
+
+  it('waits to save until the image has uploaded, then saves it once with the image', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    const upload = holdUpload()
+    const description = await editorOf('Task description')
+    await act(async () => description.chain().focus('end').insertContent(' Twice.').run())
+    await paste(description, image())
+    await upload.asked()
+    await click(buttonNamed('Save'))
+    expect(window.showToast).toHaveBeenCalledWith(STILL_UPLOADING, 'error')
+    expect(descriptions()).toEqual([])
+    const attId = await upload.finish()
+    expect(descriptions()).toHaveLength(1)
+    expect(holdsImage(descriptions()[0], attId)).toBe(true)
+  })
+
+  it('saves a waiting draft once, with its image, when the task left the workspace while it uploaded', async () => {
+    await load()
+    await openWindow('QN-27')
+    await answer('taskWindow:task', okAnswer(fam()))
+    const upload = holdUpload()
+    const description = await editorOf('Task description')
+    await paste(description, image())
+    await upload.asked()
+    // saved while the workspace holds the task, with the image uploading
+    await click(buttonNamed('Save'))
+    const saved = descriptions()[0] ?? ''
+    expect(saved).toContain('](uploading:')
+    // the task leaves the workspace, and its answer holds that save
+    await act(async () => publish(withoutFam()))
+    await answer('taskWindow:task', okAnswer({ ...fam(), description: saved }))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    // more is typed and saved while the image still uploads, which waits
+    await act(async () => description.chain().focus('end').insertContent(' Twice.').run())
+    await click(buttonNamed('Save'))
+    expect(window.showToast).toHaveBeenCalledWith(STILL_UPLOADING, 'error')
+    expect(descriptions()).toHaveLength(1)
+    const attId = await upload.finish()
+    // the upload saves the waiting draft, and patches nothing over it
+    expect(descriptions()).toHaveLength(2)
+    expect(holdsImage(descriptions()[1], attId)).toBe(true)
+  })
+
+  it('removes an image whose draft was discarded, in the task’s organization, though the window closed before it uploaded', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    const upload = holdUpload()
+    const description = await editorOf('Task description')
+    await paste(description, image())
+    await upload.asked()
+    await click(buttonNamed('Discard changes'))
+    await act(async () => root.render(<TooltipProvider>{null}</TooltipProvider>))
+    expect(open('taskWindow:task')).toEqual([])
+    const attId = await upload.finish()
+    expect(descriptions()).toEqual([])
+    expect(sentArgs('files:removeAttachment')).toEqual([{ org_id: snap.orgs[0].id, id: attId }])
+  })
+
+  it('saves a waiting draft without the image when its upload fails', async () => {
+    await load()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    const upload = holdUpload()
+    const description = await editorOf('Task description')
+    await act(async () => description.chain().focus('end').insertContent(' Twice.').run())
+    await paste(description, image())
+    await upload.asked()
+    await click(buttonNamed('Save'))
+    expect(descriptions()).toEqual([])
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await upload.fail()
+    expect(descriptions()).toHaveLength(1)
+    expect(descriptions()[0]).toContain('Measure the gain at **three** heights. Twice.')
+    expect(descriptions()[0]).not.toMatch(/uploading:|att:/)
+    expect(sentArgs('files:attach')).toEqual([])
   })
 })
 
