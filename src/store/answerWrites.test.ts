@@ -32,10 +32,15 @@ vi.mock('../lib/auth', () => ({
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
   signOut: vi.fn(),
 }))
-// the browser's image re-encoding is not what these writes test
+// the browser's image re-encoding is not what these writes test, but how
+// long it takes is, so a test can hold it until `compression.held` settles
+const compression = vi.hoisted(() => ({ held: null as Promise<void> | null }))
 vi.mock('../lib/images', async (original) => ({
   ...(await original<typeof import('../lib/images')>()),
-  compressImage: async (file: File) => file,
+  compressImage: async (file: File) => {
+    await compression.held
+    return file
+  },
 }))
 
 type Planner = typeof import('./planner')['P']
@@ -273,6 +278,7 @@ const probe = () => {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  compression.held = null
   vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
   vi.spyOn(console, 'error').mockImplementation(() => {})
 })
@@ -815,6 +821,84 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     expect(last('issues:update').args.patch).toEqual({
       description: `Gain ![photo](att:${attId})`,
     })
+  })
+
+  /** Holds the image re-encoding of the next uploads until the answer is
+      called. */
+  const holdCompression = () => {
+    let release = () => {}
+    compression.held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return release
+  }
+  const uploaded = () =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ storageId: 'st-1' }) })),
+    )
+
+  it('sends a file to the task its handle named when the upload began, though the handle moves to another task meanwhile', async () => {
+    const BETA = 'org-beta'
+    await load((next) => {
+      // Mira also holds a seat in Beta, which holds its own QN-40
+      next.orgs.push({ ...next.orgs[0], id: BETA, name: 'Beta', slug: 'beta' })
+      next.profiles.push({ ...next.profiles[0], id: 'mira-beta', org_id: BETA, org_role: 'user' })
+      next.myProfileIds.push('mira-beta')
+      next.projects.push(
+        { ...next.projects[0], id: 'beta-plan', org_id: BETA, key: 'BP', lead_id: 'mira-beta' },
+        {
+          ...next.projects[1],
+          id: 'beta-work',
+          org_id: BETA,
+          key: 'BW',
+          parent_id: 'beta-plan',
+        },
+      )
+      next.issues.push(task('beta-40', 40, { org_id: BETA, project_id: 'beta-work' }))
+    })
+    await openFar()
+    uploaded()
+    const release = holdCompression()
+    const added = P.addAttachment(H, new File(['bytes'], 'photo.png', { type: 'image/png' }), {
+      inline: true,
+    })
+    // Mira's seat here turns guest while the image re-encodes, so Beta is
+    // her home now, where QN-40 names Beta's own task
+    for (const p of snap.profiles) if (p.id === MIRA) p.org_role = 'guest'
+    publishWorkspace()
+    await turn()
+    expect(P.homeOrg).toBe(BETA)
+    expect(P.issueById[H]?.uuid).toBe('beta-40')
+    release()
+    await turn()
+    expect(sent('files:uploadUrl').map((w) => w.args)).toEqual([{ org_id: ORG, issue_id: FAR }])
+    await answerWith(last('files:uploadUrl'), 'https://convex.example/upload')
+    await turn()
+    expect(last('files:attach').args).toMatchObject({ org_id: ORG, issue_id: FAR })
+    const attId = last('files:attach').args.id
+    await answerWith(last('files:attach'), { attachment: attachment(String(attId)) })
+    await expect(added).resolves.toBe(attId)
+  })
+
+  it('says an upload stopped once the window no longer shows its task, and sends no bytes', async () => {
+    await load()
+    await openFar()
+    const release = holdCompression()
+    const image = new File(['bytes'], 'photo.png', { type: 'image/png' })
+    const added = P.addAttachment(FAR, image)
+    // the window moves to another task while the file re-encodes
+    P.watchComments('task-a', ORG)
+    release()
+    await expect(added).resolves.toBeNull()
+    const stopped =
+      'Couldn\'t upload "photo.png". The upload stopped because the window no longer shows its task.'
+    expect(window.showToast).toHaveBeenCalledWith(stopped, 'error')
+    // and a file still queued for it says the same when its turn comes
+    window.showToast = vi.fn()
+    await expect(P.addAttachment(FAR, image)).resolves.toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith(stopped, 'error')
+    expect(sent('files:uploadUrl')).toEqual([])
   })
 
   it('says why an upload waits while the window’s read failed, and sends no bytes', async () => {

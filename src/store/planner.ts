@@ -5937,6 +5937,23 @@ function answerUploadTarget(issueKey: string): UploadTarget | null {
     : null
 }
 
+/* The task a file for `issueKey`, a handle or a uuid, goes to now, for
+   P.addAttachment. It is the workspace's task, else the one the window
+   shows from a current answer. */
+const uploadTarget = (issueKey: string) =>
+  heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
+
+/* Says why task `id` takes no file now, for an upload of file `name`.
+   Either the window shows it from an answer that is not current
+   (P.refuseStaleEdit), or neither the workspace nor the window shows it
+   any more, as for a file still queued when the window moved on. */
+function refuseUpload(id: string, name: string) {
+  if (PLANNER.refuseStaleEdit(id)) return
+  toast(
+    `Couldn't upload "${name}". The upload stopped because the window no longer shows its task.`,
+  )
+}
+
 /** P.removeAttachment for attachment `attId`, which the workspace does not
     hold: a file only the watched task's attachments answer holds, of a task
     the window shows from its own answer or of a held task whose file has
@@ -9577,17 +9594,19 @@ export const PLANNER = {
       has already been accepted or refused server-side. A task the window
       shows from its own answer takes files the same way, with its
       organization, project and cap from that answer (answerUploadTarget),
-      and none while that answer is not current (P.refuseStaleEdit). */
+      and none while that answer is not current (P.refuseStaleEdit). The
+      upload follows the task `issueKey` names when it starts, by its uuid
+      and organization, whatever that handle names later. */
   addAttachment: withUpdateBlock(
     async (issueKey: string, input: File, opts?: { inline?: boolean }): Promise<string | null> => {
       // issueKey may be a derived key ("QN-482") or the issue uuid — the
       // New-issue modal and the drawer attach by uuid, which survives the rare
       // INSERT renumbering that reassigns the derived key mid-flight
-      const targetNow = () => heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
+      const first = uploadTarget(issueKey)
       // a task the window shows from an answer that is not current takes no
-      // file yet, and says why (P.refuseStaleEdit)
-      if (!targetNow()) {
-        PLANNER.refuseStaleEdit(issueKey)
+      // file yet, and says why, as does one the window no longer shows
+      if (!first) {
+        refuseUpload(issueKey, input.name)
         return null
       }
       if (refusePausedEdit()) return null
@@ -9597,14 +9616,15 @@ export const PLANNER = {
       // surfaces; the two that also pre-compress (to show an honest size, or to
       // name the file) hand over WebP, which comes straight back out.
       // Re-encoding is real wall-clock work — re-check the issue after it: the
-      // row can be deleted from another tab while we encode.
+      // row can be deleted from another tab while we encode, and a handle
+      // can move to another task, so it is checked by the uuid found first.
       const file = await compressImage(input)
-      const target = targetNow()
+      const target = uploadTarget(first.uuid)
       if (!target) {
-        PLANNER.refuseStaleEdit(issueKey)
+        refuseUpload(first.uuid, file.name)
         return null
       }
-      const { uuid, org } = target
+      const { uuid, org } = first
       // the per-task cap, before any bytes are sent (the server checks too);
       // an image a description save took out no longer counts
       const full = attachmentBlock(target.count)
