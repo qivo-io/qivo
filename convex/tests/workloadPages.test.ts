@@ -1228,27 +1228,31 @@ describe('at the design size', () => {
     expect(listed).toHaveLength(1000)
   }, 60_000)
 
-  it('pages the organization’s 10,000 open tasks held by 50 people at limit 50 and 52 weeks', async () => {
+  it('pages people who each hold 200 open tasks at limit 50 and 52 weeks, a page cut by the call’s ranges', async () => {
     const t = newT()
     const fx = await setup(t)
     const people = await plantPeople(
       t,
       fx.org.id,
-      Array.from({ length: 50 }, (_, i) => ({ name: `Busy ${i}` })),
+      Array.from({ length: 15 }, (_, i) => ({ name: `Busy ${i}` })),
     )
     // everyday sub-projects of 30 open tasks, 200 tasks a person over seven
-    // of them
-    const subs = await plantFamilies(t, fx.org.id, 350)
+    // of them; a page holds at most 10 such people, so these 3,000 tasks
+    // read as a page of the organization's 10,000 does, which the
+    // on-demand case below measures whole
+    const subs = await plantFamilies(t, fx.org.id, 105)
     await plantPlans(t, fx.org.id, people, subs, 200, 30)
     await keyOrg(t, fx.org.id)
     const { reads, people: listed } = await measurePages(
       t,
       fx.admin,
       { limit: '50', from_week: WEEK, weeks: '52' },
-      '10,000 open tasks over 50 people, limit 50, 52 weeks',
+      '3,000 open tasks over 15 people, limit 50, 52 weeks',
     )
-    expect(listed.length).toBe(56)
+    expect(listed.length).toBe(21)
+    // the call's room ends the first page before limit
     expect(reads.length).toBeGreaterThan(1)
+    expect(reads[0]?.people).toBeLessThan(21)
   }, 60_000)
 
   it('pages people for a caller who reads the 200 sub-projects they work in', async () => {
@@ -1295,3 +1299,37 @@ describe('at the design size', () => {
     expect(listed.length).toBe(107)
   }, 60_000)
 })
+
+/* The organization's 10,000 open tasks held by the people of the pages,
+ * 50 people with 200 each, whose heaviest page the normal suite measures
+ * with 15 of them ("at the design size"). It runs outside the normal
+ * suite because seeding the whole figure takes about 40 s on a large Boat
+ * sandbox beside the other tests, near vitest's 60 s on a slower runner.
+ * Run on demand with QIVO_WORKLOAD_ORG_OPEN=1. On 4 November 2026 it took
+ * 6 pages of 9 or 10 people, the heaviest 1,999 ranges, 2,119 documents
+ * and 1.2 MB. */
+describe.runIf(process.env.QIVO_WORKLOAD_ORG_OPEN === '1')(
+  "the organization's open tasks, on demand",
+  () => {
+    it('pages the organization’s 10,000 open tasks held by 50 people at limit 50 and 52 weeks', async () => {
+      const t = newT()
+      const fx = await setup(t)
+      const people = await plantPeople(
+        t,
+        fx.org.id,
+        Array.from({ length: 50 }, (_, i) => ({ name: `Busy ${i}` })),
+      )
+      const subs = await plantFamilies(t, fx.org.id, 350)
+      await plantPlans(t, fx.org.id, people, subs, 200, 30)
+      await keyOrg(t, fx.org.id)
+      const { reads, people: listed } = await measurePages(
+        t,
+        fx.admin,
+        { limit: '50', from_week: WEEK, weeks: '52' },
+        '10,000 open tasks over 50 people, limit 50, 52 weeks',
+      )
+      expect(listed.length).toBe(56)
+      expect(reads.length).toBeGreaterThan(1)
+    }, 120_000)
+  },
+)
