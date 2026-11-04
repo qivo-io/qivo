@@ -1253,6 +1253,19 @@ describe('reads at the design size', () => {
     console.log('page, 5 teams sharing 20 sub-projects each, per batch', walked.calls)
     expect(walked.rows).toHaveLength(34)
     whole(walked.calls)
+    // the first batch spends 4 of OWN_READS.teamReads (roomSpent), so it
+    // answers with 4 left and refuses whole with 3
+    try {
+      Object.assign(OWN_READS, { teamReads: 4 })
+      expect(ok(await page(t, [pia])).rows).toHaveLength(LIST_BATCH)
+      Object.assign(OWN_READS, { teamReads: 3 })
+      expect(await page(t, [pia])).toMatchObject({
+        state: 'unavailable',
+        reason: ACCESS_UNCHECKED,
+      })
+    } finally {
+      Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+    }
     const children = await measured(t, (ctx) =>
       navChildrenOf(ctx, seats, { project_id: parents[0].id }),
     )

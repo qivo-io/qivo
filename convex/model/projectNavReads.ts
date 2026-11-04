@@ -122,7 +122,8 @@ import { type Grantee, grantee, navReady } from './projectNav'
  *   documents, the same as without the archived ones;
  * - page, the first batch for a member of 5 teams each sharing 20
  *   sub-projects, every parent shown for navigation only: 219 ranges and
- *   284 documents, the most of any case;
+ *   284 documents, the most of any batch of 25 rows, and 4 of the 128
+ *   single-row reads of OWN_READS.teamReads (with 3 it refuses whole);
  * - page for one of the person's teams sharing 50 projects beside its 150
  *   archived shares: 108 ranges and 80 documents a batch;
  * - page for 200 sub-projects read through grants under 67 parents shown
