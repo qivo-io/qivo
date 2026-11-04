@@ -603,11 +603,12 @@ them yet, so that release sets no rollback floor and needs no step. The
 release whose app first calls them makes the release that shipped them the
 backend's floor, and its own paragraph here says so. The reads use only the
 reach rows and name keys every deployment holds since v0.1.97 and the
-favorites rows below, and answer `not_ready` for an organization without
-both of its `org_ready` stamps. They skip the favorites a rollback past the
-favorites release leaves, by the reader rule the favorites paragraph below
-describes, so such a row never shows and keeps its project, where the seat
-sees it, in the list of the rest.
+favorites rows below. `projectNav.page` and `projectNav.children` answer
+`not_ready` for an organization without both of its `org_ready` stamps, and
+`projectNav.resolve` answers without them. The reads skip the favorites a
+rollback past the favorites release leaves, by the reader rule the
+favorites paragraph below describes, so such a row never shows and keeps
+its project, where the seat sees it, in the list of the rest.
 
 ## Node.js version
 
