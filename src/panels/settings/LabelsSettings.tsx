@@ -450,13 +450,17 @@ export function OrgLabelsPage() {
     })
   }
 
-  // Load more keeps focus while it reads; when it goes at the list's end,
-  // focus moves to the first new row's name
+  // Load more keeps focus while it reads, and the Retry that takes its
+  // place after a failure keeps it too (EndLine). When Load more goes,
+  // focus moves to the first new row's name, else to the search box. While
+  // a split reads its halves focus stays put, and Load more comes back
+  // once they answer.
   const moreFrom = useRef<number | null>(null)
   const end: ListEnd | 'too_long' = search.tooLong
     ? 'too_long'
     : listEnd(list, search.settled !== '')
   useFocusWhenGone(end === 'more', () => {
+    if (end === 'loading') return null
     const row = moreFrom.current === null ? undefined : list.rows[moreFrom.current]
     return row ? nameOf(row.id) : searchBox.current
   })
@@ -612,7 +616,9 @@ export function OrgLabelsPage() {
 }
 
 /* The line that ends the list (lib/pagedList.ts listEnd), with its Load
-   more and Retry. */
+   more and Retry. The failure's Retry is the same button as Load more, in
+   the same place in the same element, so React keeps it and focus stays on
+   it when a Load more fails. */
 function EndLine({
   end,
   shown,

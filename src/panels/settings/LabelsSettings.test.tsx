@@ -47,12 +47,14 @@ let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
 /* What the server holds: its workspace, the states it is asked to force,
-   the label reads open on it and the way to publish its workspace. */
+   the label reads open on it, the way to publish its workspace, and
+   whether it holds back a new read's answer until the next rerun. */
 let server: {
   snap: Snapshot
   force: ForcedLabelPage
   reads: Set<Read>
   publish: (snap: Snapshot) => void
+  hold: boolean
 }
 
 const org = () => server.snap.orgs[0].id
@@ -96,14 +98,14 @@ async function load(shape?: (snap: Snapshot) => void) {
   })
   shape?.(snap)
   requests = []
-  server = { snap, force: {}, reads: new Set(), publish: () => {} }
+  server = { snap, force: {}, reads: new Set(), publish: () => {}, hold: false }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'labels:settingsPage') {
       const read: Read = { args, next, fail }
       server.reads.add(read)
-      answerLabelPages(server.snap, args, next, fail, { force: server.force })
+      if (!server.hold) answerLabelPages(server.snap, args, next, fail, { force: server.force })
       return () => server.reads.delete(read)
     }
     if (name === 'workspace:whole')
@@ -402,6 +404,34 @@ describe('Settings › Labels', () => {
     server.force = {}
     await click(button('Retry', find('[data-labels-end]')))
     expect(names()).toHaveLength(30)
+  })
+
+  it('keeps focus on the Retry that takes Load more’s place, and moves it to no row while a split reads its halves', async () => {
+    await load(many(30))
+    server.force = { batch: 5 }
+    await render()
+    const more = () => find<HTMLButtonElement>('[data-labels-more]')
+    await click(more())
+    expect(names()).toHaveLength(10)
+    // labels made inside the pinned first batch, more than one read of it
+    // holds, so it splits, and its halves answer on the next rerun
+    await act(async () => more().focus())
+    server.hold = true
+    await elsewhere((snap) => {
+      for (let i = 0; i < 20; i++) labelRow(snap, `m${i}`, `Label 00 ${i + 10}`)
+    })
+    expect(end()).toBe('Loading labels…')
+    expect(document.activeElement?.closest('[data-label-row]') ?? null).toBeNull()
+    expect(document.activeElement).not.toBe(find('[data-labels-search]'))
+    server.hold = false
+    await rerun()
+    expect(names()).toHaveLength(30)
+    // a Load more whose batch fails leaves focus on the Retry in its place
+    await act(async () => more().focus())
+    server.force = { batch: 5, fail: true }
+    await click(more())
+    expect(end()).toBe("Couldn't load more labels.Retry")
+    expect(document.activeElement).toBe(button('Retry', find('[data-labels-end]')))
   })
 
   it('reads nothing for someone who is not an admin, and shows a refusal as a failure', async () => {
