@@ -656,7 +656,8 @@ describe('every copy of a task the window shows from its own answer', { timeout:
 
   it('reshapes only the written task’s Board model among 300 open tasks of a sub-project', async () => {
     await load()
-    const rows = Array.from({ length: 300 }, (_, i) =>
+    // with QN-40 and the held QN-1, Work holds 300 open tasks
+    const rows = Array.from({ length: 298 }, (_, i) =>
       viewRow(task(`fe000000-0000-4000-8000-${String(i).padStart(12, '0')}`, 100 + i)),
     )
     await openBoard([...rows, viewRow(far())])
