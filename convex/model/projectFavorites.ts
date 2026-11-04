@@ -42,7 +42,7 @@
  * so a row on a project the seat lost costs only those lookups and reads no
  * data of that project.
  *
- * A row that fails is skipped: it is never shown, counted or allowed to
+ * A row that fails is skipped. It is never shown, counted or allowed to
  * move another row, and it keeps no project out of the list of the rest.
  * It may be the position where the read budget stops a batch, which is
  * sealed in the cursor (lib/namedPages.ts readBatch answers the last row it
@@ -112,8 +112,8 @@ export function favoritesIndex(
   return {
     all: () =>
       rows().withIndex('by_profile_list', (q) => q.eq('profile_id', seat.id).eq('live', true)),
-    // from the cursor's project id itself: a cursor another seat's row left
-    // at the same key and id lies before this seat's row there when its
+    // from the cursor's project id itself, since a cursor another seat's row
+    // left at the same key and id lies before this seat's row there when its
     // organization sorts first, and indexAfter drops what is not past it
     after: ({ key, tie: [projectId] }) => [
       () =>

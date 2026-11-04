@@ -39,7 +39,7 @@ import {
 const vNavCursors = { after: v.optional(v.string()), through: v.optional(v.string()) }
 
 /** One batch of the top-level projects the caller sees for navigation
- * across every active seat (model/projectNavReads.ts navPageOf): each
+ * across every active seat (model/projectNavReads.ts navPageOf), each
  * seat's favorites by the reader rule first, then the rest, each group in
  * name key order with the project id breaking ties, rows of several
  * organizations in one order. Rows are `{ id, org_id, name, num, favorite

@@ -1132,11 +1132,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     updateMilestone: 'orgMutation',
     removeMilestone: 'orgMutation',
   },
-  // Project navigation. The reads span organizations like main Search: a
-  // person's projects across every active seat, and a project named by id,
-  // or by its organization and number, judged with the caller's seat in its
-  // organization, by ordinary access. A star is the seat's own preference,
-  // refused like following a task while the organization is read-only.
+  // Project navigation. The reads span organizations like main Search. They
+  // read a person's projects across every active seat, and a project named
+  // by id, or by its organization and number, judged with the caller's seat
+  // in its organization, by ordinary access. A star is the seat's own
+  // preference, refused like following a task while the organization is
+  // read-only.
   projectNav: {
     page: 'authedQuery',
     children: 'authedQuery',

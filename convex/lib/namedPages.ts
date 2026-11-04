@@ -172,7 +172,7 @@ export function inGroup<Row, Tie extends NamedTie>(
 }
 
 /** What mergeNamed does with rows of several streams at one position when
- * asked (`ties: 'first'`): it hands out the row of the first of those
+ * asked (`ties: 'first'`). It hands out the row of the first of those
  * streams once and moves each of them on. It counts every row it drops
  * with `reads`, the batch's (readBatch), and hands out STOPPED after the
  * row it handed out when the budget has no room left. Right only where rows

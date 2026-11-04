@@ -27,16 +27,16 @@
  * sub-projects (projects by_org_parent_state_name), each of which inherits
  * that level, and otherwise only the live child reach rows of the seat and
  * its teams under it (by_grantee_root). A row finds a candidate and grants
- * nothing: each candidate's live project is read and judged, and a reach
- * row's copies must be its project's (organization, kind, top-level project,
- * name key against nameKey(project.name) and live state, as
- * model/projectNav.ts reachFollows compares them), else the row is skipped,
- * so a project shows once and at its own name's place. A missing or stale
- * row narrows a list and never widens it. So where a batch ends and how far
- * its budget goes depend only on the person's own rows and the projects
- * they see: a favorite on a project the seat lost costs a lookup of each of
- * its grantees' reach rows on it and nothing of that project
- * (model/projectFavorites.ts favoriteShows).
+ * nothing. The reader reads and judges each candidate's live project, and
+ * a reach row's copies must be its project's (organization, kind,
+ * top-level project, name key against nameKey(project.name) and live
+ * state, as model/projectNav.ts reachFollows compares them), else the
+ * reader skips the row, so a project shows once and at its own name's
+ * place. A missing or stale row narrows a list and never widens it. So
+ * where a batch ends and how far its budget goes depend only on the
+ * person's own rows and the projects they see. A favorite on a project the
+ * seat lost costs a lookup of each of its grantees' reach rows on it and
+ * nothing of that project (model/projectFavorites.ts favoriteShows).
  *
  * The order. A list is in the byte order of the name key (lib/namedPages.ts
  * compareNamed), the project id breaking ties. The page's positions also
@@ -308,8 +308,8 @@ export function rootIndex(
           .eq('live', true),
       ),
     // from the cursor's project id itself, as model/projectFavorites.ts
-    // favoritesIndex reads: another seat's cursor at the same key and id
-    // lies before this seat's row there when its organization sorts first
+    // favoritesIndex reads, since another seat's cursor at the same key and
+    // id lies before this seat's row there when its organization sorts first
     after: ({ key, tie: [projectId] }) => [
       () =>
         rows().withIndex('by_grantee_list', (q) =>
@@ -450,17 +450,17 @@ export type SeatSight = FavoriteSight & {
  * holds projects the caller read already.
  *
  * `shows` answers whether the seat sees a live top-level meta of its
- * organization for navigation (module header): for a reason of its own
- * (accessible), or through the first PROJECT_NAV.children live child reach
- * rows of its teams and then its seat under it, one range a grantee, each
- * row's sub-project read and asked visible, past which with none shown it
- * rejects with accessUnchecked. It never asks lib/access.ts visible of a
- * top-level project, which would read every root row of the person or, on
- * its legacy path, the parent's sub-projects. Without complete reach rows a
- * missing row proves nothing, so a project the seat sees for no reason of
- * its own answers false where lib/access.ts visible does and rejects with
- * accessUnchecked where it shows the project, since only a live sub-project
- * may show it.
+ * organization for navigation (module header). It does for a reason of
+ * its own (accessible), or through the first PROJECT_NAV.children live
+ * child reach rows of its teams and then its seat under it, one range a
+ * grantee, each row's sub-project read and asked visible, past which with
+ * none shown it rejects with accessUnchecked. It never asks lib/access.ts
+ * visible of a top-level project, which would read every root row of the
+ * person or, on its legacy path, the parent's sub-projects. Without
+ * complete reach rows a missing row proves nothing, so a project the seat
+ * sees for no reason of its own answers false where lib/access.ts visible
+ * does and rejects with accessUnchecked where it shows the project, since
+ * only a live sub-project may show it.
  *
  * `reached` answers whether the seat or one of its teams holds a reach row
  * on a project (project_reach by_project_grantee, one range a grantee, the
@@ -579,8 +579,8 @@ async function opened(
 }
 
 /* Whether top-level project `project`, which the seat sees, is one of its
- * favorites by the reader rule: its row on it (one, as setFavoriteCore
- * keeps it) passes favoriteShows. */
+ * favorites by the reader rule, which holds when its row on it (one, as
+ * setFavoriteCore keeps it) passes favoriteShows. */
 async function starred(
   ctx: QueryCtx,
   sight: FavoriteSight,
@@ -825,7 +825,7 @@ export const RESOLVE_FORM =
  * the bounds of their own rows (OWN_READS, PROJECT_NAV), and there it can
  * tell a hidden project's number from a free one, which a check that may
  * not answer no access cannot avoid. It needs no stamp of the
- * organization: without complete reach rows a top-level project the seat
+ * organization. Without complete reach rows a top-level project the seat
  * sees for a reason of its own still resolves, and one it would see only
  * for navigation answers the refusal or unavailable (seatSight shows).
  */
