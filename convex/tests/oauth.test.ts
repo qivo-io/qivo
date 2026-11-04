@@ -32,6 +32,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 
 declare class URLSearchParams {
   constructor(input?: string | Record<string, string>)
@@ -82,6 +83,9 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
   const t = newT()
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
   const f = await withOrg(t)
+  // every profile holds its name key, as on every deployment, which the
+  // workload's name order needs
+  await keyOrg(t, f.org.id)
   const profile = f[role]
   const now = Date.now()
   // the fixture's real Better Auth login, given a password to sign in with

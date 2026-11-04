@@ -18,9 +18,10 @@
  *   4. Task activity: the app's visibility rule for members, every row for
  *      organization admins.
  *   5. Workload: the app's spread rule, the anonymized hidden hours, a
- *      project limit, the week grid and the input checks. */
+ *      project limit, the week grid and the input checks. Its pages, cursors
+ *      and reads are workloadPages.test.ts's. */
 
-import { ConvexError } from 'convex/values'
+import { ConvexError, compareValues } from 'convex/values'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
@@ -28,6 +29,7 @@ import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../lib/activityVisibility
 import { verifyFileToken } from '../lib/fileTokens'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { attachmentTooLarge, LIMITS } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { weekGrid, weeksSpreadSoFar } from '../lib/workload'
 import { sha256hex } from '../machine/auth'
 import { storeThenAttach } from '../machine/records'
@@ -57,6 +59,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 
 /* edge-runtime provides Blob and TextEncoder; convex/tsconfig's ESNext-only
  * lib does not declare them. */
@@ -93,7 +96,9 @@ type Fx = OrgFixture & {
 }
 
 /* withOrg, with the agent holding Edit on TBED (FW, PCB) and nothing on
- * SKNK. The Viewer person holds Edit on TBED, capped to reading by the role. */
+ * SKNK. The Viewer person holds Edit on TBED, capped to reading by the role.
+ * Every profile holds its name key (nameKeys.setup.ts keyOrg), as on every
+ * deployment, since the workload lists people in name order. */
 async function setup(): Promise<Fx> {
   const t = newT()
   const f = await withOrg(t)
@@ -123,6 +128,7 @@ async function setup(): Promise<Fx> {
       created_at: NOW,
     }),
   )
+  await keyOrg(t, f.org.id)
   return { t, ...f, hiddenSub, agentKey }
 }
 
@@ -1719,10 +1725,16 @@ describe('workload', () => {
       hidden_hours: [0, 0, 0, 0],
     })
     expect(person(load, fx.admin.id)?.hours).toEqual([0, 15.3, 13.3, 13.3])
-    // an agent has no plannable week; everyone active is listed by name
+    // an agent has no plannable week; everyone active is listed in name
+    // key order, then by id, on one page
     expect(person(load, fx.agent.id)).toMatchObject({ plannable_hours: null, hours: [0, 0, 0, 0] })
-    const names = load.people.map((p) => p.name)
-    expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)))
+    const order = (p: { name: string; id: string }) => [nameKey(p.name), p.id]
+    expect(load.people.map((p) => p.id)).toEqual(
+      [...load.people].sort((a, b) => compareValues(order(a), order(b))).map((p) => p.id),
+    )
+    expect(load.people).toHaveLength(5)
+    expect(load.next_cursor).toBeNull()
+    expect(load.people.every((p) => p.status === 'ok')).toBe(true)
     // MCP answers the same
     expect(await mcpLoad(fx, { weeks: 4 })).toEqual(load)
   })
@@ -1738,10 +1750,16 @@ describe('workload', () => {
       remaining_hours: 4,
     })
     const staff = await restLoad(fx, { weeks: '1' })
+    expect(staff.hidden).toBe('counted')
     expect(person(staff, fx.user.id)).toMatchObject({ hours: [10], hidden_hours: [4] })
-    // the Viewer person cannot see SKNK and does not own that task
-    const viewer = await restLoad(fx, { weeks: '1' }, fx.viewer.id)
-    expect(person(viewer, fx.user.id)).toMatchObject({ hours: [6], hidden_hours: [0] })
+    // the Viewer person cannot see SKNK and does not own that task; a
+    // Viewer's page holds one person, so they ask for this one
+    const viewer = await restLoad(fx, { weeks: '1', person: fx.user.id }, fx.viewer.id)
+    expect(viewer.hidden).toBe('own_only')
+    expect(viewer.next_cursor).toBeNull()
+    expect(viewer.people).toEqual([
+      expect.objectContaining({ id: fx.user.id, status: 'ok', hours: [6], hidden_hours: [0] }),
+    ])
   })
 
   it('limits the hours to a project and its visible sub-projects', async () => {
@@ -1774,6 +1792,7 @@ describe('workload', () => {
     await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { week_start: 0 }))
     const gone = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Gone', active: false })
     await plantSeat(fx.t, { org_id: fx.org.id, name: 'Idle', active: false })
+    await keyOrg(fx.t, fx.org.id)
     await task(fx, {
       start_week: '2026-10-11',
       end_week: '2026-10-18',

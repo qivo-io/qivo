@@ -1,7 +1,8 @@
 /* One owner's load as a caller may see it, read through that owner's own
  * open tasks and never the organization's. planning.ownerLoads and
- * planning.assigneeLoad (convex/planning.ts) and the single-task delay
- * (lib/machineDelay.ts taskForecaster) read it.
+ * planning.assigneeLoad (convex/planning.ts), the REST and MCP workload
+ * pages (planning.ts workloadPage, through weeklyHours) and the single-task
+ * delay (lib/machineDelay.ts taskForecaster) read it.
  *
  * For one owner it reads the owner's profile, their open tasks (five index
  * ranges: the tasks assigned to them in each status but Done, and the ones
@@ -33,7 +34,9 @@ import { ISSUE_STATUSES } from './enums'
 import { MIB, PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
 import { countsAsSubtask } from './liveTasks'
 import { loadRowFor, loadShown, type OrgLoadRow } from './loadRows'
+import { roundTenths } from './numbers'
 import { taskOwnerId } from './review'
+import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './workload'
 
 /** The bounds of an owner-load read, which tests lower and set back with
  * structuredClone.
@@ -434,10 +437,11 @@ export function byLoadRow(
   return a.issue_id < b.issue_id ? -1 : 1
 }
 
-/** The load rows of `tasks`, an owned load of `ownerId` that read() answered
- * `ok` for `me`, through the fence (lib/loadRows.ts loadRowFor) as the
- * organization's rows (planning.ts orgLoadRows) give them, in one total
- * order (byLoadRow). Without remaining hours a task has no row. */
+/** The load rows of `tasks`, an owned load that read() answered `ok` for
+ * `me`, through the fence (lib/loadRows.ts loadRowFor) as the
+ * organization's rows give them (convex/tests/orgLoad.setup.ts orgLoadRows,
+ * the tests' oracle), in one total order (byLoadRow). Without remaining
+ * hours a task has no row. */
 export function loadRowsOf(me: Doc<'profiles'>, tasks: readonly OwnedTask[]): OrgLoadRow[] {
   const staff = isOrgStaff(me)
   const rows: OrgLoadRow[] = []
@@ -455,4 +459,52 @@ export function loadRowsOf(me: Doc<'profiles'>, tasks: readonly OwnedTask[]): Or
     if (row !== null) rows.push(row)
   }
   return rows.sort(byLoadRow)
+}
+
+/** An owner's planned hours in each week of a window, and the part of them
+ * from projects the caller cannot see. */
+export type WeeklyHours = { hours: number[]; hidden_hours: number[] }
+
+/**
+ * The planned hours of `tasks`, an owned load that read() answered `ok` for
+ * `me`, in each of `window.weeks` weeks of `grid` from week index
+ * `window.first`, rounded to tenths, with `hidden_hours` the part of them
+ * from projects `me` cannot see, unnamed. Only the tasks `keep` keeps
+ * count, such as those of one project. Each task's load row (loadRowsOf)
+ * spreads its remaining hours over its weeks by the app's rule
+ * (lib/workload.ts committedByWeek, in canonicalLoad's order, so the sums
+ * are the app's), and only the asked weeks are added up, however far a
+ * plan runs. A row of a project `me` cannot see counts in both arrays. The
+ * REST and MCP workload pages (planning.ts workloadPage) call it, and a
+ * server read that needs weekly figures can call it over its own reader
+ * and budget.
+ */
+export function weeklyHours(
+  me: Doc<'profiles'>,
+  tasks: readonly OwnedTask[],
+  grid: WeekGrid,
+  window: { first: number; weeks: number },
+  keep: (task: OwnedTask) => boolean = () => true,
+): WeeklyHours {
+  const all: LoadSpan[] = []
+  const hidden: LoadSpan[] = []
+  for (const row of loadRowsOf(me, tasks.filter(keep))) {
+    const span: LoadSpan = {
+      issueUuid: row.issue_id,
+      start: grid.ofDay(row.start_week),
+      end: grid.ofDay(row.end_week),
+      remaining: row.remaining,
+      remainingSet: row.remaining_set_at === null ? null : grid.ofInstant(row.remaining_set_at),
+    }
+    all.push(span)
+    if (row.issue_id === null) hidden.push(span)
+  }
+  const asked = { from: window.first, to: window.first + window.weeks - 1 }
+  const perWeek = (spans: LoadSpan[]): number[] => {
+    const byWeek = committedByWeek(canonicalLoad(spans), null, asked)
+    return Array.from({ length: window.weeks }, (_, i) =>
+      roundTenths(byWeek.get(window.first + i) ?? 0),
+    )
+  }
+  return { hours: perWeek(all), hidden_hours: perWeek(hidden) }
 }

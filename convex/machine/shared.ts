@@ -158,8 +158,8 @@ const numberOf = (raw: string | number): number =>
 
 /** A list's `limit`, the rows of one page, from a REST query parameter or an
  * MCP argument, checked against `range`, the list's registry entry
- * (LIMITS.listTasks, listInbox or listComments), and refused with its
- * sentence on both surfaces. Absent is DEFAULT_PAGE_SIZE. */
+ * (LIMITS.listTasks, listInbox, listComments or listWorkload), and refused
+ * with its sentence on both surfaces. Absent is DEFAULT_PAGE_SIZE. */
 export function pageLimit(range: Limit, raw: string | number | undefined): number {
   return raw === undefined ? DEFAULT_PAGE_SIZE : limitedWhole(range, numberOf(raw))
 }
@@ -180,12 +180,22 @@ export function pageOffset(raw: string | number | undefined): number {
  * 0, from a REST query parameter or an MCP argument. Absent is 0, and so is
  * any text that reads as 0, such as `00`; anything else, text that is no
  * number included, is an offset sent. The task lists refuse such an offset
- * in lib/core.ts taskListRequest with lib/listCursor.ts offsetRefusal; REST
- * GET /v1/inbox and MCP list_inbox (t3/limits-machine-inbox) and REST GET
- * /v1/workload and MCP get_workload (t3/limits-workload-pages) are to do
- * the same once they page with a cursor. */
+ * in lib/core.ts taskListRequest, and REST GET /v1/workload and MCP
+ * get_workload in machine/records.ts, with lib/listCursor.ts
+ * offsetRefusal; REST GET /v1/inbox and MCP list_inbox
+ * (t3/limits-machine-inbox) are to do the same once they page with a
+ * cursor. */
 export const offsetSent = (raw: string | number | undefined): boolean =>
   raw !== undefined && numberOf(raw) !== 0
+
+/** The refusal of a REST or MCP list in name order while its
+ * organization's name keys are not all written (model/nameKeys.ts
+ * nameKeysReady), so a page is never answered from rows without a key.
+ * Every organization holds them from its creation or since
+ * internal/nameKeysBackfill keyed it, so it is a fail-closed branch that no
+ * ordinary call meets. */
+export const NAMES_NOT_READY =
+  "this list cannot be read until this organization's names are ready; try again in a few minutes"
 
 /** A REST request body that may be left out, such as a DELETE's. An empty
  * body reads as {}, and any other body as needJson reads it. */

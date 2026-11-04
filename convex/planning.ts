@@ -1,13 +1,14 @@
-/* The plan_* load family. Two walks disclose busy TIME from projects the
- * caller cannot see, while the projection strips the identity. The fence is
- * in the filter, the anonymization in the projection — kept distinct here.
- * orgLoadRows walks an organization's live tasks, for REST and MCP
- * workload (workloadCore). The owner reader (lib/ownerLoads.ts) walks one
- * owner's open tasks, for assigneeLoad, ownerLoads, the single-task delay
- * and the REST and MCP list delays, within bounds past which an owner's
- * load is unavailable.
+/* The plan_* load family. Busy TIME from projects the caller cannot see
+ * reaches staff while the projection strips the identity. The fence is in
+ * the filter, the anonymization in the projection — kept distinct here.
+ * Every read here walks one owner's open tasks through the owner reader
+ * (lib/ownerLoads.ts), within bounds past which an owner's load is
+ * unavailable: assigneeLoad, ownerLoads, the REST and MCP workload pages
+ * (workloadPage), the single-task delay and the REST and MCP list delays.
+ * No read walks the organization's live tasks any more; the tests keep that
+ * walk as their oracle (convex/tests/orgLoad.setup.ts orgLoadRows).
  *
- * Shared fence (both walks):
+ * The fence:
  *   scheduled (start_week set — the 0037 envelope CHECK means end_week too),
  *   ordinary task (no subtask that makes it a group, lib/liveTasks.ts
  *   countsAsSubtask), status <> done (0073), not paused
@@ -23,9 +24,9 @@
  *   guests/viewers get only visible-or-own rows — other people's hidden work
  *   does not arrive at all, not even anonymously.
  *
- * org_load and ownerLoads ONLY add `remaining_hours > 0`; assigneeLoad has
- * NO remaining filter — unestimated/zero-remaining scheduled rows are
- * included. */
+ * ownerLoads and the workload pages ONLY add `remaining_hours > 0`;
+ * assigneeLoad has NO remaining filter — unestimated/zero-remaining
+ * scheduled rows are included. */
 
 import { ConvexError, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -33,15 +34,22 @@ import type { QueryCtx } from './_generated/server'
 import { accessOf, accessUnchecked, isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
-import { authedQuery, badRequest, orgQuery, type Refusal } from './lib/functions'
-import { groupTest, liveIn, liveTasksOf } from './lib/liveTasks'
-import { loadRowFor, type OrgLoadRow } from './lib/loadRows'
-import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from './lib/ownerLoads'
-import { type OrgProjectView, orgProjectView } from './lib/visibility'
-import { canonicalLoad, committedByWeek, type LoadSpan, weekGrid } from './lib/workload'
-import { roundTenths } from './model/taskValues'
-
-export type { OrgLoadRow }
+import { authedQuery, badRequest, orgQuery, type Refusal, rule } from './lib/functions'
+import { CURSOR_REFUSAL, filtersKey, listCursorText, openListCursor } from './lib/listCursor'
+import type { OrgLoadRow } from './lib/loadRows'
+import { indexAfter, type NamedAt, STOPPED } from './lib/namedPages'
+import {
+  callRoom,
+  loadRowsOf,
+  OWNER_LOADS,
+  type OwnedLoad,
+  type OwnedTask,
+  ownerLoadReader,
+  weeklyHours,
+} from './lib/ownerLoads'
+import { weekGrid } from './lib/workload'
+import { NAMES_NOT_READY } from './machine/shared'
+import { type IdTie, nameKeysReady, profileIndex } from './model/nameKeys'
 
 /* plan_assignee_load's wire shape — the SQL column names exactly. The client
  * never reads `title` today, but it is in the SQL contract; kept. */
@@ -55,37 +63,6 @@ export type AssigneeLoadRow = {
   remaining: number | null
   remaining_set_at: string | null
   visible: boolean
-}
-
-/* plan_org_load for one org, each task through the one fence
- * (lib/loadRows.ts loadRowFor). orgProfileIds = ALL profile ids of the org
- * (active + inactive + agents), the 0065 owner fence. workloadCore passes
- * its live task read (lib/liveTasks.ts liveTasksOf) so planning and grouping
- * do not scan it again. A task's group state comes from those rows, which
- * hold every subtask that makes a task in an active project a group. */
-export function orgLoadRows(
-  me: Doc<'profiles'>,
-  view: Pick<OrgProjectView, 'byUuid' | 'visible'>,
-  orgProfileIds: Set<string>,
-  issues: readonly Doc<'issues'>[],
-): OrgLoadRow[] {
-  const staff = isOrgStaff(me)
-  const live = liveIn(view.byUuid)
-  const isGroup = groupTest(issues, live)
-  const ownerInOrg = (id: string) => orgProfileIds.has(id)
-  const rows: OrgLoadRow[] = []
-  for (const i of issues) {
-    const row = loadRowFor(i, {
-      isGroup: isGroup(i),
-      projectLive: live(i.project_id),
-      ownerInOrg,
-      visible: view.visible(i.project_id),
-      staff,
-      meId: me.id,
-    })
-    if (row !== null) rows.push(row)
-  }
-  return rows
 }
 
 /** The reason of the refusal of a load that does not fit the owner
@@ -256,7 +233,7 @@ export const ownerLoads = orgQuery({
   },
 })
 
-/** One person's planned hours per week, as REST and MCP read them. */
+/** One person of a workload page, as REST and MCP read them. */
 export type PersonWorkloadJson = {
   id: string
   name: string
@@ -265,18 +242,38 @@ export type PersonWorkloadJson = {
   active: boolean
   /** null for an agent, whose capacity is unbounded */
   plannable_hours: number | null
-  /** planned hours in each week of week_starts, tasks the caller cannot see included */
-  hours: number[]
-  /** the part of hours from tasks the caller cannot see, which stay unnamed */
-  hidden_hours: number[]
-}
+} & (
+  | {
+      status: 'ok'
+      /** planned hours in each week of week_starts, tasks the caller cannot see included */
+      hours: number[]
+      /** the part of hours from tasks the caller cannot see, which stay unnamed */
+      hidden_hours: number[]
+    }
+  | {
+      /** the person's open work did not fit the owner reader's bounds
+       * (lib/ownerLoads.ts OWNER_LOADS), or a bound stopped a check of the
+       * caller's access, so their hours are not known: never zero */
+      status: 'unavailable'
+      hours: null
+      hidden_hours: null
+    }
+)
 
-/** The REST and MCP workload read. */
+/** One page of the REST and MCP workload. */
 export type WorkloadJson = {
+  /** the cursor of the next page, null only once every person is read */
+  next_cursor: string | null
   /** the first day of each week, in order */
   week_starts: string[]
   /** the project the hours are limited to, or null for all of them */
   project: { id: string; key: string; name: string } | null
+  /** as planning.ownerLoads answers it: 'counted' when work in projects
+   * the caller cannot see is in every person's hours and hidden_hours
+   * (organization admins and users), 'own_only' when only the caller's own
+   * is (guests and organization Viewers), so another person's hours are a
+   * permission-limited figure. It follows the caller's role alone. */
+  hidden: 'counted' | 'own_only'
   people: PersonWorkloadJson[]
 }
 
@@ -286,29 +283,79 @@ export const WORKLOAD_YEARS = 'the workload window must fall within the years 00
 
 const DAY_SHAPE = /^\d{4}-\d{2}-\d{2}$/
 
+/* The list name a workload cursor seals (lib/listCursor.ts). REST and MCP
+ * answer the same rows, so they share it, and a cursor of one continues on
+ * the other. */
+const WORKLOAD_LIST = 'workload'
+
+/* The position a workload cursor names in the people's name order, or a
+ * refusal when its tie is not a profile id. */
+async function workloadPosition(text: string, scope: readonly string[]): Promise<NamedAt<IdTie>> {
+  const at = await openListCursor(text, WORKLOAD_LIST, scope, 1)
+  const [id] = at.tie
+  // a cursor this list wrote always holds a profile id
+  if (typeof id !== 'string') throw badRequest(CURSOR_REFUSAL)
+  return { key: at.key, tie: [id] }
+}
+
 /**
- * Each person's planned hours for `weeks` weeks from the week holding
- * `fromDay` (YYYY-MM-DD), as `me` may see them. The rows are orgLoadRows for
- * `me`, which hold work owned by the reviewer while In Review, else the
- * assignee, scheduled, not done, not paused, with remaining hours, outside
- * archived tasks and projects. Staff also receive the rows of projects they
- * cannot see, counted in hours and again, unnamed, in hidden_hours, the part
- * of hours they cannot see; viewers and guests receive only rows they can
- * see or own. Each row's remaining hours spread
- * over its weeks by the app's rule, and only the requested weeks are added
- * up, so the work follows the window. `project`, a project `me` can see,
- * limits the hours to it and its visible sub-projects, which leaves no
- * hidden hours. Lists every active member of the organization and every
- * inactive one with hours in the window, ordered by name. It reads the live
- * tasks of the organization (lib/liveTasks.ts liveTasksOf), also with
- * `project`, because a subtask
- * stored before subtasks had to stay in their parent's top-level project
- * can make a task there a group.
+ * One page of the people of `me`'s organization, each with their planned
+ * hours for `weeks` weeks from the week holding `fromDay` (YYYY-MM-DD), as
+ * `me` may see them, for REST GET /v1/workload and MCP get_workload.
+ *
+ * The people come in name order (profiles.by_org_name: the name key, which
+ * ignores case and accents, in Convex's byte order, then the id), after
+ * `cursor`, the next_cursor of an earlier page. Each person's hours come
+ * from their own open tasks through the owner reader (lib/ownerLoads.ts),
+ * the load planning.ownerLoads answers the app, spread over the weeks by
+ * weeklyHours: work owned by the reviewer while In Review, else the
+ * assignee, scheduled, not Done, not paused, with remaining hours, outside
+ * archived tasks and projects. Staff also receive the work of projects
+ * they cannot see, in hours and again, unnamed, in hidden_hours; guests and
+ * Viewers receive only work they can see or own. `project`, a project `me`
+ * can see, keeps the work of it and its sub-projects `me` can see, which
+ * leaves no hidden hours. No call reads the organization's tasks or
+ * projects.
+ *
+ * A person whose load does not fit the reader's bounds, or whose check of
+ * `me`'s access a bound stopped, is listed `unavailable` with null hours,
+ * never zeros, an inactive one too, since their hours cannot be judged.
+ * Every other active person is listed, and an inactive one only with hours
+ * in the window. One reader serves the page, within one call's room
+ * (callRoom, which counts the page's own reads): the page stops before a
+ * person the call has no room left for, who starts the next page, and once
+ * it lists `limit` people it reads the next profile only to know whether
+ * one follows. A guest's or organization Viewer's page reads one person's
+ * load at most, as planning.ownerLoads reads one owner a call for them, so
+ * neither who is on their page nor where it ends follows another person's
+ * hidden work. So a page can hold fewer than `limit` people, or none,
+ * while next_cursor is set, and next_cursor is null only once the people
+ * have all been read. The reader's first owner is never cut, so every page
+ * moves on.
+ *
+ * The cursor is sealed with the organization, `me`, the project or `all`,
+ * and the window's first day and weeks (lib/listCursor.ts), so it opens
+ * only for that list, on either surface; any other cursor, or a changed
+ * one, is refused with CURSOR_REFUSAL. Every page checks `me`'s access
+ * afresh. Pages are not a snapshot: a person renamed between pages lands
+ * where the new name puts them. A page refuses with NAMES_NOT_READY until
+ * the organization's name keys are all written (model/nameKeys.ts
+ * nameKeysReady).
+ *
+ * `person` answers that person's row alone, inactive or idle, with
+ * next_cursor null, reading no name index, so it needs no name keys.
  */
-export async function workloadCore(
+export async function workloadPage(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
-  o: { fromDay: string; weeks: number; project: Doc<'projects'> | null },
+  o: {
+    fromDay: string
+    weeks: number
+    project: Doc<'projects'> | null
+    limit: number
+    cursor: string | null
+    person?: Doc<'profiles'>
+  },
 ): Promise<WorkloadJson> {
   const org = await byId(ctx, 'organizations', me.org_id)
   const grid = weekGrid(org?.week_start ?? 1)
@@ -321,71 +368,92 @@ export async function workloadCore(
   ) {
     throw badRequest(WORKLOAD_YEARS)
   }
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
-  const view = await orgProjectView(ctx, me)
-  const issues = await liveTasksOf(ctx, view.projects)
-  const scope =
-    o.project === null
-      ? null
-      : new Set([
-          o.project.id,
-          ...view.projects
-            .filter((p) => p.parent_id === o.project?.id && view.visible(p.id))
-            .map((p) => p.id),
-        ])
-  const projectOf = new Map(issues.map((i) => [i.id, i.project_id]))
-  const rows = orgLoadRows(me, view, new Set(profiles.map((p) => p.id)), issues).filter(
-    (row) =>
-      scope === null || (row.issue_id !== null && scope.has(projectOf.get(row.issue_id) ?? '')),
-  )
-  const spans = new Map<string, { all: LoadSpan[]; hidden: LoadSpan[] }>()
-  for (const row of rows) {
-    const span: LoadSpan = {
-      issueUuid: row.issue_id,
-      start: grid.ofDay(row.start_week),
-      end: grid.ofDay(row.end_week),
-      remaining: row.remaining,
-      remainingSet: row.remaining_set_at === null ? null : grid.ofInstant(row.remaining_set_at),
+  const window = { first, weeks: o.weeks }
+  const project = o.project
+  // the reader marks a task visible only in a project `me` can see
+  const keep =
+    project === null
+      ? undefined
+      : ({ task, project: p, visible }: OwnedTask) =>
+          visible && (task.project_id === project.id || p.parent_id === project.id)
+  const staff = isOrgStaff(me)
+  const reader = ownerLoadReader(ctx, { me, access: accessOf(ctx, me), room: callRoom })
+  /* `profile`'s row from their load, or null for an inactive person
+   * without hours whom the page leaves out unless `always` */
+  const rowOf = (
+    profile: Doc<'profiles'>,
+    load: Exclude<OwnedLoad, { state: 'not_read' }>,
+    always: boolean,
+  ): PersonWorkloadJson | null => {
+    const fields = {
+      id: profile.id,
+      name: profile.name,
+      org_role: profile.org_role,
+      kind: profile.kind,
+      active: profile.active,
+      plannable_hours: profile.plannable_hours ?? null,
     }
-    const own = spans.get(row.owner_id) ?? { all: [], hidden: [] }
-    own.all.push(span)
-    if (row.issue_id === null) own.hidden.push(span)
-    spans.set(row.owner_id, own)
+    if (load.state === 'unavailable')
+      return { ...fields, status: 'unavailable', hours: null, hidden_hours: null }
+    const { hours, hidden_hours } = weeklyHours(me, load.tasks, grid, window, keep)
+    if (!always && !profile.active && hours.every((h) => h === 0)) return null
+    return { ...fields, status: 'ok', hours, hidden_hours }
   }
-  const window = Array.from({ length: o.weeks }, (_, i) => first + i)
-  // only the asked weeks are added up, however far a plan runs, in the
-  // order the app adds them (canonicalLoad)
-  const asked = { from: first, to: first + o.weeks - 1 }
-  const perWeek = (items: LoadSpan[]): number[] => {
-    const byWeek = committedByWeek(canonicalLoad(items), null, asked)
-    return window.map((week) => roundTenths(byWeek.get(week) ?? 0))
-  }
-  const people: PersonWorkloadJson[] = []
-  const roster = [...profiles].sort(
-    (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
-  )
-  for (const p of roster) {
-    const own = spans.get(p.id)
-    const hours = perWeek(own?.all ?? [])
-    if (!p.active && hours.every((h) => h === 0)) continue
-    people.push({
-      id: p.id,
-      name: p.name,
-      org_role: p.org_role,
-      kind: p.kind,
-      active: p.active,
-      plannable_hours: p.plannable_hours ?? null,
-      hours,
-      hidden_hours: perWeek(own?.hidden ?? []),
-    })
-  }
-  return {
-    week_starts: window.map(grid.firstDay),
-    project:
-      o.project === null ? null : { id: o.project.id, key: o.project.key, name: o.project.name },
+  const answer = (next_cursor: string | null, people: PersonWorkloadJson[]): WorkloadJson => ({
+    next_cursor,
+    week_starts: Array.from({ length: o.weeks }, (_, i) => grid.firstDay(first + i)),
+    project: project === null ? null : { id: project.id, key: project.key, name: project.name },
+    hidden: staff ? 'counted' : 'own_only',
     people,
+  })
+
+  if (o.person !== undefined) {
+    const load = await reader.read(o.person.id)
+    // the first owner a reader reads is never not_read
+    if (load.state === 'not_read') throw new Error('the first owner of a read was not read')
+    const row = rowOf(o.person, load, true)
+    return answer(null, row === null ? [] : [row])
   }
+
+  if (!(await nameKeysReady(ctx, me.org_id))) throw rule(NAMES_NOT_READY)
+  const scope = [
+    me.org_id,
+    me.id,
+    project?.id ?? 'all',
+    await filtersKey([grid.firstDay(first), o.weeks]),
+  ]
+  const after = o.cursor === null ? null : await workloadPosition(o.cursor, scope)
+  const people: PersonWorkloadJson[] = []
+  // the last person the page read, whose answer is final, and whether
+  // another follows where the page stopped
+  let last: NamedAt | null = null
+  let more = false
+  let loads = 0
+  // the profile rows are in the transaction's metrics, which the reader
+  // looks at before each person, so the stream opens every range and
+  // counts nothing itself
+  const profiles = indexAfter(
+    profileIndex(ctx, me.org_id),
+    after,
+  )({ open: async () => true, skip: async () => true })
+  for await (const step of profiles) {
+    if (step === STOPPED) throw new Error('a workload page opens every range')
+    if (people.length >= o.limit || (!staff && loads > 0)) {
+      more = true
+      break
+    }
+    const load = await reader.read(step.row.id)
+    if (load.state === 'not_read') {
+      more = true
+      break
+    }
+    loads += 1
+    const row = rowOf(step.row, load, false)
+    if (row !== null) people.push(row)
+    last = step.at
+  }
+  if (!more) return answer(null, people)
+  // a page stops only after the reader's first owner, which it always reads
+  if (last === null) throw new Error('a workload page stopped before its first person')
+  return answer(await listCursorText(WORKLOAD_LIST, scope, last), people)
 }

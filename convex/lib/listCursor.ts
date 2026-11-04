@@ -2,16 +2,20 @@
  * on a list that pages with them.
  *
  * REST GET /v1/tasks and MCP list_tasks page their active tasks with these
- * (lib/activeTaskPage.ts). REST GET /v1/inbox and MCP list_inbox
- * (t3/limits-machine-inbox) and REST GET /v1/workload and MCP get_workload
- * (t3/limits-workload-pages) are to page with them too. A cursor is a
- * position in one list's order, sealed with the list's name and its scope
- * (lib/namedPages.ts namedCursor over lib/archiveCursorSeal.ts), so it shows
- * nothing and opens only for the list and scope it came from: another list,
- * surface, organization, caller or filter, or a changed cursor, opens to
- * null and is refused with CURSOR_REFUSAL. A cursor never grants access by
- * itself: every page checks the caller's access again. Archived task lists
- * keep their own `2~` cursors (lib/archivedTasks.ts). */
+ * (lib/activeTaskPage.ts), and REST GET /v1/workload and MCP get_workload
+ * their people (planning.ts workloadPage). REST GET /v1/inbox and MCP
+ * list_inbox (t3/limits-machine-inbox) are to page with them too. A cursor
+ * is a position in one list's order, sealed with the list's name and its
+ * scope (lib/namedPages.ts namedCursor over lib/archiveCursorSeal.ts), so it
+ * shows nothing and opens only for the list and scope it came from: another
+ * list, organization, caller or filter, or a changed cursor, opens to null
+ * and is refused with CURSOR_REFUSAL. A list names each surface apart where
+ * the surfaces answer different rows, as the active tasks do, whose REST
+ * search widens on `*`; the workload, whose surfaces answer the same rows,
+ * names one list for both, so its cursor continues on the other surface. A
+ * cursor never grants access by itself: every page checks the caller's
+ * access again. Archived task lists keep their own `2~` cursors
+ * (lib/archivedTasks.ts). */
 
 import { digestText } from './archiveCursorSeal'
 import { badRequest } from './functions'

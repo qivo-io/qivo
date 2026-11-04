@@ -1,11 +1,11 @@
 /* The live layer group rule (lib/liveTasks.ts countsAsSubtask): a task in
  * an active project is a group only through active subtasks in active
- * projects, on every surface, and the readers that need the organization's
- * live tasks never read the tasks of an archived project. The writes that
- * make a subtask count again (a project restore, a move out of an archived
- * project, a carried subtask) clear the parent's own hours, and those that
- * leave it uncounted (a task restore or an attach inside an archived
- * project) do not. */
+ * projects, on every surface, the lists never read the tasks of an
+ * archived project, and the workload reads no task its people do not own.
+ * The writes that make a subtask count again (a project restore, a move
+ * out of an archived project, a carried subtask) clear the parent's own
+ * hours, and those that leave it uncounted (a task restore or an attach
+ * inside an archived project) do not. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -15,12 +15,12 @@ import { accessOf } from '../lib/access'
 import { ACTIVE_PAGE } from '../lib/activeTaskPage'
 import { ACCESS_POINT_CHECKS, COMPLETION_READS, COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
-import { countsAsSubtask, LIVE_PROJECT_READS } from '../lib/liveTasks'
+import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
-import { assigneeLoad, LOAD_UNAVAILABLE, workloadCore } from '../planning'
+import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import {
   as,
@@ -40,6 +40,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { lowered, mcpPage, restPage } from './taskPages.setup'
 
 type Fx = OrgFixture & {
@@ -438,8 +439,9 @@ describe('reading only live tasks', () => {
     expect(rows.map((row) => row.issue_id)).toEqual([leaf.id])
   })
 
-  it('the workload reads the live tasks of the organization, also when it is limited to a project', async () => {
+  it("the workload reads each person's own open tasks, not the organization's, also when it is limited to a project", async () => {
     const fx = await setup()
+    await keyOrg(fx.t, fx.org.id)
     const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
     await task(fx, { ...plan, remaining_hours: 3 })
     await task(fx, { ...plan, project_id: fx.away.id, remaining_hours: 4 })
@@ -447,56 +449,34 @@ describe('reading only live tasks', () => {
     // the hours it held as a leaf, as before a restore's steps clear them
     const stale = await task(fx, { ...plan, remaining_hours: 5 })
     await task(fx, { project_id: fx.away.id, parent_id: stale.id })
-    await plantMany(fx, 300, { project_id: fx.shelf.id, ...plan, remaining_hours: 1 })
-    await plantMany(fx, 300, { project_id: fx.away.id })
+    // open work in an archived sub-project carries no load
+    await plantMany(fx, 30, { project_id: fx.shelf.id, ...plan, remaining_hours: 1 })
     const workload = (project: Doc<'projects'> | null) =>
       fx.t.run(async (ctx) => {
         const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-        const out = await workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project })
-        const hours = out.people.find((p) => p.id === fx.user.id)?.hours
-        return { hours, documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used }
+        const out = await workloadPage(ctx, me, {
+          fromDay: '2026-09-07',
+          weeks: 1,
+          project,
+          limit: 50,
+          cursor: null,
+        })
+        const user = out.people.find((p) => p.id === fx.user.id)
+        return {
+          hours: user?.hours,
+          documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used,
+        }
       })
     const all = await workload(null)
     expect(all.hours).toEqual([7])
-    // the group's hours count in neither, and no archived task is read
+    // the group's hours count in neither
     const scoped = await workload(fx.meta)
     expect(scoped.hours).toEqual([3])
-    for (const read of [all, scoped]) expect(read.documents).toBeLessThan(400)
-  })
-
-  it('the workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
-    const fx = await setup()
-    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
-    await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
-    const group = await task(fx, { ...plan, remaining_hours: 5 })
-    await task(fx, { project_id: fx.away.id, parent_id: group.id })
-    const shelvedOnly = await task(fx, { ...plan, remaining_hours: 2 })
-    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
-    await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
-    // forty more active projects, each one more range per project read
-    for (let i = 0; i < 40; i++) {
-      await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id })
-    }
-    const read = () =>
-      as(fx.t, fx.admin).query(async (ctx) => {
-        const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-        const out = await workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null })
-        return {
-          out,
-          ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
-        }
-      })
-    const reads = LIVE_PROJECT_READS.reads
-    try {
-      const perProject = await read()
-      LIVE_PROJECT_READS.reads = 1
-      const oneRange = await read()
-      expect(oneRange.out).toEqual(perProject.out)
-      expect(oneRange.ranges).toBeLessThan(perProject.ranges - 40)
-    } finally {
-      LIVE_PROJECT_READS.reads = reads
-    }
+    // tasks nobody on the page owns are never read
+    await plantMany(fx, 300, { project_id: fx.away.id })
+    await plantMany(fx, 300, { project_id: fx.sub.id, status: 'done' })
+    expect(await workload(null)).toEqual(all)
+    expect(await workload(fx.meta)).toEqual(scoped)
   })
 })
 

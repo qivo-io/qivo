@@ -854,8 +854,8 @@ export async function unarchiveProjectCore(ctx: MutationCtx, a: TreeChange): Pro
     throw forbidden('requires lead access to the archived parent project')
   }
   // the projects whose tasks come back. Tasks live in sub-projects, but a
-  // task older code stored under a top-level project comes back too
-  // (lib/liveTasks.ts liveTasksOf reads it).
+  // task older code stored under a top-level project comes back too, since
+  // a read of a project's active tasks reads it.
   const restored = [project]
   // the archived sub-projects that stay archived under a parent that is live now
   let left: Doc<'projects'>[] = []
