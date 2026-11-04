@@ -674,6 +674,23 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
       'Tune the antenna twice',
     )
+    // an image pasted into the description waits with the reason too, and
+    // never shows as uploading
+    const description = await editorOf('Task description')
+    const changes = vi.fn()
+    description.on('update', changes)
+    window.showToast = vi.fn()
+    const image = new File(['png'], 'photo.png', { type: 'image/png' })
+    const paste = {
+      clipboardData: { files: [image], getData: () => '' },
+      preventDefault: () => {},
+    } as unknown as ClipboardEvent
+    await act(async () => {
+      description.view.pasteHTML('', paste)
+    })
+    expect(changes).not.toHaveBeenCalled()
+    expect(window.showToast).toHaveBeenCalledWith(STALE_SAVE, 'error')
+    expect(sentArgs('files:uploadUrl')).toEqual([])
     for (const label of ['Status', 'Priority', 'Assignee']) {
       expect(field(label)?.disabled, label).toBe(true)
       expect(await hintOf(field(label)), label).toBe(WAITS_FOR_CHECK)

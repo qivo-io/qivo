@@ -817,6 +817,19 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     })
   })
 
+  it('says why an upload waits while the window’s read failed, and sends no bytes', async () => {
+    await load()
+    await openFar()
+    await fail('taskWindow:task')
+    const image = new File(['bytes'], 'photo.png', { type: 'image/png' })
+    await expect(P.addAttachment(H, image, { inline: true })).resolves.toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith(
+      "Couldn't save yet. Saving is available once Qivo can check this task for changes.",
+      'error',
+    )
+    expect(sent('files:uploadUrl')).toEqual([])
+  })
+
   it('removes a file only the attachments answer holds with no paint, until that answer drops it', async () => {
     await load()
     await openFar()

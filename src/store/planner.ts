@@ -9576,14 +9576,21 @@ export const PLANNER = {
       by the time uploadUrl's handler runs, a just-dispatched issues.create
       has already been accepted or refused server-side. A task the window
       shows from its own answer takes files the same way, with its
-      organization, project and cap from that answer (answerUploadTarget). */
+      organization, project and cap from that answer (answerUploadTarget),
+      and none while that answer is not current (P.refuseStaleEdit). */
   addAttachment: withUpdateBlock(
     async (issueKey: string, input: File, opts?: { inline?: boolean }): Promise<string | null> => {
       // issueKey may be a derived key ("QN-482") or the issue uuid — the
       // New-issue modal and the drawer attach by uuid, which survives the rare
       // INSERT renumbering that reassigns the derived key mid-flight
       const targetNow = () => heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
-      if (!targetNow() || refusePausedEdit()) return null
+      // a task the window shows from an answer that is not current takes no
+      // file yet, and says why (P.refuseStaleEdit)
+      if (!targetNow()) {
+        PLANNER.refuseStaleEdit(issueKey)
+        return null
+      }
+      if (refusePausedEdit()) return null
       // Shrink BEFORE the cap is applied: a 12 MB screenshot that re-encodes to
       // 600 KB should attach, not bounce. This is the choke point every caller
       // reaches, so the guard lives here rather than in each of the three
@@ -9593,7 +9600,10 @@ export const PLANNER = {
       // row can be deleted from another tab while we encode.
       const file = await compressImage(input)
       const target = targetNow()
-      if (!target) return null
+      if (!target) {
+        PLANNER.refuseStaleEdit(issueKey)
+        return null
+      }
       const { uuid, org } = target
       // the per-task cap, before any bytes are sent (the server checks too);
       // an image a description save took out no longer counts

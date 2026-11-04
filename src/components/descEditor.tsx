@@ -1232,6 +1232,10 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       toast('Create the task before adding images.')
       return
     }
+    // While the window's own answer of the task is not current, a save
+    // waits (commit), and so does an image. It says why before a
+    // placeholder goes in, which the upload would take out again.
+    if (issueKey !== null && P.refuseStaleEdit(issueKey)) return
     // One at a time. Every placeholder is inserted up front (below) so the
     // document looks right immediately, but the decodes are chained: eight
     // 12 MP phone photos dropped together would otherwise hold eight
