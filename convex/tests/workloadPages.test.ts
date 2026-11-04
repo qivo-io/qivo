@@ -1330,6 +1330,6 @@ describe.runIf(process.env.QIVO_WORKLOAD_ORG_OPEN === '1')(
       )
       expect(listed.length).toBe(56)
       expect(reads.length).toBeGreaterThan(1)
-    }, 120_000)
+    })
   },
 )
