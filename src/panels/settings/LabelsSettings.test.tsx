@@ -673,6 +673,22 @@ describe('a label name on the draft model', () => {
       { id: 'l29', name: 'Label 29', count: '0 active tasks' },
     ])
   })
+
+  it('keeps a row with a name it never sent, and its text, when a search hides it', async () => {
+    await load(many(30))
+    await render()
+    // a name over the cap stays typed and unsent
+    const long = 'f'.repeat(41)
+    await rename('l03', long)
+    expect(requests).toEqual([])
+    await type(find<HTMLInputElement>('[data-labels-search]'), 'label 29')
+    await rest()
+    await settle()
+    expect(rows()).toEqual([
+      { id: 'l03', name: long, count: 'Not in this list' },
+      { id: 'l29', name: 'Label 29', count: '0 active tasks' },
+    ])
+  })
 })
 
 describe('leaving the page and hiding the tab', () => {
