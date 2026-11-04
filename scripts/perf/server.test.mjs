@@ -320,6 +320,101 @@ describe('the benchmark server', () => {
     expect(order).toEqual(['result', 'first', 'result', 'second'])
   }, 60_000)
 
+  it('leaves the unheld tasks out of the workspace, and answers them in Search and in the task window', async () => {
+    // forMe, which a baseline build reads, leaves them out too; each server
+    // this file loads takes the worker's place, so this one goes first
+    const { snapshot } = await snapshotOf('tasks=40&unheld=3')
+    expect(snapshot.issues).toHaveLength(37)
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&unheld=3')
+    await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })
+    const [org] = JSON.parse(posted.find((m) => m.to === 'root').text).orgs
+    const windows = idWindows(startWindows(org).tasks)
+    for (const [i, w] of windows.entries())
+      send({ type: 'watch', id: `w${i}`, name: 'workspace:tasks', args: { org_id: org.id, ...w } })
+    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
+    const parts = posted
+      .filter((m) => m.type === 'transition')
+      .flatMap((m) => m.results.map((r) => JSON.parse(r.text)))
+    const held = new Set(parts.flatMap((part) => part.issues.map((row) => row.id)))
+    // every task is visible here; the three highest-numbered loose ones are
+    // not held, nor any row hung on them, nor a parent link to them
+    expect(held.size).toBe(37)
+    const missing = [...Array(40).keys()].map((n) => id('4', n)).filter((uuid) => !held.has(uuid))
+    expect(missing).toHaveLength(3)
+    for (const part of parts) {
+      for (const row of part.issueLabels ?? []) expect(missing).not.toContain(row.issue_id)
+      for (const row of part.issues) expect(missing).not.toContain(row.parent_id)
+    }
+    // the window's read answers one of them, and a write changes it and sends
+    // its read again
+    await send({ type: 'watch', id: 'window', name: 'taskWindow:task', args: { ref: missing[0] } })
+    await vi.waitFor(() =>
+      expect(
+        posted.some((m) => m.type === 'transition' && m.results.some((r) => r.to === 'window')),
+      ).toBe(true),
+    )
+    const answers = () =>
+      posted
+        .filter((m) => m.type === 'transition')
+        .flatMap((m) => m.results.filter((r) => r.to === 'window'))
+        .map((r) => JSON.parse(r.text))
+    expect(answers().at(-1)).toMatchObject({ state: 'ok', task: { id: missing[0] } })
+    await send({
+      type: 'mutation',
+      id: 'label',
+      name: 'labels:toggle',
+      args: { issue_id: missing[0], label_id: id('8', 0), on: true },
+    })
+    await send({
+      type: 'mutation',
+      id: 'follow',
+      name: 'issues:subscribe',
+      args: { issue_id: missing[0] },
+    })
+    await vi.waitFor(() => expect(answers().at(-1)?.follow).not.toBeNull())
+    expect(
+      answers()
+        .at(-1)
+        .labels.map((row) => row.label_id),
+    ).toContain(id('8', 0))
+    await send({
+      type: 'mutation',
+      id: 'unfollow',
+      name: 'issues:unsubscribe',
+      args: { issue_id: missing[0] },
+    })
+    await vi.waitFor(() => expect(answers().at(-1)?.follow).toBeNull())
+    // Search still finds it
+    await send({
+      type: 'query',
+      id: 'search',
+      name: 'search:page',
+      args: { text: answers().at(-1).task.title, include_archived: false },
+    })
+    const found = JSON.parse(posted.find((m) => m.to === 'search').text).rows
+    expect(found.map((row) => row.id)).toContain(missing[0])
+  })
+
+  it("fails the task window's read after its first answer, or answers its subtask list cut short, as the page asks", async () => {
+    const parent = () => id('4', 5)
+    const failing = await server('tasks=40&latency=0&mbps=100000&subtasks=0.2&window=failed')
+    await failing.send({ type: 'watch', id: 'w', name: 'taskWindow:task', args: { ref: parent() } })
+    const results = () =>
+      failing.posted
+        .filter((m) => m.type === 'transition')
+        .flatMap((m) => m.results.filter((r) => r.to === 'w'))
+    await vi.waitFor(() => expect(results().length).toBeGreaterThan(0))
+    expect(JSON.parse(results()[0].text)).toMatchObject({ state: 'ok' })
+    await vi.waitFor(() => expect(results().some((r) => r.error)).toBe(true), 5000)
+    expect(results().find((r) => r.error)?.error).toContain('window=failed')
+    const cut = await server('tasks=40&latency=0&mbps=100000&subtasks=0.2&window=incomplete')
+    await cut.send({ type: 'query', id: 'task', name: 'taskWindow:task', args: { ref: parent() } })
+    const answer = JSON.parse(cut.posted.find((m) => m.to === 'task').text)
+    expect(answer.subtasks.complete).toBe(false)
+    expect(answer.task).toMatchObject({ has_subtasks: true, has_hidden_subtasks: true })
+    expect(answer.subtasks.rows.length).toBeLessThan(2)
+  })
+
   it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })

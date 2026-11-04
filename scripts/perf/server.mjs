@@ -13,7 +13,8 @@
 // part whose JSON changed, and only those, in one transition, as Convex does.
 // It also answers snapshot:forMe, the one query apps before the parts read,
 // for a baseline build, and the task window's own queries (taskWindow:task,
-// links and attachments) from the workspace it holds.
+// links and attachments) from the workspace it holds, which a write sends
+// again with the parts it changed.
 //
 // Like Convex, a write's results reach the page before its answer does. A
 // subscription result that waits for its turn takes the writes made
@@ -68,6 +69,21 @@
 //   role (user)          the signed-in person's organization role, user or
 //                        viewer; a Viewer's Overview reads one owner's
 //                        load a query, as a guest's does
+//   unheld (0)           leaves the N highest-numbered visible tasks without
+//                        a parent or subtasks out of the workspace's parts
+//                        and snapshot:forMe, with their labels, files,
+//                        follows and links, while tasks:board, search:page
+//                        and the task window's queries still answer them
+//                        and writes still change them, so a Board card or
+//                        a Search result of one opens its task window from
+//                        the window's own answer
+//   window               a state the task window's own read of a task
+//                        answers, for screenshots of states a seeded
+//                        backend reaches only by timing: failed (the read
+//                        fails after its first answer, and after Retry
+//                        too) or incomplete (its subtask list is not
+//                        whole, so the window shows the task as a group
+//                        whose subtasks it cannot all read)
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -140,6 +156,8 @@ const varied = parameters.get('shape') === 'varied'
 const shownLoad = parameters.get('shownload') === '1'
 const appearance = parameters.get('appearance') === 'light' ? 'light' : 'dark'
 const viewer = parameters.get('role') === 'viewer'
+const unheldCount = option('unheld', 0)
+const forcedWindow = parameters.get('window') ?? undefined
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -511,10 +529,37 @@ function settleTasks() {
 }
 settleTasks()
 
+/* The visible tasks the workspace's parts and forMe leave out (`unheld`):
+   the highest-numbered ones without a parent or subtasks, so no task the
+   workspace holds names one as its parent or child. */
+const unheld = new Set(
+  tasks
+    .filter((row) => !row.parent_id && !parents.has(row.id))
+    .sort((a, b) => b.num - a.num)
+    .slice(0, unheldCount)
+    .map((row) => row.id),
+)
+/** The workspace as its parts and forMe send it: without the unheld tasks
+    and the rows hung on them. */
+function heldWorkspace() {
+  if (unheld.size === 0) return snapshot
+  const held = (row) => !unheld.has(row.issue_id)
+  return {
+    ...snapshot,
+    issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
+    issueLabels: snapshot.issueLabels.filter(held),
+    attachments: snapshot.attachments.filter(held),
+    issueSubs: snapshot.issueSubs.filter(held),
+    links: snapshot.links.filter(
+      (link) => !unheld.has(link.source_id) && !unheld.has(link.target_id),
+    ),
+  }
+}
+
 /** The snapshot as forMe sends it: its long lists past 8,192 values in
     parts (convex/lib/arrayLimit.ts). */
 function wireSnapshot() {
-  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = snapshot
+  const { auth_user_id, myProfileIds, orgs, messages, ...rest } = heldWorkspace()
   const { readMessageCount, unreadTruncated, readTruncated, delivered_at, ...lists } = rest
   return {
     auth_user_id,
@@ -633,7 +678,7 @@ function partsNow() {
     people: idWindows(1),
     projects: idWindows(start.projects),
   }
-  partsCache = splitWorkspace(snapshot, (_org, kind) => windowsOf[kind])[0]
+  partsCache = splitWorkspace(heldWorkspace(), (_org, kind) => windowsOf[kind])[0]
   return partsCache
 }
 const PART_KINDS = {
@@ -661,16 +706,27 @@ function readPart(name, args) {
 }
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+/* The tasks whose own read answered once, for window=failed, which fails
+   every read of them after that. */
+const windowAnswered = new Set()
 /** What the task window's query `name` answers for `args`, in the shapes
     of convex/lib/taskWindow.ts: the open task with its parent and its
     subtasks as short rows, its links with their other ends, or its
-    attachment rows. The signed-in person is shown every task the
-    workspace holds, so every list is complete, and a task it does not hold
-    answers unavailable. */
+    attachment rows. The signed-in person is shown every visible task, the
+    unheld ones too, so every list is complete unless window=incomplete
+    says otherwise, and a task it does not hold answers unavailable. With
+    window=failed, the task's read fails after its first answer, which a
+    transition soon after brings. */
 function readTaskWindow(name, args) {
   const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
   const task = byId.get(name === 'taskWindow:task' ? args.ref : args.issue_id)
   if (!task) return { state: 'unavailable' }
+  if (name === 'taskWindow:task' && forcedWindow === 'failed') {
+    if (windowAnswered.has(task.id))
+      throw new Error("the task window's read fails, as window=failed asks")
+    windowAnswered.add(task.id)
+    setTimeout(() => void transition(), 2 * latency + 500)
+  }
   // the person's grant on the visible program
   const level = access[0].level
   const short = (row) => {
@@ -689,16 +745,26 @@ function readTaskWindow(name, args) {
       .filter((row) => row.parent_id === task.id)
       .sort((a, b) => a.num - b.num || order(a.id, b.id))
     const parent = task.parent_id ? byId.get(task.parent_id) : undefined
+    // a list that is not whole says it holds hidden subtasks, as the
+    // server's does (convex/lib/taskWindow.ts windowTask)
+    const incomplete = forcedWindow === 'incomplete'
     return {
       state: 'ok',
-      task: { ...task, has_subtasks: parents.has(task.id) },
+      task: {
+        ...task,
+        has_subtasks: parents.has(task.id),
+        ...(incomplete ? { has_hidden_subtasks: true } : {}),
+      },
       level,
       labels: snapshot.issueLabels.filter((row) => row.issue_id === task.id),
       follow:
         snapshot.issueSubs.find((row) => row.issue_id === task.id && row.profile_id === me.id) ??
         null,
       parent: parent ? short(parent) : null,
-      subtasks: { rows: kids.map(short), complete: true },
+      subtasks: {
+        rows: (incomplete ? kids.slice(0, Math.floor(kids.length / 2)) : kids).map(short),
+        complete: !incomplete,
+      },
     }
   }
   if (name === 'taskWindow:links') {
@@ -1010,6 +1076,37 @@ async function mutate(name, args) {
   }
   if (name === 'issues:update') {
     if (patchTask(args.id, args.patch)) await emitWorkspace()
+    writes++
+    return null
+  }
+  // the writes the task window sends from its own answer besides an edit
+  if (name === 'labels:toggle') {
+    const has = snapshot.issueLabels.some(
+      (row) => row.issue_id === args.issue_id && row.label_id === args.label_id,
+    )
+    if (has !== args.on) {
+      snapshot.issueLabels = args.on
+        ? [...snapshot.issueLabels, { issue_id: args.issue_id, label_id: args.label_id }]
+        : snapshot.issueLabels.filter(
+            (row) => !(row.issue_id === args.issue_id && row.label_id === args.label_id),
+          )
+      await emitWorkspace()
+    }
+    writes++
+    return null
+  }
+  if (name === 'issues:subscribe' || name === 'issues:unsubscribe') {
+    const on = name === 'issues:subscribe'
+    const mine = (row) => row.issue_id === args.issue_id && row.profile_id === me.id
+    if (snapshot.issueSubs.some(mine) !== on) {
+      snapshot.issueSubs = on
+        ? [
+            ...snapshot.issueSubs,
+            { issue_id: args.issue_id, profile_id: me.id, created_at: new Date().toISOString() },
+          ]
+        : snapshot.issueSubs.filter((row) => !mine(row))
+      await emitWorkspace()
+    }
     writes++
     return null
   }
