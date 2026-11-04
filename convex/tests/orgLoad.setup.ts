@@ -112,11 +112,11 @@ export type FenceHours = { hours: number[]; hidden_hours: number[] }
 /**
  * Each person's planned hours for `weeks` weeks from the week holding
  * `fromDay`, as `me` may see them, by person id, as REST and MCP workload
- * answered them before they paged (workloadCore at ef92c289): the rows are
+ * answered them before they paged (workloadCore at ef92c289). The rows are
  * orgLoadRows over the organization's live tasks, `project`, a project `me`
  * can see, keeps the rows of it and its visible sub-projects, and each row
  * spreads over its weeks by the app's rule, only the asked weeks added up,
- * rounded to tenths. `listed` holds the people that answer listed: every
+ * rounded to tenths. `listed` holds the people that answer listed, every
  * active one and every inactive one with hours in the window.
  */
 export async function fenceWorkload(

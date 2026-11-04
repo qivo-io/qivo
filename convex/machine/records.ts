@@ -620,10 +620,10 @@ async function workloadPerson(
   return person
 }
 
-/* A workload read's paging, by the rule REST and MCP share: with `person`
+/* A workload read's paging, by the rule REST and MCP share. With `person`
  * the answer is one row, so a cursor is refused and `limit` and `offset`
- * are not read; else `limit` is LIMITS.listWorkload's, 50 when absent, and
- * any `offset` but 0 is refused with the sentence that says to pass the
+ * are not read. Otherwise `limit` is LIMITS.listWorkload's, 50 when absent,
+ * and any `offset` but 0 is refused with the sentence that says to pass the
  * cursor. */
 function workloadPaging(a: {
   person?: string

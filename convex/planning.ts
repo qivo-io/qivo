@@ -253,7 +253,7 @@ export type PersonWorkloadJson = {
   | {
       /** the person's open work did not fit the owner reader's bounds
        * (lib/ownerLoads.ts OWNER_LOADS), or a bound stopped a check of the
-       * caller's access, so their hours are not known: never zero */
+       * caller's access, so their hours are not known, and never zero */
       status: 'unavailable'
       hours: null
       hidden_hours: null
@@ -268,11 +268,11 @@ export type WorkloadJson = {
   week_starts: string[]
   /** the project the hours are limited to, or null for all of them */
   project: { id: string; key: string; name: string } | null
-  /** as planning.ownerLoads answers it: 'counted' when work in projects
-   * the caller cannot see is in every person's hours and hidden_hours
-   * (organization admins and users), 'own_only' when only the caller's own
-   * is (guests and organization Viewers), so another person's hours are a
-   * permission-limited figure. It follows the caller's role alone. */
+  /** 'counted' when work in projects the caller cannot see is in every
+   * person's hours and hidden_hours (organization admins and users), and
+   * 'own_only' when only the caller's own is (guests and organization
+   * Viewers), so another person's hours are a permission-limited figure, as
+   * planning.ownerLoads answers it. It follows the caller's role alone. */
   hidden: 'counted' | 'own_only'
   people: PersonWorkloadJson[]
 }
@@ -303,26 +303,26 @@ async function workloadPosition(text: string, scope: readonly string[]): Promise
  * hours for `weeks` weeks from the week holding `fromDay` (YYYY-MM-DD), as
  * `me` may see them, for REST GET /v1/workload and MCP get_workload.
  *
- * The people come in name order (profiles.by_org_name: the name key, which
- * ignores case and accents, in Convex's byte order, then the id), after
- * `cursor`, the next_cursor of an earlier page. Each person's hours come
- * from their own open tasks through the owner reader (lib/ownerLoads.ts),
- * the load planning.ownerLoads answers the app, spread over the weeks by
- * weeklyHours: work owned by the reviewer while In Review, else the
- * assignee, scheduled, not Done, not paused, with remaining hours, outside
- * archived tasks and projects. Staff also receive the work of projects
- * they cannot see, in hours and again, unnamed, in hidden_hours; guests and
- * Viewers receive only work they can see or own. `project`, a project `me`
- * can see, keeps the work of it and its sub-projects `me` can see, which
- * leaves no hidden hours. No call reads the organization's tasks or
- * projects.
+ * The people come in name order (profiles.by_org_name, by the name key,
+ * which ignores case and accents, in Convex's byte order, then the id),
+ * after `cursor`, the next_cursor of an earlier page. Each person's hours
+ * come from their own open tasks through the owner reader
+ * (lib/ownerLoads.ts), the load planning.ownerLoads answers the app, spread
+ * over the weeks by weeklyHours. They count work owned by the reviewer
+ * while In Review, else the assignee, scheduled, not Done, not paused, with
+ * remaining hours, outside archived tasks and projects. Staff also receive
+ * the work of projects they cannot see, in hours and again, unnamed, in
+ * hidden_hours; guests and Viewers receive only work they can see or own.
+ * `project`, a project `me` can see, keeps the work of it and its
+ * sub-projects `me` can see, which leaves no hidden hours. No call reads
+ * the organization's tasks or projects.
  *
  * A person whose load does not fit the reader's bounds, or whose check of
  * `me`'s access a bound stopped, is listed `unavailable` with null hours,
  * never zeros, an inactive one too, since their hours cannot be judged.
  * Every other active person is listed, and an inactive one only with hours
  * in the window. One reader serves the page, within one call's room
- * (callRoom, which counts the page's own reads): the page stops before a
+ * (callRoom, which counts the page's own reads). The page stops before a
  * person the call has no room left for, who starts the next page, and once
  * it lists `limit` people it reads the next profile only to know whether
  * one follows. A guest's or organization Viewer's page reads one person's
@@ -337,9 +337,9 @@ async function workloadPosition(text: string, scope: readonly string[]): Promise
  * and the window's first day and weeks (lib/listCursor.ts), so it opens
  * only for that list, on either surface; any other cursor, or a changed
  * one, is refused with CURSOR_REFUSAL. Every page checks `me`'s access
- * afresh. Pages are not a snapshot: a person renamed between pages lands
- * where the new name puts them. A page refuses with NAMES_NOT_READY until
- * the organization's name keys are all written (model/nameKeys.ts
+ * afresh. Pages are not a snapshot, so a person renamed between pages
+ * lands where the new name puts them. A page refuses with NAMES_NOT_READY
+ * until the organization's name keys are all written (model/nameKeys.ts
  * nameKeysReady).
  *
  * `person` answers that person's row alone, inactive or idle, with

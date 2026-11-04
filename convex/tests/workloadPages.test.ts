@@ -237,7 +237,7 @@ async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string)
 }
 
 /* The profiles of organization `orgId` in the order the workload lists
- * them: name key, then id, as Convex orders values. */
+ * them, by name key and then id, as Convex orders values. */
 const nameOrder = (t: T, orgId: string) =>
   t.run(async (ctx) => {
     const rows = await ctx.db
@@ -310,8 +310,8 @@ async function agentKeyOf(t: T, agent: Doc<'profiles'>): Promise<string> {
   return key
 }
 
-/* get_workload over MCP's modern leg with `key`: the tool's text and
- * whether it is an error result. */
+/* get_workload over MCP's modern leg with `key`, answering the tool's
+ * text and whether it is an error result. */
 async function mcpTool(t: T, key: string, args: Record<string, unknown>) {
   const res = await fetchPath(t, '/mcp', {
     method: 'POST',
@@ -649,7 +649,7 @@ describe('inactive people', () => {
     expect(ids).not.toContain(idle?.id)
     expect(ids).not.toContain(later?.id)
     expect(all.find((p) => p.id === busy?.id)).toMatchObject({ active: false, hours: [2, 2] })
-    // the idle person sorts first: a staff page of one goes on to the next
+    // the idle person sorts first. A staff page of one goes on to the next
     // person to list, and a Viewer's page, which reads one person, lists
     // nobody and goes on
     const [first, next] = await nameOrder(fx.t, fx.org.id)
@@ -798,8 +798,8 @@ describe('past a bound', () => {
       parent_id: fx.meta.id,
     })
     await keyOrg(fx.t, fx.org.id)
-    // the user: four planned tasks over three live projects, and one more
-    // in Backlog; the guest: one planned task
+    // the user has four planned tasks over three live projects and one
+    // more in Backlog, and the guest one planned task
     for (const p of [fx.sub, fx.sub2, third, fx.sub])
       await task(fx, { project_id: p.id, assignee_id: fx.user.id, ...plan(2) })
     await task(fx, { assignee_id: fx.user.id, status: 'backlog' })
@@ -926,7 +926,7 @@ describe('a guest’s or Viewer’s page', () => {
       expect(pages.every((p) => p.people.length === 1 && p.hidden === 'own_only')).toBe(true)
       expect(pages.map((p) => p.more)).toEqual([...pages.slice(1).map(() => true), false])
     }
-    // another person's hidden work never shows: the user's sibling work
+    // another person's hidden work never shows, so the user's sibling work
     // below reaches staff only
     const user = (pages: typeof before.guest) =>
       pages.flatMap((p) => p.people).find((p) => p.id === fx.user.id)

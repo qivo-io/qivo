@@ -1,7 +1,6 @@
-/* The organization-wide load fence the tests keep as their oracle
- * (orgLoad.setup.ts): its group rule over the rows it reads, which the
- * owner reader, the workload pages and the app's load rows are pinned
- * against. */
+/* The group rule over the rows it reads of the organization-wide load
+ * fence the tests keep as their oracle (orgLoad.setup.ts), which the owner
+ * reader, the workload pages and the app's load rows are pinned against. */
 
 import { describe, expect, it } from 'vitest'
 import { groupTest } from './orgLoad.setup'
