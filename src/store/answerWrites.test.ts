@@ -683,8 +683,13 @@ describe('labels, the eye and Subscribers from the window’s answer', { timeout
     })
     expect(shown().labels).toEqual(['label-0'])
     // the Board's row sends no labels, so its card is unsure under a filter
+    // until the server accepts the toggle, which changes no Board row, so
+    // the Board's answer does not come again for it
     expect([...P.ownUnsentEdits()]).toEqual([FAR])
+    const views = P.updates.views.getSnapshot()
     await answerWith(last('labels:toggle'))
+    expect(P.ownUnsentEdits().size).toBe(0)
+    expect(P.updates.views.getSnapshot()).not.toBe(views)
     const on = okAnswer(far(), { labels: [{ issue_id: FAR, label_id: 'label-0' }] })
     await deliver('taskWindow:task', on)
     P.toggleIssueLabel(H, 'label-0')
@@ -695,8 +700,6 @@ describe('labels, the eye and Subscribers from the window’s answer', { timeout
     // someone else puts it on again: the paint is gone
     await deliver('taskWindow:task', on)
     expect(shown().labels).toEqual(['label-0'])
-    // the Board's answer holds both writes
-    await deliver('tasks:board', boardAnswer([viewRow(far())]))
     expect(P.ownUnsentEdits().size).toBe(0)
   })
 

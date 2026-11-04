@@ -3241,7 +3241,11 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
   layers.save(layer, { workspace, thread, view: viewPart, detail })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
-  if (sent.view && !viewPart) owed.view = true
+  if (sent.view && !viewPart) {
+    owed.view = true
+    // the views show again without its unsure mark, though no row changed
+    if (unsentText.has(sent.view)) viewReadsChanged = true
+  }
   if (sent.detail && !detail && sent.detail.task === watchedComments) owed.sections = true
   // a view keep gave paints now, unless a delivery holds it already
   const now = {
@@ -3273,6 +3277,8 @@ function detailPartHeld(task: string, seen: number): boolean {
 function settleRefused(layer: Layer) {
   const had = layer.view
   layers.remove(layer)
+  // the views show again without its unsure mark, though no row changed
+  if (had.view && unsentText.has(had.view)) viewReadsChanged = true
   if (paints(had)) {
     repaint({
       workspace: !!had.workspace || owed.workspace,
@@ -6244,15 +6250,17 @@ const STALE_SAVE_TEXT =
    does not send, the description or the labels, by their view part and
    the task they change (P.ownUnsentEdits), so the Board cannot tell from
    its row whether the task still matches a text filter until its answer
-   holds the write. */
+   holds the write. A description change ends with the views' deliveries
+   that hold it, and a label toggle, which changes no view's row, once the
+   server accepts it. */
 const unsentText = new WeakMap<Paint, string>()
 
 /** P.toggleIssueLabel on the watched task the window shows from its own
     answer (answerTaskOf): whether the label goes on, and the cap, come
     from the painted answer's labels. It paints the answer and the
     workspace (labelRowsPaint), and marks the views' copies of the task,
-    whose rows send no labels, as unsure under a text filter until their
-    answers hold it (unsentText). `created` is as on the held path. */
+    whose rows send no labels, as unsure under a text filter until the
+    server accepts it (unsentText). `created` is as on the held path. */
 function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boolean>) {
   if (!rows.labels.get(labelId) || refusePausedEdit()) return
   const uuid = a.uuid
@@ -6262,8 +6270,11 @@ function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boo
     toast(full)
     return
   }
-  // a view's row sends no labels, so its paint changes nothing there
-  const marker = viewPaint([uuid], () => undefined)
+  // A view's row sends no labels, so the marker changes no view's row and
+  // no view's delivery holds it. It goes once the server accepts the
+  // write, by when Convex has delivered every view's answer the write
+  // changed (viewPartHeld), as one a label filter now matches differently.
+  const marker = viewPaint([], () => undefined)
   unsentText.set(marker, uuid)
   const view: View = {
     detail: {
@@ -8447,7 +8458,9 @@ export const PLANNER = {
   /** The tasks, by uuid, whose text a view's row does not send, their
       description or their labels, that a live write from the window's own
       answer changes, until the views' answers hold it (unsentText). The
-      Board counts such a card unsure under a text filter. */
+      Board counts such a card unsure under a text filter. A label toggle
+      leaves this list once the server accepts it, since no view's row
+      changes with it. */
   ownUnsentEdits: (): ReadonlySet<string> => {
     const out = new Set<string>()
     for (const layer of layers.ordered()) {
