@@ -59,7 +59,7 @@ export type ForcedLabelPage = {
 }
 
 type Label = Workspace['labels'][number]
-/* A place in the list: just after the label with this name_lower, time
+/* A place in the list, just after the label with this name_lower, time
    and id. */
 type Position = { key: string; created: string; id: string }
 
@@ -137,8 +137,8 @@ export function labelSettingsStandIn(
     })
 
   const counting = force.counting === true
-  // each label's active tasks: its assignments on the workspace's tasks,
-  // each task once
+  // each label's active tasks, which are its assignments on the
+  // workspace's tasks, each task once
   const tasks = new Set(workspace.issues.filter((t) => t.org_id === args.org_id).map((t) => t.id))
   const carried = new Map<string, Set<string>>()
   for (const { issue_id, label_id } of workspace.issueLabels) {

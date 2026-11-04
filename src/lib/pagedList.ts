@@ -16,7 +16,7 @@
    - `live`: each batch is a live read (lib/liveView.ts watchLive) that
      runs again whenever what it read changes, on the rules of the
      Overview's lists (store/overviewLists.ts):
-     - Only the last batch is open (no `through`). Load more pins it: the
+     - Only the last batch is open (no `through`). Load more pins it. The
        batch is read again between its `after` and the `next` it answered,
        and the next batch opens at that `next`. The pinned read and the new
        open one replace the open batch together once both answered; until
@@ -31,7 +31,7 @@
        gives way to two batches that meet at that `next`, and shows its
        earlier answer until both answered. One that stopped without moving
        (`next` equal to its `after`, as equal positions give equal cursor
-       text) checked nothing: it shows its note in place, with Retry.
+       text) checked nothing, so it shows its note in place, with Retry.
      - While a batch shows its earlier answer, for a Load more or for its
        halves, the other batches keep what they show as well and take their
        new answers with the batches that replace it, so the list shows the
@@ -390,9 +390,9 @@ function liveEngine<A, Row>(
     /** whether `held` came from the read open now */
     fresh: boolean
     shown: Shown | null
-    /** the rows a failure shows before the batch answered once: a Load
+    /** the rows a failure shows before the batch answered once. A Load
         more's pinned batch keeps the rows of the open batch it replaces,
-        and a split's first half those of the batch it splits */
+        and a split's first half those of the batch it splits. */
     kept: readonly Row[]
     retrying: boolean
   }
@@ -555,8 +555,8 @@ function liveEngine<A, Row>(
     return b.kept
   }
 
-  /** A position refusal: the list starts again once for its key, then
-      fails. */
+  /** Answers a position refusal. The list starts again once for its key,
+      then fails. */
   function refused() {
     if (restarted === key) {
       stopAll()
@@ -704,8 +704,8 @@ function liveEngine<A, Row>(
     show(next) {
       if (next === visible) return
       visible = next
-      // hidden: every read stops and the answers stay; shown: the same
-      // batches read again
+      // while hidden every read stops and the answers stay, and once shown
+      // the same batches read again
       for (const b of every()) {
         if (visible) watch(b)
         else unwatch(b)

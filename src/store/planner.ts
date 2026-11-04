@@ -11948,7 +11948,7 @@ export const PLANNER = {
   /** Renames or recolors a label. Returns false when nothing was written,
       either refused with a toast or already stored, so an inline editor
       can keep or put back its text. `save` is a settings field's draft
-      (FieldSave): its base goes out as the value seen, so the server
+      (FieldSave). Its base goes out as the value seen, so the server
       refuses a rename over someone else's change, and a refusal keeps the
       draft. Without it the values on screen go out, as for a recolor. */
   updateLabel: (

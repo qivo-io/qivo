@@ -313,7 +313,7 @@ describe('Settings › Labels', () => {
     expect(names()).toHaveLength(25)
     const box = find<HTMLInputElement>('[data-labels-search]')
     await type(box, 'label 27')
-    // typing has not rested: the list is the first one still
+    // typing has not rested, so the list is the first one still
     expect(names()).toHaveLength(25)
     await rest()
     await settle()

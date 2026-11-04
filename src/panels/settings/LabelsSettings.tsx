@@ -3,7 +3,7 @@
 
    The page reads its rows from the server a batch at a time in name order
    (labels.settingsPage), with a search over the whole list and Load more,
-   through the shared paged list's live source (lib/pagedList.ts): the
+   through the shared paged list's live source (lib/pagedList.ts). The
    loaded batches stay live while the page shows, stop while the tab is
    hidden and go when the page is left, so a later visit reads again.
    Nothing it reads goes into the store. Each row's count is the server's
@@ -86,7 +86,7 @@ const storeLabel = (id: string) => {
 }
 
 /** Whether another label of the home organization is named `name`, in any
-    case: the store's catalogue holds every one (store/planner.ts
+    case. The store's catalogue holds every one (store/planner.ts
     orgLabels), so the check does not rest on the loaded batches. */
 const nameTaken = (name: string, id: string | null) =>
   P.orgLabels().some((l) => l.id !== id && l.name.toLowerCase() === name.toLowerCase())

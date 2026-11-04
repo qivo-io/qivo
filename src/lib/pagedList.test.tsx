@@ -19,7 +19,7 @@ import type { BatchAt, BatchSource, ListBatch, PagedList } from './pagedList'
 type Row = { id: string; name: string }
 type Args = { list?: string; after?: string; through?: string }
 
-/* The server: labels by id, in name order then id, read a batch at a time
+/* The server holds labels by id, in name order then id, read a batch at a time
    as convex/model/labels.ts labelBatch reads them. A cursor is the
    position's text, so equal positions give equal cursors. */
 const server = vi.hoisted(() => ({
@@ -66,7 +66,7 @@ function answer(args: Args): ListBatch<Row> & { ready?: false } {
   return { rows: out, next: null, stopped: false }
 }
 
-/* The live transport double: one token a watch, whose result the test
+/* The live transport double, with one token a watch, whose result the test
    publishes in one transition, as Convex sends what one change brought. */
 const transport = vi.hoisted(() => {
   type Watch = {
@@ -433,7 +433,7 @@ describe('a list kept live a batch at a time', () => {
     await act(async () => now().more())
     await publish()
     expect(names()).toContain('a24')
-    // a name between a00 and a01: the pinned first batch grows, the second
+    // a name between a00 and a01, so the pinned first batch grows, the second
     // keeps its start, and a24 stays in view
     server.labels.set('new', 'a00 new')
     await publish()
@@ -460,12 +460,12 @@ describe('a list kept live a batch at a time', () => {
     expect(names()).toHaveLength(50)
     expect(now().settling).toBe(true)
     expect(listEnd(now(), false)).toBe('loading')
-    // the halves answer while the pinned batch still stops: they replace it
+    // the halves answer while the pinned batch still stops, and replace it
     await publish()
     expect(now().settling).toBe(false)
     expect(names()).toHaveLength(50)
     expect(now().batches).toHaveLength(3)
-    // a pinned batch whose read stops at its own start checked nothing: it
+    // a pinned batch whose read stops at its own start checked nothing, so it
     // keeps its rows, says so in place and asks no batch through its start
     server.stop = (args) => (args.after === middle && args.through === end ? 0 : null)
     await publish()
@@ -491,7 +491,7 @@ describe('a list kept live a batch at a time', () => {
     // Load more on the second batch, then a01 renamed into its range
     await act(async () => now().more())
     server.labels.set('a-1', 'a30 moved')
-    // only the first batch answers before the press's batches: it keeps
+    // only the first batch answers before the press's batches, and it keeps
     // what it showed, so the moved row still shows once
     for (const [token, w] of transport.watches)
       if (w.live && !w.args.after && w.args.through) {
