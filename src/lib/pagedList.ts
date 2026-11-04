@@ -602,15 +602,16 @@ function liveEngine<A, Row>(
     // swaps whose batches all answered replace what they stood for, all at
     // once, so no row shows twice or goes missing between batches
     const waiting = swaps.some((s) => !s.to.every((b) => b.shown !== null))
-    if (!waiting)
-      for (const s of [...swaps]) {
+    if (!waiting) {
+      for (const s of swaps) {
         const at = shown.indexOf(s.from[0] as Batch)
         if (at >= 0) {
           shown.splice(at, s.from.length, ...s.to)
           for (const b of s.from) unwatch(b)
         } else for (const b of s.to) unwatch(b)
-        swaps = swaps.filter((x) => x !== s)
       }
+      swaps = []
+    }
     // and the batches on screen take their results with them
     if (swaps.length === 0) for (const [b, settled] of fresh) b.shown = settled
     changed()

@@ -108,7 +108,11 @@ const { listEnd, usePagedList, useSettledSearch } = await import('./pagedList')
 
 let container: HTMLDivElement
 let root: Root
-let list: PagedList<ListBatch<Row>, Row>
+/* What the page rendered, newest last, as a component keeps no outside
+   variable. */
+const views: PagedList<ListBatch<Row>, Row>[] = []
+/** The list as the page rendered it last. */
+const now = () => views[views.length - 1] as PagedList<ListBatch<Row>, Row>
 
 /** The arguments of one batch of list `name`, in a fixed key order. */
 const argsOf = (name: string, at: BatchAt) => ({
@@ -133,7 +137,7 @@ function View({
   source: BatchSource<ListBatch<Row>>
   most?: number
 }) {
-  list = usePagedList({ key: listKey, source, batch: (a) => a, id: (row) => row.id, most })
+  views.push(usePagedList({ key: listKey, source, batch: (a) => a, id: (row) => row.id, most }))
   return null
 }
 
@@ -170,7 +174,7 @@ async function publish(all = false) {
   })
 }
 
-const names = () => list.rows.map((row) => row.name)
+const names = () => now().rows.map((row) => row.name)
 /** Labels named `prefix00` to `prefix<n-1>`, each its own id. */
 const plant = (prefix: string, n: number) => {
   for (let i = 0; i < n; i++)
@@ -188,6 +192,7 @@ beforeEach(() => {
   document.body.append(container)
   root = createRoot(container)
   server.labels.clear()
+  views.length = 0
   Object.assign(server, { batch: 25, stop: null, fail: null })
   transport.watches.clear()
   transport.handlers.clear()
@@ -234,27 +239,27 @@ describe('a list read once a batch', () => {
     plant('a', 60)
     const d = deferred()
     await render({ listKey: 'k', source: d.source })
-    expect(list.phase).toBe('first')
-    expect(listEnd(list, false)).toBe('loading')
+    expect(now().phase).toBe('first')
+    expect(listEnd(now(), false)).toBe('loading')
     await d.reply()
     expect(names()).toHaveLength(25)
-    expect(list.phase).toBe('ready')
-    expect(listEnd(list, false)).toBe('more')
+    expect(now().phase).toBe('ready')
+    expect(listEnd(now(), false)).toBe('more')
     // a second press and a Retry while a read runs read nothing
     await act(async () => {
-      list.more()
-      list.more()
-      list.retry()
+      now().more()
+      now().more()
+      now().retry()
     })
     expect(d.asked).toHaveLength(2)
     expect(d.asked[1]?.at).toEqual({ after: JSON.stringify(['a24', 'a-24']), through: null })
-    expect(list.phase).toBe('more')
+    expect(now().phase).toBe('more')
     await d.reply()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await d.reply()
     expect(names()).toHaveLength(60)
     expect(names().at(-1)).toBe('a59')
-    expect(listEnd(list, false)).toBe('end')
+    expect(listEnd(now(), false)).toBe('end')
     // nothing is subscribed
     expect(open()).toEqual([])
   })
@@ -264,16 +269,16 @@ describe('a list read once a batch', () => {
     const d = deferred()
     await render({ listKey: 'k', source: d.source })
     await d.reply()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await d.reply(null)
-    expect(list.phase).toBe('failed')
+    expect(now().phase).toBe('failed')
     expect(names()).toHaveLength(25)
-    expect(listEnd(list, false)).toBe('failed')
-    await act(async () => list.retry())
+    expect(listEnd(now(), false)).toBe('failed')
+    await act(async () => now().retry())
     expect(d.asked.at(-1)?.at.after).toBe(JSON.stringify(['a24', 'a-24']))
     await d.reply()
     expect(names()).toHaveLength(30)
-    expect(listEnd(list, false)).toBe('end')
+    expect(listEnd(now(), false)).toBe('end')
   })
 
   it('starts again on Retry after a failed first batch, and holds a first answer with no rows', async () => {
@@ -281,12 +286,12 @@ describe('a list read once a batch', () => {
     const d = deferred()
     await render({ listKey: 'k', source: { ...d.source } })
     await d.reply(null)
-    expect(list.phase).toBe('failed')
-    await act(async () => list.retry())
+    expect(now().phase).toBe('failed')
+    await act(async () => now().retry())
     expect(d.asked.at(-1)?.at).toEqual({ after: null, through: null })
     await d.reply()
     expect(names()).toEqual(['a00', 'a01', 'a02'])
-    expect(listEnd(list, false)).toBe('end')
+    expect(listEnd(now(), false)).toBe('end')
   })
 
   it('holds a first answer with no rows, and fails a later one, keeping its rows', async () => {
@@ -296,27 +301,29 @@ describe('a list read once a batch', () => {
       kind: 'once',
       read: async () => replies.shift() ?? null,
     }
-    let held: PagedList<ListBatch<Row> | 'not ready', Row> | null = null
+    const helds: PagedList<ListBatch<Row> | 'not ready', Row>[] = []
     function Held() {
-      held = usePagedList({
-        key: 'k',
-        source,
-        batch: (a) => (a === 'not ready' ? null : a),
-        id: (row) => row.id,
-        most: 200,
-      })
+      helds.push(
+        usePagedList({
+          key: 'k',
+          source,
+          batch: (a) => (a === 'not ready' ? null : a),
+          id: (row) => row.id,
+          most: 200,
+        }),
+      )
       return null
     }
     await act(async () => root.render(<Held />))
-    expect(held?.phase).toBe('held')
-    expect(listEnd(held as unknown as PagedList<unknown, unknown>, false)).toBe('held')
+    expect(helds.at(-1)?.phase).toBe('held')
+    expect(listEnd(helds.at(-1) as unknown as PagedList<unknown, unknown>, false)).toBe('held')
     // Retry starts a held list again
-    await act(async () => held?.retry())
-    expect(held?.rows).toHaveLength(25)
-    await act(async () => held?.more())
+    await act(async () => helds.at(-1)?.retry())
+    expect(helds.at(-1)?.rows).toHaveLength(25)
+    await act(async () => helds.at(-1)?.more())
     // a later batch with no rows is a failure that keeps the rows
-    expect(held?.phase).toBe('failed')
-    expect(held?.rows).toHaveLength(25)
+    expect(helds.at(-1)?.phase).toBe('failed')
+    expect(helds.at(-1)?.rows).toHaveLength(25)
   })
 
   it('drops an answer for an older key and one that arrives after the page left', async () => {
@@ -328,14 +335,14 @@ describe('a list read once a batch', () => {
     await act(async () =>
       older?.answer({ rows: [{ id: 'x', name: 'old' }], next: null, stopped: false }),
     )
-    expect(list.rows).toEqual([])
-    expect(list.phase).toBe('first')
+    expect(now().rows).toEqual([])
+    expect(now().phase).toBe('first')
     await d.reply()
     expect(names()).toHaveLength(25)
-    await act(async () => list.more())
+    await act(async () => now().more())
     const late = d.asked.at(-1)
     const renders = vi.fn()
-    const shown = list
+    const shown = now()
     await act(async () => root.unmount())
     root = createRoot(container)
     await act(async () => {
@@ -343,8 +350,8 @@ describe('a list read once a batch', () => {
       late?.answer({ rows: [{ id: 'y', name: 'late' }], next: null, stopped: false })
     })
     // nothing rendered the late answer
-    expect(list).toBe(shown)
-    expect(list.rows.some((row) => row.name === 'late')).toBe(false)
+    expect(now()).toBe(shown)
+    expect(now().rows.some((row) => row.name === 'late')).toBe(false)
   })
 
   it('says the cap is reached, and never ends a stopped batch', async () => {
@@ -352,18 +359,18 @@ describe('a list read once a batch', () => {
     const d = deferred()
     await render({ listKey: 'k', source: d.source, most: 50 })
     await d.reply()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await d.reply()
     expect(names()).toHaveLength(50)
-    expect(list.full).toBe(true)
-    expect(listEnd(list, false)).toBe('full')
+    expect(now().full).toBe(true)
+    expect(listEnd(now(), false)).toBe('full')
     // a search that matched nothing in the part the server read
     await render({ listKey: 's', source: d.source })
     d.setKey('s')
     await d.reply({ rows: [], next: 'part-2', stopped: true })
-    expect(list.stopped).toBe(true)
-    expect(listEnd(list, true)).toBe('more')
-    expect(listEnd({ ...list, next: false }, true)).toBe('partial')
+    expect(now().stopped).toBe(true)
+    expect(listEnd(now(), true)).toBe('more')
+    expect(listEnd({ ...now(), next: false }, true)).toBe('partial')
   })
 })
 
@@ -379,12 +386,12 @@ describe('a list kept live a batch at a time', () => {
     const [w] = transport.watches.values()
     if (w) w.value = { rows: [{ id: 'kept', name: 'kept' }], next: null, stopped: false }
     await act(async () => {})
-    expect(list.phase).toBe('first')
-    expect(list.rows).toEqual([])
+    expect(now().phase).toBe('first')
+    expect(now().rows).toEqual([])
     await publish()
     expect(names()).toHaveLength(25)
-    expect(listEnd(list, false)).toBe('more')
-    expect(list.refreshing).toBe(false)
+    expect(listEnd(now(), false)).toBe('more')
+    expect(now().refreshing).toBe(false)
   })
 
   it('pins the open batch on Load more and opens only the next one, showing the press-time rows until both answer', async () => {
@@ -392,11 +399,11 @@ describe('a list kept live a batch at a time', () => {
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
     const end = JSON.stringify(['a24', 'a-24'])
-    await act(async () => list.more())
+    await act(async () => now().more())
     expect(open()).toEqual([{ list: 'k' }, { list: 'k', through: end }, { list: 'k', after: end }])
-    expect(list.phase).toBe('more')
+    expect(now().phase).toBe('more')
     expect(names()).toHaveLength(25)
-    expect(listEnd(list, false)).toBe('more')
+    expect(listEnd(now(), false)).toBe('more')
     await publish()
     // the pinned batch and the next replace the open one, whose watch stops
     expect(open()).toEqual([
@@ -404,14 +411,14 @@ describe('a list kept live a batch at a time', () => {
       { list: 'k', after: end },
     ])
     expect(names()).toHaveLength(50)
-    expect(list.phase).toBe('ready')
+    expect(now().phase).toBe('ready')
   })
 
   it('shows a label made inside a pinned batch and loses none behind Load more', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     expect(names()).toContain('a24')
     // a name between a00 and a01: the pinned first batch grows, the second
@@ -428,7 +435,7 @@ describe('a list kept live a batch at a time', () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     const end = JSON.stringify(['a24', 'a-24'])
     const middle = JSON.stringify(['a11', 'a-11'])
@@ -439,38 +446,38 @@ describe('a list kept live a batch at a time', () => {
     expect(open()).toContainEqual({ list: 'k', after: middle, through: end })
     // its earlier answer shows until both halves answered, with no end claimed
     expect(names()).toHaveLength(50)
-    expect(list.settling).toBe(true)
-    expect(listEnd(list, false)).toBe('loading')
+    expect(now().settling).toBe(true)
+    expect(listEnd(now(), false)).toBe('loading')
     // the halves answer while the pinned batch still stops: they replace it
     await publish()
-    expect(list.settling).toBe(false)
+    expect(now().settling).toBe(false)
     expect(names()).toHaveLength(50)
-    expect(list.batches).toHaveLength(3)
+    expect(now().batches).toHaveLength(3)
     // a pinned batch whose read stops at its own start checked nothing: it
     // keeps its rows, says so in place and asks no batch through its start
     server.stop = (args) => (args.after === middle && args.through === end ? 0 : null)
     await publish()
     expect(open().some((a) => a.after === middle && a.through === middle)).toBe(false)
-    expect(list.batches[1]?.note).toBe('stuck')
+    expect(now().batches[1]?.note).toBe('stuck')
     expect(names()).toHaveLength(50)
-    expect(list.partial).toBe(true)
-    expect(listEnd({ ...list, next: false }, false)).toBe('partial')
+    expect(now().partial).toBe(true)
+    expect(listEnd({ ...now(), next: false }, false)).toBe('partial')
     server.stop = null
     const before = open().length
-    await act(async () => list.retry(list.batches[1]?.id))
+    await act(async () => now().retry(now().batches[1]?.id))
     expect(open()).toHaveLength(before)
     await publish(true)
-    expect(list.batches[1]?.note).toBeNull()
+    expect(now().batches[1]?.note).toBeNull()
   })
 
   it('shows one moment: a row renamed into a batch on its way never goes missing', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     // Load more on the second batch, then a01 renamed into its range
-    await act(async () => list.more())
+    await act(async () => now().more())
     server.labels.set('a-1', 'a30 moved')
     // only the first batch answers before the press's batches: it keeps
     // what it showed, so the moved row still shows once
@@ -486,14 +493,14 @@ describe('a list kept live a batch at a time', () => {
     expect(names().filter((n) => n === 'a01' || n === 'a30 moved')).toEqual(['a01'])
     await publish()
     expect(names().filter((n) => n === 'a01' || n === 'a30 moved')).toEqual(['a30 moved'])
-    expect(new Set(list.rows.map((row) => row.id)).size).toBe(list.rows.length)
+    expect(new Set(now().rows.map((row) => row.id)).size).toBe(now().rows.length)
   })
 
   it('shows a row two batches hold once, from the first', async () => {
     plant('a', 30)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     // a rename moves a00 to the end, and only the second batch answers
     server.labels.set('a-0', 'a99')
@@ -506,33 +513,33 @@ describe('a list kept live a batch at a time', () => {
           await Promise.resolve()
         })
       }
-    expect(list.rows.filter((row) => row.id === 'a-0')).toHaveLength(1)
+    expect(now().rows.filter((row) => row.id === 'a-0')).toHaveLength(1)
   })
 
   it('stops every watch while hidden, keeps its rows and refreshes the same batches on return', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     const asked = open()
     await setVisibility('hidden')
     expect(open()).toEqual([])
     expect(names()).toHaveLength(50)
-    expect(list.refreshing).toBe(false)
+    expect(now().refreshing).toBe(false)
     await setVisibility('visible')
     expect(open()).toEqual(asked)
-    expect(list.refreshing).toBe(true)
+    expect(now().refreshing).toBe(true)
     expect(names()).toHaveLength(50)
     await publish(true)
-    expect(list.refreshing).toBe(false)
+    expect(now().refreshing).toBe(false)
   })
 
   it('refreshes after a reconnect until each batch answered again', async () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     transport.state.connection = 2
     // the first answer after the reconnect names one batch only
@@ -542,9 +549,9 @@ describe('a list kept live a batch at a time', () => {
         fn({ tokens: new Set(token ? [token] : []), at: 0, connection: 2 })
       await Promise.resolve()
     })
-    expect(list.refreshing).toBe(true)
+    expect(now().refreshing).toBe(true)
     await publish(true)
-    expect(list.refreshing).toBe(false)
+    expect(now().refreshing).toBe(false)
   })
 
   it('starts again for a new key, showing no row of the old one, and leaves no watch when the page goes', async () => {
@@ -553,8 +560,8 @@ describe('a list kept live a batch at a time', () => {
     await publish()
     await render({ listKey: 'j', source: LIVE('j') })
     expect(open()).toEqual([{ list: 'j' }])
-    expect(list.rows).toEqual([])
-    expect(listEnd(list, true)).toBe('loading')
+    expect(now().rows).toEqual([])
+    expect(listEnd(now(), true)).toBe('loading')
     await publish()
     expect(names()).toHaveLength(25)
     await act(async () => root.unmount())
@@ -567,7 +574,7 @@ describe('a list kept live a batch at a time', () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
     server.fail = (args) => (args.after || args.through ? refusal : null)
@@ -577,14 +584,14 @@ describe('a list kept live a batch at a time', () => {
     server.fail = null
     await publish(true)
     expect(names()).toHaveLength(25)
-    await act(async () => list.more())
+    await act(async () => now().more())
     server.fail = (args) => (args.after || args.through ? refusal : null)
     await publish()
-    expect(list.phase).toBe('failed')
+    expect(now().phase).toBe('failed')
     expect(open()).toEqual([])
-    expect(listEnd(list, false)).toBe('failed')
+    expect(listEnd(now(), false)).toBe('failed')
     server.fail = null
-    await act(async () => list.retry())
+    await act(async () => now().retry())
     await publish()
     expect(names()).toHaveLength(25)
   })
@@ -593,23 +600,23 @@ describe('a list kept live a batch at a time', () => {
     plant('a', 60)
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
-    await act(async () => list.more())
+    await act(async () => now().more())
     await publish()
     server.fail = (args) => (args.through && !args.after ? new Error('offline') : null)
     await publish()
-    expect(list.batches[0]?.note).toBe('failed')
+    expect(now().batches[0]?.note).toBe('failed')
     expect(names()).toHaveLength(50)
-    expect(list.partial).toBe(true)
+    expect(now().partial).toBe(true)
     server.fail = null
-    await act(async () => list.retry(list.batches[0]?.id))
-    expect(list.batches[0]?.retrying).toBe(true)
+    await act(async () => now().retry(now().batches[0]?.id))
+    expect(now().batches[0]?.retrying).toBe(true)
     await publish(true)
-    expect(list.batches[0]?.note).toBeNull()
+    expect(now().batches[0]?.note).toBeNull()
     // the last batch failing is the list's failure, at its end
     server.fail = (args) => (args.after ? new Error('offline') : null)
     await publish()
-    expect(list.phase).toBe('failed')
-    expect(listEnd(list, false)).toBe('failed')
+    expect(now().phase).toBe('failed')
+    expect(listEnd(now(), false)).toBe('failed')
   })
 
   it('gathers batches up to the cap of most / LIST_BATCH, then asks for a search', async () => {
@@ -618,23 +625,23 @@ describe('a list kept live a batch at a time', () => {
     await render({ listKey: 'k', source: LIVE('k') })
     await publish()
     for (let i = 0; i < 10; i++) {
-      await act(async () => list.more())
+      await act(async () => now().more())
       await publish()
     }
     // eight batches of five, 200 / LIST_BATCH
-    expect(list.batches).toHaveLength(8)
+    expect(now().batches).toHaveLength(8)
     expect(names()).toHaveLength(40)
-    expect(list.full).toBe(true)
-    expect(listEnd(list, false)).toBe('full')
+    expect(now().full).toBe(true)
+    expect(listEnd(now(), false)).toBe('full')
   })
 })
 
 /* --------------------------------------------------------------- helpers */
 
 describe('a search box as a list asks with it', () => {
-  let settled: ReturnType<typeof useSettledSearch>
+  const boxes: ReturnType<typeof useSettledSearch>[] = []
   function Box({ text }: { text: string }) {
-    settled = useSettledSearch(text, LIMITS.search)
+    boxes.push(useSettledSearch(text, LIMITS.search))
     return null
   }
 
@@ -642,19 +649,19 @@ describe('a search box as a list asks with it', () => {
     vi.useFakeTimers()
     try {
       await act(async () => root.render(<Box text="" />))
-      expect(settled).toEqual({ typed: '', tooLong: false, settled: '' })
+      expect(boxes.at(-1)).toEqual({ typed: '', tooLong: false, settled: '' })
       await act(async () => root.render(<Box text=" fir " />))
-      expect(settled).toEqual({ typed: 'fir', tooLong: false, settled: '' })
+      expect(boxes.at(-1)).toEqual({ typed: 'fir', tooLong: false, settled: '' })
       await act(async () => vi.advanceTimersByTime(249))
-      expect(settled.settled).toBe('')
+      expect(boxes.at(-1)?.settled).toBe('')
       await act(async () => vi.advanceTimersByTime(1))
-      expect(settled.settled).toBe('fir')
+      expect(boxes.at(-1)?.settled).toBe('fir')
       const long = 'x'.repeat(LIMITS.search.max + 1)
       await act(async () => root.render(<Box text={long} />))
       await act(async () => vi.advanceTimersByTime(1000))
-      expect(settled).toEqual({ typed: long, tooLong: true, settled: 'fir' })
+      expect(boxes.at(-1)).toEqual({ typed: long, tooLong: true, settled: 'fir' })
       await act(async () => root.render(<Box text="" />))
-      expect(settled.settled).toBe('')
+      expect(boxes.at(-1)?.settled).toBe('')
     } finally {
       vi.useRealTimers()
     }

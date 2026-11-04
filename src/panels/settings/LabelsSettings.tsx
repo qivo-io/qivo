@@ -68,7 +68,7 @@ const activeTasks = (n: number) => `${grouped(n)} active task${n === 1 ? '' : 's
 
 /** What the delete window says for a label used by `count` active tasks,
     or by a count the server did not give (null). */
-export function labelDeleteSentence(count: number | null): string {
+function labelDeleteSentence(count: number | null): string {
   const used =
     count === null
       ? ''
