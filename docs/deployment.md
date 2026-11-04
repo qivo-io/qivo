@@ -579,7 +579,7 @@ window's own read of it, through the mutations the app already sends
 `issues.setSubscriber`, `files.uploadUrl`, `files.attach` and
 `files.removeAttachment`), with the expected values of that read. The
 release that first does so changes no server function, so it has no server
-change, no step and no rollback floor: an older app works against its
+change, no step and no rollback floor. An older app works against its
 backend, and it works against an older backend that has the task window's
 read.
 
