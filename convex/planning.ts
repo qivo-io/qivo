@@ -1,6 +1,6 @@
 /* The plan_* load family. Busy TIME from projects the caller cannot see
  * reaches staff while the projection strips the identity. The fence is in
- * the filter, the anonymization in the projection — kept distinct here.
+ * the filter, the anonymization in the projection, kept distinct here.
  * Every read here walks one owner's open tasks through the owner reader
  * (lib/ownerLoads.ts), within bounds past which an owner's load is
  * unavailable: assigneeLoad, ownerLoads, the REST and MCP workload pages
@@ -25,7 +25,7 @@
  *   does not arrive at all, not even anonymously.
  *
  * ownerLoads and the workload pages ONLY add `remaining_hours > 0`;
- * assigneeLoad has NO remaining filter — unestimated/zero-remaining
+ * assigneeLoad has NO remaining filter, so unestimated/zero-remaining
  * scheduled rows are included. */
 
 import { ConvexError, v } from 'convex/values'
