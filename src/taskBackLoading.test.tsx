@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerLabelPages } from './store/labelPagesStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
@@ -20,7 +21,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    task open. A task that arrives while a refused Back steps back is named
    once that step lands. A held address of another organization never
    shows a home task with the same number. Settings opens meanwhile, and
-   so does Archived tasks, but its pages that read every task wait. Back to a task or project that is
+   so do Labels, with the server's counts, and Archived tasks, but its
+   pages that read every task wait. Back to a task or project that is
    gone, once every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -187,6 +189,7 @@ async function bootLoading(
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
+    else if (name === 'labels:settingsPage') answerLabelPages(server, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -549,15 +552,40 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
       'Sign out',
     )
     expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
-    await back(`/app/${org}/settings/org-labels`)
+    await back(`/app/${org}/settings/org-teams`)
     await waitFor(() => document.querySelector('[data-tasks-loading-view]'), 'the waiting page')
     await arrive()
     await waitFor(
       () =>
         !document.querySelector('[data-tasks-loading-view]') &&
-        document.querySelector('[data-settings-page="org-labels"]'),
-      'the Labels page',
+        document.querySelector('[data-settings-page="org-teams"] [data-org-teams]'),
+      'the Teams page',
     )
+  })
+
+  it("opens Labels at once with the server's counts, though the task that carries a label is still to arrive", async () => {
+    const { org } = await bootLoading(true, undefined, (snap) => {
+      snap.labels.push({
+        id: 'soak',
+        org_id: snap.orgs[0].id,
+        name: 'Soak test',
+        name_lower: 'soak test',
+        color: '#335577',
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
+      // the held window's task carries it
+      snap.issueLabels.push({ issue_id: 'fd000000-b', label_id: 'soak' })
+    })
+    await back(`/app/${org}/settings/org-labels`)
+    const count = await waitFor(
+      () =>
+        document.querySelector(
+          '[data-settings-page="org-labels"] [data-label-row="soak"] [data-label-count]',
+        ),
+      'the Labels row',
+    )
+    expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
+    expect(count.textContent).toBe('1 active task')
   })
 
   it('opens Archived tasks at once, with every project in its chooser', async () => {
