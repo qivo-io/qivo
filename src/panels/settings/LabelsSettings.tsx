@@ -565,6 +565,7 @@ export function OrgLabelsPage() {
                 shown={shown}
                 stopped={list.stopped}
                 none={list.rows.length === 0}
+                first={list.batches.length <= 1}
                 loading={list.phase === 'more'}
                 searching={search.settled !== ''}
                 onMore={more}
@@ -624,6 +625,7 @@ function EndLine({
   shown,
   stopped,
   none,
+  first,
   loading,
   searching,
   onMore,
@@ -635,6 +637,9 @@ function EndLine({
   stopped: boolean
   /** whether no loaded batch holds a row */
   none: boolean
+  /** whether the list holds its first batch at most, so a failure is the
+      list's, not a Load more's */
+  first: boolean
   /** whether a Load more is on its way */
   loading: boolean
   searching: boolean
@@ -660,7 +665,7 @@ function EndLine({
           data-labels-end={end}
           className="flex flex-wrap items-center gap-2 px-0.5 py-1 text-sm text-danger"
         >
-          {none ? "Couldn't load labels." : "Couldn't load more labels."}
+          {none || first ? "Couldn't load labels." : "Couldn't load more labels."}
           <Button type="button" variant="ghost" className="h-control-sm text-sm" onClick={onRetry}>
             Retry
           </Button>

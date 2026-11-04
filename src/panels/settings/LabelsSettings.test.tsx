@@ -406,6 +406,21 @@ describe('Settings › Labels', () => {
     expect(names()).toHaveLength(30)
   })
 
+  it('says the list failed, not a Load more, when its only batch fails on a rerun', async () => {
+    await load(many(30))
+    await render()
+    server.force = { fail: true }
+    await rerun()
+    expect(state()).toBe('failed')
+    // the batch keeps its rows, and Retry starts the list again
+    expect(names()).toHaveLength(25)
+    expect(end()).toBe("Couldn't load labels.Retry")
+    server.force = {}
+    await click(button('Retry', find('[data-labels-end]')))
+    expect(state()).toBe('ok')
+    expect(names()).toHaveLength(25)
+  })
+
   it('keeps focus on the Retry that takes Load more’s place, and moves it to no row while a split reads its halves', async () => {
     await load(many(30))
     server.force = { batch: 5 }
