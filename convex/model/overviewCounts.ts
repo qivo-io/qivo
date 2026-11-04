@@ -804,9 +804,7 @@ export const subProjectRows = (db: Reader, projectId: string) =>
  * reads the organization's readiness and the regroup of the project's
  * top-level project (three ranges) and the project's OVERVIEW_SHARDS rows
  * (one range). The counts hold every leaf, whoever reads them; a caller
- * keeps to the sub-projects its reader may see. REST's and MCP's project
- * completion is leaves.done over the sum of the leaves of the readable live
- * sub-projects of a family, a range for each beside the three.
+ * keeps to the sub-projects its reader may see.
  */
 export async function subProjectCounts(
   db: Reader,
@@ -825,11 +823,11 @@ export async function subProjectCounts(
  * three ranges, then reads each sub-project's OVERVIEW_SHARDS rows, a range
  * and up to OVERVIEW_SHARDS documents each, all at once, so a caller that
  * bounds its reads takes room for them first. The Overview's project scope
- * reads it (lib/overview.ts). It is the reader REST's and MCP's project
- * completion (lib/core.ts projectCompletion) can switch to, Completion
- * being leaves.done over the sum of the leaves of the family's readable
- * live sub-projects: 3 + n ranges and at most 4n documents for n of them,
- * whatever their tasks.
+ * (lib/overview.ts) and REST's and MCP's project completion (lib/core.ts
+ * projectCompletion) read it, Completion being leaves.done over the sum of
+ * the leaves of the family's readable live sub-projects: 3 + n ranges and
+ * at most 4n documents beside the readiness rows for n of them, whatever
+ * their tasks.
  */
 export async function familyCounts(
   db: Reader,

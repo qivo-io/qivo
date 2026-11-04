@@ -4,10 +4,10 @@
  * names one. The app's views follow the working-set rule instead
  * (lib/viewReads.ts), so the two keep their own reads.
  *
- * The active task list (lib/activeTaskPage.ts) and project completion
- * (lib/core.ts projectCompletion) read through them, and the single-task
- * read can once t3/limits-machine-task-details rewrites it (lib/core.ts
- * taskOut).
+ * The active task list (lib/activeTaskPage.ts) reads through them, and the
+ * single-task read can once t3/limits-machine-task-details rewrites it
+ * (lib/core.ts taskOut). Project completion reads the stored counts
+ * instead (lib/core.ts projectCompletion).
  *
  * - readTally counts what a read makes against its own budget, every
  *   document at its size as Convex counts it (getDocumentSize), or at a
@@ -24,8 +24,6 @@
  *
  * - how many active subtasks a task has in projects the caller cannot read,
  *   at most LIMITS.subtasks.max a task, which a group check reads whole;
- * - how many subtasks a check of project completion reads in projects that
- *   do not count before one that does (lib/core.ts projectCompletion);
  * - how many distinct parents the caller cannot read a page's rows have,
  *   since each is read once for all its rows (subtreeReads `parent`), and
  *   whether such a parent is gone, which reads a second range and no

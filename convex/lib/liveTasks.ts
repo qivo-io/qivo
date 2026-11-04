@@ -14,9 +14,11 @@
  * restore can then leave that task a group with the own hours it took as a
  * leaf, which the restore's steps clear (regroup.ts).
  *
- * No reader needs the organization's live tasks any more: each reads one
- * owner's, one project's or one task's. The tests keep the walk over all
- * of them as their oracle (convex/tests/orgLoad.setup.ts liveTasksOf). */
+ * No reader needs the organization's live tasks any more. Each reads one
+ * owner's, one project's or one task's, and project completion reads the
+ * stored counts. The tests keep the walk over all of them, and the group
+ * rule over the rows it reads, as their oracle
+ * (convex/tests/orgLoad.setup.ts liveTasksOf and groupTest). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -69,33 +71,5 @@ export function projectLiveness(ctx: QueryCtx): (projectId: string) => Promise<b
       known.set(projectId, live)
     }
     return live
-  }
-}
-
-/**
- * Which tasks are groups by the subtasks among `rows` (countsAsSubtask). An
- * active task needs its active subtasks in `rows` and an archived one all of
- * them, so a caller passing the organization's active tasks may ask only
- * about active tasks.
- */
-export function groupTest(
-  rows: Iterable<Pick<Doc<'issues'>, 'parent_id' | 'archived_at' | 'project_id'>>,
-  live: ProjectLive,
-): (task: Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>) => boolean {
-  // parents with any child, with an active child, and with a live child
-  const any = new Set<string>()
-  const active = new Set<string>()
-  const liveKid = new Set<string>()
-  for (const row of rows) {
-    if (row.parent_id === undefined) continue
-    any.add(row.parent_id)
-    if (row.archived_at !== undefined) continue
-    active.add(row.parent_id)
-    if (live(row.project_id)) liveKid.add(row.parent_id)
-  }
-  return (task) => {
-    const parent = layerOf(task, live)
-    if (parent.archived) return any.has(task.id)
-    return parent.projectLive ? liveKid.has(task.id) : active.has(task.id)
   }
 }

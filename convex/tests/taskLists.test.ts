@@ -24,7 +24,7 @@ import {
   cursorAfter,
   parseArchiveCursor,
 } from '../lib/archivedTasks'
-import { ARCHIVED_TOO_WIDE, COMPLETION_READS, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
+import { ARCHIVED_TOO_WIDE, SUBTREE_WALK, TASK_READ_RESERVE } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { getIssue } from '../machine/rest'
@@ -44,6 +44,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPage, mcpPages, restPage, restPages } from './taskPages.setup'
 
 /* Archive cursors are sealed with a key derived from BETTER_AUTH_SECRET
@@ -222,48 +223,44 @@ describe('active task lists read active tasks only', () => {
       }
     })
     const task = await plantIssue(fx.t, { org_id: fx.org.id, project_id: fx.sub.id })
-    // a page's rows and a completion lowered to about ten ranges, fewer than
-    // the family's projects, as thousands of projects pass the real ones
-    const completion = structuredClone(COMPLETION_READS)
-    Object.assign(COMPLETION_READS, { ranges: 10 })
-    try {
-      await lowered({ page: { ranges: ACTIVE_PAGE.delays.ranges + 10 } }, async () => {
-        // more projects than a page opens side by side is refused with the
-        // sentence that says to name a project
-        await refused(
-          restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
-          'bad_request',
-          TASK_LIST_UNREADABLE,
-        )
-        const rest = await restPage(fx.t, {
-          callerId: fx.agent.id,
-          access: 'read',
-          project: 'FW',
-          limit: '1',
-        })
-        expect(rest).toEqual({
-          next_cursor: null,
-          tasks: [expect.objectContaining({ id: task.id })],
-        })
-        const mcp = await mcpPage(fx.t, {
-          callerId: fx.agent.id,
-          access: 'read',
-          project: 'FW',
-          limit: 1,
-        })
-        expect(mcp.tasks.map((row) => row.id)).toEqual([task.id])
-        expect(mcp.next_cursor).toBeNull()
-        const project = await fx.t.query(internal.machine.rest.getProject, {
-          callerId: fx.agent.id,
-          access: 'read',
-          ref: 'FW',
-        })
-        // FW's family has more live projects than its budget reads, so the
-        // completion counts FW's own task by a check of its subtasks instead
-        expect(project.completion).toEqual({ status: 'ok', done: 0, total: 1, percent: 0 })
+    await countOrg(fx.t, fx.org.id)
+    // a page's rows lowered to about ten ranges, fewer than the family's
+    // projects, as thousands of projects pass the real ones
+    await lowered({ page: { ranges: ACTIVE_PAGE.delays.ranges + 10 } }, async () => {
+      // more projects than a page opens side by side is refused with the
+      // sentence that says to name a project
+      await refused(
+        restTasks(fx.t, { callerId: fx.agent.id, access: 'read', limit: '1' }),
+        'bad_request',
+        TASK_LIST_UNREADABLE,
+      )
+      const rest = await restPage(fx.t, {
+        callerId: fx.agent.id,
+        access: 'read',
+        project: 'FW',
+        limit: '1',
       })
-    } finally {
-      Object.assign(COMPLETION_READS, completion)
+      expect(rest).toEqual({
+        next_cursor: null,
+        tasks: [expect.objectContaining({ id: task.id })],
+      })
+      const mcp = await mcpPage(fx.t, {
+        callerId: fx.agent.id,
+        access: 'read',
+        project: 'FW',
+        limit: 1,
+      })
+      expect(mcp.tasks.map((row) => row.id)).toEqual([task.id])
+      expect(mcp.next_cursor).toBeNull()
+    })
+    // the completion reads the counts, FW's own and TBED's 30 sub-projects'
+    for (const ref of ['FW', 'TBED']) {
+      const project = await fx.t.query(internal.machine.rest.getProject, {
+        callerId: fx.agent.id,
+        access: 'read',
+        ref,
+      })
+      expect(project.completion, ref).toEqual({ status: 'ok', done: 0, total: 1, percent: 0 })
     }
   })
 

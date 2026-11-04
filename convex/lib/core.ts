@@ -58,6 +58,7 @@ import { labelJson, setTaskLabel } from '../model/labels'
 import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
 import { followersOf } from '../model/messages'
 import { attachmentLimitMb } from '../model/orgs'
+import { familyCounts, OVERVIEW_SHARDS } from '../model/overviewCounts'
 import {
   canChangeAccess,
   canHoldWork,
@@ -93,6 +94,7 @@ import { byId } from './db'
 import { refuseDemoFeature } from './demo'
 import {
   type CredentialAccess,
+  ISSUE_STATUSES,
   type IssuePriority,
   type IssueStatus,
   LEVEL_RANK,
@@ -102,16 +104,9 @@ import {
 } from './enums'
 import { badRequest, forbidden, notFound, type Refusal } from './functions'
 import { limitedText } from './limitRules'
-import { LIMITS, MIB, TASK_ROW_MAX_BYTES } from './limits'
+import { LIMITS, MIB } from './limits'
 import { CURSOR_REFUSAL, offsetRefusal } from './listCursor'
-import {
-  countsAsSubtask,
-  groupTest,
-  layerOf,
-  liveIn,
-  type ProjectLive,
-  projectLiveness,
-} from './liveTasks'
+import { countsAsSubtask, layerOf, liveIn, type ProjectLive, projectLiveness } from './liveTasks'
 import {
   type DelayJson,
   delayClock,
@@ -119,12 +114,10 @@ import {
   noForecast,
   taskForecaster,
 } from './machineDelay'
-import { readTally, totalsOf } from './machineSubtree'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
 import type { EventOwner } from './taskEvents'
 import { INT4_MAX, issueKey, parseIssueRef, UUID } from './taskRefs'
-import { withoutSubtasks } from './viewReads'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
 
 export { machineDetail }
@@ -2046,29 +2039,34 @@ export const projectJson = (
 })
 
 /** A project's Completion as REST and MCP send it: `ok` with `done` of
- * `total` tasks and `percent` rounded, 0 without tasks, or `unavailable`
- * with all three null where its tasks did not fit the reads it may make
- * (projectCompletion), never a partial count. */
+ * `total` tasks and `percent` rounded, 0 without tasks; `counting` with all
+ * three null while the stored counts are not whole, which clears on its own;
+ * `unavailable` with all three null where the request has no room left to
+ * read them (projectCompletion); never a partial count. */
 export type CompletionJson =
   | { status: 'ok'; done: number; total: number; percent: number }
+  | { status: 'counting'; done: null; total: null; percent: null }
   | { status: 'unavailable'; done: null; total: null; percent: null }
 
 /** The completion of a project that holds no tasks, such as a new one. */
 export const NO_TASKS: CompletionJson = { status: 'ok', done: 0, total: 0, percent: 0 }
 
-/** The completion of a project whose tasks did not fit its reads. */
+/** The completion of a project whose counts are not whole yet. */
+export const COUNTING_COMPLETION: CompletionJson = {
+  status: 'counting',
+  done: null,
+  total: null,
+  percent: null,
+}
+
+/** The completion of a project whose counts the request has no room left
+ * to read. */
 export const UNAVAILABLE_COMPLETION: CompletionJson = {
   status: 'unavailable',
   done: null,
   total: null,
   percent: null,
 }
-
-/** What one project's completion may read, from where it starts, decided
- * before it reads anything, and within the request's limits less
- * COMPLETION_RESERVE. Past it the completion is unavailable. Tests lower
- * these and set them back with structuredClone. */
-export const COMPLETION_READS: ReadCeiling = { ranges: 2500, documents: 14_000, bytes: 4 * MIB }
 
 /** What a completion keeps back from the request's limits for the reads of
  * a project's detail after it (machine/projects.ts projectDetail): the
@@ -2078,51 +2076,52 @@ export const COMPLETION_READS: ReadCeiling = { ranges: 2500, documents: 14_000, 
  * Tests lower these. */
 export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, bytes: 4 * MIB }
 
-/** What the checks of a whole reader's counted tasks may read past
- * COMPLETION_READS once the rest of their family did not fit it
- * (projectCompletion), within the request's limits less COMPLETION_RESERVE.
- * A check reads one range and the task's active subtasks until one in a
- * live project of the family, so these hold the checks of a sub-project of
- * a few hundred tasks. Tests lower these. */
-export const COMPLETION_CHECK_READS: ReadCeiling = { ranges: 300, documents: 3000, bytes: MIB }
+/* One count row as the completion keeps room for it, as the Overview's
+ * figures do (lib/overview.ts COUNT_ROW), since its fields are ids and
+ * numbers of a few hundred bytes. */
+const COUNT_ROW_BYTES = 1024
 
-/* How many tasks a completion checks for subtasks at once. */
-const COMPLETION_CHECKS = 32
+/* What model/overviewCounts.ts familyCounts reads for `subProjects`
+ * sub-projects: the family's readiness, three ranges whose `.unique()`
+ * each reads up to two rows, the regroup's row, which lists projects,
+ * counted at Convex's document size limit, and each sub-project's range of
+ * OVERVIEW_SHARDS count rows. */
+const countsRead = (subProjects: number): ReadCeiling => ({
+  ranges: 3 + subProjects,
+  documents: 6 + OVERVIEW_SHARDS * subProjects,
+  bytes: DOCUMENT_MAX_BYTES + (5 + OVERVIEW_SHARDS * subProjects) * COUNT_ROW_BYTES,
+})
 
 /**
- * The Completion the app's Overview shows for `project` (src/store/planner.ts
- * progressIn over scopeInfo's sub-projects), as the caller sees it. It
- * counts how many of the active tasks without subtasks are Done, in the
- * project, or for a top-level project in its sub-projects that the caller
- * can read (`view.readable`) and that are not archived. A task with an
- * active subtask in an active project of its family is a group and does
- * not count, even when the caller cannot read the subtask, as in the app,
- * and a subtask stored in another family makes no task a group. Null for an
- * archived project, whose tasks are outside the working plan.
+ * The Completion the app's Overview shows for `project`, as the caller
+ * sees it, which is how many of the active tasks without subtasks are Done,
+ * in the project, or for a top-level project in its live sub-projects that
+ * the caller can read (`view.readable`), from the counts every task writer
+ * keeps (model/overviewCounts.ts familyCounts). It reads the family's
+ * readiness, three ranges, and each counted sub-project's count rows, a
+ * range and up to OVERVIEW_SHARDS documents each, and never a task, so a
+ * project of 30 sub-projects reads 33 ranges and at most 126 documents
+ * whatever its tasks. Null for an archived project, whose tasks are outside
+ * the working plan; NO_TASKS where it counts no sub-project.
  *
- * It reads within COMPLETION_READS, and answers UNAVAILABLE_COMPLETION once
- * its reads would pass them, so a project's read and its updates never fail
- * on it. It reads the active tasks of the projects counted first (issues
- * by_project_archived). A caller who reads the family's top-level project
- * and every live sub-project of it then reads the rest of the family's live
- * projects, which hold every subtask that decides a group, within the same
- * budget. Any other caller, and one whose family does not fit it, asks
- * instead of each counted task not shown to be a group by the tasks read,
- * and not a subtask created under the rule of one level (lib/viewReads.ts
- * withoutSubtasks), whether it has an active subtask in a live project of
- * the family, one range read until one does; a whole reader's checks read
- * within COMPLETION_CHECK_READS more. So a family that fits always counts,
- * and a small sub-project of one that does not counts by its own tasks. A subtask in a project that
- * caller cannot read counts there at lib/limits.ts TASK_ROW_MAX_BYTES, so
- * only how many such subtasks it reads before one that counts follows
- * hidden data (lib/machineSubtree.ts). In an update_project mutation the
- * read conflicts only with writes to the family's tasks.
+ * The leaf rule is the stored one, the Overview's and the app's
+ * (P.isGroup). A task with an active subtask in any live project of the
+ * organization is a group, whoever reads it, a subtask hidden from the
+ * caller or stored in another top-level project included. A task stored on
+ * a top-level project counts nowhere, as in the Overview.
  *
- * It is the interim reader: completion counts stored facts, which the
- * limits plan wants complete at any size inside the design size, so
- * the counts every task writer keeps (t3/limits-overview-counts) are to
- * replace it, and with them its unavailable answer. Keep it the one reader
- * of REST and MCP completion until then.
+ * COUNTING_COMPLETION while the counts are not whole: while Qivo counts
+ * the organization (internal/overviewCountsBackfill.ts), while a regroup
+ * of the family runs after one of its projects was archived, restored,
+ * moved to Deleted items or brought back from it (startRegroup, in the
+ * same transaction, so an update_project or PATCH that archives or
+ * restores a sub-project answers it), or where a row went below zero until
+ * a recount mends it. UNAVAILABLE_COMPLETION where the request has no room
+ * for those reads beside COMPLETION_RESERVE, which inside the design size
+ * never happens. It keeps the public promise that completion never fails a
+ * project's read or update (docs/rest-api.md, docs/mcp.md). In an
+ * update_project or PATCH mutation the read conflicts with writes to the
+ * family's count rows and readiness rows.
  */
 export async function projectCompletion(
   ctx: QueryCtx,
@@ -2131,119 +2130,32 @@ export async function projectCompletion(
 ): Promise<CompletionJson | null> {
   if (project.archived_at !== undefined) return null
   const { cat, readable } = view
+  const familyId = project.parent_id ?? project.id
   const subs =
-    project.type === 'meta'
-      ? cat.projects.filter((c) => c.parent_id === project.id && c.archived_at === undefined)
-      : [project]
-  const scope = new Set(subs.filter((p) => readable(p.id)).map((p) => p.id))
-  if (scope.size === 0) return NO_TASKS
-  const root =
-    project.parent_id === undefined ? project : (cat.byUuid.get(project.parent_id) ?? project)
-  const family = [root, ...cat.projects.filter((c) => c.parent_id === root.id)].filter(
-    (p) => p.archived_at === undefined,
-  )
-  const familyIds = new Set(family.map((p) => p.id))
-  const metrics = await ctx.meta.getTransactionMetrics()
-  const start = totalsOf(metrics)
-  const hard = roomOf(metrics, COMPLETION_RESERVE)
-  const ceiling: ReadCeiling = {
-    ranges: Math.min(start.ranges + COMPLETION_READS.ranges, hard.ranges),
-    documents: Math.min(start.documents + COMPLETION_READS.documents, hard.documents),
-    bytes: Math.min(start.bytes + COMPLETION_READS.bytes, hard.bytes),
-  }
-  const tally = await readTally(ctx, hard)
-  const active: Doc<'issues'>[] = []
-  /* reads the active tasks of `projects` into `active` while the reads keep
-   * under `limit`, and answers whether it read them all */
-  const readTasks = async (projects: readonly Doc<'projects'>[], limit: ReadCeiling) => {
-    for (const p of projects) {
-      if (!(await tally.under(limit))) return false
-      tally.range()
-      const range = ctx.db
-        .query('issues')
-        .withIndex('by_project_archived', (q) =>
-          q.eq('project_id', p.id).eq('archived_at', undefined),
+    project.parent_id === undefined
+      ? cat.projects.filter(
+          (c) => c.parent_id === project.id && c.archived_at === undefined && readable(c.id),
         )
-      for await (const task of range) {
-        tally.doc(task)
-        active.push(task)
-        if (!(await tally.under(limit))) return false
-      }
-    }
-    return true
-  }
-  // the counted projects' own tasks first
+      : readable(project.id)
+        ? [project]
+        : []
+  if (subs.length === 0) return NO_TASKS
+  const metrics = await ctx.meta.getTransactionMetrics()
+  const room = roomOf(metrics, COMPLETION_RESERVE)
+  const need = countsRead(subs.length)
   if (
-    !(await readTasks(
-      family.filter((p) => scope.has(p.id)),
-      ceiling,
-    ))
+    metrics.databaseQueries.used + need.ranges > room.ranges ||
+    metrics.documentsRead.used + need.documents > room.documents ||
+    metrics.bytesRead.used + need.bytes > room.bytes
   )
     return UNAVAILABLE_COMPLETION
-  const counted = [...active]
-  // a task whose subtask a read holds is a group without a check
-  const parents = () =>
-    new Set(active.flatMap((task) => (task.parent_id === undefined ? [] : [task.parent_id])))
-  let whole = family.every((p) => readable(p.id))
-  // where the checks may read to: COMPLETION_READS for a partial reader,
-  // and past it for a whole reader whose family did not fit
-  let checksCeiling = ceiling
-  if (whole) {
-    /* The rest of the family holds every subtask that decides a group, and
-     * the caller reads all of it, within the whole budget. When it does not
-     * fit, the counted tasks' checks get COMPLETION_CHECK_READS more, so a
-     * small sub-project of a large family still counts. */
-    if (
-      !(await readTasks(
-        family.filter((p) => !scope.has(p.id)),
-        ceiling,
-      ))
-    ) {
-      whole = false
-      checksCeiling = {
-        ranges: Math.min(ceiling.ranges + COMPLETION_CHECK_READS.ranges, hard.ranges),
-        documents: Math.min(ceiling.documents + COMPLETION_CHECK_READS.documents, hard.documents),
-        bytes: Math.min(ceiling.bytes + COMPLETION_CHECK_READS.bytes, hard.bytes),
-      }
-    }
-  }
-  const live = liveIn(cat.byUuid)
-  let groups: Set<string>
-  if (whole) {
-    const isGroup = groupTest(active, live)
-    groups = new Set(counted.filter(isGroup).map((task) => task.id))
-  } else {
-    groups = parents()
-    const unknown = counted.filter((task) => !groups.has(task.id) && !withoutSubtasks(task))
-    for (let at = 0; at < unknown.length; at += COMPLETION_CHECKS) {
-      if (!(await tally.under(checksCeiling))) return UNAVAILABLE_COMPLETION
-      const step = unknown.slice(at, at + COMPLETION_CHECKS)
-      const found = await Promise.all(
-        step.map(async (task) => {
-          tally.range()
-          const kids = ctx.db
-            .query('issues')
-            .withIndex('by_parent_archived', (q) =>
-              q.eq('parent_id', task.id).eq('archived_at', undefined),
-            )
-          for await (const kid of kids) {
-            tally.doc(kid, readable(kid.project_id) ? undefined : TASK_ROW_MAX_BYTES)
-            if (familyIds.has(kid.project_id)) return true
-            if (!(await tally.under(checksCeiling))) return null
-          }
-          return false
-        }),
-      )
-      if (found.includes(null)) return UNAVAILABLE_COMPLETION
-      for (const [i, task] of step.entries()) if (found[i]) groups.add(task.id)
-    }
-  }
+  const counts = await familyCounts(ctx.db, project.org_id, familyId, subs)
+  if (counts === null) return COUNTING_COMPLETION
   let done = 0
   let total = 0
-  for (const task of counted) {
-    if (groups.has(task.id)) continue
-    total++
-    if (task.status === 'done') done++
+  for (const c of counts.values()) {
+    done += c.leaves.done
+    for (const status of ISSUE_STATUSES) total += c.leaves[status]
   }
   return { status: 'ok', done, total, percent: total === 0 ? 0 : Math.round((done / total) * 100) }
 }

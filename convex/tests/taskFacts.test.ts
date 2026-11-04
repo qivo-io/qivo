@@ -15,7 +15,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { type GroupIssue, groupProgress, isIssueGroup } from '../../src/lib/issueGroups'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { COUNT_PAGE } from '../internal/overviewCountsBackfill'
 import { ACTIVE_PAGE, TASK_LIST_UNREADABLE } from '../lib/activeTaskPage'
+import { COMPLETION_RESERVE } from '../lib/core'
 import type { Refusal } from '../lib/functions'
 import { CURSOR_REFUSAL, offsetRefusal } from '../lib/listCursor'
 import {
@@ -35,6 +37,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPages, restPage, restPages } from './taskPages.setup'
 
 type Fx = OrgFixture & {
@@ -265,6 +268,7 @@ describe('a project’s completion is the app Overview’s Completion', () => {
   it('counts the active tasks without subtasks that each reader is shown', async () => {
     const fx = await setup()
     await tree(fx)
+    await countOrg(fx.t, fx.org.id)
     for (const person of [fx.admin, fx.guest]) {
       const app = appCompletion(await appView(fx, person), fx.meta.id)
       expect((await restProject(fx, person, 'TBED')).completion, person.name).toEqual(app)
@@ -310,7 +314,8 @@ describe('a project’s completion is the app Overview’s Completion', () => {
   })
 
   it('answers a new project’s zero completion without reading tasks', async () => {
-    // the parent's tasks pass this many documents, which creating never reads
+    // the parent's tasks pass this many documents, which creating never
+    // reads, and which the parent's completion from the counts reads none of
     const fx = await setup(newT({ transactionLimits: { documentsRead: 250 } }))
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 300; i++) {
@@ -329,6 +334,15 @@ describe('a project’s completion is the app Overview’s Completion', () => {
         })
       }
     })
+    // counted with the backfill's steps, each kept inside the request's
+    // documents by a smaller page
+    const page = structuredClone(COUNT_PAGE)
+    Object.assign(COUNT_PAGE, { tasks: 20 })
+    try {
+      await countOrg(fx.t, fx.org.id)
+    } finally {
+      Object.assign(COUNT_PAGE, page)
+    }
     const created = JSON.parse(
       await fx.t.mutation(internal.machine.projects.mcpCreateProject, {
         callerId: fx.user.id,
@@ -338,18 +352,33 @@ describe('a project’s completion is the app Overview’s Completion', () => {
       }),
     ) as { completion: unknown }
     expect(created.completion).toEqual({ status: 'ok', done: 0, total: 0, percent: 0 })
-    // the parent's own read answers, its completion past its budget unavailable
-    const parent = await fx.t.query(internal.machine.rest.getProject, {
-      callerId: fx.user.id,
-      access: 'read',
-      ref: 'TBED',
-    })
-    expect(parent.completion).toEqual({
+    // the parent's read answers its 300 tasks from the counts, with what
+    // the project's detail keeps back lowered to fit this request's 250
+    // documents, and unavailable where that leaves no room
+    const parent = () =>
+      fx.t.query(internal.machine.rest.getProject, {
+        callerId: fx.user.id,
+        access: 'read',
+        ref: 'TBED',
+      })
+    expect((await parent()).completion).toEqual({
       status: 'unavailable',
       done: null,
       total: null,
       percent: null,
     })
+    const reserve = structuredClone(COMPLETION_RESERVE)
+    Object.assign(COMPLETION_RESERVE, { documents: 32 })
+    try {
+      expect((await parent()).completion).toEqual({
+        status: 'ok',
+        done: 0,
+        total: 300,
+        percent: 0,
+      })
+    } finally {
+      Object.assign(COMPLETION_RESERVE, reserve)
+    }
   })
 })
 

@@ -43,6 +43,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { countOrg } from './overviewCounts.setup'
 
 const VIA_REST = 'via the REST API (drive)'
 
@@ -631,6 +632,7 @@ describe('changing a project', () => {
 
   it('archives and restores with the archived field, carrying the sub-projects', async () => {
     const fx = await setup()
+    await countOrg(fx.t, fx.org.id)
     const update = (args: Json) =>
       parsed(
         fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
@@ -680,14 +682,16 @@ describe('changing a project', () => {
       verb: 'archived',
       detail: 'with 2 sub-projects, via MCP',
     })
-    // one call restores first, so the rename lands on the active project
+    // one call restores first, so the rename lands on the active project;
+    // the restore starts its family's regroup in the same transaction, so
+    // its answer's completion is counting until the regroup's steps end
     const back = await update({ archived: false, name: 'Back' })
     expect(back).toEqual({
       ...tbed,
       name: 'Back',
       archived: false,
       archived_at: null,
-      completion: { status: 'ok', done: 0, total: 0, percent: 0 },
+      completion: { status: 'counting', done: null, total: null, percent: null },
     })
     expect((await projectRow(fx.t, fx.sub.id))?.archived_at).toBeUndefined()
     const verbs = (await activityFor(fx.t, fx.org.id)).slice(-2).map((e) => e.verb)

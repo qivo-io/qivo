@@ -1,39 +1,42 @@
-/* REST and MCP project completion within a read budget (lib/core.ts
- * projectCompletion): a reader of the whole family counts from the
- * family's tasks, any other reader from the tasks it can read with a check
- * of each for subtasks, and past COMPLETION_READS the completion says it is
- * unavailable, never failing the read or the update that answers it. */
+/* REST and MCP project completion from the counts every task writer keeps
+ * (lib/core.ts projectCompletion over model/overviewCounts.ts
+ * familyCounts). It counts the leaves of the sub-projects the caller can
+ * read, by the stored leaf rule, the Overview's figure, answers `counting`
+ * while the counts are not whole and `unavailable` where the request has
+ * no room left to read them, never failing the read or the update that
+ * answers it, and reads no task at all. Every fixture is counted first (overviewCounts.setup.ts
+ * countOrg), as every organization is on a deployment. */
 /// <reference types="vite/client" />
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { internal } from '../_generated/api'
+import { describe, expect, it } from 'vitest'
+import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
-  COMPLETION_CHECK_READS,
-  COMPLETION_READS,
+  COUNTING_COMPLETION,
   type CompletionJson,
+  loadCatalogue,
+  NO_TASKS,
+  projectCompletion,
   UNAVAILABLE_COMPLETION,
 } from '../lib/core'
-import { ONE_LEVEL_SINCE } from '../lib/viewReads'
+import { byId } from '../lib/db'
 import { getProject } from '../machine/rest'
 import {
+  as,
   NOW,
   newT,
   type OrgFixture,
   plantIssue,
+  plantLogin,
   plantProject,
   plantSeat,
+  settleScheduled,
   type T,
+  uuid,
   withOrg,
 } from './helpers.setup'
-
-const READS = structuredClone(COMPLETION_READS)
-const CHECK_READS = structuredClone(COMPLETION_CHECK_READS)
-afterEach(() => {
-  Object.assign(COMPLETION_READS, structuredClone(READS))
-  Object.assign(COMPLETION_CHECK_READS, structuredClone(CHECK_READS))
-})
+import { countOrg, countStep } from './overviewCounts.setup'
 
 type Fx = OrgFixture & { t: T; fwOnly: Doc<'profiles'> }
 
@@ -41,7 +44,10 @@ type Fx = OrgFixture & { t: T; fwOnly: Doc<'profiles'> }
  * holds it on FW alone, so PCB is hidden from them. */
 async function setup(t: T = newT()): Promise<Fx> {
   const f = await withOrg(t)
-  const fwOnly = await plantSeat(t, { org_id: f.org.id, name: 'Firmware only' })
+  const fwOnly = await plantLogin(
+    t,
+    await plantSeat(t, { org_id: f.org.id, name: 'Firmware only' }),
+  )
   await t.run(async (ctx) => {
     await ctx.db.insert('project_access', {
       project_id: f.meta.id,
@@ -58,11 +64,11 @@ async function setup(t: T = newT()): Promise<Fx> {
 }
 
 /* REST GET /v1/projects/{ref}'s completion for `callerId`. */
-const restCompletion = async (fx: Fx, callerId: string, ref: string) =>
+const restCompletion = async (fx: Pick<Fx, 't'>, callerId: string, ref: string) =>
   (await fx.t.query(internal.machine.rest.getProject, { callerId, access: 'read', ref })).completion
 
 /* MCP get_project's completion for `callerId`. */
-const mcpCompletion = async (fx: Fx, callerId: string, project: string) =>
+const mcpCompletion = async (fx: Pick<Fx, 't'>, callerId: string, project: string) =>
   (
     JSON.parse(
       await fx.t.query(internal.machine.projects.mcpGetProject, {
@@ -73,27 +79,34 @@ const mcpCompletion = async (fx: Fx, callerId: string, project: string) =>
     ) as { completion: CompletionJson | null }
   ).completion
 
-/* What REST GET /v1/projects/{ref} read in documents for `callerId`. */
-const documentsRead = (fx: Fx, callerId: string, ref: string) =>
-  fx.t.query(async (ctx) => {
-    const handler = (
-      getProject as unknown as {
-        _handler: (
-          ctx: QueryCtx,
-          a: { callerId: string; access: 'read'; ref: string },
-        ) => Promise<unknown>
-      }
-    )._handler
-    await handler(ctx, { callerId, access: 'read', ref })
-    return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+/* REST PATCH /v1/projects/{ref} and MCP update_project for `callerId`,
+ * each changing the description, answering the completion they send. */
+async function updates(fx: Fx, callerId: string, ref: string) {
+  const rest = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+    callerId,
+    access: 'write',
+    keyName: 'drive',
+    ref,
+    body: JSON.stringify({ description: `Changed over REST ${uuid().slice(0, 4)}` }),
   })
+  const mcp = JSON.parse(
+    await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
+      callerId,
+      access: 'write',
+      project: ref,
+      description: `Changed over MCP ${uuid().slice(0, 4)}`,
+    }),
+  ) as { completion: CompletionJson | null }
+  return { rest: rest.completion, mcp: mcp.completion }
+}
 
 const task = (fx: Fx, over: Partial<Doc<'issues'>> & { project_id: string }) =>
   plantIssue(fx.t, { org_id: fx.org.id, ...over })
 
 /* FW holds a Done leaf, a To Do leaf, a group whose one subtask is in PCB,
- * and a task whose one subtask is in SKNK, another family, which makes it
- * no group. PCB holds the group's subtask and a leaf. */
+ * and a task whose one subtask is in SKNK, another top-level project, which
+ * makes it a group by the stored rule. PCB holds the group's subtask and a
+ * Done leaf. */
 async function plantFamily(fx: Fx) {
   await task(fx, { project_id: fx.sub.id, status: 'done' })
   await task(fx, { project_id: fx.sub.id })
@@ -104,157 +117,264 @@ async function plantFamily(fx: Fx) {
   await task(fx, { project_id: fx.hidden.id, parent_id: legacy.id })
 }
 
-describe('project completion', () => {
-  it('counts the same from the family for a reader of all of it and from checks for a reader of part', async () => {
-    const fx = await setup()
-    await plantFamily(fx)
-    const fw = { status: 'ok', done: 1, total: 3, percent: 33 }
-    // the agent reads TBED's whole family; FW's leaves and PCB's two
-    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual({
-      status: 'ok',
-      done: 2,
-      total: 5,
-      percent: 40,
+const ok = (done: number, total: number): CompletionJson => ({
+  status: 'ok',
+  done,
+  total,
+  percent: total === 0 ? 0 : Math.round((done / total) * 100),
+})
+
+/* A handler run inside `ctx`, so a test can read the metrics after it. */
+const handlerOf = <Args, Out>(fn: unknown) =>
+  (fn as { _handler: (ctx: QueryCtx, args: Args) => Promise<Out> })._handler
+
+/* What `run` read, by Convex's counts. */
+async function readsOf<R>(ctx: QueryCtx, run: () => Promise<R>) {
+  const before = await ctx.meta.getTransactionMetrics()
+  const out = await run()
+  const after = await ctx.meta.getTransactionMetrics()
+  return {
+    out,
+    ranges: after.databaseQueries.used - before.databaseQueries.used,
+    documents: after.documentsRead.used - before.documentsRead.used,
+  }
+}
+
+/* The ranges REST GET /v1/projects/{ref} reads for `callerId`. */
+const rangesOfGet = (t: T, callerId: string, ref: string) =>
+  t.query(async (ctx) => {
+    await handlerOf<{ callerId: string; access: 'read'; ref: string }, unknown>(getProject)(ctx, {
+      callerId,
+      access: 'read',
+      ref,
     })
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
-    // the reader of FW alone counts the group as one, though its subtask is
-    // hidden, and the parent of a subtask in another family as a leaf
-    expect(await restCompletion(fx, fx.fwOnly.id, 'FW')).toEqual(fw)
-    expect(await mcpCompletion(fx, fx.fwOnly.id, 'FW')).toEqual(fw)
-    expect(await restCompletion(fx, fx.fwOnly.id, 'TBED')).toEqual(fw)
+    return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
   })
 
-  it("reads none of a hidden sub-project's other tasks for a reader of part of the family", async () => {
+describe('project completion from the counts', () => {
+  it('counts the leaves of the sub-projects each reader can read, on both reads and both updates', async () => {
     const fx = await setup()
     await plantFamily(fx)
-    const before = await documentsRead(fx, fx.fwOnly.id, 'FW')
-    const wholeBefore = await documentsRead(fx, fx.agent.id, 'FW')
-    for (let i = 0; i < 50; i++) await task(fx, { project_id: fx.sub2.id, title: `Hidden ${i}` })
-    expect(await documentsRead(fx, fx.fwOnly.id, 'FW')).toBe(before)
-    // the reader of the whole family reads PCB's tasks too
-    expect(await documentsRead(fx, fx.agent.id, 'FW')).toBe(wholeBefore + 50)
-    // and whether the partial count fits follows only what it reads, as a
-    // whole reader's does once the family does not fit beside FW's checks
-    COMPLETION_READS.documents = 9
-    const fw = { status: 'ok', done: 1, total: 3, percent: 33 }
-    expect(await restCompletion(fx, fx.fwOnly.id, 'FW')).toEqual(fw)
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
+    await countOrg(fx.t, fx.org.id)
+    // FW counts the Done and the To Do leaf, PCB the subtask and its Done leaf
+    const fw = ok(1, 2)
+    const whole = ok(2, 4)
+    for (const [caller, ref, want] of [
+      [fx.agent, 'TBED', whole],
+      [fx.agent, 'FW', fw],
+      [fx.agent, 'PCB', ok(1, 2)],
+      // the reader of FW alone counts FW only, also under TBED
+      [fx.fwOnly, 'FW', fw],
+      [fx.fwOnly, 'TBED', fw],
+    ] as const) {
+      expect(await restCompletion(fx, caller.id, ref), `${caller.name} ${ref}`).toEqual(want)
+      expect(await mcpCompletion(fx, caller.id, ref), `${caller.name} ${ref}`).toEqual(want)
+    }
+    // the updates answer the same, and the change commits
+    expect(await updates(fx, fx.user.id, 'TBED')).toEqual({ rest: whole, mcp: whole })
+    expect(await updates(fx, fx.user.id, 'FW')).toEqual({ rest: fw, mcp: fw })
+    expect((await fx.t.run((ctx) => byId(ctx, 'projects', fx.sub.id)))?.description).toMatch(
+      /^Changed over MCP/,
+    )
   })
 
-  it('counts a small sub-project of a large family for an admin by checks, and a top-level project from its family', async () => {
+  it('equals the Overview summary’s Completion for the same scope', async () => {
     const fx = await setup()
     await plantFamily(fx)
-    for (let i = 0; i < 300; i++) await task(fx, { project_id: fx.sub2.id, title: `Sibling ${i}` })
-    const fw = { status: 'ok', done: 1, total: 3, percent: 33 }
-    // the family fits: one read of it
-    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
-    // a budget FW's own tasks and checks fit and PCB's 300 tasks do not
-    COMPLETION_READS.documents = 100
-    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
-    expect(await mcpCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
-    // a top-level project counts PCB's tasks itself, which do not fit
-    expect(await restCompletion(fx, fx.admin.id, 'TBED')).toEqual(UNAVAILABLE_COMPLETION)
+    await countOrg(fx.t, fx.org.id)
+    for (const me of [fx.user, fx.guest, fx.fwOnly])
+      for (const project of [fx.meta, fx.sub]) {
+        const scope = { kind: 'project', org_id: fx.org.id, project_id: project.id } as const
+        const summary = await as(fx.t, me).query(api.overview.summary, {
+          scope,
+          day: '2026-09-09',
+        })
+        if (summary.state !== 'ok' || summary.counts.state !== 'ok')
+          throw new Error(JSON.stringify(summary))
+        const leaves = summary.counts.leaves
+        const total = Object.values(leaves).reduce((n, c) => n + c, 0)
+        expect(await restCompletion(fx, me.id, project.key), `${me.name} ${project.key}`).toEqual(
+          ok(leaves.done, total),
+        )
+      }
   })
 
-  it('answers unavailable past its budget on both reads and both updates, and the update commits', async () => {
+  it('keeps a parent whose only subtask is hidden or in another top-level project a group', async () => {
     const fx = await setup()
-    for (let i = 0; i < 20; i++) await task(fx, { project_id: fx.sub.id })
-    COMPLETION_READS.documents = 10
-    expect(await restCompletion(fx, fx.user.id, 'FW')).toEqual(UNAVAILABLE_COMPLETION)
-    expect(await mcpCompletion(fx, fx.user.id, 'FW')).toEqual(UNAVAILABLE_COMPLETION)
-    const rest = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
+    // FW holds a parent whose one subtask is in PCB, which fwOnly cannot read,
+    // one whose one subtask is in SKNK, and one leaf
+    const hidden = await task(fx, { project_id: fx.sub.id, title: 'Hidden subtask' })
+    await task(fx, { project_id: fx.sub2.id, parent_id: hidden.id })
+    const away = await task(fx, { project_id: fx.sub.id, title: 'Away subtask' })
+    const sknkSub = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.hidden.id,
+    })
+    await task(fx, { project_id: sknkSub.id, parent_id: away.id })
+    await task(fx, { project_id: fx.sub.id, status: 'done' })
+    await countOrg(fx.t, fx.org.id)
+    for (const caller of [fx.fwOnly, fx.agent, fx.admin])
+      expect(await restCompletion(fx, caller.id, 'FW'), caller.name).toEqual(ok(1, 1))
+  })
+
+  it('answers counting while the counts are not whole, and the figure once they are', async () => {
+    const fx = await setup()
+    await plantFamily(fx)
+    // not counted yet, as before the backfill
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(COUNTING_COMPLETION)
+    expect(await mcpCompletion(fx, fx.agent.id, 'FW')).toEqual(COUNTING_COMPLETION)
+    // while the backfill counts it
+    const first = await countStep(fx.t, fx.org.id)
+    expect(first.done).toBe(false)
+    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(COUNTING_COMPLETION)
+    await countOrg(fx.t, fx.org.id)
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(2, 4))
+    // a sub-project archived starts a regroup of its family in the same
+    // transaction, so its siblings count again once its steps have run
+    const archive = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
       callerId: fx.user.id,
       access: 'write',
       keyName: 'drive',
-      ref: 'FW',
-      body: JSON.stringify({ name: 'Firmware renamed' }),
+      ref: 'PCB',
+      body: JSON.stringify({ archived: true }),
     })
-    expect(rest).toMatchObject({ name: 'Firmware renamed', completion: UNAVAILABLE_COMPLETION })
-    const mcp = JSON.parse(
+    expect(archive.completion).toBeNull()
+    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(COUNTING_COMPLETION)
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(COUNTING_COMPLETION)
+    await fx.t.finishAllScheduledFunctions(() => {})
+    // the group's subtask is archived away, so the group is a leaf again
+    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(ok(1, 3))
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(1, 3))
+    // a restore answers counting in its own answer, on both surfaces
+    const restored = JSON.parse(
       await fx.t.mutation(internal.machine.projects.mcpUpdateProject, {
         callerId: fx.user.id,
         access: 'write',
-        project: 'FW',
-        description: 'Changed by MCP',
+        project: 'PCB',
+        archived: false,
       }),
-    )
-    expect(mcp).toMatchObject({ description: 'Changed by MCP', completion: UNAVAILABLE_COMPLETION })
-    const stored = await fx.t.run((ctx) => ctx.db.get(fx.sub._id))
-    expect(stored).toMatchObject({ name: 'Firmware renamed', description: 'Changed by MCP' })
-    Object.assign(COMPLETION_READS, structuredClone(READS))
-    expect(await restCompletion(fx, fx.user.id, 'FW')).toEqual({
-      status: 'ok',
-      done: 0,
-      total: 20,
-      percent: 0,
+    ) as { completion: CompletionJson | null }
+    expect(restored.completion).toEqual(COUNTING_COMPLETION)
+    await fx.t.finishAllScheduledFunctions(() => {})
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(2, 4))
+    // a count row below zero, which a bug would leave, until a recount
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('overview_counts')
+        .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
+        .first()
+      if (row !== null) await ctx.db.patch(row._id, { leaves: { ...row.leaves, todo: -1 } })
     })
+    expect([
+      await restCompletion(fx, fx.agent.id, 'FW'),
+      await restCompletion(fx, fx.agent.id, 'PCB'),
+    ]).toContainEqual(COUNTING_COMPLETION)
   })
 
-  it("counts a whole reader's family that fits its budget, however many subtasks its tasks keep in an archived sibling", async () => {
-    const fx = await setup()
-    // FW's 20 tasks each keep six active subtasks in a sibling archived
-    // since, which make no task a group, beside 100 tasks in PCB
-    const shelf = await plantProject(fx.t, {
-      org_id: fx.org.id,
-      type: 'project',
-      parent_id: fx.meta.id,
-      archived_at: NOW,
-    })
-    for (let i = 0; i < 20; i++) {
-      const parent = await task(fx, { project_id: fx.sub.id })
-      for (let k = 0; k < 6; k++) await task(fx, { project_id: shelf.id, parent_id: parent.id })
+  it('answers unavailable where the request has no room for the counts, and the update commits', async () => {
+    // the ranges the read and the update take with 30 sub-projects under
+    // TBED, the most one project holds at the design size
+    const plant = async (t: T) => {
+      const fx = await setup(t)
+      for (let i = 0; i < 28; i++)
+        await plantProject(t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id })
+      await plantFamily(fx)
+      await countOrg(t, fx.org.id)
+      return fx
     }
-    for (let i = 0; i < 100; i++) await task(fx, { project_id: fx.sub2.id })
-    // the family's 120 live tasks fit, though the subtasks a check of each
-    // of FW's tasks would read do not fit beside them
-    COMPLETION_READS.documents = 130
-    const fw = { status: 'ok', done: 0, total: 20, percent: 0 }
-    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
-    expect(await mcpCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
-    // a family that does not fit counts by checks, which read those 120
-    // subtasks within COMPLETION_CHECK_READS, and past it says unavailable
-    COMPLETION_READS.documents = 60
-    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(fw)
-    COMPLETION_CHECK_READS.documents = 100
-    expect(await restCompletion(fx, fx.admin.id, 'FW')).toEqual(UNAVAILABLE_COMPLETION)
-  })
-
-  it('counts groups created under the rule of one level the same on both reads', async () => {
-    const fx = await setup()
-    // created after ONE_LEVEL_SINCE, so a subtask holds no subtasks of its own
-    const later = (i: number) => new Date(Date.parse(ONE_LEVEL_SINCE) + i * 60_000).toISOString()
-    const group = await task(fx, { project_id: fx.sub.id, created_at: later(0) })
-    await task(fx, {
-      project_id: fx.sub.id,
-      parent_id: group.id,
-      status: 'done',
-      created_at: later(1),
+    const free = await plant(newT())
+    const get = await rangesOfGet(free.t, free.agent.id, 'TBED')
+    expect(await restCompletion(free, free.agent.id, 'TBED')).toEqual(ok(2, 4))
+    // a request limit below what the read takes with its completion but
+    // above what it takes without, which COMPLETION_RESERVE leaves no room in
+    const limited = await plant(newT({ transactionLimits: { databaseQueries: get - 10 } }))
+    expect(await restCompletion(limited, limited.agent.id, 'TBED')).toEqual(UNAVAILABLE_COMPLETION)
+    expect(await mcpCompletion(limited, limited.agent.id, 'TBED')).toEqual(UNAVAILABLE_COMPLETION)
+    expect(await updates(limited, limited.user.id, 'TBED')).toEqual({
+      rest: UNAVAILABLE_COMPLETION,
+      mcp: UNAVAILABLE_COMPLETION,
     })
-    // a group whose one subtask is in PCB, which the reader of FW alone cannot read
-    const away = await task(fx, { project_id: fx.sub.id, created_at: later(2) })
-    await task(fx, { project_id: fx.sub2.id, parent_id: away.id, created_at: later(3) })
-    await task(fx, { project_id: fx.sub.id, created_at: later(4) })
-    const fw = { status: 'ok', done: 1, total: 2, percent: 50 }
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
-    expect(await restCompletion(fx, fx.fwOnly.id, 'FW')).toEqual(fw)
-    // a whole reader counts by checks too, once PCB does not fit beside them
-    for (let i = 0; i < 20; i++) await task(fx, { project_id: fx.sub2.id })
-    COMPLETION_READS.documents = 12
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(fw)
+    expect(
+      (await limited.t.run((ctx) => byId(ctx, 'projects', limited.meta.id)))?.description,
+    ).toMatch(/^Changed over MCP/)
   })
 
-  it('answers null for an archived project and ok zeros for an empty one', async () => {
+  it('reads no task, 33 ranges for a project of 30 sub-projects, however many tasks they hold', async () => {
     const fx = await setup()
+    const subs = [fx.sub, fx.sub2]
+    for (let i = 0; i < 28; i++)
+      subs.push(
+        await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id }),
+      )
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: (subs[i % 30] as Doc<'projects'>).id,
+          num: 50_000 + i,
+          title: `Check the supplier quotes against the budget, step ${i}`,
+          status: i % 3 === 0 ? 'done' : 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
+    await countOrg(fx.t, fx.org.id)
+    const read = () =>
+      fx.t.query(async (ctx) => {
+        const me = (await byId(ctx, 'profiles', fx.agent.id)) as Doc<'profiles'>
+        const cat = await loadCatalogue(ctx, me)
+        const project = (await byId(ctx, 'projects', fx.meta.id)) as Doc<'projects'>
+        return await readsOf(ctx, () =>
+          projectCompletion(ctx, project, { cat, readable: () => true }),
+        )
+      })
+    const before = await read()
+    expect(before.out).toEqual(ok(100, 300))
+    expect(before.ranges).toBe(33)
+    expect(before.documents).toBeLessThanOrEqual(3 + 4 * 30)
+    // 300 tasks more, written past the counts, are never read
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 300; i++)
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: fx.org.id,
+          project_id: (subs[i % 30] as Doc<'projects'>).id,
+          num: 60_000 + i,
+          title: `Unread ${i}`,
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+        })
+    })
+    expect(await read()).toEqual(before)
+  })
+
+  it('answers null for an archived project, zeros for a new one without a read, and NO_TASKS where it counts nothing', async () => {
+    const fx = await setup()
+    await plantFamily(fx)
+    await countOrg(fx.t, fx.org.id)
     await fx.t.run(async (ctx) => {
       await ctx.db.patch(fx.sub2._id, { archived_at: NOW })
     })
     expect(await restCompletion(fx, fx.agent.id, 'PCB')).toBeNull()
-    expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual({
-      status: 'ok',
-      done: 0,
-      total: 0,
-      percent: 0,
-    })
+    const created = JSON.parse(
+      await fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+        callerId: fx.user.id,
+        access: 'write',
+        name: 'Optics',
+        parent: 'TBED',
+      }),
+    ) as { completion: CompletionJson | null }
+    expect(created.completion).toEqual(NO_TASKS)
+    // a top-level project without a live sub-project counts none
+    const empty = await plantProject(fx.t, { org_id: fx.org.id, key: 'EMPTY', lead_id: fx.user.id })
+    expect(await restCompletion(fx, fx.admin.id, empty.key)).toEqual(NO_TASKS)
+    await settleScheduled(fx.t)
   })
 })

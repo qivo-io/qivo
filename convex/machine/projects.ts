@@ -131,7 +131,8 @@ type ProjectDetailJson = {
   review_hours: number | null
   effective_review_hours: number
   track_delay: boolean
-  /** the app Overview's Completion, null for an archived project */
+  /** the app Overview's Completion from the stored counts, null for an
+   * archived project */
   completion: CompletionJson | null
   milestones: MilestoneJson[]
   grants: { users: GrantJson[]; teams: GrantJson[] }
@@ -151,8 +152,9 @@ const byName = (a: { name: string; id: string }, b: { name: string; id: string }
 /**
  * The fields a single-project read adds: the lead (a sub-project without its
  * own is led by its parent's), the review time it sets and the one its tasks
- * get, delay tracking, its `completion` (lib/core.ts projectCompletion, which
- * the caller reads), the milestones of the top-level project that stores
+ * get, delay tracking, its `completion` (lib/core.ts projectCompletion, from
+ * the stored counts of what the caller reads), the milestones of the
+ * top-level project that stores
  * them, by date, and the project's own grants, as the app's project settings
  * show them to anyone who can read the project. A sub-project also inherits
  * its parent's grants.
@@ -1014,7 +1016,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'get_project',
       title: 'Get project',
       description:
-        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, or `status: "unavailable"` when its tasks are too many to count in one call), its milestones (kept on the top-level project) and the users and teams given access to it.',
+        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after a sub-project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,
