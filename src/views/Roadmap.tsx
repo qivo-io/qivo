@@ -145,13 +145,15 @@ function Roadmap({
   filters: IssueFilters
   actions: Record<string, (...args: unknown[]) => void>
   filterControls: (mobile: boolean) => React.ReactNode
-  focusPlan: { id: string; n: number } | null
+  /** Plan a task from its window: its handle, a nonce, and the key the
+      sentence names when the Roadmap does not hold the task */
+  focusPlan: { id: string; n: number; key?: string } | null
   /** Gets the nonce of the request taken. */
   onFocusConsumed?: (n: number) => void
   /* Show a task without planning it (Team sync's Roadmap jump): { id, n }
      like focusPlan, n a nonce. Its bar scrolls into view and wears the
      planning spotlight for a moment; no session, no card, nothing written. */
-  revealTask?: { id: string; n: number } | null
+  revealTask?: { id: string; n: number; key?: string } | null
   onRevealConsumed?: (n: number) => void
 }) {
   const phone = useMobile()
@@ -938,6 +940,11 @@ function Roadmap({
      revealTask.n like focusPlan; `revealed` holds the ring after the signal
      is consumed. */
   const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
+  /* Says that the task asked for is not on the roadmap any more, when the
+     loaded Roadmap does not hold it, rather than dropping the request
+     without a word. */
+  const notOnRoadmap = (key?: string) =>
+    window.showToast?.(`${key ?? 'This task'} is not on the roadmap any more.`, 'error')
   /* The nonces of the requests taken. A kept Roadmap (components/KeptView)
      shown again runs its effects again with the props it held, which can
      be a request it took before it hid: that one goes, not again. */
@@ -956,6 +963,9 @@ function Roadmap({
     if (mobile) setMobileLayout('timeline')
     const it = P.issueById[revealTask.id]
     if (!it) {
+      // archived, deleted or hidden since it was asked for, as a task
+      // planned from a window that showed it from its own read can be
+      if (revealTask.key) notOnRoadmap(revealTask.key)
       consumed()
       return
     }
@@ -994,6 +1004,7 @@ function Roadmap({
     const loadEpoch = P.gridEpoch
     const undoDisabledAtStart = P.roadmapUndo.disabled
     if (!it) {
+      notOnRoadmap(focusPlan.key)
       consumed()
       return
     }

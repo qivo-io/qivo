@@ -1143,18 +1143,19 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
   })
 
-  it('opens an active result from its own read, read-only, and makes it editable once it arrives', async () => {
+  it('opens an active result from its own read, editable from it, and shows the workspace’s view once it arrives', async () => {
     const { answer, row } = await openFound({ active: true })
     expect(note()?.textContent).toBe('Loading QN-27…')
     await answer()
     expect(document.querySelector('[data-task-gone]')).toBeNull()
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(dialog()?.textContent).toContain('Measure the drift.')
-    // its fields wait for every task (src/panels/TaskDetail.test.tsx says how)
+    // its fields take edits from the answer (src/panels/TaskDetail.test.tsx
+    // says how)
     expect(
       document.querySelector<HTMLButtonElement>('[data-fieldselect][aria-label="Priority"]')
         ?.disabled,
-    ).toBe(true)
+    ).toBe(false)
     // the workspace brings it in, as once a held part arrives
     const workspace = structuredClone(snap)
     await act(async () => deliver(workspace))

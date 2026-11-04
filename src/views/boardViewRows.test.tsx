@@ -421,6 +421,68 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(busy()).toBe(false)
   })
 
+  /** Opens the window's own read of `far`, as its task window does, and
+      answers it with the Board's row and `description`. */
+  async function farWindow(board: Awaited<ReturnType<typeof farBoard>>, description: string) {
+    let read: ((value: unknown) => void) | null = null
+    const inner = network.onUpdate.getMockImplementation()
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
+      if (getFunctionName(ref) === 'taskWindow:task') {
+        read = next
+        return () => {}
+      }
+      return inner?.(ref, args, next, fail)
+    })
+    board.P.watchComments('far', board.snapshot.orgs[0].id)
+    await wait(10)
+    const row = far(board.snapshot)
+    await act(async () => {
+      read?.({
+        state: 'ok',
+        task: { ...row, description, has_hidden_subtasks: false, has_hidden_parent: false },
+        level: 'lead',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [], complete: true },
+      })
+      await wait(10)
+    })
+    const handle = board.P.taskDetail('far')?.view?.id
+    if (!handle) throw new Error('the window shows no task from its answer')
+    return handle
+  }
+
+  it('shows a window write on its card at once, and counts it unsure while its description changes under a text filter', async () => {
+    const board = await farBoard()
+    await board.search('harness')
+    await wait(300)
+    await board.answer()
+    expect(board.card('far')).not.toBeNull()
+    expect(count('progress')).toBe('1')
+    const handle = await farWindow(board, 'Check the harness')
+    // the server accepts the window's writes
+    network.mutation.mockImplementation(() => Promise.resolve(null))
+    board.server.hold = true
+    // a title away from the word: the row never held it, so the server found
+    // it in the text the row does not send, which this write leaves alone
+    void board.P.updateIssue(handle, { title: 'Tune the antenna' })
+    await wait(10)
+    expect(board.card('far')?.textContent).toContain('Tune the antenna')
+    expect(count('progress')).toBe('1')
+    expect(busy()).toBe(false)
+    // the description may have held it: the counts wait for the answer
+    void board.P.updateIssue(handle, { description: 'Check the cable' })
+    await wait(10)
+    expect(board.card('far')).not.toBeNull()
+    expect(count('progress')).toBe('…')
+    expect(busy()).toBe(true)
+    board.server.hold = false
+    await board.answer()
+    await wait(10)
+    expect(busy()).toBe(false)
+  })
+
   it("opens in the task window from the window's own read", async () => {
     const board = await farBoard()
     const handle = board.P.viewTask('board:desktop', 'far')?.id ?? ''

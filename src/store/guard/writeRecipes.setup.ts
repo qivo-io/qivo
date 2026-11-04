@@ -15,6 +15,10 @@ import type { Row } from '../rows'
 
 export type Snapshot = Workspace
 export type Thread = FunctionReturnType<typeof api.snapshot.threadComments>
+/** The task window's own answer of a task (convex/taskWindow.ts task). */
+export type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
+/** The task window's attachments answer of a task. */
+export type AttachmentsAnswer = FunctionReturnType<typeof api.taskWindow.attachments>
 type Store = typeof import('../planner')
 type Planner = Store['P']
 
@@ -70,7 +74,20 @@ export type Recipe = {
       Board's answer before the write and, given its arguments, as the
       server answers after it. */
   view?: { slot: string; answer: (args?: Record<string, unknown>) => BoardAnswer }
+  /** For a write on task WINDOW_TASK, which the task window shows from its
+      own answer because the workspace does not hold it (store/planner.ts
+      answerTaskOf): the window's answer before the write and, given its
+      arguments, as the server answers after it, and with `files` its
+      attachments answer, which the runner shows (P.showSections). */
+  detail?: {
+    answer: (args?: Record<string, unknown>) => TaskAnswer
+    files?: (args?: Record<string, unknown>) => AttachmentsAnswer
+  }
 }
+
+/** The task the window shows from its own answer in a `detail` recipe:
+    QN-80 of sub-project Work, which the workspace does not hold. */
+export const WINDOW_TASK = 'task-w'
 
 const task = (id: string, num: number, over: Partial<Row<'issues'>> = {}): Row<'issues'> => ({
   id,
@@ -306,6 +323,52 @@ function viewTask(over: Partial<ViewRow> = {}): ViewRow {
   }
 }
 
+/** WINDOW_TASK as the window's answer sends it, changed by `over`. */
+function windowTask(over: Partial<Extract<TaskAnswer, { state: 'ok' }>['task']> = {}) {
+  return {
+    ...task(WINDOW_TASK, 80),
+    has_subtasks: false,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+    ...over,
+  }
+}
+
+/** The window's answer for WINDOW_TASK: its row changed by `over`, and the
+    rest of the answer by `extra`. */
+const windowAnswer = (
+  over: Partial<Extract<TaskAnswer, { state: 'ok' }>['task']> = {},
+  extra: Partial<Extract<TaskAnswer, { state: 'ok' }>> = {},
+): TaskAnswer => ({
+  state: 'ok',
+  task: windowTask(over),
+  level: 'lead',
+  labels: [],
+  follow: null,
+  parent: null,
+  subtasks: { rows: [], complete: true },
+  ...extra,
+})
+
+/** A subtask of WINDOW_TASK as a short row of its answer. */
+const windowKid = () => {
+  const { description: _text, ...fields } = task('task-wk', 81, { parent_id: WINDOW_TASK })
+  const { parent_id: _parent, ...rest } = fields
+  return { ...rest, has_subtasks: false, level: 'lead' as const }
+}
+
+/** A file of WINDOW_TASK as its attachments answer sends it. */
+const windowFile = {
+  id: 'att-w',
+  issue_id: WINDOW_TASK,
+  name: 'notes.pdf',
+  mime: 'application/pdf',
+  size_bytes: 10,
+  storage_id: 'storage-w' as Row<'issue_attachments'>['storage_id'],
+  inline: false,
+  created_at: '2026-10-01T08:00:00.000Z',
+}
+
 /** The Board's answer for sub-project Work with task-v alone. */
 const viewAnswer = (over: Partial<ViewRow> = {}): BoardAnswer => ({
   state: 'ok',
@@ -375,6 +438,171 @@ export const recipes: Recipe[] = [
       answer: (args) => viewAnswer(args ? { assignee_id: PAT, updated_at: SERVER } : {}),
     },
     act: (P) => P.updateIssue('QN-90', { assignee: PAT }),
+  },
+  /* --- a task the window shows from its own answer ------------------- */
+  {
+    mutation: 'issues:update',
+    mutator: 'updateAnswerTask',
+    what: 'a renamed task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        windowAnswer(args ? { title: 'Renamed in the window', updated_at: SERVER } : {}),
+    },
+    act: (P) => P.updateIssue('QN-80', { title: 'Renamed in the window' }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateAnswerTask',
+    what: 'a hidden parent removed from a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        windowAnswer(
+          args ? { has_hidden_parent: false, updated_at: SERVER } : { has_hidden_parent: true },
+        ),
+    },
+    act: (P) => P.updateIssue('QN-80', { parent: null }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateAnswerTask',
+    what: "a group's priority from an answer whose subtask list is not whole",
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        windowAnswer(
+          {
+            has_subtasks: true,
+            has_hidden_subtasks: true,
+            ...(args ? { priority: 'high' as const, updated_at: SERVER } : {}),
+          },
+          { subtasks: { rows: [windowKid()], complete: false } },
+        ),
+    },
+    act: (P) => P.updateIssue('QN-80', { priority: 'high' }),
+  },
+  {
+    mutation: 'issues:move',
+    mutator: 'moveAnswerTask',
+    what: 'a task the window shows from its own answer moved to another sub-project',
+    pause: 'P',
+    detail: {
+      // movedStamps: no status stamp
+      answer: (args) =>
+        windowAnswer(
+          args ? { project_id: 'work2', status_at: undefined, updated_at: SERVER } : {},
+          { subtasks: { rows: [windowKid()], complete: true } },
+        ),
+    },
+    act: (P) => P.moveIssue('QN-80', 'work2'),
+  },
+  {
+    mutation: 'issues:archive',
+    mutator: 'sendArchive',
+    what: 'a task the window shows from its own answer archived',
+    paintsOnAccept: true,
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? {
+              state: 'archived',
+              task: {
+                ...(({ description: _text, ...row }) => row)(task(WINDOW_TASK, 80)),
+                archived_at: SERVER,
+                is_group: false,
+              },
+              description: '',
+              labels: [],
+              level: 'lead',
+            }
+          : windowAnswer(),
+    },
+    act: (P) => P.archiveIssue('QN-80', 'Not needed'),
+  },
+  {
+    mutation: 'issues:deleteDeep',
+    mutator: 'deleteAnswerTask',
+    what: 'a task the window shows from its own answer deleted',
+    paintsOnAccept: true,
+    pause: 'P',
+    detail: { answer: (args) => (args ? { state: 'unavailable' } : windowAnswer()) },
+    act: (P) => P.deleteIssue('QN-80', [], true),
+  },
+  {
+    mutation: 'labels:toggle',
+    mutator: 'toggleAnswerLabel',
+    what: 'a label put on a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        windowAnswer({}, args ? { labels: [{ issue_id: WINDOW_TASK, label_id: 'label-a' }] } : {}),
+    },
+    act: (P) => P.toggleIssueLabel('QN-80', 'label-a'),
+  },
+  {
+    mutation: 'issues:subscribe',
+    mutator: 'followAnswerTask',
+    what: 'following a task the window shows from its own answer',
+    pause: 'U',
+    detail: {
+      answer: (args) =>
+        windowAnswer(
+          {},
+          args ? { follow: { issue_id: WINDOW_TASK, profile_id: ME, created_at: SERVER } } : {},
+        ),
+    },
+    act: (P) => P.setIssueSubscribed('QN-80', true),
+  },
+  {
+    mutation: 'issues:unsubscribe',
+    mutator: 'followAnswerTask',
+    what: 'no longer following a task the window shows from its own answer',
+    pause: 'U',
+    detail: {
+      answer: (args) =>
+        windowAnswer(
+          {},
+          args
+            ? {}
+            : {
+                follow: {
+                  issue_id: WINDOW_TASK,
+                  profile_id: ME,
+                  created_at: '2026-10-01T08:00:00.000Z',
+                },
+              },
+        ),
+    },
+    act: (P) => P.setIssueSubscribed('QN-80', false),
+  },
+  {
+    mutation: 'issues:setSubscriber',
+    mutator: 'setIssueSubscriber',
+    what: 'another person following a task the window shows from its own answer',
+    pause: 'U',
+    detail: { answer: () => windowAnswer() },
+    act: (P) => {
+      const shown = P.taskShown('QN-80')
+      if (shown) P.setIssueSubscriber(shown, PAT, true, () => {})
+    },
+  },
+  {
+    mutation: 'files:removeAttachment',
+    mutator: 'removeUnheldAttachment',
+    what: 'a file only the window’s attachments answer holds removed',
+    pause: 'P',
+    detail: {
+      answer: () => windowAnswer(),
+      files: (args) => ({
+        state: 'ok',
+        rows: args ? [] : [windowFile],
+        count: args ? 0 : 1,
+        complete: true,
+      }),
+    },
+    act: (P) => P.removeAttachment('att-w'),
   },
   {
     mutation: 'issues:createParent',
@@ -450,7 +678,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'issues:archive',
-    mutator: 'archiveIssue',
+    mutator: 'sendArchive',
     what: 'an archived task',
     paintsOnAccept: true,
     pause: 'P',

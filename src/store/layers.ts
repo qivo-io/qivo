@@ -1,9 +1,10 @@
 /* One optimistic layer per store write (store/planner.ts send).
 
    The rows the store shows are always rebuilt the same way: the server's
-   last snapshot delivery, the watched comment thread and the task rows the
-   open views' answers bring (store/viewRows.ts), then every live layer's
-   paint in order. A layer lives from the moment its write is sent
+   last snapshot delivery, the watched comment thread, the task rows the
+   open views' answers bring (store/viewRows.ts) and the task window's own
+   answer of the watched task (store/planner.ts paintedAnswer), then every
+   live layer's paint in order. A layer lives from the moment its write is sent
    until the server refuses it, or until a delivery is known to hold the
    accepted write. A refusal removes only that write's own layer, so no other
    change leaves the screen with it. This module only keeps the layers; the
@@ -34,27 +35,43 @@ export type Paint = () => void
 /** What one write shows. `workspace` paints the snapshot's rows; `thread`
     paints the comment thread of task `task`, and runs only while that task's
     thread is watched; `view` paints the task rows the open views' answers
-    bring (store/viewRows.ts), every copy of a task it changes. A write on a
-    task only a view holds paints both `view` and `workspace`, whose paint
-    skips until the workspace holds the task, so the write shows from
-    whichever source the screen takes the task from. */
-export type View = { workspace?: Paint; thread?: { task: string; paint: Paint }; view?: Paint }
+    bring (store/viewRows.ts), every copy of a task it changes; `detail`
+    paints the task window's own answer of task `task` (convex/taskWindow.ts
+    task), and runs only while that task is watched and its answer held. A
+    write on a task the workspace does not hold paints `view`, `detail` and
+    `workspace`, whose paint skips until the workspace holds the task, so
+    the write shows from whichever source the screen takes the task from. */
+export type View = {
+  workspace?: Paint
+  thread?: { task: string; paint: Paint }
+  view?: Paint
+  detail?: { task: string; paint: Paint }
+}
 
 /** Which rows a paint changes. */
-export type Part = 'workspace' | 'thread' | 'view'
+export type Part = 'workspace' | 'thread' | 'view' | 'detail'
 
 /** The values on screen for the fields one write changes, before its paint:
     the row's table and id, and each field's value. The store sends them as
     the write's `expected` (store/planner.ts expectedOf), so the server can
     refuse an edit over a field someone else changed meanwhile
     (convex/model/expected.ts). */
-export type Over = { table: string; id: string; fields: Record<string, unknown> }
+export type Over = {
+  table: string
+  id: string
+  fields: Record<string, unknown>
+  /** for a task's parent pair, whether the row on screen had a parent the
+      person cannot see, when that row is not the workspace's, such as the
+      task window's own answer (store/planner.ts expectedOf) */
+  hiddenParent?: boolean
+}
 
 /** One write's optimistic change. `open` collects paints before it is sent
     (a Roadmap batch) or covers several writes (an umbrella), `pending` waits
     for the server's answer, and `saved` is accepted but not yet known to be
     held by a delivery. `seen` holds the delivery counters when it was sent,
-    the views' among them (deliveries of the reads that bring view rows).
+    the views' among them (deliveries of the reads that bring view rows) and
+    the task window's (deliveries of the watched task's own answer).
     `seenFrom` names, for each field of `over`, the newest open or pending
     layer that painted it when this one was made, so a refusal of that
     earlier write explains this one's (store/planner.ts). */
@@ -64,12 +81,12 @@ export type Layer = {
   readonly over?: Over
   readonly seenFrom?: ReadonlyMap<string, number>
   state: 'open' | 'pending' | 'saved'
-  seen: { snapshot: number; thread: number; view: number }
+  seen: { snapshot: number; thread: number; view: number; detail: number }
   view: View
 }
 
 /** Whether `view` paints anything. */
-export const paints = (view: View) => !!(view.workspace || view.thread || view.view)
+export const paints = (view: View) => !!(view.workspace || view.thread || view.view || view.detail)
 
 /** Creates an empty registry. */
 export function createLayers() {
@@ -99,7 +116,7 @@ export function createLayers() {
         ...(over ? { over } : {}),
         ...(seenFrom.size ? { seenFrom } : {}),
         state: 'open',
-        seen: { snapshot: 0, thread: 0, view: 0 },
+        seen: { snapshot: 0, thread: 0, view: 0, detail: 0 },
         view,
       }
       live.push(layer)
@@ -123,7 +140,7 @@ export function createLayers() {
     remove,
     /** Drops the saved `part` of each saved layer `held` says a live
         delivery holds. Answers whether it dropped any. */
-    dropSavedIf(part: 'workspace' | 'view', held: (layer: Layer) => boolean): boolean {
+    dropSavedIf(part: Part, held: (layer: Layer) => boolean): boolean {
       let dropped = false
       // remove() replaces `saved`, so this walks the list as it was
       for (const layer of saved) {
@@ -138,8 +155,9 @@ export function createLayers() {
     has: (layer: Layer) => live.includes(layer) || saved.includes(layer),
     /** Drops the saved `part` of every saved layer, once a live delivery
         holds them: every part for the workspace and the views, and for the
-        thread only the parts of task `task`, or of every task but `task`
-        with `except`. Answers whether it dropped any. */
+        thread and the task window's answer only the parts of task `task`,
+        or of every task but `task` with `except`. Answers whether it
+        dropped any. */
     dropSaved(part: Part, task?: string, except = false): boolean {
       let dropped = false
       // remove() replaces `saved`, so this walks the list as it was
@@ -148,9 +166,9 @@ export function createLayers() {
           if (!layer.view[part]) continue
           layer.view = { ...layer.view, [part]: undefined }
         } else {
-          const thread = layer.view.thread
-          if (!thread || (task !== undefined && (thread.task === task) === except)) continue
-          layer.view = { ...layer.view, thread: undefined }
+          const own = layer.view[part]
+          if (!own || (task !== undefined && (own.task === task) === except)) continue
+          layer.view = { ...layer.view, [part]: undefined }
         }
         dropped = true
         if (!paints(layer.view)) remove(layer)

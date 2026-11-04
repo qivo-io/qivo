@@ -926,17 +926,20 @@ function App() {
   // "Plan on roadmap": spotlight an issue on the roadmap after jumping there
   // from the issue window. { id, n } — n is a nonce so re-planning the same
   // issue re-triggers the spotlight even when the id is unchanged.
-  const [focusPlan, setFocusPlan] = useState<{ id: string; n: number } | null>(null)
+  const [focusPlan, setFocusPlan] = useState<{ id: string; n: number; key?: string } | null>(null)
   const focusN = useRef(0)
   // Show a task in the view: its bar on the Roadmap (Team sync's jump, a
   // parent's Plan on roadmap), or its card on the Board behind its task
   // window (Team sync, the Inbox, the task crumb, search). { id, n } like
   // focusPlan; the nonce comes from the same counter.
   const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
-  const reveal = (id: string, atOnce = false) => {
+  const reveal = (id: string, atOnce = false, key?: string) => {
     focusN.current += 1
-    setRevealTask({ id, n: focusN.current, atOnce })
+    setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}) })
   }
+  /* The nonce of a reveal planOnRoadmap asked for, dropped with the plan
+     request once another page covers the Roadmap (below roadmapActive). */
+  const roadmapReveal = useRef<number | null>(null)
   // current scope and layout for the popstate handler (registered once, deps [])
   const scopeRef = useRef(scope)
   scopeRef.current = scope
@@ -1091,6 +1094,19 @@ function App() {
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
+  /* A Plan on roadmap request waits while the Roadmap waits for every task
+     (TasksLoadingView). It holds only while the Roadmap stays on screen.
+     Another view, or the Inbox, Projects, Settings or Team sync page over
+     the Roadmap, drops the plan request and the reveal planOnRoadmap asked
+     for, so a later visit starts no planning session and writes no dates
+     the person no longer asked for. */
+  useEffect(() => {
+    if (roadmapActive) return
+    setFocusPlan(null)
+    const asked = roadmapReveal.current
+    roadmapReveal.current = null
+    if (asked !== null) setRevealTask((request) => (request?.n === asked ? null : request))
+  }, [roadmapActive])
   useLayoutEffect(() => () => P.roadmapContext(false, false), [])
   // the page Settings and Team sync return to on exit
   const settingsReturn = useRef(NO_RETURN)
@@ -1567,9 +1583,11 @@ function App() {
   // + card) that owns the initial placement, auto-fit, and Confirm/Cancel.
   // A group's dates come from its subtasks, so it gets the read-only reveal
   // instead. That opens no session and writes nothing, and a group's dormant
-  // status never stops it as Backlog.
+  // status never stops it as Backlog. A task the window shows from its own
+  // answer plans the same way (P.taskShown): the Roadmap waits for every
+  // task, then spotlights it, or says it is not on the roadmap any more.
   const planOnRoadmap = (id) => {
-    const it = P.issueById[id]
+    const it = P.taskShown(id)
     if (!it) return
     const group = P.isGroup(it)
     if (!group && it.status === 'backlog') {
@@ -1595,10 +1613,12 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(null)
-        if (group) reveal(id)
-        else {
+        if (group) {
+          reveal(id, false, it.key)
+          roadmapReveal.current = focusN.current
+        } else {
           focusN.current += 1
-          setFocusPlan({ id, n: focusN.current })
+          setFocusPlan({ id, n: focusN.current, key: it.key })
         }
       },
     )

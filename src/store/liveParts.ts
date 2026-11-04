@@ -125,6 +125,11 @@ export type SideNews = { value: unknown } | { error: unknown }
 export type PartsReport = {
   /** the server time of the state, in ms */
   at: number
+  /** the socket's connection count of the newest transition the registry
+      heard, 0 before the first: after a reconnect every result arrives
+      again, and a side's news counts as current only once it arrived on
+      the newest connection (store/planner.ts latestConnection) */
+  connection: number
   workspace:
     | {
         state: 'complete'
@@ -505,7 +510,12 @@ export function createLiveParts(
       transition?.progress === true,
     )
     if (transition || workspace.state === 'failed')
-      report({ at: lastAt, workspace, ...(transition?.news ? { sides: transition.news } : {}) })
+      report({
+        at: lastAt,
+        connection: connection ?? 0,
+        workspace,
+        ...(transition?.news ? { sides: transition.news } : {}),
+      })
   }
 
   /** Starts or ends the stall check of an incomplete workspace, starting
@@ -525,6 +535,7 @@ export function createLiveParts(
       stallTimer = null
       report({
         at: lastAt,
+        connection: connection ?? 0,
         workspace: {
           state: 'failed',
           error: new ConvexError({

@@ -13,7 +13,9 @@ import { taskRow } from './views/boardFixture.setup'
    and the real store (lib/keptPages.ts): each page opened stays in the
    page, hidden, and shows again as the same elements; Settings goes when
    the person leaves it; and once the person leaves the app alone for 30
-   minutes, every kept page but the one shown goes. */
+   minutes, every kept page but the one shown goes. A Plan on roadmap made
+   while the Roadmap waits for every task plans the task once they have
+   loaded, only while the person stays on the Roadmap. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -480,5 +482,116 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(await shownPage('inbox')).toBe(inbox)
     await waitFor(() => inbox.querySelector('[data-task-popout]'), 'the next task in the pane')
     expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+})
+
+describe('Plan on roadmap while the tasks load', { timeout: 30_000 }, () => {
+  /* QN-5, Plan the launch, unassigned and unplanned, which the first task
+     window brings, so its own window opens while the last one, from
+     fc000000, still loads. */
+  const LAUNCH = '01000000-0000-4000-8000-000000000005'
+  /* The writes of a planning session, which gives an unscheduled task its
+     starter bar. */
+  const dateWrites = () =>
+    network.mutation.mock.calls
+      .map(([ref]) => getFunctionName(ref))
+      .filter((name) => name === 'issues:update' || name === 'roadmap:change')
+
+  /** Boots while the tasks load in stages, opens QN-5's window and presses
+      Plan on roadmap, or Show on roadmap when `group` gives QN-5 a subtask,
+      which shows the Roadmap's notice meanwhile. Answers the organization's
+      slug. */
+  async function planWhileLoading(group = false) {
+    // 12,800 task numbers make 64 task windows; the last starts at fc000000
+    const org = await boot((snap) => {
+      underProgram(snap)
+      snap.orgs[0].next_issue_num = 64 * 200
+      snap.issues.push({
+        ...taskRow(snap, LAUNCH, 'todo', 5),
+        title: 'Plan the launch',
+        assignee_id: undefined,
+      })
+      if (group)
+        snap.issues.push({
+          ...taskRow(snap, '01000000-0000-4000-8000-000000000006', 'todo', 6),
+          parent_id: LAUNCH,
+        })
+    }, 'fc000000')
+    network.mutation.mockClear()
+    await go(`/app/${org}/board/tasks/qn-5`)
+    const plan = await waitFor(
+      () => document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]'),
+      'Plan on roadmap',
+    )
+    expect(plan.textContent).toBe(group ? 'Show on roadmap' : 'Plan on roadmap')
+    await act(async () => plan.click())
+    const roadmap = await shownPage('roadmap')
+    expect(roadmap.textContent).toContain('opens once every task has loaded')
+    return org
+  }
+
+  /** Lets the last task window arrive, and loads the Roadmap's code. */
+  async function loadEveryTask() {
+    await act(async () => {
+      double.live?.holdWindow(null)
+      await new Promise((resolve) => realTimeout(resolve, 0))
+    })
+    const { P } = await import('./store/planner')
+    expect(P.stillLoading()).toBeNull()
+    await (await import('./lib/workspaceChunks')).loadRoadmap()
+  }
+
+  it('plans the task once every task has loaded, while the person waits on the Roadmap', async () => {
+    await planWhileLoading()
+    await loadEveryTask()
+    await waitFor(() => dateWrites().length > 0, "the planning session's starter bar")
+  })
+
+  it('starts no planning session at a later visit when the person left the Roadmap while it waited', async () => {
+    const org = await planWhileLoading()
+    await go(`/app/${org}/board/all`)
+    await shownPage('kanban')
+    await loadEveryTask()
+    await go(`/app/${org}/roadmap/all`)
+    const roadmap = await shownPage('roadmap')
+    await waitFor(
+      () => roadmap.querySelector('[data-roadmap-panel]'),
+      'the Roadmap once every task has loaded',
+    )
+    await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
+    expect(document.querySelector('[data-plan-card]')).toBeNull()
+    expect(dateWrites()).toEqual([])
+  })
+
+  it('starts no planning session at a later visit when the Inbox covered the Roadmap while it waited', async () => {
+    // the Inbox is a page over the Roadmap, so the view stays roadmap meanwhile
+    const org = await planWhileLoading()
+    await go(`/app/${org}/inbox`)
+    await shownPage('inbox')
+    await loadEveryTask()
+    await go(`/app/${org}/roadmap/all`)
+    const roadmap = await shownPage('roadmap')
+    await waitFor(
+      () => roadmap.querySelector('[data-roadmap-panel]'),
+      'the Roadmap once every task has loaded',
+    )
+    await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
+    expect(document.querySelector('[data-plan-card]')).toBeNull()
+    expect(dateWrites()).toEqual([])
+  })
+
+  it('shows no task at a later visit when the person left the Roadmap while a Show on roadmap waited', async () => {
+    const org = await planWhileLoading(true)
+    await go(`/app/${org}/overview/all`)
+    await shownPage('overview')
+    await loadEveryTask()
+    await go(`/app/${org}/roadmap/all`)
+    const roadmap = await shownPage('roadmap')
+    await waitFor(
+      () => roadmap.querySelector('[data-roadmap-panel]'),
+      'the Roadmap once every task has loaded',
+    )
+    await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
+    expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()
   })
 })

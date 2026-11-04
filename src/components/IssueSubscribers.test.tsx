@@ -2,7 +2,7 @@
 import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 import { TooltipProvider } from './ui/tooltip'
@@ -32,6 +32,15 @@ let P: Planner
 let ui: typeof import('./IssueSubscribers')
 let container: HTMLDivElement
 let root: Root
+let org: string
+/* How many more people the organization holds than Aisha and Leo, and who
+   follows the task besides, as the roster answers. */
+let crowd = 0
+let followers: string[] = []
+/* The roster's arguments, and the window's read of a task the workspace
+   does not hold. */
+let rosterArgs: Record<string, unknown>[] = []
+let windowRead: ((value: unknown) => void) | null = null
 
 beforeEach(async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -51,12 +60,19 @@ beforeEach(async () => {
   playClosingAnimations()
   vi.resetModules()
   const snap: Snapshot = plannerFixture()
+  org = snap.orgs[0].id
   const me = snap.profiles[0]
   for (const [id, name] of [
     ['aisha', 'Aisha Rahman'],
     ['leo', 'Leo Martins'],
   ])
     snap.profiles.push({ ...me, id, name, auth_user_id: `account-${id}` })
+  for (let i = 0; i < crowd; i++) {
+    const id = `person-${String(i).padStart(4, '0')}`
+    snap.profiles.push({ ...me, id, name: `Person ${id.slice(7)}`, auth_user_id: `account-${id}` })
+  }
+  rosterArgs = []
+  windowRead = null
   snap.issues.push({
     id: 'task-a',
     org_id: snap.orgs[0].id,
@@ -72,11 +88,20 @@ beforeEach(async () => {
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
-    if (name === 'issues:subscribers')
-      next({ canManage: true, subscribers: [], candidates: ['aisha', 'leo'] })
+    if (name === 'taskWindow:task') windowRead = next
+    if (name === 'issues:subscribers') {
+      rosterArgs.push(args)
+      next({
+        canManage: true,
+        subscribers: followers,
+        candidates: snap.profiles
+          .map((p) => p.id)
+          .filter((id) => id !== me.id && !followers.includes(id)),
+      })
+    }
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -115,6 +140,115 @@ const offered = () =>
   )
 const press = (selector: string) =>
   act(async () => document.querySelector<HTMLElement>(selector)?.click())
+
+/* Renders the popover for task QN-40, which the workspace does not hold,
+   from the window's own answer of it (P.taskDetail). */
+async function showFromAnswer() {
+  network.mutation.mockClear()
+  P.watchComments('far', org)
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+  const task = {
+    id: 'far',
+    org_id: org,
+    project_id: P.projects[0].id,
+    num: 40,
+    title: 'Tune the antenna',
+    description: '',
+    status: 'progress',
+    priority: 'medium',
+    paused: false,
+    created_at: NOW,
+    updated_at: NOW,
+    has_subtasks: false,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  }
+  await act(async () => {
+    windowRead?.({
+      state: 'ok',
+      task,
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  const issue = P.taskDetail('far')?.view
+  if (!issue) throw new Error('the window shows no task from its answer')
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <ui.IssueSubscribers issue={issue} />
+      </TooltipProvider>,
+    ),
+  )
+}
+const writes = (name: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === name)
+    .map(([, args]) => args)
+
+describe('the task subscribers popover of a task the window shows from its own answer', () => {
+  afterEach(() => {
+    crowd = 0
+    followers = []
+  })
+
+  it('reads the roster by the answer’s task, and adds and removes from it for a lead', async () => {
+    followers = ['aisha']
+    await showFromAnswer()
+    await press('[data-task-subscribe]')
+    expect(rosterArgs.at(-1)).toEqual({ org_id: org, issue_id: 'far' })
+    await press('[data-task-subscriber-remove="aisha"]')
+    expect(writes('issues:setSubscriber')).toEqual([
+      { org_id: org, issue_id: 'far', profile_id: 'aisha', subscribed: false },
+    ])
+    await press('[data-task-subscriber-add-open]')
+    await press('[data-task-subscriber-add="leo"]')
+    expect(writes('issues:setSubscriber').at(-1)).toEqual({
+      org_id: org,
+      issue_id: 'far',
+      profile_id: 'leo',
+      subscribed: true,
+    })
+    // Me follows the task from the answer
+    await press('[data-task-subscribe-me]')
+    expect(writes('issues:subscribe')).toEqual([{ org_id: org, issue_id: 'far' }])
+  })
+
+  describe('in an organization of 1,000 people', () => {
+    beforeAll(() => {
+      crowd = 997
+    })
+    afterAll(() => {
+      crowd = 0
+    })
+
+    it('finds and adds anyone of them', { timeout: 30_000 }, async () => {
+      await showFromAnswer()
+      expect(P.users).toHaveLength(1000)
+      await press('[data-task-subscribe]')
+      await press('[data-task-subscriber-add-open]')
+      expect(offered()).toHaveLength(999)
+      const field = search()
+      if (!field) throw new Error('missing the search')
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          field,
+          'Person 0996',
+        )
+        field.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      expect(offered()).toEqual(['person-0996'])
+      await press('[data-task-subscriber-add="person-0996"]')
+      expect(writes('issues:setSubscriber')).toEqual([
+        { org_id: org, issue_id: 'far', profile_id: 'person-0996', subscribed: true },
+      ])
+    })
+  })
+})
 
 describe('the task subscribers popover', () => {
   it('keeps the person search while it closes, and starts over when it opens', async () => {

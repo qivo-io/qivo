@@ -11,9 +11,11 @@ import { type IssueVM, P, type IssueSubscribers as SubscriberRoster } from '../s
 import { Avatar, Icon, MenuItem } from './qivo'
 
 /** The eye remains personal; opening its roster never changes a subscription.
-    With `disabled`, its hint, the eye only shows whether the person
-    follows the task, as for a task the window shows from its own read,
-    whose roster and changes need the workspace's row. */
+    The roster, Me and a lead's add and remove take the task's organization
+    and uuid from `issue`, the workspace's model or the window's from its
+    own read, so they work for a task the workspace does not hold. With
+    `disabled`, its hint, the eye only shows whether the person follows the
+    task, as while the window's read of such a task failed or runs again. */
 export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled?: string }) {
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -29,11 +31,12 @@ export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled
     if (!open) return
     setRoster(null)
     setFailed(false)
-    return P.watchIssueSubscribers(issue.id, setRoster, () => {
+    return P.watchIssueSubscribers(issue, setRoster, () => {
       setRoster(null)
       setFailed(true)
     })
-  }, [open, issue.id])
+    // the roster follows the task, not the model object a repaint replaces
+  }, [open, issue.uuid, issue.org])
 
   useEffect(() => {
     if (adding) searchRef.current?.focus()
@@ -63,7 +66,7 @@ export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled
   const changeSubscriber = (id: string, subscribed: boolean) => {
     setPending((ids) => [...ids, id])
     P.setIssueSubscriber(
-      issue.id,
+      issue,
       id,
       subscribed,
       () => setPending((ids) => ids.filter((pendingId) => pendingId !== id)),

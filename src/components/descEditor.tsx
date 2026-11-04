@@ -166,24 +166,44 @@ const liveEditors = new Map<
     in the committed description, wherever it still is. A failed upload (no
     `attId`), or a reference that would take the committed description over
     TEXT_MAX, removes the image instead, and the attachment is deleted again
-    when no text keeps it. */
-function finishUpload(uuid: string, src: string, attId: string | null, alt: string) {
+    when no text keeps it, in the task's organization `org`, which the
+    store may no longer know once the window that showed the task closed.
+    The task is the workspace's, or the one the window shows from its own
+    answer (P.taskShown), whose committed text holds a placeholder only
+    when it was saved while the workspace held the task, since such a
+    description is not saved from the answer (commit). */
+function finishUpload(
+  uuid: string,
+  org: string | undefined,
+  src: string,
+  attId: string | null,
+  alt: string,
+) {
   const token = `![Uploading image…](${src})`
-  // the task's handle now, which may have moved since the upload began
-  const issueKey = P.handleOf(uuid)
-  const it = issueKey ? P.issueById[issueKey] : undefined
-  const committed = !!it && typeof it.description === 'string' && it.description.includes(token)
-  const patched = (repl: string) => it.description.split(token).join(repl).trim()
+  // the task's handle and committed text now, as the handle may have
+  // moved since the upload began
+  const committedNow = () => {
+    const issueKey = P.shownHandleOf(uuid)
+    const it = issueKey ? P.taskShown(issueKey) : undefined
+    const text = it && typeof it.description === 'string' ? it.description : ''
+    return { issueKey, text, holds: text.includes(token) }
+  }
+  const patched = (text: string, repl: string) => text.split(token).join(repl).trim()
   const ref = attId ? `![${alt}](att:${attId})` : ''
+  const before = committedNow()
   // the image reference is longer than its placeholder, so it can take saved
   // text over TEXT_MAX. Then the image leaves the draft and the saved text
   // alike, or the store would refuse the patch and leave the placeholder for
   // good, and the draft would keep an image it cannot save
-  const overflow = committed && patched(ref).length > TEXT_MAX
+  const overflow = before.holds && patched(before.text, ref).length > TEXT_MAX
   const live = liveEditors.get(uuid)
   const inDraft = live ? live(src, attId && !overflow ? { attId, alt } : null) : false
+  // Read again. The live editor may have saved a draft that waited for
+  // this upload, whose paint shows at once and holds the image already,
+  // and patching the text read before would overwrite that save.
+  const { issueKey, text, holds: committed } = committedNow()
   if (committed && issueKey)
-    P.updateIssue(issueKey, { description: patched(overflow ? '' : ref) || null })
+    P.updateIssue(issueKey, { description: patched(text, overflow ? '' : ref) || null })
   if (overflow) {
     toast(
       `Image not added. The description would go over the ${grouped(TEXT_MAX)} character limit.`,
@@ -192,8 +212,12 @@ function finishUpload(uuid: string, src: string, attId: string | null, alt: stri
   // in neither the draft nor the committed text (the paste was discarded
   // before the upload landed), or too long to keep, so drop the attachment
   if (attId && (overflow || (!inDraft && !committed)))
-    P.removeAttachment(attId, { deferWhilePaused: true })
+    void P.removeAttachment(attId, { deferWhilePaused: true, task: uuid, org })
 }
+
+/* Whether description text `text` still holds an image placeholder whose
+   upload has not finished. */
+const holdsUpload = (text: string) => text.includes('](uploading:')
 
 /* ---- image node view ------------------------------------------------------ */
 
@@ -372,9 +396,17 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
   // a save refused over someone else's change: the next text shown that is
   // neither the old baseline nor the draft becomes the baseline (draftKeep)
   const rebaseRef = useRef(false)
-  // the task this editor writes to, which a moving handle keeps
-  const taskUuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
+  // the task this editor writes to, which a moving handle keeps: the
+  // workspace's, or the one the window shows from its own answer
+  const taskUuid = issueKey === null ? undefined : P.taskShown(issueKey)?.uuid
+  // a save of text with an image still uploading, on a task the window
+  // shows from its own answer, which waits for the upload (commit)
+  const saveAfterUploadRef = useRef(false)
   const sessionUploadsRef = useRef<string[]>([])
+  // the organization of each of them by its id, which their removal
+  // still reaches once the store no longer holds or watches the task, as
+  // after the window that showed it from its own answer closed
+  const uploadOrgsRef = useRef(new Map<string, string>())
   // the cap this text saves under, and the draft's trimmed length as the
   // store sends it, taken once typing rests (a serialize per keystroke would
   // cost a long text too much)
@@ -789,11 +821,16 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     // (convex/model/descriptionImages.ts) — but a
     // held echo can leave rawRef behind the store (finishUpload patches the
     // committed row mid-draft), so check BOTH texts before deleting anything.
-    const it = issueKey !== null ? P.issueById[issueKey] : null
+    const it = issueKey !== null ? P.taskShown(issueKey) : null
     const storeDesc = it && typeof it.description === 'string' ? it.description : ''
     sessionUploadsRef.current = sessionUploadsRef.current.filter((id) => {
       if (!rawRef.current.includes(id) && !storeDesc.includes(id))
-        P.removeAttachment(id, { deferWhilePaused: true })
+        void P.removeAttachment(id, {
+          deferWhilePaused: true,
+          task: it?.uuid ?? taskUuid,
+          org: uploadOrgsRef.current.get(id),
+        })
+      uploadOrgsRef.current.delete(id)
       return false
     })
   }
@@ -923,8 +960,19 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         return
       }
       // A paused save would roll back to the stale text and, once the editor
-      // blurs, replace the draft. Keep the draft dirty with the Save bar up.
-      if (P.refusePausedEdit()) return
+      // blurs, replace the draft. Keep the draft dirty with the Save bar up,
+      // as for a task shown from an answer that is not current.
+      if (P.refusePausedEdit() || P.refuseStaleEdit(issueKey)) return
+      // On a task the window shows from its own answer, a placeholder saved
+      // now could not become its image once the window closes, so the
+      // draft waits, dirty, and saves as the upload finishes (the upload
+      // routing below)
+      if (holdsUpload(text) && !P.issueById[issueKey] && P.taskShown(issueKey)) {
+        saveAfterUploadRef.current = true
+        toast('An image is still uploading. The description saves once it has finished.')
+        return
+      }
+      saveAfterUploadRef.current = false
       // the text this draft began from, sent as what the person saw
       const keep = draftKeep(ed, rawRef.current)
       rebaseRef.current = false
@@ -958,6 +1006,9 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
     refreshDirty()
   }
 
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+
   const revert = () => {
     const ed = editorRef.current
     if (!ed || sendingRef.current) return // the draft is the commit in flight
@@ -970,11 +1021,13 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       rawRef.current = latest
       canonRef.current = canonical(latest)
     } else if (issueKey !== null) {
-      const it = P.issueById[issueKey]
+      const it = P.taskShown(issueKey)
       const latest = it && typeof it.description === 'string' ? it.description : ''
       rawRef.current = latest
       canonRef.current = canonical(latest)
     }
+    // a discarded draft does not save once its upload finishes
+    saveAfterUploadRef.current = false
     setDocFromText(ed, rawRef.current)
     // a discarded draft keeps no claim on the next text the server shows
     rebaseRef.current = false
@@ -1155,6 +1208,11 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
         tr.setNodeMarkup(f.pos, undefined, { ...f.attrs, src: `att:${repl.attId}`, alt: repl.alt })
       else tr.delete(f.pos, f.pos + f.size)
       ed.view.dispatch(tr)
+      // a save that waited for its images goes once the last one finished
+      if (saveAfterUploadRef.current && !holdsUpload(serialize(ed))) {
+        saveAfterUploadRef.current = false
+        commitRef.current()
+      }
       return true
     }
     liveEditors.set(uuid, entry)
@@ -1193,12 +1251,20 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       toast('Attach images to the task instead of the comment.')
       return
     }
-    // the task's uuid, which an upload follows if the task's handle moves
-    const uuid = issueKey === null ? undefined : P.issueById[issueKey]?.uuid
+    // the task's uuid, which an upload follows if the task's handle moves:
+    // the workspace's task, or the one the window shows from its own answer,
+    // and its organization, which its uploads' removal reaches
+    const shown = issueKey === null ? undefined : P.taskShown(issueKey)
+    const uuid = shown?.uuid
+    const org = shown?.org
     if (!uuid) {
       toast('Create the task before adding images.')
       return
     }
+    // While the window's own answer of the task is not current, a save
+    // waits (commit), and so does an image. It says why before a
+    // placeholder goes in, which the upload would take out again.
+    if (issueKey !== null && P.refuseStaleEdit(issueKey)) return
     // One at a time. Every placeholder is inserted up front (below) so the
     // document looks right immediately, but the decodes are chained: eight
     // 12 MP phone photos dropped together would otherwise hold eight
@@ -1233,16 +1299,19 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
           // at most 60 code points, so a long file name adds little to the
           // description's length
           const alt = [...name.replace(/[[\]()\n\\]/g, '_')].slice(0, 60).join('')
-          const key = P.handleOf(uuid)
-          if (!key) return finishUpload(uuid, src, null, alt)
+          const key = P.shownHandleOf(uuid)
+          if (!key) return finishUpload(uuid, org, src, null, alt)
           return P.addAttachment(key, file, { inline: true }).then(
             (attId: string | null) => {
-              if (attId) sessionUploadsRef.current.push(attId)
-              finishUpload(uuid, src, attId, alt)
+              if (attId) {
+                sessionUploadsRef.current.push(attId)
+                if (org) uploadOrgsRef.current.set(attId, org)
+              }
+              finishUpload(uuid, org, src, attId, alt)
               // finishUpload(null) is the existing "this one didn't make it" path;
               // reaching it matters more than the reason
             },
-            () => finishUpload(uuid, src, null, alt),
+            () => finishUpload(uuid, org, src, null, alt),
           )
           // and one image failing must never strand the rest of the queue
         })

@@ -163,25 +163,34 @@ subtask has loaded, Progress says **Subtasks are still loading.** or
 **Completion unknown.**, and Remaining says **Loading…** or **Unknown**. The
 Inbox's task pane has no details column, so it loads none of these lists
 until you open the task in its own window. On a phone they load when you
-choose **Details**. A card or file that has not loaded into the workspace yet
-keeps its **×** disabled with **Available once every task has loaded**,
-because removing it waits for every task.
+choose **Details**. A file can be removed before every task has loaded. Its
+row shows that it is being removed until the list no longer holds it. A
+subtask or linked task that has not loaded into the workspace yet keeps its
+**×** disabled with **Available once every task has loaded**, because
+removing it waits for every task.
 
 A task you open from these lists, or from Search, before it has loaded into
 the workspace shows at once, read from the server: its fields, labels,
-description, comments and lists. You can comment on it at once. Its fields
-and relationships can be changed once the task itself has loaded, which can
-be before every task has, and until then they are disabled with **Available
-once this task has loaded**, or with **Read-only project access** when you
-can only read its project. **Plan on roadmap** waits for the task the same
-way. Its labels show without the buttons that add or remove one, and the
-eye shows whether you follow the task but opens **Subscribers** only once
-the task has loaded. Moving, archiving and deleting it wait for every task,
-with **Available once every task has loaded**. When the task arrives, the
-window turns editable in place, and a comment you were typing stays. If
-Qivo cannot check such a task for changes, the window keeps showing it as
-it last loaded and says so, with **Retry**, and a comment you are typing
-stays then too.
+description, comments and lists. If you can edit its project, you can
+change it at once: its fields, its description and the images in it, its
+labels and its files, and **Remove parent**. Each change shows at once and
+is saved against the task as the window showed it, so a change someone else
+made meanwhile is not overwritten. You can also move, archive or delete it
+at once, once the window has read every subtask of it; while it cannot,
+**Move to sub-project…** and **Archive or delete…** say **Not available
+while Qivo cannot read every subtask of this task**. The **Parent**,
+**Subtasks** and **Linked tasks** buttons wait for the task with
+**Available once this task has loaded**. With **Read-only project access**
+you cannot change it or comment on it, but you can still edit or delete
+your own comments. Anyone who can see the task can
+follow it and open **Subscribers**, and plan it on the roadmap, which opens
+once every task has loaded and then highlights it, unless you have left the
+roadmap meanwhile. When the task arrives, the window shows it from
+the workspace in place, and a title, hours or a comment you were typing
+stay. If Qivo cannot check such a task for changes, the window keeps showing
+it as it last loaded and says so, with **Retry**. Its changes then wait with
+**Available once Qivo can check this task for changes**, and a title,
+description, hours or comment you are typing stays until you can save it.
 
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.

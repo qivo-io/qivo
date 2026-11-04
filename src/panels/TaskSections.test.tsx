@@ -638,10 +638,34 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       expect.stringContaining('/files/file-2'),
       expect.stringMatching(/\/files\/file-2.*&download=1$/),
     ])
-    // removing it waits for the workspace's row
-    const remove = row2?.querySelector<HTMLButtonElement>('[aria-label="Remove attachment"]')
-    expect(remove?.disabled).toBe(true)
-    expect(await hintOf(remove)).toBe('Available once every task has loaded')
+    // removing it goes to the server with no paint: the row shows busy
+    // until the attachments answer drops it, when the removal resolves
+    const removals: { args: unknown; resolve: (value: unknown) => void }[] = []
+    network.mutation.mockImplementation(
+      (ref, args) =>
+        new Promise((resolve) => {
+          if (getFunctionName(ref) === 'files:removeAttachment') removals.push({ args, resolve })
+          else resolve(null)
+        }),
+    )
+    const remove = () =>
+      section('attachments')
+        .querySelector('[data-attachment-open="file-2.pdf"]')
+        ?.closest('div')
+        ?.querySelector<HTMLButtonElement>(
+          '[aria-label="Remove attachment"], [aria-label="Confirm removal"]',
+        )
+    expect(remove()?.disabled).toBe(false)
+    await act(async () => remove()?.click())
+    // a second press confirms, once the first's ignore time has passed
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)))
+    await act(async () => remove()?.click())
+    expect(removals.map((r) => r.args)).toEqual([{ org_id: snap.orgs[0].id, id: 'file-2' }])
+    expect(remove()?.disabled).toBe(true)
+    expect(remove()?.dataset.attachmentRemoving).toBe('')
+    await answer('taskWindow:attachments', filesAnswer([file('file-1')]))
+    await act(async () => removals[0]?.resolve(null))
+    expect(section('attachments').querySelector('[data-attachment-open="file-2.pdf"]')).toBeNull()
   })
 
   it("shows the totals beside hidden subtasks as the visible ones'", async () => {
@@ -871,17 +895,74 @@ describe('while a large workspace still loads', { timeout: 20_000 }, () => {
     expect(await hintOf(add)).toBe(
       `This task has ${LIMITS.subtasks.max} active subtasks, the most a task can have. Archive or remove one of them first.`,
     )
-    // moving, archiving and deleting still wait for every task
+    // moving, archiving and deleting read the task's own whole list
+    // (P.familyOf) while it serves them, and wait for every task without it
+    const menu = async () => {
+      await act(async () =>
+        document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
+      )
+      const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+        b.textContent?.includes('Move to sub-project'),
+      )
+      return { move, fate: document.querySelector<HTMLButtonElement>('[data-task-fate]') }
+    }
+    const whole = await menu()
+    expect(whole.move?.disabled).toBe(false)
+    expect(whole.fate?.disabled).toBe(false)
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    await act(async () => {
+      one('taskWindow:task').deliver({
+        ...taskAnswer([], true, false, '01000000-fam'),
+        subtasks: { rows: kids.slice(0, 10).map((kid) => short(kid)), complete: false },
+      })
+    })
+    const part = await menu()
+    expect(part.move?.disabled).toBe(true)
+    expect(part.fate?.disabled).toBe(true)
+    expect(await hintOf(part.move)).toBe('Available once every task has loaded')
+    expect(await hintOf(part.fate)).toBe('Available once every task has loaded')
+  })
+
+  it('deletes the task with every subtask its own answer lists, also those still to arrive', async () => {
+    const next = await staged()
+    await openTask('01000000-fam')
+    const kids = next.issues.filter((t) => t.parent_id === '01000000-fam')
+    await act(async () => {
+      one('taskWindow:task').deliver({
+        ...taskAnswer([], true, false, '01000000-fam'),
+        subtasks: { rows: kids.map((kid) => short(kid)), complete: true },
+      })
+    })
+    // the window lists them from its answer; the workspace holds none yet
+    expect(kids.filter((kid) => P.handleOf(kid.id) !== null)).toEqual([])
+    // the window takes focus a frame after it opens, which would close a
+    // menu opened before
+    await act(async () => {
+      await vi.waitFor(() => {
+        const frame = document.querySelector('[role="dialog"]')
+        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
+      })
+    })
     await act(async () =>
       document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
     )
-    const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
-      b.textContent?.includes('Move to sub-project'),
+    await act(async () => document.querySelector<HTMLElement>('[data-task-fate]')?.click())
+    await act(async () =>
+      document.querySelector<HTMLElement>('[data-fate-card="delete"] input[type="radio"]')?.click(),
     )
-    const fate = document.querySelector<HTMLButtonElement>('[data-task-fate]')
-    expect(move?.disabled).toBe(true)
-    expect(fate?.disabled).toBe(true)
-    expect(await hintOf(move)).toBe('Available once every task has loaded')
-    expect(await hintOf(fate)).toBe('Available once every task has loaded')
+    const buttons = document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')
+    const press = [...buttons].find((b) => b.textContent === `Delete ${kids.length + 1} tasks`)
+    if (!press) throw new Error('the window offers no delete with the subtasks')
+    await act(async () => press.click())
+    // every subtask the person chose goes with it, none detached
+    const deletes = network.mutation.mock.calls
+      .filter(([ref]) => getFunctionName(ref) === 'issues:deleteDeep')
+      .map(([, args]) => args as { id: string; subtask_ids?: string[] })
+    expect(deletes).toHaveLength(1)
+    expect(deletes[0].id).toBe('01000000-fam')
+    expect([...(deletes[0].subtask_ids ?? [])].sort()).toEqual(kids.map((kid) => kid.id).sort())
+    expect(window.showToast).toHaveBeenCalledWith(`Deleted QN-27 and ${kids.length} subtasks`)
   })
 })

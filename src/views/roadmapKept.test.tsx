@@ -181,6 +181,38 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     expect(document.querySelector('[data-plan-card]')).toBeNull()
     expect(consumed).toHaveBeenCalledTimes(1)
   })
+  it('says a task asked for is not on the roadmap any more when the loaded Roadmap does not hold it', async () => {
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
+    })
+    const { Roadmap } = await import('./Roadmap')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    const consumed = vi.fn()
+    const revealed = vi.fn()
+    // a task planned from a window that showed it from its own read, which
+    // was archived meanwhile; and a group's reveal of one gone the same way
+    await board.renderView(root, (info) => (
+      <Roadmap
+        info={info}
+        filters={FILTERS}
+        actions={actions}
+        filterControls={() => null}
+        focusPlan={{ id: 'QN-9', n: 1, key: 'QN-9' }}
+        onFocusConsumed={consumed}
+        revealTask={{ id: 'QN-8', n: 2, key: 'QN-8' }}
+        onRevealConsumed={revealed}
+      />
+    ))
+    while (tasks.length) await act(async () => tasks.shift()?.())
+    expect(window.showToast).toHaveBeenCalledWith('QN-9 is not on the roadmap any more.', 'error')
+    expect(window.showToast).toHaveBeenCalledWith('QN-8 is not on the roadmap any more.', 'error')
+    expect(consumed).toHaveBeenCalledWith(1)
+    expect(revealed).toHaveBeenCalledWith(2)
+    expect(document.querySelector('[data-plan-card]')).toBeNull()
+  })
+
   it('leaves the request made while it hid, as it lets go of the one it held', async () => {
     const board = await loadBoard(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })

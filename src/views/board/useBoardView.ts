@@ -37,11 +37,13 @@
      answer brings counts as missing on the desktop too: its card shows,
      but without its parent's heading until the parent loads.
    - With a text filter, the person's own pending write on a task only the
-     answer brings can take away the word the server found it by, its
-     status or its assignee's name. The Board knows each field the write
-     changes but not the text the row does not send (stillMatches): where
-     it cannot tell, the card stays and the counts wait (`unsure`) until
-     the answer holds the write. */
+     answer brings can take away the word the server found it by: its
+     title, status, priority or assignee's name, from the Board or the
+     task's window, or its description or labels, which only the task
+     window changes (P.ownUnsentEdits). The Board knows each field its row
+     sends but not the text it does not send (stillMatches): where it
+     cannot tell, the card stays and the counts wait (`unsure`) until the
+     answer holds the write. */
 
 import { useEffect, useState } from 'react'
 import type { BoardAnswer } from '../../../convex/lib/board'
@@ -143,17 +145,25 @@ const shownText = (
     true, or null where the Board cannot tell. `row` is its row in the
     answer, which the server matched with the whole text, or undefined for
     a task the answer does not name for the filter (a parent it sends as
-    a heading). A Board write changes the status and the owners only
-    (store/planner.ts VIEW_WRITES), never the description or labels the
-    row does not send, so a word matches where the fields shown now hold
-    it, or where the row's fields did not hold it, since the server found
-    it in that text; a word only the row's changed fields held may or may
-    not be there. */
-function stillMatches(it: IssueVM, row: ViewRow | undefined, search: string): boolean | null {
+    a heading). A word matches where the fields shown now hold it. Where
+    they do not, and a write changed the description or labels the row
+    does not send (`unsent`, P.ownUnsentEdits), it may or may not be
+    there. Otherwise it matches where the row's fields did not hold it
+    either, since the server found it in the text the row does not send;
+    a word only the row's changed fields held may or may not be there. */
+function stillMatches(
+  it: IssueVM,
+  row: ViewRow | undefined,
+  search: string,
+  unsent: boolean,
+): boolean | null {
   const now = shownText(it.key, it, P.isGroup(it), it.assignee)
   const then = row && shownText(it.key, row, row.has_subtasks, row.assignee_id)
   for (const word of search.split(/\s+/).filter(Boolean))
-    if (!matchesAllWords(now, word) && (then === undefined || matchesAllWords(then, word)))
+    if (
+      !matchesAllWords(now, word) &&
+      (unsent || then === undefined || matchesAllWords(then, word))
+    )
       return null
   return true
 }
@@ -262,7 +272,10 @@ export function useBoardView(
   // the person's own changed tasks it may not match the text filter for
   let joined: { tasks: IssueVM[]; missing: number; unsure: number } | null = null
   if (shownAnswer) {
-    const own = P.ownPaintedTasks()
+    // under a text filter, a task whose description or labels a window
+    // write changed decides as the person's own changed tasks do
+    const unsent = filters.search ? P.ownUnsentEdits() : null
+    const own = unsent?.size ? new Set([...P.ownPaintedTasks(), ...unsent]) : P.ownPaintedTasks()
     const modelOf = (uuid: string) => {
       const handle = P.handleOf(uuid)
       return handle === null ? P.viewTask(slot, uuid) : P.issueById[handle]
@@ -307,7 +320,8 @@ export function useBoardView(
       // a task only the answer brings, which the local check searched by
       // nothing (passes)
       if (answered && P.handleOf(uuid) === null) {
-        if (stillMatches(it, answered.get(uuid), filters.search) === null) unsure++
+        const text = !!unsent?.has(uuid)
+        if (stillMatches(it, answered.get(uuid), filters.search, text) === null) unsure++
       }
       shown.add(uuid)
       let at = tasks.length

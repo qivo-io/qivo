@@ -7,8 +7,10 @@ export const REVEAL_MS = 2400
 /** A request to show one task: `n` is a nonce, so asking again for the
     same task reveals it again. `atOnce` says the jump opens no task window
     over the pane (the crumb on a phone closes it), so the ring's time runs
-    from the start and no later window holds it. */
-export type RevealRequest = { id: string; n: number; atOnce?: boolean }
+    from the start and no later window holds it. `key` is the task's key as
+    surfaces render it, for the sentence a view says when it does not hold
+    the task (views/Roadmap.tsx). */
+export type RevealRequest = { id: string; n: number; atOnce?: boolean; key?: string }
 
 /** The state update for a request that a view took, given its nonce `n`:
     it drops the request unless a newer one replaced it, which a kept view

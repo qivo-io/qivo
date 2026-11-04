@@ -91,7 +91,7 @@ export function liveOver(client: Client): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
   holdWindow(from: string | null): void
-  reconnect(): void
+  reconnect(only?: readonly string[]): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // the handlers of views' own reads, which start no generation
@@ -316,10 +316,15 @@ export function liveOver(client: Client): LiveQueries & {
     },
     /** Drops the socket and connects again, as Convex does after a network
         blip: the connection count moves on, and every watched result
-        arrives again in one transition, as it stands now. */
-    reconnect() {
+        arrives again in one transition, as it stands now. With `only`, the
+        results of the queries it names arrive and the rest have not yet, as
+        between the transitions that bring them again. */
+    reconnect(only) {
       connection++
-      fire(new Set(watched.keys()))
+      const names = only && new Set(only)
+      fire(
+        new Set([...watched].flatMap(([token, w]) => (!names || names.has(w.name) ? [token] : []))),
+      )
     },
     batch(step) {
       batching = new Set()
