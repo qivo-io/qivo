@@ -328,23 +328,39 @@ async function openPage(origin, tasks, metrics, query = '') {
    in a build whose views ask the server, their answers arrived: the
    Board's (data-board-state ok), and the Overview's summary
    (data-overview-state ok) with the first batch of each of its lists
-   (data-ov-list-state no longer loading or refreshing). A view that mounts
-   in slices marks its pending part with data-board-mount; one that mounts
-   whole never sets it. Only the shown view counts: a view kept hidden
-   while another one shows (KeptView) waits until it shows again. On main
-   the Overview mounted every row of its lists in slices, so there its
-   complete means every row mounted, and here the first batches answered. */
+   (data-ov-list-state no longer loading or refreshing) and its health
+   table's first answer for the table on screen (data-ov-health-state
+   neither loading nor refreshing, and no data-ov-health-kept). A view that
+   mounts in slices marks its pending part with data-board-mount; one that
+   mounts whole never sets it. Only the shown view counts: a view kept
+   hidden while another one shows (KeptView) waits until it shows again. On
+   main (7cd73dab) the Overview read its summary and lists from the server
+   too, but derived its health table in the browser once every task had
+   loaded, showing a loading note in its place until then; a build without
+   data-ov-health counts as complete once that table (data-ov-table) shows
+   in a project's or My view's Overview, which shows a health section, so
+   both sides wait for the table. */
 const boardComplete = () => {
   const state = document.querySelector('[data-workspace-view] [data-board-root]')
   const overview = document.querySelector('[data-workspace-view] [data-overview-root]')
   const lists = [...document.querySelectorAll('[data-workspace-view] [data-ov-list]')]
+  const health = document.querySelector('[data-workspace-view] [data-ov-health]')
+  const healthSection = [
+    ...document.querySelectorAll('[data-workspace-view] [data-overview-root] h2'),
+  ].some((title) => (title.textContent ?? '').endsWith('health'))
+  const healthDone =
+    health !== null
+      ? !['loading', 'refreshing'].includes(health.getAttribute('data-ov-health-state')) &&
+        !health.hasAttribute('data-ov-health-kept')
+      : !healthSection || document.querySelector('[data-workspace-view] [data-ov-table]') !== null
   return (
     !document.querySelector('[data-workspace-view] [data-board-mount="pending"]') &&
     (state === null || state.getAttribute('data-board-state') === 'ok') &&
     (overview === null || overview.getAttribute('data-overview-state') === 'ok') &&
     lists.every(
       (list) => !['loading', 'refreshing'].includes(list.getAttribute('data-ov-list-state')),
-    )
+    ) &&
+    (overview === null || healthDone)
   )
 }
 

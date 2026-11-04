@@ -22,8 +22,8 @@ and every one of those has arrived. Search works meanwhile, but on a slow
 connection its results come after the tasks already on their way. A task you open from
 Search, or from a task's subtasks or linked tasks, before it has arrived
 shows at once, read-only apart from its comments, until it has arrived. The
-Overview shows its figures and lists from the server meanwhile, and its
-health table opens once every task has loaded. The Roadmap and Team sync
+Overview shows its figures, lists and health table from the server
+meanwhile. The Roadmap and Team sync
 open once every task has loaded, and so do moving, archiving and deleting a
 task. An open task's subtasks, linked
 tasks and attachments load on their own, and removing one that has not
@@ -176,10 +176,11 @@ you own work in its scope. It appears when you belong to an organization.
 
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in
-the landscape Roadmap. The exceptions are **Archived tasks** and **Deleted
-items** in Settings, which keep their search boxes. Status and other filters
-remain available, as do searches inside people, label and relationship
-pickers.
+the landscape Roadmap. The exceptions are the **Overview**'s health cards,
+which show a search once there are more than 10, and **Archived tasks** and
+**Deleted items** in Settings, which keep their search boxes. Status and
+other filters remain available, as do searches inside people, label and
+relationship pickers.
 
 **My tasks** lists active work before backlog and completed tasks. Choose a
 status or open **Filters** to narrow the list. In a very long list, rows
@@ -193,7 +194,8 @@ project settings, **Manage people** opens user, team and email invitation
 controls. Project actions also include sub-project creation and archived
 tasks. Your permissions determine which actions are available.
 
-**Overview** shows sortable health cards. **Roadmap** starts on milestones;
+**Overview** shows sortable health cards, 10 at a time with **Load more**,
+and a search once there are more than 10. **Roadmap** starts on milestones;
 **Task schedule** lists planned and unplanned work; a very long schedule
 fills in below the first screen as **My tasks** does. Backlog is hidden, and
 Done appears only when its planned period overlaps the Roadmap window ([The Roadmap](./the-roadmap.md)).

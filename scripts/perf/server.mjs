@@ -47,8 +47,14 @@
 //                        batch stops after half a batch), unknown (every
 //                        owner's load unreadable, so projected candidates
 //                        show as risk unknown), list-over-budget,
-//                        over_budget, unavailable or access_unchecked;
-//                        several joined by commas
+//                        over_budget, unavailable or access_unchecked; for
+//                        the health table alone health-counting (its counts
+//                        counting), health-budget (its rows' delays past the
+//                        budget, so it sorts by name), health-loads (its
+//                        rows' delays needing a second owner's load),
+//                        health-over-budget, health-cap (at most 20 rows,
+//                        so the cap note shows) and health-error (its read
+//                        fails); several joined by commas
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -72,9 +78,9 @@
 // So are the owner loads the delays of tasks only the Board's answer brings
 // read (planning:ownerLoads, src/store/ownerLoadsStandIn.setup.ts), from the
 // same workspace, with no bounds. So are the Overview's queries
-// (overview:summary, risk, attention and paused), through the stand-in the
-// jsdom tests use (src/store/overviewStandIn.setup.ts), with no access or
-// read budget.
+// (overview:summary, risk, attention, paused and health), through the
+// stand-in the jsdom tests use (src/store/overviewStandIn.setup.ts), with no
+// access or read budget.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
@@ -120,6 +126,13 @@ const forcedOverview = (() => {
     else if (state === 'list-over-budget') force.list = 'over_budget'
     else if (state === 'unknown') force.unknown = 'everyone'
     else if (['over_budget', 'unavailable', 'access_unchecked'].includes(state)) force.scope = state
+    else if (state === 'health-counting') force.health = { ...force.health, counts: 'counting' }
+    else if (state === 'health-budget') force.health = { ...force.health, delays: 'budget' }
+    else if (state === 'health-loads') force.health = { ...force.health, delays: 'loads' }
+    else if (state === 'health-over-budget')
+      force.health = { ...force.health, scope: 'over_budget' }
+    else if (state === 'health-cap') force.health = { ...force.health, most: 20 }
+    else if (state === 'health-error') force.healthError = true
   }
   return force
 })()
@@ -828,6 +841,9 @@ const read = (name, args = {}) => {
     case 'overview:risk':
     case 'overview:attention':
     case 'overview:paused':
+    case 'overview:health':
+      if (name === 'overview:health' && forcedOverview.healthError)
+        throw new Error('the health table fails, as overview=health-error asks')
       return overviewStandIn(snapshot, name.slice('overview:'.length), args, {
         force:
           forcedOverview.unknown === 'everyone'

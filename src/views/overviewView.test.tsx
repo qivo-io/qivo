@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ListAnswer, OverviewRow } from '../../convex/lib/overview'
+import type { HealthAnswer, ListAnswer, OverviewRow } from '../../convex/lib/overview'
 import type { ForcedOverview } from '../store/overviewStandIn.setup'
 import type { ScopeInfo } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
@@ -14,7 +14,8 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    answered by the Overview's stand-in over the fixture's workspace
    (store/overviewStandIn.setup.ts). Every root, figure and list state with
    its markers; a figure that is not given never shows a number; the
-   sentence; the lists' batches, notes and Load more; the chooser of All
+   sentence; the lists' batches, notes and Load more; the health table's
+   rows, states, cells, notes, search and Load more; the chooser of All
    projects; My view's notes; the phone; opening a row; an own archive; a
    hidden tab, a kept page and a new day. */
 
@@ -67,6 +68,8 @@ afterEach(async () => {
   Reflect.deleteProperty(document, 'visibilityState')
   vi.useRealTimers()
   vi.unstubAllGlobals()
+  // a case's spies, such as the reading position's boxes, end with it
+  vi.restoreAllMocks()
 })
 
 /* When the file started, so a case that moves the clock keeps its days. */
@@ -765,19 +768,7 @@ describe('keyboard focus in the lists', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 })
 
-describe('the health table and the reading position', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('says the health table waits for every task while the workspace loads', async () => {
-    const { board, render } = await overview(work())
-    vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.4)
-    await render()
-    expect(document.querySelector('[data-ov-table]')).toBeNull()
-    expect(document.body.textContent).toContain(
-      'Sub-project health opens once every task has loaded.',
-    )
-    // the server's figures do not wait
-    expect(state()).toBe('ok')
-  })
-
+describe('the reading position', { timeout: BOARD_TEST_TIMEOUT }, () => {
   it('keeps the first batch left on screen in its place when the cap drops earlier ones', async () => {
     // jsdom has no scroll anchoring, as Safari has none, so the list keeps
     // its place by hand
@@ -827,5 +818,496 @@ describe('the health table and the reading position', { timeout: BOARD_TEST_TIME
     // the batch that is first now moved up by one batch: the pane follows,
     // from where it stood before the drop
     expect(pane.scrollTop).toBe(2000 - 600)
+  })
+})
+
+// ------------------------------------------------------------- the health table
+
+const table = () => document.querySelector<HTMLElement>('[data-ov-health]')
+const healthState = () => table()?.dataset.ovHealthState
+const cards = () => [...document.querySelectorAll<HTMLElement>('[data-ovcard]')]
+const cardIds = () => cards().map((c) => c.dataset.ovcard)
+const cell = (card: Element | undefined, name: string) =>
+  card?.querySelector<HTMLElement>(`[data-ovcell="${name}"]`)
+const heading = (label: string) =>
+  [...document.querySelectorAll<HTMLElement>('[data-ov-table] th')].find((th) =>
+    th.textContent?.startsWith(label),
+  )
+const healthAsked = (board: Board) =>
+  board.server.overview.asked.filter((a) => a.query === 'health').map((a) => a.args)
+
+/** `n` sub-projects of Plan, One and Two first, then Part 03 to Part `n`,
+    with the work of `work()` in One and Two. */
+const parts =
+  (n: number) =>
+  (snap: Snapshot): void => {
+    work()(snap)
+    const base = snap.projects.find((p) => p.name === 'One') as Snapshot['projects'][number]
+    for (let i = 3; i <= n; i++)
+      snap.projects.push({
+        ...base,
+        id: `part${i}`,
+        key: `P${i}`,
+        num: 10 + i,
+        name: `Part ${String(i).padStart(2, '0')}`,
+      })
+  }
+
+/** Types `text` into the health table's search, as a person does, and
+    waits for it to rest. */
+async function typeSearch(text: string) {
+  const input = document.querySelector<HTMLInputElement>('[data-ov-health-search]')
+  if (!input) throw new Error('no search box')
+  const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    set?.call(input, text)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 300)))
+  await act(async () => {})
+}
+
+describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it("shows the server's rows in its order with their figures and markers, and opens a row's Board", async () => {
+    const { board, actions } = await overview(work())
+    expect(healthState()).toBe('ok')
+    expect(table()?.getAttribute('aria-busy')).toBeNull()
+    expect(table()?.dataset.ovHealthEnd).toBe('')
+    // most Delayed first: One holds three overdue tasks, Two one
+    const one = board.snapshot.projects.find((p) => p.name === 'One')?.id
+    expect(cardIds()).toEqual([one, 'two'])
+    expect(cell(cards()[0], 'late')?.textContent).toBe('3')
+    expect(cell(cards()[0], 'paused')?.textContent).toBe('3')
+    expect(cell(cards()[0], 'done')?.textContent).toBe('1/7')
+    expect(cell(cards()[1], 'paused')?.textContent).toBe('—')
+    expect(cell(cards()[1], 'late')?.dataset.ovFigureState).toBe('ok')
+    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(heading('Progress')?.getAttribute('aria-sort')).toBeNull()
+    // no search box for two rows, and no Load more
+    expect(document.querySelector('[data-ov-health-search]')).toBeNull()
+    expect(document.querySelector('[data-ov-health-more]')).toBeNull()
+    await click(cards()[1]?.querySelector('button'))
+    expect(actions.setScope).toHaveBeenCalledWith('two')
+    expect(actions.setView).toHaveBeenCalledWith('kanban')
+  })
+
+  it('shows Left from whole tenths: 1.5h in a row and 1.5h left on a phone card', async () => {
+    const tenths = (snap: Snapshot) => {
+      work()(snap)
+      const task = snap.issues.find((t) => t.id === 'two-late')
+      if (task) task.remaining_hours = 1.5
+    }
+    const two = () => cards().find((c) => c.dataset.ovcard === 'two')
+    await overview(tenths)
+    expect(cell(two(), 'left')?.textContent).toBe('1.5h')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    phone = true
+    await overview(tenths)
+    expect(cell(two(), 'left')?.textContent).toBe('1.5h left')
+  })
+
+  it('asks only the health read for a new order, keeping the rows shown, dimmed, until the answer', async () => {
+    const { board } = await overview(work())
+    const open = [...board.server.overview.open].filter((sub) => sub.query !== 'health')
+    const asked = board.server.overview.asked.length
+    board.server.overview.hold = (query) => query === 'health'
+    await click(heading('Sub-project')?.querySelector('button'))
+    expect(board.server.overview.asked.slice(asked).map((a) => a.query)).toEqual(['health'])
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'name', dir: 'asc', limit: 10 })
+    // the summary's, the delays' and the lists' subscriptions stay
+    for (const sub of open) expect(board.server.overview.open.has(sub)).toBe(true)
+    expect(table()?.dataset.ovHealthKept).toBe('')
+    expect(healthState()).toBe('refreshing')
+    expect(table()?.getAttribute('aria-busy')).toBe('true')
+    expect(document.querySelector('[data-ov-table] tbody')?.className).toContain('opacity-60')
+    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    board.server.overview.hold = false
+    await board.answer()
+    expect(table()?.dataset.ovHealthKept).toBeUndefined()
+    expect(healthState()).toBe('ok')
+    expect(cards().map((c) => c.textContent?.slice(0, 3))).toEqual(['One', 'Two'])
+    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    // a second press flips the direction the rows are in
+    await click(heading('Sub-project')?.querySelector('button'))
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'name', dir: 'desc' })
+  })
+
+  it('never shows a digit in a cell whose figure is counting or unavailable', async () => {
+    for (const health of [{ counts: 'counting' }, { counts: 'budget' }] as const) {
+      await overview(work(), { force: { health } })
+      for (const card of cards())
+        for (const name of ['progress', 'done', 'left', 'paused']) {
+          const c = cell(card, name)
+          expect(c?.dataset.ovFigureState, `${health.counts} ${name}`).toBe(
+            health.counts === 'counting' ? 'counting' : 'unavailable',
+          )
+          // a cell that showed a 0 or a count here would fail
+          expect(c?.textContent, `${health.counts} ${name}`).not.toMatch(/\d/)
+          expect(c?.dataset.ovReason).toBe(health.counts === 'counting' ? undefined : 'budget')
+        }
+      expect(cell(cards()[0], 'progress')?.textContent).toBe(
+        health.counts === 'counting' ? 'Counting…' : 'unknown',
+      )
+      if (health.counts === 'counting') expect(cell(cards()[0], 'done')?.textContent).toBe('…')
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+    await overview(work(), { force: { health: { delays: 'loads' } } })
+    for (const card of cards())
+      for (const name of ['late', 'behind']) {
+        expect(cell(card, name)?.textContent).toBe('unknown')
+        expect(cell(card, name)?.dataset.ovReason).toBe('loads')
+      }
+  })
+
+  it('says why it sorts by name, for staff, for a guest and while the counts are counting', async () => {
+    const note = () => document.querySelector('[data-ov-health-by-name]')?.textContent
+    const { board } = await overview(work(), { force: { health: { delays: 'budget' } } })
+    expect(note()).toBe(
+      'Sorted by name, because Qivo could not work out the delays of every sub-project here.',
+    )
+    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    // a press on Delayed asks Delayed, which the server answers by name again
+    await click(heading('Delayed')?.querySelector('button'))
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc' })
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const guest = await overview(
+      (snap) => {
+        work()(snap)
+        snap.profiles[0].org_role = 'guest'
+        snap.access.push({ project_id: 'plan', profile_id: snap.profiles[0].id, level: 'user' })
+      },
+      { force: { health: { delays: 'loads' } } },
+    )
+    expect(note()).toBe(
+      'Sorted by name, because your access shows other people’s work one person at a time.',
+    )
+    // the order says why, also where the rows without their delays are past
+    // the rows shown
+    guest.board.server.overview.edit = (query, answer) => {
+      const health = answer as HealthAnswer
+      return query === 'health' && health.state === 'ok'
+        ? {
+            ...health,
+            rows: health.rows.map((r) => ({ ...r, delays: { state: 'ok', late: 0, behind: 0 } })),
+          }
+        : answer
+    }
+    await guest.board.answer()
+    expect(cell(cards()[0], 'late')?.dataset.ovFigureState).toBe('ok')
+    expect(note()).toBe(
+      'Sorted by name, because your access shows other people’s work one person at a time.',
+    )
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const counting = await overview(work(), { force: { health: { counts: 'counting' } } })
+    await click(heading('Progress')?.querySelector('button'))
+    await counting.board.answer()
+    expect(note()).toBe('Sorted by name while Qivo counts the tasks here.')
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await overview(work(), { force: { health: { counts: 'budget' } } })
+    await click(heading('Progress')?.querySelector('button'))
+    expect(note()).toBe(
+      'Sorted by name, because Qivo could not count the tasks here in one request.',
+    )
+  })
+
+  it("says why rows read unknown under the counts' name-order note too", async () => {
+    await overview(work(), { force: { health: { counts: 'counting', delays: 'loads' } } })
+    await click(heading('Progress')?.querySelector('button'))
+    expect(document.querySelector('[data-ov-health-by-name]')?.textContent).toBe(
+      'Sorted by name while Qivo counts the tasks here.',
+    )
+    expect(cell(cards()[0], 'late')?.textContent).toBe('unknown')
+    expect(document.querySelector('[data-ov-health-unknown]')?.textContent).toBe(
+      'Qivo could not work out the delays of the sub-projects marked unknown.',
+    )
+  })
+
+  it('says why counts read counting or unknown in an order that needs none, unless its name-order note does', async () => {
+    const note = () => document.querySelector<HTMLElement>('[data-ov-health-counts]')
+    const { board } = await overview(work())
+    expect(note()).toBeNull()
+    // counting under the default order, Delayed, which needs no count
+    await reanswer(board, { health: { counts: 'counting' } })
+    expect(heading('Delayed')?.getAttribute('aria-sort')).toBe('descending')
+    expect(note()?.dataset.ovHealthCounts).toBe('counting')
+    expect(note()?.textContent).toBe(
+      'Qivo is counting the tasks of these sub-projects. Their figures show once it is done.',
+    )
+    // past their budget under Name, which never falls back to say why
+    await click(heading('Sub-project')?.querySelector('button'))
+    await reanswer(board, { health: { counts: 'budget' } })
+    expect(heading('Sub-project')?.getAttribute('aria-sort')).toBe('ascending')
+    expect(cell(cards()[0], 'progress')?.textContent).toBe('unknown')
+    expect(document.querySelector('[data-ov-health-by-name]')).toBeNull()
+    expect(note()?.dataset.ovHealthCounts).toBe('budget')
+    expect(note()?.textContent).toBe(
+      'Qivo could not count the tasks of the sub-projects marked unknown in one request.',
+    )
+    // Progress falls back to name order, whose note says it alone
+    await click(heading('Progress')?.querySelector('button'))
+    expect(document.querySelector('[data-ov-health-by-name]')?.textContent).toBe(
+      'Sorted by name, because Qivo could not count the tasks here in one request.',
+    )
+    expect(note()).toBeNull()
+  })
+
+  it('searches the whole table once it holds more than one batch, rested, within its limit, saying when nothing matches', async () => {
+    const { board } = await overview(parts(25))
+    expect(cards()).toHaveLength(10)
+    expect(document.querySelector('[data-ov-health-search]')?.getAttribute('aria-label')).toBe(
+      'Search sub-projects',
+    )
+    await typeSearch('part 2')
+    expect(healthAsked(board).at(-1)).toMatchObject({ search: 'part 2', limit: 10 })
+    // every word anywhere: Part 12 and Part 20 to 25, past the first rows
+    expect(cards().map((c) => c.textContent?.slice(0, 7))).toEqual([
+      'Part 12',
+      'Part 20',
+      'Part 21',
+      'Part 22',
+      'Part 23',
+      'Part 24',
+      'Part 25',
+    ])
+    const before = healthAsked(board).length
+    await typeSearch('x'.repeat(201))
+    expect(document.querySelector('[data-ov-health-search-limit]')?.textContent).toBe(
+      'A search must be at most 200 characters. Search for fewer words.',
+    )
+    expect(healthAsked(board).length).toBe(before)
+    await typeSearch('nothing like it')
+    expect(document.querySelector('[data-ov-health-none]')?.textContent).toBe(
+      'No sub-project matches this search.',
+    )
+    expect(cards()).toHaveLength(0)
+    await typeSearch('')
+    expect(cards()).toHaveLength(10)
+  })
+
+  it('keeps the search box and its focus while a cleared search waits for its answer', async () => {
+    const { board } = await overview(parts(25))
+    const box = () => document.querySelector<HTMLInputElement>('[data-ov-health-search]')
+    await typeSearch('part 2')
+    expect(cards()).toHaveLength(7)
+    const input = box()
+    input?.focus()
+    board.server.overview.hold = (query) => query === 'health'
+    await typeSearch('')
+    expect(healthAsked(board).at(-1)).not.toHaveProperty('search')
+    expect(box()).toBe(input)
+    expect(document.activeElement).toBe(input)
+    board.server.overview.hold = false
+    await board.answer()
+    expect(cards()).toHaveLength(10)
+    expect(box()).toBe(input)
+    expect(document.activeElement).toBe(input)
+  })
+
+  it('starts the search again on a return to a scope typed in before, also on a page that stays mounted', async () => {
+    const { board, Overview, actions, render } = await overview(parts(25))
+    await typeSearch('part 2')
+    const plan = board.P.scopeInfo('plan') as ScopeInfo
+    const mine = board.P.scopeInfo('mine') as ScopeInfo
+    await render(() => <Overview info={mine} actions={actions} />)
+    await render(() => <Overview info={plan} actions={actions} />)
+    expect(document.querySelector<HTMLInputElement>('[data-ov-health-search]')?.value).toBe('')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)))
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
+    expect(healthAsked(board).at(-1)).not.toHaveProperty('search')
+    expect(cards()).toHaveLength(10)
+  })
+
+  it('loads 10 more rows on Load more to the end, keeping focus while they load and leaving it on the table at the end', async () => {
+    const { board } = await overview(parts(25))
+    const more = () => document.querySelector<HTMLButtonElement>('[data-ov-health-more]')
+    more()?.focus()
+    board.server.overview.hold = (query) => query === 'health'
+    await click(more())
+    expect(more()?.getAttribute('aria-disabled')).toBe('true')
+    expect(more()?.textContent).toBe('Loading…')
+    expect(document.activeElement).toBe(more())
+    expect(cards()).toHaveLength(10)
+    expect(table()?.dataset.ovHealthKept).toBe('')
+    board.server.overview.hold = false
+    await board.answer()
+    expect(cards()).toHaveLength(20)
+    expect(document.activeElement).toBe(more())
+    await click(more())
+    expect(cards()).toHaveLength(25)
+    expect(more()).toBeNull()
+    expect(table()?.dataset.ovHealthEnd).toBe('')
+    expect(document.activeElement).toBe(table())
+  })
+
+  it('says it shows the first rows past the cap, and offers Retry where a Load more fails', async () => {
+    await overview(parts(25), { force: { health: { most: 5 } } })
+    expect(cards()).toHaveLength(5)
+    expect(document.querySelector('[data-ov-health-more]')).toBeNull()
+    expect(document.querySelector('[data-ov-health-cap]')?.textContent).toBe(
+      'Qivo shows the first 5 sub-projects here. Search to find the others.',
+    )
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const { board } = await overview(parts(25))
+    board.server.overview.fail = new Error('down')
+    board.server.overview.failing = (query, args) => query === 'health' && args.limit === 20
+    const more = document.querySelector<HTMLButtonElement>('[data-ov-health-more]')
+    more?.focus()
+    await click(more)
+    await board.answer()
+    expect(document.querySelector('[data-ov-health] [role="alert"]')?.textContent).toContain(
+      "Couldn't load more sub-projects.",
+    )
+    expect(cards()).toHaveLength(10)
+    const retry = document.querySelector<HTMLButtonElement>('[data-ov-health-retry]')
+    expect(document.activeElement).toBe(retry)
+    board.server.overview.failing = () => false
+    await click(retry)
+    await board.answer()
+    expect(cards()).toHaveLength(20)
+  })
+
+  it('shows each state with its sentence and Try again where it helps', async () => {
+    const { board } = await overview(work(), { hold: true })
+    expect(healthState()).toBe('loading')
+    expect(table()?.getAttribute('aria-busy')).toBe('true')
+    expect(table()?.textContent).toContain('Loading…')
+    expect(cards()).toHaveLength(0)
+    board.server.overview.hold = false
+    await board.answer()
+    expect(healthState()).toBe('ok')
+    const cases = [
+      [{ scope: 'unavailable' }, 'unavailable', 'Qivo cannot show this table here.', true],
+      [
+        { scope: 'access_unchecked' },
+        'unavailable',
+        'Qivo could not check all of your access in time. Try again in a moment.',
+        false,
+      ],
+      [
+        { scope: 'over_budget' },
+        'over_budget',
+        "This table could not be loaded within the Overview's limits. Open a sub-project to see its figures.",
+        true,
+      ],
+    ] as const
+    for (const [health, state, text, again] of cases) {
+      await act(async () => root.unmount())
+      root = createRoot(container)
+      await overview(work(), { force: { health } })
+      expect(healthState()).toBe(state)
+      expect(document.querySelector('[data-ov-health-note]')?.textContent).toBe(
+        again ? `${text}Try again` : text,
+      )
+      expect(!!document.querySelector('[data-ov-health-note] button')).toBe(again)
+    }
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    const failing = await overview(work())
+    failing.board.server.overview.fail = new Error('down')
+    failing.board.server.overview.failing = (query) => query === 'health'
+    await click(heading('Sub-project')?.querySelector('button'))
+    expect(healthState()).toBe('error')
+    expect(document.querySelector('[data-ov-health-note]')?.textContent).toBe(
+      'The health table could not be loaded.Try again',
+    )
+    // a keyboard user's Try again leaves focus on the table, not nowhere
+    const again = document.querySelector<HTMLButtonElement>('[data-ov-health-note] button')
+    again?.focus()
+    failing.board.server.overview.failing = () => false
+    await click(again)
+    await failing.board.answer()
+    expect(healthState()).toBe('ok')
+    expect(document.activeElement).toBe(table())
+  })
+
+  it("shows the phone's cards with their figures, unknown delays and counting", async () => {
+    phone = true
+    await overview(work(), { force: { health: { delays: 'loads', counts: 'counting' } } })
+    expect(document.querySelector('.mobile-health-list')).not.toBeNull()
+    expect(cards()).toHaveLength(2)
+    expect(cell(cards()[0], 'late')?.textContent).toBe('delays unknown')
+    expect(cell(cards()[0], 'progress')?.textContent).toBe('Counting…')
+    expect(cell(cards()[0], 'done')?.textContent).toBe('… done')
+    expect(document.querySelector<HTMLSelectElement>('#overview-health-sort')?.value).toBe('name')
+  })
+
+  it("builds the phone's Sort by and direction button on the order asked while its rows load", async () => {
+    phone = true
+    const { board } = await overview(work())
+    const select = () => document.querySelector<HTMLSelectElement>('#overview-health-sort')
+    const direction = () =>
+      document.querySelector<HTMLButtonElement>('.mobile-health-sort button[aria-label^="Sort"]')
+    expect(select()?.value).toBe('late')
+    expect(direction()?.getAttribute('aria-label')).toBe('Sort ascending')
+    await click(direction())
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'asc' })
+    board.server.overview.hold = (query) => query === 'health'
+    await act(async () => {
+      const el = select()
+      if (!el) throw new Error('no Sort by')
+      el.value = 'done'
+      el.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'done', dir: 'desc' })
+    // while Done's rows load, the pick stays and the direction builds on it
+    expect(table()?.dataset.ovHealthKept).toBe('')
+    expect(select()?.value).toBe('done')
+    await click(direction())
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'done', dir: 'asc' })
+    board.server.overview.hold = false
+    await board.answer()
+    expect(select()?.value).toBe('done')
+    expect(direction()?.getAttribute('aria-label')).toBe('Sort descending')
+  })
+
+  it('shows Status distribution for one sub-project and asks no health read', async () => {
+    const { board } = await overview(work(), { scope: 'two' })
+    expect(document.querySelector('[data-ov-health]')).toBeNull()
+    expect(figure('status')).not.toBeNull()
+    expect(healthAsked(board)).toEqual([])
+  })
+
+  it('holds no health subscription while hidden and shows it refreshing on return', async () => {
+    const { board } = await overview(work())
+    await setVisibility('hidden')
+    expect([...board.server.overview.open].some((sub) => sub.query === 'health')).toBe(false)
+    board.server.overview.hold = true
+    await setVisibility('visible')
+    expect([...board.server.overview.open].some((sub) => sub.query === 'health')).toBe(true)
+    expect(healthState()).toBe('refreshing')
+    expect(cards()).toHaveLength(2)
+    board.server.overview.hold = false
+    await board.answer()
+    expect(healthState()).toBe('ok')
+  })
+
+  it('asks the health read once a page that mounted in a hidden tab shows', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    const { board } = await overview(work())
+    expect(board.server.overview.open.size).toBe(0)
+    expect(healthState()).toBe('loading')
+    await setVisibility('visible')
+    expect([...board.server.overview.open].some((sub) => sub.query === 'health')).toBe(true)
+    expect(healthAsked(board).at(-1)).toMatchObject({ sort: 'late', dir: 'desc', limit: 10 })
+    expect(healthState()).toBe('ok')
+    expect(cards()).toHaveLength(2)
+  })
+
+  it('shows the table from the server while the workspace still loads', async () => {
+    const { board, render } = await overview(work())
+    vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.4)
+    const scoped = vi.spyOn(board.P, 'scopedIssues')
+    await render()
+    expect(document.querySelector('[data-ov-table]')).not.toBeNull()
+    expect(cards()).toHaveLength(2)
+    expect(document.body.textContent).not.toContain('opens once every task has loaded')
+    expect(scoped).not.toHaveBeenCalled()
+    expect(state()).toBe('ok')
   })
 })

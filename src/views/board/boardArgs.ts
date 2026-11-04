@@ -8,6 +8,7 @@ import type { BoardFilters, BoardScope } from '../../../convex/lib/board'
 import { ISSUE_PRIORITIES, type IssuePriority } from '../../../convex/lib/enums'
 import { LIMITS } from '../../../convex/lib/limits'
 import { overLimit } from '../../lib/fieldLimits'
+import { useRested } from '../../lib/useRested'
 import { useViewVisibility } from '../../lib/viewVisibility'
 import type { IssueFilters, ScopeInfo } from '../../store/planner'
 
@@ -85,20 +86,6 @@ export function boardRequest(
     search: text,
   }
   return { kind: 'ask', key: JSON.stringify({ scope, filters: sent }) }
-}
-
-/** `value`, once it stayed the same for `ms`; '' at once. */
-function useRested(value: string, ms: number): string {
-  const [rested, setRested] = useState(value)
-  useEffect(() => {
-    if (value === '') {
-      setRested('')
-      return
-    }
-    const timer = setTimeout(() => setRested(value), ms)
-    return () => clearTimeout(timer)
-  }, [value, ms])
-  return value === '' ? '' : rested
 }
 
 /** The Stale cutoff (staleCutoff) now: taken again each hour, whenever

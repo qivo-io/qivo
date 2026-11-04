@@ -72,8 +72,9 @@ due date.
   Qivo works out on the server with each owner's other work. A row says
   **risk unknown** where Qivo could not read that work, so the task may not
   be late, and the projected count says it is not available where it could
-  not work out every projection. The health table counts **Delayed** and
-  **Slipping** tasks as before.
+  not work out every projection. The health table's **Delayed** and
+  **Slipping** counts come from the server too, and read **unknown** where
+  Qivo could not read an owner's other work.
 - **REST and MCP** task results carry the same verdict as `delay`, judged on
   today's date in UTC. A task's verdict says it is unavailable when Qivo
   cannot read the owner's other open work in one request. A row of a task

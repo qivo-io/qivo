@@ -180,10 +180,17 @@ ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
 `overview.risk`, `overview.attention` and `overview.paused`) and checks that
 Completion, Paused, the opening sentence and both lists count exactly those
-two tasks. That needs a backend at v0.1.112 or later whose organization
-counts are whole, as `internal/overviewCountsBackfill` left them. Against
-an older backend, or while the counts read **Counting…**, the step fails.
-After that it checks the
+two tasks. It then opens its project's Overview, waits for the health
+table's answer (`overview.health`), finds the sub-project's row among the
+project's few sub-projects and checks its cells: Progress 0%, Done 0/2,
+Paused 1, Left and Slipping blank, and Delayed 1 where the sub-project
+tracks delay, as its REST answer's `track_delay` says, else blank. A press
+on the row's name must open the sub-project's Board on the deployment's
+answer. That needs a backend from the release that added `overview.health`
+or later, whose organization counts are whole, as
+`internal/overviewCountsBackfill` left them. Against an older backend, or
+while the counts read **Counting…**, the step fails. After that it checks
+the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
 task the run archived only with it on. That shows whether the deployment's
@@ -554,6 +561,16 @@ v0.1.110 (`b38c4e1c`) added and its release step backfilled
 (`internal/overviewCountsBackfill`), so this release adds no step; an
 organization whose counts are not whole shows its counts as counting until
 they are.
+
+The app's Overview reads its health table from `overview.health`, which the
+release after v0.1.115 first ships. An app from that release, against a
+backend before it, says that the health table could not be loaded, also in
+a tab that was open when the backend went back, until the backend rolls
+forward. From that release on, never return the backend to a commit before
+it; roll forward instead. Returning the app alone to an earlier release is
+safe against a later backend, because that app derives the health table in
+the browser. The health table reads the same counts as the summary, so the
+release adds no step.
 
 ## Node.js version
 

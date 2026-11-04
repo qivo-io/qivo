@@ -31,13 +31,14 @@
  * hold its two fixture tasks (ui/board). It makes a sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary, risk, attention and paused),
- * whose figures, sentence and lists must count exactly those two
- * (ui/overview). Every task, comment, grant and
- * file lives
- * in projects the run creates and names with its run tag. It revokes every
- * credential in the app, checks that the next call is refused, and removes
- * everything it made, also after a failure (try/finally, and --cleanup for
- * a later sweep).
+ * whose figures, sentence and lists must count exactly those two, then
+ * opens its project's Overview, whose health table (overview.health) must
+ * hold that sub-project's row with those two tasks' figures, and opens the
+ * sub-project's Board from the row (ui/overview). Every task, comment,
+ * grant and file lives in projects the run creates and names with its run
+ * tag. It revokes every credential in the app, checks that the next call is
+ * refused, and removes everything it made, also after a failure
+ * (try/finally, and --cleanup for a later sweep).
  *
  * The billing pause checks need an organization whose billing pauses
  * editing. Staging runs without billing, so they report SKIP there. A local
@@ -3587,15 +3588,33 @@ export const OVERVIEW_EXPECTED = {
   sentence: '1 task is overdue.',
 }
 
+/** What the run's sub-project's row in its project's health table shows
+ *  (overviewCheck), cell by cell (data-ovcell): no task done of two, the
+ *  paused one, no planned end passed and no remaining hours. Its Delayed
+ *  cell reads 1 for the overdue task where the sub-project tracks delay and
+ *  is blank where it does not, which the REST answer's track_delay says. */
+export const OVERVIEW_HEALTH_EXPECTED = {
+  progress: '0%',
+  done: '0/2',
+  left: '—',
+  behind: '—',
+  paused: '1',
+}
+
 /** The Overview of a sub-project the run makes under its project M, with an
  *  overdue task and a paused one, opens on the deployment's answers
  *  (convex/overview.ts): the root reaches its ok state, Completion reads 0
  *  of 2 tasks done, Paused 1, the sentence names the one overdue task, the
  *  At-risk list holds the overdue task marked overdue and the Paused list
- *  the paused one, both at their end. It makes the sub-project and its
- *  tasks over REST and pushes the tasks to run.created, so the cleanup,
- *  which deletes M, removes them, and only reads in the app. It runs before
- *  the run archives M. */
+ *  the paused one, both at their end. Then M's own Overview answers its
+ *  health table, whose row for the sub-project reads
+ *  OVERVIEW_HEALTH_EXPECTED, among M's few sub-projects, which all fit its
+ *  first 10 rows, and a press on the row's name opens the sub-project's
+ *  Board on the deployment's answer, which leaves the run's saved view on a
+ *  Board for the steps after it. It makes the sub-project and its tasks
+ *  over REST and pushes the tasks to run.created, so the cleanup, which
+ *  deletes M, removes them, and only reads in the app. It runs before the
+ *  run archives M. */
 async function overviewCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -3649,7 +3668,38 @@ async function overviewCheck() {
       ((await pausedRows.first().textContent()) ?? '').includes(held.title),
       `the Paused row is not ${held.key}`,
     )
-    return `opened the Overview of ${sub.name} on the deployment's answers, with ${late.key} overdue and ${held.key} paused`
+    // M's health table: the sub-project's row among M's sub-projects
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const project = app.locator(
+      '[data-workspace-view] [data-overview-root][data-overview-state="ok"]',
+    )
+    await project.waitFor({ timeout: 60_000 })
+    const health = project.locator('[data-ov-health][data-ov-health-state="ok"]')
+    await health.waitFor({ timeout: 60_000 })
+    const healthRow = health.locator(`[data-ovcard="${sub.id}"]`)
+    expect(
+      await until(async () => (await healthRow.count()) === 1),
+      `the health table holds no row for ${sub.name}`,
+    )
+    const cell = async (name) =>
+      ((await healthRow.locator(`[data-ovcell="${name}"]`).first().textContent()) ?? '').trim()
+    for (const [name, want] of Object.entries({
+      ...OVERVIEW_HEALTH_EXPECTED,
+      late: sub.track_delay ? '1' : '—',
+    }))
+      eq(await cell(name), want, `the health row's ${name}`)
+    // the row's name opens the sub-project's Board
+    await healthRow.locator('button').first().click()
+    await app
+      .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+      .waitFor({ timeout: 60_000 })
+    expect(
+      await until(async () => app.url().includes(`/board/p/${sub.num}`)),
+      `the health row did not open the Board of ${sub.name}`,
+    )
+    return `opened the Overview of ${sub.name} on the deployment's answers, with ${late.key} overdue and ${held.key} paused, and its row in ${M.key}'s health table, which opened its Board`
   })
 }
 

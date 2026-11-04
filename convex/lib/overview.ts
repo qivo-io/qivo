@@ -1,10 +1,11 @@
 /* The Overview's reads behind overview.ts: the summary of a scope, its
- * projected delays, and its two task lists, through the shared view reader
- * (lib/viewReads.ts) and the counts every task writer keeps
- * (model/overviewCounts.ts). It holds the Overview's own rules: what each
- * figure counts, as the app's store derives it from the workspace's tasks
- * (src/store/overviewOracle.setup.ts, which src/store/overviewParity.test.ts
- * compares), the lists' order, batches and positions, and the states.
+ * projected delays, its two task lists and its health table, through the
+ * shared view reader (lib/viewReads.ts) and the counts every task writer
+ * keeps (model/overviewCounts.ts). It holds the Overview's own rules: what
+ * each figure counts, as the app's store derives it from the workspace's
+ * tasks (src/store/overviewOracle.setup.ts, which
+ * src/store/overviewParity.test.ts compares), the lists' order, batches and
+ * positions, the health table's rows, search and order, and the states.
  *
  * A scope is a top-level project with its visible live sub-projects, one
  * sub-project, or My view, the person's own tasks by the Reviewer rule
@@ -65,9 +66,20 @@
  * OVERVIEW.split rows answers `split` with a middle position. Positions are
  * sealed (lib/archiveCursorSeal.ts) and bound to their list, the login,
  * the scope and the days (listKey), because in My view one can fall on the
- * person's own task in a project they cannot see. */
+ * person's own task in a project they cannot see.
+ *
+ * The health table is one read of the whole table (readHealth): a row for
+ * each visible live sub-project of a project scope, or in My view for each
+ * top-level project above the person's own tasks, with the search and the
+ * asked column's order applied on the server before it answers the first
+ * `limit` rows, at most OVERVIEW.healthRows. Each row's counts come from the
+ * count rows; its Delayed and Slipping from its tasks' verdicts, read only
+ * for the rows the order needs (every row for those two columns, else the
+ * rows it answers). No position is needed, as each answer is one moment's
+ * order of the whole table. */
 
 import type { TransactionMetrics } from 'convex/server'
+import { compareValues, type Value } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
@@ -77,13 +89,13 @@ import {
   type LeafCounts,
   noCounts,
   orgCountState,
-  overviewRegroupOf,
   ownerRows,
 } from '../model/overviewCounts'
 import {
   ACCESS_UNCHECKED,
   type Access,
   accessOf,
+  inMetaTree,
   isAccessUnchecked,
   isOrgStaff,
   OWN_READS,
@@ -95,9 +107,12 @@ import { byId } from './db'
 import { type DelayInfo, type DelayIssue, delayOf } from './delay'
 import { ISSUE_STATUSES, type IssueStatus } from './enums'
 import { badRequest } from './functions'
-import { MIB, TASK_ROW_MAX_BYTES } from './limits'
+import { limitedText } from './limitRules'
+import { LIMITS, MIB, TASK_ROW_MAX_BYTES } from './limits'
+import { nameKey } from './nameKey'
 import { loadRowsOf, OWNER_LOADS, ownerLoadReader, type ReadRoom } from './ownerLoads'
 import { taskOwnerId } from './review'
+import { allWordsMatcher } from './search'
 import {
   BY_ID,
   firstSubtaskCheck,
@@ -110,6 +125,7 @@ import {
   noSubtasks,
   ownerSettled,
   ownHeldTasks,
+  ownTasks,
   PROJECT_ASK,
   PROJECT_READ,
   projectSelection,
@@ -162,13 +178,51 @@ import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf
  *   581, 625 and 0.26, a first At-risk batch 113 ranges and a first Paused
  *   batch 126.
  *
+ * The health table (readHealth), measured on 3 November 2026 the same way
+ * (tests/overviewHealth.test.ts, real limits), sorted by Delayed and then
+ * by Name, every figure given in each case:
+ *
+ * - 600 tasks over a project of 30 sub-projects that a team of the reader
+ *   shares: 1,133, 1,283 and 0.81 by Delayed, 713, 803 and 0.49 by Name,
+ *   which judges only the 10 rows it answers.
+ * - A project of 3 sub-projects with 800 open tasks: 1,247, 1,492 and 1.0
+ *   either way, as every row is in the answer.
+ * - One sub-project of 300 open tasks beside two of 30: 602, 693 and 0.46.
+ * - 200 Done tasks not yet archived beside 90 open ones: 410, 410 and 0.27.
+ * - My view of 400 of the reader's own tasks over the 200 sub-projects of
+ *   67 projects: 1,315, 1,917 and 0.94 by Delayed, 975, 1,917 and 0.94 by
+ *   Name.
+ * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
+ *   422, 282 and 0.15.
+ *
+ * Delayed and Slipping read the loads of the owners the order needs, so,
+ * by the owner's rule of 1 November 2026 for figures that follow
+ * workloads, they answer unavailable past this measured size inside the
+ * design size. An everyday project's 10 owners hold the organization's
+ * open tasks, half of them scheduled. Beside the project's own 90, those
+ * tasks are in sub-projects of 30 open tasks, three to a project, so each
+ * owner's scheduled work spans every sub-project (the on-demand cases,
+ * QIVO_HEALTH_ORG_OPEN=1). 3,000 such tasks read 1,171, 2,183 and 1.39,
+ * 5,000 read 1,792, 3,536 and 2.25 and 6,000 read 2,104, 4,216 and 2.69,
+ * whole. From 6,100 each owner's scheduled work is in more than the 200
+ * live projects the owner reader reads for one owner (lib/ownerLoads.ts
+ * OWNER_LOADS.projects), and with that bound raised the owners' loads pass
+ * the reader's room for one organization's owners there too
+ * (OWNER_LOADS.call, 2,000 ranges). The rows then answer `loads` and the
+ * table sorts by name. overview.risk and the At-risk list read the same
+ * loads.
+ *
  * `batch` is how many rows a list batch holds, the page's Load more step,
  * and `split` how many a batch with a fixed end may hold before it answers
- * a middle position to split at. */
+ * a middle position to split at. `healthRows` is the most rows one answer
+ * of the health table holds: the design size's 200 top-level projects, so
+ * inside the design size every row stays reachable by Load more, and past
+ * it the table says it shows the first ones and a search finds the rest. */
 export const OVERVIEW = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   batch: 10,
   split: 20,
+  healthRows: 200,
 }
 
 /** An Overview scope, as the Board names one (lib/board.ts BoardScope). */
@@ -472,11 +526,13 @@ async function projectCounts(
  * then whether each row's project is live, a sub-project and one they see.
  * The rows of projects they cannot see are read too; they are alike in
  * size, so only how many there are can move an answer, at the budget's
- * margin. */
+ * margin. With `parents`, it also notes each answered sub-project's
+ * top-level project there, for the health table's rows. */
 async function mineCounts(
   ctx: QueryCtx,
   guard: ViewBudget,
   seats: ViewSeats,
+  parents?: Map<string, string>,
 ): Promise<Map<string, LeafCounts> | null> {
   const out = new Map<string, LeafCounts>()
   for (const seat of seats.values()) {
@@ -508,6 +564,7 @@ async function mineCounts(
       const counts = countsOfRows(byProject.get(p.id) ?? [], p)
       if (counts === null) return null
       out.set(p.id, counts)
+      if (p.parent_id !== undefined) parents?.set(p.id, p.parent_id)
     }
   }
   return out
@@ -883,9 +940,6 @@ const UNKNOWN = 'unknown' as const
  * not be read. */
 type Load = LoadSpan[] | typeof UNKNOWN
 
-/** What verdicts answers: one query's verdicts, each owner's load read once. */
-export type Verdicts = ReturnType<typeof verdicts>
-
 /**
  * The verdicts of one query, on `clock`: each task's as lib/delay.ts gives
  * it, with the owner's load read once (lib/ownerLoads.ts ownerLoadReader)
@@ -893,6 +947,9 @@ export type Verdicts = ReturnType<typeof verdicts>
  * seat, in a room built from the query's own budget (loadRoom). A guest or
  * an organization Viewer gets at most one owner's load a query; a verdict
  * that needs another is unknown, and so is one whose owner did not fit.
+ * Once readAll stopped at an owner of an organization, every owner it did
+ * not reach there is unknown too, without a read, so which verdicts are
+ * known follows the owner id order and never the order tasks ask in.
  */
 export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clock: Clock) {
   const profiles = new Map<string, Promise<Doc<'profiles'> | null>>()
@@ -900,6 +957,8 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
   const readers = new Map<string, ReturnType<typeof ownerLoadReader>>()
   // the owners a guest's or Viewer's seat read, by organization
   const read = new Map<string, number>()
+  // the organizations whose readAll stopped at an owner it could not read
+  const stopped = new Set<string>()
 
   const profileOf = async (id: string): Promise<Doc<'profiles'> | null> => {
     let p = profiles.get(id)
@@ -955,6 +1014,8 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
   const loadOf = async (orgId: string, owner: string): Promise<Load> => {
     const known = loads.get(owner)
     if (known !== undefined) return known
+    // an owner past the one readAll stopped at is never read after it
+    if (stopped.has(orgId)) return UNKNOWN
     const seat = seats.get(orgId)
     if (seat === undefined) return UNKNOWN
     if (!isOrgStaff(seat.me)) {
@@ -1024,10 +1085,14 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
       return delayOf(it, load, 0)
     },
     /** Reads the loads of `owners`, owner ids of organization `orgId`, in
-     * owner id order, and answers whether every one was read. */
+     * owner id order, and answers whether every one was read. It stops at
+     * the first it could not read, and the owners after it stay unknown. */
     async readAll(orgId: string, owners: readonly string[]): Promise<boolean> {
       for (const owner of [...new Set(owners)].sort())
-        if ((await loadOf(orgId, owner)) === UNKNOWN) return false
+        if ((await loadOf(orgId, owner)) === UNKNOWN) {
+          stopped.add(orgId)
+          return false
+        }
       return true
     },
   }
@@ -1897,97 +1962,439 @@ export async function readPaused(
   })
 }
 
-// --- one sub-project's health ---------------------------------------------------------------
+// --- the health table ------------------------------------------------------------------------
 
-/** One health row piece: a sub-project's figures, or one person's in it. */
-export type HealthPiece = {
-  /** the leaves by status, the paused leaves and the remaining hours of the
-   * leaves not Done in whole tenths, unrounded: a row over several pieces
-   * adds them up and rounds once, as src/store/planner.ts remainingByGroups
-   * does */
+/** A health table column (src/views/overview/HealthTable.tsx HEALTH_COLS):
+ * the name, the lead, Progress, Done, Left, Delayed (`late`), Slipping
+ * (`behind`) and Paused. */
+export type HealthSort =
+  | 'name'
+  | 'lead'
+  | 'progress'
+  | 'done'
+  | 'left'
+  | 'late'
+  | 'behind'
+  | 'paused'
+
+/** One health row: a sub-project of a project scope or, in My view, a
+ * top-level project with the person's figures of its sub-projects. */
+export type HealthRow = {
+  project_id: string
+  name: string
+  /** the effective lead, the project's or else its top-level project's
+   * (src/store/planner.ts leadOf), whether or not its profile is still
+   * there */
+  lead_id: string | null
+  /** the leaves by status, the paused leaves and Left in whole tenths,
+   * unrounded: My view's row adds up the person's counts of its
+   * sub-projects, and the page divides Left by 10 once */
   counts: Figure<LeafCounts>
-  /** the tasks, groups included, whose verdict is late (Delayed) or behind
-   * (Slipping), in a project that tracks delay; zero in one that does not */
+  /** Delayed (late) and Slipping (behind): the tasks, groups included,
+   * whose verdict is late or behind in a project that tracks delay; zero
+   * in one that does not */
   delays: Figure<{ late: number; behind: number }>
 }
 
-/**
- * The health figures of live sub-project `project`, or with `owner` of the
- * tasks that seat's person owns there by the Reviewer rule, for a health
- * row (src/views/Overview.tsx, the health table), within `guard`:
- *
- * - its counts: the family's readiness and the sub-project's rows, or the
- *   person's rows there (model/overviewCounts.ts), a few ranges whatever
- *   its tasks;
- * - its delays: every active task of the sub-project read (lib/viewReads.ts
- *   selectionTasks), which are groups and their group facts, and the
- *   verdicts `v` gives, whose owners' loads it reads in owner id order.
- *
- * A figure whose reads do not fit `guard` answers unavailable for `budget`,
- * one whose owner's load could not be read for `loads`. Pass one `v` for
- * all the rows of one query, so each owner's load is read once. A row of a
- * project scope is one piece; a top-level project's row in My view adds up
- * the person's pieces of its sub-projects. It is also the reader REST's and
- * MCP's project completion can switch to for one sub-project
- * (model/overviewCounts.ts familyCounts for a family).
- */
-export async function subProjectHealth(
+/** What overview.health answers. */
+export type HealthAnswer =
+  | {
+      state: 'ok'
+      /** the first `limit` rows of the table in `sort`'s order */
+      rows: HealthRow[]
+      /** how many rows the table holds with the search applied */
+      total: number
+      /** the order of `rows`: the one asked, or name ascending where the
+       * asked column needs a figure some row lacks, `by_name` naming it
+       * and `missing` why it is not given, also where the rows that lack
+       * it are past `rows`. For the delays `missing` is `budget` where
+       * their reads did not fit, else `loads`; for the counts it is their
+       * reason. */
+      sort: {
+        key: HealthSort
+        dir: 'asc' | 'desc'
+        by_name?: 'delays' | 'counts'
+        missing?: Missing
+      }
+      /** the most rows one answer holds (OVERVIEW.healthRows): past it, a
+       * search finds the others */
+      most: number
+    }
+  | ScopeRefusal
+
+/* A health row as the reader builds it: its project, its name key, its
+ * effective lead and, in My view, the person's own tasks under it. */
+type HealthItem = {
+  project: Doc<'projects'>
+  key: string
+  lead: string | null
+  own: Doc<'issues'>[]
+}
+
+/* The health table's rows of the scope `at`, before the search: for a
+ * project scope each selected sub-project, an empty one included, with its
+ * own lead or else its top-level project's; for My view each top-level
+ * project a seat shows (live, a meta and visible, as the app's
+ * P.visibleProjects) above a task the seat's person owns by the Reviewer
+ * rule, a group included, in a visible live sub-project, with those tasks,
+ * read through the person's own ranges (lib/viewReads.ts ownTasks), never
+ * the projects'. In My view `g` learns which of the tasks whose owner
+ * depends on it are groups. Past the guard it throws OverBudget, as the
+ * table cannot know its rows without them. */
+async function healthItems(
   ctx: QueryCtx,
   guard: ViewBudget,
-  seats: ViewSeats,
-  project: Doc<'projects'>,
-  v: Verdicts,
-  owner?: Doc<'profiles'>,
-): Promise<HealthPiece> {
-  const family = project.parent_id
-  const counts = await bounded(async (): Promise<Figure<LeafCounts>> => {
-    if (family === undefined || project.archived_at !== undefined)
-      return { state: 'unavailable', reason: 'counting' }
-    if (owner === undefined) {
-      await guard.take(RANGE, 3)
-      await guard.take(SUB_COUNTS)
-      const got = (await familyCounts(ctx.db, project.org_id, family, [project]))?.get(project.id)
-      return got === undefined
-        ? { state: 'unavailable', reason: 'counting' }
-        : { state: 'ok', ...got }
+  at: ScopeRead,
+  g: Groups,
+): Promise<HealthItem[]> {
+  if (at.kind === 'project') {
+    const { project, subProjects } = at.selection
+    const out: HealthItem[] = []
+    for (const p of subProjects) {
+      // a sub-project scope's top-level project, which the access read
+      // when it asked about the sub-project
+      const parent =
+        p !== project
+          ? project
+          : p.parent_id === undefined
+            ? null
+            : await at.seat.project(p.parent_id)
+      out.push({
+        project: p,
+        key: nameKey(p.name),
+        lead: p.lead_id ?? parent?.lead_id ?? null,
+        own: [],
+      })
     }
-    await guard.take(RANGE, 3)
-    await guard.take(SUB_COUNTS)
-    const state = await orgCountState(ctx.db, project.org_id)
-    if (!state.stamped || state.run !== null || (await overviewRegroupOf(ctx.db, family)) !== null)
-      return { state: 'unavailable', reason: 'counting' }
-    const rows = await ctx.db
-      .query('overview_counts')
-      .withIndex('by_owner_project', (q) => q.eq('owner_id', owner.id).eq('project_id', project.id))
-      .collect()
-    const got = countsOfRows(rows, project)
-    return got === null ? { state: 'unavailable', reason: 'counting' } : { state: 'ok', ...got }
-  })
-  const delays = await bounded(async (): Promise<Figure<{ late: number; behind: number }>> => {
-    if (!tracks(project)) return { state: 'ok', late: 0, behind: 0 }
-    const tasks: Doc<'issues'>[] = []
-    for await (const step of selectionTasks(ctx, guard, [project])) tasks.push(...step)
-    const g = newGroups()
-    await readGroups(ctx, guard, seats, g, tasks, true)
-    const mine = tasks.filter(
-      (t) => owner === undefined || taskOwnerId(t, isGroup(g, t)) === owner.id,
+    return out
+  }
+  const out: HealthItem[] = []
+  for (const seat of at.seats.values()) {
+    const own: Doc<'issues'>[] = []
+    for await (const step of ownTasks(ctx, guard, seat, ISSUE_STATUSES)) own.push(...step)
+    await readGroups(
+      ctx,
+      guard,
+      at.seats,
+      g,
+      own.filter((t) => !ownerSettled(t)),
+      false,
     )
-    const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
-    const owners: string[] = []
-    for (const t of mine) {
-      const needed = await v.needs(t, facts(t))
-      if (needed !== null) owners.push(needed)
+    // the person's tasks by the top-level project of their sub-project
+    const byTop = new Map<string, Doc<'issues'>[]>()
+    for (const t of own) {
+      if (taskOwnerId(t, isGroup(g, t)) !== seat.me.id) continue
+      const top = (await seat.project(t.project_id))?.parent_id
+      if (top !== undefined) byTop.set(top, [...(byTop.get(top) ?? []), t])
     }
-    if (!(await v.readAll(project.org_id, owners))) return { state: 'unavailable', reason: 'loads' }
+    const ids = [...byTop.keys()]
+    const live = await seat.live(ids)
+    const liveIds = ids.filter((_, i) => live[i])
+    const shown = await seat.visible(liveIds)
+    for (const [i, id] of liveIds.entries()) {
+      const top = await seat.project(id)
+      if (!shown[i] || top === null || !inMetaTree(top, top)) continue
+      out.push({
+        project: top,
+        key: nameKey(top.name),
+        lead: top.lead_id ?? null,
+        own: byTop.get(id) ?? [],
+      })
+    }
+  }
+  return out
+}
+
+/* The counts of each of `items`, the scope `at`'s rows the search kept, by
+ * project id, or null while they are not whole: a project scope's from its
+ * family's readiness once and each kept sub-project's rows (projectCounts);
+ * My view's from every count row of each seat's person (mineCounts), each
+ * row adding up those of its visible live sub-projects in whole tenths. */
+async function healthCounts(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  at: ScopeRead,
+  items: readonly HealthItem[],
+): Promise<Map<string, LeafCounts> | null> {
+  if (items.length === 0) return new Map()
+  if (at.kind === 'project')
+    return await projectCounts(ctx, guard, {
+      ...at.selection,
+      subProjects: items.map((r) => r.project),
+    })
+  const parents = new Map<string, string>()
+  const subs = await mineCounts(ctx, guard, at.seats, parents)
+  if (subs === null) return null
+  const out = new Map(items.map((r): [string, LeafCounts] => [r.project.id, noCounts()]))
+  for (const [id, counts] of subs) {
+    const top = parents.get(id)
+    const sum = top === undefined ? undefined : out.get(top)
+    if (top !== undefined && sum !== undefined) out.set(top, addCounts(sum, counts))
+  }
+  return out
+}
+
+/* The name key of each lead of `items` that is a profile of its row's
+ * organization, by profile id, each read by id a step at a time; a lead
+ * whose profile is gone, or one of another organization, is no lead. Every
+ * seat's people window holds its organization's whole roster
+ * (lib/workspaceParts.ts readPeople), so ordering by these names shows the
+ * reader nothing it does not hold. */
+async function leadKeys(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  items: readonly HealthItem[],
+): Promise<Map<string, string>> {
+  const wanted = [
+    ...new Map(
+      items.flatMap((r): [string, string][] =>
+        r.lead === null ? [] : [[r.lead, r.project.org_id]],
+      ),
+    ),
+  ]
+  const out = new Map<string, string>()
+  for (let at = 0; at < wanted.length; ) {
+    const step = wanted.slice(at, at + (await guard.upTo(BY_ID, Math.min(64, wanted.length - at))))
+    at += step.length
+    const found = await settled(step.map(([id]) => byId(ctx, 'profiles', id)))
+    for (const [i, p] of found.entries())
+      if (p !== null && p.org_id === step[i]?.[1]) out.set(p.id, nameKey(p.name))
+  }
+  return out
+}
+
+/* Delayed and Slipping of each of `judged`, rows of the scope `at`, by
+ * project id. It reads their tasks in projects that track delay (a project
+ * scope's every active task of each such judged sub-project,
+ * lib/viewReads.ts selectionTasks; in My view the person's own tasks the
+ * rows hold), which are groups and the groups' facts, then the owners
+ * each organization's verdicts need, in owner id order across every judged
+ * row, organizations in id order (verdicts readAll), so where a guest's
+ * one owner or the room ends never follows the order of the rows. A row
+ * whose verdicts need an owner whose load was not read answers unavailable
+ * for `loads`. Throws OverBudget past the guard. */
+async function healthDelays(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  at: ScopeRead,
+  clock: Clock,
+  judged: readonly HealthItem[],
+  g: Groups,
+): Promise<Map<string, Figure<{ late: number; behind: number }>>> {
+  const tasksOf = new Map<string, Doc<'issues'>[]>(judged.map((r) => [r.project.id, []]))
+  if (at.kind === 'project') {
+    const tracked = judged.map((r) => r.project).filter(tracks)
+    for await (const step of selectionTasks(ctx, guard, tracked))
+      for (const t of step) tasksOf.get(t.project_id)?.push(t)
+  } else
+    for (const r of judged) {
+      const seat = at.seats.get(r.project.org_id)
+      const kept: Doc<'issues'>[] = []
+      for (const t of r.own) if (tracks((await seat?.project(t.project_id)) ?? null)) kept.push(t)
+      tasksOf.set(r.project.id, kept)
+    }
+  const tasks = [...tasksOf.values()].flat()
+  await readGroups(ctx, guard, at.seats, g, tasks, true)
+  const facts = (t: Doc<'issues'>) => (isGroup(g, t) ? (g.facts.get(t.id) ?? null) : null)
+  const v = verdicts(ctx, guard, at.seats, clock)
+  const byOrg = groupBy(tasks, (t) => t.org_id)
+  for (const org of [...byOrg.keys()].sort()) {
+    const owners: string[] = []
+    for (const t of byOrg.get(org) ?? []) {
+      const owner = await v.needs(t, facts(t))
+      if (owner !== null) owners.push(owner)
+    }
+    await v.readAll(org, owners)
+  }
+  const out = new Map<string, Figure<{ late: number; behind: number }>>()
+  for (const r of judged) {
     let late = 0
     let behind = 0
-    for (const t of mine) {
+    let known = true
+    for (const t of tasksOf.get(r.project.id) ?? []) {
       const verdict = await v.of(t, facts(t))
-      if (verdict === UNKNOWN) return { state: 'unavailable', reason: 'loads' }
+      if (verdict === UNKNOWN) {
+        known = false
+        break
+      }
       if (verdict?.status === 'late') late++
-      if (verdict?.status === 'behind') behind++
+      else if (verdict?.status === 'behind') behind++
     }
-    return { state: 'ok', late, behind }
+    out.set(
+      r.project.id,
+      known ? { state: 'ok', late, behind } : { state: 'unavailable', reason: 'loads' },
+    )
+  }
+  return out
+}
+
+/* The columns whose order needs every row's delays, and those whose order
+ * needs every row's counts. */
+const DELAY_SORTS: readonly HealthSort[] = ['late', 'behind']
+const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused']
+
+/**
+ * The health table of `scope` (HealthAnswer) on the client's day and weeks
+ * (clockOf), for the login whose seats are `profiles`: its rows with the
+ * search applied, in the order `sort` and `dir` ask, the first `limit` of
+ * them. It reads, in this order, within OVERVIEW.reads:
+ *
+ * 1. the rows (healthItems): a project scope's selected sub-projects, or in
+ *    My view the person's own tasks and the top-level projects above them,
+ *    which past the budget answer over_budget, as the table cannot know its
+ *    rows without them;
+ * 2. the search, over each row's name key (lib/nameKey.ts), every word
+ *    anywhere in it (lib/search.ts allWordsMatcher), which `total` counts;
+ * 3. the counts of the kept rows, one figure (healthCounts), `counting`
+ *    while they are not whole and `budget` past the budget;
+ * 4. for the Lead sort, each lead's name (leadKeys), before any delay, so
+ *    that sort never meets a guard the delays spent, and over_budget past
+ *    the budget;
+ * 5. for every sort but Delayed and Slipping, the order and the cut, so
+ *    only the rows the answer returns are judged;
+ * 6. the delays of the judged rows (healthDelays), every kept row for
+ *    Delayed and Slipping, whose order needs each one: one figure that past
+ *    the budget answers `budget` on every judged row;
+ * 7. for Delayed and Slipping, the order and the cut.
+ *
+ * One total order: the column's value in `dir`, then the name key and then
+ * the project id ascending, as Convex orders values (strings in UTF-8 byte
+ * order, never JavaScript's `<`); for Name the name key in `dir`, then the
+ * id. A row without a lead, or whose lead's profile is gone or of another
+ * organization, sorts after every lead ascending and before them
+ * descending. Where the order asked needs a figure some row lacks
+ * (Delayed's and Slipping's the judged rows' delays, Progress's, Done's,
+ * Left's and Paused's the counts), the rows are in name order and `sort`
+ * says so (`by_name`) and why (`missing`), from every judged row and not
+ * only the ones returned, so the page's note never depends on which rows
+ * the cut kept; Name and Lead never fall back. Outside Delayed and
+ * Slipping the judged rows grow with `limit`, so a Load more can turn a
+ * row's Delayed into unavailable: for a guest or Viewer by the owner order,
+ * for staff by the budget. Refuses a malformed clock, a `limit` that is not
+ * a whole number from 1 to OVERVIEW.healthRows, and a search past
+ * LIMITS.search.
+ */
+export async function readHealth(
+  ctx: QueryCtx,
+  profiles: ReadonlyMap<string, Doc<'profiles'>>,
+  args: {
+    scope: OverviewScope
+    day: string
+    week: string
+    week_starts: readonly number[]
+    week_end: number
+    sort: HealthSort
+    dir: 'asc' | 'desc'
+    search?: string
+    limit: number
+  },
+): Promise<HealthAnswer> {
+  const clock = clockOf(args)
+  const { sort, dir, limit } = args
+  if (!Number.isInteger(limit) || limit < 1 || limit > OVERVIEW.healthRows)
+    throw badRequest(`limit must be a whole number from 1 to ${OVERVIEW.healthRows}`)
+  const matches = allWordsMatcher(nameKey(limitedText(LIMITS.search, args.search ?? '')))
+  return await overScope(ctx, profiles, args.scope, async (guard, at) => {
+    const g = newGroups()
+    const items = (await healthItems(ctx, guard, at, g)).filter((r) => matches(r.key))
+    const counts = await bounded(async (): Promise<Figure<{ of: Map<string, LeafCounts> }>> => {
+      const read = await healthCounts(ctx, guard, at, items)
+      return read === null
+        ? { state: 'unavailable', reason: 'counting' }
+        : { state: 'ok', of: read }
+    })
+    const leads = sort === 'lead' ? await leadKeys(ctx, guard, items) : new Map<string, string>()
+    let delays = new Map<string, Figure<{ late: number; behind: number }>>()
+    const countsOf = (r: HealthItem): LeafCounts | null =>
+      counts.state === 'ok' ? (counts.of.get(r.project.id) ?? noCounts()) : null
+    /* row `r`'s value in column `key`, as Convex orders values */
+    const columnOf = (r: HealthItem, key: HealthSort): Value => {
+      const c = countsOf(r)
+      const all = c === null ? 0 : leafTotal(c)
+      const d = delays.get(r.project.id)
+      switch (key) {
+        case 'name':
+          return r.key
+        case 'lead': {
+          const name = r.lead === null ? undefined : leads.get(r.lead)
+          return name === undefined ? [1] : [0, name]
+        }
+        case 'progress':
+          return c !== null && all > 0 ? Math.round((c.leaves.done / all) * 100) : 0
+        case 'done':
+          return c !== null && all > 0 ? c.leaves.done / all : 0
+        case 'left':
+          return c?.left_tenths ?? 0
+        case 'paused':
+          return c?.paused ?? 0
+        case 'late':
+          return d?.state === 'ok' ? d.late : 0
+        case 'behind':
+          return d?.state === 'ok' ? d.behind : 0
+      }
+    }
+    let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
+      COUNT_SORTS.includes(sort) && counts.state !== 'ok'
+        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: counts.reason }
+        : { key: sort, dir }
+    /* the kept rows in `order`, one total order */
+    const ordered = () =>
+      [...items].sort((a, b) => {
+        const d = compareValues(columnOf(a, order.key), columnOf(b, order.key))
+        const asked = order.dir === 'asc' ? d : -d
+        if (asked !== 0) return asked
+        const byName = order.key === 'name' ? 0 : compareValues(a.key, b.key)
+        return byName !== 0 ? byName : compareValues(a.project.id, b.project.id)
+      })
+    const byDelays = DELAY_SORTS.includes(sort)
+    let rows = byDelays ? items : ordered()
+    const judged = byDelays ? items : rows.slice(0, limit)
+    const read = await bounded(
+      async (): Promise<Figure<{ of: typeof delays }>> => ({
+        state: 'ok',
+        of: await healthDelays(ctx, guard, at, clock, judged, g),
+      }),
+    )
+    delays =
+      read.state === 'ok'
+        ? read.of
+        : new Map(
+            judged.map((r): [string, Figure<{ late: number; behind: number }>] => [
+              r.project.id,
+              { state: 'unavailable', reason: read.reason },
+            ]),
+          )
+    if (byDelays) {
+      if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
+        order = {
+          key: 'name',
+          dir: 'asc',
+          by_name: 'delays',
+          missing: read.state === 'ok' ? 'loads' : read.reason,
+        }
+      rows = ordered()
+    }
+    return {
+      state: 'ok',
+      rows: rows.slice(0, limit).map((r): HealthRow => {
+        const c = countsOf(r)
+        return {
+          project_id: r.project.id,
+          name: r.project.name,
+          lead_id: r.lead,
+          counts:
+            c !== null
+              ? { state: 'ok', ...c }
+              : {
+                  state: 'unavailable',
+                  reason: counts.state === 'ok' ? 'counting' : counts.reason,
+                },
+          delays: delays.get(r.project.id) ?? { state: 'unavailable', reason: 'budget' },
+        }
+      }),
+      total: items.length,
+      sort: order,
+      most: OVERVIEW.healthRows,
+    }
   })
-  return { counts, delays }
 }

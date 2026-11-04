@@ -21,6 +21,7 @@ import {
   isSiteOf,
   LIST_REFUSALS,
   OVERVIEW_EXPECTED,
+  OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_OVERDUE_DAYS,
   pace,
   parseArgs,
@@ -63,6 +64,23 @@ describe('staging check REST contract', () => {
       completion: '0 of 2 tasks done',
       paused: '1',
       sentence: '1 task is overdue.',
+    })
+  })
+  it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
+    const table = readFileSync(
+      new URL('../src/views/overview/HealthTable.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(table).toMatch(/`\$\{f\.pct\}%`/)
+    expect(table).toMatch(/`\$\{f\.done\}\/\$\{f\.total\}`/)
+    // a blank where a trouble column or Left counts nothing
+    expect(table).toContain("n > 0 ? n : '—'")
+    expect(OVERVIEW_HEALTH_EXPECTED).toEqual({
+      progress: '0%',
+      done: '0/2',
+      left: '—',
+      behind: '—',
+      paused: '1',
     })
   })
   it('fills a task to the page sizes of its thread', () => {

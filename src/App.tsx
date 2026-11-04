@@ -2183,8 +2183,7 @@ function App() {
           />
         )
       case 'overview':
-        // its figures and lists come from the server; its health table
-        // waits for every task on its own
+        // its figures, lists and health table come from the server
         if (!scopeInfo) return null
         return <Overview info={scopeInfo} actions={actions} />
       case 'roadmap':

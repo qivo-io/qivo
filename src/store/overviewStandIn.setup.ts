@@ -1,9 +1,9 @@
-/* A stand-in for the Overview's four live queries (convex/overview.ts
-   summary, risk, attention and paused) that answers from a workspace the
-   app holds, for the jsdom Board fixture (src/views/boardFixture.setup.tsx),
-   the app-level tests and the browser benchmark's server
-   (scripts/perf/server.mjs), as store/boardStandIn.setup.ts answers the
-   Board.
+/* A stand-in for the Overview's five live queries (convex/overview.ts
+   summary, risk, attention, paused and health) that answers from a
+   workspace the app holds, for the jsdom Board fixture
+   (src/views/boardFixture.setup.tsx), the app-level tests and the browser
+   benchmark's server (scripts/perf/server.mjs), as
+   store/boardStandIn.setup.ts answers the Board.
 
    It applies the Overview's rules (convex/lib/overview.ts) to the
    workspace's tasks: the scope as the Board's stand-in selects it, the
@@ -14,18 +14,29 @@
    organization Viewer, and the two lists in the server's order (due date,
    undated last, then the task number, organization and id, where the
    server ties by creation time), in batches of OVERVIEW_BATCH with the
-   server's `complete`, `next`, `end` and `split`, and fixed ends. Its
-   positions are plain text with each list's prefix, refused with
-   bad_request under another list, scope, reader or clock. It reads no
-   access rule or read budget of its own, so a state the workspace cannot
-   reach, such as `counting`, `budget`, `over_budget` or a stopped batch,
-   answers only when `force` asks for it. src/store/overviewParity.test.ts
+   server's `complete`, `next`, `end` and `split`, and fixed ends, and the
+   health table's rows (a project's visible live sub-projects, or My view's
+   top-level projects above the person's tasks) with their counts and
+   delays, searched, ordered by the server's total order (name keys by
+   their bytes, convex/lib/nameKey.ts) with its name fallback and cut at
+   `limit`, at most HEALTH_ROWS. Its positions are plain text with each
+   list's prefix, refused with bad_request under another list, scope,
+   reader or clock. It reads no access rule or read budget of its own, so a
+   state the workspace cannot reach, such as `counting`, `budget`,
+   `over_budget` or a stopped batch, answers only when `force` asks for
+   it. src/store/overviewParity.test.ts
    compares it with the real queries. It imports nothing the benchmark's
    worker cannot load. */
 
-import { ConvexError } from 'convex/values'
+import { ConvexError, compareValues, type Value } from 'convex/values'
 import { type DelayIssue, delayOf } from '../../convex/lib/delay'
+import { LIMITS } from '../../convex/lib/limits'
+import { nameKey } from '../../convex/lib/nameKey'
 import type {
+  Figure,
+  HealthAnswer,
+  HealthRow,
+  HealthSort,
   ListAnswer,
   OverviewRow,
   OverviewScope,
@@ -33,6 +44,7 @@ import type {
   SummaryAnswer,
 } from '../../convex/lib/overview'
 import { taskOwnerId } from '../../convex/lib/review'
+import { allWordsMatcher } from '../../convex/lib/search'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import {
   canonicalLoad,
@@ -41,6 +53,7 @@ import {
   plannableHoursOf,
 } from '../../convex/lib/workload'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
+import type { LeafCounts } from '../../convex/model/overviewCounts'
 import { groupProgress, isIssueDone } from '../lib/issueGroups'
 import { spanOf } from './boardStandIn.setup'
 import { OVERVIEW_BATCH, OVERVIEW_SPLIT, type OverviewQuery } from './overviewLists'
@@ -52,7 +65,8 @@ import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
     them too, Overdue's `budget`, the projection's `budget`, or `loads`), a
     list batch that stops after half a batch (`incomplete`), a list batch
     that answers `over_budget`, or the owners in `unknown` whose loads no
-    batch can read. */
+    batch can read; and for the health table alone its scope refusal, its
+    counts or its judged rows' delays not given, or a lower cap (`most`). */
 export type ForcedOverview = {
   scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
   counts?: 'counting' | 'budget'
@@ -60,7 +74,17 @@ export type ForcedOverview = {
   projected?: 'budget' | 'loads'
   list?: 'incomplete' | 'over_budget'
   unknown?: readonly string[]
+  health?: {
+    scope?: 'unavailable' | 'access_unchecked' | 'over_budget'
+    counts?: 'counting' | 'budget'
+    delays?: 'budget' | 'loads'
+    most?: number
+  }
 }
+
+/** The most rows one health answer holds (convex/lib/overview.ts
+    OVERVIEW.healthRows, pinned by store/overviewParity.test.ts). */
+export const HEALTH_ROWS = 200
 
 /** The sentence an `access_unchecked` answer carries. */
 export const ACCESS_UNCHECKED_MESSAGE =
@@ -116,7 +140,14 @@ export type OverviewArgs = {
   week_end?: number
   cursor?: string
   end?: string
+  sort?: HealthSort
+  dir?: 'asc' | 'desc'
+  search?: string
+  limit?: number
 }
+
+/* The columns whose order needs every row's counts. */
+const COUNT_SORTS: readonly HealthSort[] = ['progress', 'done', 'left', 'paused']
 
 /* Where a row sorts: dated before undated, then by due date, then the task
    number, organization and id. */
@@ -143,7 +174,7 @@ export function overviewStandIn(
   query: OverviewQuery,
   args: OverviewArgs,
   { sees, force = {} }: { sees?: (projectId: string) => boolean; force?: ForcedOverview } = {},
-): SummaryAnswer | RiskAnswer | ListAnswer {
+): SummaryAnswer | RiskAnswer | ListAnswer | HealthAnswer {
   const mine = new Set(workspace.myProfileIds)
   const projectById = new Map(workspace.projects.map((p) => [p.id, p]))
   const profileById = new Map(workspace.profiles.map((p) => [p.id, p]))
@@ -326,6 +357,190 @@ export function overviewStandIn(
     return delayOf(it, load, 0)
   }
   const unknownOwners = new Set(force.unknown ?? [])
+
+  if (query === 'health') {
+    const h = force.health ?? {}
+    if (h.scope === 'unavailable') return { state: 'unavailable' }
+    if (h.scope === 'access_unchecked')
+      return { state: 'unavailable', reason: 'access_unchecked', message: ACCESS_UNCHECKED_MESSAGE }
+    if (h.scope === 'over_budget') return { state: 'over_budget' }
+    // a lowered cap cuts the rows there, as the page's first ask of 10 rows
+    // stays one the server takes
+    const most = Math.min(h.most ?? HEALTH_ROWS, HEALTH_ROWS)
+    const { sort = 'late', dir = 'desc', limit: asked = OVERVIEW_BATCH } = args
+    if (!Number.isInteger(asked) || asked < 1 || asked > HEALTH_ROWS)
+      throw new ConvexError({
+        code: 'bad_request',
+        message: `limit must be a whole number from 1 to ${HEALTH_ROWS}`,
+      })
+    const limit = Math.min(asked, most)
+    const text = (args.search ?? '').trim()
+    if (text.length > LIMITS.search.max)
+      throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
+    const matches = allWordsMatcher(nameKey(text))
+    // the rows: a project's sub-projects, or My view's top-level projects
+    // above the person's tasks, each with its tasks in the scope
+    type Item = { project: Project; key: string; lead: string | null; tasks: Task[] }
+    const item = (project: Project, lead: string | null, tasks: Task[]): Item => ({
+      project,
+      key: nameKey(project.name),
+      lead,
+      tasks,
+    })
+    let items: Item[]
+    if (subProjects !== null)
+      items = subProjects.map((p) =>
+        item(
+          p,
+          p.lead_id ??
+            (p.parent_id === undefined ? undefined : projectById.get(p.parent_id)?.lead_id) ??
+            null,
+          scoped.filter((t) => t.project_id === p.id),
+        ),
+      )
+    else {
+      const byTop = new Map<string, Task[]>()
+      for (const t of scoped) {
+        const top = projectById.get(t.project_id)?.parent_id
+        if (top !== undefined) byTop.set(top, [...(byTop.get(top) ?? []), t])
+      }
+      items = []
+      for (const [id, tasks] of byTop) {
+        const top = projectById.get(id)
+        if (top && top.type === 'meta' && top.parent_id === undefined && seen(top.id))
+          items.push(item(top, top.lead_id ?? null, tasks))
+      }
+    }
+    items = items.filter((r) => matches(r.key))
+    // the counts: the leaves by status, the paused leaves and Left in tenths
+    const countsOf = (r: Item): LeafCounts => {
+      const c: LeafCounts = {
+        leaves: { backlog: 0, todo: 0, progress: 0, review: 0, done: 0 },
+        paused: 0,
+        left_tenths: 0,
+      }
+      for (const t of r.tasks)
+        if (!isGroup(t)) {
+          c.leaves[t.status]++
+          if (t.paused) c.paused++
+          if (t.status !== 'done') c.left_tenths += Math.round((t.remaining_hours ?? 0) * 10)
+        }
+      return c
+    }
+    const counted = h.counts === undefined
+    // each lead's name, a lead of another organization or none being none
+    const leadName = (r: Item) => {
+      const p = r.lead === null ? undefined : profileById.get(r.lead)
+      return p !== undefined && p.org_id === r.project.org_id ? nameKey(p.name) : undefined
+    }
+    const delays = new Map<string, Figure<{ late: number; behind: number }>>()
+    const columnOf = (r: Item, key: HealthSort): Value => {
+      const c = counted ? countsOf(r) : null
+      const all = c === null ? 0 : Object.values(c.leaves).reduce((n, x) => n + x, 0)
+      const d = delays.get(r.project.id)
+      switch (key) {
+        case 'name':
+          return r.key
+        case 'lead': {
+          const name = leadName(r)
+          return name === undefined ? [1] : [0, name]
+        }
+        case 'progress':
+          return c !== null && all > 0 ? Math.round((c.leaves.done / all) * 100) : 0
+        case 'done':
+          return c !== null && all > 0 ? c.leaves.done / all : 0
+        case 'left':
+          return c?.left_tenths ?? 0
+        case 'paused':
+          return c?.paused ?? 0
+        case 'late':
+          return d?.state === 'ok' ? d.late : 0
+        case 'behind':
+          return d?.state === 'ok' ? d.behind : 0
+      }
+    }
+    let order: Extract<HealthAnswer, { state: 'ok' }>['sort'] =
+      COUNT_SORTS.includes(sort) && h.counts !== undefined
+        ? { key: 'name', dir: 'asc', by_name: 'counts', missing: h.counts }
+        : { key: sort, dir }
+    const ordered = () =>
+      [...items].sort((a, b) => {
+        const d = compareValues(columnOf(a, order.key), columnOf(b, order.key))
+        const asked = order.dir === 'asc' ? d : -d
+        if (asked !== 0) return asked
+        const byName = order.key === 'name' ? 0 : compareValues(a.key, b.key)
+        return byName !== 0 ? byName : compareValues(a.project.id, b.project.id)
+      })
+    const byDelays = sort === 'late' || sort === 'behind'
+    let rows = byDelays ? items : ordered()
+    const judged = byDelays ? items : rows.slice(0, limit)
+    // the judged rows' delays: owners read in owner id order across them,
+    // by organization, none past the first that could not be read, and one
+    // a query for a guest or Viewer
+    const tracked = (r: Item) => r.tasks.filter(tracks)
+    const readable = new Set<string>()
+    const all = judged.flatMap(tracked)
+    for (const org of [...new Set(all.map((t) => t.org_id))].sort()) {
+      const owners = [
+        ...new Set(all.filter((t) => t.org_id === org).flatMap((t) => needs(t) ?? [])),
+      ].sort()
+      for (const [i, id] of owners.entries()) {
+        if (unknownOwners.has(id) || (onePerQuery(org) && i > 0)) break
+        readable.add(id)
+      }
+    }
+    for (const r of judged) {
+      if (h.delays !== undefined) {
+        delays.set(r.project.id, { state: 'unavailable', reason: h.delays })
+        continue
+      }
+      let late = 0
+      let behind = 0
+      let known = true
+      for (const t of tracked(r)) {
+        const id = needs(t)
+        if (id !== null && !readable.has(id)) {
+          known = false
+          break
+        }
+        const verdict = verdictOf(t, id === null ? [] : loadOf(t.org_id, id))
+        if (verdict?.status === 'late') late++
+        else if (verdict?.status === 'behind') behind++
+      }
+      delays.set(
+        r.project.id,
+        known ? { state: 'ok', late, behind } : { state: 'unavailable', reason: 'loads' },
+      )
+    }
+    if (byDelays) {
+      if (judged.some((r) => delays.get(r.project.id)?.state !== 'ok'))
+        order = {
+          key: 'name',
+          dir: 'asc',
+          by_name: 'delays',
+          missing: h.delays === 'budget' ? 'budget' : 'loads',
+        }
+      rows = ordered()
+    }
+    return {
+      state: 'ok',
+      rows: rows.slice(0, limit).map(
+        (r): HealthRow => ({
+          project_id: r.project.id,
+          name: r.project.name,
+          lead_id: r.lead,
+          counts:
+            h.counts === undefined
+              ? { state: 'ok', ...countsOf(r) }
+              : { state: 'unavailable', reason: h.counts },
+          delays: delays.get(r.project.id) ?? { state: 'unavailable', reason: 'budget' },
+        }),
+      ),
+      total: items.length,
+      sort: order,
+      most,
+    }
+  }
 
   if (query === 'risk') {
     if (force.projected)

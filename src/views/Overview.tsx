@@ -1,22 +1,22 @@
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-/* Overview — dashboard rollup: what to do, the scope's state in one box,
+/* Overview: a dashboard rollup of what to do, the scope's state in one box,
    health per group as a sortable table, then at-risk tasks, paused tasks and
    milestones.
 
-   The summary, the projected delays and the two lists come from the
-   server (convex/overview.ts), through the reads the store owns
-   (P.watchOverview, store/overviewLists.ts), registered from an effect
-   while the page and the tab show (lib/viewVisibility.ts). The store keeps
-   their answers while they stop, and the page shows them marked
-   refreshing until fresh ones arrive. A figure the server answers
-   unavailable shows a dash and why, never a number. Each list shows the
-   server's batches in the server's order, never sorted or cut here. The
-   health table and the milestones still read the workspace until their
-   own stages (t3/limits-overview-health, t3/limits-milestone-overview),
-   and the health table waits for every task. */
+   The summary, the projected delays, the two lists and the health table
+   come from the server (convex/overview.ts), through the reads the store
+   owns (P.watchOverview and P.watchOverviewTable, store/overviewLists.ts),
+   registered from effects while the page and the tab show
+   (lib/viewVisibility.ts). The store keeps their answers while they stop,
+   and the page shows them marked refreshing until fresh ones arrive. A
+   figure the server answers unavailable shows a dash or "unknown" and why,
+   never a number. Each list shows the server's batches, and the health
+   table the server's rows, in the server's order, never sorted or cut
+   here (views/overview/HealthTable.tsx). The milestones still read the
+   workspace until their own stage (t3/limits-milestone-overview), and so
+   do the lists' rows where the workspace holds their tasks. */
 
 import {
   type MouseEvent,
@@ -33,11 +33,19 @@ import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
+import { useRested } from '@/lib/useRested'
 import { cn } from '@/lib/utils'
 import { useViewVisibility } from '@/lib/viewVisibility'
 import { STALL } from '@/store/liveParts'
-import type { FigureView, ListKind, ListView, OverviewView } from '@/store/overviewLists'
+import type {
+  FigureView,
+  HealthTable,
+  ListKind,
+  ListView,
+  OverviewView,
+} from '@/store/overviewLists'
 import type { StoreVersion } from '@/store/updates'
+import { LIMITS } from '../../convex/lib/limits'
 import type { Figure, Missing, OverviewRow } from '../../convex/lib/overview'
 import { NoProjects } from '../components/NoProjects'
 import {
@@ -49,11 +57,13 @@ import {
   ProjectName,
   StatusDot,
 } from '../components/qivo'
-import { TasksLoadingView } from '../components/TasksLoading'
 import { ViewNote } from '../components/ViewNote'
+import { OVERVIEW_BATCH } from '../store/overviewLists'
 import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
+import { BOARD_SEARCH_DELAY_MS } from './board/boardArgs'
+import { type HealthOrder, OvHealthTable } from './overview/HealthTable'
 import { overviewRequest } from './overview/overviewArgs'
-import { healthRows, statusCounts } from './overviewFigures'
+import { OvStatusBar } from './overview/StatusBar'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import { useViewsNews } from './useViewsNews'
 import './Overview.css'
@@ -220,44 +230,6 @@ function OvLeadStat({ info }: { info: ScopeInfo }) {
   )
 }
 
-/* stacked status-distribution bar; a segment paints the palette's
-   --status-fill-<status> where one is set, else the status ink */
-const statusBarSizeClasses = {
-  6: 'h-[6px] rounded-[6px]',
-  7: 'h-[7px] rounded-[7px]',
-  8: 'h-[8px] rounded-[8px]',
-} as const
-
-/** The stacked status bar of `counts`, the leaves by status, empty while
-    they are not given (null). */
-function OvStatusBar({
-  counts,
-  height = 7,
-}: {
-  counts: Record<string, number> | null
-  height?: keyof typeof statusBarSizeClasses
-}) {
-  const total = counts ? Object.values(counts).reduce((sum, n) => sum + n, 0) : 0
-  if (!counts || !total) return <div className={cn('bg-surface-3', statusBarSizeClasses[height])} />
-  return (
-    <div className={cn('flex overflow-hidden bg-surface-3', statusBarSizeClasses[height])}>
-      {P.STATUSES.map((s) => {
-        const n = counts[s.id]
-        return n ? (
-          <HoverTooltip key={s.id} content={`${s.name}, ${n}`}>
-            <div
-              style={{
-                width: `${(n / total) * 100}%`,
-                background: `var(--status-fill-${s.id}, ${s.tone})`,
-              }}
-            />
-          </HoverTooltip>
-        ) : null
-      })}
-    </div>
-  )
-}
-
 /** The legend of `counts`, each status with its count, or `missing` in
     place of every count while they are not given (null). */
 function OvStatusLegend({
@@ -281,331 +253,6 @@ function OvStatusLegend({
           </span>
         </span>
       ))}
-    </div>
-  )
-}
-
-/* ═══ Health, as a table ════════════════════════════════════════════════════
-   One row per group: a sub-project inside one project, a whole project across
-   all of them (deviation #47). Everything is derived from the group's ISSUES
-   and sub-project ids, so the same row serves both altitudes.
-
-   THIS WAS A GRID OF CARDS. Cards are right for four of them and wrong for
-   twenty: a wall you scan rather than read, with no way to ask the one question
-   the section exists to answer — WHICH of these is worst. Every number the card
-   carried is still here; what the table adds is that any of them can be sorted
-   on, and what it costs is the per-card status bar's size, now a 110px sparkbar
-   in the Progress cell. That bar is deliberately the STACKED distribution
-   rather than a plain progress bar: its done segment already IS the progress,
-   so the stacked one says strictly more in the same width.
-
-   NO MILESTONE COLUMN. A milestone belongs to a project (0078), not to a
-   sub-project — the Milestones section below is where it lives, and at this
-   altitude the same date would either repeat down every row of a project's
-   table or be blank on all of them.
-
-   The columns that count trouble are BLANK at zero, not "0". Colour marks the
-   exception (tokens.css), and so does presence: a column of noughts is a column
-   of decorations of exactly the weight of the one number that matters. */
-const HEALTH_COLS = [
-  { id: 'name', label: '', align: 'left', dir: 'asc', title: '' },
-  { id: 'lead', label: 'Lead', align: 'left', dir: 'asc', title: '' },
-  {
-    id: 'progress',
-    label: 'Progress',
-    align: 'left',
-    dir: 'desc',
-    title: '',
-  },
-  { id: 'done', label: 'Done', align: 'right', dir: 'desc', title: '' },
-  {
-    id: 'left',
-    label: 'Left',
-    align: 'right',
-    dir: 'desc',
-    title: 'Remaining hours on unfinished tasks',
-  },
-  {
-    id: 'late',
-    label: 'Delayed',
-    align: 'right',
-    dir: 'desc',
-    title: 'Tasks projected to miss their due date',
-  },
-  {
-    id: 'behind',
-    label: 'Slipping',
-    align: 'right',
-    dir: 'desc',
-    title: 'Tasks running past their planned end',
-  },
-  {
-    id: 'paused',
-    label: 'Paused',
-    align: 'right',
-    dir: 'desc',
-    title: 'Tasks on hold',
-  },
-] as const
-
-const tdClass = 'border-b border-border px-3 py-2 text-base text-text-1'
-const troubleToneClasses = {
-  late: 'text-[color:var(--pressure-over)]',
-  behind: 'text-[color:var(--pressure-warn)]',
-  paused: 'text-[color:var(--warn)]',
-} as const
-
-/* A count that says nothing when there is nothing to say. The `data-ovcell`
-   hook is how a drive reads one number off one row: the health CARD had no hook
-   at all and verify-delay-status had to find it by "the button containing
-   'Enclosure' and the words 'tasks done'". A cell that a check depends on gets
-   a name (design-spec §7.2 — renaming these is a breaking change). */
-function TroubleCell({
-  id,
-  n,
-  last,
-}: {
-  id: keyof typeof troubleToneClasses
-  n: number
-  last: boolean
-}) {
-  return (
-    <td
-      data-ovcell={id}
-      className={cn(
-        tdClass,
-        'text-right font-mono',
-        n > 0 ? troubleToneClasses[id] : 'text-text-3',
-        last && 'border-b-0',
-      )}
-    >
-      {n > 0 ? n : '—'}
-    </td>
-  )
-}
-
-function OvHealthTable({ rows, unit, sort, setSort, onOpen, mobile }) {
-  /* Clicking a heading sorts by it; clicking the one already sorted flips the
-     direction. Every column has its OWN natural first direction — a name wants
-     A→Z and a delay count wants worst-first — because a table that always
-     starts ascending makes you click twice to ask the question you meant. */
-  const click = (c: (typeof HEALTH_COLS)[number]) =>
-    setSort((s) =>
-      s.key === c.id
-        ? { key: c.id, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-        : { key: c.id, dir: c.dir },
-    )
-  if (mobile) {
-    return (
-      <div className="mobile-health-list" data-ov-table>
-        <div className="mobile-health-sort">
-          <label htmlFor="overview-health-sort">Sort by</label>
-          <NativeSelect
-            id="overview-health-sort"
-            className="shadow-none"
-            value={sort.key}
-            onChange={(e) => {
-              const col = HEALTH_COLS.find((c) => c.id === e.target.value)
-              if (col) setSort({ key: col.id, dir: col.dir })
-            }}
-          >
-            {HEALTH_COLS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label || unit}
-              </option>
-            ))}
-          </NativeSelect>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={`Sort ${sort.dir === 'asc' ? 'descending' : 'ascending'}`}
-            onClick={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
-          >
-            <Icon name={sort.dir === 'asc' ? 'chevronUp' : 'chevronDown'} size={16} />
-          </Button>
-        </div>
-        {rows.map((r) => (
-          <Button
-            key={r.proj.id}
-            type="button"
-            variant="unstyled"
-            data-ovcard={r.proj.id}
-            className="mobile-health-card"
-            onClick={() => onOpen(r.proj.id)}
-          >
-            <span className="mobile-health-heading">
-              <strong>
-                <ProjectName project={r.proj} wrap />
-              </strong>
-              <Icon name="chevronRight" size={16} />
-            </span>
-            <span className="mobile-health-progress" data-ovcell="progress">
-              <span>
-                <OvStatusBar counts={statusCounts(r.issues)} height={6} />
-              </span>
-              <span className="font-mono">{r.pct}%</span>
-            </span>
-            <span className="mobile-health-facts">
-              <span data-ovcell="done">
-                {r.done}/{r.total} done
-              </span>
-              <span data-ovcell="left">{r.remaining}h left</span>
-              <span data-ovcell="late" className={cn(r.late && troubleToneClasses.late)}>
-                {r.late} delayed
-              </span>
-              <span data-ovcell="behind" className={cn(r.behind && troubleToneClasses.behind)}>
-                {r.behind} slipping
-              </span>
-              <span data-ovcell="paused" className={cn(r.paused && troubleToneClasses.paused)}>
-                {r.paused} paused
-              </span>
-            </span>
-            <span className="mobile-health-lead" data-ovcell="lead">
-              {r.lead ? (
-                <>
-                  <Avatar id={r.lead.id} size={28} />
-                  <span>{r.lead.name}, Lead</span>
-                </>
-              ) : (
-                'No lead assigned'
-              )}
-            </span>
-          </Button>
-        ))}
-      </div>
-    )
-  }
-  return (
-    <div
-      data-ov-table
-      className="[background:var(--surface-1)] [border:1px_solid_var(--border)] [border-radius:var(--r-lg)] [box-shadow:var(--qivo-shadow-card)] [overflow-x:auto]"
-    >
-      <table className="[width:100%] [border-collapse:collapse]">
-        <thead>
-          <tr>
-            {HEALTH_COLS.map((c) => (
-              /* One tooltip, on the BUTTON: a tooltip on the <th> as well would
-                 only ever show in the cell's padding, and the two would take
-                 turns depending on where the pointer landed. */
-              <th
-                key={c.id}
-                className={cn(
-                  'border-b border-border px-3 py-2 text-sm font-medium text-text-2 whitespace-nowrap',
-                  c.align === 'right' ? 'text-right' : 'text-left',
-                )}
-              >
-                <Button
-                  type="button"
-                  onClick={() => click(c)}
-                  title={c.title || undefined}
-                  className={cn(
-                    '[display:inline-flex] [align-items:center] [min-height:32px] [gap:4px] [border:none] [background:transparent] [padding:0] [font:inherit] [letter-spacing:inherit] [text-transform:inherit] [cursor:pointer]',
-                    sort.key === c.id ? 'text-text-1' : 'text-inherit',
-                  )}
-                  variant="unstyled"
-                >
-                  {c.label || unit}
-                  {sort.key === c.id && (
-                    <Icon
-                      name={sort.dir === 'asc' ? 'chevronUp' : 'chevronDown'}
-                      size={11}
-                      color="var(--primary)"
-                    />
-                  )}
-                </Button>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i: number) => {
-            // the last row's rule would land one pixel inside the panel's own
-            // bottom border — two lines where the card had one
-            const last = i === rows.length - 1
-            return (
-              /* The row is the target for a pointer and the NAME is the target for
-               a keyboard. Keep the row out of the Tab order; focus on its name
-               also opens the shared tooltip. The button stops the
-               click from reaching the row so one press is one navigation. */
-              <HoverTooltip key={r.proj.id} content={`Open the ${r.proj.name} board`}>
-                <tr
-                  data-ovcard={r.proj.id}
-                  onClick={() => onOpen(r.proj.id)}
-                  tabIndex={-1}
-                  className="[cursor:pointer] [transition:background-color_var(--dur-fast)_var(--ease-out)]"
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = 'var(--hover)'
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = 'transparent'
-                  }}
-                >
-                  <td
-                    className={cn(
-                      tdClass,
-                      'max-w-60 font-medium text-text-1',
-                      last && 'border-b-0',
-                    )}
-                  >
-                    <Button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onOpen(r.proj.id)
-                      }}
-                      className="[border:none] [background:transparent] [padding:0] [font:inherit] [color:inherit] [cursor:pointer] [max-width:100%] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap] [display:block] [text-align:left]"
-                      variant="unstyled"
-                    >
-                      <ProjectName project={r.proj} />
-                    </Button>
-                  </td>
-                  <td data-ovcell="lead" className={cn(tdClass, last && 'border-b-0')}>
-                    {r.lead ? (
-                      <Avatar id={r.lead.id} size={28} />
-                    ) : (
-                      <span className="[color:var(--text-3)]">—</span>
-                    )}
-                  </td>
-                  <td data-ovcell="progress" className={cn(tdClass, last && 'border-b-0')}>
-                    <span className="[display:inline-flex] [align-items:center] [gap:8px]">
-                      <span className="[width:110px] [display:inline-block]">
-                        <OvStatusBar counts={statusCounts(r.issues)} height={6} />
-                      </span>
-                      <span className="!font-mono [font-size:var(--fs-xs)] [color:var(--text-1)]">
-                        {r.pct}%
-                      </span>
-                    </span>
-                  </td>
-                  <td
-                    data-ovcell="done"
-                    className={cn(
-                      tdClass,
-                      'text-right font-mono whitespace-nowrap',
-                      last && 'border-b-0',
-                    )}
-                  >
-                    {r.done}/{r.total}
-                  </td>
-                  <td
-                    data-ovcell="left"
-                    className={cn(tdClass, 'text-right font-mono', last && 'border-b-0')}
-                  >
-                    {r.remaining > 0 ? (
-                      `${r.remaining}h`
-                    ) : (
-                      <span className="[color:var(--text-3)]">—</span>
-                    )}
-                  </td>
-                  <TroubleCell id="late" last={last} n={r.late} />
-                  <TroubleCell id="behind" last={last} n={r.behind} />
-                  <TroubleCell id="paused" last={last} n={r.paused} />
-                </tr>
-              </HoverTooltip>
-            )
-          })}
-        </tbody>
-      </table>
     </div>
   )
 }
@@ -1391,12 +1038,14 @@ type OverviewState =
 let overviewReaders = 0
 
 /** The Overview's reads for `info`, which the page registers with the store
-    while it and the tab show, with Try again; the store's answers for the
-    arguments on screen. Renders again on the store's `views` news. In All
-    projects, which asks for none, it releases the reads and rows of the
-    page it replaced, which only stopped them: App mounts one Overview page
-    for one scope, so no other page holds them. */
-function useOverviewRead(info: ScopeInfo) {
+    while it and the tab show, with Try again, and its health table
+    `table` (null for none, as for one sub-project), registered apart so a
+    new sort, search or Load more asks the health read alone; the store's
+    answers for the arguments on screen. Renders again on the store's
+    `views` news. In All projects, which asks for none, it releases the
+    reads and rows of the page it replaced, which only stopped them: App
+    mounts one Overview page for one scope, so no other page holds them. */
+function useOverviewRead(info: ScopeInfo, table: HealthTable | null) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useStateO(0)
   // this mounted page, which owns the reads while it asks
@@ -1413,6 +1062,24 @@ function useOverviewRead(info: ScopeInfo) {
     P.watchOverview(ask, owner, attempt)
     return () => P.watchOverview(null, owner, attempt)
   }, [ask, owner, attempt, request.kind])
+  /* The table, registered again after each registration of the scope's
+     reads. The store takes a table only from the page that owns the reads,
+     and a page that mounts while hidden, or on a day the store has not
+     reached yet, owns them only once it asks for a key. An unchanged table
+     asks nothing again, so a return keeps the rows loaded. Its reads stop
+     with the scope's. */
+  const sort = table?.sort
+  const dir = table?.dir
+  const search = table?.search
+  useEffect(() => {
+    if (request.kind === 'choose') return
+    P.watchOverviewTable(
+      sort === undefined || dir === undefined || search === undefined
+        ? null
+        : { sort, dir, search },
+      owner,
+    )
+  }, [sort, dir, search, owner, request.kind, ask])
   const view: OverviewView = P.overviewRead()
   // answers count only for the arguments on screen
   const mine = key !== null && view.key === key
@@ -1422,6 +1089,7 @@ function useOverviewRead(info: ScopeInfo) {
     summary: mine ? view.summary : null,
     risk: mine ? view.risk : null,
     lists: mine ? { attention: view.attention, paused: view.paused } : null,
+    health: mine ? view.health : null,
     retry: () => setAttempt((n) => n + 1),
   }
 }
@@ -1446,12 +1114,30 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
     P.noteViewTask(id)
     actions.openIssue(id)
   })
-  /* Which column the health table is sorted on. It opens on the worst first —
+  /* Which column the health table is sorted on. It opens on the worst first:
      "which of these is in trouble" is the question the section exists to
      answer, and a table that opens alphabetically makes you click to ask it.
      Held here rather than inside the table so it survives the table
-     re-rendering under a store update. */
-  const [sort, setSort] = useStateO({ key: 'late', dir: 'desc' })
+     re-rendering under a store update. App mounts the page anew for each
+     scope (ViewKeeper), so a new scope opens on the worst first again, and
+     the store asks the new scope's health read only with this order. */
+  const [sort, setSort] = useStateO<HealthOrder>({ key: 'late', dir: 'desc' })
+  /* The health table's search as typed, for the scope it was typed in, so
+     a new scope starts with none, also on a return to a scope typed in
+     before, and the text it asks once typing rests. A search past
+     LIMITS.search asks nothing new: the table keeps the last one it could
+     ask. */
+  const [typed, setTyped] = useStateO({ scope: info.id, text: '' })
+  if (typed.scope !== info.id) setTyped({ scope: info.id, text: '' })
+  const search = typed.scope === info.id ? typed.text : ''
+  const searchOver = search.trim().length > LIMITS.search.max
+  const lastSearch = useRef('')
+  if (!searchOver) lastSearch.current = search.trim()
+  const rested = useRested(searchOver ? lastSearch.current : search.trim(), BOARD_SEARCH_DELAY_MS)
+  // the unsearched table's size for each scope, which shows the search box
+  // once it passes one batch, taken only from an answer asked with no
+  // search, so the box stays while a cleared search waits for its answer
+  const unsearched = useRef(new Map<string, number>())
   /* The Milestones window opened from a row can delete that milestone, and
      the row with it. Focus then goes to the next row, the previous one, the
      + or the empty list's line, else, once the last one went from a scope
@@ -1468,16 +1154,23 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         () => newMilestone.current ?? noMilestones.current ?? shownEmptyState(),
       ),
     )
-  const read = useOverviewRead(info)
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one of those that also narrows to my own tasks. The Overview renders
-  // no filter row, so it takes no `filters` — the scope's own `only` predicate
+  // no filter row, so it takes no `filters`: the scope's own `only` predicate
   // is the whole narrowing, and nothing invisible can be left switched on.
   const wide = info.wide
   const mine = info.mine
-  // "grouped" scopes get health cards, a lone sub-project gets the status
-  // distribution — one project's sub-projects, or My view's projects
+  // "grouped" scopes get the health table, a lone sub-project gets the
+  // status distribution: one project's sub-projects, or My view's projects
   const grouped = wide || info.isMeta
+  const read = useOverviewRead(
+    info,
+    grouped ? { sort: sort.key, dir: sort.dir, search: rested } : null,
+  )
+  const health = read.health
+  const healthAnswer = health?.value
+  if (healthAnswer?.state === 'ok' && health?.table.search === '')
+    unsearched.current.set(info.id, healthAnswer.total)
 
   const summaryAnswer = read.summary?.value
   let state: OverviewState
@@ -1731,59 +1424,26 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
               </div>
 
               {grouped ? (
-                P.stillLoading() !== null ? (
-                  // the table reads every task of the scope, which the
-                  // workspace is still loading, and never shows part of it
-                  <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
-                    <TasksLoadingView what={wide ? 'Project health' : 'Sub-project health'} />
-                  </OvSection>
-                ) : (
-                  (() => {
-                    const rows = healthRows(info, P.scopedIssues(info), mine)
-
-                    /* The sort. Name and lead compare as text, everything else as a
-                     number, and NAME is always the last tiebreak so the order is total:
-                     without it two groups with the same delay count would swap places on
-                     every unrelated store update. */
-                    const key = (r) => {
-                      switch (sort.key) {
-                        case 'name':
-                          return r.proj.name.toLowerCase()
-                        case 'lead':
-                          return (r.lead ? r.lead.name : '￿').toLowerCase()
-                        case 'progress':
-                          return r.pct
-                        case 'done':
-                          return r.total ? r.done / r.total : 0
-                        case 'left':
-                          return r.remaining
-                        default:
-                          return r[sort.key] || 0
-                      }
+                <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
+                  <OvHealthTable
+                    view={health}
+                    mine={mine}
+                    asked={sort}
+                    onSort={setSort}
+                    search={search}
+                    onSearch={(text) => setTyped({ scope: info.id, text })}
+                    searching={
+                      search !== '' || (unsearched.current.get(info.id) ?? 0) > OVERVIEW_BATCH
                     }
-                    const sorted = rows.slice().sort((a, b) => {
-                      const ka = key(a),
-                        kb = key(b)
-                      const d = ka < kb ? -1 : ka > kb ? 1 : 0
-                      return (sort.dir === 'asc' ? d : -d) || a.proj.name.localeCompare(b.proj.name)
-                    })
-                    return (
-                      <OvSection title={wide ? 'Project health' : 'Sub-project health'}>
-                        <OvHealthTable
-                          rows={sorted}
-                          unit={wide ? 'Project' : 'Sub-project'}
-                          sort={sort}
-                          setSort={setSort}
-                          mobile={mobile}
-                          onOpen={(id: string) => {
-                            actions.setScope(id)
-                            actions.setView('kanban')
-                          }}
-                        />
-                      </OvSection>
-                    )
-                  })()
-                )
+                    searched={rested !== ''}
+                    onePerson={onePersonAtATime(info)}
+                    mobile={mobile}
+                    onOpen={(id: string) => {
+                      actions.setScope(id)
+                      actions.setView('kanban')
+                    }}
+                  />
+                </OvSection>
               ) : (
                 <OvSection title="Status distribution">
                   <div
