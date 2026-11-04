@@ -303,6 +303,18 @@ read its `tasks` and follow `next_cursor`. Its model learns how to page
 active tasks and what the new statuses mean only after the client refreshes
 its tool list.
 
+Later in November 2026 `get_workload` began to answer one page of people at
+a time, as `{next_cursor, week_starts, project, hidden, people}`, with a
+`status` on each person, `ok` or `unavailable`, and took `limit`, `cursor`,
+`offset` (refused unless `0`) and `person` (see [Workload](#workload)). A
+project's `completion` gained `counting`, for a moment after one of its
+sub-projects is archived or restored. A client holding the older catalogue
+gets the new answers too. The answer kept `people`, so code that read every
+person from one answer now reads the first page, at most 50 people, as if
+it were the whole organization, without any error. Such code must follow
+`next_cursor` until it is `null`. Its model learns the new arguments and
+statuses only after the client refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -1282,7 +1294,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, or `status: "unavailable"` when they are too many to count in one call), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after a sub-project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
@@ -1306,7 +1318,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Answers the attachment as `get_task` lists it |
 | `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
 | `list_task_activity` | The task's newest history, at most 500 rows, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. `before` (a row's `id`) reads the rows before it. See [Task activity](#task-activity) |
-| `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`. See [Workload](#workload) |
+| `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`, one page of people in name order (`limit` 1 to 200, 50 by default), paged with `cursor` until `next_cursor` is `null`, or one `person` alone. See [Workload](#workload) |
 | `update_comment` | Replace a comment's `body` (at most 20,000 characters); `comment` is its `id` from `list_comments`. The comment's author may, and so may a lead of the task's project. `expected` holds the `body` you last read. See [Comments, inbox and following](#comments-inbox-and-following) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_comment` | Delete a comment, by the same rule as `update_comment`. `expected` holds the `body` you last read, because a deleted comment cannot be restored |
 | `list_inbox` | Your inbox as `items`, one per active task you can read, latest activity first, with `unread_only`, `include_snoozed`, `limit` (50 by default, at most 200) and `offset`. `truncated` says some messages were not looked at |
@@ -1566,14 +1578,23 @@ the time a task entering `review` gets. `completion` is the project's
 **Completion** on the app's Overview. It counts the active tasks without
 subtasks in the project, or for a top-level project in its sub-projects you
 can read that are not archived, and `done` counts those that are Done. A
-task whose only subtasks are hidden from you still counts as a group and is
-left out, as in the app. `percent` is rounded, and `0` when `total` is `0`.
-Its `status` is `ok`. When the project's tasks are too many to count in one
-call, it is `{"status": "unavailable", "done": null, "total": null,
-"percent": null}` instead, which never fails the read or `update_project`.
+task with an active subtask in any project that is not archived counts as a
+group and is left out, as in the app, also when that subtask is hidden from
+you or sits in another top-level project. `percent` is rounded, and `0` when
+`total` is `0`. Its `status` is `ok`. Qivo keeps these counts as tasks
+change, so they hold whatever the project's size. For a moment after one of
+the project's sub-projects is archived, restored, moved to Deleted items or
+brought back from it, and while Qivo counts an organization again, it is
+`{"status": "counting", "done": null, "total": null, "percent": null}`, so
+ask again later; an `update_project` that archives or restores a
+sub-project answers its own completion as `counting` too. In a project with
+so many sub-projects that the call has no room left to read their counts,
+it is `{"status": "unavailable", "done": null, "total": null, "percent":
+null}` instead. Neither ever fails the read or `update_project`.
 `completion` is `null` for an archived project, and `create_project` answers
 `ok` with zeros, because a new project holds no tasks. `status` arrived in
-November 2026, so treat a `status` you do not know as no completion.
+November 2026, and `counting` later that month, so treat a `status` you do
+not know as no completion.
 `milestones` belong to the top-level
 project, so a sub-project shows its parent's, ordered by date. `grants` are
 the project's own individual and team grants, as its **Project access** list
@@ -2230,16 +2251,19 @@ Deleted items deletes its history.
 ### Workload
 
 `get_workload` answers each person's planned hours per week, as the
-Roadmap's Team strip and the planning panel count them:
+Roadmap's Team strip and the planning panel count them, one page of people
+at a time:
 
 ```json
 {
+  "next_cursor": "…",
   "week_starts": ["2026-10-12", "2026-10-19"],
   "project": null,
+  "hidden": "counted",
   "people": [
     {
       "id": "…uuid…", "name": "Leo Martins", "org_role": "user", "kind": "person",
-      "active": true, "plannable_hours": 32,
+      "active": true, "plannable_hours": 32, "status": "ok",
       "hours": [30, 22], "hidden_hours": [4, 0]
     }
   ]
@@ -2263,11 +2287,51 @@ Roadmap's Team strip and the planning panel count them:
   agents have no weekly limit.
 - Organization admins and Standard users also receive the hours of projects
   they cannot see, in `hours` and `hidden_hours`, without naming the task or
-  project. `hidden_hours` is the part of `hours` from those projects, so do
-  not add the two. Viewers and guests receive only work they can see or own.
-  With `project`, `hidden_hours` is all zeros.
-- `people` lists every active user and agent, and any inactive one with hours
-  in the window, ordered by name.
+  project, and `hidden` is `counted`. `hidden_hours` is the part of `hours`
+  from those projects, so do not add the two. Viewers and guests receive
+  only work they can see or own, and `hidden` is `own_only`, so another
+  person's hours are not their whole workload. With `project`,
+  `hidden_hours` is all zeros.
+- A person's `status` is `ok`, or `unavailable` with `hours` and
+  `hidden_hours` set to `null` when their open work is too large to read in
+  one call. That is more than 2,000 open tasks, scheduled tasks in more than
+  200 live projects or more than 500 scheduled tasks to check for subtasks,
+  or where checking which of those projects you can see, or the first person
+  of a page alone, does not fit in one call. Never read `unavailable` as free
+  time. With `project` a person can be unavailable because of open work
+  outside it.
+- `people` lists every active user and agent, any inactive one with hours
+  in the window, and any inactive one whose hours are `unavailable`, in name
+  order, ignoring case and accents, then by id.
+- A page holds at most `limit` people, 50 by default and 1 to 200. Pass
+  `next_cursor` back as `cursor` until it is `null`. A page can hold fewer
+  than `limit` people, or none, while `next_cursor` is set, because it ends
+  before a person whose open work does not fit beside the people before
+  them, who opens the next page. Only a `null` `next_cursor` ends the list,
+  and `limit` may change from one page to the next. A guest's or Viewer's
+  page holds at most one person, so where a page ends never depends on work
+  they cannot see; an inactive person without hours costs them a page that
+  lists nobody.
+- A cursor works only for the organization, user, project and window it
+  came from, also on REST's `GET /v1/workload`. Another `weeks`, or a
+  `from_week` in another week, starts a new list, so pass `from_week` while
+  you page. Without it a page asked for after the week turns in UTC refuses
+  the cursor. Pages are not a snapshot, so a person added or renamed while
+  you page lands where their name puts them.
+- `person` (a user id from `list_users`) answers that person alone with
+  `next_cursor` `null`, also when they are inactive and have no hours. It
+  takes `project`, ignores `limit` and `offset`, and refuses `cursor`. An id
+  that is not a user of the organization is refused with `person "<id>" not
+  found`.
+- Qivo refuses a `limit` outside 1 to 200 (`limit must be a whole number of
+  people from 1 to 200.`), an `offset` other than `0` (`offset does not
+  apply to workload; pass next_cursor as cursor`), a cursor of another list
+  or a changed one (`cursor must be the next_cursor of an earlier page`),
+  `cursor` with `person` (`cursor does not apply with person`), and a page
+  before Qivo has prepared the organization's names for name order (`this
+  list cannot be read until this organization's names are ready; try again
+  in a few minutes`). The tool's schema refuses a `limit` or `offset` that is
+  not a whole number before the call reaches Qivo.
 
 ### Comments, inbox and following
 

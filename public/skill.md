@@ -259,8 +259,10 @@ Useful field rules:
   the single task for its own verdict.
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
-  tasks with `status: "ok"`, or `status: "unavailable"` with null counts
-  when the project's tasks are too many to count in one request. If a task
+  tasks with `status: "ok"`. It says `status: "counting"` with null counts
+  for a moment after one of the project's sub-projects is archived or
+  restored, so ask again later, and `status: "unavailable"` with null
+  counts in a project with too many sub-projects to read in one request. If a task
   list says it could not be read within the request's limits, name a
   `project` to list one project's tasks.
 
@@ -343,11 +345,17 @@ Useful field rules:
   changes nothing adds no row.
 - **Workload:** `get_workload` or `GET /v1/workload` answers each person's
   planned hours per week (`hours`, aligned with `week_starts`) beside their
-  `plannable_hours`. Use it before assigning or scheduling work. For
+  `plannable_hours`. Use it before assigning or scheduling work, and pass
+  `person` with a user id to read one person, which is one request. The
+  answer is one page of people in name order. Pass `next_cursor` back as
+  `cursor`, with the same `from_week`, until it is `null`, because a page
+  can hold fewer than `limit` people, or none, while it is set. A person
+  whose open work is too large to read in one request has `status:
+  "unavailable"` and null hours. Never read that as free time. For
   organization admins and Standard users, `hours` already includes work in
   projects hidden from you, and `hidden_hours` is that part of `hours`,
   without names. Do not add the two. Viewers and guests get only work they
-  can see or own.
+  can see or own (`hidden: "own_only"`), and one person a page.
 
 ## Comments, inbox and following
 
