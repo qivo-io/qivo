@@ -289,6 +289,19 @@ describe('a write on a task only a view brings', () => {
     expect(store.P.ownPaintedTasks().has('far')).toBe(false)
   })
 
+  it('shows each of two writes on one card at once, the second over the first', async () => {
+    answer = ok([row('far', 9)])
+    await open()
+    const id = store.P.viewTask(SLOT, 'far')?.id ?? ''
+    void store.P.updateIssue(id, { status: 'progress' })
+    // the second paints over the copy the first made, whose model the
+    // first's showing shaped
+    void store.P.updateIssue(id, { reviewer: snapshot.profiles[0].id })
+    expect(store.P.viewTask(SLOT, 'far')?.status).toBe('progress')
+    expect(store.P.viewTask(SLOT, 'far')?.reviewer).toBe(snapshot.profiles[0].id)
+    expect(writes.map((w) => w.name)).toEqual(['issues:update', 'issues:update'])
+  })
+
   it('goes with a refusal, and changes nothing the Board does not write', async () => {
     answer = ok([row('far', 9)])
     await open()

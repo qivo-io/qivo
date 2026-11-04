@@ -84,7 +84,9 @@ export function createViewRows(
   const anchors = new Map<ViewSlot, ReadonlyMap<string, ViewRow>>()
   // the rows on screen: each view's anchor with the layers painted over
   let painted = new Map<ViewSlot, Map<string, ViewRow>>()
-  // the copies a paint made in this repaint, so it copies a row once
+  // the copies the paints made since the last reshape, so a repaint copies
+  // a row once; a model shaped from a copy holds it, so a later paint, such
+  // as the next write's at its send, copies the row again (reshape)
   let copies = new Set<ViewRow>()
   // the models of the tasks the workspace does not hold, by view and uuid
   const shaped = new Map<ViewSlot, Map<string, Shaped>>()
@@ -285,6 +287,9 @@ export function createViewRows(
           shaped.delete(slot)
         }
       byHandle = handles
+      // the models hold these rows now: a paint that changed one in place
+      // would leave its model as it was, so the next paint copies afresh
+      copies = new Set()
       return changed
     },
     /** The model of task `uuid` in view `slot`, when the workspace does not
