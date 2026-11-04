@@ -47,6 +47,19 @@ describe('the benchmark server', () => {
     expect(odd.snapshot.issueSubs).toHaveLength(70)
   })
 
+  it('puts each label on a task once, whatever orglabels gives', async () => {
+    // a stride of 5 over 1 or 5 labels meets the same label again
+    for (const orglabels of [1, 5]) {
+      const { snapshot } = await snapshotOf(`tasks=100&orglabels=${orglabels}`)
+      const pairs = snapshot.issueLabels.map((row) => `${row.issue_id} ${row.label_id}`)
+      expect(new Set(pairs).size, `orglabels=${orglabels}`).toBe(pairs.length)
+      expect(pairs, `orglabels=${orglabels}`).toHaveLength(snapshot.issues.length)
+    }
+    // the default gives every task its two labels
+    const usual = await snapshotOf('tasks=100')
+    expect(usual.snapshot.issueLabels).toHaveLength(2 * usual.snapshot.issues.length)
+  })
+
   it('counts the UTF-8 bytes it sends', async () => {
     const { bytes, text } = await snapshotOf('tasks=20')
     // the workspace holds names past ASCII, so the two counts differ

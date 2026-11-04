@@ -23,7 +23,8 @@
 // The workspace is realistic by default. Page parameters change it:
 //   tasks (100)          visible tasks
 //   descriptions (300)   average description length in characters
-//   labels (2)           labels per task
+//   labels (2)           labels per task, at most, as a task carries
+//                        each label once
 //   orglabels (12)       labels in the organization, with ordinary names,
 //                        which the tasks' labels spread over
 //   links (0.05)         share of tasks that link to another task
@@ -474,11 +475,14 @@ const loadRow = (row) => {
 }
 const wireRows = new Map(tasks.map((row) => [row.id, wireTask(row)]))
 const loadRows = new Map(allTasks.map((row) => [row.id, loadRow(row)]))
+// each label once a task, also where the stride of 5 meets a label again,
+// as it does for every task with orglabels=1 or orglabels=5
 const issueLabels = tasks.flatMap((row, n) =>
-  Array.from({ length: labelsPerTask }, (_, k) => ({
-    issue_id: row.id,
-    label_id: labels[(n + k * 5) % labels.length].id,
-  })),
+  [
+    ...new Set(
+      Array.from({ length: labelsPerTask }, (_, k) => labels[(n + k * 5) % labels.length].id),
+    ),
+  ].map((label_id) => ({ issue_id: row.id, label_id })),
 )
 /** Whether task `n` is among a `share` of the tasks, spread evenly. Each
     relation takes another `offset`, so they fall on different tasks. */
