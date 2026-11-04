@@ -150,7 +150,7 @@ describe('a write from the task window’s own answer', () => {
     }
   })
 
-  it('detaches a hidden parent by the pair the answer shows, also once it became another hidden task, and refuses once there is none', async () => {
+  it('detaches a hidden parent by the pair the answer shows, also once it became another hidden task, passes as no change once there is none, and refuses once the guest is shown the parent', async () => {
     const fx = await setup()
     const sibling = await plantHiddenSibling(fx.t, fx, fx.guest)
     const parent = await plantIssue(fx.t, { org_id: fx.org.id, project_id: sibling.id })
