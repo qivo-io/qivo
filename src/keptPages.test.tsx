@@ -563,6 +563,23 @@ describe('Plan on roadmap while the tasks load', { timeout: 30_000 }, () => {
     expect(dateWrites()).toEqual([])
   })
 
+  it('starts no planning session at a later visit when the Inbox covered the Roadmap while it waited', async () => {
+    // the Inbox is a page over the Roadmap, so the view stays roadmap meanwhile
+    const org = await planWhileLoading()
+    await go(`/app/${org}/inbox`)
+    await shownPage('inbox')
+    await loadEveryTask()
+    await go(`/app/${org}/roadmap/all`)
+    const roadmap = await shownPage('roadmap')
+    await waitFor(
+      () => roadmap.querySelector('[data-roadmap-panel]'),
+      'the Roadmap once every task has loaded',
+    )
+    await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
+    expect(document.querySelector('[data-plan-card]')).toBeNull()
+    expect(dateWrites()).toEqual([])
+  })
+
   it('shows no task at a later visit when the person left the Roadmap while a Show on roadmap waited', async () => {
     const org = await planWhileLoading(true)
     await go(`/app/${org}/overview/all`)

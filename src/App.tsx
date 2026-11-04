@@ -937,19 +937,9 @@ function App() {
     focusN.current += 1
     setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}) })
   }
-  /* A Plan on roadmap request waits while the Roadmap waits for every task
-     (TasksLoadingView). It holds only while the person stays on the
-     Roadmap. Leaving it drops the plan request, and a reveal planOnRoadmap
-     asked for (its nonce here), so a later visit starts no planning
-     session and writes no dates the person no longer asked for. */
+  /* The nonce of a reveal planOnRoadmap asked for, dropped with the plan
+     request once another page covers the Roadmap (below roadmapActive). */
   const roadmapReveal = useRef<number | null>(null)
-  useEffect(() => {
-    if (view === 'roadmap') return
-    setFocusPlan(null)
-    const asked = roadmapReveal.current
-    roadmapReveal.current = null
-    if (asked !== null) setRevealTask((request) => (request?.n === asked ? null : request))
-  }, [view])
   // current scope and layout for the popstate handler (registered once, deps [])
   const scopeRef = useRef(scope)
   scopeRef.current = scope
@@ -1104,6 +1094,19 @@ function App() {
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
+  /* A Plan on roadmap request waits while the Roadmap waits for every task
+     (TasksLoadingView). It holds only while the Roadmap stays on screen.
+     Another view, or the Inbox, Projects, Settings or Team sync page over
+     the Roadmap, drops the plan request and the reveal planOnRoadmap asked
+     for, so a later visit starts no planning session and writes no dates
+     the person no longer asked for. */
+  useEffect(() => {
+    if (roadmapActive) return
+    setFocusPlan(null)
+    const asked = roadmapReveal.current
+    roadmapReveal.current = null
+    if (asked !== null) setRevealTask((request) => (request?.n === asked ? null : request))
+  }, [roadmapActive])
   useLayoutEffect(() => () => P.roadmapContext(false, false), [])
   // the page Settings and Team sync return to on exit
   const settingsReturn = useRef(NO_RETURN)
