@@ -411,22 +411,28 @@ export function OrgLabelsPage() {
     })
   }
 
-  // the delete window, and where focus goes once the row has left: the
-  // next row's name, else the previous one's, else the search box
+  // The delete window, the row whose Delete opened the latest one, and
+  // where focus goes once that row has left. That is the next row's name,
+  // else the previous one's, else the search box. A window closed without
+  // a delete leaves the row in place, and its Delete button takes focus
+  // back (ModalShell).
   const [asked, setAsked] = useState<{ id: string; name: string; count: number | null } | null>(
     null,
   )
   const searchBox = useRef<HTMLInputElement>(null)
   const after = useRef<() => HTMLElement | null>(() => null)
-  const [leaving, setLeaving] = useState<string | null>(null)
-  const going = asked?.id ?? leaving
+  const [opener, setOpener] = useState<string | null>(null)
   useFocusWhenGone(
-    going !== null && !deleting.has(going),
+    opener !== null && !deleting.has(opener),
     () => after.current() ?? searchBox.current,
   )
   const askDelete = (id: string) => {
     const label = storeLabel(id)
     if (!label) return
+    // no target from an earlier delete, so a close without one gives focus
+    // back to this Delete button
+    after.current = () => null
+    setOpener(id)
     setAsked({ id, name: label.name, count: loaded.get(id)?.active_tasks ?? null })
   }
   const remove = () => {
@@ -436,7 +442,6 @@ export function OrgLabelsPage() {
       row.querySelector<HTMLElement>('[data-label-name]'),
     )
     setAsked(null)
-    setLeaving(id)
     setDeleting((s) => toggled(s, id, true))
     void P.removeLabel(id).then((saved) => {
       if (saved) window.showToast?.(`Label “${name}” deleted`)

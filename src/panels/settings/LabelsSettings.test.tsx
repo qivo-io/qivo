@@ -140,6 +140,9 @@ const settle = () =>
     for (let i = 0; i < 10; i++) await Promise.resolve()
   })
 
+/** Lets timers due now run, as a closing window gives focus back in one. */
+const tick = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+
 /** Publishes the server's workspace with `edit` applied, as another
     session's write reaches every client, and reruns the label reads. */
 async function elsewhere(edit: (snap: Snapshot) => void) {
@@ -457,6 +460,35 @@ describe('Settings › Labels', () => {
     await answer('labels:remove', 'accept')
     expect(toasts()).toContain('Label “Hardware” deleted')
     expect(names()).toEqual(['Firmware', 'Quality'])
+  })
+
+  it('gives focus back to the Delete button when a later window closes without deleting', async () => {
+    await load((snap) => {
+      labelRow(snap, 'fw', 'Firmware')
+      labelRow(snap, 'hw', 'Hardware')
+      labelRow(snap, 'qa', 'Quality')
+    })
+    await render()
+    const deleteOf = (id: string) => find<HTMLButtonElement>(`[data-delete-label="${id}"]`)
+    /** Presses label `id`'s Delete with focus on it, as a keyboard user does. */
+    const ask = async (id: string) => {
+      await act(async () => deleteOf(id).focus())
+      await click(deleteOf(id))
+    }
+    await ask('hw')
+    await click(button('Delete'))
+    await answer('labels:remove', 'accept')
+    await tick()
+    expect(document.activeElement).toBe(nameField('qa'))
+    await ask('fw')
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    await click(button('Cancel'))
+    await tick()
+    // the row stays, and the window gives focus back to the Delete button
+    // that opened it, with no move to another row or the search box first
+    expect(focus.mock.contexts).toHaveLength(1)
+    expect(focus.mock.contexts[0]).toBe(deleteOf('fw'))
+    expect(document.activeElement).toBe(deleteOf('fw'))
   })
 
   it('shows a label it made past the loaded rows as Added until a batch holds it', async () => {
