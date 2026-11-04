@@ -1455,6 +1455,54 @@ describe('reads at the design size', () => {
   })
 })
 
+/* -------------------------------------------------------- the public doors */
+
+describe('the public queries', () => {
+  it('answer for the signed-in login across its active seats, leaving out an inactive seat and an organization being deleted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ann = await person(t, f.org.id, 'Ann')
+    const elsewhere = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'Ann',
+      auth_user_id: ann.auth_user_id,
+    })
+    await plantGrants(t, ann, [f.meta])
+    await plantGrants(t, elsewhere, [f.otherProject])
+    await ready(t, f)
+    const caller = as(t, ann)
+    const listed = async () =>
+      ok(await caller.query(api.projectNav.page, {})).rows.map((r) => r.org_id)
+    // Elsewhere sorts before Testbed platform
+    expect(await listed()).toEqual([f.otherOrg.id, f.org.id])
+    const children = await caller.query(api.projectNav.children, { project_id: f.meta.id })
+    expect(ok(children).rows).toHaveLength(2)
+    expect(
+      await caller.query(api.projectNav.resolve, {
+        org_id: f.otherOrg.id,
+        num: f.otherProject.num,
+      }),
+    ).toMatchObject({ state: 'ok', project: { id: f.otherProject.id } })
+    await t.run((ctx) => ctx.db.patch(elsewhere._id, { active: false }))
+    expect(await listed()).toEqual([f.org.id])
+    expect(await caller.query(api.projectNav.resolve, { project_id: f.otherProject.id })).toEqual({
+      state: 'unavailable',
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(elsewhere._id, { active: true })
+      await ctx.db.insert('org_removals', {
+        org_id: f.otherOrg.id,
+        reason: 'requested',
+        ended_at: NOW,
+        delete_after: NOW,
+        phase: 'profiles',
+        created_at: NOW,
+      })
+    })
+    expect(await listed()).toEqual([f.org.id])
+  })
+})
+
 /* The page's cursor positions carry the group and the seat's organization. */
 it('seals a page position with its group, name key, project id and organization', async () => {
   const t = newT()
