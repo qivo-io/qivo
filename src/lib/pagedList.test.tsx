@@ -29,6 +29,8 @@ const server = vi.hoisted(() => ({
   stop: null as null | ((args: Args) => number | null),
   /** a batch that fails, by its arguments */
   fail: null as null | ((args: Args) => unknown),
+  /** a batch that answers not ready, by its arguments */
+  notReady: null as null | ((args: Args) => boolean),
 }))
 
 const cursorOf = (row: Row) => JSON.stringify([row.name, row.id])
@@ -39,10 +41,11 @@ const past = (row: Row, cursor: string) => {
   return order(row, { name, id }) > 0
 }
 
-/** What the server answers for one batch. */
-function answer(args: Args): ListBatch<Row> {
+/** What the server answers for one batch, which may say it is not ready. */
+function answer(args: Args): ListBatch<Row> & { ready?: false } {
   const failure = server.fail?.(args)
   if (failure) throw failure
+  if (server.notReady?.(args)) return { rows: [], next: null, stopped: false, ready: false }
   const rows = [...server.labels].map(([id, name]) => ({ id, name })).sort(order)
   const after = args.after ?? null
   const through = args.through ?? null
@@ -127,7 +130,8 @@ const LIVE = (name: string): BatchSource<ListBatch<Row>> => ({
   args: (at) => argsOf(name, at),
 })
 
-/** Renders a page that lists `listKey` from `source`. */
+/** Renders a page that lists `listKey` from `source`, where an answer
+    that says it is not ready holds no batch. */
 function View({
   listKey,
   source,
@@ -137,7 +141,15 @@ function View({
   source: BatchSource<ListBatch<Row>>
   most?: number
 }) {
-  views.push(usePagedList({ key: listKey, source, batch: (a) => a, id: (row) => row.id, most }))
+  views.push(
+    usePagedList({
+      key: listKey,
+      source,
+      batch: (a) => ('ready' in a ? null : a),
+      id: (row) => row.id,
+      most,
+    }),
+  )
   return null
 }
 
@@ -193,7 +205,7 @@ beforeEach(() => {
   root = createRoot(container)
   server.labels.clear()
   views.length = 0
-  Object.assign(server, { batch: 25, stop: null, fail: null })
+  Object.assign(server, { batch: 25, stop: null, fail: null, notReady: null })
   transport.watches.clear()
   transport.handlers.clear()
   Object.assign(transport.state, { n: 0, connection: 1, joined: false })
@@ -617,6 +629,27 @@ describe('a list kept live a batch at a time', () => {
     await publish()
     expect(now().phase).toBe('failed')
     expect(listEnd(now(), false)).toBe('failed')
+  })
+
+  it('keeps a later batch’s rows when its answer holds none, failing it in place', async () => {
+    plant('a', 60)
+    await render({ listKey: 'k', source: LIVE('k') })
+    await publish()
+    await act(async () => now().more())
+    await publish()
+    expect(names()).toHaveLength(50)
+    // the second batch's rerun answers not ready
+    server.notReady = (args) => args.after !== undefined
+    await publish()
+    expect(now().phase).toBe('failed')
+    expect(now().batches[1]?.note).toBe('failed')
+    expect(names()).toHaveLength(50)
+    expect(listEnd(now(), false)).toBe('failed')
+    server.notReady = null
+    await act(async () => now().retry())
+    await publish(true)
+    expect(now().phase).toBe('ready')
+    expect(names()).toHaveLength(50)
   })
 
   it('gathers batches up to the cap of most / LIST_BATCH, then asks for a search', async () => {

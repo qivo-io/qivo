@@ -516,7 +516,7 @@ function liveEngine<A, Row>(
     if (batch === null)
       return b.after === null
         ? { kind: 'held', answer }
-        : { kind: 'error', error: new Error('a later batch answered no rows'), rows: [] }
+        : { kind: 'error', error: new Error('a later batch answered no rows'), rows }
     if (splitAt(b, batch) !== null) return null
     // a pinned batch that stopped at its own end read every row in it
     if (b.through !== null && batch.stopped && batch.next === b.through)
