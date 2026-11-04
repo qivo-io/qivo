@@ -257,6 +257,31 @@ describe('the live parts registry', () => {
     expect(last()?.state).toBe('complete')
   })
 
+  it('names the connection of each report, so news after a reconnect is told from news before', async () => {
+    const { s, parts, reports } = await started()
+    expect(reports.at(-1)?.connection).toBe(1)
+    parts.watchSide('task', TASK, { ref: 't' })
+    const side = s.keyOf('taskWindow:task', { ref: 't' })
+    s.set('taskWindow:task', { ref: 't' }, { value: { state: 'ok' } })
+    s.send([side])
+    expect(reports.at(-1)).toMatchObject({
+      connection: 1,
+      sides: { task: { value: { state: 'ok' } } },
+    })
+    // the socket reconnects: a transition that brings the root alone names
+    // the new connection and no side news, so the side's answer from before
+    // is not the newest connection's
+    s.reconnect()
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
+    expect(reports.at(-1)?.connection).toBe(2)
+    expect(reports.at(-1)?.sides).toBeUndefined()
+    s.send([side])
+    expect(reports.at(-1)).toMatchObject({
+      connection: 2,
+      sides: { task: { value: { state: 'ok' } } },
+    })
+  })
+
   it('fails on a failed or refusing part, and Retry runs only that part again', async () => {
     const { s, parts, last } = await started()
     const inbox = s.keyOf('workspace:inbox', { org_id: ORG })

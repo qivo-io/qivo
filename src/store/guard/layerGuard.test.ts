@@ -6,6 +6,7 @@ import {
   type AstNode,
   apiNames,
   enclosing,
+  functionName,
   ownerName,
   parseFile,
   textOf,
@@ -182,6 +183,85 @@ describe('every write has a recipe', () => {
         sends.some((s) => s.mutator === recipe.mutator && s.names.includes(recipe.mutation)),
         recipe.what,
       ).toBe(true)
+  })
+})
+
+describe('the writes from the task window’s own answer', () => {
+  /* The store functions that serve a task the window shows from its own
+     answer, which the workspace does not hold (planner.ts answerTaskOf),
+     and the readers they and the window ask. Once tasks load on demand,
+     the workspace holds a few tasks, so none of them may walk its task
+     lists; one row looked up by its uuid or handle is allowed. The paints
+     they give the workspace (labelRowsPaint, followRowsPaint,
+     moveRowsPaint) skip until the workspace holds the task, and walk then
+     what the held path walks. */
+  const ANSWER_PATH = [
+    'answerTaskOf',
+    'updateAnswerTask',
+    'toggleAnswerLabel',
+    'followAnswerTask',
+    'answerUploadTarget',
+    'removeUnheldAttachment',
+    'moveAnswerTask',
+    'deleteAnswerTask',
+    'answerParent',
+    'answerFamilyOf',
+    'familyOf',
+    'taskShown',
+    'shownHandleOf',
+    'editsFromAnswer',
+    'answerSaveWaits',
+  ]
+  /* The whole-list walks of the workspace's tasks and of their rows. */
+  const WALKS = [
+    /\bP\.issues\b/,
+    /\bPLANNER\.issues\b/,
+    /\bscopedIssues\b/,
+    /\brows\.issues\.(?!get\(|has\()/,
+    /\brows\.issueLabels\b/,
+    /\brows\.attachments\.values\(/,
+    /\brows\.issueSubs\b/,
+    /peekList\('issue(Subs|Labels)'\)/,
+  ]
+  const bodies = new Map<string, string>()
+  walk(program, (node, ancestors) => {
+    if (
+      !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(node.type)
+    )
+      return
+    const name = functionName(node, ancestors)
+    if (ANSWER_PATH.includes(name)) bodies.set(name, textOf(source, node))
+  })
+
+  it('finds every function it checks', () => {
+    expect([...bodies.keys()].sort()).toEqual([...ANSWER_PATH].sort())
+  })
+
+  it('walks none of the workspace’s task lists', () => {
+    const found = [...bodies].flatMap(([name, text]) =>
+      WALKS.filter((walk) => walk.test(text)).map((walk) => `${name}: ${walk}`),
+    )
+    expect(found).toEqual([])
+  })
+
+  it('catches a walk in its pattern list', () => {
+    // each pattern finds what it stands for, so the scan cannot pass empty
+    const samples = [
+      'P.issues.find((i) => i.uuid === id)',
+      'PLANNER.issues.filter(Boolean)',
+      'PLANNER.scopedIssues(info)',
+      'rows.issues.forEach((c) => c)',
+      'rows.issueLabels.some(Boolean)',
+      '[...rows.attachments.values()]',
+      'rows.issueSubs.push(row)',
+      "workspaceRows.peekList('issueSubs')",
+    ]
+    expect(samples.map((text) => WALKS.some((walk) => walk.test(text)))).toEqual(
+      samples.map(() => true),
+    )
+    expect(WALKS.some((walk) => walk.test('rows.issues.get(uuid) ?? rows.issues.has(t)'))).toBe(
+      false,
+    )
   })
 })
 

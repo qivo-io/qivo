@@ -3,24 +3,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   fixture,
   NOW,
+  ORG,
   type Recipe,
   recipes,
   type Snapshot,
   type Thread,
   thread,
+  WINDOW_TASK,
 } from './writeRecipes.setup'
 
 /* Every write recipe (writeRecipes.setup.ts) in four scenarios, against the
    Convex double that keeps Convex's order (convexOrder.setup.ts). A write on
    a task only the Board's answer brings runs with the Board's read open
-   (P.watchBoard), its answer delivered with the snapshot's:
+   (P.watchBoard), its answer delivered with the snapshot's, and one on a
+   task the window shows from its own answer with the window open on it
+   (P.watchComments), its answer delivered with the snapshot's:
 
    1. Paused, by the snapshot trouble that pauses its class and by the pause
       while Qivo cannot save, it paints nothing and sends nothing.
    2. Refused online, the rows return to exactly what they were.
-   3. Sent online, accepted while the snapshot (or the thread) fails, and
-      then another painted write refused: the change stays. A delivery of
-      the server's rows then ends the trouble, and no layer is left.
+   3. Sent online, accepted while the snapshot (or the thread, or the
+      window's answer) fails, and then another painted write refused: the
+      change stays. A delivery of the server's rows then ends the trouble,
+      and no layer is left.
    4. With the server's rows delivered before the answer, as Convex does,
       the rows equal them, server stamps aside, and after the answer they
       equal them exactly with no layer left. A paint shown when the write is
@@ -52,6 +57,7 @@ vi.mock('../../lib/images', async (original) => ({
 
 const QUERY_FAILURE = '[CONVEX Q(workspace:whole)] Server Error'
 const THREAD_FAILURE = '[CONVEX Q(snapshot:threadComments)] Server Error'
+const WINDOW_FAILURE = '[CONVEX Q(taskWindow:task)] Server Error'
 const REFUSAL = () => new ConvexError({ code: 'forbidden', message: 'no write access' })
 
 let store: typeof import('../planner')
@@ -124,6 +130,23 @@ async function boot(recipe: Recipe) {
     await settle()
     if (!P().viewTask(recipe.view.slot, 'task-v')) throw new Error('the Board brought no task-v')
   }
+  if (recipe.detail) {
+    d.publish('taskWindow:task', recipe.detail.answer(), false)
+    if (recipe.detail.files) d.publish('taskWindow:attachments', recipe.detail.files(), false)
+    P().watchComments(WINDOW_TASK, ORG)
+    if (recipe.detail.files) P().showSections({}, true)
+    await settle()
+    if (P().taskDetail(WINDOW_TASK)?.state !== 'ok')
+      throw new Error('the window shows no task-w from its own answer')
+  }
+}
+
+/* Delivers the window's answers after the write, for a write on a task the
+   window shows from its own answer. */
+function publishDetail(recipe: Recipe, args: Record<string, unknown>) {
+  if (!recipe.detail) return
+  if (recipe.detail.files) server().publish('taskWindow:attachments', recipe.detail.files(args))
+  server().publish('taskWindow:task', recipe.detail.answer(args))
 }
 
 /* Delivers the Board's answer after the write, for a write on a task only
@@ -220,7 +243,7 @@ afterEach(() => {
 
 /** Whether `recipe`'s write paints when it is sent, not only once accepted. */
 const paintsAtSend = (recipe: Recipe) =>
-  !!(recipe.truth || recipe.thread || recipe.view) && !recipe.paintsOnAccept
+  !!(recipe.truth || recipe.thread || recipe.view || recipe.detail) && !recipe.paintsOnAccept
 
 describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
   '%s',
@@ -269,6 +292,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
           beforeAnswer = probe().rows(true)
           // the query fails before the answer, so no delivery holds the write
           if (thread) server().fail('snapshot:threadComments', new Error(THREAD_FAILURE))
+          else if (recipe.detail) server().fail('taskWindow:task', new Error(WINDOW_FAILURE))
           else server().fail('workspace:whole', new Error(QUERY_FAILURE))
         }
         resolve(answerOf(recipe, name, sent))
@@ -293,6 +317,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       if (thread) server().publish('snapshot:threadComments', threadOf(recipe, args))
       else server().publish('workspace:whole', truthOf(recipe, args))
       publishView(recipe, args)
+      publishDetail(recipe, args)
       await settle()
       expect(P().snapshotTrouble()).toBeNull()
       expect(probe().layerCount()).toBe(0)
@@ -315,6 +340,7 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
       if (recipe.thread) server().publish('snapshot:threadComments', threadOf(recipe, pending))
       else server().publish('workspace:whole', truthOf(recipe, pending))
       publishView(recipe, pending)
+      publishDetail(recipe, pending)
       await settle()
       const painted = probe().rows(true)
       ;(answer as () => void)()

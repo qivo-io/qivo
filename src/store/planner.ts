@@ -167,7 +167,7 @@ import { createOwnerLoadCache } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
-import { shapeTaskDetail, type TaskDetailVM } from './taskDetail'
+import { answerFamily, shapeShortTask, shapeTaskDetail, type TaskDetailVM } from './taskDetail'
 import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex'
 
 export type { UIPrefs } from './preferences'
@@ -496,7 +496,9 @@ let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
    names), which runs only while one of them does, so the desktop Inbox
    pane, which shows no details, reads none of them. The task side also
    runs while a window shows the watched task from its answer, because the
-   workspace does not hold it (sidesWanted). */
+   workspace does not hold it (sidesWanted), and the writes on that task
+   paint its answer (detailRows) and end with its next current delivery
+   (taskDelivered). */
 const sectionOwners = new Set<object>()
 /* The task and organization each section side query watches, or null
    while it does not run (syncSections). */
@@ -507,7 +509,8 @@ const sectionsWatched: Record<SectionSide, { task: string; org: string } | null>
 }
 /* What the sections' side queries last delivered for task `issue`, the
    anchors their lists and the task's detail are built from
-   (rebuildSections) as the base is for the workspace rows: null before a
+   (rebuildSections, the task's answer painted with the layers' detail
+   parts first, paintedAnswer) as the base is for the workspace rows: null before a
    side's first delivery, CREATING for a task whose create is on its way,
    which has none of them yet. At most one task's three answers, so at most
    TASK_WINDOW.rows short rows a list and TASK_WINDOW.attachments
@@ -526,6 +529,13 @@ const sectionFailure: Record<SectionSide, CommentsFailure> = {
   links: 'none',
   attachments: 'none',
 }
+/* The watched task's own answer (sectionAnswers.task) with the detail part
+   of every live layer painted over it (store/layers.ts View detail), as
+   the window, its Subtasks and the caps read it (paintedAnswer): `from` is
+   the anchor it was painted from, `task` the painted copy, null while the
+   watched task has no ok answer. At most one task's answer, so at most
+   TASK_WINDOW.rows subtask rows a repaint copies. */
+let detailRows: { from: TaskOk | null; task: TaskOk | null } = { from: null, task: null }
 
 /* The sections' side queries (store/liveParts.ts SIDE_NAMES). */
 const SECTION_SIDES = ['task', 'links', 'attachments'] as const satisfies readonly SideName[]
@@ -534,10 +544,11 @@ type SectionSide = (typeof SECTION_SIDES)[number]
 type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
 type LinksAnswer = FunctionReturnType<typeof api.taskWindow.links>
 type AttachmentsAnswer = FunctionReturnType<typeof api.taskWindow.attachments>
+type TaskOk = Extract<TaskAnswer, { state: 'ok' }>
 type LinksOk = Extract<LinksAnswer, { state: 'ok' }>
 type AttachmentsOk = Extract<AttachmentsAnswer, { state: 'ok' }>
 /* A task in a section's answer (convex/lib/taskWindow.ts ShortRow). */
-type ShortRow = Extract<TaskAnswer, { state: 'ok' }>['subtasks']['rows'][number]
+type ShortRow = TaskOk['subtasks']['rows'][number]
 /* What a section holds of a task whose create is on its way: a complete,
    empty list, as watchComments gives such a task an empty thread. */
 const CREATING = 'creating'
@@ -1075,6 +1086,10 @@ function syncSections(): boolean {
       sectionsWatched[side] = null
     }
     if (!wanted[side] && (sectionAnswers[side] !== null || sectionFailure[side] !== 'none')) {
+      // nothing holds a write's paint of the task's own answer once it
+      // goes, as when the workspace comes to hold the task
+      if (side === 'task' && sectionAnswers.issue !== null)
+        layers.dropSaved('detail', sectionAnswers.issue)
       sectionAnswers = { ...sectionAnswers, [side]: null }
       sectionFailure[side] = 'none'
       changed = true
@@ -1102,8 +1117,11 @@ function watchSection(side: SectionSide) {
   const watched = sectionsWatched[side]
   if (!parts || !watched) return
   const { task, org } = watched
-  if (side === 'task') parts.watchSide(side, api.taskWindow.task, { org_id: org, ref: task })
-  else parts.watchSide(side, api.taskWindow[side], { org_id: org, issue_id: task })
+  if (side === 'task') {
+    // a fresh subscription has delivered nothing that holds a write yet
+    detailFresh = false
+    parts.watchSide(side, api.taskWindow.task, { org_id: org, ref: task })
+  } else parts.watchSide(side, api.taskWindow[side], { org_id: org, issue_id: task })
 }
 
 /* Stops every section side query. */
@@ -1148,12 +1166,60 @@ function sectionNews(side: SectionSide) {
     if ('error' in news) {
       console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
       sectionFailure[side] = 'failed'
+      // a failure holds no write, and the answer before it stays
+      if (side === 'task') detailFresh = false
     } else {
       sectionFailure[side] = 'none'
       sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
+      if (side === 'task') taskDelivered(watched.task)
     }
     owe('sections')
   }
+}
+
+/* Records a live good delivery of task `task`'s own answer, the anchor
+   the window shows the task from while the workspace does not hold it. It
+   arrived on the newest connection (latestConnection), so it holds every
+   write on the task accepted before it, and their saved detail parts go,
+   as threadDelivered does for the thread. The sections paint again with
+   it (owe). */
+function taskDelivered(task: string) {
+  detailDeliveries++
+  detailFresh = true
+  detailConnection = latestConnection
+  layers.dropSaved('detail', task)
+}
+
+/* The watched task's own answer when it says ok, the anchor its painted
+   answer is built from, else null. */
+function okAnswer(): TaskOk | null {
+  const t = watchedComments
+  const answer = t && sectionAnswers.issue === t ? sectionAnswers.task : null
+  return answer && answer !== CREATING && answer.state === 'ok' && answer.task.id === t
+    ? answer
+    : null
+}
+
+/* Builds the watched task's painted answer again: a copy of its anchor
+   with every live layer's detail part of the task painted over it, in the
+   order a repaint applies them (layers.ordered). */
+function paintDetail() {
+  const from = okAnswer()
+  detailRows = { from, task: from && structuredClone(from) }
+  if (!detailRows.task) return
+  for (const layer of layers.ordered()) {
+    const own = layer.view.detail
+    if (own && own.task === watchedComments) guarded(own.paint)
+  }
+}
+
+/* The watched task's own answer as the window shows it, painted
+   (detailRows): built again when its anchor changed since it was painted,
+   so it always shows the anchor the sections hold. Null while the task has
+   no ok answer. */
+function paintedAnswer(): TaskOk | null {
+  if (detailRows.from !== okAnswer()) paintDetail()
+  return detailRows.task
 }
 
 /* What each side query's news goes to. */
@@ -1472,8 +1538,11 @@ function sectionsNow(): TaskSectionsVM | null {
     })
   return {
     task: t,
+    // the Subtasks of the answer the window shows, painted (paintedAnswer)
     subtasks:
-      fallback && answers.task === null ? fallback.subtasks : subtaskSection(t, answers.task),
+      fallback && answers.task === null
+        ? fallback.subtasks
+        : subtaskSection(t, shownAnswer(answers.task)),
     links: fallback && answers.links === null ? fallback.links : linkSection(t, answers.links),
     attachments:
       fallback && answers.attachments === null
@@ -1482,15 +1551,25 @@ function sectionsNow(): TaskSectionsVM | null {
   }
 }
 
+/* The watched task's answer `answer` as the window shows it: for an ok
+   answer the painted one (paintedAnswer), with the person's own writes on
+   their way, else the answer itself. */
+function shownAnswer(answer: SectionAnswers['task']): SectionAnswers['task'] {
+  return answer && answer !== CREATING && answer.state === 'ok'
+    ? (paintedAnswer() ?? answer)
+    : answer
+}
+
 /* The watched task as the window shows it from its own read
-   (store/taskDetail.ts), or null unless the workspace does not hold it and
-   its organization is known. */
+   (store/taskDetail.ts), with the person's own writes on it painted
+   (paintedAnswer), or null unless the workspace does not hold it and its
+   organization is known. */
 function taskDetailNow(): TaskDetailVM | null {
   const t = watchedComments
   const org = watchedOrgOf()
   if (!t || !org || rows.issues.has(t)) return null
   const answers = sectionAnswers.issue === t ? sectionAnswers : null
-  const answer = answers?.task
+  const answer = answers ? shownAnswer(answers.task) : undefined
   const links = answers?.links
   const files = answers?.attachments
   return shapeTaskDetail({
@@ -1587,27 +1666,35 @@ let lastDeliveryAt: string | null = null
    snapshot admits the restored task (and any ancestors restored with it). */
 const pendingRestoreIssueIds = new Set<string>()
 /* Draft-only uploads a discarded draft let go of while edits were paused
-   (removeAttachment's deferWhilePaused). The pause would refuse their
-   delete, so it waits for the snapshot to recover (reapPausedUploads). A
-   reload forgets them, and a later description save drops them a day after
-   their upload, as it does a closed tab's leftovers
-   (convex/model/descriptionImages.ts). */
-const reapAfterPause = new Set<string>()
+   (removeAttachment's deferWhilePaused), with the task each belongs to.
+   The pause would refuse their delete, so it waits for the snapshot to
+   recover (reapPausedUploads). A reload forgets them, and a later
+   description save drops them a day after their upload, as it does a
+   closed tab's leftovers (convex/model/descriptionImages.ts). */
+const reapAfterPause = new Map<string, string>()
 
 /* Deletes the uploads reapAfterPause holds once edits resume, except one a
    description took meanwhile, which the server's description saves settle
-   from then on. */
+   from then on. An upload of a task the workspace does not hold goes only
+   while the window's own answer shows that task, whose saved text must not
+   name it either; otherwise it stays for the server to drop. */
 function reapPausedUploads() {
   // one pause can end while the other still holds
   if (snapshotTrouble || savePause()) return
   const ids = [...reapAfterPause]
   reapAfterPause.clear()
-  for (const id of ids) {
+  for (const [id, task] of ids) {
     const rec = rows.attachments.get(id)
-    const issue = rec ? rows.issues.get(rec.issue_id) : undefined
+    if (!rec) {
+      const shown = task === watchedComments && !rows.issues.has(task) ? paintedAnswer() : null
+      if (shown && !String(shown.task.description ?? '').includes(id))
+        void PLANNER.removeAttachment(id, { task })
+      continue
+    }
+    const issue = rows.issues.get(rec.issue_id)
     if (!issue || (typeof issue.description === 'string' && issue.description.includes(id)))
       continue
-    PLANNER.removeAttachment(id)
+    void PLANNER.removeAttachment(id)
   }
 }
 
@@ -2106,25 +2193,40 @@ const layers = createLayers()
    is already in the newest delivery. */
 let snapshotCurrent = false
 /* Live good deliveries counted since the store started, of the snapshot, of
-   the watched thread and of the views' reads (viewReads). A layer remembers
-   them when it is sent. */
+   the watched thread, of the views' reads (viewReads) and of the watched
+   task's own answer (taskDelivered). A layer remembers them when it is
+   sent. */
 let snapshotDeliveries = 0
 let threadDeliveries = 0
 let viewDeliveries = 0
+let detailDeliveries = 0
 /** The delivery counters now, which a layer keeps when it is sent. */
 const deliveryCounters = () => ({
   snapshot: snapshotDeliveries,
   thread: threadDeliveries,
   view: viewDeliveries,
+  detail: detailDeliveries,
 })
 /* Whether the newest thread result was a live good delivery of the watched
    task, as snapshotCurrent is for the snapshot. */
 let threadCurrent = false
+/* Whether the newest result of the watched task's own answer was a good
+   delivery of its subscription, and the connection it arrived on. A
+   failure, a fresh subscription (watchSection) and a re-init of the parts
+   (stopParts) clear it, and a reconnect moves latestConnection past it
+   (detailCurrent). */
+let detailFresh = false
+let detailConnection = 0
+/** Whether the newest result of the watched task's own answer was a live
+    good delivery on the socket's newest connection, so a write accepted
+    while this holds, with a delivery since it was sent, is in it. */
+const detailCurrent = () => detailFresh && detailConnection === latestConnection
 /* The parts whose anchor changed while a painted write waited, and the
-   timer that paints them at the latest (owe). No layer paints the task
-   window's sections, which merge the rows on screen with their answers
-   (rebuildSections), but their answers wait with the rest, so one
-   transition still renders once. */
+   timer that paints them at the latest (owe). The sections merge the rows
+   on screen with their answers (rebuildSections), and the watched task's
+   own answer is painted with the layers' detail parts when they repaint
+   (paintDetail); their answers wait with the rest, so one transition
+   still renders once. */
 const owed = { workspace: false, thread: false, sections: false, view: false }
 let payTimer: ReturnType<typeof setTimeout> | null = null
 let storeEpoch = 0
@@ -2166,7 +2268,7 @@ function repaint(parts: {
     clearTimeout(payTimer)
     payTimer = null
   }
-  paintRows(workspace, thread, view)
+  paintRows(workspace, thread, view, sections)
   if (workspace) {
     if (loadEnds) {
       loadEnds = false
@@ -2241,9 +2343,11 @@ function together(step: () => void) {
 /** Builds the rows of the parts named from their anchors and paints every
     live layer over them, in order (layers.ordered), without showing them.
     The workspace rows start again from the server's, with the staged
-    delivery applied (store/rowMap.ts beginRepaint), and the views' rows
-    from their reads' answers (store/viewRows.ts). */
-function paintRows(workspace: boolean, thread: boolean, view = false) {
+    delivery applied (store/rowMap.ts beginRepaint), the views' rows from
+    their reads' answers (store/viewRows.ts), and with `detail` the watched
+    task's own answer from its anchor (paintDetail). */
+function paintRows(workspace: boolean, thread: boolean, view = false, detail = false) {
+  if (detail) paintDetail()
   const painting = workspace && hasSnapshot
   if (painting) {
     workspaceRows.beginRepaint()
@@ -2803,21 +2907,30 @@ const ownerLoads = createOwnerLoadCache({
 })
 
 /** Paints `view` over the rows on screen, the moment its write is sent, and
-    shows the change. A thread part shows only while its task is watched. */
+    shows the change. A thread part shows only while its task is watched,
+    and a detail part only while its task is watched, over the painted
+    answer as it shows, or with every layer from its anchor when that
+    changed since. */
 function showPaint(view: View) {
   const thread = view.thread && view.thread.task === watchedComments ? view.thread : null
+  const detail = view.detail && view.detail.task === watchedComments ? view.detail : null
   workspaceRows.paint(() => {
     view.workspace?.()
     thread?.paint()
     view.view?.()
   })
+  if (detail) {
+    if (detailRows.from !== okAnswer()) paintDetail()
+    else if (detailRows.task) detail.paint()
+  }
   if (view.workspace) {
     rebuild()
     reshapeViews()
     emit()
   } else {
-    if (thread) {
-      rebuildComments()
+    if (thread || detail) {
+      if (thread) rebuildComments()
+      if (detail) rebuildSections()
       emit('comments')
     }
     if (view.view) {
@@ -2849,7 +2962,14 @@ function moveHandles(moved: ReadonlyMap<string, string>) {
     task it concerns, or that the person did not make the change, such as the
     read that opening a task sends, which the notice does not count and the
     crash note leaves out. */
-type WriteAbout = { task?: string; background?: boolean }
+type WriteAbout = {
+  task?: string
+  background?: boolean
+  /** a write on a task the window shows from its own answer, which the
+      workspace does not hold (answerTaskOf), so a later guard against
+      writes that need every task can tell it apart by this mark */
+  answer?: true
+}
 
 /** How send() and sendAwaited() treat a write's answer. */
 type SendOptions<R> = {
@@ -2961,7 +3081,13 @@ function start<M extends FunctionReference<'mutation'>, T>(
     if (batch) {
       const had = batch.view
       layers.remove(batch)
-      if (paints(had)) repaint({ workspace: !!had.workspace, thread: !!had.thread })
+      if (paints(had))
+        repaint({
+          workspace: !!had.workspace,
+          thread: !!had.thread,
+          view: !!had.view,
+          sections: !!had.detail,
+        })
     }
     const quiet = o.quietPause && errData(paused).code === 'paused'
     if (!quiet) (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, !!batch)))?.(paused)
@@ -3086,20 +3212,38 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
   // (viewPartHeld); with no such rows left, as after the view closed, it
   // paints nothing and no delivery would ever end it
   const viewPart = view.view && !viewPartHeld(view.view, layer.seen.view) ? view.view : undefined
-  layers.save(layer, { workspace, thread, view: viewPart })
+  // the watched task's own answer holds its part as the thread holds its
+  // own (detailPartHeld)
+  const detail =
+    view.detail && !detailPartHeld(view.detail.task, layer.seen.detail) ? view.detail : undefined
+  layers.save(layer, { workspace, thread, view: viewPart, detail })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
   if (sent.view && !viewPart) owed.view = true
+  if (sent.detail && !detail && sent.detail.task === watchedComments) owed.sections = true
   // a view keep gave paints now, unless a delivery holds it already
   const now = {
     workspace: !!next && !!workspace,
     thread: !!next && !!thread && thread.task === watchedComments,
     view: !!next && !!viewPart,
+    sections: !!next && !!detail && detail.task === watchedComments,
   }
-  if (now.workspace || now.thread || now.view) repaint(now)
-  if (!owed.workspace && !owed.thread && !owed.view) return
+  if (now.workspace || now.thread || now.view || now.sections) repaint(now)
+  if (!owed.workspace && !owed.thread && !owed.view && !owed.sections) return
   if (!layers.paintedPending()) pay()
   else payTimer ??= setTimeout(pay, 0)
+}
+
+/** Whether the watched task's own answer holds the saved detail part of a
+    write on task `task` sent when its deliveries counted `seen`: a live
+    good delivery since the send on the newest connection (detailCurrent),
+    as threadCurrent decides for the thread. A part whose task's answer the
+    store no longer holds, as after its window closed or the workspace came
+    to hold the task, paints nothing, and no delivery would ever end it. */
+function detailPartHeld(task: string, seen: number): boolean {
+  const answer = sectionAnswers.issue === task ? sectionAnswers.task : null
+  if (watchedComments !== task || answer === null || answer === CREATING) return true
+  return detailCurrent() && detailDeliveries > seen
 }
 
 /** Takes refused `layer` away and paints the rows without it, with
@@ -3112,12 +3256,18 @@ function settleRefused(layer: Layer) {
       workspace: !!had.workspace || owed.workspace,
       thread: (!!had.thread && had.thread.task === watchedComments) || owed.thread,
       view: !!had.view || owed.view,
+      sections: (!!had.detail && had.detail.task === watchedComments) || owed.sections,
     })
-  } else if ((owed.workspace || owed.thread || owed.view) && !layers.paintedPending()) pay()
+  } else if (
+    (owed.workspace || owed.thread || owed.view || owed.sections) &&
+    !layers.paintedPending()
+  )
+    pay()
 }
 
-/* Test builds only (STRICT_LAYERS): before every emit, the rows on screen
-   must be exactly the anchors with every live layer painted over them, and
+/* Test builds only (STRICT_LAYERS): before every emit, the rows on screen,
+   the watched task's painted answer among them, must be exactly the
+   anchors with every live layer painted over them, and
    painting every layer once more with the clock an hour ahead must change
    nothing but server stamps, and write no time it read from the clock (the
    paint rules in store/layers.ts). Skipped while a part is owed, while a
@@ -3134,6 +3284,7 @@ function checkLayers() {
     owed.workspace ||
     owed.thread ||
     owed.view ||
+    owed.sections ||
     !PLANNER.loaded ||
     !hasSnapshot ||
     base.staging()
@@ -3143,10 +3294,11 @@ function checkLayers() {
   const saved = workspaceRows.save()
   const savedViews = viewRows.save()
   const thread = { comments: rows.comments, threadEvents: rows.threadEvents }
+  const detail = detailRows
   const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
   try {
     const shown = canonicalRows()
-    paintRows(true, true, true)
+    paintRows(true, true, true, true)
     const outside = firstDifference(shown, canonicalRows())
     if (outside) throw new Error(`rows changed outside a layer: ${outside}`)
     const built = canonicalRows(true)
@@ -3157,6 +3309,8 @@ function checkLayers() {
           const part = layer.view.thread
           if (part && part.task === watchedComments) part.paint()
           layer.view.view?.()
+          const own = layer.view.detail
+          if (own && own.task === watchedComments && detailRows.task) own.paint()
         }
       }),
     )
@@ -3171,6 +3325,7 @@ function checkLayers() {
   } finally {
     workspaceRows.restore(saved)
     viewRows.restore(savedViews)
+    detailRows = detail
     Object.assign(rows, thread)
     ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
     checkingLayers = false
@@ -3221,6 +3376,9 @@ function canonicalRows(noStamps = false): Record<string, string> {
   for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
   out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut])
   for (const [slot, value] of viewRows.views()) out[`view:${slot}`] = JSON.stringify(norm(value))
+  // the watched task's own answer, painted, as the window reads it
+  const detail = paintedAnswer()
+  if (detail) out.detail = JSON.stringify(norm(detail))
   return out
 }
 
@@ -5243,14 +5401,18 @@ function clearParentHours(parentUuid: string | null | undefined, at: string) {
 /* Every visible task under `it`, once each, at any depth. The seen set keeps
    a corrupt parent cycle from hanging the client. Subtasks outside this view
    are not in the snapshot, so they are never visited. */
-function eachDescendant(it: IssueVM, visit: (child: IssueVM) => void) {
+function eachDescendant(
+  it: IssueVM,
+  visit: (child: IssueVM) => void,
+  byId: Readonly<Record<string, IssueVM>> = PLANNER.issueById,
+) {
   const seen = new Set([it.id])
   const stack = [...it.children]
   while (stack.length) {
     const id = stack.pop() as string
     if (seen.has(id)) continue
     seen.add(id)
-    const child = PLANNER.issueById[id]
+    const child = byId[id]
     if (!child) continue
     visit(child)
     stack.push(...child.children)
@@ -5559,6 +5721,16 @@ export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
 export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
 /** A holder who would lose access to `project` (edit access when `edit`). */
 export type AccessBlocker = Holder & { project: ProjectVM; edit: boolean }
+/** What Move and Archive or delete take along with a task (P.familyOf):
+    `root` is the task as they read it, whose `children` are the family's,
+    `byId` holds it, its parent when known and every subtask under it by
+    handle, and `done` says whether it is Done, a group's by its whole
+    list. */
+export type TaskFamily = {
+  root: IssueVM
+  byId: Readonly<Record<string, IssueVM>>
+  done: boolean
+}
 
 export type IssuePatch = Partial<{
   title: string
@@ -5621,11 +5793,14 @@ const VIEW_WRITES = new Set(['status', 'assignee', 'reviewer'])
 /** P.updateIssue on a task only an open view's answer brings
     (store/viewRows.ts), which the Board's drop and owner picker send: its
     status, assignee and reviewer, with the roster check the workspace's
-    tasks get. The write paints the views' rows of the task and the
-    workspace's, which skips until the workspace holds the task, so it shows
-    whichever source the screen takes the task from (store/layers.ts View).
-    Its `expected` values are the row on screen. Resolves false for any
-    other field. */
+    tasks get. The write paints the views' rows of the task, the task
+    window's own answer of it (`detail`), which shows once a window opens
+    on the task while the write waits, and the workspace's, which skips
+    until the workspace holds the task, so it shows whichever source the
+    screen takes the task from (store/layers.ts View). Its `expected`
+    values are the view's row on screen. Resolves false for any other
+    field. A write on the task a window shows from a current answer goes
+    through updateAnswerTask instead (P.updateIssue). */
 function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   const it = viewRows.byHandle(id)
   const row = it && viewRows.peek(it.uuid)
@@ -5658,11 +5833,599 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     view: viewPaint([uuid], () => {
       for (const copy of viewRows.edit(uuid)) stampTaskPatch(copy, paintDb, at)
     }),
+    // the window's own answer of the task, while a window shows it
+    detail: {
+      task: uuid,
+      paint: () => {
+        const shown = detailRows.task
+        if (shown?.task.id === uuid) stampTaskPatch(shown.task, paintDb, at)
+      },
+    },
     // skips until the workspace holds the task, then paints it there too
     workspace: () => patchIssueRow(uuid, paintDb, at),
   }
   return send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
     over: overOf('issues', row, Object.keys(wire)),
+  })
+}
+
+/** What P.updateIssue takes besides the patch: what an editor showed when
+    the person began, by wire field, and what a kept draft does after a
+    refusal (SendOptions keepDraft and keepUnsaved). */
+type UpdateOptions = {
+  seen?: Partial<Row<'issues'>>
+  keepDraft?: (shown: unknown) => boolean
+  keepUnsaved?: () => void
+}
+
+/** Puts label `labelId` on task `uuid` in the workspace's rows, or takes
+    it off with `on` false, as a label toggle paints them. Skips while the
+    workspace does not hold the task or the label, so a write from the
+    window's own answer paints the workspace once it holds the task. */
+function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
+  return () => {
+    if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return
+    const has = workspaceRows
+      .peekList('issueLabels')
+      .some((il) => il.issue_id === uuid && il.label_id === labelId)
+    if (has === on) return
+    if (on) rows.issueLabels.push({ issue_id: uuid, label_id: labelId })
+    else
+      workspaceRows.keepList(
+        'issueLabels',
+        (il) => !(il.issue_id === uuid && il.label_id === labelId),
+      )
+  }
+}
+
+/** Makes profile `me` follow task `uuid` in the workspace's rows, or stop
+    following it with `on` false, as of `at`. Skips while the workspace does
+    not hold the task, as labelRowsPaint does. */
+function followRowsPaint(uuid: string, me: string, on: boolean, at: string): Paint {
+  return () => {
+    if (!rows.issues.has(uuid)) return
+    const has = workspaceRows
+      .peekList('issueSubs')
+      .some((s) => s.issue_id === uuid && s.profile_id === me)
+    if (has === on) return
+    if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
+    else workspaceRows.keepList('issueSubs', (s) => !(s.issue_id === uuid && s.profile_id === me))
+  }
+}
+
+/** Where a file of task `issueKey`, a handle or a uuid, goes, for
+    P.addAttachment: the task, its organization and project, how many
+    attachment rows the per-task cap counts, and whether the window's own
+    answer, not the workspace, holds it. */
+type UploadTarget = { uuid: string; org: string; project: string; count: number; answer: boolean }
+
+/** The workspace's task for an upload: its cap counts the larger of the
+    workspace's rows and the whole section list (capInputs), and an image a
+    description save took out no longer counts. */
+function heldUploadTarget(issueKey: string): UploadTarget | null {
+  const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
+  const row = uuid ? rows.issues.get(uuid) : undefined
+  if (!row || !uuid) return null
+  const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
+  const count = Math.max(
+    [...rows.attachments.values()].filter((a) => a.issue_id === uuid && a.dropped_at === undefined)
+      .length,
+    held ? capInputs(held).attachments : 0,
+  )
+  return { uuid, org: row.org_id, project: row.project_id, count, answer: false }
+}
+
+/** The task the window shows from its own answer for an upload
+    (answerTaskOf): its cap counts the larger of the window's view and its
+    whole attachments answer (capInputs), with no walk of the workspace. */
+function answerUploadTarget(issueKey: string): UploadTarget | null {
+  const shown = answerTaskOf(issueKey)
+  return shown
+    ? {
+        uuid: shown.uuid,
+        org: shown.org,
+        project: shown.model.project,
+        count: capInputs(shown.model).attachments,
+        answer: true,
+      }
+    : null
+}
+
+/** P.removeAttachment for attachment `attId`, which the workspace does not
+    hold: a file only the watched task's attachments answer holds, of a task
+    the window shows from its own answer or of a held task whose file has
+    not arrived yet, or an upload of task `opts.task` that no list holds. It
+    sends files.removeAttachment to that task's organization without a
+    paint. The attachments answer drops the row when the write commits,
+    before the write resolves (lib/convexOrdering.test.ts), so the row
+    shows busy until then, and a refusal toasts and leaves it. */
+function removeUnheldAttachment(
+  attId: string,
+  opts: { deferWhilePaused?: boolean; task?: string },
+): Promise<boolean> {
+  const listed = sectionAttachment(attId)
+  const task = listed?.row.issue_id ?? opts.task
+  const org = listed?.org ?? (task ? orgOfTask(task) : undefined)
+  if (!task || !org) return Promise.resolve(false)
+  if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
+    reapAfterPause.set(attId, task)
+    return Promise.resolve(false)
+  }
+  if (refusePausedEdit()) return Promise.resolve(false)
+  return send(api.files.removeAttachment, { org_id: org, id: attId }, 'none', {
+    about: { task, ...(rows.issues.has(task) ? {} : { answer: true }) },
+  })
+}
+
+/** P.archiveIssue's write of task `uuid` in organization `org`, which
+    waits for the server: nothing changes until it accepts, and a refusal
+    leaves the task and the window in place (toasted). */
+function sendArchive(
+  org: string,
+  uuid: string,
+  reason: string | undefined,
+  keepSubtasks: boolean,
+  about?: WriteAbout,
+): Promise<boolean | 'already'> {
+  if (refusePausedEdit()) return Promise.resolve(false)
+  const text = (reason || '').trim()
+  const epoch = storeEpoch
+  const at = new Date().toISOString()
+  return sendAwaited(
+    api.issues.archive,
+    {
+      org_id: org,
+      id: uuid,
+      ...(text ? { reason: text } : {}),
+      ...(keepSubtasks ? { keep_subtasks: true } : {}),
+    },
+    'none',
+    // The delivery that drops the task usually lands first, and then
+    // nothing paints. When it has not, an archive this call made paints
+    // until one does. An 'already' answer changed nothing, and the earlier
+    // archive may have kept or taken the subtasks, so nothing paints and
+    // the board shows the task until a delivery holds that archive. A task
+    // the workspace does not hold paints nothing (archivePaint skips): its
+    // window's answer turns archived first.
+    {
+      keep: (out) =>
+        out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at) },
+      ...(about ? { about } : {}),
+    },
+  ).then(
+    // an answer without `archived`, as one from before it, archived the task
+    (out) => (out?.archived === false ? 'already' : true),
+    (error) => {
+      // it painted nothing, so a refusal has nothing to revert
+      if (epoch === storeEpoch) toastWriteError(error, false)
+      return false
+    },
+  )
+}
+
+/** Paints task row `task` moved to sub-project `projectId` at `at`, with
+    the server's stamps: the move clears the status stamp and restarts a
+    review hand-off or Done time at the move, keeping the remaining-hours
+    measurement (model/issues.ts movedStamps). Skips a row already there. */
+function paintMoved(
+  task: Pick<Row<'issues'>, 'project_id' | 'updated_at' | 'status_at' | 'review_at' | 'done_at'>,
+  projectId: string,
+  at: string,
+) {
+  if (task.project_id === projectId) return
+  task.project_id = projectId
+  task.updated_at = at
+  task.status_at = undefined
+  if (task.review_at != null) task.review_at = at
+  if (task.done_at != null) task.done_at = at
+}
+
+/** A move's paint of the workspace's rows: the tasks `family` (the task
+    first, then the subtasks it carries) in sub-project `projectId` at
+    `at`, and the task without its parent when it `leavesParent`. Each row
+    the workspace does not hold skips. */
+function moveRowsPaint(
+  family: readonly string[],
+  projectId: string,
+  leavesParent: boolean,
+  at: string,
+): Paint {
+  return () => {
+    for (const taskId of family) {
+      const moved = rows.issues.get(taskId)
+      if (moved) paintMoved(moved, projectId, at)
+    }
+    const uuid = family[0]
+    const moved = uuid === undefined ? undefined : rows.issues.get(uuid)
+    if (leavesParent && moved && uuid !== undefined) {
+      moved.parent_id = undefined
+      rows.hiddenParentTasks.delete(uuid)
+    }
+  }
+}
+
+/** P.moveIssue on the watched task the window shows from its own answer
+    (answerTaskOf), with what it takes along from the answer's whole
+    subtask list (P.familyOf), and no move while that is unknown. Its
+    expected values are the painted answer's project and, with a detach,
+    its parent pair. It paints the answer (the task, the subtasks it
+    carries, the parent it leaves), every view copy of those tasks, and
+    the workspace's rows (moveRowsPaint), and answers the task's handle, or
+    null for a no-op or an invalid target. */
+function moveAnswerTask(a: AnswerTask, projectId: string): string | null {
+  const target = rows.projects.get(projectId)
+  const row = a.answer.task
+  if (target?.type !== 'project' || row.project_id === projectId) return null
+  const family = PLANNER.familyOf(a.model)
+  if (!family || refusePausedEdit()) return null
+  const { leavesParent, carried } = PLANNER.moveFamily(a.model, projectId, family)
+  const uuid = a.uuid
+  const moving = [uuid, ...carried.map((task) => task.uuid)]
+  const at = new Date().toISOString()
+  const view: View = {
+    detail: {
+      task: uuid,
+      paint: () => {
+        const shown = detailRows.task
+        if (!shown || shown.task.id !== uuid) return
+        paintMoved(shown.task, projectId, at)
+        for (const kid of shown.subtasks.rows)
+          if (moving.includes(kid.id)) paintMoved(kid, projectId, at)
+        if (leavesParent) {
+          shown.task.parent_id = undefined
+          shown.task.has_hidden_parent = false
+          shown.parent = null
+        }
+      },
+    },
+    view: viewPaint(moving, () => {
+      for (const taskId of moving)
+        for (const copy of viewRows.edit(taskId)) {
+          paintMoved(copy, projectId, at)
+          if (leavesParent && taskId === uuid) {
+            copy.parent_id = undefined
+            copy.has_hidden_parent = false
+          }
+        }
+    }),
+    workspace: moveRowsPaint(moving, projectId, leavesParent, at),
+  }
+  void send(
+    api.issues.move,
+    {
+      org_id: a.org,
+      id: uuid,
+      project_id: projectId,
+      ...(leavesParent ? { detach_parent: true } : {}),
+    },
+    view,
+    {
+      over: {
+        ...overOf('issues', row, leavesParent ? ['project_id', 'parent_id'] : ['project_id']),
+        hiddenParent: row.has_hidden_parent,
+      },
+      about: { task: uuid, answer: true },
+    },
+  )
+  return a.model.id
+}
+
+/** P.deleteIssue on the watched task the window shows from its own answer
+    (answerTaskOf), with the subtasks `subtasks` (handles) the Archive or
+    delete window listed as deletable, their uuids from the answer's whole
+    subtask list (P.familyOf), and no delete while that is unknown. It
+    waits for the server, as the window asks: nothing paints before it
+    accepts, and the workspace's paint then skips, since the window's
+    answer says the task is gone first. */
+function deleteAnswerTask(a: AnswerTask, subtasks: string[], reason?: string): Promise<boolean> {
+  const family = PLANNER.familyOf(a.model)
+  if (!family || refusePausedEdit()) return Promise.resolve(false)
+  const root = family.root
+  const subtaskIds = subtasks.flatMap((key) => {
+    const kid = family.byId[key]
+    return kid && kid.parent === root.id ? [kid.uuid] : []
+  })
+  const gone = new Set([a.uuid, ...subtaskIds])
+  const at = new Date().toISOString()
+  const view: View = { workspace: () => dropDeletedTasks(gone, at) }
+  const text = (reason || '').trim()
+  const epoch = storeEpoch
+  return sendAwaited(
+    api.issues.deleteDeep,
+    {
+      org_id: a.org,
+      id: a.uuid,
+      ...(subtaskIds.length ? { subtask_ids: subtaskIds } : {}),
+      ...(text ? { reason: text } : {}),
+    },
+    'none',
+    { keep: () => view, about: { task: a.uuid, answer: true } },
+  ).then(
+    () => true,
+    (error) => {
+      if (epoch === storeEpoch) toastWriteError(error, false)
+      return false
+    },
+  )
+}
+
+/** The watched task as a write from its window's own answer reads it: its
+    uuid and organization, its painted answer (paintedAnswer), whose row the
+    write sends as its expected values, and the window's view model of it
+    (P.detail). */
+type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
+
+/** The watched task, when handle or uuid `id` names it, the workspace does
+    not hold it and the window shows it from a current answer of the task
+    side (P.taskDetail state ok, neither failed nor running again), in its
+    known organization; else null, and a write on it answers false without
+    sending. The answer must be the task side's own, so a window that shows
+    the task from another read's answer, as t3/limits-direct-links adds,
+    edits nothing until the task side answered. */
+function answerTaskOf(id: string): AnswerTask | null {
+  const t = watchedComments
+  const detail = PLANNER.detail
+  if (!t || !detail || detail.task !== t || rows.issues.has(t)) return null
+  if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
+  if (id !== t && id !== detail.view.id) return null
+  const answer = paintedAnswer()
+  if (!answer || answer.task.org_id !== detail.org) return null
+  return { uuid: t, org: detail.org, answer, model: detail.view }
+}
+
+/* What a save says while the window's own answer of its task is not current
+   (P.refuseStaleEdit), which the window's hint says as WAITS_FOR_CHECK. */
+const STALE_SAVE_TEXT =
+  "Couldn't save yet. Saving is available once Qivo can check this task for changes."
+
+/* The writes from the window's own answer that change text a view's row
+   does not send, the description or the labels, by their view part and
+   the task they change (P.ownUnsentEdits), so the Board cannot tell from
+   its row whether the task still matches a text filter until its answer
+   holds the write. */
+const unsentText = new WeakMap<Paint, string>()
+
+/** P.toggleIssueLabel on the watched task the window shows from its own
+    answer (answerTaskOf): whether the label goes on, and the cap, come
+    from the painted answer's labels. It paints the answer and the
+    workspace (labelRowsPaint), and marks the views' copies of the task,
+    whose rows send no labels, as unsure under a text filter until their
+    answers hold it (unsentText). `created` is as on the held path. */
+function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boolean>) {
+  if (!rows.labels.get(labelId) || refusePausedEdit()) return
+  const uuid = a.uuid
+  const on = !a.answer.labels.some((row) => row.label_id === labelId)
+  const full = on && labelBlock(a.answer.labels)
+  if (full) {
+    toast(full)
+    return
+  }
+  // a view's row sends no labels, so its paint changes nothing there
+  const marker = viewPaint([uuid], () => undefined)
+  unsentText.set(marker, uuid)
+  const view: View = {
+    detail: {
+      task: uuid,
+      paint: () => {
+        const shown = detailRows.task
+        if (!shown || shown.task.id !== uuid) return
+        const has = shown.labels.some((row) => row.label_id === labelId)
+        if (has === on) return
+        shown.labels = on
+          ? [...shown.labels, { issue_id: uuid, label_id: labelId }]
+          : shown.labels.filter((row) => row.label_id !== labelId)
+      },
+    },
+    view: marker,
+    workspace: labelRowsPaint(uuid, labelId, on),
+  }
+  void send(
+    api.labels.toggle,
+    { org_id: a.org, issue_id: uuid, label_id: labelId, on },
+    view,
+    created
+      ? {
+          about: { task: uuid, answer: true },
+          onError: (e) =>
+            void created.then((saved) => {
+              if (saved) toastWriteError(e)
+            }),
+        }
+      : { about: { task: uuid, answer: true } },
+  )
+}
+
+/** P.setIssueSubscribed on the watched task the window shows from its
+    own answer (answerTaskOf): its follow is the answer's, which the write
+    paints with the person's profile in the task's organization, as the
+    workspace's rows once they hold the task (followRowsPaint). */
+function followAnswerTask(a: AnswerTask, on: boolean) {
+  const me = profileIn(a.org)
+  const uuid = a.uuid
+  if (!me || (a.answer.follow !== null) === on) return
+  if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
+  const at = new Date().toISOString()
+  const view: View = {
+    detail: {
+      task: uuid,
+      paint: () => {
+        const shown = detailRows.task
+        if (!shown || shown.task.id !== uuid || (shown.follow !== null) === on) return
+        shown.follow = on ? { issue_id: uuid, profile_id: me, created_at: at } : null
+      },
+    },
+    workspace: followRowsPaint(uuid, me, on, at),
+  }
+  void send(
+    on ? api.issues.subscribe : api.issues.unsubscribe,
+    { org_id: a.org, issue_id: uuid },
+    view,
+    { about: { task: uuid, answer: true } },
+  )
+}
+
+/* The parent the window's own answer names for task `it`, the watched
+   task, as a view model whose own parent that answer does not hold
+   (store/taskDetail.ts shapeShortTask), kept while the painted answer
+   holds the same row; undefined for another task or none. */
+let parentShaped: { row: ShortRow; view: IssueVM } | null = null
+function answerParent(it: { uuid: string; parent: string | null }): IssueVM | undefined {
+  const row = it.parent && it.uuid === watchedComments ? paintedAnswer()?.parent : null
+  if (!row) return undefined
+  if (parentShaped?.row !== row)
+    parentShaped = {
+      row,
+      view: shapeShortTask(row, PLANNER.handleNow(row.id, row.org_id, row.num)),
+    }
+  return parentShaped.view.id === it.parent ? parentShaped.view : undefined
+}
+
+/* What P.familyOf answered last for a task the window shows from its own
+   answer, kept while the painted answer and the model are the same. */
+let familyShaped: { answer: TaskOk; it: IssueVM; family: TaskFamily | null } | null = null
+
+/* Task `it`'s family from the watched task's own answer (P.familyOf):
+   the answer's whole list of leaf subtasks under it, with the parent the
+   workspace or the answer holds, or null while the answer lacks one. */
+function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
+  if (familyShaped?.answer === answer && familyShaped.it === it) return familyShaped.family
+  const kids = answerFamily(answer, it, PLANNER.handleNow)
+  let family: TaskFamily | null = null
+  if (kids) {
+    const children = Object.keys(kids)
+    const hidden = answer.task.has_hidden_subtasks
+    const root: IssueVM = {
+      ...it,
+      children,
+      hasHiddenSubtasks: hidden,
+      isGroup: children.length > 0 || hidden,
+    }
+    const byId: Record<string, IssueVM> = { ...kids, [root.id]: root }
+    const parent = root.parent ? (PLANNER.issueById[root.parent] ?? answerParent(root)) : undefined
+    if (parent) byId[parent.id] = parent
+    family = { root, byId, done: isIssueDone(root, byId) }
+  }
+  familyShaped = { answer, it, family }
+  return family
+}
+
+/** P.updateIssue on the watched task the window shows from its own answer
+    (answerTaskOf), which the workspace does not hold. It takes every field
+    the window offers and Remove parent, a `parent` of null; any other
+    parent answers false (t3/limits-relation-pickers widens it). The held
+    path's rules hold, read from the answer: the text caps, a new holder's
+    sight of the tasks above (P.unseenAbove reads the answer's parent; a
+    hidden parent and the parent's own parent are left to the server), a
+    group's dates and own hours dropped and its status left out of the
+    paint, where the answer's view model counts a subtask list that is not
+    whole as a group, and each field equal to what the person saw left
+    unsent. A group's status, Pause or new reviewer still goes, and the
+    server refuses it, as on the held path. Its expected values are the
+    painted answer's row with `opts.seen` over it, and its hidden parent
+    pair. It paints the answer (`detail`), every view copy (`view`) and the
+    workspace's row (`workspace`, which skips until the workspace holds the
+    task), and sends to the answer's organization, marked as a write from
+    the answer (WriteAbout). It joins no Roadmap history: the Roadmap opens
+    only once every task is held. */
+function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
+  if ('parent' in patch && patch.parent !== null) return Promise.resolve(false)
+  if (refusePausedEdit()) return Promise.resolve(false)
+  // text the server would refuse is refused before the paint, as on the
+  // held path
+  if ('title' in patch && refuseOver(LIMITS.title, cleanTitle(patch.title)))
+    return Promise.resolve(false)
+  if ('description' in patch && refuseText(LIMITS.description, patch.description ?? ''))
+    return Promise.resolve(false)
+  const it = a.model
+  for (const holder of [patch.assignee, patch.reviewer]) {
+    const unseen = holder ? PLANNER.unseenAbove(it, holder) : null
+    const project = unseen && PLANNER.project(unseen.project)
+    if (holder && project) {
+      const who = PLANNER.user(holder)?.name || 'This person'
+      toast(
+        `${who} has no access to ${PLANNER.projectLabel(project)}, where a task above ${it.key} is. Give them access or choose someone else.`,
+        'error',
+      )
+      return Promise.resolve(false)
+    }
+  }
+  // a group's dates come from its subtasks and it has no hours of its own;
+  // a list that is not whole counts as a group (store/taskDetail.ts)
+  const group = PLANNER.isGroup(it)
+  let asked = patch
+  if (group && ('start' in asked || 'end' in asked || 'remaining' in asked)) {
+    asked = { ...asked }
+    delete asked.start
+    delete asked.end
+    delete asked.remaining
+    if (!Object.keys(asked).length) return Promise.resolve(true)
+  }
+  const row = a.answer.task
+  const uuid = a.uuid
+  const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
+  const wire = mapIssuePatch(asked)
+  // as on the held path, a field sent with the value the person saw stays
+  // unsent; a detach from a parent the person cannot see is a change
+  for (const key of Object.keys(wire) as (keyof typeof wire)[]) {
+    const value = wire[key]
+    const shown = seenRow[key]
+    const same =
+      key === 'title'
+        ? String(value ?? '').trim() === String(shown ?? '').trim()
+        : key === 'description'
+          ? (value || null) === (shown || null)
+          : (key !== 'parent_id' || !row.has_hidden_parent) && (value ?? null) === (shown ?? null)
+    if (same) delete wire[key]
+  }
+  if (!Object.keys(wire).length) return Promise.resolve(true)
+  const paintDb = { ...wire }
+  if (group) delete paintDb.status
+  // a view's row sends no text
+  const viewDb = { ...paintDb }
+  delete viewDb.description
+  const detach = 'parent_id' in paintDb
+  const prevDesc = String(row.description || '')
+  const at = new Date().toISOString()
+  const viewPart = viewPaint([uuid], () => {
+    for (const copy of viewRows.edit(uuid)) {
+      stampTaskPatch(copy, viewDb, at)
+      if (detach) copy.has_hidden_parent = false
+    }
+  })
+  if ('description' in paintDb) unsentText.set(viewPart, uuid)
+  const view: View = {
+    detail: {
+      task: uuid,
+      paint: () => {
+        const shown = detailRows.task
+        if (!shown || shown.task.id !== uuid) return
+        stampTaskPatch(shown.task, paintDb, at)
+        // the parent goes, a hidden one too
+        if (detach) {
+          shown.task.has_hidden_parent = false
+          shown.parent = null
+        }
+      },
+    },
+    view: viewPart,
+    // skips until the workspace holds the task, then paints it as the held
+    // path does
+    workspace: () => {
+      if (!rows.issues.has(uuid)) return
+      patchIssueRow(uuid, paintDb, at)
+      if (detach) rows.hiddenParentTasks.delete(uuid)
+      if ('description' in paintDb)
+        paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
+    },
+  }
+  return send(api.issues.update, { org_id: a.org, id: uuid, patch: wire }, view, {
+    over: {
+      ...overOf('issues', row, Object.keys(wire), opts.seen),
+      hiddenParent: row.has_hidden_parent,
+    },
+    keepDraft: opts.keepDraft,
+    keepUnsaved: opts.keepUnsaved,
+    about: { task: uuid, answer: true },
   })
 }
 
@@ -6084,7 +6847,8 @@ function overOf(
 
 /** The value on screen of `over`'s first field, for a kept draft
     (SendOptions.keepDraft): a task's, a comment's, or a settings field's
-    organization, team, project or person. */
+    organization, team, project or person. A task the workspace does not
+    hold shows from the window's painted answer, else a view's row. */
 function shownOf(over: Over | undefined): unknown {
   const field = over && Object.keys(over.fields)[0]
   if (!over || !field) return undefined
@@ -6096,7 +6860,11 @@ function shownOf(over: Over | undefined): unknown {
     projects: rows.projects,
     profiles: rows.profiles,
   }
-  const row = table[over.table]?.get(over.id)
+  const unheld = () => {
+    const answer = paintedAnswer()
+    return answer?.task.id === over.id ? answer.task : viewRows.peek(over.id)
+  }
+  const row = table[over.table]?.get(over.id) ?? (over.table === 'issues' ? unheld() : undefined)
   return row ? Object.entries(row).find(([key]) => key === field)?.[1] : undefined
 }
 
@@ -6110,8 +6878,9 @@ const PRINTED: Record<string, Record<string, (value: unknown) => unknown>> = {
 
 /** A write's `expected` from `over` (convex/model/expected.ts): null for
     unset, a long text as its print, and a task's parent as the pair a read
-    shows, with has_hidden_parent. Read before the write's paint, which may
-    take the hidden parent away. */
+    shows, with has_hidden_parent: the one `over` carries from the row it
+    was made from, such as the window's own answer, else the workspace's.
+    Read before the write's paint, which may take the hidden parent away. */
 function expectedOf(over: Over): Record<string, unknown> {
   const printed = PRINTED[over.table] ?? {}
   const out: Record<string, unknown> = {}
@@ -6120,7 +6889,8 @@ function expectedOf(over: Over): Record<string, unknown> {
     out[field] = form ? printOf(form(value)) : (value ?? null)
   }
   if (over.table === 'issues' && 'parent_id' in over.fields)
-    out.has_hidden_parent = over.fields.parent_id == null && rows.hiddenParentTasks.has(over.id)
+    out.has_hidden_parent =
+      over.fields.parent_id == null && (over.hiddenParent ?? rows.hiddenParentTasks.has(over.id))
   return out
 }
 
@@ -6797,10 +7567,12 @@ export const PLANNER = {
     uid: string,
     sees = (projectId: string) => PLANNER.canSee(projectId, uid),
   ): IssueVM | null => {
-    // the parents an open view's answer brings count as the workspace's do
-    const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
+    // the parents an open view's answer brings count as the workspace's do,
+    // and so does the parent the window's own answer names, whose own
+    // parent that answer does not hold
+    const it = typeof x === 'string' ? (PLANNER.anyTask(x) ?? PLANNER.taskShown(x)) : x
     const seen = new Set<string>()
-    for (let up = it?.parent ? PLANNER.anyTask(it.parent) : null; up; ) {
+    for (let up = it?.parent ? (PLANNER.anyTask(it.parent) ?? answerParent(it)) : null; up; ) {
       if (seen.has(up.id)) break
       seen.add(up.id)
       if (!sees(up.project)) return up
@@ -6817,7 +7589,7 @@ export const PLANNER = {
      each assignee, and each reviewer of a task without subtasks (a group's
      reviewer is dormant). A switched-off person holds no new work, as on the
      server. */
-  holdersOf: (it: IssueVM, self: boolean): Holder[] => {
+  holdersOf: (it: IssueVM, self: boolean, family?: TaskFamily): Holder[] => {
     const out: Holder[] = []
     const add = (task: IssueVM) => {
       for (const role of ['assignee', 'reviewer'] as const) {
@@ -6826,8 +7598,9 @@ export const PLANNER = {
         if (PLANNER.user(uid)?.active) out.push({ uid, task, role })
       }
     }
-    if (self) add(it)
-    eachDescendant(it, add)
+    const root = family?.root ?? it
+    if (self) add(root)
+    eachDescendant(root, add, family?.byId)
     return out
   },
   /* Who would lose sight of a task above their own if `it` got `parentKey`
@@ -6856,25 +7629,34 @@ export const PLANNER = {
      along. `carried` lists the visible ones, and `carriesSubtasks` also
      counts active ones hidden from this view. Archived subtasks are not in
      the view, so the Move window asks the server too
-     (moveCarriesSubtasks). */
+     (moveCarriesSubtasks). With `family` (P.familyOf) the task, its
+     parent and its subtasks are the family's, as for a task the window
+     shows from its own answer. */
   moveFamily: (
     it: IssueVM,
     projectId: string,
+    family?: TaskFamily,
   ): { leavesParent: boolean; carriesSubtasks: boolean; carried: IssueVM[] } => {
+    const root = family?.root ?? it
+    const byId = family?.byId ?? PLANNER.issueById
     const dst = PLANNER.topLevelOf(projectId)
-    const crosses = PLANNER.topLevelOf(it.project) !== dst
-    const parent = it.parent ? PLANNER.issueById[it.parent] : undefined
-    const parentTop = PLANNER.topLevelOf(parent ? parent.project : it.project)
-    const leavesParent = crosses && (!!it.parent || it.hasHiddenParent) && parentTop !== dst
+    const crosses = PLANNER.topLevelOf(root.project) !== dst
+    const parent = root.parent ? byId[root.parent] : undefined
+    const parentTop = PLANNER.topLevelOf(parent ? parent.project : root.project)
+    const leavesParent = crosses && (!!root.parent || root.hasHiddenParent) && parentTop !== dst
     const carried: IssueVM[] = []
     if (crosses) {
-      eachDescendant(it, (child) => {
-        if (PLANNER.topLevelOf(child.project) !== dst) carried.push(child)
-      })
+      eachDescendant(
+        root,
+        (child) => {
+          if (PLANNER.topLevelOf(child.project) !== dst) carried.push(child)
+        },
+        byId,
+      )
     }
     return {
       leavesParent,
-      carriesSubtasks: crosses && (carried.length > 0 || it.hasHiddenSubtasks),
+      carriesSubtasks: crosses && (carried.length > 0 || root.hasHiddenSubtasks),
       carried,
     }
   },
@@ -6882,13 +7664,14 @@ export const PLANNER = {
      leaf reviewer of the task and of each subtask it carries need edit
      access there, and the people on its other subtasks need sight of it, the
      same checks the server makes. */
-  moveBlockers: (it: IssueVM, projectId: string): AccessBlocker[] => {
+  moveBlockers: (it: IssueVM, projectId: string, family?: TaskFamily): AccessBlocker[] => {
     const project = PLANNER.project(projectId)
     if (!project) return []
     // the tasks that move must be held there by their assignee and leaf
     // reviewer, switched off or not; people on the subtasks that stay only
     // need to see the task
-    const movers = [it, ...PLANNER.moveFamily(it, projectId).carried]
+    const root = family?.root ?? it
+    const movers = [root, ...PLANNER.moveFamily(root, projectId, family).carried]
     const moving = new Set(movers.map((task) => task.id))
     const own: Holder[] = []
     for (const task of movers) {
@@ -6900,7 +7683,7 @@ export const PLANNER = {
       ...own
         .map((h) => ({ ...h, project, edit: true }))
         .filter((b) => !PLANNER.canWrite(projectId, b.uid)),
-      ...PLANNER.holdersOf(it, false)
+      ...PLANNER.holdersOf(root, false, family)
         .filter((h) => !moving.has(h.task.id))
         .map((h) => ({ ...h, project, edit: false }))
         .filter((b) => !PLANNER.canSee(projectId, b.uid)),
@@ -7540,6 +8323,77 @@ export const PLANNER = {
       outlasts a moment, such as an image upload, follows a task by uuid,
       because a new task's handle can move to another task meanwhile. */
   handleOf: (uuid: string): string | null => uuidToKey.get(uuid) ?? null,
+  /** The handle task `uuid` shows by now: the workspace's, else the
+      window's while it shows the task from its own answer, or null. The
+      description editor follows its uploads by it (P.handleOf answers
+      only the workspace's, which the views read as whether it holds the
+      task). */
+  shownHandleOf: (uuid: string): string | null => {
+    const held = uuidToKey.get(uuid)
+    if (held !== undefined) return held
+    const detail = PLANNER.detail
+    return detail?.task === uuid && detail.answered === 'ok' ? (detail.view?.id ?? null) : null
+  },
+  /** The task handle or uuid `id` names as the window shows it: the
+      workspace's view, else the window's view from its own answer while
+      the workspace does not hold the task (P.taskDetail), or undefined. */
+  taskShown: (id: string): IssueVM | undefined => {
+    const held = PLANNER.issueById[id]
+    if (held) return held
+    const detail = PLANNER.detail
+    const view = detail?.answered === 'ok' ? detail.view : null
+    return view && (view.id === id || view.uuid === id) && !rows.issues.has(view.uuid)
+      ? view
+      : undefined
+  },
+  /** Whether the window can save a change to task `id` from its own answer
+      now (answerTaskOf): the workspace does not hold it, and the window
+      shows it from a current answer of its own read. */
+  editsFromAnswer: (id: string): boolean => answerTaskOf(id) !== null,
+  /** Whether a save to task `id` waits because the window shows the task
+      from its own answer, which is not current now: its read failed or
+      runs again (P.editsFromAnswer is false), so Qivo cannot tell whether
+      someone changed the task meanwhile. */
+  answerSaveWaits: (id: string): boolean => {
+    const shown = PLANNER.taskShown(id)
+    return !!shown && !rows.issues.has(shown.uuid) && answerTaskOf(id) === null
+  },
+  /** Refuses a save to task `id` while it waits (P.answerSaveWaits), with
+      a toast that says why, so the editor keeps its draft, as
+      refusePausedEdit does. Answers whether it refused. */
+  refuseStaleEdit: (id: string): boolean => {
+    if (!PLANNER.answerSaveWaits(id)) return false
+    toast(STALE_SAVE_TEXT, 'error')
+    return true
+  },
+  /** What Move and Archive or delete take along with task `it` (TaskFamily):
+      the workspace's subtasks once every task has loaded, else the whole
+      list of leaf subtasks the watched task's own answer holds, neither
+      failed nor running again, for a task the window shows from it or one
+      the workspace holds while tasks still load. Null while neither knows
+      them, a list that is not whole or holds a subtask stored before the
+      rule of one level, so both windows say they cannot read every
+      subtask, or wait for every task. */
+  familyOf: (it: IssueVM): TaskFamily | null => {
+    const held = rows.issues.has(it.uuid)
+    if (held && stillLoading === null)
+      return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
+    const answer =
+      watchedComments === it.uuid && sectionFailure.task === 'none' ? paintedAnswer() : null
+    return answer ? answerFamilyOf(it, answer) : null
+  },
+  /** The tasks, by uuid, whose text a view's row does not send, their
+      description or their labels, that a live write from the window's own
+      answer changes, until the views' answers hold it (unsentText). The
+      Board counts such a card unsure under a text filter. */
+  ownUnsentEdits: (): ReadonlySet<string> => {
+    const out = new Set<string>()
+    for (const layer of layers.ordered()) {
+      const uuid = layer.view.view && unsentText.get(layer.view.view)
+      if (uuid) out.add(uuid)
+    }
+    return out
+  },
   /** The tasks, by uuid, that a live layer of the person's own writes
       changed from the server's applied rows: created, removed, edited or
       given other labels, and the parents such a task left or joined.
@@ -7957,21 +8811,20 @@ export const PLANNER = {
      the person began, by wire field, in place of the row on screen, and
      `opts.keepDraft` runs when the server refuses because someone changed
      the field first and the editor keeps the draft, and `opts.keepUnsaved`
-     when the save fails for any other reason (SendOptions.keepUnsaved). */
-  updateIssue: (
-    id: string,
-    patch: IssuePatch,
-    opts: {
-      seen?: Partial<Row<'issues'>>
-      keepDraft?: (shown: unknown) => boolean
-      keepUnsaved?: () => void
-    } = {},
-  ): Promise<boolean> => {
+     when the save fails for any other reason (SendOptions.keepUnsaved). A
+     task the workspace does not hold saves from the window's own answer
+     while the window shows it from a current one (updateAnswerTask), else
+     from a view's row (updateViewTask). */
+  updateIssue: (id: string, patch: IssuePatch, opts: UpdateOptions = {}): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
     if (!patch || !Object.keys(patch).length) return Promise.resolve(false)
-    // a task only an open view's answer brings (store/viewRows.ts)
-    if (!row || !uuid) return updateViewTask(id, patch)
+    if (!row || !uuid) {
+      // the task the window shows from its own current answer, else one
+      // only an open view's answer brings (store/viewRows.ts)
+      const shown = answerTaskOf(id)
+      return shown ? updateAnswerTask(shown, patch, opts) : updateViewTask(id, patch)
+    }
     if (refusePausedEdit()) return Promise.resolve(false)
     // text the server would refuse is refused before the paint, so a draft
     // is never lost to a refusal
@@ -8113,9 +8966,12 @@ export const PLANNER = {
   /** Whether the server would carry subtasks along if the task `id` moved
       to `projectId` (api.issues.moveCarriesSubtasks), archived ones
       included. The snapshot holds no archived tasks, so moveFamily cannot
-      tell. Null on transport error or for a task outside this view. */
-  moveCarriesSubtasks: async (id: string, projectId: string): Promise<boolean | null> => {
-    const it = PLANNER.issueById[id]
+      tell. It takes the task's organization and uuid from its model, the
+      workspace's or the window's from its own answer; a handle names a
+      task the workspace holds. Null on transport error or for a task
+      outside this view. */
+  moveCarriesSubtasks: async (id: IssueVM | string, projectId: string): Promise<boolean | null> => {
+    const it = typeof id === 'string' ? PLANNER.issueById[id] : id
     if (!it) return null
     try {
       return await convex.query(api.issues.moveCarriesSubtasks, {
@@ -8268,6 +9124,11 @@ export const PLANNER = {
   moveIssue: (id: string, projectId: string) => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
+    if (!row || !uuid) {
+      // the task the window shows from its own answer
+      const shown = answerTaskOf(id)
+      return shown ? moveAnswerTask(shown, projectId) : null
+    }
     const target = rows.projects.get(projectId)
     const it = PLANNER.issueById[id]
     if (
@@ -8283,27 +9144,7 @@ export const PLANNER = {
     const { leavesParent, carried } = PLANNER.moveFamily(it, projectId)
     const at = new Date().toISOString() // the server's move fires the touch
     const family = [uuid, ...carried.map((task) => task.uuid)]
-    const view: View = {
-      workspace: () => {
-        for (const taskId of family) {
-          const moved = rows.issues.get(taskId)
-          if (!moved || moved.project_id === projectId) continue
-          moved.project_id = projectId
-          moved.updated_at = at
-          // the server's move clears the status stamp and restarts a review
-          // hand-off or Done time at the move, keeping the remaining-hours
-          // measurement (model/issues.ts movedStamps)
-          moved.status_at = undefined
-          if (moved.review_at != null) moved.review_at = at
-          if (moved.done_at != null) moved.done_at = at
-        }
-        const moved = rows.issues.get(uuid)
-        if (leavesParent && moved) {
-          moved.parent_id = undefined
-          rows.hiddenParentTasks.delete(uuid)
-        }
-      },
-    }
+    const view: View = { workspace: moveRowsPaint(family, projectId, leavesParent, at) }
     void send(
       api.issues.move,
       {
@@ -8323,16 +9164,21 @@ export const PLANNER = {
      with whether I can delete it (Edit access to its project). A subtask I
      cannot delete stays, keeping its own subtasks, so those are not listed.
      `hidden` is true when the task, or a subtask that would be deleted, has
-     subtasks in projects I cannot see; how many is not known here. */
-  deletePlan: (id: string): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
-    const root = PLANNER.issueById[id]
+     subtasks in projects I cannot see; how many is not known here. With
+     `family` (P.familyOf) the task and its subtasks are the family's. */
+  deletePlan: (
+    id: string,
+    family?: TaskFamily,
+  ): { rows: DeleteRow[]; deletable: IssueVM[]; hidden: boolean } => {
+    const byId = family?.byId ?? PLANNER.issueById
+    const root = family?.root ?? PLANNER.issueById[id]
     const rows: DeleteRow[] = []
     if (!root) return { rows, deletable: [], hidden: false }
     let hidden = root.hasHiddenSubtasks
     const seen = new Set([root.id])
     const walk = (it: IssueVM, depth: number) => {
       for (const key of it.children) {
-        const child = PLANNER.issueById[key]
+        const child = byId[key]
         if (!child || seen.has(key)) continue
         seen.add(key)
         const deletable = PLANNER.canWrite(child.project)
@@ -8363,7 +9209,12 @@ export const PLANNER = {
   ): Promise<boolean> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
+    if (!row || !uuid) {
+      // the task the window shows from its own answer, which always waits
+      const shown = answerTaskOf(id)
+      return shown ? deleteAnswerTask(shown, subtasks, reason) : Promise.resolve(false)
+    }
+    if (refusePausedEdit()) return Promise.resolve(false)
     const subtaskIds = subtasks.flatMap((key) => keyToUuid.get(key) || [])
     const gone = new Set([uuid, ...subtaskIds])
     // the paint of the delete; the server moves the rows to Deleted items
@@ -8413,37 +9264,16 @@ export const PLANNER = {
   ): Promise<boolean | 'already'> => {
     const uuid = keyToUuid.get(id)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!row || !uuid || refusePausedEdit()) return Promise.resolve(false)
-    const text = (reason || '').trim()
-    const epoch = storeEpoch
-    const at = new Date().toISOString()
-    return sendAwaited(
-      api.issues.archive,
-      {
-        org_id: row.org_id,
-        id: uuid,
-        ...(text ? { reason: text } : {}),
-        ...(keepSubtasks ? { keep_subtasks: true } : {}),
-      },
-      'none',
-      // The delivery that drops the task usually lands first, and then
-      // nothing paints. When it has not, an archive this call made paints
-      // until one does. An 'already' answer changed nothing, and the earlier
-      // archive may have kept or taken the subtasks, so nothing paints and
-      // the board shows the task until a delivery holds that archive.
-      {
-        keep: (out) =>
-          out?.archived === false ? null : { workspace: archivePaint(uuid, keepSubtasks, at) },
-      },
-    ).then(
-      // an answer without `archived`, as one from before it, archived the task
-      (out) => (out?.archived === false ? 'already' : true),
-      (error) => {
-        // it painted nothing, so a refusal has nothing to revert
-        if (epoch === storeEpoch) toastWriteError(error, false)
-        return false
-      },
-    )
+    if (!row || !uuid) {
+      // the task the window shows from its own answer
+      const shown = answerTaskOf(id)
+      if (!shown || !PLANNER.familyOf(shown.model)) return Promise.resolve(false)
+      return sendArchive(shown.org, shown.uuid, reason, keepSubtasks, {
+        task: shown.uuid,
+        answer: true,
+      })
+    }
+    return sendArchive(row.org_id, uuid, reason, keepSubtasks)
   },
 
   /** Restore from Archived tasks. Awaited, never optimistic, because the
@@ -8687,9 +9517,14 @@ export const PLANNER = {
     return DEMO_MODE ? Math.min(limit, DEMO_FILE_BYTES) : limit
   },
 
-  /** Takes a derived key or the issue uuid, like addAttachment. */
+  /** Takes a derived key or the issue uuid, like addAttachment: the size
+      limit of its project, also for the task the window shows from its own
+      answer (P.taskShown). */
   attachmentLimit: (issueKey: string) => {
-    const it = PLANNER.issueById[issueKey] || PLANNER.issues.find((i) => i.uuid === issueKey)
+    const it =
+      PLANNER.issueById[issueKey] ??
+      PLANNER.issueById[uuidToKey.get(issueKey) ?? ''] ??
+      PLANNER.taskShown(issueKey)
     return PLANNER.projectAttachmentLimit(it?.project ?? '')
   },
 
@@ -8704,15 +9539,16 @@ export const PLANNER = {
       delivery holds it. bc022c2's pendingIssueInserts gate is
       dead too — mutations from one ConvexClient are ordered on one socket, so
       by the time uploadUrl's handler runs, a just-dispatched issues.create
-      has already been accepted or refused server-side. */
+      has already been accepted or refused server-side. A task the window
+      shows from its own answer takes files the same way, with its
+      organization, project and cap from that answer (answerUploadTarget). */
   addAttachment: withUpdateBlock(
     async (issueKey: string, input: File, opts?: { inline?: boolean }): Promise<string | null> => {
       // issueKey may be a derived key ("QN-482") or the issue uuid — the
       // New-issue modal and the drawer attach by uuid, which survives the rare
       // INSERT renumbering that reassigns the derived key mid-flight
-      const uuid = keyToUuid.get(issueKey) || (rows.issues.has(issueKey) ? issueKey : undefined)
-      let row = uuid ? rows.issues.get(uuid) : undefined
-      if (!row || !uuid || refusePausedEdit()) return null
+      const targetNow = () => heldUploadTarget(issueKey) ?? answerUploadTarget(issueKey)
+      if (!targetNow() || refusePausedEdit()) return null
       // Shrink BEFORE the cap is applied: a 12 MB screenshot that re-encodes to
       // 600 KB should attach, not bounce. This is the choke point every caller
       // reaches, so the guard lives here rather than in each of the three
@@ -8721,35 +9557,30 @@ export const PLANNER = {
       // Re-encoding is real wall-clock work — re-check the issue after it: the
       // row can be deleted from another tab while we encode.
       const file = await compressImage(input)
-      row = rows.issues.get(uuid)
-      if (!row) return null
+      const target = targetNow()
+      if (!target) return null
+      const { uuid, org } = target
       // the per-task cap, before any bytes are sent (the server checks too);
       // an image a description save took out no longer counts
-      const held = PLANNER.issueById[uuidToKey.get(uuid) ?? '']
-      const full = attachmentBlock(
-        Math.max(
-          [...rows.attachments.values()].filter(
-            (a) => a.issue_id === uuid && a.dropped_at === undefined,
-          ).length,
-          held ? capInputs(held).attachments : 0,
-        ),
-      )
+      const full = attachmentBlock(target.count)
       if (full) {
         toast(`Couldn't upload "${file.name}". ${full}`)
         return null
       }
-      const limit = PLANNER.attachmentLimit(issueKey)
+      const limit = PLANNER.projectAttachmentLimit(target.project)
       if (file.size > limit) {
         toast(attachmentTooLarge(file.name, limit))
         return null
       }
       const attId = crypto.randomUUID()
       const inline = !!opts?.inline
+      const about: WriteAbout = { task: uuid, ...(target.answer ? { answer: true } : {}) }
       try {
         const url = await sendAwaited(
           api.files.uploadUrl,
-          { org_id: row.org_id, issue_id: uuid },
+          { org_id: org, issue_id: uuid },
           'none',
+          { about },
         )
         // the POST's Content-Type is what lands in storage metadata and what
         // the gateway serves back — an empty type would break inline rendering
@@ -8763,7 +9594,7 @@ export const PLANNER = {
         const out = await sendAwaited(
           api.files.attach,
           {
-            org_id: row.org_id,
+            org_id: org,
             id: attId,
             issue_id: uuid,
             storage_id: storageId as Id<'_storage'>,
@@ -8773,6 +9604,10 @@ export const PLANNER = {
           },
           'none',
           {
+            about,
+            // a file of a task the workspace does not hold shows with the
+            // attachments answer, which Convex delivers before the write
+            // resolves (lib/convexOrdering.test.ts); this paint skips then
             keep: (answer) =>
               'refused' in answer
                 ? null
@@ -8805,19 +9640,25 @@ export const PLANNER = {
       like every other send() mutator; any project member may remove any
       attachment on an issue they can write. With `deferWhilePaused`, for an
       upload only a discarded draft held, a paused delete says nothing and
-      runs once edits resume (reapPausedUploads). */
-  removeAttachment: (attId: string, opts: { deferWhilePaused?: boolean } = {}) => {
+      runs once edits resume (reapPausedUploads). A file the workspace does
+      not hold is removed without a paint (removeUnheldAttachment), and
+      `task` names the task of an upload no list holds. Resolves whether the
+      server removed it. */
+  removeAttachment: (
+    attId: string,
+    opts: { deferWhilePaused?: boolean; task?: string } = {},
+  ): Promise<boolean> => {
     const rec = rows.attachments.get(attId)
-    if (!rec) return
+    if (!rec) return removeUnheldAttachment(attId, opts)
     if (opts.deferWhilePaused && (snapshotTrouble || savePause())) {
-      reapAfterPause.add(attId)
-      return
+      reapAfterPause.set(attId, rec.issue_id)
+      return Promise.resolve(false)
     }
-    if (refusePausedEdit()) return
+    if (refusePausedEdit()) return Promise.resolve(false)
     const issueRow = rows.issues.get(rec.issue_id)
     // no visible issue = the server cascade already owns (or took) the row
-    if (!issueRow) return
-    void send(
+    if (!issueRow) return Promise.resolve(false)
+    return send(
       api.files.removeAttachment,
       { org_id: issueRow.org_id, id: attId },
       {
@@ -8885,7 +9726,10 @@ export const PLANNER = {
     threadStart = false
     earlierLoad = 'idle'
     threadCurrent = false
+    detailFresh = false
     layers.dropSaved('thread', issueUuid ?? undefined, true)
+    // a write's paint of another task's own answer can never show again
+    layers.dropSaved('detail', issueUuid ?? undefined, true)
     PLANNER.commentsLoaded = false
     PLANNER.commentsFailure = 'none'
     // threadComments is org-scoped: the organization comes from the task's
@@ -11065,7 +11909,13 @@ export const PLANNER = {
   toggleIssueLabel: (issueId: string, labelId: string, created?: Promise<boolean>) => {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
-    if (!uuid || !issue || !rows.labels.get(labelId) || refusePausedEdit()) return
+    if (!uuid || !issue) {
+      // the task the window shows from its own answer
+      const shown = answerTaskOf(issueId)
+      if (shown) toggleAnswerLabel(shown, labelId, created)
+      return
+    }
+    if (!rows.labels.get(labelId) || refusePausedEdit()) return
     // the state asked for travels with the write (`on`), so the paint and
     // the server set it, and a repeat changes nothing
     const on = !rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)
@@ -11074,21 +11924,7 @@ export const PLANNER = {
       toast(full)
       return
     }
-    const view: View = {
-      workspace: () => {
-        if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return
-        const has = workspaceRows
-          .peekList('issueLabels')
-          .some((il) => il.issue_id === uuid && il.label_id === labelId)
-        if (has === on) return
-        if (on) rows.issueLabels.push({ issue_id: uuid, label_id: labelId })
-        else
-          workspaceRows.keepList(
-            'issueLabels',
-            (il) => !(il.issue_id === uuid && il.label_id === labelId),
-          )
-      },
-    }
+    const view: View = { workspace: labelRowsPaint(uuid, labelId, on) }
     void send(
       api.labels.toggle,
       { org_id: issue.org_id, issue_id: uuid, label_id: labelId, on },
@@ -11103,13 +11939,16 @@ export const PLANNER = {
   },
 
   /* Each open subscriber popover owns its reactive roster; the shared
-     snapshot continues to own the current user's eye indicator. */
+     snapshot continues to own the current user's eye indicator. The
+     popover passes the task's model, the workspace's or the window's from
+     its own answer, whose organization and uuid the roster takes; a handle
+     names a task the workspace holds. */
   watchIssueSubscribers: (
-    issueId: string,
+    issueId: IssueVM | string,
     onChange: (value: IssueSubscribers) => void,
     onError: () => void,
   ): (() => void) => {
-    const issue = PLANNER.issueById[issueId]
+    const issue = typeof issueId === 'string' ? PLANNER.issueById[issueId] : issueId
     if (!issue) {
       onError()
       return () => undefined
@@ -11122,14 +11961,17 @@ export const PLANNER = {
     )
   },
 
+  /* Adds or removes another person's follow, for a lead or an admin, on
+     the task the popover shows (watchIssueSubscribers), by its
+     organization and uuid. */
   setIssueSubscriber: (
-    issueId: string,
+    issueId: IssueVM | string,
     profileId: string,
     subscribed: boolean,
     onSettled: () => void,
     onSuccess?: () => void,
   ) => {
-    const issue = PLANNER.issueById[issueId]
+    const issue = typeof issueId === 'string' ? PLANNER.issueById[issueId] : issueId
     if (!issue) {
       onSettled()
       return
@@ -11138,7 +11980,11 @@ export const PLANNER = {
       api.issues.setSubscriber,
       { org_id: issue.org, issue_id: issue.uuid, profile_id: profileId, subscribed },
       'none',
-      { onOk: () => onSuccess?.(), onSettled },
+      {
+        onOk: () => onSuccess?.(),
+        onSettled,
+        about: { task: issue.uuid, ...(rows.issues.has(issue.uuid) ? {} : { answer: true }) },
+      },
     )
   },
 
@@ -11147,24 +11993,24 @@ export const PLANNER = {
   setIssueSubscribed: (issueId: string, on: boolean) => {
     const uuid = keyToUuid.get(issueId)
     const row = uuid ? rows.issues.get(uuid) : null
-    if (!uuid || !row) return
+    if (!uuid || !row) {
+      // the task the window shows from its own answer, which anyone it
+      // shows the task to follows as from a held task
+      const shown = answerTaskOf(issueId)
+      if (shown) followAnswerTask(shown, on)
+      return
+    }
     // `me` is resolved per ORG: one human is several profiles (0081), and
     // following a task in a guest org must write that seat's id
     const me = profileIn(row.org_id)
     if (!me) return
-    const has = () =>
-      workspaceRows.peekList('issueSubs').some((s) => s.issue_id === uuid && s.profile_id === me)
-    if (has() === on) return // already in the asked-for state
+    const has = workspaceRows
+      .peekList('issueSubs')
+      .some((s) => s.issue_id === uuid && s.profile_id === me)
+    if (has === on) return // already in the asked-for state
     if (refusePausedWrite(on ? api.issues.subscribe : api.issues.unsubscribe)) return
     const at = new Date().toISOString()
-    const view: View = {
-      workspace: () => {
-        if (has() === on || !rows.issues.has(uuid)) return
-        if (on) rows.issueSubs.push({ issue_id: uuid, profile_id: me, created_at: at })
-        else
-          workspaceRows.keepList('issueSubs', (s) => !(s.issue_id === uuid && s.profile_id === me))
-      },
-    }
+    const view: View = { workspace: followRowsPaint(uuid, me, on, at) }
     void send(
       on ? api.issues.subscribe : api.issues.unsubscribe,
       { org_id: row.org_id, issue_id: uuid },
@@ -11384,6 +12230,9 @@ function startParts(
     live,
     (news) => {
       if (!stillCurrent() || bootFailed) return
+      // a reconnect shows here first, also while no view read hears
+      // transitions, so a side's answer from before it is not current
+      latestConnection = Math.max(latestConnection, news.connection)
       const ws = news.workspace
       if (!settled) {
         for (const name of SIDE_NAMES) {
@@ -11531,6 +12380,7 @@ function stopParts() {
   historyWatched = null
   for (const side of SECTION_SIDES) sectionsWatched[side] = null
   threadCurrent = false
+  detailFresh = false
   bootSideNews.clear()
 }
 
@@ -11595,7 +12445,11 @@ export function disposeDemoStore() {
   snapshotDeliveries = 0
   threadDeliveries = 0
   viewDeliveries = 0
+  detailDeliveries = 0
   threadCurrent = false
+  detailFresh = false
+  detailConnection = 0
+  detailRows = { from: null, task: null }
   preferences.dispose(myProfileSet)
   clearAvatarSources()
   minted.clear()

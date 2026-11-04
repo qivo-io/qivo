@@ -1,13 +1,16 @@
 /* The task window's view of a task the workspace does not hold
    (store/planner.ts P.taskDetail), shaped from the window's own read of the
-   task (convex/taskWindow.ts task, the 'task' side of the live parts) into
-   the view model the workspace gives its tasks (store/viewModels.ts
-   shapeIssue), so the window draws it with the same code, read-only but
-   for its comments. Its context comes from that answer, not from the task
-   index: the handles of the task, its parent and its subtasks by the
-   store's rule (P.handleNow), its labels in the task index's order, the
-   caller's follow, and its links and files while the window's sections
-   read them for the same task.
+   task (convex/taskWindow.ts task, the 'task' side of the live parts),
+   with the person's own writes on it painted (planner.ts paintedAnswer),
+   into the view model the workspace gives its tasks (store/viewModels.ts
+   shapeIssue), so the window draws and edits it with the same code. Its
+   context comes from that answer, not from the task index: the handles of
+   the task, its parent and its subtasks by the store's rule (P.handleNow),
+   its labels in the task index's order, the caller's follow, and its links
+   and files while the window's sections read them for the same task. The
+   answer's parent and subtasks shape the same way (shapeShortTask), for
+   the store's checks before a write, such as a new holder's sight of the
+   parent and what a move takes along (answerFamily).
 
    A group's dates and Done state follow the workspace's rules
    (lib/issueGroups.ts groupSpan and isIssueDone) over the answer's subtask
@@ -31,6 +34,8 @@ import { type AttachmentVM, type IssueVM, shapeAttachment, shapeIssue } from './
 
 type TaskAnswer = FunctionReturnType<typeof api.taskWindow.task>
 type TaskOk = Extract<TaskAnswer, { state: 'ok' }>
+/* A task in the answer's lists (convex/lib/taskWindow.ts ShortRow). */
+type ShortRow = TaskOk['subtasks']['rows'][number]
 type TaskArchived = Extract<TaskAnswer, { state: 'archived' }>
 /** An archived answer as it may arrive: a backend from before this release
     answers the page row alone (convex/lib/taskWindow.ts readWindowTask). */
@@ -252,6 +257,56 @@ function archivedView(answer: ArchivedAnswer, inputs: DetailInputs) {
     num: row.num,
     textless: answer.description === undefined,
   }
+}
+
+/** Short row `row` of the answer as a view model (shapeIssue), handle
+    `handle`, under `parent` when given. A short row holds no text, labels
+    or files, and no parent of its own, so the task's parent shaped here
+    names none, and a subtask stored before the rule of one level, with
+    has_subtasks, is a group whose subtasks the answer does not hold. */
+export function shapeShortTask(
+  row: ShortRow,
+  handle: string,
+  parent?: { uuid: string; handle: string },
+): IssueVM {
+  const { has_subtasks, level: _level, ...fields } = row
+  const task: Row<'issues'> = {
+    ...fields,
+    description: '',
+    ...(parent ? { parent_id: parent.uuid } : {}),
+  }
+  return shapeIssue(
+    task,
+    contextOf(row.id, {
+      handle,
+      key: `${ISSUE_PREFIX}-${row.num}`,
+      parent,
+      hiddenSubtasks: has_subtasks,
+      hiddenParent: false,
+      labels: [],
+      follows: false,
+    }),
+  )
+}
+
+/** The subtasks of the task `view` an ok answer shows (okView), each a
+    view model under it by handle (shapeShortTask), when the answer holds
+    the whole list and every subtask in it is a leaf; else null, because
+    what a move, an archive or a delete takes along is then unknown. */
+export function answerFamily(
+  answer: TaskOk,
+  view: IssueVM,
+  handleNow: DetailInputs['handleNow'],
+): Record<string, IssueVM> | null {
+  const kids = answer.subtasks
+  if (!kids.complete || kids.rows.some((kid) => kid.has_subtasks)) return null
+  const parent = { uuid: view.uuid, handle: view.id }
+  const out: Record<string, IssueVM> = {}
+  for (const kid of kids.rows) {
+    const handle = handleNow(kid.id, kid.org_id, kid.num)
+    out[handle] = shapeShortTask(kid, handle, parent)
+  }
+  return out
 }
 
 /** The window's view of task `inputs.task` from its last answer, in the
