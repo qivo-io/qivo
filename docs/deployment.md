@@ -572,6 +572,17 @@ safe against a later backend, because that app derives the health table in
 the browser. The health table reads the same counts as the summary, so the
 release adds no step.
 
+The task window edits a task the workspace does not hold yet from the
+window's own read of it, through the mutations the app already sends
+(`issues.update`, `issues.move`, `issues.archive`, `issues.deleteDeep`,
+`labels.toggle`, `issues.subscribe`, `issues.unsubscribe`,
+`issues.setSubscriber`, `files.uploadUrl`, `files.attach` and
+`files.removeAttachment`), with the expected values of that read. The
+release that first does so changes no server function, so it has no server
+change, no step and no rollback floor: an older app works against its
+backend, and it works against an older backend that has the task window's
+read.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

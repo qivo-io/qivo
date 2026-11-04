@@ -21,11 +21,12 @@ arrived. Their counts show once the server has said which tasks they show
 and every one of those has arrived. Search works meanwhile, but on a slow
 connection its results come after the tasks already on their way. A task you open from
 Search, or from a task's subtasks or linked tasks, before it has arrived
-shows at once, read-only apart from its comments, until it has arrived. The
-Overview shows its figures, lists and health table from the server
-meanwhile. The Roadmap and Team sync
+shows at once, and you can change it at once, apart from its parent,
+subtasks and links, which wait until it has arrived. Moving, archiving and
+deleting such a task work at once too. The Overview shows its figures,
+lists and health table from the server meanwhile. The Roadmap and Team sync
 open once every task has loaded, and so do moving, archiving and deleting a
-task. An open task's subtasks, linked
+task that has arrived, unless its window has read every subtask of it. An open task's subtasks, linked
 tasks and attachments load on their own, and removing one that has not
 arrived yet waits for it.
 Settings opens at once, but its
