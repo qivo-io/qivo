@@ -109,10 +109,13 @@ export type PagedListOptions<A, Row> = {
   most: number
 }
 
-/** One batch as the list shows it: its rows (each id once across the
-    list), and its note where it has one, which a page shows after its rows
-    when it is not the last batch: the batch failed (`failed`), or its read
-    stopped without checking anything (`stuck`), each with Retry. */
+/** One batch as the list shows it, with its rows (each id once across the
+    list) and its note where it has one, which a page shows after its rows
+    with Retry. A page shows a `stuck` note, for a read that stopped
+    without checking anything, wherever the batch is, since listEnd answers
+    `partial` with no line for a stuck last batch. It shows a `failed`
+    note when the batch is not the last, as listEnd answers the last
+    batch's failure as `failed`. */
 export type PagedBatch<Row> = {
   id: number
   rows: readonly Row[]
@@ -156,11 +159,17 @@ export type PagedList<A, Row> = {
   retry: (id?: number) => void
 }
 
-/** Which line ends a list: its first batch on its way (`loading`), an
-    answer with no rows (`held`), a failure (`failed`), the cap reached
-    with more to read (`full`), Load more (`more`, with `stopped` beside
-    it), a failure or a stop above that leaves the end unknown
-    (`partial`), a search with no match (`none`) or the list's end. */
+/** Which line ends a list, one of:
+    - `loading`, its first batch or a split's halves on their way;
+    - `held`, a first answer with no rows;
+    - `failed`, a failure of the list or of its last batch;
+    - `full`, the cap reached with more to read;
+    - `more`, Load more, with `stopped` beside it;
+    - `partial`, no line, for a batch above the last that failed or
+      stopped without moving, or a last batch that stopped without moving,
+      each with its own note, so the end is unknown;
+    - `none`, a search with no match;
+    - `end`, the list's end. */
 export type ListEnd = 'loading' | 'held' | 'failed' | 'full' | 'more' | 'partial' | 'none' | 'end'
 
 /** The line that ends `list`, where `searching` says a search is active.

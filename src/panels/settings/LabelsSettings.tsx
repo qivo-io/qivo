@@ -306,9 +306,11 @@ function LabelDeleteWindow({
   )
 }
 
-/* What a batch says in place, after its rows, when it is not the list's
-   end: it failed, or its read stopped without checking anything, each with
-   Retry. */
+/* What a batch says in place, after its rows, with Retry. A batch whose
+   read stopped without checking anything says so wherever it is, the last
+   one included, since the end line then says nothing. One that failed says
+   so when it is not the last, as the end line gives the last one's
+   failure. */
 function BatchNote({
   note,
   retrying,
