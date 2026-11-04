@@ -163,7 +163,7 @@ subtask has loaded, Progress says **Subtasks are still loading.** or
 **Completion unknown.**, and Remaining says **Loading…** or **Unknown**. The
 Inbox's task pane has no details column, so it loads none of these lists
 until you open the task in its own window. On a phone they load when you
-choose **Details**. A file can be removed before every task has loaded: its
+choose **Details**. A file can be removed before every task has loaded. Its
 row shows that it is being removed until the list no longer holds it. A
 subtask or linked task that has not loaded into the workspace yet keeps its
 **×** disabled with **Available once every task has loaded**, because
