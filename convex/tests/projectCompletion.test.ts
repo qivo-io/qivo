@@ -232,14 +232,15 @@ describe('project completion from the counts', () => {
     expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(2, 4))
     // a sub-project archived starts a regroup of its family in the same
     // transaction, so its siblings count again once its steps have run
-    const archive = await fx.t.mutation(internal.machine.projects.restUpdateProject, {
-      callerId: fx.user.id,
-      access: 'write',
-      keyName: 'drive',
-      ref: 'PCB',
-      body: JSON.stringify({ archived: true }),
-    })
-    expect(archive.completion).toBeNull()
+    const setArchived = (archived: boolean) =>
+      fx.t.mutation(internal.machine.projects.restUpdateProject, {
+        callerId: fx.user.id,
+        access: 'write',
+        keyName: 'drive',
+        ref: 'PCB',
+        body: JSON.stringify({ archived }),
+      })
+    expect((await setArchived(true)).completion).toBeNull()
     expect(await restCompletion(fx, fx.agent.id, 'FW')).toEqual(COUNTING_COMPLETION)
     expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(COUNTING_COMPLETION)
     await fx.t.finishAllScheduledFunctions(() => {})
@@ -256,6 +257,12 @@ describe('project completion from the counts', () => {
       }),
     ) as { completion: CompletionJson | null }
     expect(restored.completion).toEqual(COUNTING_COMPLETION)
+    await fx.t.finishAllScheduledFunctions(() => {})
+    expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(2, 4))
+    // archived again and restored over REST
+    expect((await setArchived(true)).completion).toBeNull()
+    await fx.t.finishAllScheduledFunctions(() => {})
+    expect((await setArchived(false)).completion).toEqual(COUNTING_COMPLETION)
     await fx.t.finishAllScheduledFunctions(() => {})
     expect(await restCompletion(fx, fx.agent.id, 'TBED')).toEqual(ok(2, 4))
     // a count row below zero, which a bug would leave, until a recount
