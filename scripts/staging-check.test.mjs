@@ -74,6 +74,7 @@ describe('staging check REST contract', () => {
       'utf8',
     )
     expect(page).toMatch(/`\$\{grouped\(n\)\} active task\$\{n === 1 \? '' : 's'\}`/)
+    expect(page).toMatch(/`Used by \$\{activeTasks\(count\)\}\. `/)
     expect(page).toContain(
       'Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     )
