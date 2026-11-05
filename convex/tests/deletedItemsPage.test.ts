@@ -923,6 +923,41 @@ describe('stops', () => {
     })
   })
 
+  it('ends a page that went on inside a project item after its tasks when its sources then do not open, without saying reads', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const sam = await person(t, org_id, 'Sam')
+    const older = await plantIssue(t, { org_id, project_id: f.sub.id, assignee_id: sam.id })
+    await deleteTask(t, f.user, older.id)
+    later()
+    const leaving = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 3; i++)
+      tasks.push(await plantIssue(t, { org_id, project_id: leaving.id, assignee_id: sam.id }))
+    await deleteProject(t, f.user, leaving.id)
+    await runSteps(t)
+    const item = (await itemFor(t, leaving.id)).id
+    const keys = tasks.map((task) => `QN-${task.num}`)
+    const args = { scope: { org_id, all: true as const }, assignee: sam.id, limit: 2 }
+    // the lead's scan: the project item's first two tasks
+    const first = await page(t, f.user, args)
+    expect(first.entries.map((e) => e.task?.key)).toEqual(keys.slice(0, 2))
+    // the next page reads the item's last task, then cannot open its sources
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 1 } })
+    const second = await page(t, f.user, { ...args, cursor: first.next_cursor ?? '' })
+    expect(second.entries).toEqual([
+      { item_id: item, task: expect.objectContaining({ key: keys[2] }) },
+    ])
+    expect(second.missing).toBeUndefined()
+    expect(second.next_cursor).not.toBeNull()
+    // with the whole budget the page after it goes on after the item
+    Object.assign(DELETED_PAGE, { find: DEFAULT_PAGE.find })
+    const third = await page(t, f.user, { ...args, cursor: second.next_cursor ?? '' })
+    expect(third.entries).toEqual([{ item_id: (await itemFor(t, older.id)).id }])
+    expect(third.next_cursor).toBeNull()
+  })
+
   it('answers too_wide past the lowered sources for anyone but an admin, whose page past the lowered adminSources reads the organization instead', async () => {
     const t = newT()
     const f = await withOrg(t)

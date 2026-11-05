@@ -140,9 +140,12 @@ type Profile = Doc<'profiles'>
  * range of the stored rows that name them as lead, which with the project
  * entries before them is 1,403 ranges on the first page. That leaves about
  * 4 MiB, 8,000 documents and 960 ranges for sights and for judging items,
- * which reads mostly what the seat's sight holds. A page that cannot open
- * every source inside `find` reads what it opened and says
- * `missing: 'reads'`.
+ * which reads mostly what the seat's sight holds. A part of a page that
+ * cannot open every source inside `find` lists none of their items. The
+ * page ends after the tasks of a project item the part went on inside
+ * first, or where the part starts, for the next page to read it with the
+ * whole budget, or, when the part is the page's first, with
+ * `missing: 'reads'` (readPart).
  * `gather` is the part of `call` a page's task search keeps for itself, so
  * a page that lists project entries first leaves the search the same room
  * as a page that starts with it, and every page gathers the same
@@ -847,11 +850,14 @@ type Judge = (seat: Seat, item: Item, from: number) => Promise<{ pending: Pendin
 /** Reads one part through the merge of `plans` after `from`, judging each
  * item with `judge`, until the page is full, the part ends or the budget
  * stops it. A stop ends the page with next_cursor at the last position it
- * looked at, also with no entries. A part that follows another on the page
- * (`fresh` false) and cannot open or look at anything ends the page with
- * next_cursor at `from`, where the next page reads it with the whole
- * budget; a fresh one reads what it opened and sets `reads`. Answers
- * whether the page goes on to the next part. */
+ * looked at, also with no entries. A part that cannot open all of its
+ * sources looks at none of their items, since one of a source it did not
+ * open could sort first. Having gone on inside a project item, it ends the
+ * page at the last of that item's tasks it looked at, which the next page
+ * goes on after. Otherwise a part that follows another on the page (`fresh`
+ * false) ends the page with next_cursor at `from`, where the next page
+ * reads it with the whole budget, and a fresh one ends it with no cursor
+ * and sets `reads`. Answers whether the page goes on to the next part. */
 async function readPart(
   run: Run,
   part: Part,
@@ -885,11 +891,13 @@ async function readPart(
     }
   }
   const { merge, cut } = await openPlans(run, plans, from)
-  if (cut && !fresh && looked === null) {
-    await merge.close()
-    return later()
+  if (cut && looked === null) {
+    if (!fresh) {
+      await merge.close()
+      return later()
+    }
+    run.reads = true
   }
-  if (cut) run.reads = true
   try {
     for (;;) {
       if (stopped(run)) {
