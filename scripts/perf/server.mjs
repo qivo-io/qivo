@@ -14,7 +14,10 @@
 // It also answers snapshot:forMe, the one query apps before the parts read,
 // for a baseline build, and the task window's own queries (taskWindow:task,
 // links and attachments) from the workspace it holds, which a write sends
-// again with the parts it changed.
+// again with the parts it changed. The task window's relation pickers' read
+// (taskWindow:relationCandidates), which the app reads once a batch, comes
+// from a stand-in (src/store/relationPickerStandIn.setup.ts) before the
+// task window's other reads.
 //
 // Like Convex, a write's results reach the page before its answer does. A
 // subscription result that waits for its turn takes the writes made
@@ -101,6 +104,16 @@
 //                        or a reference shows its loading frame) or error
 //                        (the read fails from its first answer on, so
 //                        such a task shows that it could not be opened)
+//   relations            states the relation pickers' read answers
+//                        whatever the workspace says
+//                        (src/store/relationPickerStandIn.setup.ts):
+//                        stopped (each batch stops after 8 tasks looked
+//                        at, so Load more goes on), failed (every read
+//                        fails), unavailable, over_budget, blocked (the
+//                        opened task's own block, as for subtasks the
+//                        window cannot see), and rows-N (N tasks a batch,
+//                        for Load more and the held rows); several joined
+//                        by commas
 //   removal              a state the removal window's reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -151,6 +164,7 @@ import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
+import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -222,6 +236,20 @@ const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
 const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
+/* The relation pickers' forced states (the `relations` parameter), as the
+   stand-in's `force` takes them. */
+const forcedRelations = (() => {
+  const force = {}
+  for (const state of (parameters.get('relations') ?? '').split(',').filter(Boolean)) {
+    if (state === 'stopped') force.stop = 8
+    else if (state === 'failed') force.fail = true
+    else if (state === 'unavailable') force.unavailable = true
+    else if (state === 'over_budget') force.over = true
+    else if (state === 'blocked') force.blocked = true
+    else if (/^rows-\d+$/.test(state)) force.rows = Math.max(1, Number(state.slice(5)))
+  }
+  return force
+})()
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
 const fixtureTime = new Date()
@@ -994,6 +1022,16 @@ function searchPage({ text, include_archived, scope, cursor }) {
 }
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
+  // the relation pickers' read, before the task window's other reads
+  if (name === 'taskWindow:relationCandidates')
+    return relationPickerStandIn(
+      snapshot,
+      { ...args, org_id: args.org_id ?? org },
+      {
+        level: access[0].level,
+        force: forcedRelations,
+      },
+    )
   if (name.startsWith('taskWindow:')) return readTaskWindow(name, args)
   switch (name) {
     case 'snapshot:forMe':

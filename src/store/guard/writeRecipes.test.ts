@@ -292,8 +292,12 @@ describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, re
           beforeAnswer = probe().rows(true)
           // the query fails before the answer, so no delivery holds the write
           if (thread) server().fail('snapshot:threadComments', new Error(THREAD_FAILURE))
-          else if (recipe.detail) server().fail('taskWindow:task', new Error(WINDOW_FAILURE))
-          else server().fail('workspace:whole', new Error(QUERY_FAILURE))
+          else if (recipe.detail) {
+            server().fail('taskWindow:task', new Error(WINDOW_FAILURE))
+            // a write from the window's answer that also paints the
+            // workspace, as a create does, waits for both
+            if (recipe.truth) server().fail('workspace:whole', new Error(QUERY_FAILURE))
+          } else server().fail('workspace:whole', new Error(QUERY_FAILURE))
         }
         resolve(answerOf(recipe, name, sent))
       })

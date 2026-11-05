@@ -128,6 +128,35 @@ to add or change them. Relationship pickers can create a task if no existing
 task matches. Attachments support drag-and-drop and follow the
 organization's per-file size limit ([Attachment limits](./organization-and-team-settings.md)).
 
+The **Parent**, **Subtasks** and **Linked tasks** pickers search on the
+server and show 25 tasks at a time, with **Load more** for the next 25. The
+search covers every task you could choose, also tasks that have not loaded
+into the workspace yet, and finds a task when every word you type occurs in
+its ID or title. The task's current parent, subtasks and links show first,
+checked, so you can take them off, and one you take off stays listed,
+unchecked, so you can choose it again. When someone else changes one of
+them while the picker is open, the picker shows the change once the window
+does, also for one you just picked. While the window is still loading them,
+or could not load them all, the picker says so, and while their list could
+not load, they stay checked and cannot be taken off there. So does one you
+can no longer change while the picker is open, as after your access
+changed, and if someone else then takes it off, it shows unchecked and
+cannot be chosen there. The pickers list the task's own sub-project first, then the other
+sub-projects of its project, each in the order its tasks were created. If
+the task moves to another project meanwhile, the picker lists them again
+from the start. **Linked tasks** stops at the end of the task's own
+project, and **Search all your projects** goes on into your other projects.
+A typed task ID, such as QN-12, finds that task first, anywhere you could
+link it. In a large organization a picker can say **Qivo checked part of
+the tasks. Load more continues.**, and **Load more** goes on from there.
+After 200 tasks a picker asks you to search to find more. **No matching
+tasks.** appears only once the whole list and the task's current relations
+have loaded, beside the row that creates a task where you can create one.
+Enter picks the only task shown, or creates a task when none matches, once
+the whole list and the task's current relations have loaded, and in
+**Linked tasks** also at the end of the task's own project. A typed task ID
+picks its task at once.
+
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.
 Taking an image out of the description and saving frees its place at once,
@@ -163,11 +192,14 @@ subtask has loaded, Progress says **Subtasks are still loading.** or
 **Completion unknown.**, and Remaining says **Loading…** or **Unknown**. The
 Inbox's task pane has no details column, so it loads none of these lists
 until you open the task in its own window. On a phone they load when you
-choose **Details**. A file can be removed before every task has loaded. Its
-row shows that it is being removed until the list no longer holds it. A
-subtask or linked task that has not loaded into the workspace yet keeps its
-**×** disabled with **Available once every task has loaded**, because
-removing it waits for every task.
+choose **Details**. A file, a subtask and a linked task can be removed
+before every task has loaded. A file's or a linked task's row shows that it
+is being removed until the list no longer holds it, and a subtask leaves
+the list at once. A removal is checked against the list as it showed, so
+while **Subtasks** or **Linked tasks** could not load its latest list, the
+**×** of its rows waits with **Available once Qivo can check this task for
+changes**. A link you make to a task that has not loaded into the
+workspace yet shows in **Linked tasks** with the list's next answer.
 
 A task you open from these lists, from Search, from a link, a bookmark,
 Back or Forward, or from an Inbox row before it has loaded into the
@@ -186,16 +218,15 @@ which says **Available once Qivo can check this task for changes**, until
 the window has read the task on its own, which on a large workspace comes
 after the first tasks have loaded. Then, if you can edit its project, you can
 change it: its fields, its description and the images in it, its
-labels and its files, and **Remove parent**. Each change shows at once and
+labels and its files, its parent, its subtasks and its links, and create
+a parent, subtask or linked task from its pickers. Each change shows at once and
 is saved against the task as the window showed it, so a change someone else
 made meanwhile is not overwritten. You can also move, archive or delete it
 at once, once the window has read every subtask of it; while it cannot,
 **Move to sub-project…** and **Archive or delete…** say **Not available
-while Qivo cannot read every subtask of this task**. The **Parent**,
-**Subtasks** and **Linked tasks** buttons wait for the task with
-**Available once this task has loaded**. With **Read-only project access**
-you cannot change it or comment on it, but you can still edit or delete
-your own comments. Anyone who can see the task can
+while Qivo cannot read every subtask of this task**. With **Read-only
+project access** you cannot change it or comment on it, but you can link it
+to a task you can edit, and you can still edit or delete your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
 once every task has loaded and then highlights it, unless you have left the
 roadmap meanwhile. When the task arrives, the window shows it from
@@ -215,17 +246,20 @@ the **Subtasks** button is disabled with **A subtask cannot have subtasks**,
 and when the window lists 100 subtasks with **This task has 100 active
 subtasks, the most a task can have. Archive or remove one of them first.** A task with subtasks cannot become a
 subtask, so when the window lists any, its **Parent** button is disabled with
-**A task with subtasks cannot become a subtask**. The window does not list
-archived subtasks, or subtasks you cannot see, so Qivo refuses those choices
-when you make them, with the same sentence. **Remove parent** also appears
+**A task with subtasks cannot become a subtask**. The buttons count what the
+window lists, which leaves out archived subtasks and subtasks you cannot
+see. The pickers count those too: when the task can take no parent, no more
+subtasks or no more links for them, its picker says so with the same
+sentence and offers nothing to create. **Remove parent** also appears
 when the parent is outside this view.
 
 A subtask stays in its parent's project, in any of that project's
 sub-projects. Setting a parent changes both tasks, so it needs edit access to
 the subtask and to the parent. The parent and subtask pickers offer only
 tasks of the same project that you can edit, and leave out tasks the limits
-above refuse. The current parent stays listed
-so you can remove it, and so does each current subtask you can edit.
+above refuse, also for subtasks that are archived or that you cannot see.
+The current parent shows first so you can remove it, and so does each
+current subtask you can edit, also one stored in another project.
 Everyone assigned to or reviewing the task or its subtasks must be able to
 see the new parent and every task above it; otherwise Qivo refuses the parent and names the person
 and the subtask to reassign. The assignee and

@@ -35,7 +35,14 @@
  * answers a number in the organization the address names and an archived
  * link opens. It opens the Board of the project it made and
  * waits for the deployment's answer for it (tasks.board), whose cards must
- * hold its two fixture tasks (ui/board). It makes a sub-project of its own
+ * hold its two fixture tasks (ui/board). It opens the window of one fixture
+ * task and, from the deployment's batches (taskWindow.relationCandidates),
+ * finds the other one in Link task by its ID, a search with no match there
+ * that ends the list, a task of its second project only after Search all
+ * your projects, and the subtask it made as a current subtask in Add
+ * subtask, with one task it makes over REST in its second project and
+ * nothing written through the pickers (ui/relation-pickers). It makes a
+ * sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary, risk, attention and paused),
  * whose figures, sentence and lists must count exactly those two, then
@@ -3726,6 +3733,102 @@ async function boardCheck() {
   })
 }
 
+/** The step that opens the task window's relation pickers
+ *  (relationPickersCheck). */
+export const RELATION_STEP = 'ui/relation-pickers'
+
+/** What the Linked tasks picker says (src/panels/RelationPicker.tsx): at
+ *  the end of the task's own project, before Search all your projects,
+ *  and once the whole list ended without a match. */
+export const RELATION_EXPECTED = {
+  family: 'No matching tasks in this project.',
+  more: 'Search all your projects',
+  none: 'No matching tasks.',
+}
+
+/** The task window's relation pickers on the deployment's batches
+ *  (convex/taskWindow.ts relationCandidates). The window of run.t0 offers
+ *  run.tz in Link task by its typed ID, a search with no match says so at
+ *  the end of the project and once Search all your projects ended too, a
+ *  task of the second project (N1, made here over REST and pushed to
+ *  run.created) shows only after Search all your projects, and the window
+ *  of run.parent lists run.child in Add subtask as a current subtask,
+ *  checked. Escape closes each picker, so nothing is written. Without N1
+ *  the continuation is left out, and without run.child the Subtasks part,
+ *  as subtaskRuleChecks makes both. It runs before the run archives M. */
+async function relationPickersCheck() {
+  const w = run.creds.writeToken
+  await check(RELATION_STEP, async () => {
+    // made inside the step, so a refused POST fails this step alone
+    const far = run.projects.N1
+      ? await restOk(w, 'POST', '/tasks', {
+          project: run.projects.N1.id,
+          title: `${run.tag} far link target`,
+        })
+      : null
+    if (far) run.created.push(far)
+    const at = (ref) => `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${ref.toLowerCase()}`
+    const openWindow = async (t) => {
+      await app.goto(at(t.key), { waitUntil: 'domcontentloaded' })
+      const title = app.locator('[role="dialog"] [data-task-title]')
+      await title.waitFor({ timeout: 60_000 })
+      expect(
+        await until(async () => ((await title.textContent()) ?? '').trim() === t.title),
+        `the window of ${t.key} does not show its title`,
+      )
+    }
+    const openPicker = async (label, kind) => {
+      const press = app.locator(`[role="dialog"] button[aria-label="${label}"]`)
+      expect(await until(async () => await press.isEnabled()), `${label} stays disabled`)
+      await press.click()
+      const picker = app.locator(`[data-relation-picker="${kind}"]`)
+      await picker.waitFor({ timeout: 20_000 })
+      return picker
+    }
+    const typeInto = async (picker, text) => {
+      await picker.locator('input').fill(text)
+    }
+    const shows = async (picker, text) =>
+      await until(async () => ((await picker.textContent()) ?? '').includes(text), 30_000)
+    await openWindow(run.t0)
+    const link = await openPicker('Link task', 'link')
+    // the other fixture task by its ID, from the deployment's batch
+    await typeInto(link, run.tz.key)
+    await link.locator(`[data-picker-row="${run.tz.id}"]`).waitFor({ timeout: 30_000 })
+    // a search with no match, at the project's end and at the list's end
+    await typeInto(link, `${run.tag} nothing`)
+    expect(await shows(link, RELATION_EXPECTED.family), 'no end of the project')
+    await link.locator('[data-picker-all]').click()
+    expect(await shows(link, RELATION_EXPECTED.none), 'no end of the list')
+    expect(
+      await until(async () => (await link.getAttribute('data-picker-end')) === ''),
+      'the list does not end',
+    )
+    // a task of the second project only after Search all your projects
+    if (far) {
+      await typeInto(link, far.title)
+      expect(await shows(link, RELATION_EXPECTED.more), 'no Search all your projects')
+      eq(await link.locator(`[data-picker-row="${far.id}"]`).count(), 0, 'a far task too soon')
+      await link.locator('[data-picker-all]').click()
+      await link.locator(`[data-picker-row="${far.id}"]`).waitFor({ timeout: 30_000 })
+    }
+    await app.keyboard.press('Escape')
+    await link.waitFor({ state: 'detached', timeout: 10_000 })
+    // the subtask as a current subtask, checked
+    if (run.child) {
+      await openWindow(run.parent)
+      const sub = await openPicker('Add subtask', 'subtask')
+      await typeInto(sub, run.child.key)
+      const kid = sub.locator(`[data-picker-row="${run.child.id}"][data-picker-current]`)
+      await kid.waitFor({ timeout: 30_000 })
+      eq(await kid.getAttribute('aria-pressed'), 'true', 'the current subtask is not checked')
+      await app.keyboard.press('Escape')
+      await sub.waitFor({ state: 'detached', timeout: 10_000 })
+    }
+    return `found ${run.tz.key} by its ID, the ends of an empty search${far ? `, ${far.key} after Search all your projects` : ''}${run.child ? ` and ${run.child.key} as a current subtask` : ''}`
+  })
+}
+
 /** What the Overview of the run's own sub-project shows once the
  *  deployment answered (overviewCheck): its two tasks, one To do and due
  *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
@@ -5517,6 +5620,8 @@ async function main() {
   await factChecks()
   // the Board of the run's project, while it is active
   await boardCheck()
+  // the task window's relation pickers, while it is active
+  await relationPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
   // Settings › Labels with a label of its own on a fixture task

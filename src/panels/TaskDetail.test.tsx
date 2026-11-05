@@ -48,7 +48,6 @@ type Live = {
 }
 
 const AT = '2026-09-14T08:00:00.000Z'
-const WAITS_FOR_IT = 'Available once this task has loaded'
 const WAITS_FOR_CHECK = 'Available once Qivo can check this task for changes'
 const FAMILY_UNKNOWN = 'Not available while Qivo cannot read every subtask of this task'
 const READ_ONLY = 'Read-only project access'
@@ -64,6 +63,10 @@ const FAR = 'fd000000-0000-4000-8000-000000000040'
 const FAR_RO = 'fd000000-0000-4000-8000-000000000041'
 const FAR_KID = 'fd000000-0000-4000-8000-000000000042'
 const FAR_KID_2 = 'fd000000-0000-4000-8000-000000000043'
+/* Tasks a relation picker offers, which the workspace does not hold. */
+const PICKED = 'fd000000-0000-4000-8000-000000000044'
+const PICKED_2 = 'fd000000-0000-4000-8000-000000000045'
+const PICKED_3 = 'fd000000-0000-4000-8000-000000000046'
 // a day as YYYY-MM-DD, `days` from today
 const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 
@@ -403,11 +406,36 @@ const typeInto = (field: HTMLInputElement | HTMLTextAreaElement, value: string) 
 /* Lets the next animation frame run, where a picker measures its place. */
 const nextFrame = () =>
   act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
-/* The window's relation controls, which wait for the task. */
+/* The window's relation controls. */
 const relationButtons = () =>
   ['Set parent', 'Add subtask', 'Link task'].map((label) =>
     document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`),
   )
+/* The relation pickers' reads, held until the test answers each. */
+function holdRelations() {
+  const held: { args: Record<string, unknown>; answer: (value: unknown) => Promise<void> }[] = []
+  network.query.mockImplementation((ref, args) =>
+    getFunctionName(ref) === 'taskWindow:relationCandidates'
+      ? new Promise((resolve) =>
+          held.push({ args, answer: (value) => act(async () => resolve(value)) }),
+        )
+      : Promise.resolve(null),
+  )
+  return held
+}
+/* Task `row` as a relation picker's row, and an ended batch of `rows`. */
+const pickerRow = (row: Task) => {
+  const { has_subtasks: _group, ...rest } = short(row)
+  return rest
+}
+const pickerBatch = (rows: unknown[]) => ({
+  state: 'ok',
+  rows,
+  next: null,
+  all_projects: null,
+  stopped: false,
+  blocked: null,
+})
 const dueText = () =>
   [...document.querySelectorAll('.task-field')]
     .find((f) => f.querySelector('.task-field-label')?.textContent === 'Due')
@@ -619,12 +647,10 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     // Plan on roadmap, for a task from a current answer
     const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
     expect(roadmap?.disabled).toBe(false)
-    // the relations wait for the task
+    // the relations change from the answer too (the next case)
     expect(dialog()?.textContent).toContain('No parent task.')
-    for (const control of relationButtons()) {
-      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
-      expect(await hintOf(control)).toBe(WAITS_FOR_IT)
-    }
+    for (const control of relationButtons())
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(false)
     // the composer stays
     expect(document.querySelector('[data-composer]')).not.toBeNull()
     // Move and Archive or delete open, from the answer's whole subtask list
@@ -646,6 +672,193 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await click(eye)
     expect(document.querySelector('[data-task-subscribers]')).not.toBeNull()
     expect(one('issues:subscribers').args).toEqual({ org_id: snap.orgs[0].id, issue_id: FAR })
+  })
+
+  it('changes the parent, subtasks and links of a task shown from its answer, sending what the window showed', async () => {
+    await load()
+    const held = holdRelations()
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    const org = snap.orgs[0].id
+    // Set parent reads the Parent picker's batch for this task
+    await click(document.querySelector('[aria-label="Set parent"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'parent' })
+    const mast = pickerRow(task(PICKED, 44, { title: 'Build the mast' }))
+    await held.at(-1)?.answer(pickerBatch([mast]))
+    await click(document.querySelector(`[data-picker-row="${PICKED}"]`))
+    expect(sentArgs('issues:update').at(-1)).toEqual({
+      org_id: org,
+      id: FAR,
+      patch: { parent_id: PICKED },
+      expected: { parent_id: null, has_hidden_parent: false },
+    })
+    // the Parent row shows the new parent at once
+    const parentRow = document.querySelector(`[data-related-task="QN-44"]`)
+    expect(parentRow?.textContent).toContain('Build the mast')
+    // a later answer: no parent, and a subtask the workspace does not hold
+    const kid = task(FAR_KID, 42, { title: 'Mount the antenna', parent_id: FAR })
+    await answer(
+      'taskWindow:task',
+      okAnswer(far(), { subtasks: { rows: [short(kid)], complete: true } }),
+    )
+    // a subtask's × detaches it from the row as the window showed it
+    const remove = document.querySelector<HTMLButtonElement>(
+      '[data-section="subtasks"] [data-related-task="QN-42"] .task-related-remove',
+    )
+    expect(remove?.disabled).toBe(false)
+    await click(remove)
+    expect(sentArgs('issues:update').at(-1)).toEqual({
+      org_id: org,
+      id: FAR_KID,
+      patch: { parent_id: null },
+      expected: { parent_id: FAR, has_hidden_parent: false },
+    })
+    expect(
+      document.querySelector('[data-section="subtasks"] [data-related-task="QN-42"]'),
+    ).toBeNull()
+    // Link task links a task the picker offered, in the stored form
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'link' })
+    await held.at(-1)?.answer(pickerBatch([pickerRow(task(PICKED_2, 45, { title: 'Wire it' }))]))
+    await click(document.querySelector(`[data-picker-row="${PICKED_2}"]`))
+    expect(sentArgs('issues:addLink').at(-1)).toMatchObject({
+      org_id: org,
+      source_id: PICKED_2,
+      target_id: FAR,
+      type: 'blocks',
+    })
+  })
+
+  it('picks a subtask with the parent its row showed and takes off a link with the kind its list showed, for a task shown from its answer', async () => {
+    await load()
+    const held = holdRelations()
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    // a link that blocks this task, to a task the workspace does not hold
+    const blocker = task(PICKED_2, 45, { title: 'Wire it' })
+    await answer('taskWindow:links', {
+      state: 'ok',
+      links: [
+        { id: 'link-far', source_id: PICKED_2, target_id: FAR, type: 'blocks', created_at: AT },
+      ],
+      tasks: [short(blocker)],
+      complete: true,
+    })
+    const org = snap.orgs[0].id
+    // Add subtask offers a task that is another task's subtask today
+    await click(document.querySelector('[aria-label="Add subtask"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'subtask' })
+    const cable = pickerRow(task(PICKED_3, 46, { title: 'Coil the cable' }))
+    await held.at(-1)?.answer(pickerBatch([{ ...cable, parent_id: FAR_KID_2 }]))
+    await click(document.querySelector(`[data-picker-row="${PICKED_3}"]`))
+    // the move, with the parent the row showed as the one expected
+    expect(sentArgs('issues:update').at(-1)).toEqual({
+      org_id: org,
+      id: PICKED_3,
+      patch: { parent_id: FAR },
+      expected: { parent_id: FAR_KID_2, has_hidden_parent: false },
+    })
+    // the window's Subtasks list shows it at once
+    expect(
+      document.querySelector('[data-section="subtasks"] [data-related-task="QN-46"]'),
+    ).not.toBeNull()
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    expect(document.querySelector('[data-relation-picker]')).toBeNull()
+    // Link task lists the current link first, checked, and a press takes it off
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'link' })
+    await held.at(-1)?.answer(pickerBatch([]))
+    const current = document.querySelector<HTMLElement>(
+      `[data-picker-row="${PICKED_2}"][data-picker-current]`,
+    )
+    expect(current?.getAttribute('aria-pressed')).toBe('true')
+    await click(current)
+    // with the relation the list showed, seen from this task
+    expect(sentArgs('issues:removeLink')).toEqual([
+      { org_id: org, a: FAR, b: PICKED_2, expected: { kind: 'blocked_by' } },
+    ])
+  })
+
+  it('keeps a current subtask checked and locked in the Subtasks picker once access to it drops while the picker is open', async () => {
+    await load()
+    const held = holdRelations()
+    await openWindow(await noteTask(far()))
+    const kid = task(FAR_KID, 42, { title: 'Mount the antenna', parent_id: FAR })
+    const withKid = (level: string) =>
+      okAnswer(far(), { subtasks: { rows: [{ ...short(kid), level }], complete: true } })
+    await answer('taskWindow:task', withKid('lead'))
+    await click(document.querySelector('[aria-label="Add subtask"]'))
+    await nextFrame()
+    await held.at(-1)?.answer(pickerBatch([]))
+    const rowOf = () => document.querySelector<HTMLButtonElement>(`[data-picker-row="${FAR_KID}"]`)
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(false)
+    // the window's next answer says Mira only views QN-42's project now
+    await answer('taskWindow:task', withKid('viewer'))
+    // it is still a subtask, so it stays checked, and takes no press
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(true)
+    await click(rowOf())
+    expect(sentArgs('issues:update')).toEqual([])
+  })
+
+  it('keeps a link that only its Edit on the task takes off listed, checked and locked, while the read of a task shown from its answer fails', async () => {
+    await load()
+    const held = holdRelations()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    // a link to a task in Manuals, which Mira only views, so only her Edit
+    // on this task takes it off
+    const manual = task(PICKED_2, 45, { title: 'Proof the manual', project_id: 'manuals' })
+    await answer('taskWindow:links', {
+      state: 'ok',
+      links: [
+        { id: 'link-ro', source_id: FAR, target_id: PICKED_2, type: 'relates', created_at: AT },
+      ],
+      tasks: [short(manual)],
+      complete: true,
+    })
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    await held.at(-1)?.answer(pickerBatch([]))
+    const rowOf = () => document.querySelector<HTMLButtonElement>(`[data-picker-row="${PICKED_2}"]`)
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(false)
+    // the window's read fails, so Qivo cannot check the task for changes
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    expect(document.querySelector<HTMLElement>('[data-task-stale]')?.dataset.taskStale).toBe(
+      'failed',
+    )
+    // the link stays current and checked, without a press
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(true)
+  })
+
+  it('offers a Viewer of a task shown from its answer only Link task, to a task they can edit', async () => {
+    await load()
+    holdRelations()
+    const row = task(FAR_RO, 41, { title: 'Read the far manual', project_id: 'manuals' })
+    await openWindow(await noteTask(row))
+    await answer('taskWindow:task', okAnswer(row))
+    const [parent, subtask, link] = relationButtons()
+    for (const control of [parent, subtask]) {
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
+      expect(await hintOf(control)).toBe(READ_ONLY)
+    }
+    expect(link?.disabled).toBe(false)
   })
 
   it('waits with the check sentence while its read fails, keeping comments and a typed title', async () => {
@@ -695,6 +908,11 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     const roadmap = document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
     expect(roadmap?.disabled).toBe(true)
     expect(await hintOf(roadmap)).toBe(WAITS_FOR_CHECK)
+    // the relation changes wait the same way, Link task included
+    for (const control of relationButtons()) {
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
+      expect(await hintOf(control)).toBe(WAITS_FOR_CHECK)
+    }
     // comments still work
     expect(document.querySelector('[data-composer]')).not.toBeNull()
     await act(async () =>
@@ -846,6 +1064,60 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     // the read stops with no section to read it for; the details column's
     // sections ask afresh
     expect(open('taskWindow:task')).toHaveLength(1)
+  })
+
+  it('offers no relation change over a number address until the task side answers, then offers them', async () => {
+    await load()
+    holdRelations()
+    const { taskRef } = await import('../lib/taskReference')
+    const org = snap.orgs[0].id
+    await openWindow(taskRef({ org, num: 40 }))
+    // the read of the reference by its number serves the window first
+    const byNumber = one('taskWindow:task')
+    expect(byNumber.args).toEqual({ org_id: org, ref: 'QN-40' })
+    await act(async () => byNumber.deliver(okAnswer(far())))
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
+    // the task side reads it by its uuid, and until it answers the window
+    // takes no relation change, Link task included
+    const side = open('taskWindow:task').find((s) => s.args.ref === FAR)
+    expect(side?.args).toEqual({ org_id: org, ref: FAR })
+    for (const control of relationButtons()) {
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
+      expect(await hintOf(control)).toBe(WAITS_FOR_CHECK)
+    }
+    await act(async () => side?.deliver(okAnswer(far())))
+    for (const control of relationButtons())
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(false)
+  })
+
+  it('keeps a relation picker open with its rows and a pick on its way when the task arrives', async () => {
+    await load(true)
+    const held = holdRelations()
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    // the picker reads once it mounts, a frame after the press
+    await act(async () => {
+      await vi.waitFor(() => expect(held).toHaveLength(1))
+    })
+    await held[0]?.answer(pickerBatch([pickerRow(task(PICKED, 44, { title: 'Wire it' }))]))
+    const row = () => document.querySelector<HTMLElement>(`[data-picker-row="${PICKED}"]`)
+    await act(async () => {
+      await vi.waitFor(() => expect(row()).not.toBeNull())
+    })
+    await click(row())
+    expect(row()?.dataset.pickerBusy).toBe('')
+    await arrive()
+    await act(async () => {
+      await vi.waitFor(() => expect(dialog()?.dataset.taskSource).toBe('workspace'))
+    })
+    // the same picker, its rows and its busy row, with no read again
+    expect(row()?.dataset.pickerBusy).toBe('')
+    expect(row()?.getAttribute('aria-pressed')).toBe('true')
+    expect(held).toHaveLength(1)
   })
 
   it('opens a related task the workspace does not hold from its own read, and names its organization in the address', async () => {

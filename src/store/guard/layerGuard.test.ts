@@ -229,6 +229,20 @@ describe('the writes from the task window’s own answer', () => {
     'windowDelay',
     'windowDelayIssue',
     'syncWindowLoad',
+    // the relation pickers' read and writes, which take a task or its other
+    // end from a server answer (t3/limits-relation-pickers)
+    'parentUuidOf',
+    'subtaskListPaint',
+    'setSubtaskParent',
+    'linkTasks',
+    'unlinkTasks',
+    'relationCandidates',
+    'shownParent',
+    'subtaskPickRow',
+    'editsSomeProject',
+    'createParent',
+    'createLinked',
+    'addIssue',
   ]
   /* The whole-list walks of the workspace's tasks and of their rows. */
   const WALKS = [
