@@ -734,6 +734,39 @@ describe('the access lists', () => {
     }
   })
 
+  it('moves focus after the last Load more to the search box for a reader who cannot change access', async () => {
+    await load((snap) => {
+      const self = snap.profiles[0]
+      self.org_role = 'user'
+      snap.access.push({ project_id: 'plan', profile_id: self.id, level: 'viewer' })
+      // 26 direct user grants with Leo's, Ada's, Vic's and mine: one past a batch
+      for (let i = 0; i < 22; i++) {
+        const id = `person-${String(i).padStart(2, '0')}`
+        snap.profiles.push({
+          ...self,
+          id,
+          auth_user_id: `account-${id}`,
+          name: `Person ${String(i).padStart(2, '0')}`,
+          initials: 'P',
+          email: `${id}@example.test`,
+        })
+        snap.access.push({ project_id: 'plan', profile_id: id, level: 'user' })
+      }
+    })
+    await open()
+    // the lead's row and a batch of 25
+    expect(rows('user')).toHaveLength(26)
+    expect(roleOf('leo').disabled).toBe(true)
+    const more = find<HTMLButtonElement>('[data-project-access-more="user"]')
+    more.focus()
+    await click(more)
+    await rerun()
+    expect(rows('user').at(-1)).toBe('Vic Viewer')
+    expect(has('[data-project-access-more="user"]')).toBe(false)
+    expect(roleOf('vic').disabled).toBe(true)
+    expect(document.activeElement).toBe(find('[data-project-access-list-search="user"]'))
+  })
+
   it('never says a list is empty where it was not ready, stopped or failed', async () => {
     server.force = { notReady: true }
     await open()

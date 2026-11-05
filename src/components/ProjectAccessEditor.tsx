@@ -316,8 +316,11 @@ const stateOf = <A, Row>(list: PagedList<A, Row>) =>
         : 'ok'
 
 /** Load more for `list`, which keeps focus while it reads; once its button
-    goes, focus moves to the first new row's role select, else to the
-    list's search box (useFocusWhenGone). */
+    goes, focus moves to the first new row's role select while it is
+    enabled, else to the list's search box (useFocusWhenGone). A reader
+    whose role select stays off, such as one without the right to change
+    access, gets the search box rather than a target that never takes
+    focus. */
 function useMore<A, Row extends { id: string }>(
   list: PagedList<A, Row>,
   end: ListEnd | 'too_long',
@@ -328,7 +331,8 @@ function useMore<A, Row extends { id: string }>(
   useFocusWhenGone(end === 'more', () => {
     if (end === 'loading') return null
     const row = from.current === null ? undefined : list.rows[from.current]
-    return (row ? rowSelect(row.id) : null) ?? searchBox.current
+    const select = row ? rowSelect(row.id) : null
+    return select && !select.matches(':disabled') ? select : searchBox.current
   })
   return () => {
     if (list.phase === 'more') return
