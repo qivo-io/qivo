@@ -343,8 +343,10 @@ type Kept = { kind: Kind; id: string; name: string; level: AccessLevel }
 /**
  * A project's Teams and Users access lists and the Add team or user
  * picker. `canManageUsers`, `canManageTeams` and `canChangeLead` are the
- * page's rights (projectSettings.get); `current` says whether the page's
- * answer is current, and every control that writes is off while it is not.
+ * page's rights (projectSettings.get). `current` is false while the page's
+ * read failed or its project is no longer available (unavailable or
+ * archived), and every control that writes is off then. A refreshing page
+ * keeps the controls of the answer it kept.
  * `onLevel` sends one grant's level, or Lead through the Lead field's
  * write, with the level the row showed (null for a new grant), and
  * resolves whether the server accepted it; the row shows the chosen level,
