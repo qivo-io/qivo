@@ -1342,7 +1342,8 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
     const msg = checkValue(prop, value)
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
-  // Arguments the schema does not know are refused rather than dropped.
+  // Arguments the schema does not know are refused rather than dropped,
+  // except in a call of the older catalogue to a FORMERLY_BARE tool.
   const unknown = Object.keys(args).filter(
     (key) => !Object.hasOwn(props, key) && !(tool.name === 'update_task' && key === 'reporter_id'),
   )

@@ -7,7 +7,9 @@
  * import cycle. These rules therefore live here, once, and every module that
  * names the caller, signs a write's activity row, reads an agent key's name,
  * reads a request body or parses a REST body or query parameter imports
- * them from this file. */
+ * them from this file. The REST and MCP lists that page through
+ * lib/listCursor.ts namedListPage, and the later lists in name order, check
+ * their paging with namedPaging here. */
 
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'

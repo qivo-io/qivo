@@ -18,11 +18,13 @@
  * surfaces answer different rows, as the active tasks do, whose REST search
  * widens on `*`; the workload and the lists of namedListPage, whose
  * surfaces answer the same rows, name one list for both, so a cursor
- * continues on the other surface. The lists of namedListPage take names in
- * `machine.`, such as `machine.users`, so none reads like an app list's, and
- * seal their scope with namedScope. A cursor never grants access by itself:
- * every page checks the caller's access again. Archived task lists keep
- * their own `2~` cursors (lib/archivedTasks.ts). */
+ * continues on the other surface. These lists, and the later REST and MCP
+ * lists in name order, page through namedListPage after machine/shared.ts
+ * namedPaging, take a name in `machine.`, such as `machine.users`, so none
+ * reads like an app list's, seal their scope with namedScope and answer
+ * `{next_cursor, <rows>}`, the cursor first. A cursor never grants access
+ * by itself: every page checks the caller's access again. Archived task
+ * lists keep their own `2~` cursors (lib/archivedTasks.ts). */
 
 import type { GenericDocument } from 'convex/server'
 import type { QueryCtx } from '../_generated/server'
