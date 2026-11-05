@@ -493,6 +493,52 @@ describe('a demo upload that never attaches', () => {
   })
 })
 
+describe('a demo file in use', () => {
+  it('keeps a picture, a background and its preview past their reservations, until the demo ends', async () => {
+    const d = await setup()
+    const url = await d.caller.mutation(api.files.avatarUploadUrl, {
+      profile_id: d.admin.id,
+      size: 1 * KiB,
+    })
+    const sent = await post(d.t, url, new Uint8Array(1 * KiB))
+    const { storageId: picture } = (await sent.json()) as { storageId: Id<'_storage'> }
+    await d.caller.mutation(api.files.setAvatar, { profile_id: d.admin.id, storage_id: picture })
+    const ticket = await d.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: 1 * MiB,
+    })
+    expect((await post(d.t, ticket.upload_url, jpegOf(1 * MiB), 'image/jpeg')).status).toBe(200)
+    const [image] = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
+    const job = { kind: 'custom' as const, id: image.id, storage_id: image.storage_id }
+    const work = await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)
+    const preview = await d.t.run(async (ctx) => {
+      const id = await ctx.storage.store(new Blob([new Uint8Array(100)]) as never)
+      await ctx.db.patch(id as never, { contentType: 'image/webp' } as never)
+      return id
+    })
+    await d.t.mutation(internal.backgroundPreviews.attach, {
+      ...job,
+      preview_storage_id: preview,
+      preview_version: BACKGROUND_PREVIEW_VERSION,
+      demo_ticket_id: work!.id,
+    })
+    const rows = () => d.t.run((ctx) => ctx.db.query('demo_uploads').collect())
+    const before = await rows()
+    expect(before.map((row) => row.storage_id).sort()).toEqual(
+      [picture, image.storage_id, preview].sort(),
+    )
+    // every reservation has passed its own expiry, at most 15 minutes on
+    expect(Math.max(...before.map((row) => row.expires_at))).toBeLessThanOrEqual(NOW + 15 * 60_000)
+    vi.setSystemTime(Math.max(...before.map((row) => row.expires_at)) + 1)
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    for (const id of [picture, image.storage_id, preview])
+      expect(await d.t.run((ctx) => ctx.db.system.get(id))).not.toBeNull()
+    expect((await rows()).map((row) => row.expires_at)).toEqual(
+      before.map(() => d.receipt.expires_at),
+    )
+  })
+})
+
 describe('a demo upload whose POST got no answer', () => {
   /* Another demo login, the admin of the fixture's other organization. */
   async function otherLogin(d: Demo) {
