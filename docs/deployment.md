@@ -800,10 +800,16 @@ answers otherwise stay as before. The Overview's delay verdicts moved to a
 module the agenda shares, with every Overview answer unchanged. The clock
 check the Overview's queries and the agenda share now also refuses, as a
 bad request, a clock whose last week does not begin at a local midnight of
-its `week`, which no app sends. `lib/visibility.ts` `orgProjectView`, which
-read every project of the organization and lastComments was the last to
-call, is gone; the tests keep it as an oracle. There is no schema change
-and no backfill.
+its `week`, which no app sends. The same release's app begins every week of
+its grid at the first instant of the week's first day. In a zone whose
+daylight-saving change skips a midnight, such as Santiago, Havana or Beirut,
+the grid began each week an hour late in the weeks around that day, so there
+the Overview placed a change made in the first hour of a week in the week
+before, and the Roadmap's due mark could say a plan ends after a due date on
+the first day of its last planned week. `lib/visibility.ts`
+`orgProjectView`, which read every project of the organization and
+lastComments was the last to call, is gone; the tests keep it as an oracle.
+There is no schema change and no backfill.
 
 ## Node.js version
 

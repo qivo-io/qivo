@@ -128,6 +128,37 @@ describe('org week settings', () => {
     expect(isoFromDate(weekStartOf(new Date(2026, 0, 1)))).toBe('2025-12-28')
   })
 
+  it('begins every week of the grid at its first local instant where daylight saving skips a midnight', () => {
+    const zone = process.env.TZ
+    // each zone skips the midnight of a Sunday in 2026, so that day begins
+    // at 01:00 and every other one at 00:00; a grid anchored on it, or on a
+    // week holding it, must not carry 01:00 to its other weeks
+    const skips = [
+      ['America/Havana', [2026, 2, 8]],
+      ['America/Santiago', [2026, 8, 6]],
+      ['Asia/Beirut', [2026, 2, 29]],
+    ] as const
+    try {
+      for (const [tz, [y, m, d]] of skips) {
+        process.env.TZ = tz
+        for (const start of [0, 1])
+          for (const after of [0, 3, 6, 7, 77, 80]) {
+            const now = new Date(y, m, d + after, 12)
+            setWeekConfig(start, null, now)
+            const label = `${tz} week start ${start} on ${isoFromDate(now)}`
+            const first = (x: Date) =>
+              new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+            expect(weekStartOf(now).getTime(), label).toBe(first(weekStartOf(now)))
+            for (let w = -2; w <= TODAY_WEEK + 2; w++)
+              expect(weekToDate(w).getTime(), `${label} week ${w}`).toBe(first(weekToDate(w)))
+          }
+      }
+    } finally {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    }
+  })
+
   it('rejects garbage and falls back to ISO defaults', () => {
     setWeekConfig(99, 'nonsense')
     expect(weekToDate(0).getDay()).toBe(1)

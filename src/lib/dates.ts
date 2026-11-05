@@ -6,7 +6,10 @@
    run negative and past 28, and each view clips to its own window instead.
    All math is done on local-midnight
    dates; ISO strings are built manually (never via toISOString) to avoid
-   timezone drift on date-only values. */
+   timezone drift on date-only values. Each week start is built from its
+   year, month and day (dayStart), so where a daylight-saving change skips a
+   midnight (Santiago, Havana, Beirut) only that day starts at 01:00, and
+   no other week takes its wall time. */
 
 import { LIMITS } from '../../convex/lib/limits'
 
@@ -46,19 +49,28 @@ let weekOneRule: WeekOneRule = DEFAULT_WEEK_ONE_RULE
 const weekCache = new Map<string, number>()
 let weekCacheKey = ''
 
+/* The first instant of local day `day` of month `month` (0-based) of
+   `year`: its midnight, or where a daylight-saving change skips that
+   midnight the instant after the gap. Days past either end of the month
+   roll over. The date is set at noon, then its first instant, so the
+   wall time of another day never carries over, and setFullYear keeps
+   years 0-99 as they are. */
+function dayStart(year: number, month: number, day: number): Date {
+  const date = new Date(2000, 0, 1, 12)
+  date.setFullYear(year, month, day)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
+
 /** First day of d's week — the org's week-start day at local midnight. */
 export function weekStartOf(d: Date): Date {
-  const m = new Date(d)
-  m.setHours(0, 0, 0, 0)
-  const dow = (m.getDay() - weekStart + 7) % 7 // days since the week started
-  m.setDate(m.getDate() - dow)
-  return m
+  const dow = (d.getDay() - weekStart + 7) % 7 // days since the week started
+  return dayStart(d.getFullYear(), d.getMonth(), d.getDate() - dow)
 }
 
 function computeTimelineStart(now: Date): Date {
   const d = weekStartOf(now)
-  d.setDate(d.getDate() - TODAY_WEEK * 7)
-  return d
+  return dayStart(d.getFullYear(), d.getMonth(), d.getDate() - TODAY_WEEK * 7)
 }
 const initialToday = new Date()
 export let TIMELINE_START: Date = computeTimelineStart(initialToday)
@@ -92,10 +104,10 @@ export function setWeekConfig(start?: number | null, rule?: string | null, now =
   TODAY_ISO = isoFromDate(now)
 }
 
+/** The first day of week index w at local midnight (dayStart). */
 export function weekToDate(w: number): Date {
-  const d = new Date(TIMELINE_START)
-  d.setDate(d.getDate() + Math.round(w * 7))
-  return d
+  const d = TIMELINE_START
+  return dayStart(d.getFullYear(), d.getMonth(), d.getDate() + Math.round(w * 7))
 }
 
 export const MONTHS = [
@@ -231,10 +243,7 @@ export function isoFromDate(d: Date): string {
 }
 export function isoToDate(s: string): Date {
   const p = s.split('-').map(Number)
-  const date = new Date(0)
-  date.setHours(0, 0, 0, 0)
-  date.setFullYear(p[0], p[1] - 1, p[2]) // Date's constructor maps years 0–99 into 1900–1999.
-  return date
+  return dayStart(p[0], p[1] - 1, p[2]) // Date's constructor maps years 0–99 into 1900–1999.
 }
 export function fmtISO(s: string): string {
   return fmtFull(isoToDate(s))
