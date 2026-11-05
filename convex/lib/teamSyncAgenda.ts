@@ -135,8 +135,10 @@ import {
  *   archived sub-projects, the organization's whole figures, over_ceiling
  *   from the counts in 1,117, 1,686 and 0.96 for an admin, 1,146, 1,688
  *   and 0.95 for a member in 3 teams who sees 54 sub-projects across the
- *   names; while counting from the read in 1,677, 3,047 and 1.79 and in
- *   1,256, 2,054 and 1.21.
+ *   names; while counting from the read, after every top-level project, in
+ *   2,222, 3,160 and 1.68 for the admin over 1,458 open tasks in the first
+ *   25 projects by name and in 1,256, 1,874 and 1.10 for the member over
+ *   1,440 in theirs.
  * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
  *   1,026, 375 and 0.19, every walker's week.
  * - An everyday team whose 600 rows 200 of its members own, of a roster of
