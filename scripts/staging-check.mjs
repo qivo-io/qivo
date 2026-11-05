@@ -2738,6 +2738,35 @@ async function uploadChecks() {
     keepFile(att, w, 'rest')
     await sameBytes(att, bytes, type)
   })
+  // A confirm sent again after its answer was lost answers the attachment
+  // the first one made, over REST and MCP alike, attaches the file once,
+  // and another user still finds no such upload.
+  await check('uploads/confirm-retry', async () => {
+    const { bytes, type } = sampleFile()
+    const start = await restOk(w, 'POST', `/tasks/${task.key}/attachments`, {
+      name: `${run.tag} sent twice.bin`,
+      content_type: type,
+      size: bytes.length,
+    })
+    const storage_id = await putBytes(start.upload_url, bytes, type)
+    const path = `/tasks/${task.key}/attachments/${start.ticket}`
+    const att = await restOk(w, 'POST', path, { storage_id })
+    keepFile(att, w, 'rest')
+    eq((await restOk(w, 'POST', path, { storage_id })).id, att.id, 'the REST confirm sent again')
+    const confirm = { ref: task.key, ticket: start.ticket, storage_id }
+    eq((await toolOk(w, 'confirm_attachment_upload', confirm)).id, att.id, 'the MCP one')
+    eq(
+      await toolRefusal(s, 'confirm_attachment_upload', confirm),
+      UPLOAD_MISSING,
+      "the Standard agent sending Nora's confirm again",
+    )
+    const rows = (await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).filter(
+      (a) => a.id === att.id,
+    )
+    eq(rows.length, 1, 'rows of the file')
+    await sameBytes(att, bytes, type)
+    return 'the same attachment over REST and MCP, one row, and 404 for another user'
+  })
   await check('write-token/mcp/upload-activity', async () => {
     const rows = await toolOk(w, 'list_task_activity', { ref: task.key })
     const attached = rows.filter((r) => r.verb === 'attached a file to')
@@ -4174,6 +4203,61 @@ async function tasksOnDemandCheck() {
     } finally {
       app.off('websocket', record)
     }
+  })
+}
+
+/** The step that uploads a file through a task window
+ *  (attachmentUploadCheck). */
+export const UPLOAD_STEP = 'ui/attachment-upload'
+
+/** A file sent through the task window of run.t0, as a person attaches one
+ *  (src/panels/IssueDetail.tsx): its upload goes on a ticket, so the POST
+ *  must go to /attachment-uploads/ on the API origin and answer 200, the
+ *  window must list the file, and its download must match the bytes. It
+ *  deletes the file again over REST. The app on the deployment must send
+ *  the file's size (files.uploadUrl), and the hosted receiver must answer
+ *  the app's origin, which every upload of the app depends on. It runs
+ *  before the run archives M. */
+async function attachmentUploadCheck() {
+  const w = run.creds.writeToken
+  await check(UPLOAD_STEP, async () => {
+    const task = run.t0
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator('[role="dialog"] [data-task-title]').waitFor({ timeout: 60_000 })
+    const bytes = randomBytes(2048)
+    const type = 'application/octet-stream'
+    const name = `${run.tag} window upload.bin`
+    const posted = app.waitForResponse(
+      (r) =>
+        r.request().method() === 'POST' &&
+        new URL(r.url()).pathname.startsWith('/attachment-uploads/'),
+      { timeout: 60_000 },
+    )
+    await app
+      .locator('[role="dialog"] input[type="file"][multiple]')
+      .setInputFiles({ name, mimeType: type, buffer: bytes })
+    const res = await posted
+    expect(onApi(res.url()), 'the upload went to another origin than the API')
+    eq(res.status(), 200, 'the upload POST')
+    await app
+      .locator(`[role="dialog"] [data-attachment-open="${name}"]`)
+      .waitFor({ timeout: 60_000 })
+    const att = (await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).find(
+      (a) => a.name === name,
+    )
+    expect(att, 'the task lacks the file')
+    try {
+      await sameBytes(att, bytes, type)
+    } finally {
+      eq(
+        (await restOk(w, 'DELETE', `/tasks/${task.key}/attachments/${att.id}`)).deleted,
+        true,
+        'deleted',
+      )
+    }
+    return `the POST went to /attachment-uploads/ and answered 200, and ${bytes.length} bytes downloaded the same`
   })
 }
 
@@ -6342,6 +6426,8 @@ async function main() {
   await boardCheck()
   // the task window's relation pickers, while it is active
   await relationPickersCheck()
+  // a file attached through the task window, on an upload ticket
+  await attachmentUploadCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
   // the Board and a task address without task windows, then the Roadmap

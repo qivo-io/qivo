@@ -63,6 +63,7 @@ import {
   TASK_WINDOWS_QUERY,
   THREAD_PAGE,
   taskPages,
+  UPLOAD_STEP,
   WAITS,
   WORKLOAD_PAGE,
   WORKLOAD_PAGES_MAX,
@@ -217,6 +218,13 @@ describe('staging check REST contract', () => {
       row: `${billingBytes(2048)} · 1 file`,
       counting: STORAGE_COUNTING,
     })
+  })
+
+  it("uploads through the task window's file input and finds the file by its row", () => {
+    const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
+    expect(UPLOAD_STEP).toBe('ui/attachment-upload')
+    expect(window).toContain('data-attachment-open={att.name}')
+    expect(window).toMatch(/type="file"\s+multiple/)
   })
   it("checks the relation pickers in the picker's own words", () => {
     const picker = readFileSync(
