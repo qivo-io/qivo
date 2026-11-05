@@ -501,6 +501,47 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('takes no parent for a row taken off from a batch read before it was current, and one from a batch read since', async () => {
+    await load()
+    // the batch serves QN-45 under another parent, QN-9
+    await show()
+    await reads[0].answer(batch([row(45, { parent_id: 'task-9' })]))
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[0]?.slice(1)).toEqual([
+      true,
+      { on: false, busy: false, parent: { id: 'task-9', hidden: false } },
+    ])
+    // the window lists it, and the person takes it off again
+    await show({ current: [relation(45)] })
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[1]?.slice(1)).toEqual([
+      false,
+      { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } },
+    ])
+    await show({ current: [] })
+    expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('false')
+    // the batch's row predates the first pick, so the next press sends the
+    // parent the person's removal left, none, rather than QN-9
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[2]?.slice(1)).toEqual([
+      true,
+      { on: false, busy: false, parent: { id: null, hidden: false } },
+    ])
+    // someone else moves it under QN-7, and the window's list drops it
+    await show({ current: [relation(45)] })
+    await show({ current: [] })
+    // a batch read since shows that parent, which the next press sends
+    await typeInto('task 45')
+    await rest()
+    await reads[1].answer(batch([row(45, { parent_id: 'task-7' })]))
+    expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('false')
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[3]?.slice(1)).toEqual([
+      true,
+      { on: false, busy: false, parent: { id: 'task-7', hidden: false } },
+    ])
+  })
+
   it('keeps a current row checked and locked once the person can no longer change it, and lists one they never could not at all', async () => {
     await load()
     const kid = relation(45, 'Mount the board')

@@ -28,9 +28,12 @@
      (`locked`), they show without taking a press, and so does one the
      person can no longer change, as after their access changed, which
      stays checked as long as the window lists it. In Subtasks and Linked
-     tasks a row that showed as current stays listed for the picker's life
-     with its last data, unchecked once it leaves the window's list, so a
-     relation taken off can be chosen again. A task shows once.
+     tasks a row that showed as current stays listed for the picker's life,
+     unchecked once it leaves the window's list, so a relation taken off
+     can be chosen again. It shows with its last data from the window, or
+     with the server's row of it from a batch read after it left, never
+     one read while it was current, which predates its relation. A task
+     shows once.
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
@@ -113,8 +116,8 @@ export type CurrentRelations = {
 
 /** One row of the picker: a current relation from the window, a task of
     the server's batch, or a row that showed as current and has left the
-    window's list since (its `candidate` the row it was shown with, if
-    any). */
+    window's list since (its `candidate` the server's row of it from a
+    batch read since, else the row it was shown with, if any). */
 type Choice = {
   uuid: string
   key: string
@@ -278,15 +281,28 @@ export function RelationPicker({
   // picker's life, so one taken off stays listed and can be pressed again;
   // a picker that closes after one pick (Parent) keeps none
   const wasCurrent = useRef(new Map<string, CurrentRelation>())
+  // the server's rows that showed while their task was current. The server
+  // leaves current relations out of its batches, so such a row was read
+  // before the relation the window showed, and its parent is older
+  const readBefore = useRef(new WeakSet<RelationCandidate>())
+  // the server's rows only for the text they answer, so a new text's rows
+  // start empty until its answer arrives
+  const served = answered ? list.rows : []
   // a current relation the person cannot change lists only once it showed
   // as one they could, and then stays current, checked and locked, as
   // long as the window lists it, rather than show as taken off
   const listed = (row: CurrentRelation) => !row.locked || wasCurrent.current.has(row.uuid)
   if (!single)
-    for (const row of current.rows) if (listed(row)) wasCurrent.current.set(row.uuid, row)
-  // the server's rows only for the text they answer, so a new text's rows
-  // start empty until its answer arrives
-  const served = answered ? list.rows : []
+    for (const row of current.rows) {
+      if (!listed(row)) continue
+      wasCurrent.current.set(row.uuid, row)
+      const old = served.find((r) => r.id === row.uuid)
+      if (old) readBefore.current.add(old)
+    }
+  // the server's row of a task that showed as current, from a batch read
+  // since it showed, if any
+  const servedSince = (uuid: string) =>
+    served.find((r) => r.id === uuid && !readBefore.current.has(r))
   const shownIds = new Set<string>()
   const choices: Choice[] = []
   for (const row of current.rows) {
@@ -304,9 +320,9 @@ export function RelationPicker({
     const key = issueKey(row.num)
     if (shownIds.has(row.uuid) || !matches(key, row.title)) continue
     shownIds.add(row.uuid)
-    // the server's row of it where a batch of this text holds it, else
-    // the row it showed with
-    const fresh = served.find((r) => r.id === row.uuid)
+    // the server's row of it where a batch read since holds it, else the
+    // row it showed with
+    const fresh = servedSince(row.uuid)
     choices.push({
       uuid: row.uuid,
       key: fresh ? issueKey(fresh.num) : key,
@@ -325,9 +341,9 @@ export function RelationPicker({
   const liveOf = (uuid: string): Seen | undefined => {
     const now = current.rows.find((row) => row.uuid === uuid)
     if (now) return seenOf({ current: now })
-    const fresh = served.find((row) => row.id === uuid)
     const was = wasCurrent.current.get(uuid)
-    if (was) return seenOf({ candidate: fresh ?? was.row })
+    if (was) return seenOf({ candidate: servedSince(uuid) ?? was.row })
+    const fresh = served.find((row) => row.id === uuid)
     return fresh ? seenOf({ candidate: fresh }) : undefined
   }
   // a settled pick shows until the window's lists or the server's row show
