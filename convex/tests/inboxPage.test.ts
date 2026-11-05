@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { OWN_READS } from '../lib/access'
+import { accessOf, OWN_READS } from '../lib/access'
 import { newWindowKey } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
 import { inboxSearchText, itemKinds, kindsMatch, messageDetail, messageLine } from '../lib/inbox'
@@ -1398,9 +1398,10 @@ describe('the rows', () => {
 /** A reader of everyday reach (AGENTS.md, the design size): a member of the
  * fixture's organization in `teams` teams, each sharing 7 top-level
  * projects of 3 sub-projects, about 20 sub-projects a team, and a grant on
- * each of `more` further top-level projects of 3 sub-projects. Answers the
- * reader and every sub-project it sees, 3 a parent in a row. */
-async function everyday(t: T, f: OrgFixture, teams = 3, more = 0) {
+ * each of `more` further top-level projects of 3 sub-projects, the last of
+ * them with `last`. Answers the reader and every sub-project it sees,
+ * those of one parent in a row. */
+async function everyday(t: T, f: OrgFixture, teams = 3, more = 0, last = 3) {
   const me = await reader(t, f, [], 'user')
   const subs = await t.run(async (ctx) => {
     const out: Doc<'projects'>[] = []
@@ -1422,9 +1423,9 @@ async function everyday(t: T, f: OrgFixture, teams = 3, more = 0) {
       })
       return (await ctx.db.get(_id)) as Doc<'projects'>
     }
-    const family = async (i: number) => {
+    const family = async (i: number, children = 3) => {
       const parent = await project(null, `Product line ${i}`)
-      for (const name of ['Firmware', 'Hardware', 'Validation'])
+      for (const name of ['Firmware', 'Hardware', 'Validation'].slice(0, children))
         out.push(await project(parent, `${name} ${i}`))
       return parent
     }
@@ -1448,7 +1449,7 @@ async function everyday(t: T, f: OrgFixture, teams = 3, more = 0) {
       }
     }
     for (let i = 0; i < more; i++) {
-      const parent = await family(1000 + i)
+      const parent = await family(1000 + i, i === more - 1 ? last : 3)
       await ctx.db.insert('project_access', {
         project_id: parent.id,
         profile_id: me.id,
@@ -1459,6 +1460,23 @@ async function everyday(t: T, f: OrgFixture, teams = 3, more = 0) {
   })
   return { me, subs }
 }
+
+/** How many live sub-projects of `me`'s organization `me` sees
+ * (lib/access.ts accessOf), whatever gave it the access. */
+const readable = (t: T, me: Doc<'profiles'>) =>
+  t.run(async (ctx) => {
+    const access = accessOf(ctx, me)
+    let n = 0
+    for (const p of await ctx.db.query('projects').collect())
+      if (
+        p.org_id === me.org_id &&
+        p.parent_id !== undefined &&
+        (await access.live(p.id)) &&
+        (await access.visible(p.id))
+      )
+        n++
+    return n
+  })
 
 /** `n` people of the fixture's organization, the actors of a case. */
 async function actors(t: T, f: OrgFixture, n: number) {
@@ -1778,11 +1796,12 @@ describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
     it('5. the 200 sub-projects one person can read, 30 groups each', async () => {
       const t = newT()
       const f = await withOrg(t)
-      // 63 sub-projects through the person's 3 teams and 138 through grants on 46 more
-      const { me, subs } = await everyday(t, f, 3, 46)
-      const two = subs.slice(0, 200)
-      expect(two).toHaveLength(200)
-      await plantRaw(t, me, 6000, (i) => two[i % 200].id, {
+      // 63 sub-projects through the person's 3 teams and 137 through grants
+      // on 46 more, the last of them with 2, so exactly 200 in all
+      const { me, subs } = await everyday(t, f, 3, 46, 2)
+      expect(subs).toHaveLength(200)
+      expect(await readable(t, me)).toBe(200)
+      await plantRaw(t, me, 6000, (i) => subs[i % 200].id, {
         title,
         sent: (i) => ({
           minute: i,
