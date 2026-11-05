@@ -205,7 +205,14 @@ with its run tag over REST, puts it on one of its fixture tasks, opens
 finds the label by search with **1 active task**, renames it in place and
 deletes it in its delete window (`ui/settings-labels`). While a label count
 backfill runs on the deployment, the counts read **Counting…** and that step
-fails. After that it checks
+fails. It then makes a sub-project of its own under its second project, with
+a User grant and a To Do task for the Standard agent, removes the agent's
+grant in that sub-project's settings, waits for the removal window to list
+the task from the deployment's preview (`accessRemovals.preview`), chooses
+Nora in the **Reassign** picker's search (`accessRemovals.reassignChoices`)
+and saves, then checks over REST that the task is Nora's and the agent's
+grant is gone (`ui/removal-window`). Against a backend from before the
+removal window's release that step fails. After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
@@ -601,6 +608,20 @@ it; roll forward instead. Returning the app alone to an earlier release is
 safe against a later backend, because that app derives the health table in
 the browser. The health table reads the same counts as the summary, so the
 release adds no step.
+
+The app's removal window reads `accessRemovals.preview`, which v0.1.99
+(`78f5d6ad`) first shipped, with its `reassign_to` argument and its
+`keep.offered`, `keep.permitted` and `reassign.permitted` fields, and its
+Reassign picker reads `accessRemovals.reassignChoices`. The release after
+v0.1.119 first ships the argument, the fields and the picker's query. An app
+from that release, against a backend before it, says that it could not check
+which tasks a removal affects and removes nothing, also in a tab that was
+open when the backend went back, until the backend rolls forward. From that
+release on, never return the backend to a commit before it; roll forward
+instead. Returning the app alone to an earlier release is safe against a
+later backend, because that app works a removal out from its loaded tasks
+and the backend keeps every earlier argument and field. The release adds no
+step.
 
 The task window edits a task the workspace does not hold yet from the
 window's own read of it, through the mutations the app already sends
