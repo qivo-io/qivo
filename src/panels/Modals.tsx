@@ -971,14 +971,20 @@ function MoveIssueModal({
    organization refuses closes it with the server's sentence. */
 
 /* What the window compares before it saves: each listed holding, the
-   counts, the Keep targets and which choices the server allows. */
+   people who lose sight (also of tasks it does not list, whom Keep as
+   Viewer grants Viewer), the counts, the Keep targets and what the Keep
+   text says each person can still change, and which choices the server
+   offers and allows. */
 const removalKey = (a: RemovalAnswer): string =>
   JSON.stringify([
     a.items.map((i) => `${i.task_id}:${i.project_id}:${i.role}:${i.holder_id}`).sort(),
+    a.people.map((p) => p.id).sort(),
     a.tasks,
     a.hidden,
     a.items_total,
     a.keep.targets,
+    a.keep.changers.map((c) => `${c.id}:${c.projects.join(',')}:${c.more}`).sort(),
+    a.keep.offered,
     a.keep.allowed,
     a.reassign.allowed,
   ])

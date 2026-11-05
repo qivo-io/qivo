@@ -506,6 +506,34 @@ describe('saving the removal window', () => {
     expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
   })
 
+  it('asks again when the holders of tasks it does not list or what they can still change differ', async () => {
+    // Ada's task sits in a project the caller cannot see, so the window
+    // names her and counts the task without listing it
+    const leo = answer().people[0]
+    const ada = { id: 'ada-berg', name: 'Ada Berg', kind: 'person', org_role: 'user' } as const
+    const shown = answer({ people: [leo, ada], tasks: 2, hidden: 1 })
+    for (const now of [
+      // that task went from Ada to Carl, whom Keep as Viewer would grant Viewer
+      answer({ people: [leo, { ...ada, id: 'carl', name: 'Carl Berg' }], tasks: 2, hidden: 1 }),
+      // Ada can still change Work once the access is gone
+      answer({
+        people: [leo, ada],
+        tasks: 2,
+        hidden: 1,
+        keep: { changers: [{ id: 'ada-berg', projects: [work], more: 0 }] },
+      }),
+    ]) {
+      preview = async () => now
+      const onClose = await open(shown)
+      await click(shellButton('Change to Viewer'))
+      expect(windowText()).toContain(
+        'Access or tasks changed while this window was open. Check them and choose again.',
+      )
+      expect(onClose).not.toHaveBeenCalled()
+    }
+    expect(writes()).toEqual([])
+  })
+
   it('asks the server whether the chosen person can still take the tasks, and asks again with Unassigned when not', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     onTestFinished(() => {
