@@ -354,8 +354,9 @@ which also becomes a comment, but do not require one
 
 Open **Archived tasks** from a project or sub-project's **…** menu, or from
 **Settings → Projects → Archived tasks**. The page opens on that project, or
-with nothing chosen, and reads nothing until you choose. Its project list
-works like **Search in**
+from Settings on the project you were viewing, and otherwise with nothing
+chosen, and reads nothing until you choose. Its project list works like
+**Search in**
 ([Search palette](./finding-your-way-around.md#search-palette)). Choose up to
 50 projects and sub-projects of one organization at once, each shown under
 the filters with a button that takes it off, or **All projects** of one
