@@ -813,6 +813,18 @@ due date on the first day of its last planned week. `lib/visibility.ts`
 lastComments was the last to call, is gone; the tests keep it as an oracle.
 There is no schema change and no backfill.
 
+The project lists of Settings, `projectSettings.projects`, `subProjects`,
+`archived` and `archivedSubProjects`, first ship in the release after
+v0.1.128. No app calls them yet, so that release sets no rollback floor for
+them and needs no step, and returning the backend to a commit before it
+stays safe while no app calls the lists. The release whose app first calls
+the lists makes the release that shipped them the backend's floor, and its
+own paragraph here says so. They add the index `projects.by_org_state_name`,
+which Convex builds at deploy with no backfill, and which a rollback drops
+with no effect on stored data. The lists read the archive states, reach
+rows and name keys every deployment holds since v0.1.97, and answer
+`not_ready` for an organization without both of its `org_ready` stamps.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
