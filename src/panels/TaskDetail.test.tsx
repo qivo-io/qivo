@@ -1491,6 +1491,9 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     await answer('tasks:board', card(day(28)))
     expect(verdict()).toBe('late')
     expect(delayChip()?.dataset.delayChip).toBe('late')
+    // the Board hides and stops reading, so its kept card lends nothing
+    await act(async () => P.watchBoard('board:desktop', null))
+    expect(delayChip()?.dataset.delayChip).toBe('unknown')
   })
 
   it('says Delayed for a passed due date, as for a task the workspace holds, and nothing for a Done task or one without a due date or plan', async () => {
