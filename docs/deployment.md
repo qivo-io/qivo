@@ -228,7 +228,18 @@ task the run archived only with it on. That shows whether the deployment's
 search index takes the filter for an absent `archived_at` and still returns
 active matches. The archived task must then open read-only in its task
 window, with its description and, under **All**, its history, which shows
-whether the deployment answers an archived task's text and history. It then
+whether the deployment answers an archived task's text and history. Archived
+tasks chooses its project through the shared project picker, found by name,
+and between the two searches the run chooses through that picker on the
+deployment's navigation reads (`ui/project-picker`): it lists its project's
+two sub-projects from `projectNav.children` and chooses both, which must
+list exactly its three archived tasks, takes one sub-project's chip off,
+finds that sub-project with its project from `projectNav.search`, opens an
+archived task over Archived tasks read-only with its description, and
+narrows Search to the sub-project, where **Include archived tasks** must
+find exactly the task archived there. Against a backend from before v0.1.126
+both Archived tasks steps fail, as each finds its project through the
+picker's search. It then
 opens task links in fresh loads (`ui/task-link`): that archived task's,
 which must show read-only under its archived note with its title,
 `/tasks/qn-99999999`, which must say the task can't be opened, and an active
@@ -655,17 +666,17 @@ works against any backend from v0.1.97 on, which the floors above already
 hold.
 
 The project navigation reads `projectNav.page`, `projectNav.children` and
-`projectNav.resolve` first ship in the release after v0.1.117. No app calls
-them yet, so that release sets no rollback floor and needs no step. The
-release whose app first calls them makes the release that shipped them the
-backend's floor, and its own paragraph here says so. The reads use only the
-reach rows and name keys every deployment holds since v0.1.97 and the
-favorites rows below. `projectNav.page` and `projectNav.children` answer
-`not_ready` for an organization without both of its `org_ready` stamps, and
-`projectNav.resolve` answers without them. The reads skip the favorites a
-rollback past the favorites release leaves, by the reader rule the
-favorites paragraph below describes, so such a row never shows and keeps
-its project, where the seat sees it, in the list of the rest.
+`projectNav.resolve` first shipped in v0.1.118 (`13f4bcba`), which set no
+rollback floor and needed no step. The shared project picker is the first
+app that calls them, and its paragraph below says which floor that app
+needs. The reads use only the reach rows and name keys every deployment
+holds since v0.1.97 and the favorites rows below. `projectNav.page` and
+`projectNav.children` answer `not_ready` for an organization without both
+of its `org_ready` stamps, and `projectNav.resolve` answers without them.
+The reads skip the favorites a rollback past the favorites release leaves,
+by the reader rule the favorites paragraph below describes, so such a row
+never shows and keeps its project, where the seat sees it, in the list of
+the rest.
 
 The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119. No
@@ -754,17 +765,15 @@ finish checking within those limits now gets that refusal on a task's
 history too, as on the workspace. There is no schema change and no backfill.
 
 The directory's name search across a person's projects and sub-projects,
-`projectNav.search`, first ships in the release after v0.1.125. No app
-calls it yet, so that release sets no rollback floor and needs no step, and
-returning the backend to a commit before it stays safe while no app calls
-the search. The release whose app first calls it makes the release that
-shipped it the backend's floor, and its own paragraph here says so. The
-search reads only the reach rows and name keys every deployment holds since
-v0.1.97 and the favorites rows below, and the release changes no table,
-field or index. It answers `not_ready` for an organization without both of
-its `org_ready` stamps, and it skips the favorites a rollback past the
-favorites release leaves, by the reader rule the favorites paragraph below
-describes, as the navigation reads do.
+`projectNav.search`, first shipped in v0.1.126 (`1228de4c`), which set no
+rollback floor and needed no step. The shared project picker is the first
+app that calls it, and its paragraph below says which floor that app
+needs. The search reads only the reach rows and name keys every deployment
+holds since v0.1.97 and the favorites rows below, and the release changes
+no table, field or index. It answers `not_ready` for an organization
+without both of its `org_ready` stamps, and it skips the favorites a
+rollback past the favorites release leaves, by the reader rule the
+favorites paragraph below describes, as the navigation reads do.
 
 The task window's Parent, Subtasks and Linked tasks pickers read the tasks
 they offer from `taskWindow.relationCandidates`, once a batch and never
@@ -824,6 +833,26 @@ which Convex builds at deploy with no backfill, and which a rollback drops
 with no effect on stored data. The lists read the archive states, reach
 rows and name keys every deployment holds since v0.1.97, and answer
 `not_ready` for an organization without both of its `org_ready` stamps.
+
+The shared project picker, which **Search in** and **Settings → Projects →
+Archived tasks** open, first ships in the release after v0.1.127. While it
+is open it keeps its batches of `projectNav.page`, `projectNav.children` and
+`projectNav.search` live, and Search and Archived tasks read
+`projectNav.resolve` once for the project they open on. v0.1.118
+(`13f4bcba`) first shipped `projectNav.page`, `projectNav.children` and
+`projectNav.resolve`, and v0.1.126 (`1228de4c`) first shipped
+`projectNav.search`. The release changes no server function, so it has no
+server change and no release step. An app from that release against a
+backend before v0.1.126 says in a picker's search that it couldn't load your
+projects, and against one before v0.1.118 says so in every picker list and
+opens Search on **All projects** and Archived tasks on no choice, while the
+**All projects** rows still work, also in a tab that was open when the
+backend went back, until the backend rolls forward. So this app needs a
+backend from v0.1.126 (`1228de4c`) on. The relation pickers' floor above,
+v0.1.127, already holds that, so this release sets no new floor. From it
+on, as from that one, never return the backend to a commit before v0.1.127;
+roll forward instead. Returning the app alone to an earlier release is safe
+against a later backend, because that app lists the workspace's projects.
 
 ## Node.js version
 
