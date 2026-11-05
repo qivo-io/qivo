@@ -1,6 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import { plannerFixture as fixture, type Snapshot } from './plannerFixture.setup'
 
 type Planner = typeof import('./planner')['P']
@@ -133,6 +134,79 @@ describe('refusal sentences in restore and upload toasts', () => {
       'Couldn\'t upload "notes.txt". No write access to this project.',
       'error',
     )
+  })
+
+  /* The arguments the store sent `name` with, by its last call. */
+  const sentWith = (name: string) =>
+    network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === name).at(-1)?.[1]
+  /* An upload URL's receiver that refuses the POST with `error`. */
+  const receiverRefuses = (error: unknown) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ error }, { status: 400 })),
+    )
+  const BUDGET =
+    'the demo stores at most 5 MiB of files in total, and 0.4 MiB of it is free. Remove a file, a picture or your background, or delete items for good in Settings → Projects → Deleted items, then try again.'
+
+  it("quotes the demo budget's and the upload cap's sentences in full, capitalized, naming the file", async () => {
+    for (const message of [BUDGET, LIMITS.uploadsInProgress.refusal]) {
+      showToast.mockClear()
+      answers['files:uploadUrl'] = refuse('rule', message)
+      expect(await P.addAttachment('task-1', file())).toBeNull()
+      expect(showToast).toHaveBeenCalledExactlyOnceWith(
+        `Couldn't upload "notes.txt". ${message.charAt(0).toUpperCase()}${message.slice(1)}`,
+        'error',
+      )
+    }
+  })
+
+  it('declares the size and name of the file it sends, and quotes the sentence its upload URL refused', async () => {
+    answers['files:uploadUrl'] = () => Promise.resolve('https://upload.example.test/u')
+    receiverRefuses('the file is larger than the most this upload URL takes; start a new upload')
+    expect(await P.addAttachment('task-1', file())).toBeNull()
+    expect(sentWith('files:uploadUrl')).toMatchObject({ size: 11, name: 'notes.txt' })
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      'Couldn\'t upload "notes.txt". The file is larger than the most this upload URL takes; start a new upload.',
+      'error',
+    )
+    // an answer without a sentence names the file alone
+    showToast.mockClear()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('Bad gateway', { status: 502 })),
+    )
+    expect(await P.addAttachment('task-1', file())).toBeNull()
+    expect(showToast).toHaveBeenCalledExactlyOnceWith('Couldn\'t upload "notes.txt"', 'error')
+  })
+
+  it('declares a picture’s size and answers the sentence its upload URL refused', async () => {
+    answers['files:avatarUploadUrl'] = () => Promise.resolve('https://upload.example.test/a')
+    receiverRefuses(BUDGET)
+    const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
+    const profile = snap.profiles[0].id
+    expect(await P.setAvatar(profile, picture)).toBe(
+      `${BUDGET.charAt(0).toUpperCase()}${BUDGET.slice(1)}`,
+    )
+    expect(sentWith('files:avatarUploadUrl')).toEqual({ profile_id: profile, size: 9 })
+  })
+
+  it('declares a background’s size, and cancels its ticket when the receiver refuses it', async () => {
+    answers['appearance:createUpload'] = () =>
+      Promise.resolve({
+        ticket_id: 'ticket-1',
+        upload_url: 'https://upload.example.test/b',
+        expires_at: 0,
+      })
+    receiverRefuses({
+      code: 'bad_request',
+      message: 'The file is larger than its upload said. Choose it again.',
+    })
+    const image = new File(['jpeg bytes'], 'Lake.jpg', { type: 'image/jpeg' })
+    await expect(P.uploadAppearanceImage(image, new AbortController().signal)).rejects.toThrow(
+      'The file is larger than its upload said. Choose it again.',
+    )
+    expect(sentWith('appearance:createUpload')).toEqual({ name: 'Lake.jpg', size: 10 })
+    expect(sentWith('appearance:cancelUpload')).toEqual({ ticket_id: 'ticket-1' })
   })
 
   it('quotes the size refusal that attach returns as a sentence', async () => {

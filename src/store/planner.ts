@@ -4961,6 +4961,20 @@ function toastCreateProjectError(e: unknown, label: string) {
   toast(`Couldn't create ${label}`)
 }
 
+/* The sentence an upload URL's receiver refused a POST with, its
+   `{"error": "…"}` (convex/machine/uploads.ts and the demo's receiver in
+   convex/http.ts), or null when the answer holds none. The size the upload
+   declared, the most an older ticket takes, a slow body, a used or expired
+   URL and the demo's storage each explain themselves there. */
+async function receiverRefusal(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.json()) as { error?: unknown }
+    return typeof body.error === 'string' && body.error.trim() ? body.error : null
+  } catch {
+    return null
+  }
+}
+
 /* The avatar mutators return an error SENTENCE (Settings toasts it verbatim).
    A refusal's own message — the set_avatar right, the type and size rules — is
    the best sentence there is; anything without one gets the fallback. */
@@ -10976,6 +10990,13 @@ export const PLANNER = {
       resolves the new attachment id, or null on any failure (toasted).
       `inline` marks description images, which the attachments list hides.
 
+      files.uploadUrl gets the file's size and name, after compression, since
+      the compressed file is what is sent. Outside the private demo it answers
+      an upload ticket's URL on the API origin, which stores one file of that
+      size, and only this person's attach of that file to this task takes it;
+      in the demo it reserves that size in the demo's shared storage. A
+      refusal from the URL's receiver is toasted in its own words.
+
       No optimistic row until the server accepts it: three awaited hops make
       optimism pointless, and the server deletes oversize bytes inside attach
       itself (the returned refusal). The accepted row paints until a
@@ -11034,7 +11055,7 @@ export const PLANNER = {
       try {
         const url = await sendAwaited(
           api.files.uploadUrl,
-          { org_id: org, issue_id: uuid },
+          { org_id: org, issue_id: uuid, size: file.size, name: file.name },
           'none',
           { about },
         )
@@ -11045,7 +11066,12 @@ export const PLANNER = {
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file,
         })
-        if (!res.ok) throw new Error(`upload failed (${res.status})`)
+        if (!res.ok) {
+          const why = await receiverRefusal(res)
+          console.error('[qivo] upload failed:', res.status)
+          toast(`Couldn't upload "${file.name}"${why ? `. ${asSentence(why)}` : ''}`)
+          return null
+        }
         const { storageId } = (await res.json()) as { storageId: string }
         const out = await sendAwaited(
           api.files.attach,
@@ -11975,7 +12001,11 @@ export const PLANNER = {
   },
   uploadAppearanceImage: (file: File, signal: AbortSignal): Promise<AppearancePreferences> => {
     const pending = (async () => {
-      const ticket = await sendAwaited(api.appearance.createUpload, { name: file.name }, 'none')
+      const ticket = await sendAwaited(
+        api.appearance.createUpload,
+        { name: file.name, size: file.size },
+        'none',
+      )
       try {
         if (signal.aborted) throw new DOMException('Upload canceled', 'AbortError')
         const response = await fetch(browserBackendUrl(ticket.upload_url), {
@@ -13068,7 +13098,11 @@ export const PLANNER = {
     const small = await avatarImage(file)
     if (small.size > LIMITS.avatarSize.max * MIB) return limitSentence(LIMITS.avatarSize)
     try {
-      const url = await sendAwaited(api.files.avatarUploadUrl, { profile_id: profileId }, 'none')
+      const url = await sendAwaited(
+        api.files.avatarUploadUrl,
+        { profile_id: profileId, size: small.size },
+        'none',
+      )
       const res = await fetch(browserBackendUrl(url), {
         method: 'POST',
         // the POST's Content-Type lands in storage metadata — it is what the
@@ -13076,7 +13110,10 @@ export const PLANNER = {
         headers: { 'Content-Type': small.type || 'application/octet-stream' },
         body: small,
       })
-      if (!res.ok) return "Couldn't upload that picture"
+      if (!res.ok) {
+        const why = await receiverRefusal(res)
+        return why ? asSentence(why) : "Couldn't upload that picture"
+      }
       const stored = ((await res.json()) as { storageId: string }).storageId as Id<'_storage'>
       // the accepted portrait paints until a delivery holds it; a rebuild
       // prunes and revokes the replaced portrait source
