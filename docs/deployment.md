@@ -806,7 +806,9 @@ daylight-saving change skips a midnight, such as Santiago, Havana or Beirut,
 the grid began each week an hour late in the weeks around that day, so there
 the Overview placed a change made in the first hour of a week in the week
 before, and the Roadmap's due mark could say a plan ends after a due date on
-the first day of its last planned week. `lib/visibility.ts`
+the first day of its last planned week. The agenda reads each week start a
+client sends as within an hour of its local midnight, so an older app's
+clock still reads every Done task its page shows. `lib/visibility.ts`
 `orgProjectView`, which read every project of the organization and
 lastComments was the last to call, is gone; the tests keep it as an oracle.
 There is no schema change and no backfill.
