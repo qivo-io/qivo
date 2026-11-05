@@ -1016,7 +1016,7 @@ export const PROJECT_TOOLS: McpTool[] = [
       name: 'get_project',
       title: 'Get project',
       description:
-        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after a sub-project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it.',
+        'One project you can see, by number, key or uuid: its lead, review time, delay tracking, its completion (done and total tasks, `status: "counting"` with null counts for a moment after any project is archived or restored, so ask again later, or `status: "unavailable"` in a project with very many sub-projects), its milestones (kept on the top-level project) and the users and teams given access to it.',
       inputSchema: {
         type: 'object',
         $schema: SCHEMA,

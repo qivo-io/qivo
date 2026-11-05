@@ -260,9 +260,10 @@ Useful field rules:
   `last_comment_at` is when the task was last commented on, or `null`. `get_project` and
   `GET /v1/projects/{ref}` add `completion`, the Overview's done and total
   tasks with `status: "ok"`. It says `status: "counting"` with null counts
-  for a moment after one of the project's sub-projects is archived or
-  restored, so ask again later, and `status: "unavailable"` with null
-  counts in a project with too many sub-projects to read in one request. If a task
+  for a moment after any project in the organization is archived, restored
+  or moved to Deleted items, so ask again later, and `status:
+  "unavailable"` with null counts in a project with too many sub-projects
+  to read in one request. If a task
   list says it could not be read within the request's limits, name a
   `project` to list one project's tasks.
 

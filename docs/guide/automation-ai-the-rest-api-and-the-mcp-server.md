@@ -15,7 +15,7 @@ task's history and read planned hours per person by the same rules as the
 app. Planned hours come a page of people at a time, and say when a person's
 open work is too large to read in one request. Both also read a group's
 progress, a project's completion, a task's delay verdict and when it was
-last commented on, as the app shows them. For a moment after a sub-project
+last commented on, as the app shows them. For a moment after any project
 is archived or restored, a project's completion can say that it is still
 counting. Images inside descriptions stay in the app.
 

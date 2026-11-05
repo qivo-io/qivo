@@ -4282,18 +4282,18 @@ const counts = (done, total) => ({
 /** A project's `completion` whose tasks were counted, which says `ok`. */
 const completion = (done, total) => ({ status: 'ok', ...counts(done, total) })
 
-/** A project's `completion` while its family's counts are not whole, as
- *  for a moment after a sub-project is archived or restored. */
+/** A project's `completion` while the organization's counts are not
+ *  whole, as for a moment after any project is archived or restored. */
 const COUNTING = { status: 'counting', done: null, total: null, percent: null }
 
-/** The milliseconds a check waits for a family's counts to be whole again
- *  after an archive or a restore regroups them. */
+/** The milliseconds a check waits for the counts to be whole again after
+ *  an archive or a restore regroups them. */
 export const REGROUP_WAIT = 30_000
 
 /** Project `p`'s completion over REST once it no longer says `counting`,
- *  which an archive or a restore of a sub-project in its family starts
- *  (convex/model/overviewCounts.ts startRegroup), or a check failure after
- *  REGROUP_WAIT. */
+ *  which an archive or a restore of any project in the organization starts
+ *  (convex/model/overviewCounts.ts startRegroup and countsReady), or a
+ *  check failure after REGROUP_WAIT. */
 async function countedCompletion(cred, p) {
   let got = null
   const whole = await until(async () => {

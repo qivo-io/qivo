@@ -307,8 +307,8 @@ Later in November 2026 `get_workload` began to answer one page of people at
 a time, as `{next_cursor, week_starts, project, hidden, people}`, with a
 `status` on each person, `ok` or `unavailable`, and took `limit`, `cursor`,
 `offset` (refused unless `0`) and `person` (see [Workload](#workload)). A
-project's `completion` gained `counting`, for a moment after one of its
-sub-projects is archived or restored. A client holding the older catalogue
+project's `completion` gained `counting`, for a moment after any project of
+the organization is archived or restored. A client holding the older catalogue
 gets the new answers too. The answer kept `people`, so code that read every
 person from one answer now reads the first page, at most 50 people, as if
 it were the whole organization, without any error. Such code must follow
@@ -1294,7 +1294,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
-| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after a sub-project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
+| `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `create_project` | Create a top-level project from `name` (at most 80 characters), or with `parent` (number/key/uuid) a sub-project; optional `lead_id` (you by default) and `description`. Answers like `get_project` |
 | `update_project` | Change a project you lead: `name` (at most 80 characters), `description`, `review_hours`, `track_delay`, `archived: true/false` to archive or restore it, and `lead_id` to hand over the lead (people only). An archive or restore and a rename in one call share one budget of 2,000 sub-projects and access entries (see [Limits](#limits)) and of the data one change can read; a project tree past that data is refused with `this project, or the top-level project above it, has sub-projects that hold more data than one change can read, so it cannot be archived or restored at once. Shorten the longest project names or descriptions there, or delete some of those sub-projects first.` and nothing changes. When a call that archives or restores and renames is refused on that budget, make the archive or restore and the rename two calls, which each get the whole budget. A top-level project that more people have among their favorites than one change can update is refused with `more people have this project among their favorites than one change can update, so it cannot be archived, restored or renamed at once. Contact support@qivo.io so we can help.` and nothing changes; one call that archives or restores and renames it updates each favorite once, so two calls would meet the same refusal. Answers like `get_project`. It takes no `archive_reason`, which only tasks take. `expected` holds what you last read of the fields it changes, `lead_id` as `get_project` shows it. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
@@ -1582,16 +1582,18 @@ task with an active subtask in any project that is not archived counts as a
 group and is left out, as in the app, also when that subtask is hidden from
 you or sits in another top-level project. `percent` is rounded, and `0` when
 `total` is `0`. Its `status` is `ok`. Qivo keeps these counts as tasks
-change, so they hold whatever the project's size. For a moment after one of
-the project's sub-projects is archived, restored, moved to Deleted items or
-brought back from it, and while Qivo counts an organization again, it is
+change, so they hold whatever the project's size. For a moment after any
+project of the organization is archived, restored, moved to Deleted items
+or brought back from it, and while Qivo counts an organization again, it is
 `{"status": "counting", "done": null, "total": null, "percent": null}`, so
-ask again later; an `update_project` that restores a sub-project answers
-its completion as `counting` too, and one that archives a project answers
-`null`. In a project with so many sub-projects that the call has no room
-left to read their counts, it is `{"status": "unavailable", "done": null,
-"total": null, "percent": null}` instead. Neither ever fails the read or
-`update_project`.
+ask again later. That includes a project in another top-level project,
+because older versions of Qivo let a subtask sit in another top-level
+project than its parent. An `update_project` that restores a project
+answers its completion as `counting` too, unless it has no sub-project you
+can read, and one that archives a project answers `null`. In a project with
+so many sub-projects that the call has no room left to read their counts,
+it is `{"status": "unavailable", "done": null, "total": null, "percent":
+null}` instead. Neither ever fails the read or `update_project`.
 `completion` is `null` for an archived project, and `create_project` answers
 `ok` with zeros, because a new project holds no tasks. `status` arrived in
 November 2026, and `counting` later that month, so treat a `status` you do

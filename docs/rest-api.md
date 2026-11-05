@@ -545,16 +545,19 @@ A row of the list:
   the app, also when that subtask is hidden from you or sits in another
   top-level project. `percent` is rounded, and `0` when `total` is `0`. Its
   `status` is `ok`. Qivo keeps these counts as tasks change, so they hold
-  whatever the project's size. For a moment after one of the project's
-  sub-projects is archived, restored, moved to Deleted items or brought
+  whatever the project's size. For a moment after any project of the
+  organization is archived, restored, moved to Deleted items or brought
   back from it, and while Qivo counts an organization again, it is
   `{"status": "counting", "done": null, "total": null, "percent": null}`,
-  so ask again later. A `PATCH` that restores a sub-project answers its
-  completion as `counting` too, and one that archives a project answers
-  `null`, as for any archived project. In a project with so many
-  sub-projects that the request has no room left to read their counts, it
-  is `{"status": "unavailable", "done": null, "total": null, "percent":
-  null}` instead. Neither ever fails the read or a `PATCH`.
+  so ask again later. That includes a project in another top-level
+  project, because older versions of Qivo let a subtask sit in another
+  top-level project than its parent. A `PATCH` that restores a project
+  answers its completion as `counting` too, unless it has no sub-project
+  you can read, and one that archives a project answers `null`, as for any
+  archived project. In a project with so many sub-projects that the request
+  has no room left to read their counts, it is `{"status": "unavailable",
+  "done": null, "total": null, "percent": null}` instead. Neither ever
+  fails the read or a `PATCH`.
   `completion` is `null` for an archived project. A new project answers `ok`
   with zeros, because it holds no tasks. `status` arrived in November 2026,
   and `counting` later that month, so treat a `status` you do not know as
