@@ -8,6 +8,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 
 /* The entries App's pages and phone layers leave, on App and the real
    store. A layer that closes with the move it started, as Create and a
@@ -159,12 +160,16 @@ async function boot(address: string, phone: boolean, second = false) {
   reads = 0
   // what the server holds: the workspace last published
   let server = snap
+  // a project's Settings page reads from the workspace last published
+  const settings = projectSettingsServer(() => server)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
+        settings.rerun()
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
