@@ -1388,22 +1388,38 @@ const PURGEABLE = ['ready', 'stuck'] as const
 
 /* Purging a project item also purges what could never come back without
  * it: the task items whose project was in it, and the sub-project items
- * whose parent was. Items still moving or restoring are left to their own
- * expiry. Each read asks an index for one kind in one purgeable state
- * (by_org_project_kind_state, by_org_parent_kind_state), so it reads only
- * items it purges, however many items in other states name the project,
- * and the step's budget counts every item it reads. */
+ * whose parent was (dependentRanges). Items still moving or restoring are
+ * left to their own expiry. Each read asks an index for one kind in one
+ * purgeable state, so it reads only items it purges, however many items in
+ * other states name the project, and the step's budget counts every item
+ * it reads. */
 async function purgeDependents(run: Run): Promise<boolean> {
-  const { org_id } = run.item
-  for (const id of itemProjectIds(run.item))
-    for (const state of PURGEABLE) {
-      const reads = [
-        run.ctx.db
+  for (const read of dependentRanges(run.ctx, run.item))
+    if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent))))
+      return false
+  return true
+}
+
+/** The ranges that hold what a purge of project item `item` purges with
+ * it now, in the order purgeDependents drains them: for each of its
+ * projects and each purgeable state, the task items whose project it is
+ * (by_org_project_kind_state) and then the sub-project items whose parent
+ * it is (by_org_parent_kind_state). A sub-project item found there purges
+ * its own in turn, in its own purge. Delete now's summary counts through
+ * the same ranges (model/deletedItemsChoices.ts), so the two never
+ * disagree. A range reads only once it is iterated. */
+export function dependentRanges(ctx: QueryCtx, item: Item): AsyncIterable<Item>[] {
+  const { org_id } = item
+  const ranges: AsyncIterable<Item>[] = []
+  for (const id of itemProjectIds(item))
+    for (const state of PURGEABLE)
+      ranges.push(
+        ctx.db
           .query('deleted_items')
           .withIndex('by_org_project_kind_state', (q) =>
             q.eq('org_id', org_id).eq('project_id', id).eq('kind', 'task').eq('state', state),
           ),
-        run.ctx.db
+        ctx.db
           .query('deleted_items')
           .withIndex('by_org_parent_kind_state', (q) =>
             q
@@ -1412,12 +1428,8 @@ async function purgeDependents(run: Run): Promise<boolean> {
               .eq('kind', 'project')
               .eq('state', state),
           ),
-      ]
-      for (const read of reads)
-        if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent))))
-          return false
-    }
-  return true
+      )
+  return ranges
 }
 
 /* Rows the item still holds in the live tables. A project item that got
