@@ -19,8 +19,9 @@
      org_id when the login holds several seats, and shows the other
      organizations' rows without a press; All projects of an organization
      leaves every row open. A top-level row's arrow lists its sub-projects
-     (projectNav.children), one row at a time. A new text collapses it,
-     and a pick that only narrows the search to its organization keeps
+     (projectNav.children), one row at a time. A new text collapses it.
+     A pick that only narrows the search to its organization, or taking
+     that pick off, keeps it open while the restarted list still shows
      it.
    - Each list reads through the shared paged list (lib/pagedList.ts) with
      live batches, which stop while the tab or the desktop window is
