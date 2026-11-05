@@ -483,12 +483,17 @@ type RemovalShown = {
 
 export function ProjectPage({
   projectId,
+  read: given,
   setPage,
   onBackPage = setPage,
   onProjectGone,
   onHolding,
 }: {
   projectId: string
+  /** the read of the project's settings that Settings holds for this page
+      (useProjectSettings), so Try again subscribes afresh; a page rendered
+      on its own reads its own */
+  read?: ProjectSettingsRead
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
@@ -504,8 +509,12 @@ export function ProjectPage({
 }) {
   /* The page reads its project, its parent, its lead and every right from
      the server, and shows nothing of the project until that answer comes
-     (useProjectSettings). */
-  const read = useProjectSettings(projectId)
+     (useProjectSettings). It keeps one watch of that read: a second one
+     beside Settings' would join the subscription Settings holds, so its
+     Try again would read back the failure Convex stored and never ask the
+     server again. */
+  const own = useProjectSettings(given ? null : projectId)
+  const read = given ?? own
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up
      when the project leaves, whether by a delete it sent before the

@@ -1,7 +1,7 @@
 /* A project's Settings page's read of its settings from the server
-   (projectSettings.get), which Settings holds too for its check that the
-   page is still valid and the phone's Back. It lives apart from
-   ProjectSettings.tsx, which exports components only. */
+   (projectSettings.get). Settings holds it for its check that the page is
+   still valid and the phone's Back, and hands it to the page. It lives
+   apart from ProjectSettings.tsx, which exports components only. */
 import React from 'react'
 import { api } from '../../../convex/_generated/api'
 import { useLiveView } from '../../lib/liveView'
@@ -36,9 +36,12 @@ export type ProjectSettingsRead = {
  * or nothing for null. It subscribes while the page shows, stops while the
  * tab or the desktop window is hidden and when the page is left, and
  * keeps the last `ok` answer for the same project while the read has no
- * current answer, a failure included (ProjectSettingsRead). Settings and
- * the page both call it with equal arguments, which share one
- * subscription (lib/liveView.ts).
+ * current answer, a failure included (ProjectSettingsRead). Call it once
+ * per page: Settings calls it and passes the read to ProjectPage, and a
+ * ProjectPage rendered on its own calls it itself. A second call with
+ * equal arguments joins the first one's subscription (lib/liveView.ts),
+ * so its `retry` reads back the result Convex holds, a failure included,
+ * and asks the server nothing while the first call still subscribes.
  */
 export function useProjectSettings(projectId: string | null): ProjectSettingsRead {
   const key = projectId === null ? null : JSON.stringify({ id: projectId })

@@ -1068,6 +1068,28 @@ describe('Settings around a project page', () => {
     expect(resetPage).toHaveBeenCalledWith('account')
   })
 
+  it('holds one watch of the settings read with the page, which Try again starts afresh', async () => {
+    /* Convex gives equal watches one subscription, so a second watch by
+       the page would join the failed one Settings holds and read its error
+       back on Try again; the double gives each watch its own, so count
+       them. */
+    const gets = () =>
+      network.onUpdate.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectSettings:get')
+        .length
+    const getsOpen = () => server.reads.open().filter((r) => r.name === 'projectSettings:get')
+    server.force = { fail: ['get'] }
+    const before = gets()
+    await settingsAt('project:plan')
+    expect(pageState()).toBe('failed')
+    expect(gets() - before).toBe(1)
+    expect(getsOpen()).toHaveLength(1)
+    server.force = {}
+    await click(button('Try again'))
+    expect(pageState()).toBe('ok')
+    expect(gets() - before).toBe(2)
+    expect(getsOpen()).toHaveLength(1)
+  })
+
   it("keeps the page for a project the workspace does not hold, and takes the phone's Back to the parent the answer names", async () => {
     await load(undefined, (copy) => {
       copy.projects = copy.projects.filter((p) => p.id !== 'work')
