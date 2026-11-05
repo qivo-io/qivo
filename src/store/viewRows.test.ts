@@ -39,6 +39,8 @@ let deliver: (snap: Snapshot) => void
 let answer: BoardAnswer
 let board: ((value: BoardAnswer) => void) | null
 let loads: Map<string, (value: OwnerLoadsJson) => void>
+/* the task window's own reads, by ref */
+let taskReads: Map<string, (value: unknown) => void>
 /* the Overview's reads, by query, the newest subscription of each */
 let overviews: Map<string, (value: unknown) => void>
 /* the Overview's reads, by query and arguments (JSON), the newest of each */
@@ -116,6 +118,7 @@ beforeEach(async () => {
   answer = ok([])
   board = null
   loads = new Map()
+  taskReads = new Map()
   overviews = new Map()
   overviewsByArgs = new Map()
   writes = []
@@ -139,6 +142,7 @@ beforeEach(async () => {
     } else if (name === 'planning:ownerLoads')
       loads.set((args.owner_ids as string[]).join(), receive as (v: OwnerLoadsJson) => void)
     else if (name === 'snapshot:threadComments') receive({ comments: [], earlier: false })
+    else if (name === 'taskWindow:task') taskReads.set(String(args.ref), receive)
     else if (name.startsWith('overview:')) {
       overviews.set(name, receive)
       overviewsByArgs.set(`${name} ${JSON.stringify(args)}`, receive)
@@ -488,6 +492,38 @@ describe('the delays of tasks only a view brings', () => {
     expect(loads.size).toBe(GUEST_CALLS)
     for (let i = 0; i < GUEST_CALLS; i++) expect(unknown(i), `t${i}`).toBe(false)
     for (let i = GUEST_CALLS; i < people.length; i++) expect(unknown(i), `t${i}`).toBe(true)
+    // the task window over a capped card reads its owner under its own key,
+    // which no cap counts, and the card reads the same load while it shows
+    const capped = GUEST_CALLS
+    const row = { ...planned(`t${capped}`, 10 + capped), assignee_id: people[capped].id }
+    P.watchComments(row.id, snapshot.orgs[0].id)
+    P.showSections({}, true)
+    const read = taskReads.get(row.id)
+    if (!read) throw new Error('no task read')
+    const { span: _span, group_done: _done, ...fields } = row
+    read({
+      state: 'ok',
+      task: { ...fields, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+      level: 'viewer',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    })
+    await turn()
+    const view = P.taskDetail(row.id)?.view
+    if (!view) throw new Error('no window view')
+    expect(loads.size).toBe(GUEST_CALLS + 1)
+    expect(P.windowDelay(view)).toBeNull()
+    expect(unknown(capped)).toBe(false)
+    loads.get(people[capped].id)?.({
+      hidden: 'counted',
+      owners: [{ owner_id: people[capped].id, state: 'ok', spans: [] }],
+    })
+    await turn()
+    const card = P.viewTask(SLOT, row.id)
+    expect(P.windowDelay(view)).toMatchObject({ status: 'ok' })
+    expect(P.delayOf(card ?? '')).toEqual(P.windowDelay(view))
   })
 
   it("asks no load for a held task, whose delay stays the workspace's", async () => {

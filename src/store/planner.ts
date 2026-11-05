@@ -3285,8 +3285,16 @@ const ownerLoads = createOwnerLoadCache({
   changed: () => {
     // the window's chip reads the cache too, and shows with the comments
     if (windowLoad) windowLoadNews = true
-    if (reshaping || windowLoadSyncing) return
+    if (reshaping) return
     viewReadsChanged = true
+    // the window's registration runs inside a repaint, after which the
+    // views judge their cards again, as a card of the same owner a cap
+    // left unread is read now
+    if (windowLoadSyncing) {
+      owed.view = true
+      payTimer ??= setTimeout(pay, 0)
+      return
+    }
     owe('view')
   },
   watchVisibility,
