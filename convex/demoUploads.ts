@@ -85,7 +85,7 @@ export const finish = internalMutation({
   },
 })
 
-/* Undoes the failed work of reservation `id` for its minter: erases
+/* Undoes the failed work of reservation `id` for its minter. It erases
  * `storage_id` unless something holds it and deletes the reservation.
  * A reservation that holds its file stays, as when the answer of finish was
  * lost after it committed. Then it answers that file when it is

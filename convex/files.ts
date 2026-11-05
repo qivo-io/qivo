@@ -728,9 +728,10 @@ export const reapOrphans = internalMutation({
  * expired ticket left, whose file then falls to its files phase. */
 
 /** How many expired tickets one reapUploadTickets leg handles. A ticket
- * holding a file nothing names costs the ticket, the file, storageIdInUse's
- * nine ranges and the erase, so a full leg reads about 2,600 of Convex's
- * 4,096 documents with the page and the restore check. Tests lower it. */
+ * holding a file nothing names costs eleven index ranges (the file,
+ * storageIdInUse's nine and the erase), so a full leg reads about 2,200 of
+ * Convex's 4,096 index ranges with the page and the restore check. Tests
+ * lower it. */
 export const UPLOAD_TICKET_PAGE = { size: 200 }
 
 const vTicketCounts = v.object({
