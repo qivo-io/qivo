@@ -169,7 +169,9 @@ activity** until the first comment and the created row appear. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
-deployment takes a body that large. It also checks task progress, last
+deployment takes a body that large. A confirm sent again must answer the
+same attachment over REST and over MCP, leave one row, and stay a `404` for
+another user (`uploads/confirm-retry`). It also checks task progress, last
 comment times, delay and project completion, and the rule that a subtask in
 an archived project makes no group. After it archives and restores a
 sub-project it waits, for up to 30 seconds, until the family's completion
@@ -203,7 +205,12 @@ again once **Search all your projects** ended, a task it makes in its second
 project only after **Search all your projects**, and the subtask it made
 as a current subtask in **Add subtask**, and writes nothing through the
 pickers (`ui/relation-pickers`). Against a backend from before the relation
-pickers' release that step fails. It then makes a
+pickers' release that step fails. In the same window it attaches a small
+file, which must go on an upload ticket: its `POST` must go to
+`/attachment-uploads/` on the API origin and answer 200, the window must list
+the file and its download must match the bytes, and the step deletes it again
+(`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
+backend from before the release after v0.1.129. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
@@ -959,6 +966,42 @@ release keeps with its scan for tabs loaded before it, and the release that
 removes it adds it to the Instant Rollback list above. The period's storage
 sample still scans the attachment rows. There is no schema change, no
 backfill and no release step.
+
+From the release after v0.1.129, an app upload of an attachment or
+description image outside the private demo goes through an upload ticket,
+as REST and MCP uploads do. `files.uploadUrl` takes the file's `size` and
+`name` and answers an upload URL on Qivo's API origin that stores one file
+of that size, and `files.attach` takes only a file the same person's
+unexpired ticket for that task stored. A person has at most 20 uploads in
+progress in an organization over the app, REST and MCP together, and the
+new hourly cron `reap-expired-upload-tickets` deletes expired tickets and
+erases the files nothing names that they hold. A REST or MCP confirm sent
+again after its answer was lost answers the attachment it made. App uploads
+now run in Qivo's HTTP actions for the whole transfer, up to 5 minutes, as
+REST, MCP and demo uploads already did, instead of Convex's storage
+endpoint, so they share Convex's limit on actions running at once with
+every other action. On the demo backend the shared upload budget falls from
+50 MiB to 5 MiB, reserved at each upload's declared size. A demo above 5 MiB
+keeps its files and admits no upload until enough is freed, and a stored
+upload that never attaches stops counting within minutes.
+`files.avatarUploadUrl` and `appearance.createUpload` take a `size` too,
+which only the demo reserves. The app sends arguments an older backend
+refuses, so from that release on never return the backend to a commit
+before it; roll forward instead. Returning the app alone is safe, because an
+app loaded before that release calls `files.uploadUrl` without a size and
+gets a ticket that takes up to the organization's per-file limit, and on
+the demo a reservation of the per-file limit or the free space, whichever is
+smaller. A file uploaded through a Convex upload URL before the deploy and
+attached after it is refused once, and the person uploads it again. A
+monthly usage run that spans the deploy fails the organization whose Deleted
+items it was reading, which its audit row counts in `failed` until the month
+runs again. The release adds `attachment_uploads.up_to`, the index
+`attachment_uploads.by_storage`, `demo_uploads.declared` and
+`custom_backgrounds.preview_skipped`, the last two written only on the demo.
+An older backend fails to deploy while a ticket row holds `up_to`, which goes
+when it attaches or within an hour of its expiry, or while a demo row holds
+`declared` or a demo background holds `preview_skipped`, which go with their
+demo within a day. There is no backfill and no release step.
 
 ## Node.js version
 
