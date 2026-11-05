@@ -13,7 +13,8 @@ import { BillingStorage } from './BillingStorage'
 /* Billing's Storage by project on its one-shot reads
    (billing.storageProjects), each answered by hand: the first batch on
    opening, Load more, the search, the notes of a stopped, failed, counting
-   or full list, Refresh and the labels. */
+   or full list, where focus goes across Load more and Retry, Refresh and
+   the labels. */
 
 const network = vi.hoisted(() => ({ query: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -202,6 +203,47 @@ describe('Storage by project', () => {
     expect(reads.at(-1)?.args).toEqual({ org_id: 'org-1', cursor: 'c1' })
     await answer(ready(rows(25, 5)))
     expect(shown()).toHaveLength(30)
+  })
+
+  it('keeps keyboard focus across Load more and Retry, and moves it to the search box when a first batch’s Retry goes', async () => {
+    const focused = () => document.activeElement
+    await open()
+    await fail()
+    act(() => retry()?.focus())
+    await click(retry())
+    // the Retry went with its line, so focus moves to the search box
+    expect(note()).toBe('Loading storage by project…')
+    expect(focused()).toBe(searchBox())
+    await answer(ready(rows(0, 25), 'c1'))
+    expect(focused()).toBe(searchBox())
+
+    act(() => more()?.focus())
+    await click(more())
+    expect(focused()).toBe(more())
+    // a failed Load more's Retry is the same button, so focus stays on it
+    await fail()
+    expect(focused()).toBe(retry())
+    await click(retry())
+    expect(focused()).toBe(more())
+    // once Load more goes, focus moves to the first new row
+    await answer(ready(rows(25, 5)))
+    expect(more()).toBeNull()
+    expect(focused()).toBe(container.querySelector('[data-billing-storage-row="p25:25"]'))
+
+    // a Refresh that takes a failed first batch's Retry away moves nothing,
+    // also after a Retry of that list's first batch failed again
+    await act(async () => setRefresh(1))
+    await fail()
+    act(() => retry()?.focus())
+    await click(retry())
+    expect(focused()).toBe(searchBox())
+    await fail()
+    // Refresh disables itself while it reads, which leaves focus nowhere
+    act(() => retry()?.focus())
+    act(() => retry()?.blur())
+    await act(async () => setRefresh(2))
+    expect(note()).toBe('Loading storage by project…')
+    expect(focused()).toBe(document.body)
   })
 
   it('says storage is being counted, at first and for a later batch', async () => {

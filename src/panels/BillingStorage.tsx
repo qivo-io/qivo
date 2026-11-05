@@ -57,8 +57,9 @@ const noteClass = 'px-0.5 py-1 text-sm text-text-2'
 export function BillingStorage({ orgId, refresh }: { orgId: string; refresh: number }) {
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
+  const key = JSON.stringify([orgId, refresh, search.settled])
   const list = usePagedList({
-    key: JSON.stringify([orgId, refresh, search.settled]),
+    key,
     source: { kind: 'once', read: (at) => readStorage(orgId, search.settled, at.after) },
     batch: (answer: StorageProjects) => (answer.state === 'ready' ? answer : null),
     id: storageRowId,
@@ -69,8 +70,11 @@ export function BillingStorage({ orgId, refresh }: { orgId: string; refresh: num
     : listEnd(list, search.settled !== '')
 
   // Load more keeps focus while it reads (aria-disabled), and the Retry
-  // that takes its place after a failure is the same button. When Load
-  // more goes, focus moves to the first new row, else to the search box.
+  // that takes its place after a failed Load more is the same button. When
+  // Load more goes, focus moves to the first new row, else to the search
+  // box. The Retry of a failed first batch goes while it reads that batch
+  // again, and focus moves to the search box. When a Refresh or a new
+  // search starts the list over, focus stays where it is.
   const searchBox = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLUListElement>(null)
   const moreFrom = useRef<number | null>(null)
@@ -87,6 +91,15 @@ export function BillingStorage({ orgId, refresh }: { orgId: string; refresh: num
     if (list.phase === 'more') return
     moreFrom.current = list.rows.length
     list.more()
+  }
+  // the list whose failed first batch a Retry read again
+  const retried = useRef<string | null>(null)
+  useFocusWhenGone(end === 'failed' && list.batches.length === 0, () =>
+    retried.current === key ? searchBox.current : null,
+  )
+  const retry = () => {
+    retried.current = list.batches.length === 0 ? key : null
+    list.retry()
   }
 
   return (
@@ -134,7 +147,7 @@ export function BillingStorage({ orgId, refresh }: { orgId: string; refresh: num
           loading={list.phase === 'more'}
           searching={search.settled !== ''}
           onMore={more}
-          onRetry={() => list.retry()}
+          onRetry={retry}
         />
       </div>
     </SettingsGroup>
