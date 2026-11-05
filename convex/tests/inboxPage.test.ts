@@ -888,6 +888,53 @@ describe('the seats of a login', () => {
     // another login in the other organization reads none of them
     expect((await pageOf(t, f.otherAdmin)).rows).toEqual([])
   })
+
+  it('keeps two seats’ items at one list time and task id apart, each once in both orders, also where a page ends between them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const elsewhere = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      auth_user_id: f.guest.auth_user_id,
+      org_role: 'guest',
+      name: 'guest',
+    })
+    await grant(t, elsewhere, f.otherProject.id)
+    const [lo, hi] = [f.guest, elsewhere].sort((x, y) => (x.id < y.id ? -1 : 1))
+    const home = (seat: Doc<'profiles'>) => (seat.id === f.guest.id ? f.sub : f.otherProject)
+    // a group of seat `shown` at `minute`, and an item of seat `gone` with
+    // the same task id and list time, as a create in another organization
+    // can take the id of a task deleted for good (schema.ts) while the
+    // item waits for its teardown; the walk reads it and leaves it out
+    const shared = async (shown: Doc<'profiles'>, gone: Doc<'profiles'>, minute: number) => {
+      const [task] = await plantGroups(t, shown, 1, () => home(shown).id, {
+        sent: () => [{ minute }],
+      })
+      await deliver(t, gone, { ...task, org_id: gone.org_id }, { minute })
+      return task
+    }
+    const [first] = await plantGroups(t, f.guest, 1, () => f.sub.id, {
+      sent: () => [{ minute: 1 }],
+    })
+    // the left-out item comes first at its position oldest first in the
+    // first pair, newest first in the second
+    const up = await shared(hi, lo, 10)
+    const down = await shared(lo, hi, 20)
+    const [last] = await plantGroups(t, elsewhere, 1, () => f.otherProject.id, {
+      sent: () => [{ minute: 30 }],
+    })
+    const order = [first, up, down, last].map((x) => x.id)
+    expect(ids((await pageOf(t, f.guest)).rows)).toEqual([...order].reverse())
+    expect(ids((await pageOf(t, f.guest, { order: 'oldest' })).rows)).toEqual(order)
+    // one item a page, so a page ends on the left-out item and the next
+    // reads the other seat's item at the same list time and task id
+    INBOX_PAGE.rows = 1
+    INBOX_PAGE.reads = { ranges: 0, documents: 0, bytes: 0 }
+    const newest = await pages(t, f.guest)
+    expect(newest.some((p) => p.rows.length === 0 && p.stopped)).toBe(true)
+    expect(allIds(newest)).toEqual([...order].reverse())
+    expect(allIds(await pages(t, f.guest, { order: 'oldest' }))).toEqual(order)
+    expect(await drift(t)).toEqual([])
+  })
 })
 
 /* ---------------------------------------------------- filters and order */
