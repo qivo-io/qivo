@@ -785,8 +785,11 @@ export function ProjectPickerPanel({
 
 /** What ProjectPicker asks of its caller, beside the panel's props. */
 export type ProjectPickerProps = Omit<ProjectPickerPanelProps, 'onDone'> & {
-  /** the trigger's attributes: its id, its data attribute and its label */
-  trigger: { id?: string; 'aria-label'?: string } & Record<`data-${string}`, string>
+  /** the trigger's attributes: its id and its data attribute */
+  trigger: { id?: string } & Record<`data-${string}`, string>
+  /** the trigger's label, which its accessible name joins with what it
+      says, "Projects, Luma Sensor", so a screen reader hears the pick */
+  name: string
   /** what the trigger says before any pick */
   none?: string
   /** what the trigger says instead of the pick, such as while it loads */
@@ -804,6 +807,7 @@ export type ProjectPickerProps = Omit<ProjectPickerPanelProps, 'onDone'> & {
  */
 export function ProjectPicker({
   trigger,
+  name,
   none,
   busyLabel = null,
   triggerRef,
@@ -835,6 +839,7 @@ export function ProjectPicker({
           type="button"
           variant="default"
           {...trigger}
+          aria-label={`${name}, ${text}`}
           className={cn(
             'min-w-0 max-w-[260px] justify-between gap-2 bg-surface-1 font-sans text-sm',
             className,

@@ -416,6 +416,7 @@ describe('the Search palette', { timeout: 20_000 }, () => {
       },
     })
     expect(scopeLabel()).toBe('Loading…')
+    expect(find('[data-palette-scope]').getAttribute('aria-label')).toBe('Search in, Loading…')
     await type('firm')
     // nothing searches a scope wider or narrower than asked meanwhile
     expect(calls).toHaveLength(0)
@@ -423,6 +424,10 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await act(async () => release())
     await settle()
     expect(scopeLabel()).toBe('Luma Sensor › Firmware')
+    // a screen reader hears Search in with the pick
+    expect(find('[data-palette-scope]').getAttribute('aria-label')).toBe(
+      'Search in, Luma Sensor › Firmware',
+    )
     expect(calls.map((c) => c.args)).toEqual([
       { text: 'firm', include_archived: false, scope: { org_id: ORG, project_id: FW } },
     ])

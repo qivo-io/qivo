@@ -496,6 +496,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
           <ProjectPicker
             triggerRef={scopeRef}
             trigger={{ id: 'palette-scope', 'data-palette-scope': '' }}
+            name="Search in"
             busyLabel={resolving ? 'Loading…' : null}
             pick={pick}
             rules={SCOPE_RULES}

@@ -209,7 +209,8 @@ async function withTrigger(rules: PickRules = SEARCH_RULES) {
     })
     return (
       <picker.ProjectPicker
-        trigger={{ 'data-test-trigger': '', 'aria-label': 'Projects' }}
+        trigger={{ 'data-test-trigger': '' }}
+        name="Projects"
         pick={pick}
         onPick={setPick}
         rules={rules}
@@ -703,6 +704,8 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(document.querySelector('[data-project-picker]')).toBeNull()
     expect(document.activeElement).toBe(trigger)
     expect(trigger.textContent).toBe('Luma Sensor › Firmware')
+    // a screen reader hears the trigger's label with the pick
+    expect(trigger.getAttribute('aria-label')).toBe('Projects, Luma Sensor › Firmware')
   })
 
   it('clears the text on the first Escape and closes on the next, which goes no further', async () => {

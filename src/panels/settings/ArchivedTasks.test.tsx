@@ -440,6 +440,8 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
   it('opens on its project with the search focused, 25 a page, Next and Previous replacing them', async () => {
     await open()
     expect(calls.map((c) => c.args)).toEqual([{ scope: project(META), limit: 25 }])
+    // a screen reader hears the trigger's label with the pick
+    expect(find('[data-archive-project]').getAttribute('aria-label')).toBe('Projects, Luma Sensor')
     expect(document.activeElement).toBe(find('[data-archive-search]'))
     // search comes first in the filters
     expect(

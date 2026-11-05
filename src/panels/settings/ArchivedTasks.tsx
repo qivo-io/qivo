@@ -726,7 +726,8 @@ export function ArchivedTasksPage({
             )}
           </div>
           <ProjectPicker
-            trigger={{ 'data-archive-project': '', 'aria-label': 'Projects' }}
+            trigger={{ 'data-archive-project': '' }}
+            name="Projects"
             none="Choose projects…"
             busyLabel={resolving ? 'Loading…' : null}
             pick={pick}
