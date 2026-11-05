@@ -143,6 +143,8 @@ describe('staging check REST contract', () => {
       expect(picker).toContain(mark)
     // the trigger's own attribute, not a comment that names it
     expect(picker).toContain(`${PICKER_EXPECTED.busy}={`)
+    // the separator of a search's sub-project row, which the step reads
+    expect(picker).toContain(`{'${PICKER_EXPECTED.place}'}`)
     for (const mark of [PICKER_EXPECTED.open, PICKER_EXPECTED.chip]) expect(page).toContain(mark)
     expect(pick).toContain(`\`\${p.parent.name}${PICKER_EXPECTED.place}\${p.name}\``)
   })
