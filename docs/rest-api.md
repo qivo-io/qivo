@@ -2427,12 +2427,14 @@ upload again.
 
 Only the user that started the upload can confirm it, only for the same
 task, and the file attaches once. A confirm sent again by the same user for
-the same task with the same `storage_id` after the first one attached the
-file, for example because its answer was lost, answers `201` with that
-attachment and changes nothing. Any other ticket, including an expired one,
-answers `404` (`upload not found or expired; start a new upload`), and so
-does a confirm sent again by another user, for another task or with another
-file, or after the file was deleted. A confirm before
+the same task with the same ticket and `storage_id` after the first one
+attached the file, for example because its answer was lost, answers `201`
+with that attachment and changes nothing. Any other ticket answers `404`
+(`upload not found or expired; start a new upload`), whatever file it
+names: an expired one, one that never existed, one Qivo deleted and
+another of the user's confirmed tickets. So does a confirm sent again by
+another user, for another task or with another file, or after the file was
+deleted. A confirm before
 the upload URL has stored a file answers `400` (`no file has been sent to
 this upload URL; send it there, or start a new upload`). `storage_id` must
 be the `storageId` the upload URL answered, and any other value answers

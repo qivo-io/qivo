@@ -497,12 +497,12 @@ export const UPLOAD_NOT_SENT =
  * upload URL stored. */
 export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
 
-/* The attachment that file `storageId` became on `issue`, uploaded by `me`
- * and not taken out by a description save, else null. With `id`, only a
- * row of that id. One range of issue_attachments.by_storage. */
+/* The attachment `id` that file `storageId` became on `issue`, uploaded by
+ * `me` and not taken out by a description save, else null. One range of
+ * issue_attachments.by_storage. */
 async function committedUpload(
   ctx: QueryCtx,
-  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; storageId: Id<'_storage'>; id?: string },
+  a: { me: Doc<'profiles'>; issue: Doc<'issues'>; storageId: Id<'_storage'>; id: string },
 ): Promise<AttachmentRow | null> {
   const row = await ctx.db
     .query('issue_attachments')
@@ -510,10 +510,10 @@ async function committedUpload(
     .first()
   if (
     row === null ||
+    row.id !== a.id ||
     row.issue_id !== a.issue.id ||
     row.uploaded_by !== a.me.id ||
-    row.dropped_at !== undefined ||
-    (a.id !== undefined && row.id !== a.id)
+    row.dropped_at !== undefined
   )
     return null
   return pub(row)
@@ -526,12 +526,13 @@ async function committedUpload(
  * not-found refusal with `missing`, the surface's sentence, the same for
  * every such case. With no ticket at all, as when the completion is sent
  * again after its answer was lost and the first one spent the ticket, it
- * answers the attachment `storageId` became when that is a row of this
- * task that `me` uploaded and no description save took out, and, with
- * `sameId`, of `row.id`; it then writes nothing, no row, activity or
- * count. Every other such case is `missing`. `storageId` must be the file
- * its upload URL stored (finishTicketUpload), so a ticket cannot claim or
- * delete any other file. The attachment is `row`, through attachFileCore
+ * answers the attachment `storageId` became when that is the row `row.id`
+ * of this task, which `me` uploaded and no description save took out; it
+ * then writes nothing, no row, activity or count. So a completion sent
+ * again answers only the attachment its own first try made, never another
+ * upload of the caller's. Every other such case is `missing`. `storageId`
+ * must be the file its upload URL stored (finishTicketUpload), so a ticket
+ * cannot claim or delete any other file. The attachment is `row`, through attachFileCore
  * with every one of its checks, the ticket's declared size enforced unless
  * it was `up_to`, and `provenance` signing the activity row. A completed
  * ticket is spent, and so is one whose file was deleted for exceeding the
@@ -550,14 +551,17 @@ async function completeUpload(
     nowMs: number
     provenance?: string
     missing: string
-    sameId: boolean
   },
 ): Promise<AttachResult> {
   const { me, issue, ticket } = a
   if (ticket === null && a.storageId !== null) {
     await assertCanEdit(ctx, me, issue.project_id)
-    const id = a.sameId ? a.row.id : undefined
-    const committed = await committedUpload(ctx, { me, issue, storageId: a.storageId, id })
+    const committed = await committedUpload(ctx, {
+      me,
+      issue,
+      storageId: a.storageId,
+      id: a.row.id,
+    })
     if (committed !== null) return { attachment: committed }
   }
   if (
@@ -608,19 +612,22 @@ export async function attachUploadedFile(
     .query('attachment_uploads')
     .withIndex('by_storage', (q) => q.eq('storage_id', a.storageId))
     .first()
-  return await completeUpload(ctx, { ...a, ticket, missing: UPLOAD_NOT_STARTED, sameId: true })
+  return await completeUpload(ctx, { ...a, ticket, missing: UPLOAD_NOT_STARTED })
 }
 
 /**
  * Confirms the upload `ticketId` of `me` to `issue` with the uploaded
  * file `storage_id`, then attaches it like the app does (completeUpload),
  * under the ticket's name and media type, with `provenance` signing the
- * activity row. A ticket that is unknown, expired, another caller's or
- * another task's is UPLOAD_TICKET_MISSING. A confirm sent again by the same
- * caller for the same task and file after the first one attached it, as
- * when its answer was lost, finds no ticket and answers that attachment,
- * changing nothing. So do two confirms of one ticket sent at once, since
- * the second conflicts on the ticket, runs again and finds it spent.
+ * activity row. The attachment takes the ticket's id, which ties it to its
+ * ticket once the confirm has spent that. A ticket that is unknown,
+ * expired, another caller's or another task's is UPLOAD_TICKET_MISSING. A
+ * confirm sent again by the same caller with the same ticket, task and file
+ * after the first one attached it, as when its answer was lost, finds no
+ * ticket and answers that attachment, changing nothing. So do two confirms
+ * of one ticket sent at once, since the second conflicts on the ticket,
+ * runs again and finds it spent. Any other ticket, such as another of the
+ * caller's spent ones, is UPLOAD_TICKET_MISSING whatever file it names.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,
@@ -633,14 +640,15 @@ export async function confirmAttachmentUpload(
     provenance: string
   },
 ): Promise<AttachResult> {
-  const ticket = await byId(ctx, 'attachment_uploads', a.ticketId.toLowerCase())
+  const ticketId = a.ticketId.toLowerCase()
+  const ticket = await byId(ctx, 'attachment_uploads', ticketId)
   return await completeUpload(ctx, {
     me: a.me,
     issue: a.issue,
     ticket,
     storageId: ctx.db.system.normalizeId('_storage', a.storage_id),
     row: {
-      id: newUuid(),
+      id: ticketId,
       name: ticket?.name ?? '',
       mime: ticket?.content_type,
       inline: false,
@@ -648,7 +656,6 @@ export async function confirmAttachmentUpload(
     nowMs: a.nowMs,
     provenance: a.provenance,
     missing: UPLOAD_TICKET_MISSING,
-    sameId: false,
   })
 }
 

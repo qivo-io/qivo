@@ -1169,6 +1169,50 @@ describe('the REST upload', () => {
     )
   })
 
+  it("answers a confirm sent again only with its own ticket's attachment, over REST", async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const tasks = `/v1/tasks/QN-${issue.num}/attachments`
+    const attached = async (size: number) => {
+      const res = await rest(fx, 'POST', tasks, { name: `${size}.txt`, size })
+      const { ticket, upload_url } = JSON.parse(res.text) as { ticket: string; upload_url: string }
+      const storage_id = await upload(fx.t, upload_url, size)
+      const out = await rest(fx, 'POST', `${tasks}/${ticket}`, { storage_id })
+      expect(out.status).toBe(201)
+      return { ticket, storage_id, id: (JSON.parse(out.text) as { id: string }).id }
+    }
+    const a = await attached(2)
+    const b = await attached(3)
+    const missing = { status: 404, text: JSON.stringify({ error: UPLOAD_TICKET_MISSING }) }
+    // A's ticket with B's file, both the caller's own uploads to this task
+    expect(await rest(fx, 'POST', `${tasks}/${a.ticket}`, { storage_id: b.storage_id })).toEqual(
+      missing,
+    )
+    // a ticket that never existed, with a file the caller attached
+    expect(await rest(fx, 'POST', `${tasks}/${uuid()}`, { storage_id: a.storage_id })).toEqual(
+      missing,
+    )
+    // a ticket the hourly cleanup deleted after it expired
+    const res = await rest(fx, 'POST', tasks, { name: 'late.txt', size: 4 })
+    const late = JSON.parse(res.text) as { ticket: string }
+    await fx.t.run(async (ctx) => {
+      const row = (await ctx.db.query('attachment_uploads').collect()).find(
+        (r) => r.id === late.ticket,
+      )
+      if (row) await ctx.db.patch(row._id, { expires_at: Date.now() - 1 })
+    })
+    await fx.t.mutation(internal.files.reapUploadTickets, {})
+    expect(await tickets(fx.t)).toEqual([])
+    expect(await rest(fx, 'POST', `${tasks}/${late.ticket}`, { storage_id: a.storage_id })).toEqual(
+      missing,
+    )
+    // the same ticket and file still answer the attachment they made
+    const again = await rest(fx, 'POST', `${tasks}/${a.ticket}`, { storage_id: a.storage_id })
+    expect(again.status).toBe(201)
+    expect((JSON.parse(again.text) as { id: string }).id).toBe(a.id)
+    expect((await attachmentRows(fx.t)).map((row) => row.id).sort()).toEqual([a.id, b.id].sort())
+  })
+
   it('answers 404 again for a ticket the oversize refusal spent', async () => {
     const fx = await setup()
     const issue = await task(fx)
@@ -1385,6 +1429,42 @@ describe('the MCP upload', () => {
       ),
     ).toEqual({ text: UPLOAD_TICKET_MISSING, isError: true })
     expect(await attachmentRows(fx.t)).toHaveLength(1)
+  })
+
+  it("refuses a confirm sent again with another of the user's tickets with the refusal sentence", async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const secret = await personalToken(fx.t, fx.user, 'write')
+    const ref = `QN-${issue.num}`
+    const attached = async (size: number) => {
+      const started = await mcpTool(fx.t, secret, 'start_attachment_upload', {
+        ref,
+        name: `${size}.txt`,
+        size,
+      })
+      const { ticket, upload_url } = JSON.parse(started.text) as {
+        ticket: string
+        upload_url: string
+      }
+      const storage_id = await upload(fx.t, upload_url, size)
+      const out = await mcpTool(fx.t, secret, 'confirm_attachment_upload', {
+        ref,
+        ticket,
+        storage_id,
+      })
+      expect(out.isError).toBe(false)
+      return { ticket, storage_id }
+    }
+    const a = await attached(2)
+    const b = await attached(3)
+    expect(
+      await mcpTool(fx.t, secret, 'confirm_attachment_upload', {
+        ref,
+        ticket: a.ticket,
+        storage_id: b.storage_id,
+      }),
+    ).toEqual({ text: UPLOAD_TICKET_MISSING, isError: true })
+    expect(await attachmentRows(fx.t)).toHaveLength(2)
   })
 
   it('refuses the 21st upload in progress, counted with the REST ones, as an error result', async () => {

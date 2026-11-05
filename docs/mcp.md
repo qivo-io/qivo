@@ -2321,14 +2321,16 @@ its URL answers
 for every answer). Only the user that started
 the upload can confirm it, only for the same task, and the file attaches
 once. A confirm sent again by the same user for the same task with the same
-`storage_id` after the first one attached the file, for example because its
-answer was lost, answers that attachment and changes nothing. A ticket
-belongs to the user, not the credential, so a ticket started over MCP can be
-confirmed over REST by the same user, and the reverse, and a confirm sent
-again on the other surface answers the same attachment. The confirm follows
-REST's rules. Another ticket, including an expired one, answers `upload not
-found or expired; start a new upload`, and a `storage_id` that is not the
-`storageId` the upload URL answered is refused with `storage_id must be the
+ticket and `storage_id` after the first one attached the file, for example
+because its answer was lost, answers that attachment and changes nothing. A
+ticket belongs to the user, not the credential, so a ticket started over MCP
+can be confirmed over REST by the same user, and the reverse, and a confirm
+sent again on the other surface answers the same attachment. The confirm
+follows REST's rules. Any other ticket answers `upload not found or expired;
+start a new upload`, whatever file it names, including an expired ticket,
+one that never existed, one Qivo deleted and another of the user's confirmed
+tickets. A `storage_id` that is not the `storageId` the upload URL answered
+is refused with `storage_id must be the
 storageId the upload answered`, or with `no file has been sent to this upload
 URL; send it there, or start a new upload` before the upload URL has stored
 one. If the organization lowered its per-file
