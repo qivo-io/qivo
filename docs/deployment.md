@@ -1271,12 +1271,14 @@ their threads again from the start.
 
 Each label has a `label_counts` row with the number of active tasks that
 carry it, and each team a `team_counts` row with its members, as the team
-lists show them. No reader uses them yet. Every write that changes either
-keeps the rows, and labels and teams created since the release that added
-them start with one. A label or team stored before has no row until the
-one-time `internal/labelCountsBackfill` and `internal/teamCountsBackfill`
-count it, and the readers to come show such a count as unavailable, never
-as zero. Run both on every hosted deployment once it serves that release,
+lists show them. No reader uses the label counts yet; the REST and MCP team
+answers show each team's row as `member_count`, null for a team without a
+finished row, from the release that pages the people, label and team lists.
+Every write that changes either keeps the rows, and labels and teams created
+since the release that added them start with one. A label or team stored
+before has no row until the one-time `internal/labelCountsBackfill` and
+`internal/teamCountsBackfill` count it, and a reader shows such a count as
+unavailable, never as zero. Run both on every hosted deployment once it serves that release,
 as each module's header says: read the dry run first, then run it, calling
 again with the answered `cursor` until it answers `done`. A dry run lists
 the labels and teams a run would count, any stored count that its rows do
