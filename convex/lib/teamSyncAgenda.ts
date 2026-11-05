@@ -143,21 +143,24 @@ import {
  * walker about one for their stamp; a team's or All projects' sub-project
  * one for its count rows. The loads come last, the verdicts' room
  * (lib/viewLoads.ts loadRoom, lib/ownerLoads.ts OWNER_LOADS.call inside
- * this guard), owners in owner id order. By the owner's rule of 1 November
- * 2026 for figures that follow workloads, a walker's week and a row's
- * verdict that needs a load answer unavailable past this measured size
- * inside the design size, for an everyday project of 3 sub-projects of 30
- * open tasks, whose 10 owners hold the organization's open tasks, half of
- * them scheduled, in sub-projects of 30, three to a project (the on-demand
- * cases, QIVO_AGENDA_ORG_OPEN=1). At 3,000 such tasks it reads 2,030, 3,259 and
- * 1.98 with every walker's week given. From 3,500 the owners last in owner
- * id order pass the verdicts' room of OWNER_LOADS.call, 2,000 ranges, so
- * their weeks and the verdicts that need them answer unavailable (`loads`,
- * `unknown`): one owner at 3,500, about half at 5,000, in 2,227 ranges.
- * By 6,500 each owner's scheduled work is in more than the 200 live
+ * this guard), owners in owner id order.
+ *
+ * The loads' measured size is 3,000 open tasks held by the scope's 10
+ * owners across the organization, at which every walker's week is given
+ * (2,030 ranges, 3,259 documents and 1.98 MiB). By the owner's rule of 1
+ * November 2026 for figures that follow workloads, a walker's week and a
+ * row's verdict that needs a load may answer unavailable past it, inside
+ * the design size. It is measured for an everyday project of 3 sub-projects
+ * of 30 open tasks whose 10 owners hold the organization's open tasks, half
+ * of them scheduled, in sub-projects of 30, three to a project (the
+ * on-demand cases, QIVO_AGENDA_ORG_OPEN=1). From 3,500 the owners last in
+ * owner id order pass the verdicts' room of OWNER_LOADS.call, 2,000 ranges,
+ * so their weeks and the verdicts that need them answer unavailable
+ * (`loads`, `unknown`): one owner at 3,500, about half at 5,000, in 2,227
+ * ranges. By 6,500 each owner's scheduled work is in more than the 200 live
  * projects the owner reader reads for one owner (OWNER_LOADS.projects), and
- * every week and every such verdict answers unavailable, in 445 ranges. That is the measured size. Inside it the everyday team reads
- * every walker's load.
+ * every week and every such verdict answers unavailable, in 445 ranges.
+ * Inside the measured size the everyday team reads every walker's load.
  *
  * The Done tasks the reading floor loads beyond the page's exact reading
  * point count toward the ceiling, so a meeting whose certain tasks fit and
