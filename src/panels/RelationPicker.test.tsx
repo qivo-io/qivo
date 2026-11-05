@@ -126,6 +126,9 @@ type Options = {
   locked?: boolean
   toggle?: (...args: unknown[]) => Promise<boolean> | boolean
   onCreate?: (title: string) => void
+  /** what a row shows before a pick, as IssueDetail's Linked tasks
+      picker reads it, in place of the Subtasks rule */
+  links?: boolean
 }
 const picks = vi.fn<(...args: unknown[]) => Promise<boolean> | boolean>()
 const created = vi.fn<(title: string) => void>()
@@ -142,14 +145,19 @@ async function show(o: Options = {}) {
           onDone={vi.fn()}
           placeholder="Add subtasks: ID or title…"
           current={{ rows: o.current ?? [], note: o.note ?? null, locked: o.locked }}
+          linkKind={o.links ? 'blocks' : undefined}
           seenOf={(c) =>
-            c.current
-              ? { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } }
-              : {
-                  on: false,
-                  busy: false,
-                  parent: { id: c.candidate?.parent_id ?? null, hidden: false },
-                }
+            o.links
+              ? c.current
+                ? { on: true, busy: false, link: c.current.type ?? null }
+                : { on: false, busy: false, link: null }
+              : c.current
+                ? { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } }
+                : {
+                    on: false,
+                    busy: false,
+                    parent: { id: c.candidate?.parent_id ?? null, hidden: false },
+                  }
           }
           toggle={(...args) => picks(...args)}
           createLabel="Create new subtask:"
@@ -488,7 +496,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(picks.mock.calls[1]?.[0]).toMatchObject({ uuid: 'task-45', candidate: kid.row })
     expect(picks.mock.calls[1]?.slice(1)).toEqual([
       true,
-      { on: false, busy: false, parent: { id: null, hidden: false }, link: null },
+      { on: false, busy: false, parent: { id: null, hidden: false } },
     ])
     expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('true')
   })
@@ -574,6 +582,49 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(picks.mock.calls.at(-1)?.slice(1)).toEqual([
       false,
       { on: true, busy: false, parent: { id: TASK.uuid, hidden: false }, link: null },
+    ])
+  })
+
+  it('shows a relation someone else changed since a pick, so the next press sends what is there now', async () => {
+    await load()
+    const relationOf = (type: string) => ({ ...relation(46, 'Wire it'), type })
+    await show({ kind: 'link', links: true })
+    await reads[0].answer(batch([row(46, { title: 'Wire it' })]))
+    await click(rowOf('task-46'))
+    expect(picks.mock.calls[0]?.slice(1)).toEqual([true, { on: false, busy: false, link: null }])
+    expect(rowOf('task-46')?.getAttribute('aria-pressed')).toBe('true')
+    // the window's list shows the new link, and then someone else makes it
+    // relate, so a removal names that kind
+    await show({ kind: 'link', links: true, current: [relationOf('blocks')] })
+    await show({ kind: 'link', links: true, current: [relationOf('relates')] })
+    expect(rowOf('task-46')?.getAttribute('aria-pressed')).toBe('true')
+    // then they take it off, so it shows as not linked, and a press links
+    // it again rather than removing a link that is gone
+    await show({ kind: 'link', links: true, current: [] })
+    expect(rowOf('task-46')?.getAttribute('aria-pressed')).toBe('false')
+    await click(rowOf('task-46'))
+    expect(picks.mock.calls[1]?.slice(1)).toEqual([true, { on: false, busy: false, link: null }])
+    // a pick whose write is on its way keeps showing, whatever the list says
+    let settle: (ok: boolean) => void = () => {}
+    const toggle = () => new Promise<boolean>((resolve) => (settle = resolve))
+    await show({ kind: 'link', links: true, current: [relationOf('blocks')], toggle })
+    await click(rowOf('task-46'))
+    expect(picks.mock.calls[2]?.slice(1)).toEqual([
+      false,
+      { on: true, busy: false, link: 'blocks' },
+    ])
+    await show({ kind: 'link', links: true, current: [relationOf('relates')], toggle })
+    expect(rowOf('task-46')?.getAttribute('aria-pressed')).toBe('false')
+    expect(rowOf('task-46')?.dataset.pickerBusy).toBe('')
+    // the store refuses the removal over the kind the person saw, and the
+    // row then shows the list's link, which the next press names
+    await act(async () => settle(false))
+    expect(rowOf('task-46')?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf('task-46')?.dataset.pickerBusy).toBeUndefined()
+    await click(rowOf('task-46'))
+    expect(picks.mock.calls[3]?.slice(1)).toEqual([
+      false,
+      { on: true, busy: false, link: 'relates' },
     ])
   })
 

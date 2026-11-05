@@ -32,7 +32,10 @@
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
-     press, also across a new text.
+     press, also across a new text, until the window's lists or the
+     server's row of it show its relation changed since the press. Then the
+     row shows them, so a change someone else made meanwhile, such as a
+     link they took off, is not pressed over as if it were not there.
    - Enter picks or creates only when the rows answer the typed text, the
      window's current relations are whole and the list has ended, or in
      Linked tasks reached the family's end, where the create row shows
@@ -121,6 +124,18 @@ type Seen = {
   parent?: { id: string | null; hidden: boolean }
   link?: string | null
 }
+
+/** A row's pick as the picker keeps it: what the row now shows, and
+    `basis`, what the window's lists and the server's row showed of its
+    relation when the person pressed. */
+type Kept = { now: Seen; basis: Seen }
+
+/* Whether `a` and `b` show the same relation. */
+const sameSeen = (a: Seen, b: Seen) =>
+  a.on === b.on &&
+  (a.parent?.id ?? null) === (b.parent?.id ?? null) &&
+  !!a.parent?.hidden === !!b.parent?.hidden &&
+  (a.link ?? null) === (b.link ?? null)
 
 /** The window's sentence for the opened task's own block of the picker's
     kind, as its buttons' tooltips word it. */
@@ -233,7 +248,7 @@ export function RelationPicker({
   })
   // what each row shows after a pick, kept for the picker's life, so an
   // answer for a later text never undoes a row whose write is on its way
-  const [seen, setSeen] = useState<ReadonlyMap<string, Seen>>(new Map())
+  const [seen, setSeen] = useState<ReadonlyMap<string, Kept>>(new Map())
   const searchBox = useRef<HTMLInputElement>(null)
   const ql = typed.toLowerCase()
   const matches = (key: string, title: string) => !ql || matchesAllWords(`${key}\n${title}`, ql)
@@ -285,7 +300,38 @@ export function RelationPicker({
     shownIds.add(row.id)
     choices.push({ uuid: row.id, key: issueKey(row.num), title: row.title, candidate: row })
   }
-  const seenNow = (choice: Choice): Seen => seen.get(choice.uuid) ?? seenOf(choice)
+  // what the window's lists and the server's rows show of a row's
+  // relation now, whatever the text, as the rows above compose it, or
+  // undefined for a row the picker knows nothing of now
+  const liveOf = (uuid: string): Seen | undefined => {
+    const now = current.rows.find((row) => row.uuid === uuid)
+    if (now) return seenOf({ current: now })
+    const fresh = served.find((row) => row.id === uuid)
+    const was = wasCurrent.current.get(uuid)
+    if (was) return seenOf({ candidate: fresh ?? was.row })
+    return fresh ? seenOf({ candidate: fresh }) : undefined
+  }
+  // a settled pick shows until the window's lists or the server's row show
+  // its relation otherwise than when the person pressed; then they show,
+  // and the pick is dropped. A pick whose write is on its way always shows
+  const stale = new Set<string>()
+  for (const [uuid, kept] of seen) {
+    if (kept.now.busy) continue
+    const live = liveOf(uuid)
+    if (live && !sameSeen(live, kept.basis)) stale.add(uuid)
+  }
+  useEffect(() => {
+    if (stale.size === 0) return
+    setSeen((m) => {
+      const next = new Map(m)
+      for (const uuid of stale) if (!next.get(uuid)?.now.busy) next.delete(uuid)
+      return next
+    })
+  })
+  const seenNow = (choice: Choice): Seen => {
+    const kept = seen.get(choice.uuid)
+    return kept && !stale.has(choice.uuid) ? kept.now : seenOf(choice)
+  }
 
   // what the list says, from its first answer that lists nothing, a later
   // one that failed it, or its end
@@ -331,19 +377,24 @@ export function RelationPicker({
     const before = seenNow(choice)
     if (before.busy || choice.locked) return
     const on = !before.on
-    setSeen((m) => new Map(m).set(choice.uuid, { ...before, on, busy: true }))
+    // the relation as the window's lists and the server's row show it now
+    const basis = liveOf(choice.uuid) ?? seenOf(choice)
+    setSeen((m) => new Map(m).set(choice.uuid, { now: { ...before, on, busy: true }, basis }))
     const settle = (ok: boolean) => {
       setSeen((m) => {
-        const now = new Map(m)
-        if (!ok) now.set(choice.uuid, { ...before, busy: false })
+        const kept = new Map(m)
+        if (!ok) kept.set(choice.uuid, { now: { ...before, busy: false }, basis })
         else
-          now.set(choice.uuid, {
-            on,
-            busy: false,
-            parent: on ? { id: task.uuid, hidden: false } : { id: null, hidden: false },
-            link: on ? (linkKind ?? null) : null,
+          kept.set(choice.uuid, {
+            now: {
+              on,
+              busy: false,
+              parent: on ? { id: task.uuid, hidden: false } : { id: null, hidden: false },
+              link: on ? (linkKind ?? null) : null,
+            },
+            basis,
           })
-        return now
+        return kept
       })
     }
     const sent = toggle(choice, on, before)
