@@ -1092,9 +1092,10 @@ function ReviewTimeField({
    grant made in between refuses it. Inviting… covers both calls, and the
    field, the level and the button stay off until both answer. The form's
    own level is User or Viewer; once the lookup finds an organization
-   viewer for the address, only Viewer, which it says rather than change
-   the level unseen. A lookup that fails or refuses sends nothing and says
-   why. */
+   viewer for the address, only Viewer for that address, which it says
+   rather than change the level unseen. The chosen level stays as it was,
+   so another address, or the next invitation, goes out with it again. A
+   lookup that fails or refuses sends nothing and says why. */
 function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean }) {
   const { project } = answer
   const [email, setEmail] = useStateS('')
@@ -1111,6 +1112,7 @@ function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean 
   useUnsaved(!!email.trim(), 'email')
   const typed = email.trim()
   const viewerOnly = viewerAddress !== null && viewerAddress === typed.toLowerCase()
+  const sending = viewerOnly ? 'viewer' : level
   const canInvite = answer.can_invite && !blocked
   const invite = async () => {
     if (!canInvite || !typed || inviting) return
@@ -1130,16 +1132,15 @@ function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean 
       )
       return
     }
-    if (found.person?.org_role === 'viewer' && level !== 'viewer') {
+    if (found.person?.org_role === 'viewer' && sending !== 'viewer') {
       setInviting(false)
       setViewerAddress(typed.toLowerCase())
-      setLevel('viewer')
       setNote(
         `${found.person.name} is an organization viewer, so they can only be given Viewer. Invite again to give them Viewer.`,
       )
       return
     }
-    const invited = await P.inviteToProject(project.id, typed, level, {
+    const invited = await P.inviteToProject(project.id, typed, sending, {
       orgId: project.org_id,
       level: found.level,
     })
@@ -1173,7 +1174,7 @@ function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean 
           data-invite-level
           aria-label="Invitation role"
           disabled={!canInvite || inviting}
-          value={viewerOnly ? 'viewer' : level}
+          value={sending}
           onChange={(e) => setLevel(e.target.value === 'viewer' ? 'viewer' : 'user')}
           className="h-control w-28 shrink-0 bg-surface-1 text-base font-sans"
         >

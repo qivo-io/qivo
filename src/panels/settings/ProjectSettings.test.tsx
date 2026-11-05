@@ -1100,6 +1100,32 @@ describe('changing access', () => {
     expect(requests).toEqual([])
   })
 
+  it("keeps the invitation's chosen level once an organization Viewer's address is gone", async () => {
+    await open()
+    const email = find<HTMLInputElement>('[data-invite-email]')
+    const level = () => find<HTMLSelectElement>('[data-invite-level]')
+    await type(email, 'val@example.test')
+    await click(find('[data-invite-send]'))
+    expect(level().value).toBe('viewer')
+    // another address goes back to the level chosen, User
+    await type(email, 'leo@example.test')
+    expect(level().value).toBe('user')
+    expect([...level().options].map((o) => o.value)).toEqual(['user', 'viewer'])
+    await type(email, 'val@example.test')
+    await click(find('[data-invite-send]'))
+    expect(sent('projects:inviteGuest')).toEqual([
+      expect.objectContaining({ email: 'val@example.test', level: 'viewer' }),
+    ])
+    await answer('projects:inviteGuest', undefined, { id: 'val', emailed: false })
+    // and so does the next invitation
+    expect(level().value).toBe('user')
+    await type(email, 'new@example.test')
+    await click(find('[data-invite-send]'))
+    expect(sent('projects:inviteGuest')).toEqual([
+      expect.objectContaining({ email: 'new@example.test', level: 'user' }),
+    ])
+  })
+
   it("gives the server's sentence for an address past the limit, and sends nothing", async () => {
     await open()
     // 255 characters, one past LIMITS.email, which the lookup refuses
