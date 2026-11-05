@@ -64,6 +64,7 @@ import { byNumber, OverCeiling, order } from './viewFilters'
 import { type Clock, clockOf, type Figure, UNKNOWN, verdicts } from './viewLoads'
 import {
   BY_ID,
+  byIdSteps,
   doneSinceRange,
   FOCUS_STATUSES,
   firstSubtaskCheck,
@@ -137,13 +138,19 @@ import {
  *   1,681, 3,039 and 1.78 and in 1,256, 2,053 and 1.21.
  * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
  *   1,026, 375 and 0.19, every walker's week.
+ * - An everyday team whose 600 rows 200 of its members own, of a roster of
+ *   1,000: 3,341, 1,743 and 0.91, the walkers' profiles, memberships and
+ *   stamps read in steps (lib/viewReads.ts byIdSteps); 142 of the 200
+ *   weeks, as the loads of the last owners in owner id order pass the
+ *   verdicts' room, which the agenda's own ranges bound there.
  *
  * Each task costs about one range for its group check beside its read, a
  * group's parent one more for its facts, each row one for its links and a
- * walker about one for their stamp; a team's or All projects' sub-project
- * one for its count rows. The loads come last, the verdicts' room
- * (lib/viewLoads.ts loadRoom, lib/ownerLoads.ts OWNER_LOADS.call inside
- * this guard), owners in owner id order.
+ * walker about one for their stamp, in a team one more for their
+ * membership; a team's or All projects' sub-project one for its count
+ * rows. The loads come last, the verdicts' room (lib/viewLoads.ts
+ * loadRoom, lib/ownerLoads.ts OWNER_LOADS.call inside this guard), owners
+ * in owner id order.
  *
  * The loads' measured size is 3,000 open tasks held by the scope's 10
  * owners across the organization, at which every walker's week is given
@@ -345,14 +352,15 @@ async function agendaOf(
   const { known, tasks, rows, asks } = read
 
   // the walk's people, with every row owner's profile read once, as the
-  // verdicts read the same profiles for each owner's capacity
+  // verdicts read the same profiles for each owner's capacity, and the
+  // profiles, memberships and stamps in steps, as a meeting can walk
+  // hundreds of people
   const v = verdicts(ctx, guard, seats, clock)
   const owners = [...new Set(rows.flatMap((t) => taskOwnerId(t, false) ?? []))].sort(order)
-  const owned = await settled(owners.map((id) => v.profile(id)))
+  const owned = await v.profiles(owners)
   let walkers = owned.flatMap((p) => (p !== null && p.org_id === me.org_id ? [p] : []))
   if (scope.kind === 'team') walkers = await membersOf(ctx, guard, scope.team_id, walkers)
-  await guard.take(BY_ID, walkers.length)
-  const stamps = await settled(walkers.map((p) => stampOf(ctx, p.id)))
+  const stamps = await byIdSteps(guard, walkers, (p) => stampOf(ctx, p.id))
 
   // the Done tasks each walker's Done since can show
   const done = await doneOf(ctx, guard, seats, read, walkers, stamps, args, me.org_id)
@@ -646,22 +654,20 @@ function liveTops(
 // --- the people ---------------------------------------------------------------------------
 
 /* Those of `people` who are members of team `teamId`, each asked by their
- * own membership row (team_members by_team_profile), so the reads follow
- * the rows' owners and never the team's whole roster. */
+ * own membership row (team_members by_team_profile), in steps
+ * (lib/viewReads.ts byIdSteps), so the reads follow the rows' owners and
+ * never the team's whole roster. */
 async function membersOf(
   ctx: QueryCtx,
   guard: ViewBudget,
   teamId: string,
   people: readonly Doc<'profiles'>[],
 ): Promise<Doc<'profiles'>[]> {
-  await guard.take(BY_ID, people.length)
-  const rows = await settled(
-    people.map((p) =>
-      ctx.db
-        .query('team_members')
-        .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', p.id))
-        .first(),
-    ),
+  const rows = await byIdSteps(guard, people, (p) =>
+    ctx.db
+      .query('team_members')
+      .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', p.id))
+      .first(),
   )
   return people.filter((_, i) => rows[i] !== null)
 }

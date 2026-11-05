@@ -1391,11 +1391,60 @@ describe('real limits', () => {
       }))
     await withReach(t)
     await countOrg(t, f.org.id)
+    expect(await peopleOf(t, f.org.id)).toBe(1000)
     const { answer, read } = await agendaRead(t, me, projectScope(shared.tops[0]))
     record('an everyday project whose 90 tasks 90 people own', answer, read)
     expect(okOf(answer).people).toHaveLength(90)
   })
+
+  it('answers an everyday team whose 600 rows 200 of its members own, in a roster of 1,000', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const me = await seatOf(t, f)
+    const owners = (await plantRoster(t, f.org.id, 994)).slice(0, 200)
+    // each of the reader's three teams shares 7 projects of 3 sub-projects
+    // but one of 2, 20 in all, and the 200 owners are members of all three,
+    // so the walk reads 200 profiles, memberships and stamps
+    const shared = await plantSharedTops(t, f, me, {
+      tops: 21,
+      subs: (i) => (i < 3 ? 2 : 3),
+      members: [me, ...owners],
+    })
+    const subs = shared.tops
+      .filter((_, i) => i % 3 === 0)
+      .flatMap((p) => shared.subsOf.get(p.id) ?? [])
+    expect(subs).toHaveLength(20)
+    for (const [k, sub] of subs.entries())
+      await plantTasks(t, sub, 30, (i) => ({
+        ...openOf(i),
+        assignee_id: owners[(30 * k + i) % owners.length].id,
+      }))
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    expect(await peopleOf(t, f.org.id)).toBe(1000)
+    const { answer, read } = await agendaRead(t, me, { kind: 'team', team_id: shared.teams[0] })
+    record('an everyday team whose 600 rows 200 people of a roster of 1,000 own', answer, read)
+    const ok = okOf(answer)
+    expect(ok.rows).toHaveLength(600)
+    expect(sorted(ok.people.map((p) => p.id))).toEqual(sorted(owners.map((p) => p.id)))
+    // past the loads' measured size the last owners in id order answer
+    // `loads`, never a zero or `budget`
+    expect(ok.people.every((p) => p.week.state === 'ok' || p.week.reason === 'loads')).toBe(true)
+  })
 })
+
+/* How many people organization `orgId` holds, agents and invitations
+ * included, the people figure of the design size. */
+const peopleOf = (t: T, orgId: string): Promise<number> =>
+  t.run(
+    async (ctx) =>
+      (
+        await ctx.db
+          .query('profiles')
+          .withIndex('by_org', (q) => q.eq('org_id', orgId))
+          .collect()
+      ).length,
+  )
 
 /* An everyday open task `i`, scheduled in NOW's week with remaining hours,
  * due in two weeks. */

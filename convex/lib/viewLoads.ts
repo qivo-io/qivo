@@ -31,7 +31,15 @@ import {
   type ReadRoom,
 } from './ownerLoads'
 import { taskOwnerId } from './review'
-import { BY_ID, type GroupFacts, isOverBudget, type ViewBudget, type ViewSeats } from './viewReads'
+import {
+  BY_ID,
+  byIdSteps,
+  type GroupFacts,
+  isOverBudget,
+  settled,
+  type ViewBudget,
+  type ViewSeats,
+} from './viewReads'
 import { canonicalLoad, DEFAULT_PLANNABLE_HOURS, type LoadSpan, plannableHoursOf } from './workload'
 
 // --- figures --------------------------------------------------------------------------
@@ -351,10 +359,20 @@ export function verdicts(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats, clo
   }
 
   return {
-    /** The profile with this id, read once a query through the guard, as
-     * the verdicts read an owner's capacity, so a reader that needs the
-     * same profiles reads them once. */
-    profile: profileOf,
+    /** The profiles with these ids, each read once a query through the
+     * guard, as the verdicts read an owner's capacity, so a reader that
+     * needs the same profiles reads them once. Those not read before are
+     * read in steps (lib/viewReads.ts byIdSteps), so many profiles never
+     * need the room of all of them at once. */
+    async profiles(ids: readonly string[]): Promise<(Doc<'profiles'> | null)[]> {
+      const fresh = [...new Set(ids)].filter((id) => !profiles.has(id))
+      await byIdSteps(guard, fresh, (id) => {
+        const p = byId(ctx, 'profiles', id)
+        profiles.set(id, p)
+        return p
+      })
+      return await settled(ids.map(profileOf))
+    },
     /** The tasks the owner reader answered for the owner with this id
      * (lib/ownerLoads.ts OwnedLoad tasks), once their load was read, or
      * null where it was not read or could not be, for lib/ownerLoads.ts

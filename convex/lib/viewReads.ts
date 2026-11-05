@@ -5,7 +5,8 @@
  * and the Roadmap apply on top of these, is lib/viewFilters.ts filterRead.
  *
  * - viewBudget, the guard every read goes through, over the request's
- *   totals as Convex counts them, the caller's access rows included;
+ *   totals as Convex counts them, the caller's access rows included, and
+ *   byIdSteps, many reads by id in steps within it;
  * - viewAccess, the caller's access in one organization (lib/access.ts
  *   accessOf), asked within that guard;
  * - projectSelection and selectionOf, a top-level project with its visible
@@ -284,6 +285,32 @@ export async function settled<R>(promises: readonly Promise<R>[]): Promise<R[]> 
   for (const one of all) {
     if (one.status === 'rejected') throw one.reason
     out.push(one.value)
+  }
+  return out
+}
+
+/** How many reads one step of byIdSteps makes at once. */
+const BY_ID_STEP = 64
+
+/**
+ * `read` of each of `items`, each a document read by id or the first row of
+ * one range, a step of at most BY_ID_STEP at a time. Each step takes room
+ * for its reads at BY_ID before it starts and ends before the next one
+ * takes any, so a long list never needs the room of every read at once and
+ * the guard's next look counts what the step read; near the budget's end a
+ * step reads fewer, and it throws OverBudget only where not one more fits.
+ * Answers in the order of `items`.
+ */
+export async function byIdSteps<I, R>(
+  guard: ViewBudget,
+  items: readonly I[],
+  read: (item: I) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = []
+  for (let at = 0; at < items.length; ) {
+    const n = await guard.upTo(BY_ID, Math.min(BY_ID_STEP, items.length - at))
+    out.push(...(await settled(items.slice(at, at + n).map(read))))
+    at += n
   }
   return out
 }
