@@ -12,9 +12,10 @@
      projects and sub-projects whose own name holds every word typed, each
      sub-project with its project; a text of spaces and accents only, whose
      name key is empty, browses, as the server refuses it. A picker of one
-     organization whose pick names one sends its org_id when the login
-     holds several seats, and shows the other organizations' rows without a
-     press. A top-level row's arrow lists its sub-projects
+     organization whose pick holds projects sends their organization's
+     org_id when the login holds several seats, and shows the other
+     organizations' rows without a press; All projects of an organization
+     leaves every row open. A top-level row's arrow lists its sub-projects
      (projectNav.children), one row at a time.
    - Each list reads through the shared paged list (lib/pagedList.ts) with
      live batches, which stop while the tab or the desktop window is
@@ -279,7 +280,7 @@ export function ProjectPickerPanel({
   const term = nameKey(search.settled)
   const browsing = term === ''
   // a picker of one organization lists another's rows without a press once
-  // its pick names one, and searches only its own
+  // its pick holds projects, and searches only theirs
   const orgOnly = rules.oneOrg && pick?.kind === 'projects' ? pick.org_id : null
   // a login of one seat searches that seat alike either way, so its first
   // pick keeps the batches loaded
