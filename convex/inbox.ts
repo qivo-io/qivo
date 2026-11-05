@@ -35,11 +35,15 @@
  *   commit timestamp (model/messages.ts itemMessages). It reads the
  *   item row, the task, its project and the caller's levels on it (no item
  *   where a bound stopped that check, as the task window then answers
- *   `unavailable`), the newest message by _creationTime, the oldest unread message, and for an
- *   item with an unread message and a change or a mention its read
- *   messages, one normally (model/inboxReads.ts unreadChange), and the
- *   unread ones up to the first mention in the description only when no
- *   change is unread and a mention is. `unread_change` says whether an
+ *   `unavailable`), the newest message by _creationTime, the oldest unread
+ *   message, and for an item with an unread message and a change or a
+ *   mention its read messages, one normally (model/inboxReads.ts
+ *   unreadChange), and the unread ones up to the first mention in the
+ *   description only when no change is unread and a mention is, at most
+ *   1,000 of them (internal/inboxItemsBackfill.ts BUILD.pair_rows, the most
+ *   messages the backfill builds an item of). An item with more unread
+ *   messages, none of the first 1,000 a change, answers `unread_change`
+ *   true, since the rest may tell of one. `unread_change` says whether an
  *   unread message tells of a change, a change or a mention in the
  *   description, the app's rule (src/lib/spine.ts unreadStart). It reruns
  *   when any of those change.

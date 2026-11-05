@@ -45,10 +45,12 @@ installTrashTimers()
 const DEFAULT_SUMMARY = { ...SUMMARY }
 const DEFAULT_REKEY = { ...REKEY }
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
+const DEFAULT_BUILD = { ...BUILD }
 afterEach(() => {
   Object.assign(SUMMARY, DEFAULT_SUMMARY)
   Object.assign(REKEY, DEFAULT_REKEY)
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+  Object.assign(BUILD, DEFAULT_BUILD)
 })
 
 /* The caller's unread summary. */
@@ -725,6 +727,48 @@ describe('one task’s item', () => {
         body: MENTION_DETAILS.comment,
       })
     expect(await changeOf(oldest.id)).toBe(true)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('walks at most BUILD.pair_rows unread messages for the unread change, and says one may be unread past them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // `n` unread mentions in comments, the `description`th in the
+    // description, so the walk reads them in turn, oldest first
+    const mentions = async (n: number, description = -1) => {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      for (let i = 0; i < n; i++)
+        await post(t, f, {
+          to: f.guest,
+          task,
+          minute: i,
+          kind: 'mention',
+          body: i === description ? MENTION_DETAILS.description : MENTION_DETAILS.comment,
+        })
+      return task
+    }
+    const [five, eight, late] = [await mentions(5), await mentions(8), await mentions(8, 7)]
+    const read = (issueId: string) =>
+      t.run(async (ctx) => {
+        const me = (await byId(ctx, 'profiles', f.guest.id))!
+        const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const answer = await readInboxItem(ctx, me, issueId)
+        if (answer.state !== 'ok' || answer.item === null) throw new Error('no item')
+        return {
+          change: answer.item.unread_change,
+          documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used - before,
+        }
+      })
+    const whole = await read(eight.id)
+    expect(whole.change).toBe(false)
+    expect((await read(late.id)).change).toBe(true)
+    BUILD.pair_rows = 5
+    // at the bound the walk has read every unread message, none a change
+    expect((await read(five.id)).change).toBe(false)
+    // past it, the messages the walk left may tell of a change, so it says one may
+    const bounded = await read(eight.id)
+    expect(bounded).toEqual({ change: true, documents: whole.documents - 3 })
+    expect((await read(late.id)).change).toBe(true)
     expect(await drift(t)).toEqual([])
   })
 

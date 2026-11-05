@@ -20,6 +20,7 @@
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { BUILD } from '../internal/inboxItemsBackfill'
 import { accessOf, isAccessUnchecked } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
 import { MENTION_DETAILS } from '../lib/messageDetails'
@@ -297,12 +298,20 @@ const tellsChange = (message: Pick<Doc<'messages'>, 'kind' | 'detail'>): boolean
  * the unread ones are those beyond the read ones, which the prune keeps to
  * at most one, so the answer reads the item's read messages, one normally,
  * and, only when no change is unread and a mention is, walks the unread
- * messages up to the first mention in the description, at most
- * ITEM_UNREAD_CAP (model/messages.ts) on an item the cap keeps. An item
- * with more than READ_PEEK read messages, kept from before that rule, is
- * walked unread first instead, up to its first such message. `guard`,
- * when given, counts every range and message read (lib/namedPages.ts
- * ReadGuard), as a page's walk needs.
+ * messages up to the first mention in the description. An item with more
+ * than READ_PEEK read messages, kept from before that rule, is walked
+ * unread first instead, up to its first such message.
+ *
+ * A walk reads at most BUILD.pair_rows (1,000) unread messages, the most
+ * messages internal/inboxItemsBackfill.ts builds an item of. An item the
+ * cap keeps holds at most ITEM_UNREAD_CAP (model/messages.ts) unread
+ * messages, and one kept from before the cap as many as the backfill built
+ * it with, which later arrivals trim toward the cap. When an item holds
+ * more unread messages than the walk read and none of those it read tells
+ * of a change, it answers true, since the messages it left may, and the
+ * task window then names the All filter rather than hide a change.
+ * `guard`, when given, counts every range and message read
+ * (lib/namedPages.ts ReadGuard), as a page's walk needs.
  */
 export async function unreadChange(
   ctx: QueryCtx,
@@ -316,12 +325,17 @@ export async function unreadChange(
       const item = q.eq('recipient_id', pair.recipient_id).eq('issue_id', pair.issue_id)
       return read ? item.gt('read_at', undefined) : item.eq('read_at', undefined)
     })
-  // the unread messages, up to the first that tells of a change
+  // the unread messages, up to the first that tells of a change, at most
+  // BUILD.pair_rows of them
   const walk = async (): Promise<boolean> => {
     await guard?.range()
+    let seen = 0
     for await (const message of messages(false)) {
       await guard?.document(message)
       if (tellsChange(message)) return true
+      seen += 1
+      // the unread messages past the bound may tell of one
+      if (seen === BUILD.pair_rows) return row.unread_count > seen
     }
     return false
   }
@@ -357,7 +371,9 @@ export async function unreadChange(
  * _creationTime, the oldest unread message, and for an item with an unread
  * message and a change or a mention its read messages (unreadChange), one
  * normally, and the unread ones up to the first mention in the description
- * only when no change is unread and a mention is, at most the item cap.
+ * only when no change is unread and a mention is, at most BUILD.pair_rows
+ * (1,000) of them. An item with more, none of those a change, answers
+ * `unread_change` true (unreadChange).
  */
 export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   if (!(await seatReady(ctx, me.id))) return { state: 'building' as const }
