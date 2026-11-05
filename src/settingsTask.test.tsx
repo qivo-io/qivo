@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { pastCloseTicks } from './lib/discardQuestion.setup'
+import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import {
   answerProjectNav,
@@ -15,11 +16,13 @@ import {
 
 /* The task window a Settings › Archived tasks row opens, over Settings,
    in the whole App on the real store. The server holds two archived tasks
-   in the project the person leads: issues.archivedPage lists them, the
+   in Firmware, a sub-project of the project the person leads:
+   issues.archivedPage lists them, the
    window's own read (taskWindow:task) answers them archived, and a restore
    (issues:unarchive) moves one back into the workspace and delivers it. The
-   project picker reads the navigation reads from their stand-in. Writes
-   other than the restore never answer. */
+   project picker reads the navigation reads from their stand-in, and the
+   Board, where Show on board leads, reads tasks.board from its stand-in
+   over the workspace. Writes other than the restore never answer. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -88,14 +91,28 @@ function readAnswer(ref: string): unknown {
   }
 }
 
-/** Boots App on the workspace with the project the person leads and two
-    archived tasks, and goes to Archived tasks. */
+/** Boots App on the workspace with the project the person leads, its
+    sub-project Firmware and two archived tasks there, and goes to
+    Archived tasks. */
 async function boot() {
   vi.resetModules()
   snap = plannerFixture()
   ORG = snap.orgs[0].id
-  PROJECT = snap.projects[0].id
-  snap.projects[0] = { ...snap.projects[0], type: 'meta', lead_id: snap.profiles[0].id }
+  const meta = { ...snap.projects[0], type: 'meta' as const, lead_id: snap.profiles[0].id }
+  PROJECT = crypto.randomUUID()
+  snap.projects = [
+    meta,
+    {
+      ...meta,
+      id: PROJECT,
+      type: 'project',
+      parent_id: meta.id,
+      key: 'FW',
+      num: 2,
+      name: 'Firmware',
+      lead_id: undefined,
+    },
+  ]
   archive = [archived(41, 'Calibrate the old rig'), archived(42, 'Measure the drift')]
   const reads: { args: { ref: string }; next: (value: unknown) => void }[] = []
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -113,6 +130,7 @@ async function boot() {
       reads.push(read)
       setTimeout(() => next(readAnswer(args.ref)), 0)
     } else if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
+    else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     return () => {}
   })
   network.query.mockImplementation(async (ref, args) => {
@@ -124,7 +142,7 @@ async function boot() {
         ...task,
         archived_at: '2026-09-15T08:00:00.000Z',
         is_group: false,
-        place: { project_name: snap.projects[0].name, parent_name: null },
+        place: { project_name: 'Firmware', parent_name: snap.projects[0].name },
         owner_name: null,
         can_restore: true,
       })),
@@ -183,6 +201,11 @@ beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
+  // jsdom does not scroll: a scroll to a place, as the Board's reveal
+  // makes, sets the element's offset
+  Element.prototype.scrollTo = function (this: Element, options?: ScrollToOptions | number) {
+    if (typeof options === 'object') this.scrollTop = options.top ?? 0
+  }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'matchMedia',
@@ -295,6 +318,42 @@ describe('an Archived tasks row', { timeout: 30_000 }, () => {
     expect(
       network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:archivedPage'),
     ).toHaveLength(asked + 1)
+  })
+
+  it('leaves Settings for the board with the task revealed when Show on board acts', async () => {
+    const { address } = await boot()
+    await click(find('[data-archive-open="arch-42"]'))
+    const dialog = await waitFor(archivedWindow, 'the archived task window')
+    const restore = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Restore',
+    )
+    if (!restore) throw new Error('no Restore in the window')
+    await click(restore)
+    // restored, the window names the task's project, which shows it on the board
+    const crumb = await waitFor(
+      () =>
+        archivedWindow()
+          ? null
+          : document.querySelector(`[role="dialog"] [data-task-crumb-project="${PROJECT}"]`),
+      'the project in the restored task',
+    )
+    await click(crumb)
+    await waitFor(
+      () => (document.querySelector('[data-settings-page]') ? null : true),
+      'Settings to close',
+    )
+    // the window over Settings went with it, and the board of the task's
+    // project shows its card revealed, with the task's own window over it
+    expect(location.pathname).toBe(`/app/${address.split('/')[2]}/board/tasks/qn-42`)
+    // the ring is on the card that holds the task's row
+    await waitFor(
+      () => document.querySelector('[data-card="QN-42"]')?.closest('[data-board-revealed]'),
+      'the revealed card',
+    )
+    const windows = document.querySelectorAll('[role="dialog"]')
+    expect(windows).toHaveLength(1)
+    expect(windows[0].hasAttribute('data-task-archived')).toBe(false)
+    expect(windows[0].textContent).toContain('Measure the drift')
   })
 
   it('keeps Settings and the window where Plan on roadmap only says why', async () => {
