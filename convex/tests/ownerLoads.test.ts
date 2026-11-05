@@ -1044,8 +1044,9 @@ describe('the owners of a call', () => {
       guest: ['ok', 'not_read', 'not_read'],
       viewer: ['ok', 'not_read', 'not_read'],
     })
-    // the user's hidden open work grows, which only staff receive (as busy
-    // time without a task id)
+    // the user's hidden open work grows by 40 planned tasks, which only
+    // staff receive, as busy time without a task id, and 20 Backlog ones,
+    // which no one receives
     await plantMany(fx.t, fx.org.id, 40, {
       project_id: fx.sib.id,
       assignee_id: fx.user.id,
