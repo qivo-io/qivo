@@ -437,6 +437,28 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(find(`[data-project-pick="${fws[2]}"]`).textContent).toBe('Other › Firmware')
   })
 
+  it('keeps the tags of equal names when an expanded project is renamed to another row’s name', async () => {
+    const next = base()
+    const alpha = top(next, 'Alpha')
+    const beta = top(next, 'Beta')
+    sub(next, alpha, 'Electronics')
+    await load(next)
+    await panel()
+    await click(find(`[data-project-expand="${alpha}"]`))
+    expect(find(`[data-project-pick="${alpha}"]`).textContent).toBe('Alpha')
+    // another client renames Alpha to Beta, and the live list answers again;
+    // the expanded row's children still name it Alpha, and the row's own
+    // current name decides the tags
+    const renamed = snap.projects.find((x) => x.id === alpha)
+    if (renamed) renamed.name = 'Beta'
+    const page = open().find((s) => s.name === 'projectNav:page')
+    if (!page) throw new Error('no page read')
+    await deliver(page)
+    const numOf = (id: string) => next.projects.find((x) => x.id === id)?.num
+    expect(find(`[data-project-pick="${alpha}"]`).textContent).toBe(`Beta#${numOf(alpha)}`)
+    expect(find(`[data-project-pick="${beta}"]`).textContent).toBe(`Beta#${numOf(beta)}`)
+  })
+
   it('searches once typing rests, every word of a project’s own name, ignoring accents', async () => {
     const next = base()
     const cafe = top(next, 'Café Ordering')

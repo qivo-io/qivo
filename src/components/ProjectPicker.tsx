@@ -440,8 +440,14 @@ export function ProjectPickerPanel({
       name: row.name,
       num: row.num,
     })
-    const up = row.parent
-    if (up)
+  }
+  // a project the list does not show counts with the name its sub-project
+  // row carries; a shown row keeps its own current name, which an expanded
+  // row's children carry from when it was expanded
+  for (const entry of walk) {
+    if (entry.kind !== 'row') continue
+    const up = entry.row.parent
+    if (up && !taggable.has(up.id))
       taggable.set(up.id, {
         id: up.id,
         org: up.org_id,
