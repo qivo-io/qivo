@@ -148,6 +148,7 @@ import type * as lib_projectGrants from "../lib/projectGrants.js";
 import type * as lib_projectKeys from "../lib/projectKeys.js";
 import type * as lib_requestBody from "../lib/requestBody.js";
 import type * as lib_review from "../lib/review.js";
+import type * as lib_roadmap from "../lib/roadmap.js";
 import type * as lib_roadmapVisibility from "../lib/roadmapVisibility.js";
 import type * as lib_search from "../lib/search.js";
 import type * as lib_searchTerms from "../lib/searchTerms.js";
@@ -417,6 +418,7 @@ declare const fullApi: ApiFromModules<{
   "lib/projectKeys": typeof lib_projectKeys;
   "lib/requestBody": typeof lib_requestBody;
   "lib/review": typeof lib_review;
+  "lib/roadmap": typeof lib_roadmap;
   "lib/roadmapVisibility": typeof lib_roadmapVisibility;
   "lib/search": typeof lib_search;
   "lib/searchTerms": typeof lib_searchTerms;

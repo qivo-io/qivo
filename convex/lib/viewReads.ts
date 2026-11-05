@@ -71,7 +71,7 @@ import {
 import { accessOf, inMetaTree, OWN_READS } from './access'
 import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
-import { ISSUE_STATUSES, type IssueStatus } from './enums'
+import { type AccessLevel, ISSUE_STATUSES, type IssueStatus } from './enums'
 import { MIB, PROJECT_ROW_MAX_BYTES, TASK_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
 import { taskOwnerId } from './review'
 import { parentLink, type Shown } from './workingSet'
@@ -407,6 +407,18 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
     live,
     /** Whether the reader can see each project (Access.visible). */
     visible,
+    /** The reader's level on each project (Access.level), null where they
+     * cannot see it, asked within the guard as `visible` asks: for a
+     * sub-project the same reads, so a project asked about before takes no
+     * more room. */
+    levels: (ids: readonly string[]): Promise<(AccessLevel | null)[]> =>
+      inRounds(ids, asked, PROJECT_ASK, async (id) => {
+        const answer = await access.level(id)
+        rows.add(id)
+        await chargeOnce(id)
+        await chargeOnce((await access.project(id))?.parent_id)
+        return answer
+      }),
     /** Whether each task is in the reader's working set (Access.holds). */
     async holds(tasks: readonly Doc<'issues'>[]): Promise<boolean[]> {
       const isLive = await live(tasks.map((t) => t.project_id))

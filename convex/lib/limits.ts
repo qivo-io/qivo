@@ -154,6 +154,14 @@ export const TASK_ROW_MAX_BYTES = 2 * 1024
  * LIMITS.boardTasks, the Limits guide's row. */
 export const BOARD_TASKS = 1000
 
+/** The most tasks one Roadmap answers (tasks.ts roadmap), across its whole
+ * selection: every seat and sub-project together, each group and each
+ * subtask counted, unlike the Board's count (BOARD_TASKS). Shown parents
+ * and a group's subtasks that are not rows count toward the Roadmap's read
+ * budgets, not here. The Roadmap view names it once it reads the server;
+ * no LIMITS entry yet. */
+export const ROADMAP_TASKS = 1000
+
 /** The rows one batch of an app list holds before Load more, such as the
  * labels of Settings > Labels and of the task label picker (labels.ts), a
  * project's access lists (projectSettings.ts), and a person's projects and
