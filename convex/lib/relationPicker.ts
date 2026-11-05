@@ -1034,15 +1034,16 @@ async function batchOf(
  *
  * The tasks read again keep room at what they weighed when a batch last
  * read them (Position bytes), as the reader is shown them, and only the
- * tasks never read keep room at ROW. So a group of tasks created at one
- * time goes past any cursor within the budgets, more than RELATION_PICKER
- * reads holds at ROW each included, and a step that reads a group again
- * asks for at least as many new tasks as it reads again, so a group takes
- * few steps. Only a group that weighs more than a batch's budget with room
- * for one more task, which only text far past ordinary sizes reaches,
- * stops every batch at it. A task of the group that left the range since
- * lets one more new task into that range, and one that grew since counts
- * at its size once read, as every read of the scope does.
+ * tasks never read keep room at ROW. So Load more goes past a group of
+ * tasks created at one time within the budgets, also one larger than
+ * RELATION_PICKER reads holds at ROW each, and a step that reads a group
+ * again asks for at least as many new tasks as it reads again, so a group
+ * takes few steps. Only a group that weighs more than a batch's budget
+ * with room for one more task stops every batch at it, which takes
+ * thousands of tasks of ordinary text, past the design size, or text far
+ * past ordinary sizes. A task of the group that left the range since lets
+ * one more new task into that range, and one that grew since counts at
+ * its size once read, as every read of the scope does.
  */
 async function scanScope(
   ctx: QueryCtx,
