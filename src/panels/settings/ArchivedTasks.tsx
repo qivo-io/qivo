@@ -6,11 +6,14 @@
    organization, a top-level project standing for its sub-projects, or,
    only when chosen, All projects of one organization. The page opens on
    the project it was opened for once the server resolves it for this
-   person (P.resolveProject), and on no choice otherwise. Then one page of
-   25 tasks at a time (P.fetchArchivedPage, server issues.archivedPage),
-   which Previous and Next replace, so the page holds one page of rows
-   however far it goes. A chosen project that is later archived, deleted or
-   hidden stays chosen and answers as any project the person cannot see.
+   person (P.resolveProject), and otherwise on no choice, saying it
+   couldn't open on that project, as for an admin who reaches it only as
+   an admin, whose lists hold the projects they take part in. Then one
+   page of 25 tasks at a time (P.fetchArchivedPage, server
+   issues.archivedPage), which Previous and Next replace, so the page
+   holds one page of rows however far it goes. A chosen project that is
+   later archived, deleted or hidden stays chosen and answers as any
+   project the person cannot see.
    Search is the main way to find a task. It asks the server, which looks
    through the scope's archived tasks a read budget at a time, so a page can
    stop early, even with no matches, and Search older tasks goes on from
@@ -120,10 +123,10 @@ const PICK_RULES: PickRules = { many: true, most: PICK_MOST, oneOrg: true, all: 
 const CHIPS_SHOWN = 6
 
 /** The Archived tasks page, opened on `initialProject` once the server
-    resolves it as a project the person can open, else on no choice until
-    they choose. A row's open button calls `onOpenTask` with the task's
-    reference; `taskOpen` says the task window shows over the page, which
-    reads its page again once that window closes. */
+    resolves it as a project the person can open, else on no choice, which
+    says so until they choose. A row's open button calls `onOpenTask` with
+    the task's reference; `taskOpen` says the task window shows over the
+    page, which reads its page again once that window closes. */
 export function ArchivedTasksPage({
   initialProject,
   onOpenTask,
@@ -139,6 +142,9 @@ export function ArchivedTasksPage({
   // waits for the server, while nothing is read
   const [pick, setPick] = useState<ProjectPick | null>(null)
   const [resolving, setResolving] = useState(!!initialProject)
+  // whether the project the page opened for did not resolve, which the
+  // page says until the person chooses
+  const [missed, setMissed] = useState(false)
   // whether the person chose in the picker, which the resolved project
   // never replaces
   const chose = useRef(false)
@@ -147,6 +153,7 @@ export function ArchivedTasksPage({
   const choose = (next: ProjectPick | null) => {
     chose.current = true
     setResolving(false)
+    setMissed(false)
     setPick(next)
   }
   useEffect(() => {
@@ -157,9 +164,11 @@ export function ArchivedTasksPage({
       // a project the person cannot open, a check the server could not
       // finish and a failed read all leave no choice, and a choice the
       // person made meanwhile stands
-      if (answer?.state === 'ok' && !chose.current) {
-        const { id, org_id, name, num, parent } = answer.project
-        setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
+      if (!chose.current) {
+        if (answer?.state === 'ok') {
+          const { id, org_id, name, num, parent } = answer.project
+          setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
+        } else setMissed(true)
       }
       setResolving(false)
     })
@@ -478,7 +487,14 @@ export function ArchivedTasksPage({
   const several = picked.length > 1
   let body: ReactNode = null
   if (resolving) body = <ListNote>Loading archived tasks…</ListNote>
-  else if (!list.scope) body = <ListNote>Choose a project to see its archived tasks.</ListNote>
+  else if (!list.scope)
+    body = (
+      <ListNote>
+        {missed
+          ? "Couldn't open this page on that project. The project list shows the projects you take part in."
+          : 'Choose a project to see its archived tasks.'}
+      </ListNote>
+    )
   else if (tooLong) body = <ListNote>{limitSentence(LIMITS.search)}</ListNote>
   else if (list.phase === 'first')
     body = (

@@ -423,6 +423,9 @@ const chips = () =>
   [...document.querySelectorAll<HTMLElement>('[data-archive-pick]')].map(
     (el) => el.dataset.archivePick,
   )
+/** What the page says when the project it opened on did not resolve. */
+const MISSED =
+  "Couldn't open this page on that project. The project list shows the projects you take part in."
 /** The newest issues.archivedPage call. */
 const last = () => calls[calls.length - 1]
 /** The scope argument of the project `id` of Testbed Labs. */
@@ -1021,10 +1024,27 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
       await settle()
       expect(calls).toEqual([])
       expect(trigger()).toBe('Choose projects…')
-      expect(text('[data-archived-tasks]')).toContain('Choose a project to see its archived tasks.')
+      expect(text('[data-archived-tasks]')).toContain(MISSED)
       await act(async () => root.unmount())
       root = createRoot(container)
     }
+  })
+
+  it('says an admin’s project it could not open on, and lets them choose in the picker', async () => {
+    // the admin reaches Luma Sensor only as an admin, without a lead
+    await open({ shape: (next) => Object.assign(next.projects[0], { lead_id: undefined }) })
+    expect(calls).toEqual([])
+    expect(trigger()).toBe('Choose projects…')
+    expect(text('[data-archived-tasks]')).toContain(MISSED)
+    expect(text('[data-archived-tasks]')).not.toContain('Choose a project to see')
+    // the picker lists the projects they take part in, none here, and its
+    // All projects still reads
+    await openPicker()
+    expect(has(`[data-project-pick="${META}"]`)).toBe(false)
+    await click(find(`[data-project-pick-all="${ORG}"]`))
+    await closePicker()
+    expect(calls.map((c) => c.args)).toEqual([{ scope: { org_id: ORG, all: true }, limit: 25 }])
+    expect(text('[data-archived-tasks]')).not.toContain(MISSED)
   })
 
   it('keeps a choice made while the project it opened on still resolves', async () => {

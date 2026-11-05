@@ -365,12 +365,14 @@ sub-projects. The page lists one organization at a time, so another
 organization's projects wait until you clear your choice. It lists the
 projects you can see that are not archived. An organization admin's list
 holds the projects they lead or hold a grant or team share on, and **All
-projects** still reads the organization's whole archive for them. A sub-project
-archived on its own, and an archived project, show their tasks again once
-they are restored. The page shows 25 tasks at a time, newest archived
-first, and **Next** and **Previous** move between pages. The line above the
-list says which tasks the page shows, such as **Archived tasks 26 to 50**,
-and the last page says these are the oldest.
+projects** still reads the organization's whole archive for them. Opened on a
+project they reach only as an admin, the page says it couldn't open on that
+project and starts with nothing chosen. A sub-project archived on its own,
+and an archived project, show their tasks again once they are restored. The
+page shows 25 tasks at a time, newest archived first, and **Next** and
+**Previous** move between pages. The line above the list says which tasks
+the page shows, such as **Archived tasks 26 to 50**, and the last page says
+these are the oldest.
 
 The search, on desktop and phones, looks through every archived task of
 that choice by task ID, title, description, status, priority, assignee and
