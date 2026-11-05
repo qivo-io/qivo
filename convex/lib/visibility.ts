@@ -1,5 +1,8 @@
 // Preload projects and applicable grants once per organization. Per-row
-// visibility becomes a set lookup; corrupt roots remain invisible.
+// visibility becomes a set lookup; corrupt roots remain invisible. Team
+// sync's latest comments (teamSync.ts lastComments) is its last caller; a
+// member's task history asks lib/access.ts accessOf about the projects its
+// rows name instead (lib/activityVisibility.ts).
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

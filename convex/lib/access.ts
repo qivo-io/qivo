@@ -1073,10 +1073,13 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * (lib/mainSearch.ts), the Board
  * (lib/board.ts, which answers it `unavailable` with access_unchecked), the
  * Overview's reads (lib/overview.ts, which answer it the same way),
- * project settings (model/projectSettings.ts) and the project navigation
+ * project settings (model/projectSettings.ts), the project navigation
  * reads (model/projectNavReads.ts, which answer it `unavailable` with
- * access_unchecked as well) apply this one rule, each with its own answer
- * for that refusal. */
+ * access_unchecked as well) and a member's task history
+ * (lib/activityVisibility.ts, whose pages in the task window, REST and MCP
+ * refuse a page whose check stopped, and whose taskWriters names nobody
+ * for such a row) apply this one rule, each with its own answer for that
+ * refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

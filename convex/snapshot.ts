@@ -67,8 +67,11 @@ const showsHistory = (issue: Doc<'issues'>, project: Doc<'projects'>) =>
  * history the caller receives (lib/activityVisibility.ts taskHistoryPage),
  * oldest first, whether the history holds rows before them, and `next`, the
  * row the window reads those before with historyBefore. It can hold no row
- * while `earlier` is set. The page is empty for an active task in an
- * archived project (showsHistory). An archived task's history is answered
+ * while `earlier` is set. It refuses with access_unchecked where Qivo could
+ * not finish checking the caller's access to a project the page's rows name
+ * (taskHistoryPage), which the window shows as its activity load failure
+ * with Retry. The page is empty for an active task in an archived project
+ * (showsHistory). An archived task's history is answered
  * since the window shows such a task read-only; an older app never asks
  * for it. */
 export const threadHistory = orgQuery({
@@ -93,7 +96,10 @@ export const threadHistory = orgQuery({
  * `earlier` is set. The app reads it once rather than subscribing. A
  * `before` that is not a row of this task's history refuses with
  * BEFORE_NOT_A_CHANGE as a bad_request, and a task the window shows no
- * history for (showsHistory) answers an empty page. */
+ * history for (showsHistory) answers an empty page. Like threadHistory it
+ * refuses with access_unchecked where Qivo could not finish checking the
+ * caller's access to a project the page's rows name (taskHistoryPage),
+ * which the window shows as a failed load. */
 export const historyBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
