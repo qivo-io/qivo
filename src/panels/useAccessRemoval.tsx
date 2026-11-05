@@ -1,8 +1,9 @@
 /* The removal press of the Settings pages that take access away: a team's
    Delete on Teams, a member's Remove on a team's page, and a person's or a
    team's Remove in a project's access editor. One hook beside the removal
-   window, so the three pages share its state. It lives apart from
-   Modals.tsx, which exports components only. */
+   window, so the three pages share its code, and each page that calls it
+   holds its own press. It lives apart from Modals.tsx, which exports
+   components only. */
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useFocusAfterRender } from '../lib/focusWhenGone'
 import { type AccessRemoval, P, type RemovalAnswer } from '../store/planner'

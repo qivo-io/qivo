@@ -958,7 +958,7 @@ function MoveIssueModal({
    already Viewer leaves only the reassignment. A choice the server refuses
    is disabled with its sentence, and with both refused only Cancel acts.
    The window asks the server again before it saves, with the chosen
-   person, so a choice applies only to the tasks the person read: if they
+   person, so a choice applies only to the tasks the person read. If they
    or the chosen person's eligibility changed meanwhile, the window shows
    the new answer and asks again. It stays open, and keeps the settings
    behind it out of reach, until the server has accepted the removal. A
@@ -1125,7 +1125,7 @@ function AccessRemovalModal({
         void P.removeLeavingTasks(change, now)
         return
       }
-      // nobody loses sight of anything any more: the plain removal applies
+      // nobody loses sight of anything any more, so the plain removal applies
       if (now.tasks === 0) {
         finish(P.removeAccess(change, { to: null }))
         return
