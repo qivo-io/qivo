@@ -2281,8 +2281,14 @@ Uploading a file takes three steps, the same as on REST:
    at most 20 MiB) is refused with `a file must be at most 20 MiB, this
    organization's attachment limit. Attach a smaller file.` The 20 MiB
    ceiling is Qivo's product rule: attachments are for images, PDF files and
-   similar documents, and Qivo is not a file store. It answers `{ "ticket": "…uuid…", "upload_url": "…",
-   "expires_at": "…" }`.
+   similar documents, and Qivo is not a file store. One user has at most 20
+   uploads in progress in an organization, here, over REST and in the app
+   together, so a 21st start is refused with `you already have 20 uploads in
+   progress, the most one person can have at once. Try again once one has
+   finished. An upload that is never finished stops counting an hour after
+   it started.` An upload counts from its start until it is confirmed, or
+   until its ticket expires, also when no file was sent. It answers
+   `{ "ticket": "…uuid…", "upload_url": "…", "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header, for example
    `curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<upload_url>"`.
@@ -2313,9 +2319,13 @@ either like a network error. Once the upload is confirmed,
 its URL answers
 `404` like an expired one (see [REST attachments](rest-api.md#attachments)
 for every answer). Only the user that started
-the upload can confirm it, only for the same task, and only once. A ticket
+the upload can confirm it, only for the same task, and the file attaches
+once. A confirm sent again by the same user for the same task with the same
+`storage_id` after the first one attached the file, for example because its
+answer was lost, answers that attachment and changes nothing. A ticket
 belongs to the user, not the credential, so a ticket started over MCP can be
-confirmed over REST by the same user, and the reverse. The confirm follows
+confirmed over REST by the same user, and the reverse, and a confirm sent
+again on the other surface answers the same attachment. The confirm follows
 REST's rules. Another ticket, including an expired one, answers `upload not
 found or expired; start a new upload`, and a `storage_id` that is not the
 `storageId` the upload URL answered is refused with `storage_id must be the
@@ -2324,7 +2334,7 @@ URL; send it there, or start a new upload` before the upload URL has stored
 one. If the organization lowered its per-file
 limit after the upload started and the file now exceeds it, Qivo deletes the
 file, refuses the confirm and spends the ticket. Bytes uploaded but never
-confirmed are deleted by the weekly storage sweep.
+confirmed are deleted within an hour after their ticket expires.
 
 Uploading needs a client that can send an HTTP request with the file, such
 as a coding agent with a shell. Chat assistants that cannot make HTTP
