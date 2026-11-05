@@ -22,18 +22,17 @@ and every one of those has arrived. Search works meanwhile, but on a slow
 connection its results come after the tasks already on their way. A task you open from
 Search, a link, a bookmark, Back or Forward, an Inbox row, or a task's
 subtasks or linked tasks before it has arrived
-shows at once, and you can change it at once, apart from setting or
-changing its parent, its subtasks and its links, which wait until it has
-arrived. A task opened by the number in its link takes changes once the
+shows at once, and you can change it at once, its parent, its subtasks and
+its links included. A task opened by the number in its link takes changes once the
 window has read it on its own. Moving, archiving and
 deleting such a task work at once too, once its window has read every
 subtask of it. The Overview shows its figures,
 lists and health table from the server meanwhile. The Roadmap and Team sync
 open once every task has loaded, and so do moving, archiving and deleting a
 task that has arrived, unless its window has read every subtask of it. An
-open task's subtasks, linked tasks and attachments load on their own.
-Removing a subtask or linked task that has not arrived yet waits for it.
-Settings and all its pages open at once. A
+open task's subtasks, linked tasks and attachments load on their own, and
+its **Parent**, **Subtasks** and **Linked tasks** pickers search every task
+on the server. Settings and all its pages open at once. A
 link to one task opens with the first tasks, read from the server, without
 waiting for every task. If loading stops, the
 note says how far it got, and a notice explains what went wrong.
@@ -185,7 +184,8 @@ the landscape Roadmap. The exceptions are the **Overview**'s health cards,
 which show a search once there are more than 10, and **Archived tasks** and
 **Deleted items** in Settings, which keep their search boxes. Status and
 other filters remain available, as do searches inside people, label and
-relationship pickers.
+relationship pickers. The relationship pickers search every task you could
+choose on the server.
 
 **My tasks** lists active work before backlog and completed tasks. Choose a
 status or open **Filters** to narrow the list. In a very long list, rows
