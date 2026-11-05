@@ -38,8 +38,8 @@ import { ERASE_TIMERS, noteRestore } from '../model/fileHolds'
 import { activeTaskCount } from '../model/labelCounts'
 import { countersOf, countersRow, type OrgCounters } from '../model/orgs'
 import { memberCount } from '../model/teamCounts'
-import { teamJson } from '../model/teams'
 import schema from '../schema'
+import { teamJson } from './teamMembers.setup'
 
 export type T = TestConvex<typeof schema>
 
