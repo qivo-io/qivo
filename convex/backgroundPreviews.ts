@@ -117,6 +117,8 @@ export const attach = internalMutation({
     await ctx.db.patch(image._id, {
       preview_storage_id: args.preview_storage_id,
       preview_version: args.preview_version,
+      // a preview stored after the demo once had no room for one
+      ...('preview_skipped' in image ? { preview_skipped: undefined } : {}),
     })
     // A library preview's storage URL is permanent and needs no sign in, so
     // a replaced one is erased at once, as panoramaImages.ts remove erases a
@@ -181,8 +183,27 @@ export const beginDemoWork = internalMutation({
       authId: image.auth_user_id,
       targetId: image.id,
     })
-    if (ticket === null) return null
+    if (ticket === null) {
+      if (!image.preview_skipped) await ctx.db.patch(image._id, { preview_skipped: true })
+      return null
+    }
     await beginDemoUpload(ctx, ticket.id, image.auth_user_id, true)
     return { id: ticket.id, authId: image.auth_user_id, bytes: ticket.bytes }
+  },
+})
+
+/* Records on a demo's custom background that its preview did not fit in
+ * the bytes beginDemoWork reserved, while the background is still the
+ * current one, so Settings says there is none (schema.ts
+ * custom_backgrounds.preview_skipped). generate calls it instead of storing
+ * the preview, and does not retry. */
+export const skipDemoPreview = internalMutation({
+  args: backgroundPreviewArgs,
+  handler: async (ctx, args): Promise<null> => {
+    if (!isDemoDeployment() || args.kind !== 'custom') return null
+    const image = await currentSource(ctx, args)
+    if (image && 'auth_user_id' in image && !image.preview_skipped)
+      await ctx.db.patch(image._id, { preview_skipped: true })
+    return null
   },
 })

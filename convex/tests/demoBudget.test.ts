@@ -11,6 +11,7 @@ import type { Id } from '../_generated/dataModel'
 import type { ActionCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import http from '../http'
+import { BACKGROUND_PREVIEW_VERSION } from '../lib/backgroundPreviews'
 import { LIMITS } from '../lib/limits'
 import { UPLOAD_SIZE_SHAPE } from '../model/attachments'
 import {
@@ -488,6 +489,108 @@ describe('a demo upload that never attaches', () => {
       }),
       'forbidden',
     )
+  })
+})
+
+describe("a demo background's preview", () => {
+  /* Uploads a background of `bytes` and answers the preview job's arguments. */
+  async function background(d: Demo, bytes: number) {
+    const ticket = await d.caller.mutation(api.appearance.createUpload, {
+      name: 'Lake.jpg',
+      size: bytes,
+    })
+    expect((await post(d.t, ticket.upload_url, jpegOf(bytes), 'image/jpeg')).status).toBe(200)
+    const [image] = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
+    return { kind: 'custom' as const, id: image.id, storage_id: image.storage_id }
+  }
+  const skipped = async (d: Demo) =>
+    (await d.caller.query(api.appearance.get, {})).custom_image?.preview_skipped
+  const webp = (t: T) =>
+    t.run(async (ctx) => {
+      const id = await ctx.storage.store(new Blob([new Uint8Array(100)]) as never)
+      await ctx.db.patch(id as never, { contentType: 'image/webp' } as never)
+      return id
+    })
+
+  it('reserves 1 MiB or the free space, and stores a preview that fits with no mark', async () => {
+    const d = await setup()
+    const job = await background(d, 3 * MiB)
+    await reserve(d, 1.5 * MiB)
+    const work = await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)
+    expect(work).toMatchObject({ authId: d.authId, bytes: 0.5 * MiB })
+    expect(
+      await d.t.mutation(internal.backgroundPreviews.attach, {
+        ...job,
+        preview_storage_id: await webp(d.t),
+        preview_version: BACKGROUND_PREVIEW_VERSION,
+        demo_ticket_id: work!.id,
+      }),
+    ).toBe(true)
+    expect(await d.caller.query(api.appearance.get, {})).toMatchObject({
+      custom_image: { preview_ready: true, preview_skipped: false },
+    })
+  })
+
+  it('marks the skip when nothing is free, and a later preview clears it', async () => {
+    const d = await setup()
+    const job = await background(d, 3 * MiB)
+    await reserve(d, 2 * MiB)
+    expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)).toBeNull()
+    expect(await skipped(d)).toBe(true)
+    expect(await ledger(d.t)).toEqual({ bytes: 5 * MiB, rows: 2 })
+    // the reservation expires, and a preview made later clears the mark
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    const work = await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)
+    expect(work?.bytes).toBe(1 * MiB)
+    await d.t.mutation(internal.backgroundPreviews.attach, {
+      ...job,
+      preview_storage_id: await webp(d.t),
+      preview_version: BACKGROUND_PREVIEW_VERSION,
+      demo_ticket_id: work!.id,
+    })
+    expect(await skipped(d)).toBe(false)
+  })
+
+  it('marks the skip when the demo holds 200 files', async () => {
+    const d = await setup()
+    const job = await background(d, 1 * MiB)
+    await d.t.run(async (ctx) => {
+      for (let i = 1; i < DEMO_UPLOAD_ROWS; i++)
+        await ctx.db.insert('demo_uploads', {
+          id: uuid(),
+          demo_id: d.receipt.id,
+          auth_user_id: d.authId,
+          kind: 'attachment',
+          target_id: d.issue.id,
+          reserved_bytes: 1,
+          expires_at: d.receipt.expires_at,
+          state: 'pending',
+        })
+    })
+    expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)).toBeNull()
+    expect(await skipped(d)).toBe(true)
+  })
+
+  it('records a preview larger than its reservation as skipped for the current background only', async () => {
+    const d = await setup()
+    const old = await background(d, 1 * MiB)
+    expect(await skipped(d)).toBe(false)
+    await d.caller.mutation(api.appearance.removeCustom, {})
+    const ticket = await d.caller.mutation(api.appearance.createUpload, {
+      name: 'Fjord.jpg',
+      size: 1 * MiB,
+    })
+    await post(d.t, ticket.upload_url, jpegOf(1 * MiB), 'image/jpeg')
+    const [current] = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
+    // a job for the background the person replaced marks nothing
+    await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, old)
+    expect(await skipped(d)).toBe(false)
+    await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, {
+      kind: 'custom',
+      id: current.id,
+      storage_id: current.storage_id,
+    })
+    expect(await skipped(d)).toBe(true)
   })
 })
 

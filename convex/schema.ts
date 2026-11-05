@@ -675,6 +675,12 @@ export default defineSchema({
     storage_id: v.id('_storage'),
     preview_storage_id: v.optional(v.id('_storage')),
     preview_version: v.optional(v.number()),
+    // true when the private demo's storage left no room for the preview
+    // (backgroundPreviews.ts beginDemoWork and skipDemoPreview), so
+    // Settings says why there is none and the Canvas shows the full image,
+    // as whenever a preview is missing. Only the demo writes it, and a
+    // later stored preview clears it.
+    preview_skipped: v.optional(v.literal(true)),
     name: v.string(),
     mime: v.string(),
     width: v.number(),
