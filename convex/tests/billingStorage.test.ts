@@ -8,9 +8,10 @@
  *      an organization not counted yet or counting answers null, never 0.
  *   2. The period's sample answers a paid period's finished sample only.
  *   3. Storage by project pages 25 at a time, largest first, equal bytes
- *      each once, adding up to the organization's total; labels active,
- *      archived, Deleted items and removed projects, a row without a name
- *      and a row whose number another live project does not have.
+ *      each once, the rest of a cursor's creation instant included, adding
+ *      up to the organization's total; labels active, archived, Deleted
+ *      items and removed projects, a row without a name and a row whose
+ *      number another live project does not have.
  *   4. Its search ignores accents, case and word order over the whole list
  *      and answers only this organization's rows; a row whose bytes cross
  *      the cursor between calls is missed or answered again, as the owner
@@ -35,8 +36,14 @@ import type { QueryCtx } from '../_generated/server'
 import type { StorageProjectRow, StorageProjects } from '../lib/billingTypes'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { namedCursor } from '../lib/namedPages'
 import { currentUsageOf } from '../model/billing'
-import { NOT_STORAGE_CURSOR, STORAGE_PROJECTS, storageProjectsBatch } from '../model/billingStorage'
+import {
+  NOT_STORAGE_CURSOR,
+  STORAGE_PROJECTS,
+  STORAGE_PROJECTS_LIST,
+  storageProjectsBatch,
+} from '../model/billingStorage'
 import { recordApiCall } from '../model/billingUsage'
 import {
   type Amount,
@@ -108,8 +115,8 @@ async function attach(t: T, f: OrgFixture, issue: Doc<'issues'>, bytes: number, 
   if (!('attachment' in out)) throw new Error(`the attach was refused: ${out.refused.message}`)
 }
 
-/** A sub-project of TBED with one task holding a file of `bytes`, attached
- * in the app. */
+/** A sub-project of TBED, or of `extra.parent_id` when given, with one task
+ * holding a file of `bytes`, attached in the app. */
 async function withFile(
   t: T,
   f: OrgFixture,
@@ -439,9 +446,14 @@ describe("the period's storage sample", () => {
 describe('Storage by project, order and paging', () => {
   it('pages 60 sub-projects with files 25, 25 and 10, largest first, adding up to current storage', async () => {
     const { t, f } = await counted()
-    // bytes 10 to 600 in an order that is not the order of creation
+    // bytes 10 to 600 in an order that is not the order of creation, three
+    // sub-projects under each of 20 projects, the everyday figure for one
+    // project
     const bytes = Array.from({ length: 60 }, (_, i) => (((i * 37) % 60) + 1) * 10)
-    for (const b of bytes) await withFile(t, f, b)
+    for (let i = 0; i < bytes.length; i += 3) {
+      const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
+      for (const b of bytes.slice(i, i + 3)) await withFile(t, f, b, { parent_id: top.id })
+    }
     const { batches, rows } = await walk(t, f.admin)
     expect(batches.map((b) => b.rows.length)).toEqual([25, 25, 10])
     expect(batches.map((b) => b.stopped)).toEqual([false, false, false])
@@ -455,7 +467,7 @@ describe('Storage by project, order and paging', () => {
     expect(rows.map((r) => r.bytes)).not.toEqual(bytes)
   })
 
-  it('answers each of 30 rows of equal bytes once, newest row first, some written in one transaction', async () => {
+  it('answers each of 30 rows of equal bytes once, newest row first', async () => {
     const { t, f } = await counted()
     const rows = Array.from({ length: 30 }, (_, i) => ({
       project_id: uuid(),
@@ -463,13 +475,56 @@ describe('Storage by project, order and paging', () => {
       name: `Equal ${i}`,
       bytes: 77,
     }))
-    // fifteen in one transaction, then one a transaction
+    // fifteen in one transaction, then one a transaction. convex-test gives
+    // every insert its own creation time, so no two of these rows share an
+    // instant; the next case reads inside one
     await plantTotals(t, f.org.id, rows.slice(0, 15))
     for (const row of rows.slice(15)) await plantTotals(t, f.org.id, [row])
     const { batches, rows: got } = await walk(t, f.admin)
     expect(batches.map((b) => b.rows.length)).toEqual([25, 5])
     expect(got.map((r) => r.name)).toEqual(rows.map((r) => r.name).reverse())
     expect(new Set(got.map((r) => r.project_id)).size).toBe(30)
+  })
+
+  it('answers the rest of a cursor’s instant at its bytes, then its older rows and the smaller ones', async () => {
+    const { t, f } = await counted()
+    const rows = ['Larger', 'Newer', 'Held', 'Older', 'Smaller'].map((name, i) => ({
+      project_id: uuid(),
+      num: 2000 + i,
+      name,
+      bytes: name === 'Larger' ? 90 : name === 'Smaller' ? 30 : 60,
+    }))
+    // one a transaction from Smaller to Larger, so of the three rows at 60
+    // bytes Newer is the newest and Older the oldest
+    for (const row of [...rows].reverse()) await plantTotals(t, f.org.id, [row])
+    const held = await t.run(async (ctx) => {
+      const all = await ctx.db
+        .query('storage_project_totals')
+        .withIndex('by_org_bytes', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      return all.find((r) => r.name === 'Held')!
+    })
+    // A position inside Held's instant just before Held in descending
+    // order, as a cursor reads when Convex gave another row the same
+    // creation time with a larger id. Held lies past it, so the batch must
+    // answer Held from the cursor's own instant before the older rows.
+    const cursor = await namedCursor(STORAGE_PROJECTS_LIST, [f.org.id, ''], {
+      key: '',
+      tie: [held.bytes, held._creationTime, `${held._id}~`],
+    })
+    const batch = ready(await t.run((ctx) => storageProjectsBatch(ctx, f.org.id, { cursor })))
+    expect(batch.rows.map((r) => r.name)).toEqual(['Held', 'Older', 'Smaller'])
+    expect(batch.next).toBeNull()
+    // a cursor at Held itself answers only what follows it
+    const at = await namedCursor(STORAGE_PROJECTS_LIST, [f.org.id, ''], {
+      key: '',
+      tie: [held.bytes, held._creationTime, held._id],
+    })
+    expect(
+      ready(await t.run((ctx) => storageProjectsBatch(ctx, f.org.id, { cursor: at }))).rows.map(
+        (r) => r.name,
+      ),
+    ).toEqual(['Older', 'Smaller'])
   })
 })
 
