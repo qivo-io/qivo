@@ -36,9 +36,12 @@
  * by a restore changes which of its tasks' parents are groups, and whether
  * its tasks count at all, without a task write. It starts background steps
  * (startRegroup, overviewRegroup.ts) that reconcile its tasks and their
- * parents, which share its top-level project (model/issues.ts
- * parentChainCheck), and that top-level project's counts answer
- * `counting` until they end.
+ * parents, and every top-level project's counts in the organization answer
+ * `counting` until they end (countsReady). A parent shares its subtask's
+ * top-level project (model/issues.ts parentChainCheck), except where older
+ * code stored the subtask in another one, which nothing records, so the
+ * change cannot tell which other top-level projects it reaches without
+ * reading every task of its projects.
  *
  * An organization is counted from its org_ready overview_counts_at: from
  * its creation (model/orgs.ts insertOrgRows), from a Northstar seed's last
@@ -762,13 +765,22 @@ export async function countWhole(db: Writer, orgId: string, now: string): Promis
 
 // --- the readers --------------------------------------------------------------------
 
-/** Whether the counts of top-level project `familyId`'s sub-projects are
- * whole: its organization is counted, no backfill counts it, and no
- * regroup of the project is under way. */
-export async function countsReady(db: Reader, orgId: string, familyId: string): Promise<boolean> {
+/** Whether the counts of organization `orgId` are whole: it is counted,
+ * no backfill counts it, and no regroup runs in it. A regroup reconciles
+ * the parents of its projects' tasks wherever they are, and a subtask that
+ * older code stored in another top-level project than its parent's puts
+ * such a parent in another family, so every family waits for every
+ * regroup (see the header). Three ranges: org_ready and
+ * overview_count_runs, each read with `.unique()`, and the organization's
+ * first overview_regroups row. */
+export async function countsReady(db: Reader, orgId: string): Promise<boolean> {
   const state = await orgCountState(db, orgId)
   if (!state.stamped || state.run !== null) return false
-  return (await overviewRegroupOf(db, familyId)) === null
+  const regroup = await db
+    .query('overview_regroups')
+    .withIndex('by_org', (q) => q.eq('org_id', orgId))
+    .first()
+  return regroup === null
 }
 
 /** The counts `rows` of one project hold for `project`: the sum of those of
@@ -800,26 +812,26 @@ export const subProjectRows = (db: Reader, projectId: string) =>
  * organization with a parent), or null for an archived one, whose rows wait
  * for a restore's regroup, while they are not whole (countsReady) or where
  * a row went negative: never a partial figure or a zero for one not
- * counted. It
- * reads the organization's readiness and the regroup of the project's
- * top-level project (three ranges) and the project's OVERVIEW_SHARDS rows
- * (one range). The counts hold every leaf, whoever reads them; a caller
- * keeps to the sub-projects its reader may see.
+ * counted. It reads the organization's readiness (countsReady, three
+ * ranges) and the project's OVERVIEW_SHARDS rows (one range). The counts
+ * hold every leaf, whoever reads them; a caller keeps to the sub-projects
+ * its reader may see.
  */
 export async function subProjectCounts(
   db: Reader,
   project: Doc<'projects'>,
 ): Promise<LeafCounts | null> {
   if (project.parent_id === undefined || project.archived_at !== undefined) return null
-  if (!(await countsReady(db, project.org_id, project.parent_id))) return null
+  if (!(await countsReady(db, project.org_id))) return null
   return countsOfRows(await subProjectRows(db, project.id), project)
 }
 
 /**
  * The leaf counts of each of `subProjects`, live sub-projects of top-level
  * project `familyId` in organization `orgId` that the caller may read, by
- * project id, or null while the family's counts are not whole (countsReady)
- * or a row went negative: never a partial figure. It asks countsReady once,
+ * project id, or null while the organization's counts are not whole
+ * (countsReady, so also while a regroup runs in another family) or a row
+ * went negative: never a partial figure. It asks countsReady once,
  * three ranges, then reads each sub-project's OVERVIEW_SHARDS rows, a range
  * and up to OVERVIEW_SHARDS documents each, all at once, so a caller that
  * bounds its reads takes room for them first. The Overview's project scope
@@ -838,7 +850,7 @@ export async function familyCounts(
   // an archived sub-project's rows wait for a restore's regroup, and one of
   // another family is not this family's to answer
   if (subProjects.some((p) => p.archived_at !== undefined || p.parent_id !== familyId)) return null
-  if (!(await countsReady(db, orgId, familyId))) return null
+  if (!(await countsReady(db, orgId))) return null
   const rows = await Promise.all(subProjects.map((p) => subProjectRows(db, p.id)))
   const out = new Map<string, LeafCounts>()
   for (const [i, p] of subProjects.entries()) {

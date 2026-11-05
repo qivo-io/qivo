@@ -9,7 +9,8 @@
  * stops or starts being live, changes what its tasks add and which of
  * their parents are groups, in any sub-project of its top-level project
  * (model/issues.ts parentChainCheck keeps a subtask in its parent's
- * top-level project), without a task write. The archive, the restore, the
+ * top-level project) or, for a subtask older code stored elsewhere, of
+ * another one, without a task write. The archive, the restore, the
  * move and the reveal (model/projects.ts archiveProjectCore and
  * unarchiveProjectCore, model/deletedItems.ts moveProjectToTrash and
  * revealProjects) call model/overviewCounts.ts startRegroup in their
@@ -18,10 +19,12 @@
  * transaction, which reads the projects' active tasks a page at a time
  * (issues by_project_archived) and reconciles each task and its parent with
  * what the counts hold for them (reconcileTask), reading their subtasks
- * again. While the row exists, that top-level project's counts answer
- * `counting` (countsReady). A task written meanwhile reconciles itself and
- * its parents; either may come first, and the second finds nothing to
- * move.
+ * again. While the row exists, the counts of every top-level project of
+ * the organization answer `counting` (countsReady), because a parent that
+ * older code left in another top-level project than its subtask's is
+ * reconciled by these steps too. A task written meanwhile reconciles
+ * itself and its parents; either may come first, and the second finds
+ * nothing to move.
  *
  * Convex drops the calls a failed mutation scheduled, so a step that fails
  * leaves the row in place. `recover` runs every ten minutes (crons.ts) and

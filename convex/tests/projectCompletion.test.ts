@@ -151,6 +151,54 @@ const rangesOfGet = (t: T, callerId: string, ref: string) =>
     return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
   })
 
+/* setup, with AWAY, a sub-project of SKNK that the user leads, archived
+ * or not, and in FW a To Do parent whose only subtask older code stored in
+ * AWAY, beside a Done leaf, counted. */
+async function legacyFamily(archived: boolean) {
+  const fx = await setup()
+  const away = await plantProject(fx.t, {
+    org_id: fx.org.id,
+    type: 'project',
+    parent_id: fx.hidden.id,
+    key: 'AWAY',
+    ...(archived ? { archived_at: NOW } : {}),
+  })
+  const legacy = await task(fx, { project_id: fx.sub.id, title: 'Legacy parent' })
+  await task(fx, { project_id: away.id, parent_id: legacy.id })
+  await task(fx, { project_id: fx.sub.id, status: 'done' })
+  await countOrg(fx.t, fx.org.id)
+  return { ...fx, away }
+}
+
+/* FW's and TBED's completion for the agent, over REST and MCP. */
+async function legacyReads(fx: Fx) {
+  const out: Record<string, CompletionJson | null> = {}
+  for (const ref of ['FW', 'TBED']) {
+    out[`rest ${ref}`] = await restCompletion(fx, fx.agent.id, ref)
+    out[`mcp ${ref}`] = await mcpCompletion(fx, fx.agent.id, ref)
+  }
+  return out
+}
+
+/* What legacyReads answers when every read is `c`. */
+const everywhere = (c: CompletionJson) => ({
+  'rest FW': c,
+  'mcp FW': c,
+  'rest TBED': c,
+  'mcp TBED': c,
+})
+
+/* REST PATCH /v1/projects/{ref} archiving or restoring `project` as the
+ * user, who leads TBED and SKNK. */
+const restArchive = (fx: Fx, project: Doc<'projects'>, archived: boolean) =>
+  fx.t.mutation(internal.machine.projects.restUpdateProject, {
+    callerId: fx.user.id,
+    access: 'write',
+    keyName: 'drive',
+    ref: project.key,
+    body: JSON.stringify({ archived }),
+  })
+
 describe('project completion from the counts', () => {
   it('counts the leaves of the sub-projects each reader can read, on both reads and both updates', async () => {
     const fx = await setup()
@@ -277,6 +325,32 @@ describe('project completion from the counts', () => {
       await restCompletion(fx, fx.agent.id, 'FW'),
       await restCompletion(fx, fx.agent.id, 'PCB'),
     ]).toContainEqual(COUNTING_COMPLETION)
+  })
+
+  it('answers counting in the family of a parent whose only subtask is in another family, from that family’s archive until its steps have run', async () => {
+    const fx = await legacyFamily(false)
+    // the parent is a group while its subtask's project is live
+    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 1)))
+    // archived: TBED's counts still hold the parent a group until SKNK's
+    // regroup reaches it, so they answer counting, never the stale figure
+    expect((await restArchive(fx, fx.away, true)).completion).toBeNull()
+    expect(await legacyReads(fx)).toEqual(everywhere(COUNTING_COMPLETION))
+    await fx.t.finishAllScheduledFunctions(() => {})
+    // its only subtask archived away, the parent is a To Do leaf
+    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 2)))
+  })
+
+  it('answers counting in the family of a parent whose only subtask is in another family, from that family’s restore until its steps have run', async () => {
+    const fx = await legacyFamily(true)
+    // the parent is a leaf while its subtask's project is archived
+    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 2)))
+    // restored: TBED's counts still hold the parent a leaf until SKNK's
+    // regroup reaches it, so they answer counting, as the restore's own
+    // answer does
+    expect((await restArchive(fx, fx.away, false)).completion).toEqual(COUNTING_COMPLETION)
+    expect(await legacyReads(fx)).toEqual(everywhere(COUNTING_COMPLETION))
+    await fx.t.finishAllScheduledFunctions(() => {})
+    expect(await legacyReads(fx)).toEqual(everywhere(ok(1, 1)))
   })
 
   it('answers unavailable where the request has no room for the counts, and the update commits', async () => {

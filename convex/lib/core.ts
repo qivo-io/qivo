@@ -2082,14 +2082,15 @@ export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, 
 const COUNT_ROW_BYTES = 1024
 
 /* What model/overviewCounts.ts familyCounts reads for `subProjects`
- * sub-projects: the family's readiness, three ranges whose `.unique()`
- * each reads up to two rows, the regroup's row, which lists projects,
- * counted at Convex's document size limit, and each sub-project's range of
- * OVERVIEW_SHARDS count rows. */
+ * sub-projects: the organization's readiness (countsReady), three ranges,
+ * two of them read with `.unique()`, which reads up to two rows, and one
+ * the organization's first regroup row, which lists projects and is
+ * counted at Convex's document size limit, then each sub-project's range
+ * of OVERVIEW_SHARDS count rows. */
 const countsRead = (subProjects: number): ReadCeiling => ({
   ranges: 3 + subProjects,
-  documents: 6 + OVERVIEW_SHARDS * subProjects,
-  bytes: DOCUMENT_MAX_BYTES + (5 + OVERVIEW_SHARDS * subProjects) * COUNT_ROW_BYTES,
+  documents: 5 + OVERVIEW_SHARDS * subProjects,
+  bytes: DOCUMENT_MAX_BYTES + (4 + OVERVIEW_SHARDS * subProjects) * COUNT_ROW_BYTES,
 })
 
 /**
@@ -2097,12 +2098,12 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  * sees it, which is how many of the active tasks without subtasks are Done,
  * in the project, or for a top-level project in its live sub-projects that
  * the caller can read (`view.readable`), from the counts every task writer
- * keeps (model/overviewCounts.ts familyCounts). It reads the family's
- * readiness, three ranges, and each counted sub-project's count rows, a
- * range and up to OVERVIEW_SHARDS documents each, and never a task, so a
- * project of 30 sub-projects reads 33 ranges and at most 126 documents
- * whatever its tasks. Null for an archived project, whose tasks are outside
- * the working plan; NO_TASKS where it counts no sub-project.
+ * keeps (model/overviewCounts.ts familyCounts). It reads the
+ * organization's readiness, three ranges, and each counted sub-project's
+ * count rows, a range and up to OVERVIEW_SHARDS documents each, and never
+ * a task, so a project of 30 sub-projects reads 33 ranges and at most 125
+ * documents whatever its tasks. Null for an archived project, whose tasks
+ * are outside the working plan; NO_TASKS where it counts no sub-project.
  *
  * The leaf rule is the stored one, the Overview's and the app's
  * (P.isGroup). A task with an active subtask in any live project of the
@@ -2112,16 +2113,20 @@ const countsRead = (subProjects: number): ReadCeiling => ({
  *
  * COUNTING_COMPLETION while the counts are not whole: while Qivo counts
  * the organization (internal/overviewCountsBackfill.ts), while a regroup
- * of the family runs after one of its projects was archived, restored,
- * moved to Deleted items or brought back from it (startRegroup, in the
- * same transaction, so an update_project or PATCH that restores a
+ * runs anywhere in the organization after any project was archived,
+ * restored, moved to Deleted items or brought back from it (startRegroup,
+ * in the same transaction, so an update_project or PATCH that restores a
  * sub-project answers it; one that archives a project answers null), or
- * where a row went below zero until a recount mends it. UNAVAILABLE_COMPLETION where the request has no room
- * for those reads beside COMPLETION_RESERVE, which inside the design size
- * never happens. It keeps the public promise that completion never fails a
- * project's read or update (docs/rest-api.md, docs/mcp.md). In an
- * update_project or PATCH mutation the read conflicts with writes to the
- * family's count rows and readiness rows.
+ * where a row went below zero until a recount mends it. A regroup of
+ * another top-level project counts too, because it can reconcile a parent
+ * here whose subtask older code stored there (countsReady).
+ * UNAVAILABLE_COMPLETION where the request has no room for those reads
+ * beside COMPLETION_RESERVE, which inside the design size never happens.
+ * It keeps the public promise that completion never fails a project's
+ * read or update (docs/rest-api.md, docs/mcp.md). In an update_project or
+ * PATCH mutation the read conflicts with writes to the family's count rows
+ * and the organization's readiness rows, a regroup's steps in any family
+ * included, which Convex retries.
  */
 export async function projectCompletion(
   ctx: QueryCtx,

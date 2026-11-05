@@ -316,7 +316,7 @@ describe('overview counts', () => {
     const org_id = f.org.id
     await stamp(t, org_id)
     const w = writers(t, f)
-    const ready = () => t.run((ctx) => countsReady(ctx.db, org_id, f.meta.id))
+    const ready = () => t.run((ctx) => countsReady(ctx.db, org_id))
     const parent = await w.create({
       status: 'progress',
       assignee_id: f.user.id,
@@ -610,7 +610,7 @@ describe('overview counts', () => {
   it('the Northstar seed, the guest fixture and a new organization start counted', async () => {
     const t = newT()
     const { org } = await plantNorthstar(t)
-    expect(await t.run((ctx) => countsReady(ctx.db, org.id, org.id))).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, org.id))).toBe(true)
     await expectCountsExact(t, org.id, 'Northstar')
     expect(Object.keys((await truth(t, org.id)).rows).length).toBeGreaterThan(0)
     const { org_id } = await t.mutation(internal.internal.guestOrg.zzGuestOrg, {})
@@ -623,7 +623,7 @@ describe('overview counts', () => {
       people: [{ name: 'Ada', email: 'ada@starter.test', role: 'admin' }],
       actor: { auth_user_id: 'operator', email: 'operator@qivo.test' },
     })
-    expect(await t.run((ctx) => countsReady(ctx.db, made.org_id, uuid()))).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, made.org_id))).toBe(true)
   }, 60_000)
 
   it("the Northstar wipe takes the counts, and its seed counts again with the projects' new rows", async () => {
@@ -641,7 +641,7 @@ describe('overview counts', () => {
         ),
       )
     expect(done).toBe(true)
-    expect(await t.run((ctx) => countsReady(ctx.db, org.id, org.id))).toBe(false)
+    expect(await t.run((ctx) => countsReady(ctx.db, org.id))).toBe(false)
     for (const table of OVERVIEW_TABLES)
       expect(
         (await t.run((ctx) => ctx.db.query(table).collect())).filter((r) => r.org_id === org.id),
@@ -659,7 +659,7 @@ describe('overview counts', () => {
       })
     })
     await expectCountsExact(t, org.id, 'seeded again')
-    expect(await t.run((ctx) => countsReady(ctx.db, org.id, org.id))).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, org.id))).toBe(true)
     expect(await northstarId('org')).toBe(org.id)
   }, 60_000)
 
@@ -773,9 +773,9 @@ describe('overview counts', () => {
     expect(got.done).toBe(true)
     // the regroup it started stays, and its project reads as counting
     expect(await t.run((ctx) => overviewRegroupOf(ctx.db, f.meta.id))).not.toBeNull()
-    expect(await t.run((ctx) => countsReady(ctx.db, org_id, f.meta.id))).toBe(false)
+    expect(await t.run((ctx) => countsReady(ctx.db, org_id))).toBe(false)
     await runSteps(t)
-    expect(await t.run((ctx) => countsReady(ctx.db, org_id, f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, org_id))).toBe(true)
     await expectCountsExact(t, org_id, 'counted, then regrouped')
   })
 
@@ -972,7 +972,7 @@ describe('overview counts', () => {
     })
     expect(got).toMatchObject({ counted: 0 })
     expect(await t.run((ctx) => overviewCountRun(ctx.db, f.org.id))).toBeNull()
-    expect(await t.run((ctx) => countsReady(ctx.db, f.org.id, f.meta.id))).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, f.org.id))).toBe(true)
   })
 })
 

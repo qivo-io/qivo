@@ -12,12 +12,14 @@
  *   whether the scope holds a task, and Overdue, the tasks not done for the
  *   reader and due before the client's day. It reads the caller's seats,
  *   for a project the project by id, its sub-projects (projects by_parent)
- *   and the caller's access to each, the family's readiness (org_ready,
- *   overview_count_runs, overview_regroups) and each sub-project's count
- *   rows (overview_counts by_project_owner_shard); for My view each
- *   person's count rows (by_owner_project) and their projects. Overdue reads
- *   the tasks due before the day (issues by_project_archived_paused_due, or
- *   by_assignee_archived_paused_due and by_reviewer_archived_status), Done
+ *   and the caller's access to each, the organization's readiness
+ *   (org_ready, overview_count_runs, its first overview_regroups row, as a
+ *   regroup in any family holds every family's counts) and each
+ *   sub-project's count rows (overview_counts by_project_owner_shard); for
+ *   My view each person's count rows (by_owner_project) and their
+ *   projects. Overdue reads the tasks due before the day (issues
+ *   by_project_archived_paused_due, or by_assignee_archived_paused_due and
+ *   by_reviewer_archived_status), Done
  *   ones that wait for the nightly archive included, each one's first
  *   subtask and a group's subtasks.
  * - risk: the tasks due on or after the day, in projects that track delay,
@@ -31,8 +33,8 @@
  *   OVERVIEW.healthRows, a row a sub-project of a project scope or in My
  *   view a top-level project above the person's own tasks, with the search
  *   and the asked column's order applied to the whole table first. Each row
- *   holds the counts (a project scope's from the family's readiness and
- *   each kept sub-project's count rows, My view's from the person's count
+ *   holds the counts (a project scope's from the organization's readiness
+ *   and each kept sub-project's count rows, My view's from the person's count
  *   rows) and Delayed and Slipping, read as risk reads its verdicts. For
  *   Delayed and Slipping it reads every active task of the kept
  *   sub-projects that track delay, each one's first subtask, a group's
