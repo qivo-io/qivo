@@ -46,6 +46,7 @@ import { withReach } from './projectReach.setup'
 import {
   DEFAULT_WINDOW,
   dayPlus,
+  dependenciesFor,
   NO_ROADMAP_FILTERS,
   NOW_WEEK,
   ordinary,
@@ -169,7 +170,7 @@ describe('access', () => {
     expect((await roadmapFor(t, f.guest, projectScope(f.guest, f.meta.id))).state).toBe('ok')
   })
 
-  it("answers unavailable with access_unchecked where a bound of the caller's own reads stopped a check, never ok", async () => {
+  it("answers unavailable with access_unchecked from both reads where a bound of the caller's own reads stopped a check, never ok", async () => {
     const t = newT()
     const f = await withOrg(t)
     const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
@@ -195,17 +196,22 @@ describe('access', () => {
       state: 'ok',
       rows: 1,
     })
-    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0, navRows: 0 })
-    for (const scope of [
+    const scopes: RoadmapScope[] = [
       projectScope(me, f.meta.id),
       projectScope(me, f.sub2.id),
-      { kind: 'mine' } as const,
-    ])
-      expect(await roadmapFor(t, me, scope)).toEqual({
-        state: 'unavailable',
-        reason: 'access_unchecked',
-        message: expect.stringContaining('could not finish checking which projects you can see'),
-      })
+      { kind: 'mine' },
+    ]
+    for (const scope of scopes) expect((await dependenciesFor(t, me, scope)).state).toBe('ok')
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0, navRows: 0 })
+    const unchecked = {
+      state: 'unavailable',
+      reason: 'access_unchecked',
+      message: expect.stringContaining('could not finish checking which projects you can see'),
+    }
+    for (const scope of scopes) {
+      expect(await roadmapFor(t, me, scope)).toEqual(unchecked)
+      expect(await dependenciesFor(t, me, scope)).toEqual(unchecked)
+    }
   })
 
   it('adds no row, parent, subtask or Remaining of a hidden or an archived sub-project', async () => {
@@ -345,6 +351,24 @@ describe('visibility', () => {
       parent_id: backlogDone.id,
       ...doneIn(dayPlus(first, -7)),
     })
+    const backlogInside = await plant('Backlog group, done inside', { status: 'backlog' }, true)
+    await task(t, f.sub, {
+      title: 'Kid of the Backlog group inside',
+      parent_id: backlogInside.id,
+      ...doneIn(first),
+    })
+    const doneGroupInside = await plant('Done group, done inside', { status: 'done' }, true)
+    await task(t, f.sub, {
+      title: 'Kid of the Done group inside',
+      parent_id: doneGroupInside.id,
+      ...doneIn(first),
+    })
+    const doneGroupOutside = await plant('Done group, done outside', { status: 'done' }, false)
+    await task(t, f.sub, {
+      title: 'Kid of the Done group outside',
+      parent_id: doneGroupOutside.id,
+      ...doneIn(dayPlus(last, 7)),
+    })
     const doneOpen = await plant('Done group with an open kid', { status: 'done' }, true)
     await task(t, f.sub, { title: 'Its open kid', parent_id: doneOpen.id })
     const hiddenKid = await plant('Group with a hidden kid', { status: 'todo' }, true)
@@ -369,7 +393,14 @@ describe('visibility', () => {
     if (answer.state !== 'ok') throw new Error(answer.state)
     // the open subtasks are rows too, and a Done one in the window
     expect(titles(answer)).toEqual(
-      [...shown, 'Done kid inside', 'Its open kid', 'Its to do'].sort(),
+      [
+        ...shown,
+        'Done kid inside',
+        'Its open kid',
+        'Its to do',
+        'Kid of the Backlog group inside',
+        'Kid of the Done group inside',
+      ].sort(),
     )
   })
 
@@ -611,8 +642,6 @@ describe('the headings', () => {
       expect(await roadmapFor(t, f.guest, scope, filters)).toMatchObject({
         remaining: { state: 'ok', tenths: { [f.sub.id]: 38, [f.sub2.id]: 11 } },
       })
-    // 0.1 and 0.2 sum to 0.30000000000000004 in floats, 3 in tenths
-    expect(0.1 + 0.2).not.toBe(0.3)
     // in My view, the person's own leaves
     expect(await roadmapFor(t, f.guest, { kind: 'mine' })).toMatchObject({
       remaining: { state: 'ok', tenths: { [f.sub.id]: 16, [f.sub2.id]: 4 } },
