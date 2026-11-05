@@ -585,6 +585,21 @@ describe('Review time on the draft model', () => {
     expect(reviewField().value).toBe('3')
   })
 
+  it('puts back the saved value for an unparsable entry, which a number input reads as empty', async () => {
+    await open()
+    await act(async () => reviewField().focus())
+    // an entry such as 2e: the browser marks it badInput and its value ''
+    Object.defineProperty(reviewField(), 'validity', {
+      configurable: true,
+      value: { badInput: true },
+    })
+    await type(reviewField(), '')
+    await act(async () => reviewField().blur())
+    await settle()
+    expect(requests).toEqual([])
+    expect(reviewField().value).toBe('2')
+  })
+
   it('clears to the inherited value, and keeps a number outside 0 to 999 typed and marked', async () => {
     await open()
     await enter(reviewField(), '1000')
