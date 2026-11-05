@@ -2668,6 +2668,8 @@ function repaint(parts: {
     if (!lastShown || !sameShown(lastShown)) {
       emit()
       windowLoadNews = false
+      // the emit showed the window's borrowed group facts too
+      windowSpanMoved()
     } else {
       if (thread) emit('comments')
       if (models || view || viewReadsChanged) emit('views')
@@ -2691,7 +2693,9 @@ function repaint(parts: {
       viewReadsChanged = false
     }
   }
-  // an owner load the window's delay reads shows with the comments
+  // what the window's delay reads besides its task shows with the
+  // comments, an owner load or a group's facts from a view's row
+  if (windowSpanMoved()) windowLoadNews = true
   if (windowLoadNews) {
     windowLoadNews = false
     emit('comments')
@@ -3134,6 +3138,9 @@ function watchView(
     viewReadsChanged = true
     owe('view')
   }
+  // a read that stops lends the window's delay no group's facts
+  // (windowSpanRow), which the repaint shows
+  else if (wasLive && read.live === null && windowSpanShown !== null) owe('view')
 }
 
 /** What view `slot`'s read holds: the arguments' key its result answers
@@ -3208,23 +3215,65 @@ let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
    are its own registration's, which the judging after it reads anyway. */
 let reshaping = false
 
+/** The row of group `uuid` that the window's delay takes the group's
+    facts from (windowDelayIssue): for a group the window shows from its
+    answer whose dates the answer cannot give, as when a subtask has
+    subtasks of its own, its row in a view whose read is current, the live
+    subscription's own answer on the newest connection, which carries the
+    server's span. A stopped view's kept rows hear no change to the task,
+    so they never lend it. Undefined otherwise. */
+function windowSpanRow(uuid: string): ViewRow | undefined {
+  const detail = PLANNER.taskDetail(uuid)
+  if (!detail || detail.datesKnown) return undefined
+  for (const [slot, read] of viewReads) {
+    if (read.behind || !viewRead(slot).current) continue
+    const row = viewRows.rowsOf(slot)?.get(uuid)
+    if (row?.has_subtasks && row.span) return row
+  }
+  return undefined
+}
+
+/* The group facts the window's delay last took from a view's row
+   (windowSpanRow) when the comments showed, as JSON, or null for none. */
+let windowSpanShown: string | null = null
+
+/** Whether the group facts the window's delay takes from a view's row
+    (windowSpanRow) changed since the comments last showed, and records
+    them. The window listens to the comments, and a view's answer repaints
+    only the views. */
+function windowSpanMoved(): boolean {
+  const row = watchedComments ? windowSpanRow(watchedComments) : undefined
+  const shown = row ? JSON.stringify([row.span, row.group_done]) : null
+  if (shown === windowSpanShown) return false
+  windowSpanShown = shown
+  return true
+}
+
 /** Task `it` as the window's delay verdict reads it (P.windowDelay), with
     a group's facts: from P.taskDetail for a task the window shows from its
     own read, else from the workspace's tasks, by the rules the task index
     judges with (store/taskIndex.ts judge). A group shown from its answer
-    whose dates the answer cannot give, as when a subtask has subtasks of
-    its own, takes the server's span from a view's row of it, as that
-    view's card does, so the window over the card shows its verdict;
-    without such a row its dates stay unknown. */
+    whose dates the answer cannot give takes its Done and span from a
+    current view's row of it (windowSpanRow), as that view's card does, so
+    the window over the card shows its verdict. Everything else, its due
+    date included, stays the window's own. Without such a row its dates
+    stay unknown. */
 function windowDelayIssue(it: IssueVM) {
   const detail = PLANNER.taskDetail(it.uuid)
   const group = isIssueGroup(it)
-  const row = detail && group && !detail.datesKnown ? viewRows.peek(it.uuid) : undefined
-  if (row?.has_subtasks && row.span)
+  const row = detail && group ? windowSpanRow(it.uuid) : undefined
+  if (row) {
+    const { isDone, partial, start, end } = delayIssueOfRow(row, viewDelayCtx.capacity)
+    const own = delayIssueOfTask(
+      it,
+      { isGroup: true, isDone: !!isDone, partial: !!partial },
+      viewDelayCtx.capacity,
+    )
     return {
-      issue: delayIssueOfRow(row, viewDelayCtx.capacity),
+      issue: { ...own, start, end },
       facts: { datesKnown: true, loading: false },
     }
+  }
   const span = !detail && group ? groupSpan(it, PLANNER.issueById) : null
   const issue = delayIssueOfTask(
     it,
@@ -8722,10 +8771,11 @@ export const PLANNER = {
       a group's subtasks are not all there. The window's own registration
       is never capped, since a guest's cap counts the calls of one view. A
       task shown from its answer takes its group facts from P.taskDetail,
-      or a group's span from a view's row of it where the answer cannot
-      give its dates, a held one from the workspace's tasks. Only a held group can have
-      subtasks still to load: those an answer leaves out are hidden from
-      the person, which no load changes. */
+      or a group's Done and span from the row of a view that still reads
+      it where the answer cannot give its dates (windowSpanRow), a held
+      one from the workspace's tasks. Only a held group can have subtasks
+      still to load. Those an answer leaves out are hidden from the
+      person, which no load changes. */
   windowDelay: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
     const { issue, facts } = windowDelayIssue(it)
     return judgeDelay(issue, it.org, viewDelayCtx, facts)

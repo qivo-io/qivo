@@ -73,9 +73,10 @@ due date.
   subtasks' dates, not from anyone's other work, so it says **Delay
   unknown** only while some of those dates have not loaded. For a task
   that has not loaded, those include the dates of subtasks under its
-  subtasks, which the window takes from the task's card or row in a view
-  that shows it; without one it says **Delay unknown**, or **Overdue** once
-  the due date has passed.
+  subtasks, which the window takes from the task's card or row in an open
+  view that shows it, and follows as they change. Without one, as when that
+  view is hidden behind another page, it says **Delay unknown**, or
+  **Overdue** once the due date has passed.
 - **Overview** includes projected misses in **Overdue & at risk**, which
   Qivo works out on the server with each owner's other work. A row says
   **risk unknown** where Qivo could not read that work, so the task may not

@@ -5,6 +5,7 @@ import type { BoardAnswer } from '../../convex/lib/board'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { OwnerLoadsJson } from '../../convex/planning'
 import { isoToWeek, TODAY_WEEK, weekToISO } from '../lib/dates'
+import { DELAY_UNKNOWN } from '../lib/delay'
 import { GUEST_CALLS } from './ownerLoadCache'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
@@ -574,6 +575,77 @@ describe('the delays of tasks only a view brings', () => {
     const view = P.taskDetail('grp')?.view
     if (!view) throw new Error('no window view')
     expect(P.windowDelay(view)).toEqual(verdict)
+  })
+
+  it("takes only a group's Done and span from a view that still reads it, never a stopped view's kept row", async () => {
+    snapshot.projects[0].track_delay = true
+    deliver(structuredClone(snapshot))
+    await turn()
+    const P = store.P
+    // a group due in three weeks whose span, as the Board sends it, ends
+    // next week
+    const group = row('grp', 20, {
+      status: 'progress',
+      due_date: weekToISO(TODAY_WEEK + 3),
+      has_subtasks: true,
+      group_done: false,
+      span: {
+        start_week: weekToISO(TODAY_WEEK - 2),
+        end_week: weekToISO(TODAY_WEEK + 1),
+        partial: false,
+      },
+    })
+    answer = ok([group])
+    await open()
+    // the window reads the group, whose one subtask has subtasks of its own
+    P.watchComments('grp', snapshot.orgs[0].id)
+    P.showSections({}, true)
+    const read = taskReads.get('grp')
+    if (!read) throw new Error('no task read')
+    const { span: _span, group_done: _done, ...fields } = group
+    const { has_hidden_subtasks: _h, has_hidden_parent: _p, ...kid } = row('kid', 21)
+    /** The window's answer, the group due on `due`. */
+    const windowRead = async (due: string) => {
+      read({
+        state: 'ok',
+        task: {
+          ...fields,
+          due_date: due,
+          description: '',
+          has_hidden_subtasks: false,
+          has_hidden_parent: false,
+        },
+        level: 'user',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [{ ...kid, has_subtasks: true, level: 'user' }], complete: true },
+      })
+      await turn()
+    }
+    const verdict = () => {
+      const view = P.taskDetail('grp')?.view
+      if (!view) throw new Error('no window view')
+      return P.windowDelay(view)
+    }
+    await windowRead(weekToISO(TODAY_WEEK + 3))
+    expect(verdict()).toMatchObject({ status: 'ok' })
+    // the Board hides and its read stops, keeping its rows, which then hear
+    // no change to the task, so the window takes nothing from them
+    P.watchBoard(SLOT, null)
+    await turn()
+    expect(P.viewTask(SLOT, 'grp')).toBeDefined()
+    expect(verdict()).toBe(DELAY_UNKNOWN)
+    // its due date passes meanwhile, which only the window hears, so it is
+    // overdue, never on track by the kept row's due date
+    await windowRead(weekToISO(TODAY_WEEK - 1))
+    expect(verdict()).toBeNull()
+    // the Board reads again with an answer that has not caught up with the
+    // window's yet, so the span is the card's and the due date the window's
+    P.watchBoard(SLOT, KEY)
+    await turn()
+    await turn()
+    expect(verdict()).toMatchObject({ status: 'late' })
   })
 
   it("asks no load for a held task, whose delay stays the workspace's", async () => {
