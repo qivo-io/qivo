@@ -10,8 +10,9 @@
  *   3. Storage by project pages 25 at a time, largest first, equal bytes
  *      each once, the rest of a cursor's creation instant included, adding
  *      up to the organization's total; labels active, archived, Deleted
- *      items and removed projects, a row without a name and a row whose
- *      number another live project does not have.
+ *      items and removed projects, a row without a name, a row whose
+ *      number another live project does not have, and a row whose id and
+ *      number another organization's live or stored project holds.
  *   4. Its search ignores accents, case and word order over the whole list
  *      and answers only this organization's rows; a row whose bytes cross
  *      the cursor between calls is missed or answered again, as the owner
@@ -640,6 +641,59 @@ describe('Storage by project, where each project is now', () => {
     expect(await usageOf(t, f.admin)).toMatchObject({
       storage_bytes: rows.reduce((n, r) => n + r.bytes, 0),
     })
+  })
+
+  it("never names a row after another organization's live or stored project of the same id and number", async () => {
+    const { t, f } = await counted()
+    // the other organization's live project, and one of its projects that
+    // its admin moved to Deleted items
+    const live = f.otherProject
+    const dropped = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      name: 'Elsewhere dropped',
+      key: 'OTHD',
+      lead_id: f.otherAdmin.id,
+    })
+    await as(t, f.otherAdmin).mutation(api.projects.deleteDeep, {
+      org_id: f.otherOrg.id,
+      id: dropped.id,
+    })
+    await runSteps(t)
+    const copy = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'projects').eq('row_id', dropped.id))
+        .first(),
+    )
+    expect(copy?.org_id).toBe(f.otherOrg.id)
+    expect(copy?.row.table === 'projects' ? copy.row.doc.num : null).toBe(dropped.num)
+    // this organization's rows hold the same ids and numbers
+    await plantTotals(t, f.org.id, [
+      { project_id: live.id, num: live.num, name: 'Own row', bytes: 300 },
+      { project_id: dropped.id, num: dropped.num, name: 'Own dropped row', bytes: 200 },
+    ])
+
+    const { rows } = await walk(t, f.admin)
+    expect(
+      rows.map(({ project_id, num, key, name, status }) => ({
+        project_id,
+        num,
+        key,
+        name,
+        status,
+      })),
+    ).toEqual([
+      { project_id: live.id, num: live.num, key: null, name: 'Own row', status: 'removed' },
+      {
+        project_id: dropped.id,
+        num: dropped.num,
+        key: null,
+        name: 'Own dropped row',
+        status: 'removed',
+      },
+    ])
+    const text = JSON.stringify(rows)
+    for (const word of ['Elsewhere', live.key, 'OTHD']) expect(text).not.toContain(word)
   })
 })
 
