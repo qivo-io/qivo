@@ -30,6 +30,8 @@ import {
   parseArgs,
   RATE_BUDGET,
   REGROUP_WAIT,
+  REMOVAL_EXPECTED,
+  REMOVAL_STEP,
   REST_BODY_FIELDS,
   rateLimitWait,
   redact,
@@ -91,6 +93,15 @@ describe('staging check REST contract', () => {
       confirm:
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     })
+  })
+  it("checks the removal window on a sub-project of its own, in the window's words", () => {
+    const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
+    expect(modals).toContain("'Reassign and remove'")
+    expect(modals).toMatch(/aria-label=\{`New assignee: \$\{label\}`\}/)
+    expect(modals).toContain('data-access-removal-task={i.task_id}')
+    expect(REMOVAL_STEP).toBe('ui/removal-window')
+    expect(REMOVAL_EXPECTED.submit).toBe('Reassign and remove')
+    expect(REMOVAL_EXPECTED.chosen('Nora Berg')).toBe('New assignee: Nora Berg')
   })
   it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
     const table = readFileSync(
