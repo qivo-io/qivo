@@ -3755,6 +3755,76 @@ describe('restore calls', () => {
     await assertNoOrphanHistory(t, 'after a late split deleted the subtask for good')
   })
 
+  it("rewrites a split subtask's item fields for the item that holds it, and keeps a row from before them as it was", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Harness' })
+    const sub = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      title: 'Crimp the leads',
+      description: 'Use the red crimper',
+      assignee_id: f.admin.id,
+    })
+    const older = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      title: 'Older row',
+    })
+    await deleteTask(t, f, root.id, { subtask_ids: [sub.id, older.id] })
+    const item = await itemFor(t, root.id)
+    // a row as the release before the Deleted items page stored it
+    const fields = [
+      'search_text',
+      'assignee_id',
+      'deleted_at',
+      'deleted_by',
+      'item_project_id',
+      'item_parent_id',
+    ] as const
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('deleted_tasks')
+        .withIndex('by_task', (q) => q.eq('task_id', older.id))
+        .unique()
+      if (row === null) throw new Error('no stored row for the older subtask')
+      await ctx.db.patch(row._id, {
+        search_text: undefined,
+        assignee_id: undefined,
+        deleted_at: undefined,
+        deleted_by: undefined,
+        item_project_id: undefined,
+        item_parent_id: undefined,
+      })
+    })
+    // Board rev leaves later, as a project item of the admin's
+    vi.setSystemTime(START + HOUR)
+    await as(t, f.admin).mutation(api.projects.deleteDeep, { org_id, id: f.sub2.id })
+    const projectItem = await itemFor(t, f.sub2.id)
+    await restore(t, f.user, [item.id])
+    await runSteps(t)
+    expect(await liveTask(t, root.id)).not.toBeNull()
+
+    const rows = new Map((await storedTasks(t, projectItem.id)).map((r) => [r.task_id, r]))
+    expect(rows.get(sub.id)).toMatchObject({
+      item_id: projectItem.id,
+      search_text: 'Crimp the leads\nUse the red crimper',
+      assignee_id: f.admin.id,
+      deleted_at: projectItem.deleted_at,
+      deleted_by: f.admin.id,
+      item_project_id: f.sub2.id,
+      item_parent_id: f.meta.id,
+    })
+    expect(projectItem.deleted_at).not.toBe(item.deleted_at)
+    expect(rows.get(sub.id)?.cross_project_id).toBeUndefined()
+    const kept = rows.get(older.id)
+    expect(kept?.item_id).toBe(projectItem.id)
+    for (const field of fields) expect(kept?.[field]).toBeUndefined()
+  })
+
   it('defers what waits for a project item of the same call, whatever the order of the ids', async () => {
     const t = newT()
     const f = await withOrg(t)

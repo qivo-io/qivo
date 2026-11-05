@@ -138,7 +138,13 @@ import { recheckParent, recheckProject, waitsForChildren } from './archiveRechec
 import { beginCount, type CommentWrite, deleteCommentRows, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
-import { dropDescription, insertTask, patchTaskRow, withDescription } from './descriptions'
+import {
+  deletedSearchText,
+  dropDescription,
+  insertTask,
+  patchTaskRow,
+  withDescription,
+} from './descriptions'
 import { releaseFile } from './fileHolds'
 import { taskItems } from './inboxItems'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
@@ -208,7 +214,13 @@ const RECOVER_BATCH = 32
 /* The most stalled jobs one recovery looks at, oldest progress first (the
  * profileRemovals.ts recover pattern). */
 const RECOVER_SCAN = 512
-// deleted_tasks rows are small, so a cursor walk reads them in pages.
+/* A cursor walk reads deleted_tasks rows in pages of this many
+ * (eachStoredTask). Each row holds its task's searchable text
+ * (search_text), the readable text of its description among it, so a page
+ * reads up to 64 descriptions: a few hundred bytes a task at ordinary
+ * text, and at the description cap in a three-byte script about 3.8 MB.
+ * The walk charges each page to the step's bytes, so a step of large
+ * tasks stops sooner, and reads at most one page past its budget. */
 const TASK_PAGE = 64
 
 const stepRef = makeFunctionReference<'mutation', { item_id: string }, null>('deletedItems:step')
@@ -803,10 +815,22 @@ async function storedAlready(run: Run, live: LiveRow, ownerId: string): Promise<
   return stored.some((row) => row.owner_id === ownerId)
 }
 
+/** What a deleted_tasks row copies of its item, for the Deleted items
+ * page's sources (schema.ts). None of these fields of an item changes while
+ * it is in Deleted items. */
+const itemCopies = (item: Item) => ({
+  deleted_at: item.deleted_at,
+  deleted_by: item.deleted_by,
+  item_project_id: item.project_id,
+  item_parent_id: item.parent_project_id,
+})
+
 /** Stores a task row with its deleted_tasks row, and counts it. `task`
  * carries its description (model/descriptions.ts withDescription), which
- * the stored copy keeps. Answers whether it stored the task, which a row
- * too large to store is not (storeRow). */
+ * the stored copy keeps and the row's search text reads
+ * (deletedSearchText), with the task's assignee and the copies of its item
+ * the Deleted items page filters on (itemCopies). Answers whether it stored
+ * the task, which a row too large to store is not (storeRow). */
 async function storeTask(
   ctx: MutationCtx,
   item: Item,
@@ -828,6 +852,9 @@ async function storeTask(
     archived,
     cross_project_id:
       item.kind === 'task' && task.project_id !== item.project_id ? task.project_id : undefined,
+    search_text: deletedSearchText(task),
+    assignee_id: task.assignee_id,
+    ...itemCopies(item),
   })
   tally.tasks += 1
   if (archived) tally.archived_tasks += 1
@@ -1153,6 +1180,7 @@ async function eachStoredTask(
       .query('deleted_tasks')
       .withIndex('by_item', (q) => q.eq('item_id', run.item.id).gt('_creationTime', cursor.after))
       .take(TASK_PAGE)
+    for (const task of tasks) chargeRead(run.budget, task)
     for (const task of tasks) {
       if (spent(run.budget) || !(await clear(task))) return false
       cursor.after = task._creationTime
@@ -2286,11 +2314,17 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   }
   const { _id, _creationTime, ...light } = task
   // a new row, so that a restore of `into` past its cursor still meets it;
-  // in the project item that holds its project it is no cross-project task
+  // in the project item that holds its project it is no cross-project task.
+  // It keeps its search text and assignee and copies `into`, so the
+  // Deleted items page finds it with the item that holds it now, and a row
+  // stored before the page's release stays one, without the copies. The
+  // page then judges its assignee against `into`'s deletion, as every
+  // other reference the split moves.
   await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
     ...light,
     item_id: into.id,
     cross_project_id: undefined,
+    ...(task.deleted_at === undefined ? {} : itemCopies(into)),
   })
   await countInto(run.ctx, into, task)
   return true
@@ -2719,7 +2753,11 @@ async function writeTask(
       .query('deleted_tasks')
       .withIndex('by_task', (q) => q.eq('task_id', doc.id))
       .collect()
-    for (const row of light) if (row.item_id === run.item.id) await run.ctx.db.delete(row._id)
+    // each holds its task's search text (schema.ts), so its bytes count
+    for (const row of light) {
+      chargeRead(run.budget, row)
+      if (row.item_id === run.item.id) await run.ctx.db.delete(row._id)
+    }
   }
   tallyTask(tallyOf(run), { project_id: doc.project_id, archived: !active }, -1)
   if (!active) run.txn.archived.push(doc.id)

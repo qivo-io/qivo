@@ -574,6 +574,116 @@ describe('moving a task to Deleted items', () => {
  * transaction to 4,096 writes instead, which every delete also spends.
  * One or two followers per task keep convex-test fast; LIMITS.followers.max
  * per task was checked on a local backend. */
+describe("the Deleted items page's fields on each stored task", () => {
+  it("stores each task's search text and assignee with its item's fields, for every task of a task item", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // under another top-level project, for a subtask from before the
+    // subtask rule (model/issues.ts sameTopLevel)
+    const elsewhere = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    const root = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      title: 'Battery level',
+      description: 'Check the [charger](https://example.com/hidden-path) voltage',
+      assignee_id: f.user.id,
+    })
+    const sibling = await plantIssue(t, {
+      org_id,
+      project_id: f.sub2.id,
+      parent_id: root.id,
+      title: 'Board fit',
+      assignee_id: f.admin.id,
+    })
+    const older = await plantIssue(t, {
+      org_id,
+      project_id: elsewhere.id,
+      parent_id: root.id,
+      title: 'Bracket from before the rule',
+    })
+    await deleteTask(t, f, root.id, { subtask_ids: [sibling.id, older.id] })
+
+    const item = await itemFor(t, root.id)
+    const rows = new Map((await storedTasks(t, item.id)).map((r) => [r.task_id, r]))
+    const copies = {
+      deleted_at: item.deleted_at,
+      deleted_by: f.user.id,
+      item_project_id: f.sub.id,
+      item_parent_id: f.meta.id,
+    }
+    expect(rows.get(root.id)).toMatchObject({ ...copies, assignee_id: f.user.id })
+    expect(rows.get(sibling.id)).toMatchObject({
+      ...copies,
+      assignee_id: f.admin.id,
+      cross_project_id: f.sub2.id,
+      search_text: 'Board fit\n',
+    })
+    expect(rows.get(older.id)).toMatchObject({
+      ...copies,
+      cross_project_id: elsewhere.id,
+      search_text: 'Bracket from before the rule\n',
+    })
+    expect(rows.get(older.id)?.assignee_id).toBeUndefined()
+    // the words a person reads, without a link's destination
+    const text = rows.get(root.id)?.search_text ?? ''
+    expect(text.startsWith('Battery level\n')).toBe(true)
+    expect(text).toContain('charger')
+    expect(text).not.toContain('hidden-path')
+  })
+
+  it("stores a project item's tasks, moved in steps, with their text from the description rows", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    for (let i = 0; i < 4; i++)
+      await plantIssue(t, {
+        org_id,
+        project_id: f.sub2.id,
+        title: `Trace ${i}`,
+        description: `Probe point ${i}`,
+        assignee_id: f.admin.id,
+      })
+    TRASH_BUDGET.rows = 2
+    await deleteProject(t, f, f.sub2.id)
+    const item = await itemFor(t, f.sub2.id)
+    // the tasks go in steps
+    expect(await jobFor(t, item.id)).not.toBeNull()
+    expect((await storedTasks(t, item.id)).length).toBeLessThan(4)
+    await runSteps(t)
+
+    const rows = await storedTasks(t, item.id)
+    expect(rows).toHaveLength(4)
+    for (const row of rows)
+      expect(row).toMatchObject({
+        deleted_at: item.deleted_at,
+        deleted_by: f.user.id,
+        item_project_id: f.sub2.id,
+        item_parent_id: f.meta.id,
+        assignee_id: f.admin.id,
+      })
+    expect(rows.map((r) => r.search_text).sort()).toEqual(
+      [0, 1, 2, 3].map((i) => `Trace ${i}\nProbe point ${i}`),
+    )
+  })
+
+  it('keeps the search text of a task cut to the caps within them', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = newT()
+    const f = await withOrg(t)
+    const huge = await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Huge',
+      description: 'x'.repeat(STORED_ROW_MAX_BYTES),
+    })
+    await deleteTask(t, f, huge.id)
+    await runSteps(t)
+    const [row] = await storedTasks(t, (await itemFor(t, huge.id)).id)
+    expect(row.search_text).toBe(`Huge\n${'x'.repeat(TEXT_MAX)}`)
+  })
+})
+
 describe('a task delete at the caps', () => {
   const TX_LIMITS = { documentsWritten: 4096 }
 

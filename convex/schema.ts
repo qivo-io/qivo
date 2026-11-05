@@ -2015,6 +2015,12 @@ export default defineSchema({
     .index('by_org_deleter', ['org_id', 'deleted_by', 'deleted_at'])
     .index('by_org_project', ['org_id', 'project_id', 'deleted_at'])
     .index('by_org_parent', ['org_id', 'parent_project_id', 'deleted_at'])
+    // The Deleted items page (model/deletedItemsPage.ts) reads project items
+    // and task items apart, newest first: an organization's, one person's
+    // deletes and the items under one top-level project.
+    .index('by_org_kind_deleted', ['org_id', 'kind', 'deleted_at'])
+    .index('by_org_deleter_kind_deleted', ['org_id', 'deleted_by', 'kind', 'deleted_at'])
+    .index('by_org_parent_kind_deleted', ['org_id', 'parent_project_id', 'kind', 'deleted_at'])
     // A project item's purge also purges the ready and stuck items that
     // need its projects (model/deletedItems.ts purgeDependents), task items
     // by project_id and sub-project items by parent_project_id. Kind and
@@ -2223,8 +2229,15 @@ export default defineSchema({
     round: v.number(),
   }).index('by_org', ['org_id']),
 
-  /* One light row per stored task, written and deleted with its issues row
-   * in deleted_rows: what search, counts and finding a task's item need. */
+  /* One row per stored task, written and deleted with its issues row in
+   * deleted_rows: what search, counts and finding a task's item need. From
+   * the release of the Deleted items page (model/deletedItemsPage.ts) each
+   * row also holds the text the page searches, which includes the readable
+   * text of the task's description, so a row is no longer light, and the
+   * task's assignee and copies of its item's fields, which the page's
+   * search and assignee sources filter on. A row stored before that release
+   * has none of them, and the page finds it by its number and its title
+   * (search_title). */
   deleted_tasks: defineTable({
     org_id: v.string(),
     item_id: v.string(),
@@ -2238,12 +2251,44 @@ export default defineSchema({
     // a sibling sub-project of the root's, or, for a subtask from before the
     // subtask rule (model/issues.ts sameTopLevel), any other project.
     cross_project_id: v.optional(v.string()),
+    // the title, a newline and the readable text of the description
+    // (model/descriptions.ts deletedSearchText)
+    search_text: v.optional(v.string()),
+    assignee_id: v.optional(v.string()), // the task's assignee when it was deleted
+    // Copies of the item's deleted_at, deleted_by, project_id and
+    // parent_project_id, which never change while the row stays with its
+    // item. A split (model/deletedItems.ts splitOff) writes them again for
+    // the item the task moves to. deleted_at is absent only on a row stored
+    // before the page's release.
+    deleted_at: v.optional(v.string()),
+    deleted_by: v.optional(v.string()),
+    item_project_id: v.optional(v.string()),
+    item_parent_id: v.optional(v.string()),
   })
     .index('by_task', ['task_id'])
     .index('by_item', ['item_id'])
     .index('by_org_num', ['org_id', 'num'])
     .index('by_org_cross_project', ['org_id', 'cross_project_id'])
-    .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] }),
+    // an organization's tasks of one assignee, newest delete first, and
+    // with neither field the rows stored before the page's release
+    .index('by_org_assignee', ['org_id', 'assignee_id', 'deleted_at'])
+    // one item's tasks of one assignee, by number
+    .index('by_item_assignee', ['item_id', 'assignee_id', 'num'])
+    // matches and the page's rows stored before its release; search_text
+    // replaces it once no such row is left
+    .searchIndex('search_title', { searchField: 'title', filterFields: ['org_id'] })
+    // the page's search, each query filtered to the items of one source
+    .searchIndex('search_text', {
+      searchField: 'search_text',
+      filterFields: [
+        'org_id',
+        'deleted_by',
+        'item_project_id',
+        'item_parent_id',
+        'item_id',
+        'assignee_id',
+      ],
+    }),
 
   webhook_subscriptions: defineTable({
     id: v.string(),

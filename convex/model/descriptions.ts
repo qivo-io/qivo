@@ -71,6 +71,7 @@ import { insertUnique, insertUsed } from '../lib/db'
 import { uncountedWriter } from '../lib/demo'
 import type { Refusal } from '../lib/functions'
 import { MIB } from '../lib/limits'
+import { readableText } from '../lib/md'
 import { countsKept, tallyOverview } from './overviewCounts'
 
 type Reader = QueryCtx['db']
@@ -620,3 +621,12 @@ export async function withDescription(
   const row = shownOf(read, task)
   return { task: { ...task, description: row?.description ?? '' }, row, read }
 }
+
+/** The text the Deleted items page searches for a task Deleted items
+ * stores (deleted_tasks.search_text, model/deletedItems.ts storeTask): its
+ * title, a newline and the readable text (lib/md.ts readableText) of the
+ * description `task` carries as withDescription answers it, so the search
+ * sees the words a person reads, as main Search does. A description that
+ * hides no words is taken as it is, unparsed. */
+export const deletedSearchText = (task: Doc<'issues'>): string =>
+  `${task.title}\n${readableText(task.description ?? '')}`
