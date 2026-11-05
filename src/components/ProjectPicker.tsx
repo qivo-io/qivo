@@ -562,7 +562,9 @@ export function ProjectPickerPanel({
     return (
       <div
         key={entry.key}
-        className={cn('flex min-w-0 items-center gap-0.5', entry.child && 'pl-6')}
+        // a sub-project's text sits a step past its project's, which follows
+        // the project's arrow
+        className={cn('flex min-w-0 items-center gap-0.5', entry.child && 'pl-[42px]')}
       >
         {top ? (
           <Button
@@ -698,7 +700,7 @@ export function ProjectPickerPanel({
                           what="sub-projects"
                         />
                       ))}
-                    <div className="pl-6">
+                    <div className="pl-[42px]">
                       <ListLines
                         list={kids}
                         end={kidsEnd}
@@ -770,6 +772,8 @@ export function ProjectPicker({
   return (
     <Popover
       width={width}
+      // a phone keeps its 16 px gutters whatever the trigger's place
+      collisionPadding={16}
       backLayer
       modal={modal}
       onEscapeKeyDown={(event) => {

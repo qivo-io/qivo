@@ -279,7 +279,8 @@ function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withO
    landscape Roadmap's. `modal` makes the Radix popover modal: it keeps
    focus and scrolling inside itself and hides the rest from screen
    readers, which a popover over a modal dialog needs to scroll its own
-   list (components/ProjectPicker.tsx inside Search). */
+   list (components/ProjectPicker.tsx inside Search). `collisionPadding`
+   keeps the open popover that far inside the viewport's edges. */
 type PopoverProps = {
   button: (toggle: () => void, open: boolean) => ReactNode
   children: (close: (then?: () => void) => void) => ReactNode
@@ -289,6 +290,7 @@ type PopoverProps = {
   backLayer?: boolean
   onEscapeKeyDown?: (event: KeyboardEvent) => void
   modal?: boolean
+  collisionPadding?: number
 }
 
 function landscapeBottomAnchor(
@@ -421,6 +423,7 @@ function LivePopover({
   backLayer = false,
   onEscapeKeyDown,
   modal = false,
+  collisionPadding,
 }: PopoverProps) {
   const [open, setOpen] = useState(false)
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
@@ -436,6 +439,7 @@ function LivePopover({
       <PopoverContent
         align={align === 'right' ? 'end' : 'start'}
         sideOffset={6}
+        collisionPadding={collisionPadding}
         className="z-[120] rounded-lg p-1 shadow-pop"
         style={{ width }}
         onEscapeKeyDown={onEscapeKeyDown}
