@@ -12,9 +12,16 @@
    · `since` is the page owner's reading point in ms (convex/lib/teamSync.ts
      `syncSince`): "Done since", "untouched" and "changed" all read from it. */
 import { STATUS_NAMES } from '../../convex/lib/taskRefs'
-import { isReadingDay, SYNC_SITTING_MS, type SyncStamp } from '../../convex/lib/teamSync'
+import {
+  askHorizon,
+  doneSinceKind,
+  isReadingDay,
+  needsAnOwner,
+  SYNC_SITTING_MS,
+  type SyncStamp,
+} from '../../convex/lib/teamSync'
 import type { IssueVM, MilestoneVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
-import { fmtDate, isoFromDate, isoToDate, TODAY_WEEK, WEEKDAYS, weekStartOf } from './dates'
+import { fmtDate, isoFromDate, TODAY_WEEK, WEEKDAYS, weekStartOf } from './dates'
 import type { DelayInfo } from './delay'
 import { isIssueDone, isIssueGroup } from './issueGroups'
 import type { MdInline } from './md'
@@ -87,12 +94,6 @@ export function syncDay(now: number): SyncDay {
   const end = weekStartOf(new Date(now))
   end.setDate(end.getDate() + 6)
   return { todayWeek: TODAY_WEEK, today: isoFromDate(new Date(now)), weekEnd: isoFromDate(end) }
-}
-
-function addDays(iso: string, days: number): string {
-  const d = isoToDate(iso)
-  d.setDate(d.getDate() + days)
-  return isoFromDate(d)
 }
 
 /** Whole calendar days from `at` to `now`, by local midnights. */
@@ -306,7 +307,8 @@ export function waitingOnReview<I extends SyncIssue>(
     `since`, newest first. `done` when the person was the assignee; `reviewed` when
     they reviewed someone else's task to Done: its reviewer, with a review
     hand-off that the move into Done kept (`reviewAt`, which any other way
-    into Done clears). */
+    into Done clears). The rule is convex/lib/teamSync.ts doneSinceKind,
+    which the server's agenda shares. */
 export function doneSince<I extends SyncIssue>(
   person: string,
   issues: readonly I[],
@@ -315,12 +317,20 @@ export function doneSince<I extends SyncIssue>(
 ): { issue: I; kind: 'done' | 'reviewed' }[] {
   const out: { issue: I; kind: 'done' | 'reviewed' }[] = []
   for (const it of issues) {
-    if (it.status !== 'done' || isIssueGroup(it) || !subIds.has(it.project)) continue
-    if (it.doneAt == null || it.doneAt < since) continue
-    if (it.assignee === person) out.push({ issue: it, kind: 'done' })
-    else if (it.reviewer === person && it.reviewAt != null) {
-      out.push({ issue: it, kind: 'reviewed' })
-    }
+    if (it.status !== 'done' || !subIds.has(it.project)) continue
+    const kind = doneSinceKind(
+      {
+        status: it.status,
+        group: isIssueGroup(it),
+        doneAt: it.doneAt ?? null,
+        assignee: it.assignee || null,
+        reviewer: it.reviewer || null,
+        handedOff: it.reviewAt != null,
+      },
+      person,
+      since,
+    )
+    if (kind !== null) out.push({ issue: it, kind })
   }
   return out.sort(
     (a, b) =>
@@ -530,21 +540,31 @@ export function syncSentence(
     up. Listed when open and Urgent or High, when open and planned to start
     this week or earlier, or when due within two weeks (or overdue) in any
     status but Done, Backlog included. Due date first (undated last), then
-    priority, then key. `issues` is every task (Backlog is not a row). */
+    priority, then key. `issues` is every task (Backlog is not a row). The
+    rule is convex/lib/teamSync.ts needsAnOwner, which the server's agenda
+    shares. */
 export function needsOwner<I extends SyncIssue>(
   issues: readonly I[],
   subIds: Set<string>,
   day: SyncDay,
 ): I[] {
-  const horizon = addDays(day.today, 14)
+  const horizon = askHorizon(day.today)
   return issues
-    .filter((it) => {
-      if (it.assignee || isIssueGroup(it) || !subIds.has(it.project)) return false
-      const open = OPEN.has(it.status)
-      if (open && (it.priority === 'urgent' || it.priority === 'high')) return true
-      if (open && it.start != null && it.start <= day.todayWeek) return true
-      return it.status !== 'done' && !!it.due && it.due <= horizon
-    })
+    .filter(
+      (it) =>
+        subIds.has(it.project) &&
+        needsAnOwner(
+          {
+            status: it.status,
+            pressing: it.priority === 'urgent' || it.priority === 'high',
+            assigned: !!it.assignee,
+            group: isIssueGroup(it),
+            startsByThisWeek: it.start != null && it.start <= day.todayWeek,
+            due: it.due || null,
+          },
+          horizon,
+        ),
+    )
     .sort(
       (a, b) =>
         (a.due === b.due ? 0 : !a.due ? 1 : !b.due ? -1 : a.due.localeCompare(b.due)) ||
