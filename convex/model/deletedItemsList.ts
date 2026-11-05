@@ -1,9 +1,14 @@
 /* Deleted items as people read them (design 6.2): the Settings list and the
- * search for deleted tasks by key or title. Both read every active seat of
- * the login, because Deleted items spans organizations as Archived projects
- * does, and judge each item with the seat in its own organization, never
- * the home one. Rows are projections for that seat (model/deletedItems.ts
- * viewOf), never stored documents.
+ * search for deleted tasks by key or title, which the app reads today, and
+ * the row of one item, which every reader shares. The page of 25 entries
+ * that replaces the list and the search lives in model/deletedItemsPage.ts
+ * and builds its rows here (rowOf, deleterOf, hitPath) with this budget's
+ * metering (spending), so a later release can delete listFor, matchesFor,
+ * LIST and MATCHES without touching the page. The list and the search read
+ * every active seat of the login, because Deleted items spans
+ * organizations as Archived projects does, and judge each item with the
+ * seat in its own organization, never the home one. Rows are projections
+ * for that seat (model/deletedItems.ts viewOf), never stored documents.
  *
  * The search finds any stored task, a task item's root or subtask or a task
  * inside a deleted project, so it reaches the older items a capped list
@@ -112,14 +117,15 @@ export const LIST = {
 }
 
 /** What one call has left of a LIST budget. */
-type Reads = { bytes: number; rows: number; ranges: number }
+export type Reads = { bytes: number; rows: number; ranges: number }
 
 /** Whether `reads` has nothing left to open a range or read a document. */
-const spent = (reads: Reads): boolean => reads.bytes <= 0 || reads.rows <= 0 || reads.ranges <= 0
+export const spent = (reads: Reads): boolean =>
+  reads.bytes <= 0 || reads.rows <= 0 || reads.ranges <= 0
 
 /** `ctx` whose every read spends each of `budgets`: a range per query read
  * or read by id, and a row and its estimated bytes per document read. */
-const spending = (ctx: QueryCtx, ...budgets: Reads[]): QueryCtx =>
+export const spending = (ctx: QueryCtx, ...budgets: Reads[]): QueryCtx =>
   meterDb(ctx, {
     range: () => {
       for (const b of budgets) b.ranges -= 1
@@ -388,7 +394,7 @@ async function candidatesOf(
 }
 
 /** `item` as `sight`'s person sees it, or null when it is hidden from them. */
-async function rowOf(
+export async function rowOf(
   ctx: QueryCtx,
   sight: Sight,
   orgName: string,
@@ -506,23 +512,41 @@ function pathOf(sight: Sight, item: Item): string[] {
   return [live(item.parent_project_id, 0) ?? '', live(item.project_id, 1) ?? '']
 }
 
+/** Whether `me` may know which credential deleted `item` (design 1.6): an
+ * agent key's to everyone, a personal token's or connected app's to
+ * organization admins and to its owner, the deleter. */
+const namesCredential = (me: Doc<'profiles'>, item: Item): boolean =>
+  item.via !== undefined &&
+  (item.via.table === 'agent_keys' ||
+    me.org_role === 'admin' ||
+    namesProfile(item, item.deleted_by, me))
+
+/** How `item` was deleted, as `me` may know it: 'app', the table of the
+ * credential of a REST or MCP delete, or `table:id` where `me` may know
+ * which credential (namesCredential). The deleter line's `who` ends with
+ * it, and the page's `via` filter matches it, so an id `me` may not know
+ * matches nothing, as an unknown one does. */
+export function howOf(me: Doc<'profiles'>, item: Item): string {
+  const { via } = item
+  if (via === undefined) return 'app'
+  return namesCredential(me, item) ? `${via.table}:${via.id}` : via.table
+}
+
 /** The deleter line's parts for `sight`'s person (design 1.6, 6.2). */
-function deleterOf(sight: Sight, item: Item): Deleter {
+export function deleterOf(sight: Sight, item: Item): Deleter {
   const { me } = sight
   const id = item.deleted_by
   const profile = id === undefined ? undefined : sight.profiles.get(id)
   const known = sameReference(profile, item)
-  const you = namesProfile(item, id, me)
   const { via } = item
-  const named = via !== undefined && (via.table === 'agent_keys' || me.org_role === 'admin' || you)
-  const how = via === undefined ? 'app' : named ? `${via.table}:${via.id}` : via.table
+  const named = namesCredential(me, item)
   return {
-    you,
+    you: namesProfile(item, id, me),
     profile_id: known ? id : undefined,
     name: known ? profile.name : undefined,
     kind: via?.table ?? 'app',
-    credential_name: named ? via.name : undefined,
-    who: `${known ? id : ''}|${how}`,
+    credential_name: named ? via?.name : undefined,
+    who: `${known ? id : ''}|${howOf(me, item)}`,
   }
 }
 
@@ -644,7 +668,7 @@ async function visibleItem(ctx: QueryCtx, sight: Sight, id: string) {
  * the task's project. A task item's task in the root's project: the
  * item's path; in another project, that project after its top-level
  * project, with the names they carry now. */
-function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
+export function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
   if (item.kind === 'project')
     return [
       project.id === item.target_id ? (pathOf(sight, item)[0] ?? '') : item.name,
