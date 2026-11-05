@@ -19,15 +19,16 @@
  *    its live sub-projects the reader can see by creation and then itself.
  *
  * Parent and Subtasks keep the projects where the reader has Edit, since
- * both ends of a parent change need it (model/issues.ts assertWritable and
- * parentChainCheck's no_write), and refuse a reader without Edit on the
- * opened task. Linked tasks keeps every visible live project for a reader
- * with Edit on the opened task, and else the projects they can edit
- * (model/issues.ts linkAccess). Levels are the writes' levels of the
- * reader (lib/access.ts projectLevel), so an organization admin holds lead
- * on every project, as the writes give it, never ordinaryOf's level. The
- * family's come from viewAccess.levels and the rest of the organization's
- * from projectLevelsForOrg, which the tests compare with projectLevel.
+ * both ends of a parent change need it (issues.ts assertWritable, which is
+ * model/issues.ts assertCanEdit, and parentChainCheck's no_write), and
+ * refuse a reader without Edit on the opened task. Linked tasks keeps
+ * every visible live project for a reader with Edit on the opened task,
+ * and else the projects they can edit (model/issues.ts linkAccess).
+ * Levels are the writes' levels of the reader (lib/access.ts
+ * projectLevel), so an organization admin holds lead on every project, as
+ * the writes give it, never ordinaryOf's level. The family's come from
+ * viewAccess.levels and the rest of the organization's from
+ * projectLevelsForOrg, which the tests compare with projectLevel.
  *
  * Within each project the batch reads its active tasks by creation (issues
  * by_project_archived), one project after another, so a batch ends at one
@@ -37,7 +38,7 @@
  * (lib/archiveCursorSeal.ts), so it opens for nothing else. A place names
  * its project by fields that never change, so a project that leaves the
  * scope between batches costs no row, and no row comes twice while the data
- * stays the same. Every task a batch reads is in the reader's working set.
+ * stays the same. Every task the scan reads is in the reader's working set.
  *
  * A task matches when every fragment of the search occurs in its ID or its
  * title (lib/search.ts allWordsMatcher), the rule the app's pickers apply.
