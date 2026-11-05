@@ -2311,7 +2311,9 @@ finishing in time, answers `503` with `Retry-After: 1` and stores nothing,
 so wait and send it again, or, rarely, `409` when Qivo could not free the
 URL either. Qivo reads the body in one of
 its own request handlers, which stays busy until the file has arrived, for
-at most 5 minutes, so send large files a few at a time. A refusal such as
+at most 5 minutes plus a second for every 32 KiB of `size`, and never more
+than 8 minutes, so a 20 MiB file needs about 44 KB/s or more. Send large
+files a few at a time. A refusal such as
 the `409` or the size `400` waits only 5 seconds more for the rest of the
 body, so a large upload that is refused can end with the connection closed,
 or with a `502` from the hosting front end, instead of the answer. Treat

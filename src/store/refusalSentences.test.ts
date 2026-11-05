@@ -145,6 +145,8 @@ describe('refusal sentences in restore and upload toasts', () => {
       'fetch',
       vi.fn(async () => Response.json({ error }, { status: 400 })),
     )
+  const LOST =
+    'The upload did not finish. Check your connection and try again, or send a smaller file.'
   const BUDGET =
     'the demo stores at most 5 MiB of files in total, and 0.4 MiB of it is free. Remove a file, a picture or your background, or delete items for good in Settings → Projects → Deleted items, then try again.'
 
@@ -169,14 +171,28 @@ describe('refusal sentences in restore and upload toasts', () => {
       'Couldn\'t upload "notes.txt". The file is larger than the most this upload URL takes; start a new upload.',
       'error',
     )
-    // an answer without a sentence names the file alone
-    showToast.mockClear()
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => new Response('Bad gateway', { status: 502 })),
-    )
-    expect(await P.addAttachment('task-1', file())).toBeNull()
-    expect(showToast).toHaveBeenCalledExactlyOnceWith('Couldn\'t upload "notes.txt"', 'error')
+  })
+
+  it('says the upload did not finish when its POST ends without the receiver’s answer', async () => {
+    answers['files:uploadUrl'] = () => Promise.resolve('https://upload.example.test/u')
+    answers['files:avatarUploadUrl'] = () => Promise.resolve('https://upload.example.test/a')
+    const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
+    // the connection drops, and the hosting front end answers instead
+    for (const post of [
+      async () => {
+        throw new TypeError('Failed to fetch')
+      },
+      async () => new Response('Bad gateway', { status: 502 }),
+    ]) {
+      showToast.mockClear()
+      vi.stubGlobal('fetch', vi.fn(post))
+      expect(await P.addAttachment('task-1', file())).toBeNull()
+      expect(showToast).toHaveBeenCalledExactlyOnceWith(
+        `Couldn't upload "notes.txt". ${LOST}`,
+        'error',
+      )
+      expect(await P.setAvatar(snap.profiles[0].id, picture)).toBe(LOST)
+    }
   })
 
   it('declares a picture’s size and answers the sentence its upload URL refused', async () => {

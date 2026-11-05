@@ -380,7 +380,8 @@ export const UPLOAD_NOT_STARTED =
 /** How long a POST to an upload URL holds the URL. A POST that ended
  * without storing its file, or without freeing the URL, such as one whose
  * runtime was stopped, lets another POST take the URL once this has passed.
- * The receiver stops reading a body well before (machine/uploads.ts). */
+ * The receiver stops reading a body well before, after at most 8 minutes
+ * (machine/uploads.ts uploadReadMs). */
 export const UPLOAD_CLAIM_MS = 15 * 60 * 1000
 
 /* The ticket `ticketId` of `minter` while it is unexpired at `nowMs`, else

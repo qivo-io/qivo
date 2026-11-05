@@ -977,10 +977,14 @@ progress in an organization over the app, REST and MCP together, and the
 new hourly cron `reap-expired-upload-tickets` deletes expired tickets and
 erases the files nothing names that they hold. A REST or MCP confirm sent
 again after its answer was lost answers the attachment it made. App uploads
-now run in Qivo's HTTP actions for the whole transfer, up to 5 minutes, as
-REST, MCP and demo uploads already did, instead of Convex's storage
-endpoint, so they share Convex's limit on actions running at once with
-every other action. On the demo backend the shared upload budget falls from
+now run in Qivo's HTTP actions for the whole transfer, as REST, MCP and
+demo uploads already did, instead of Convex's storage endpoint, so they
+share Convex's limit on actions running at once with every other action.
+The receiver reads a body for 5 minutes plus a second for every 32 KiB
+declared, at most 8 minutes, which leaves the HTTP action time to store the
+file within Convex's action time limit, so a 20 MiB file needs about
+44 KB/s. Before this release a REST or MCP upload had 5 minutes whatever
+its size. On the demo backend the shared upload budget falls from
 50 MiB to 5 MiB, reserved at each upload's declared size. A demo above 5 MiB
 keeps its files and admits no upload until enough is freed, and a stored
 upload that never attaches stops counting within minutes.

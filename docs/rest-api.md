@@ -2386,8 +2386,9 @@ one file:
   exactly the 48213 bytes declared`), a `Content-Type` over 255 characters
   answers `400` (`a file's media type must be at most 255 characters. Send a
   media type such as application/pdf.`),
-  and a body that takes more than 5 minutes to arrive answers `400` (`the
-  upload took too long; send it again`). These store nothing, and the URL
+  and a body that takes longer than its time to arrive, 5 minutes plus a
+  second for every 32 KiB of `size` and at most 8 minutes, answers `400`
+  (`the upload took too long; send it again`). These store nothing, and the URL
   can be tried again, as after any other failed `POST`. A `POST` that ends
   without an answer and without storing a file, for example when the
   connection drops, holds the URL for at most 15 minutes. So does, rarely,
@@ -2412,7 +2413,9 @@ one file:
 
 Qivo reads the body of a `POST` to the upload URL in one of its own request
 handlers, which stays busy until the whole file has arrived, for at most the
-5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
+time above. A 20 MiB file gets 8 minutes and therefore needs about 44 KB/s
+(350 kbit/s) or more, and a 1 MiB file gets 5 minutes and 32 seconds, about
+3 KB/s. Many
 large uploads at once from one organization share the deployment's handlers
 with every other request, so send them a few at a time. A refusal decided
 before the file is read, or while reading a body of another size, such as
@@ -2421,7 +2424,7 @@ of the body, but only 5 seconds more, 1 second without bytes and 32 MiB, as
 for [every request](#request-limits-and-billing). A slower upload that is
 refused can end with the connection closed, or with a `502` from the
 hosting front end, instead of the answer. The `400` for an upload that took
-more than 5 minutes stops the upload at once, so a client that slow usually
+too long stops the upload at once, so a client that slow usually
 sees the connection close. Treat either like a network error and start the
 upload again.
 

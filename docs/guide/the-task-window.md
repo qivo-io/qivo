@@ -169,8 +169,11 @@ full task is refused before it uploads. Outside the private demo, one person
 can have at most 20 uploads in progress in an organization at once, in the
 app, over the REST API and over MCP together. An upload counts until its
 file is attached, and one never finished stops counting an hour after it
-started. A link also needs room on the other
-task, so picking a task that has 100 links is refused with a sentence that
+started. A file must also arrive within 5 minutes, plus a second for every
+32 KiB of it and at most 8 minutes, so a 20 MiB file needs a connection of
+about 350 kbit/s. When an upload does not finish, Qivo says so. Check your
+connection and try again, or attach a smaller file. A link also needs room
+on the other task, so picking a task that has 100 links is refused with a sentence that
 names it. The window counts only the links whose other task you can see, so
 Qivo can also refuse a link when you make it, naming the task that is full.
 A new task you create from the **Linked tasks** picker is then not created

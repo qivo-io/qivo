@@ -4975,6 +4975,39 @@ async function receiverRefusal(res: Response): Promise<string | null> {
   }
 }
 
+/** What an upload says when its POST ended without the receiver's answer:
+    the connection dropped, or the hosting front end answered instead, as
+    when a large file on a slow connection ran out of the time the receiver
+    reads it for (convex/machine/uploads.ts uploadReadMs). Sending it again
+    on the same connection fails the same way. */
+const UPLOAD_NOT_FINISHED =
+  'The upload did not finish. Check your connection and try again, or send a smaller file.'
+
+/* How a POST of a file to an upload URL ended: the stored file, the
+   receiver's refusal, or no answer from the receiver at all. */
+type Posted = { storageId: string } | { refused: string } | { unanswered: true }
+
+/* POSTs `file` to upload URL `url`. The POST's Content-Type is what lands
+   in storage metadata and what the gateway serves back, so an empty type
+   would break inline rendering. */
+async function postUpload(url: string, file: Blob): Promise<Posted> {
+  let res: Response
+  try {
+    res = await fetch(browserBackendUrl(url), {
+      method: 'POST',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+  } catch (e) {
+    console.error('[qivo] upload did not finish:', e)
+    return { unanswered: true }
+  }
+  if (res.ok) return { storageId: ((await res.json()) as { storageId: string }).storageId }
+  console.error('[qivo] upload failed:', res.status)
+  const why = await receiverRefusal(res)
+  return why === null ? { unanswered: true } : { refused: why }
+}
+
 /* The avatar mutators return an error SENTENCE (Settings toasts it verbatim).
    A refusal's own message — the set_avatar right, the type and size rules — is
    the best sentence there is; anything without one gets the fallback. */
@@ -10995,7 +11028,9 @@ export const PLANNER = {
       an upload ticket's URL on the API origin, which stores one file of that
       size, and only this person's attach of that file to this task takes it;
       in the demo it reserves that size in the demo's shared storage. A
-      refusal from the URL's receiver is toasted in its own words.
+      refusal from the URL's receiver is toasted in its own words, and a
+      POST that ended without the receiver's answer with
+      UPLOAD_NOT_FINISHED.
 
       No optimistic row until the server accepts it: three awaited hops make
       optimism pointless, and the server deletes oversize bytes inside attach
@@ -11059,20 +11094,13 @@ export const PLANNER = {
           'none',
           { about },
         )
-        // the POST's Content-Type is what lands in storage metadata and what
-        // the gateway serves back — an empty type would break inline rendering
-        const res = await fetch(browserBackendUrl(url), {
-          method: 'POST',
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-          body: file,
-        })
-        if (!res.ok) {
-          const why = await receiverRefusal(res)
-          console.error('[qivo] upload failed:', res.status)
-          toast(`Couldn't upload "${file.name}"${why ? `. ${asSentence(why)}` : ''}`)
+        const posted = await postUpload(url, file)
+        if (!('storageId' in posted)) {
+          const why = 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED
+          toast(`Couldn't upload "${file.name}". ${why}`)
           return null
         }
-        const { storageId } = (await res.json()) as { storageId: string }
+        const { storageId } = posted
         const out = await sendAwaited(
           api.files.attach,
           {
@@ -13103,18 +13131,11 @@ export const PLANNER = {
         { profile_id: profileId, size: small.size },
         'none',
       )
-      const res = await fetch(browserBackendUrl(url), {
-        method: 'POST',
-        // the POST's Content-Type lands in storage metadata — it is what the
-        // server's allowlist checks and what the gateway serves back
-        headers: { 'Content-Type': small.type || 'application/octet-stream' },
-        body: small,
-      })
-      if (!res.ok) {
-        const why = await receiverRefusal(res)
-        return why ? asSentence(why) : "Couldn't upload that picture"
-      }
-      const stored = ((await res.json()) as { storageId: string }).storageId as Id<'_storage'>
+      // the POST's Content-Type is also what the server's allowlist checks
+      const posted = await postUpload(url, small)
+      if (!('storageId' in posted))
+        return 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED
+      const stored = posted.storageId as Id<'_storage'>
       // the accepted portrait paints until a delivery holds it; a rebuild
       // prunes and revokes the replaced portrait source
       await sendAwaited(
