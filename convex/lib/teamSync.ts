@@ -181,7 +181,7 @@ function weekOf(
 }
 
 /* How much later than a local midnight previousWorkingDayStart can answer
- * when it walks back from day number `to` to the day after `from`: where a
+ * when it walks back from day number `to` to the day after `from`. Where a
  * daylight-saving change skips one of those days' midnight, the walk lands
  * on the hour after the gap and keeps that wall time back to the working
  * day. At most the largest change of those days' weeks, or three hours
@@ -196,7 +196,7 @@ function walkDrift(from: number, to: number, clock: ReadingClock): number {
 }
 
 /* The earliest and latest instant previousWorkingDayStart(at) can answer
- * in the client's zone: the midnight of the working day before each local
+ * in the client's zone, the midnight of the working day before each local
  * day `at` can fall on. */
 function workingDayBeforeInstant(
   at: number,
@@ -232,7 +232,7 @@ function workingDayBeforeInstant(
  * one, within twice its change, at most four hours. They are looser where
  * the change leaves unclear whether the sitting covers the day's first or
  * last moments, or which local day the stamp's `at` fell on, that is where
- * either lies within a few hours of a midnight: they then span the
+ * either lies within a few hours of a midnight. They then span the
  * sitting's reading point, or the working days before both days, up to
  * three days more.
  *

@@ -179,7 +179,7 @@ async function expectMeeting(
     answer.people.map((p) => p.id),
     `${label}: people`,
   ).toEqual(sorted(m.walkers.map((u) => u.id)))
-  // Needs an owner: the rows it lists and the asks
+  // Needs an owner, the rows it lists and the asks
   expect(sorted(answer.asks.map((r) => r.id)), `${label}: asks`).toEqual(
     sorted(m.asks.filter((it) => !rowIds.has(it.uuid)).map((it) => it.uuid)),
   )
@@ -471,7 +471,7 @@ describe('the rules that must hold', () => {
     expect(await agendaOf(t, P, subject, { kind: 'team', team_id: unknown })).toEqual({
       state: 'unavailable',
     })
-    // a blocker read past sight: the stored links name one in SKNK's
+    // a blocker read past sight, as the stored links name one in SKNK's
     // sub-project, which the admin sees, so read as the viewer instead
     const viewer = f.viewer
     const V = await storeOf(t, viewer, now)

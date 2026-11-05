@@ -12,7 +12,7 @@
  * whose cards it shows, so neither the workspace parts nor the page read a
  * comment per task of the whole organization.
  *
- * agenda is a live query: a change to a document its reads returned or
+ * agenda is a live query. A change to a document its reads returned or
  * would now return reruns it, such as an active task of the scope's
  * sub-projects in an open, Backlog or Done status the reads reached, a
  * subtask a check read, a link row of a row, a blocker or parent it read, a
@@ -216,7 +216,7 @@ export async function latestComments(
           if (sight.get(task.project_id) === true) guard.refund(task, TASK_ROW_MAX_BYTES)
         for (const task of step) {
           const shown = task.org_id === me.org_id ? sight.get(task.project_id) : false
-          // a project past LAST_COMMENTS.projects: this task and those after
+          // a project past LAST_COMMENTS.projects, so this task and those after
           // it have no row
           if (shown === undefined) {
             complete = false
@@ -302,7 +302,7 @@ export async function latestComments(
  * four per person and one more for each 64 of their open tasks, at most
  * six for each live project asked about, and one per task answered.
  *
- * For the Team sync view stage: an answer cut short by the projects bound,
+ * For the Team sync view stage, an answer cut short by the projects bound,
  * the guard or the caller's own access bound still makes the page say the
  * person "holds more open tasks than Qivo checks at once" (src/views/
  * TeamSync.tsx marksCutLine), which is then not why. */

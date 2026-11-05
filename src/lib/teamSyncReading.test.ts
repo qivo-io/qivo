@@ -221,7 +221,7 @@ describe('readingBounds', () => {
   })
 
   it('must fail for a floor without the zones’ margin: the UTC midnight of the working day before', () => {
-    // this must fail: on Wednesday 9 September, without a stamp, the page
+    // this must fail, as on Wednesday 9 September, without a stamp, the page
     // reads from Tuesday's local midnight, which is before Tuesday's UTC
     // midnight east of UTC, as at UTC+14
     const late: string[] = []

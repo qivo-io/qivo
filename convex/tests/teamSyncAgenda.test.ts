@@ -329,7 +329,7 @@ describe('scope', () => {
       expect(ok.sub_projects).toEqual([])
     }
     // this must fail for a rule that names every top-level project the
-    // reader can see: they see TBED, to navigate
+    // reader can see, as they see TBED, to navigate
     expect(await t.run((ctx) => accessOf(ctx, me).visible(f.meta.id))).toBe(true)
   })
 
@@ -370,7 +370,7 @@ describe('rows', () => {
     expect(titles(pcb.parents)).toEqual(['Group'])
     expect(pcb.rows[0].parent_id).toBe(group.id)
     expect(pcb.parents[0].has_subtasks).toBe(true)
-    // a team scope narrows the people, not the rows: the admin is not in it
+    // a team scope narrows the people, not the rows, and the admin is not in it
     const scoped = okOf(await agendaFor(t, f.viewer, { kind: 'team', team_id: team }))
     expect(titles(scoped.rows)).toEqual(titles(meta.rows))
     expect(scoped.people.map((p) => p.id)).toEqual([f.user.id])
@@ -814,7 +814,7 @@ describe('the ceiling', () => {
       done_at: `2025-12-2${i + 2}T00:00:00.000Z`,
     }))
     const scope = projectScope(f.meta)
-    // eleven loaded, eight certain: the page may show eight after 06:30
+    // eleven loaded and eight certain, as the page may show eight after 06:30
     expect(await agendaFor(t, f.viewer, scope)).toEqual({ state: 'over_budget' })
     // this must fail for a claim from the floor: Done after the sitting's
     // end is certain

@@ -1,5 +1,5 @@
 /* The project view a member's reads built at once before they asked about
- * the projects their rows name: every project of the organization and the
+ * the projects their rows name, every project of the organization and the
  * member's grants and team shares, read together, with each project's
  * visibility a set lookup. Team sync's latest comments (teamSync.ts
  * lastComments) was its last caller. The access suites keep it as the

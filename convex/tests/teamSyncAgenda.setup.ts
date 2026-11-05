@@ -20,7 +20,7 @@ import { dayPlus, ordinary } from './roadmap.setup'
 const DAY_MS = 86_400_000
 
 /** The client's clock on day `day` of the week that begins on `week`, both
- * YYYY-MM-DD, on UTC weeks: the arguments lib/viewLoads.ts clockOf takes. */
+ * YYYY-MM-DD, on UTC weeks, the arguments lib/viewLoads.ts clockOf takes. */
 export const clockOn = (day: string, week: string) => {
   const start = Date.parse(`${week}T00:00:00.000Z`)
   return {
@@ -37,7 +37,7 @@ export type AgendaClock = ReturnType<typeof clockOn>
 /** The Monday of helpers.setup.ts NOW's week, 2025-12-29. */
 export const NOW_WEEK = '2025-12-29'
 
-/** NOW's day, Thursday 1 January 2026, in its Monday week: the fixtures'
+/** NOW's day, Thursday 1 January 2026, in its Monday week, as the fixtures'
  * dates sit around it. A walker without a stamp reads Done since from
  * Wednesday's midnight, 2025-12-31T00:00Z, on these UTC weeks. */
 export const NOW_CLOCK = clockOn(NOW.slice(0, 10), NOW_WEEK)

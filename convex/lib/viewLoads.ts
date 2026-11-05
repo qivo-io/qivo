@@ -1,4 +1,4 @@
-/* The client's clock and the owner-load verdicts the views share: the
+/* The client's clock and the owner-load verdicts the views share. The
  * Overview's figures (lib/overview.ts) and Team sync's agenda
  * (lib/teamSyncAgenda.ts) read their delays and owners' loads through
  * verdicts here, and the Roadmap (lib/roadmap.ts) its days and figures.

@@ -1,4 +1,4 @@
-/* Team sync's agenda behind teamSync.ts agenda: one meeting of the home
+/* Team sync's agenda behind teamSync.ts agenda, one meeting of the home
  * organization for one scope, every task the page shows with the people
  * it walks and their loads, within one budget (AGENDA) and Team sync's
  * ceiling of AGENDA.ceiling tasks, lib/limits.ts TEAM_SYNC_TASKS. It reads
@@ -127,11 +127,11 @@ import {
  * - An everyday team, 20 sub-projects of 30 open tasks, read by a member in
  *   3 teams: 1,609, 1,612 and 0.99. The same for a member in 5 teams.
  * - A team that shares 50 live and 150 archived projects, the archived
- *   shares read first: over_ceiling from the counts in 1,325, 1,980 and
+ *   shares read first, over_ceiling from the counts in 1,325, 1,980 and
  *   0.98, and while the counts are not whole from the read in 1,732, 2,616
  *   and 1.41.
  * - All projects over 200 live top-level projects with 500 live and 1,000
- *   archived sub-projects: over_ceiling from the counts in 1,117, 1,676 and
+ *   archived sub-projects, over_ceiling from the counts in 1,117, 1,676 and
  *   0.95 for an admin, 1,146, 1,685 and 0.95 for a member in 3 teams who
  *   sees 54 sub-projects across the names; while counting from the read in
  *   1,681, 3,039 and 1.78 and in 1,256, 2,053 and 1.21.
@@ -146,7 +146,7 @@ import {
  * this guard), owners in owner id order. By the owner's rule of 1 November
  * 2026 for figures that follow workloads, a walker's week and a row's
  * verdict that needs a load answer unavailable past this measured size
- * inside the design size: an everyday project of 3 sub-projects of 30
+ * inside the design size, for an everyday project of 3 sub-projects of 30
  * open tasks, whose 10 owners hold the organization's open tasks, half of
  * them scheduled, in sub-projects of 30, three to a project (the on-demand
  * cases, QIVO_AGENDA_ORG_OPEN=1). At 3,000 such tasks it reads 2,030, 3,259 and
@@ -192,7 +192,7 @@ export type AgendaRow = ViewRow & {
   delay: 'late' | 'behind' | 'unknown' | null
 }
 
-/** One person the walk visits: an owner of a row (lib/review.ts
+/** One person the walk visits, an owner of a row (lib/review.ts
  * taskOwnerId), in a team scope only a member of the team. */
 export type AgendaPerson = {
   id: string
@@ -614,7 +614,7 @@ async function scopeOf(
 }
 
 /* The live top-level projects of organization `orgId` in name order
- * (projects by_org_parent_state_name), name key then id: after a step's
+ * (projects by_org_parent_state_name), name key then id, after a step's
  * last row, the rest of its name key and the later ones. */
 function liveTops(
   ctx: QueryCtx,
@@ -679,7 +679,7 @@ const doneFacts = (t: Doc<'issues'>): DoneFacts => ({
 /**
  * The Done tasks of the scope's sub-projects that some walker's Done since
  * can show on the client's day, read from each walker's reading floor
- * (lib/teamSync.ts readingBounds, with the organization's week start): one
+ * (lib/teamSync.ts readingBounds, with the organization's week start), one
  * range a sub-project from the earliest floor, a task kept where its
  * assignee is a walker and it reached Done at or after that walker's floor,
  * or its reviewer is another walker, with a review hand-off, and it reached
@@ -742,7 +742,7 @@ async function doneOf(
 // --- blockers -------------------------------------------------------------------------------
 
 /**
- * The blockers of the scope's rows: each row's blocks links as their target
+ * The blockers of the scope's rows, from each row's blocks links as their target
  * (issue_links by_target, each row at LINK_ROW_BYTES, relates links
  * dropped), and each blocker the read does not hold read by id at
  * TASK_ROW_MAX_BYTES, dropped unless it is of the row's organization, before
@@ -832,10 +832,10 @@ async function blockersOf(
  * For staff the owners are the walkers and the owners whose load a row's
  * verdict needs in a project that tracks delay, read in owner id order
  * (readAll) within the verdicts' room, lib/ownerLoads.ts OWNER_LOADS.call
- * inside the agenda's guard: a row whose verdict needs a load not read is
+ * inside the agenda's guard. A row whose verdict needs a load not read is
  * `unknown`, and so is a walker's week, `loads`. An organization Viewer, the
  * only other seat that reaches here, reads no load (the coordinator's
- * answer of 5 November 2026): their rows whose verdict needs one are
+ * answer of 5 November 2026). Their rows whose verdict needs one are
  * `unknown`, the others judged, and every week `loads`. A row in a project
  * that does not track delay has no verdict. Should a read here pass the
  * guard, every row of a project that tracks delay is `unknown` and every
