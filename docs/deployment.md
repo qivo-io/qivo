@@ -170,8 +170,9 @@ check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
 deployment takes a body that large. A confirm sent again must answer the
-same attachment over REST and over MCP, leave one row, and stay a `404` for
-another user (`uploads/confirm-retry`). It also checks task progress, last
+same attachment over REST and over MCP and leave one row, and the same
+confirm from another user must answer `404` over REST and the same refusal
+over MCP (`uploads/confirm-retry`). It also checks task progress, last
 comment times, delay and project completion, and the rule that a subtask in
 an archived project makes no group. After it archives and restores a
 sub-project it waits, for up to 30 seconds, until the family's completion

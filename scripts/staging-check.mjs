@@ -2740,7 +2740,7 @@ async function uploadChecks() {
   })
   // A confirm sent again after its answer was lost answers the attachment
   // the first one made, over REST and MCP alike, attaches the file once,
-  // and another user still finds no such upload.
+  // and another user still finds no such upload on either surface.
   await check('uploads/confirm-retry', async () => {
     const { bytes, type } = sampleFile()
     const start = await restOk(w, 'POST', `/tasks/${task.key}/attachments`, {
@@ -2755,6 +2755,7 @@ async function uploadChecks() {
     eq((await restOk(w, 'POST', path, { storage_id })).id, att.id, 'the REST confirm sent again')
     const confirm = { ref: task.key, ticket: start.ticket, storage_id }
     eq((await toolOk(w, 'confirm_attachment_upload', confirm)).id, att.id, 'the MCP one')
+    await restRefusal(s, 'POST', path, { storage_id }, 404, UPLOAD_MISSING)
     eq(
       await toolRefusal(s, 'confirm_attachment_upload', confirm),
       UPLOAD_MISSING,
@@ -2765,7 +2766,7 @@ async function uploadChecks() {
     )
     eq(rows.length, 1, 'rows of the file')
     await sameBytes(att, bytes, type)
-    return 'the same attachment over REST and MCP, one row, and 404 for another user'
+    return 'the same attachment over REST and MCP, one row, and for another user a REST 404 and the MCP refusal'
   })
   await check('write-token/mcp/upload-activity', async () => {
     const rows = await toolOk(w, 'list_task_activity', { ref: task.key })
