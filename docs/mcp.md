@@ -1305,10 +1305,10 @@ arguments and then counts the rest, such as `and 5 more`. A name longer than
 object, or absent or `null` for none. Any other value is refused, for
 example `Invalid input: expected object, received string`. Only `get_me`,
 the one tool that takes no arguments, ignores what it is sent. `list_users`,
-`list_labels` and `list_teams` took no arguments before November 2026, so a
+`list_labels` and `list_teams` took no arguments before November 2026. A
 call to one of them that sends none of its own arguments, such as a
-placeholder alone, is read as a call of the older catalogue, so its unknown
-arguments are dropped and the first page answers. A call that sends one of
+placeholder alone, is read as a call of the older catalogue, which drops
+the unknown arguments and answers the first page. A call that sends one of
 its own arguments refuses an unknown one beside it, and `next_cursor` is
 refused even alone, so a loop that passes the answer's `next_cursor` back
 under that name, instead of as `cursor`, is told so. The schema check covers each
