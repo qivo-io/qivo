@@ -1115,7 +1115,7 @@ export const SEARCH_LIST = 'projectNav.search'
 /** The refusal of a search whose name key is empty, one of spaces and
  * accents only. */
 export const BLANK_SEARCH =
-  'search must hold a character besides spaces and accents; browse every project with projectNav.page'
+  'search must hold a character besides spaces and accents; browse with projectNav.page'
 
 /** The refusal of an empty org_id. */
 export const EMPTY_ORG = 'org_id must name an organization, or be left out to search every seat'
