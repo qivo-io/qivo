@@ -183,6 +183,7 @@ import {
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
 import {
+  delayIssueOfRow,
   delayIssueOfTask,
   issueNeedsLoad,
   judgeDelay,
@@ -3204,10 +3205,20 @@ let reshaping = false
 /** Task `it` as the window's delay verdict reads it (P.windowDelay), with
     a group's facts: from P.taskDetail for a task the window shows from its
     own read, else from the workspace's tasks, by the rules the task index
-    judges with (store/taskIndex.ts judge). */
+    judges with (store/taskIndex.ts judge). A group shown from its answer
+    whose dates the answer cannot give, as when a subtask has subtasks of
+    its own, takes the server's span from a view's row of it, as that
+    view's card does, so the window over the card shows its verdict;
+    without such a row its dates stay unknown. */
 function windowDelayIssue(it: IssueVM) {
   const detail = PLANNER.taskDetail(it.uuid)
   const group = isIssueGroup(it)
+  const row = detail && group && !detail.datesKnown ? viewRows.peek(it.uuid) : undefined
+  if (row?.has_subtasks && row.span)
+    return {
+      issue: delayIssueOfRow(row, viewDelayCtx.capacity),
+      facts: { datesKnown: true, loading: false },
+    }
   const span = !detail && group ? groupSpan(it, PLANNER.issueById) : null
   const issue = delayIssueOfTask(
     it,
@@ -8704,8 +8715,9 @@ export const PLANNER = {
       way, DELAY_UNKNOWN where it came back unavailable or failed, or where
       a group's subtasks are not all there. The window's own registration
       is never capped, since a guest's cap counts the calls of one view. A
-      task shown from its answer takes its group facts from P.taskDetail, a
-      held one from the workspace's tasks. Only a held group can have
+      task shown from its answer takes its group facts from P.taskDetail,
+      or a group's span from a view's row of it where the answer cannot
+      give its dates, a held one from the workspace's tasks. Only a held group can have
       subtasks still to load: those an answer leaves out are hidden from
       the person, which no load changes. */
   windowDelay: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {

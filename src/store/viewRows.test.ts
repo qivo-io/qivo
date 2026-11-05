@@ -526,6 +526,56 @@ describe('the delays of tasks only a view brings', () => {
     expect(P.delayOf(card ?? '')).toEqual(P.windowDelay(view))
   })
 
+  it("judges a group the window shows from its answer by the card's span, when a subtask has subtasks of its own", async () => {
+    snapshot.projects[0].track_delay = true
+    deliver(structuredClone(snapshot))
+    await turn()
+    const P = store.P
+    // a group past its due date whose span, as the server sends it on the
+    // card, runs into next week
+    const group = row('grp', 20, {
+      status: 'progress',
+      due_date: weekToISO(TODAY_WEEK - 1),
+      has_subtasks: true,
+      group_done: false,
+      span: {
+        start_week: weekToISO(TODAY_WEEK - 2),
+        end_week: weekToISO(TODAY_WEEK + 1),
+        partial: false,
+      },
+    })
+    answer = ok([group])
+    await open()
+    const card = P.viewTask(SLOT, 'grp') ?? ''
+    const verdict = P.delayOf(card)
+    expect(verdict).not.toBeNull()
+    // the window reads the group, whose one subtask has subtasks of its own
+    P.watchComments('grp', snapshot.orgs[0].id)
+    P.showSections({}, true)
+    const read = taskReads.get('grp')
+    if (!read) throw new Error('no task read')
+    const { span: _span, group_done: _done, ...fields } = group
+    const kid = row('kid', 21, {
+      start_week: weekToISO(TODAY_WEEK - 2),
+      end_week: weekToISO(TODAY_WEEK - 1),
+    })
+    const { has_hidden_subtasks: _h, has_hidden_parent: _p, ...short } = kid
+    read({
+      state: 'ok',
+      task: { ...fields, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+      level: 'user',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [{ ...short, has_subtasks: true, level: 'user' }], complete: true },
+    })
+    await turn()
+    expect(P.taskDetail('grp')?.datesKnown).toBe(false)
+    const view = P.taskDetail('grp')?.view
+    if (!view) throw new Error('no window view')
+    expect(P.windowDelay(view)).toEqual(verdict)
+  })
+
   it("asks no load for a held task, whose delay stays the workspace's", async () => {
     snapshot.projects[0].track_delay = true
     deliver(structuredClone(snapshot))
