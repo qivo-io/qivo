@@ -1,8 +1,9 @@
 /* The Deleted items page (model/deletedItemsPage.ts) at the design size,
  * with ordinary text, one figure raised a case: a project item of 30 live
  * and 40 archived sub-projects with the project's 800 open tasks, a
- * sub-project item with the sub-project's 300 open tasks, a lead who reads
- * 200 live and 500 archived sub-projects, a person in 5 teams, a team that
+ * sub-project item with the sub-project's 300 open tasks, a member who
+ * reads 200 live and 500 archived sub-projects, leading their top-level
+ * projects or each sub-project one by one, a person in 5 teams, a team that
  * shares 50 live and 150 archived projects, the catalogue of 2,000
  * projects every seat's sight reads, and 1,000 people. Deleted items has
  * no figure of its own; it holds the work of these (coordinator,
@@ -153,7 +154,8 @@ async function plantProjectItem(
 }
 
 /** A ready task item of one task in live sub-project `p` under `top`,
- * deleted by `by` at `at`, with its deleted_tasks row. */
+ * deleted by `by` at `at`, with its deleted_tasks row, assigned to
+ * `assignee` when given. */
 async function plantTaskItem(
   t: T,
   f: OrgFixture,
@@ -161,6 +163,7 @@ async function plantTaskItem(
   top: string,
   by: Profile,
   at: number,
+  assignee?: string,
 ): Promise<string> {
   const id = uuid()
   const num = nextNum++
@@ -195,6 +198,7 @@ async function plantTaskItem(
       project_id: p.id,
       archived: false,
       search_text: `${title(num)}\n${DESCRIPTION}`,
+      ...(assignee === undefined ? {} : { assignee_id: assignee }),
       deleted_at,
       deleted_by: by.id,
       item_project_id: p.id,
@@ -248,16 +252,54 @@ async function readPage(t: T, me: Profile, args: PageArgs) {
 type Figures = Awaited<ReturnType<typeof readPage>>['figures']
 
 /** Prints `figures` and checks them inside Convex's limits and the page's
- * budgets. */
+ * `call` and `gather`. */
 function record(what: string, figures: Figures): void {
   console.log(`deleted page figures, ${what}:`, JSON.stringify(figures))
   expect(figures.ranges).toBeLessThan(4096)
   expect(figures.documents).toBeLessThan(32_000)
   expect(figures.mib).toBeLessThan(16)
-  const { call } = figures.page
-  expect(call?.ranges ?? 0).toBeLessThan(DELETED_PAGE.call.ranges)
-  expect(call?.rows ?? 0).toBeLessThan(DELETED_PAGE.call.rows)
-  expect(call?.bytes ?? 0).toBeLessThan(DELETED_PAGE.call.bytes)
+  for (const part of ['call', 'gather'] as const) {
+    const spent = figures.page[part]
+    expect(spent?.ranges ?? 0, part).toBeLessThan(DELETED_PAGE[part].ranges)
+    expect(spent?.rows ?? 0, part).toBeLessThan(DELETED_PAGE[part].rows)
+    expect(spent?.bytes ?? 0, part).toBeLessThan(DELETED_PAGE[part].bytes)
+  }
+}
+
+/** `count` top-level projects, led by `topLead` when given, the first
+ * `liveTops` live and the rest archived, each with three sub-projects in
+ * its own state (two under the last live and the last archived one), led
+ * by `subLead` when given. With 234 and 67 that is 200 live and 500
+ * archived sub-projects under 67 live and 167 archived top-level projects.
+ * Inserts them and answers the top-level projects, the live sub-projects
+ * and how many sub-projects there are. */
+async function catalogue(
+  t: T,
+  f: OrgFixture,
+  a: { count: number; liveTops: number; topLead?: string; subLead?: string },
+) {
+  const tops: ProjectRow[] = []
+  const live: ProjectRow[] = []
+  const rows: ProjectRow[] = []
+  for (let i = 0; i < a.count; i++) {
+    const archived = i >= a.liveTops
+    const top = projectRow(f, { type: 'meta', lead_id: a.topLead, archived })
+    tops.push(top)
+    rows.push(top)
+    const n = i === a.liveTops - 1 || i === a.count - 1 ? 2 : 3
+    for (let s = 0; s < n; s++) {
+      const sub = projectRow(f, {
+        type: 'project',
+        parent_id: top.id,
+        lead_id: a.subLead,
+        archived,
+      })
+      rows.push(sub)
+      if (!archived) live.push(sub)
+    }
+  }
+  await insertProjects(t, rows)
+  return { tops, live, subs: rows.length - tops.length }
 }
 
 describe('the page at the design size', () => {
@@ -325,39 +367,24 @@ describe('the page at the design size', () => {
     expect(scanned.figures).toMatchObject({ entries: 25, next: true, missing: null })
   })
 
-  it('reads for a lead of 200 live and 500 archived sub-projects, three a project, with a task item in each live one', async () => {
+  it('reads for a lead of 234 top-level projects with 200 live and 500 archived sub-projects, three a project, with a task item in each live one', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const lead = await member(t, f)
-    const tops: ProjectRow[] = []
-    const live: ProjectRow[] = []
-    const rows: ProjectRow[] = []
-    // 67 live projects with 200 live sub-projects, 167 archived ones with 500
-    for (let i = 0; i < 234; i++) {
-      const archived = i >= 67
-      const top = projectRow(f, { type: 'meta', lead_id: lead.id, archived })
-      tops.push(top)
-      rows.push(top)
-      const n = i === 66 || i === 233 ? 2 : 3
-      for (let s = 0; s < n; s++) {
-        const sub = projectRow(f, { type: 'project', parent_id: top.id, archived })
-        rows.push(sub)
-        if (!archived) live.push(sub)
-      }
-    }
+    const { tops, live, subs } = await catalogue(t, f, {
+      count: 234,
+      liveTops: 67,
+      topLead: lead.id,
+    })
     expect(live).toHaveLength(200)
-    expect(rows.length - tops.length).toBe(700)
-    await insertProjects(t, rows)
-    for (const [i, sub] of live.entries()) {
-      const top = sub.parent_id ?? ''
-      await plantTaskItem(t, f, sub, top, f.admin, START + i * 1000)
-    }
+    expect(subs).toBe(700)
+    for (const [i, sub] of live.entries())
+      await plantTaskItem(t, f, sub, sub.parent_id ?? '', f.admin, START + i * 1000)
     const scope = { org_id: f.org.id, all: true as const }
+    // the project part's 236 ranges and the task part's 935 fit one page
     const first = await readPage(t, lead, { scope })
-    record('a lead of 700 sub-projects browsing All, the first page', first.figures)
-    // the project part leaves too little of the finding share to open
-    // the task part's 935 ranges beside it, so the next page does
-    expect(first.figures).toMatchObject({ entries: 0, next: true, missing: null })
+    record('a lead of 234 top-level projects browsing All, the first page', first.figures)
+    expect(first.figures).toMatchObject({ entries: 25, next: true, missing: null })
     const second = await readPage(t, lead, { scope, cursor: first.page.next_cursor ?? '' })
     record('the same, the second page', second.figures)
     expect(second.figures).toMatchObject({ entries: 25, next: true, missing: null })
@@ -367,8 +394,54 @@ describe('the page at the design size', () => {
     const search = await readPage(t, lead, { scope, search: 'calibrate' })
     record('the same, searching a word every task holds', search.figures)
     expect(search.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
-    // the page merges at most DELETED_PAGE.sources ranges for the lead
+    // the browse merges its own deletes and the 234 top-level projects
     expect(DELETED_PAGE.sources).toBeGreaterThan(1 + tops.length)
+  })
+
+  it('reads for a member who leads 200 live and 500 archived sub-projects one by one, three a project, with an assigned task item in each live one', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const lead = await member(t, f)
+    // the same catalogue, each top-level project led by the admin and each
+    // sub-project by the member, so each sub-project is a range of its own
+    const { live, subs } = await catalogue(t, f, {
+      count: 234,
+      liveTops: 67,
+      topLead: f.admin.id,
+      subLead: lead.id,
+    })
+    expect(live).toHaveLength(200)
+    expect(subs).toBe(700)
+    for (const [i, sub] of live.entries())
+      await plantTaskItem(t, f, sub, sub.parent_id ?? '', f.admin, START + i * 1000, lead.id)
+    const scope = { org_id: f.org.id, all: true as const }
+    // 701 ordered ranges, past the 256 sources allowed before 5 November,
+    // and 700 cross-project ranges, past the 1,024 find allowed then
+    const first = await readPage(t, lead, { scope })
+    record(
+      'a member leading 700 sub-projects one by one browsing All, the first page',
+      first.figures,
+    )
+    expect(first.page.too_wide).toBeUndefined()
+    expect(first.figures).toMatchObject({ entries: 25, next: true, missing: null })
+    const second = await readPage(t, lead, { scope, cursor: first.page.next_cursor ?? '' })
+    record('the same, the second page', second.figures)
+    expect(second.figures).toMatchObject({ entries: 25, next: true, missing: null })
+    const search = await readPage(t, lead, { scope, search: 'calibrate' })
+    record('the same, searching a word every task holds', search.figures)
+    expect(search.page.too_wide).toBeUndefined()
+    expect(search.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
+    const assigned = await readPage(t, lead, { scope, assignee: lead.id })
+    record('the same, the assignee filter', assigned.figures)
+    expect(assigned.page.too_wide).toBeUndefined()
+    expect(assigned.figures).toMatchObject({ entries: 25, next: true, missing: null })
+    const next = await readPage(t, lead, {
+      scope,
+      assignee: lead.id,
+      cursor: assigned.page.next_cursor ?? '',
+    })
+    record('the same, the assignee filter, the second page', next.figures)
+    expect(next.figures).toMatchObject({ entries: 25, next: true, missing: null })
   })
 
   it('reads for a person in 5 teams that share 20 sub-projects each, with 30 of their own deletes', async () => {

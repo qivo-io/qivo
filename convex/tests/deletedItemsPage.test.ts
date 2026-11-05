@@ -923,7 +923,7 @@ describe('stops', () => {
     })
   })
 
-  it('answers too_wide past the lowered sources for anyone but an admin, whose page reads the organization instead', async () => {
+  it('answers too_wide past the lowered sources for anyone but an admin, whose page past the lowered adminSources reads the organization instead', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -960,10 +960,10 @@ describe('stops', () => {
       too_wide: true,
     })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
-    Object.assign(DELETED_PAGE, { sources: 1 })
+    Object.assign(DELETED_PAGE, { sources: 1, adminSources: 1 })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
     // a search past the lowered searches reads the whole organization
-    Object.assign(DELETED_PAGE, { sources: 256, searches: 1 })
+    Object.assign(DELETED_PAGE, { sources: DEFAULT_PAGE.sources, searches: 1 })
     const found = await page(t, f.user, { scope, search: 'spring' })
     expect(found.entries.map((e) => e.item_id)).toEqual(items)
     expect(found.missing).toBe('matches')

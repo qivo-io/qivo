@@ -100,20 +100,26 @@ type Profile = Doc<'profiles'>
 /**
  * What one page reads and answers. `rows` entries a page.
  *
- * `sources` bounds the ranges one seat's browse or assignee scan merges.
- * For anyone but an admin it counts the ordered ranges: their own deletes,
- * and one for each project in the scope that they lead, or whose top-level
- * project they lead, and that the range of no top-level project in the
- * scope covers. That is each such top-level project, and each sub-project
- * whose top-level project they do not lead or the scope leaves out, live
- * and archived alike. The assignee scan reads both kinds in each of these
- * ranges, so it counts each once, as the browse does. Past the bound they
- * get too_wide. For an
- * admin's scope of some projects it counts the ordered and the
- * cross-project ranges together (taskPlan, searchPlan), and past it the
- * admin reads the organization's range of the kind and keeps the scope in
- * code. `searches` search queries one call plans, past which the seat's
- * search reads its organization through one query and judges every
+ * `sources` bounds the ordered ranges the browse or the assignee scan of
+ * anyone but an admin merges for one seat: their own deletes, and one for
+ * each project in the scope that they lead, or whose top-level project
+ * they lead, and that the range of no top-level project in the scope
+ * covers. That is each such top-level project, and each sub-project whose
+ * top-level project they do not lead or the scope leaves out, live and
+ * archived alike. The assignee scan reads both kinds in each of these
+ * ranges, so it counts each once, as the browse does. The bound is the
+ * design size's sum for one person (coordinator, 2026-11-05): the 200 live
+ * and 500 archived sub-projects one person may read, each led one by one,
+ * the organization's 200 live and 300 archived top-level projects, each
+ * led, and their own deletes, 1,201 ranges. Inside it they browse,
+ * filter by assignee and search; past it they get too_wide, and a scope of
+ * fewer projects serves them. `adminSources` bounds the ranges an
+ * admin's scope of some projects opens, the ordered and the cross-project
+ * ranges together (taskPlan, searchPlan). Past it the admin reads the
+ * organization's range of the kind and keeps the scope in code, and
+ * searches the organization in one query, which leaves the search's room
+ * to its results. `searches` search queries one call plans, past which the
+ * seat's search reads its organization through one query and judges every
  * candidate. `candidates` results one search query reads at most, below
  * the 1,024 one Convex search query can scan, and `results` the results
  * the call's search queries read together, split into equal allowances
@@ -126,11 +132,19 @@ type Profile = Doc<'profiles'>
  * of the page's entries (answerOf), and the reads authedQuery makes for
  * the login.
  * `find` is the share of `call` the ranges that find items may spend:
- * 6 MiB, 12,000 documents and 1,024 ranges, which leaves about 4 MiB,
- * 8,000 documents and 1,536 ranges for sights and rows, which read mostly
- * ranges. `gather` is the part of `call` a page's task search keeps for
- * itself, so a page that lists project entries first leaves the search the
- * same room as a page that starts with it, and every page gathers the same
+ * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges are the page's own
+ * bound, set by the widest browse inside the design size: a member who
+ * leads the 700 sub-projects one by one opens a range for their own
+ * deletes, for each sub-project and for its cross-project rows, and the
+ * range of the stored rows that name them as lead, which with the project
+ * entries before them is 1,403 ranges on the first page. That leaves about
+ * 4 MiB, 8,000 documents and 960 ranges for sights and for judging items,
+ * which reads mostly what the seat's sight holds. A page that cannot open
+ * every source inside `find` reads what it opened and says
+ * `missing: 'reads'`.
+ * `gather` is the part of `call` a page's task search keeps for itself, so
+ * a page that lists project entries first leaves the search the same room
+ * as a page that starts with it, and every page gathers the same
  * candidates. Every search result counts as an index range, as Convex
  * fetches each by id. A mutable object, so tests can lower it; replace
  * `call`, `find` and `gather` whole rather than change their fields.
@@ -145,36 +159,29 @@ type Profile = Doc<'profiles'>
  * allowance, and says `matches`; its lead's search 234 ranges and 0.22
  * MiB. A sub-project item of 300 tasks: the same search 269 ranges and
  * 0.21 MiB, an admin's assignee page 12 ranges and 39 documents, a lead's
- * scan 27 and 42. A lead of 234 top-level projects with 200 live and 500
- * archived sub-projects under them: a browse opens 235 ordered and 700
- * cross-project ranges, 935 of the 1,024 `find` allows, so a page that
- * read the project entries first ends with next_cursor at the task
- * entries, and the next page reads 942 ranges, 1,030 documents and 0.41
- * MiB for its 25 entries; its search, past `searches`, reads the
- * organization in one query, 845 ranges and 0.80 MiB. The sight of a seat
- * beside the catalogue of 2,000 projects reads 2,010 documents and 0.70
- * MiB, beside 1,000 people 1,011 and 0.32 MiB, and for a person whose
- * team shares 200 projects 416 and 0.11 MiB.
- * `sources` holds that lead's 235 ordered ranges.
- *
- * too_wide refuses shapes inside the design size. A member who leads more
- * than 255 projects in the scope that are not under a top-level project
- * they lead there, live and archived together, gets too_wide for that
- * scope: 256 of the organization's 200 live and 300 archived top-level
- * projects, or 256 of the 200 live and 500 archived sub-projects one
- * person may read, each led one by one. A scope of fewer projects serves
- * them. A larger `sources` alone would not serve the sub-project shape:
- * 700 sub-projects led one by one need 701 ordered and 700 cross-project
- * ranges, past the 1,024 of `find`.
+ * scan 24 and 42. A lead of 234 top-level projects with 200 live and 500
+ * archived sub-projects under them: a browse's first page opens 236
+ * ranges for the project entries and 935 for the task entries, and reads
+ * 1,178 ranges, 1,030 documents and 0.41 MiB for its 25 entries, the next
+ * page 942 ranges and 0.40 MiB; its search, past `searches`, reads the
+ * organization in one query, 845 ranges and 0.80 MiB. A member who leads
+ * the same 700 sub-projects one by one: a browse's first page reads 1,410
+ * ranges, 1,146 documents and 0.53 MiB, the next page 1,408 ranges and
+ * 0.51 MiB, an assignee page 1,434 ranges and 0.55 MiB, and the search,
+ * past `searches`, 611 ranges and 0.85 MiB. The sight of a seat beside
+ * the catalogue of 2,000 projects reads 2,010 documents and 0.70 MiB,
+ * beside 1,000 people 1,011 and 0.32 MiB, and for a person whose team
+ * shares 200 projects 416 and 0.11 MiB.
  */
 export const DELETED_PAGE = {
   rows: 25,
-  sources: 256,
+  sources: 1_201,
+  adminSources: 256,
   searches: 96,
   candidates: 256,
   results: 512,
   call: { bytes: 10 * 1024 * 1024, rows: 20_000, ranges: 2_560 },
-  find: { bytes: 6 * 1024 * 1024, rows: 12_000, ranges: 1_024 },
+  find: { bytes: 6 * 1024 * 1024, rows: 12_000, ranges: 1_600 },
   gather: { bytes: 4 * 1024 * 1024, rows: 8_000, ranges: 1_536 },
 }
 
@@ -610,7 +617,8 @@ function projectPlan(run: Run, seat: Seat, scope: Scoped | null): Plan | 'too_wi
   if (seat.admin) {
     let ordered: Opener<Item>[]
     if (a.deletedBy !== undefined) ordered = [deleterRange(org, a.deletedBy, 'project')]
-    else if (all || scope.tops.size > DELETED_PAGE.sources) ordered = [kindRange(org, 'project')]
+    else if (all || scope.tops.size > DELETED_PAGE.adminSources)
+      ordered = [kindRange(org, 'project')]
     else ordered = [...scope.tops].map((top) => parentRange(org, top, 'project'))
     return { ordered, cross: [], storedLead: false, keeps }
   }
@@ -653,7 +661,7 @@ function taskPlan(run: Run, seat: Seat, scope: Scoped, projects = false): Plan |
         cross.push(p.id)
       }
     }
-    if (ordered.length + cross.length > DELETED_PAGE.sources) return wide
+    if (ordered.length + cross.length > DELETED_PAGE.adminSources) return wide
     return { ordered, cross, storedLead: false, keeps }
   }
   const kind = projects ? undefined : 'task'
@@ -1102,8 +1110,8 @@ const WHOLE: SearchPlan = { queries: [{}], crossItems: [] }
  * source, wherever the task sits. The cross-project items the browse finds
  * through subtasks, whose roots no query holds, are read whole instead
  * (crossItems), as an item holds at most LIMITS.subtasks.max + 1 tasks.
- * Past DELETED_PAGE.sources for an admin, or DELETED_PAGE.searches for
- * anyone, the seat searches its organization whole (WHOLE).
+ * Past DELETED_PAGE.adminSources for an admin, or DELETED_PAGE.searches
+ * for anyone, the seat searches its organization whole (WHOLE).
  */
 async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPlan> {
   const { a } = run
@@ -1125,7 +1133,7 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
       for (const sub of seat.sight.projects.values()) if (sub.parent_id === p.id) cross.push(sub.id)
     }
     // past the browse's bounds the browse reads the organization's range too
-    if (parents.size + projects.size + cross.length > DELETED_PAGE.sources) return WHOLE
+    if (parents.size + projects.size + cross.length > DELETED_PAGE.adminSources) return WHOLE
   } else {
     const inScope = (p: Doc<'projects'>) => scope.all || scope.ids.has(p.id)
     for (const p of seat.sight.projects.values()) {
