@@ -30,6 +30,8 @@ import {
   parseArgs,
   RATE_BUDGET,
   REGROUP_WAIT,
+  RELATION_EXPECTED,
+  RELATION_STEP,
   REMOVAL_EXPECTED,
   REMOVAL_STEP,
   REST_BODY_FIELDS,
@@ -118,6 +120,16 @@ describe('staging check REST contract', () => {
     })
     // a number the server's ref grammar reads, which no organization reaches
     expect(Number(TASK_LINK_UNKNOWN.ref.slice(3))).toBeLessThanOrEqual(2147483647)
+  })
+  it("checks the relation pickers in the picker's own words", () => {
+    const picker = readFileSync(
+      new URL('../src/panels/RelationPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(RELATION_STEP).toBe('ui/relation-pickers')
+    for (const text of Object.values(RELATION_EXPECTED)) expect(picker).toContain(text)
+    for (const mark of ['data-picker-row', 'data-picker-all', 'data-picker-current'])
+      expect(picker).toContain(mark)
   })
   it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
     const table = readFileSync(
