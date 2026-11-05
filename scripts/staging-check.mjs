@@ -59,7 +59,15 @@
  * whose figures, sentence and lists must count exactly those two, then
  * opens its project's Overview, whose health table (overview.health) must
  * hold that sub-project's row with those two tasks' figures, and opens the
- * sub-project's Board from the row (ui/overview). It makes a label with
+ * sub-project's Board from the row (ui/overview). It records the frames the
+ * page sends on its sync socket and opens its project's Board and a fixture
+ * task's address in fresh loads, neither of which may subscribe the
+ * workspace's task windows (workspace.tasks), then the Roadmap, which must
+ * subscribe them and show the task's row (ui/tasks-on-demand), so the
+ * deployment's app loads every task only for a page that needs them. The
+ * relation pickers step waits for each window's Link task and Add subtask
+ * to turn on, which they do once the window's own read of its task has
+ * answered, since a task address loads no task window. It makes a label with
  * its run tag over REST and puts it on a fixture task, opens Settings ›
  * Labels on the deployment's live batches (labels.settingsPage), finds the
  * label by search with its count of active tasks, renames it in place and
@@ -4075,6 +4083,87 @@ async function relationPickersCheck() {
   })
 }
 
+/** The step that checks over the socket that the app loads tasks on demand
+ *  (tasksOnDemandCheck). */
+export const ON_DEMAND_STEP = 'ui/tasks-on-demand'
+
+/** The query of the workspace's task windows, which the app subscribes only
+ *  once a page that needs every task asks for them (src/store/liveParts.ts). */
+export const TASK_WINDOWS_QUERY = 'workspace:tasks'
+
+/** Whether a frame `text` the page sent on its sync socket subscribes the
+ *  query `udfPath`: a ModifyQuerySet with an Add of it. Any other frame,
+ *  also one that is no JSON, does not. */
+export function addsQuery(text, udfPath) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return false
+  }
+  return (
+    message?.type === 'ModifyQuerySet' &&
+    Array.isArray(message.modifications) &&
+    message.modifications.some((m) => m?.type === 'Add' && m.udfPath === udfPath)
+  )
+}
+
+/** The app loads tasks on demand, over the deployment's socket: a fresh
+ *  load of the run project's Board by its address, as ui/board reads it,
+ *  reaches its ok state without subscribing a task window
+ *  (TASK_WINDOWS_QUERY), a fresh load of run.t0's address shows its title
+ *  without one, and the Roadmap, opened from the view switch, subscribes
+ *  them and shows run.t0's row once every task has loaded (an unscheduled
+ *  To Do task has one). It reads only, and leaves the saved view on the
+ *  Board for the steps after it. It runs before the run archives M. */
+async function tasksOnDemandCheck() {
+  const { M } = run.projects
+  await check(ON_DEMAND_STEP, async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    // the frames each fresh load sends on its sync socket
+    let sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      const fresh = async (url) => {
+        sent = []
+        await app.goto(url, { waitUntil: 'domcontentloaded' })
+      }
+      const taskWindows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
+      await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`)
+      await app
+        .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+        .waitFor({ timeout: 60_000 })
+      eq(taskWindows(), 0, 'the Board subscribed task windows')
+      await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`)
+      const title = app.locator('[role="dialog"] [data-task-title]')
+      await title.waitFor({ timeout: 60_000 })
+      expect(
+        await until(async () => ((await title.textContent()) ?? '').trim() === run.t0.title),
+        `the window of ${run.t0.key} does not show its title`,
+      )
+      eq(taskWindows(), 0, 'a task address subscribed task windows')
+      // the window closes, and the Roadmap asks for every task
+      await app.keyboard.press('Escape')
+      await title.waitFor({ state: 'detached', timeout: 10_000 })
+      const view = (name) =>
+        app.locator('[data-view-switch]').getByRole('radio', { name, exact: true })
+      await view('Roadmap').click()
+      expect(await until(async () => taskWindows() > 0, 60_000), 'the Roadmap did not ask')
+      await app
+        .locator('[data-roadmap-task-open]')
+        .filter({ hasText: run.t0.title })
+        .first()
+        .waitFor({ timeout: 120_000 })
+      const asked = taskWindows()
+      await view('Board').click()
+      return `opened the Board and ${run.t0.key} without task windows, and the Roadmap with ${asked} of them`
+    } finally {
+      app.off('websocket', record)
+    }
+  })
+}
+
 /** What the Overview of the run's own sub-project shows once the
  *  deployment answered (overviewCheck): its two tasks, one To do and due
  *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
@@ -6052,6 +6141,9 @@ async function main() {
   await relationPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
+  // the Board and a task address without task windows, then the Roadmap
+  // with them, while the project is active
+  await tasksOnDemandCheck()
   // Settings › Labels with a label of its own on a fixture task
   await settingsLabelsCheck()
   // the removal window and its Reassign picker on a sub-project of its own

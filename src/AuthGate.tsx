@@ -301,7 +301,7 @@ export function AuthGate() {
             if (attempt === loadAttempt.current) setAppearanceAccount(accountId)
           },
           knownSession,
-          // the task the address names, which the first stage reads, so
+          // the task the address names, read with the first parts, so
           // its window shows with the first paint
           { address: addressedTask(location.pathname, location.hash) },
         ),

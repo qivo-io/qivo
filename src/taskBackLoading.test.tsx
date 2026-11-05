@@ -10,8 +10,8 @@ import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 
-/* Back or Forward to a task's address while a large workspace still loads
-   its tasks in stages (store/liveParts.ts), on App and the real store: the
+/* Back or Forward to a task's address while every task loads
+   (store/liveParts.ts), on App and the real store: the
    task window opens the task the workspace does not hold by a reference
    (lib/taskReference.ts), which the store reads from the server, the
    address keeps naming it, and the task opens once its answer or the
@@ -233,7 +233,7 @@ async function bootLoading(
       next.delivered_at = '2026-09-15T09:00:00.000Z'
       publish(next)
     })
-  return { store, org: location.pathname.split('/')[2], change }
+  return { store, org: location.pathname.split('/')[2], change, snap }
 }
 
 /** Makes the project at board/p/1 top-level, so the sidebar lists it, adds
@@ -422,7 +422,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await back(address)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
-    // deleted meanwhile, which the staged load shows only with the last tasks
+    // deleted meanwhile, which the load shows only with every task
     await change((snap) => {
       snap.projects = snap.projects.filter((project) => project.num !== 1)
     })
@@ -527,7 +527,7 @@ describe("Back to another organization's task still to arrive", { timeout: 30_00
 })
 
 describe('Back to a task during the first load', { timeout: 30_000 }, () => {
-  it('holds its address when the load began in stages, then opens the task', async () => {
+  it('holds its address while every task loads, then opens the task', async () => {
     const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
     const address = `/app/${store.P.org.slug}/inbox/tasks/qn-2`
     expect(location.pathname).toBe(address)
@@ -579,9 +579,36 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
   })
 })
 
-describe('Settings while tasks load', { timeout: 30_000 }, () => {
+describe.each([
+  ['while every task loads', true],
+  ['in a session that never asked for every task', false],
+])('Settings %s', { timeout: 30_000 }, (_session, asked) => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = asked
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+    // a page of Settings asks for no task, and sends no write on a path
+    // that needs every task
+    if (!asked && settingsStore) {
+      expect(settingsStore.P.taskLoad()).toEqual({ state: 'not_asked' })
+      expect(settingsStore.__layerProbe?.asks()).toEqual([])
+      expect(settingsStore.__layerProbe?.faults()).toEqual([])
+    }
+    settingsStore = null
+  })
+  let settingsStore: typeof import('./store/planner') | null = null
+  /* Boots as bootLoading does, keeping the store for the check above. */
+  const bootSettings = async (shape?: (snap: Snapshot) => void) => {
+    const booted = await bootLoading(true, undefined, shape)
+    settingsStore = booted.store
+    return booted
+  }
+
   it('opens Teams, a team, Projects and a project at once, and a removal there asks the server', async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       const home = snap.orgs[0].id
       snap.projects[0].type = 'meta'
       snap.profiles.push({
@@ -663,7 +690,7 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
   })
 
   it("opens Labels at once with the server's counts, though the task that carries a label is still to arrive", async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       snap.labels.push({
         id: 'soak',
         org_id: snap.orgs[0].id,
@@ -688,7 +715,7 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
   })
 
   it('opens Archived tasks at once, with the projects the person leads in its picker', async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       secondProject(snap)
       // the navigation reads judge the admin by ordinary access, so the
       // person leads both projects to see them listed
@@ -713,6 +740,63 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
       'Second project',
       'Task creation fixture',
     ])
+  })
+})
+
+describe('Back and Forward in a session that never asked for every task', {
+  timeout: 30_000,
+}, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  it('opens a task from its own read on Back, and again on Forward, with no ask', async () => {
+    const { store, org, snap } = await bootLoading()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const row = snap.issues.find((issue) => issue.id === 'fd000000-b')
+    if (!row) throw new Error('no soak test')
+    const okAnswer = {
+      state: 'ok',
+      task: { ...row, has_subtasks: false },
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    }
+    /* Answers every read of the soak test, by its number or its uuid. */
+    const answerReads = () =>
+      act(async () => {
+        for (const read of reads)
+          if (read.args.ref === 'QN-2' || read.args.ref === row.id) read.next(okAnswer)
+      })
+    const title = () => document.querySelector('[data-task-title]')?.textContent
+    const board = `/app/${org}/board/all`
+    const address = `/app/${org}/board/tasks/qn-2`
+    await back(board)
+    await back(address)
+    // the window reads the task by its number, as no task is held
+    expect(reads.map((read) => read.args)).toContainEqual({ org_id: store.P.org.id, ref: 'QN-2' })
+    await answerReads()
+    await waitFor(() => title() === 'Run the soak test', "the task's window")
+    await answerReads()
+    expect(location.pathname).toBe(address)
+    // Back to the Board closes it, and Forward opens it again from its read
+    await back(board)
+    expect(title()).toBeUndefined()
+    await back(address)
+    await answerReads()
+    await waitFor(() => title() === 'Run the soak test', "the task's window again")
+    expect(location.pathname).toBe(address)
+    expect(store.__layerProbe?.asks()).toEqual([])
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.P.handleOf(row.id)).toBeNull()
+    expect(store.__layerProbe?.faults()).toEqual([])
   })
 })
 

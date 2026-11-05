@@ -546,9 +546,9 @@ function MobileTaskBoard({
   const count = groups.reduce((sum, group) => sum + group.tasks.length, 0)
   // a scope across every project, with none to show (components/NoProjects)
   const noProjects = info.wide && info.metas.length === 0
-  // the list waits while the Board's answer, or before it the workspace,
-  // still brings tasks; an answer's rows are all there
-  const waiting = view.busy || (view.state !== 'ok' && P.stillLoading() !== null)
+  // the list waits while the Board's answer is on its way; an answer's rows
+  // are all there
+  const waiting = view.busy
   // Focus stays on a task's row when a change moves it to another section.
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
@@ -560,7 +560,8 @@ function MobileTaskBoard({
 
   /* A list of more than SYNC_LIMIT tasks mounts the rows of its first
      screen at once and the rest in slices, section by section. The counts
-     come from the first render of a scope and status choice. */
+     come from the first render of a scope and status choice with rows to
+     show, not the loading frame, which has none. */
   const [scheduler] = useState(createMountScheduler)
   useMountGuards(scheduler)
   useLayoutEffect(() => scheduler.setRoot(listRef.current), [scheduler])
@@ -576,8 +577,13 @@ function MobileTaskBoard({
     )
   }
   const eagerKey = `${info.id}:${selectedStatus}:${filters.focus}`
-  const [eager, setEager] = useState(() => ({ key: eagerKey, counts: firstScreen() }))
-  if (eager.key !== eagerKey) setEager({ key: eagerKey, counts: firstScreen() })
+  const [eager, setEager] = useState(() => ({
+    key: eagerKey,
+    frame: view.frame,
+    counts: firstScreen(),
+  }))
+  if (eager.key !== eagerKey || (eager.frame && !view.frame))
+    setEager({ key: eagerKey, frame: view.frame, counts: firstScreen() })
   const initialOf = (status: string) =>
     count <= SYNC_LIMIT
       ? Number.POSITIVE_INFINITY
@@ -705,11 +711,6 @@ function MobileTaskBoard({
               initial={initialOf(group.id)}
               scheduler={scheduler}
               label={pendingRows}
-              // tasks still arriving land among the rows (DeferredList hold),
-              // while the store's own result shows during a staged load; the
-              // answer's rows are all there, also while the list waits for
-              // a model or the answer's next run, and hold no slice back
-              hold={view.provisional && P.stillLoading() !== null}
             />
           </div>
         </section>
@@ -724,17 +725,18 @@ function MobileTaskBoard({
         <div className="mobile-task-empty" data-empty-state>
           <Icon name="board" size={24} />
           <h2 data-empty-state-title>{waiting ? 'Loading tasks…' : 'No tasks here'}</h2>
-          <p>
-            {waiting
-              ? 'Tasks are still arriving.'
-              : noProjects
+          {/* the frame says only that it loads: no task is arriving */}
+          {!waiting && (
+            <p>
+              {noProjects
                 ? noProjectsHint()
                 : activeFilters || selectedStatus !== 'all'
                   ? 'Try another status or adjust your filters.'
                   : info.mine
                     ? 'Tasks assigned to you will appear here.'
                     : 'Create a task to get started.'}
-          </p>
+            </p>
+          )}
           {noProjects && P.canCreateProject() && (
             <Button onClick={() => actions.newProject({ kind: 'program' })}>
               <Icon name="plus" size={16} /> New project

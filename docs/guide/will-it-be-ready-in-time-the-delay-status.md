@@ -55,11 +55,13 @@ due date.
 - **Roadmap** colors bars, unplanned markers, edge badges and due-date lines.
   Hover a due-date line for its explanation.
 - **Board** shows **Slipping** or **Delayed** above the card. The due-date
-  tooltip also explains projected misses. For a task your browser has not
-  loaded yet, Qivo reads the owner's other work from the server, so its
-  delay shows while tasks still load; where that work cannot be read, the
-  card says **Delay unknown**. Tasks your browser has already loaded show
-  their delay once loading finishes.
+  tooltip also explains projected misses. Qivo reads the owner's other work
+  from the server for the Board's cards, so their delay shows without
+  loading every task; where that work cannot be read, the card says
+  **Delay unknown**. Once every task has loaded for a page that needs them,
+  as the Roadmap does, the cards of the tasks you have loaded take their
+  delay from your browser, and a task you created while they loaded shows
+  its delay once loading finishes.
 - **Task window** shows **Currently delayed** or **Delayed** beside Due.
   Hover for the projected finish week. A missed or projected-to-miss deadline
   outlines Due in red. While tasks still load, or for a task that has not

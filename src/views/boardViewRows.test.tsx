@@ -93,6 +93,8 @@ async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = fa
     },
     { phone },
   )
+  // the workspace holds every task it has, which leaves out far
+  await board.ask()
   board.server.edit = (answer) =>
     answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
   await board.render(root)
@@ -183,6 +185,32 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(writes().map((w) => w.patch)).toEqual([{ status: 'review' }])
     expect(board.P.viewTask('board:desktop', 'far')?.status).toBe('review')
     expect(cell('review')?.contains(board.card('far'))).toBe(true)
+  })
+
+  it('drops a card of a session that never asked, marked as a write on the answer’s task', async () => {
+    // the app's state: no task held, every card the answer's row
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 'a', 'todo', 1), {
+        ...taskRow(snap, 'b', 'todo', 2),
+        assignee_id: undefined,
+      })
+    })
+    await board.render(root)
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+    board.probe?.faults()
+    board.probe?.answerMarks()
+    await drop(board, 'a', 'review')
+    // an owner change on the card too, from its row
+    const b = board.card('b')?.dataset.card ?? ''
+    await act(async () => void board.P.updateIssue(b, { assignee: board.snapshot.profiles[0].id }))
+    expect(writes().map((w) => w.patch)).toEqual([
+      { status: 'review' },
+      { assignee_id: board.snapshot.profiles[0].id },
+    ])
+    // the view write's mark lets both through the guard, with no ask
+    expect(board.probe?.answerMarks()).toEqual(['issues:update', 'issues:update'])
+    expect(board.probe?.faults()).toEqual([])
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 
   it("changes its owner from the owner picker, with the roster's check", async () => {
@@ -329,7 +357,9 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
             parents: [...answer.parents, parent],
           }
         : answer
-    const loading = vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.5)
+    // y is held, and a load of every task is on its way
+    await board.ask()
+    const loading = vi.spyOn(board.P, 'tasksArriving').mockReturnValue(true)
     await board.render(root)
     await board.answer()
     const state = () => document.querySelector<HTMLElement>('[data-board-root]')?.dataset.boardState
@@ -338,8 +368,8 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     // the card shows, and the Board does not say it is complete
     expect(board.card('y')).not.toBeNull()
     expect(state()).toBe('loading')
-    // once the workspace has loaded, it would hold x too
-    loading.mockReturnValue(null)
+    // once every task has loaded, the workspace would hold x too
+    loading.mockReturnValue(false)
     await board.answer()
     expect(state()).toBe('ok')
   })

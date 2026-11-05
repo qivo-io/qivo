@@ -689,6 +689,11 @@ export async function runDemoSmoke(env = process.env) {
     const replacement = await ready(pageA)
     assert.notEqual(replacement.authUserId, ownerA.authUserId)
     assert.notEqual(replacement.orgId, ownerA.orgId)
+    // tasks load on demand, so the fresh store holds none until it asks:
+    // ask for every task of the replacement workspace before checking that
+    // visitor A's task is not among them
+    await pageA.evaluate(() => window.PLANNER.askTasks('script'))
+    await pageA.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
     assert.equal(
       await pageA.evaluate(
         (title) => window.PLANNER.issues.some((task) => task.title === title),

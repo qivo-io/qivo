@@ -86,6 +86,11 @@
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
+//   done                 the share of the default shape's tasks in Done, from
+//                        0 to 1, spread over the numbers; by default a sixth
+//   titles               the length of the default shape's task titles in
+//                        characters, padded with ordinary words; by default
+//                        about 40
 //   shape=varied         a Board-shaped mix instead (variedTask): every
 //                        status, a parent for every 25 tasks, due dates,
 //                        paused, long-titled and unowned tasks
@@ -208,6 +213,10 @@ const peopleCount = Math.max(2, option('people', 50))
 const hiddenCount = option('hidden', 4)
 const programCount = Math.max(1, option('programs', 1))
 const subprojectCount = Math.max(1, option('subprojects', 10))
+// the default shape's share of Done tasks and title length, or null for
+// its own mix
+const doneShare = parameters.has('done') ? Math.min(1, Math.max(0, option('done', 0))) : null
+const titleLength = parameters.has('titles') ? Math.max(1, option('titles', 40)) : null
 const forcedBoard = parameters.get('board') ?? undefined
 /* The Overview's forced states (the `overview` parameter), as the
    stand-in's `force` takes them. */
@@ -453,10 +462,33 @@ const parentOf = (n) => {
   const at = n % 10
   return at > 5 && at <= 5 + subtasksPerBlock ? id('4', n - at + 5) : undefined
 }
+/* The open statuses a task takes where the `done` parameter sets the share
+   of Done tasks. */
+const OPEN_STATUSES = STATUSES.filter((status) => status !== 'done')
+/** Whether task `n` is Done under the `done` parameter: the golden ratio's
+    steps spread the share over the numbers, so every block of tasks holds
+    about it. */
+const doneAt = (n, share) => (n * 0.6180339887498949) % 1 < share
+/* The words a title the `titles` parameter sets is padded with. */
+const TITLE_WORDS = ' for the next release of the sensor board and its enclosure'
+/** The title of task `n`, `titleLength` characters long where the
+    parameter sets it. */
+const titleOf = (n) => {
+  const title = `Testbed ${n % 2 ? 'firmware signed' : 'signed firmware'} task ${n + 1}`
+  if (titleLength === null) return title
+  let long = title
+  while (long.length < titleLength) long += TITLE_WORDS
+  return long.slice(0, titleLength).trimEnd()
+}
 /** Task `n`, visible or not, in `project`, with every optional field a
     working task tends to have. */
 const taskRow = (n, uid, project, parent) => {
-  const status = STATUSES[n % STATUSES.length]
+  const status =
+    doneShare === null
+      ? STATUSES[n % STATUSES.length]
+      : doneAt(n, doneShare)
+        ? 'done'
+        : OPEN_STATUSES[n % OPEN_STATUSES.length]
   const owner = profiles[n % peopleCount].id
   const reviewer = profiles[(n + 1) % peopleCount].id
   const length = Math.round(descriptionLength * (0.2 + 1.6 * random()))
@@ -465,7 +497,7 @@ const taskRow = (n, uid, project, parent) => {
     org_id: org,
     project_id: project.id,
     num: n + 1,
-    title: `Testbed ${n % 2 ? 'firmware signed' : 'signed firmware'} task ${n + 1}`,
+    title: titleOf(n),
     description: length ? prose(length) : '',
     status,
     priority: ['urgent', 'high', 'medium', 'low'][n % 4],

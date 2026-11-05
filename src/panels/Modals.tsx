@@ -795,8 +795,9 @@ const familyWait = (it: IssueVM) =>
    its own read, else the workspace's task `issueId`. What the move takes
    along and who would lose access come from its family (P.familyOf),
    read on every render, so a family that turns unknown while the window
-   is open, as when the task arrives in the workspace during a staged load
-   with no answer to serve it, shows the reason and refuses the move. */
+   is open, as when the task arrives in the workspace with every task
+   while no answer serves its family, shows the reason and refuses the
+   move. */
 function MoveIssueModal({
   issueId,
   task,

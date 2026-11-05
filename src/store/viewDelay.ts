@@ -1,6 +1,7 @@
 /* The delay of a task the workspace cannot judge, a task only a view's
-   answer brings (store/viewRows.ts) and a task the task window shows from
-   its own read or while tasks still load (store/planner.ts P.windowDelay),
+   answer brings (store/viewRows.ts), which before an ask for every task is
+   every task a view shows, and a task the task window shows from its own
+   read or holds before every task is held (store/planner.ts P.windowDelay),
    judged from the task and its owner's load from the owner-load cache
    (store/ownerLoadCache.ts), by the rules the task index judges the
    workspace's tasks with (store/taskIndex.ts judge). Both go through one

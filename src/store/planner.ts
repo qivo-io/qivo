@@ -148,6 +148,7 @@ import {
   SIDE_NAMES,
   type SideName,
   type SideNews,
+  TASKS,
 } from './liveParts'
 import {
   baseOfKey,
@@ -650,8 +651,8 @@ export type LinkedTaskVM = RelatedTaskVM & { type: string; linkHeld: boolean }
     (lib/taskSections.ts SectionState), its rows (none while loading or
     unavailable; those delivered before a failure), whether the list is
     whole, whether an answer arrived for the task, and where the list
-    comes from. Until its answer arrives, a section of a complete workspace
-    (P.stillLoading() null) lists what the workspace holds, as the window
+    comes from. Until its answer arrives, a section of a workspace that
+    holds every task (P.tasksHeld()) lists what the workspace holds, as the window
     did before the sections had their own reads (`source` 'workspace'), so
     a task opened offline or before its answers still shows its lists. */
 export type SectionVM<R> = {
@@ -896,17 +897,35 @@ function orgOfTask(uuid: string): string | undefined {
   return uuid === watchedComments ? (watchedOrg ?? undefined) : undefined
 }
 
-/* Whether the watched task is one whose create is on its way: the rows
-   show it and the last snapshot delivery does not hold it, or the store
-   knows no organization for it. Such a task gets an empty, complete thread,
-   history and lists until a delivery holds it (subscribeWaitingThread). */
-function watchedCreating(): boolean {
-  const t = watchedComments
-  return !!t && !serverTask(t) && (rows.issues.has(t) || !watchedOrg)
+/* The tasks this store created that the server took, by uuid, with their
+   organization. Until a delivery holds such a task, as while every task
+   loads, when no delivery holds any (askTasks), its window reads its
+   thread and its lists from the server all the same, so its Move and
+   Archive or delete wait only for its own answer (P.familyOf). */
+const tookCreates = new Map<string, string>()
+
+/* Notes that the server took the create of task `uuid` in organization
+   `org` (tookCreates), from P.addIssue, P.createParent or P.createLinked,
+   and has a window watching it read its thread and lists at once. */
+function tookCreate(uuid: string, org: string) {
+  tookCreates.set(uuid, org)
+  if (watchedComments === uuid) repaint({ thread: true, sections: true })
 }
 
-/* Subscribes to the watched thread once the snapshot holds its task, for a
-   task watched while its create was on its way (watchComments), and with
+/* Whether the watched task is one whose create is on its way: the rows
+   show it, the last snapshot delivery does not hold it and the server has
+   not taken its create yet (tookCreates), or the store knows no
+   organization for it. Such a task gets an empty, complete thread, history
+   and lists until a delivery holds it or the server takes the create
+   (subscribeWaitingThread). */
+function watchedCreating(): boolean {
+  const t = watchedComments
+  return !!t && !serverTask(t) && !tookCreates.has(t) && (rows.issues.has(t) || !watchedOrg)
+}
+
+/* Subscribes to the watched thread once the snapshot holds its task or the
+   server took its create (tookCreates), for a task watched while its
+   create was on its way (watchComments), and with
    the kept organization (watchedOrg) for a task the workspace does not
    hold. Asking earlier for a task whose create is on its way would refuse
    with not_found, which the server logs as an error, and so would asking
@@ -918,7 +937,9 @@ function subscribeWaitingThread() {
   const t = watchedComments
   if (!t || threadWatched || watchedGone()) return
   const row = serverTask(t)
+  const took = tookCreates.get(t)
   if (row) subscribeThread(t, row.org_id)
+  else if (took) subscribeThread(t, took)
   else if (watchedOrg && !rows.issues.has(t)) subscribeThread(t, watchedOrg)
 }
 
@@ -1103,7 +1124,8 @@ function watchedGone(): boolean {
    stops and drops its answer, while a re-init of the parts (stopParts)
    keeps the answers until the new subscriptions deliver. A task whose
    create is on its way gets complete, empty lists (CREATING) until a
-   delivery holds it, also when a window shows its sections again. It runs
+   delivery holds it or the server took its create (tookCreates), also when
+   a window shows its sections again. It runs
    as the sections build (rebuildSections), after the thread (syncThread),
    so whether the workspace holds the task is the rows' word in the same
    repaint. Answers whether an answer changed. */
@@ -1248,6 +1270,10 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
     if (side === 'task') taskDelivered(watched.task)
   }
   if (side === 'task') refFromTaskSide(watched, news)
+  // Move and Archive or delete of a task the workspace holds read its
+  // family from this answer until every task is held (P.familyOf), also
+  // where its lists show the same as before, as for the person's new task
+  if (side === 'task' && rows.issues.has(watched.task) && !tasksAll) familyNews = true
   return true
 }
 
@@ -1858,8 +1884,8 @@ function attachmentSection(t: string, answer: SectionAnswers['attachments']) {
   }
 }
 
-/* Task `it`'s sections as the workspace holds them, for a complete
-   workspace (P.stillLoading() null) before their answers arrive: its
+/* Task `it`'s sections as the workspace holds them, for a workspace that
+   holds every task (P.tasksHeld()) before their answers arrive: its
    painted subtasks, links and files, as whole lists, with the states
    `states` gives each (a failed read stays failed beside the rows). An
    answer that agrees shows the same rows, so it takes over unseen. */
@@ -1902,8 +1928,10 @@ function workspaceSections(
 }
 
 /* The watched task's sections now, or null while no window shows them.
-   A section without an answer yet lists what a complete workspace holds
-   (workspaceSections), and says it loads while the workspace does. */
+   A section without an answer yet lists what a workspace that holds every
+   task holds (workspaceSections), and says it loads otherwise, since a
+   task the person created while tasks load has lists that only its
+   answers bring. */
 function sectionsNow(): TaskSectionsVM | null {
   const t = watchedComments
   if (!t || sectionOwners.size === 0) return null
@@ -1913,7 +1941,7 @@ function sectionsNow(): TaskSectionsVM | null {
       : { issue: t, task: null, links: null, attachments: null }
   // the workspace's lists, built only while one section has no answer
   const waits = answers.task === null || answers.links === null || answers.attachments === null
-  const handle = waits && stillLoading === null ? uuidToKey.get(t) : undefined
+  const handle = waits && tasksAll ? uuidToKey.get(t) : undefined
   const held = handle === undefined ? undefined : PLANNER.issueById[handle]
   const fallback =
     held &&
@@ -2071,8 +2099,33 @@ let lastDeliveryAt: string | null = null
    an archived task's messages read in the background, so they usually come
    back read, but a restore that beats that step brings them back unread.
    Either way, keep them from looking like new arrivals when the next
-   snapshot admits the restored task (and any ancestors restored with it). */
-const pendingRestoreIssueIds = new Set<string>()
+   snapshot admits the restored task (and any ancestors restored with it).
+   Each restore maps to whether the server accepted it (unarchiveIssue).
+   Before every task is held, a task only shows that it came back when it
+   brings a message, and one with no message for the restorer never does,
+   so a restore also ends with the delivery that holds it, whether or not
+   its task's messages came. Convex hands that delivery to the listeners
+   before the write resolves, so a restore accepted after such a delivery
+   ends at once, and one accepted before any ends with the next one the
+   store takes (tookInbox). A restore left waiting would swallow the
+   task's next real notification. */
+const pendingRestores = new Map<string, boolean>()
+/* The live deliveries the store took the Inbox from: every complete one
+   and, while every task loads, every partial one, which holds every part
+   but the tasks (tookInbox). */
+let inboxDeliveries = 0
+/* Whether the newest workspace report was such a delivery, as
+   snapshotCurrent is for a complete one. */
+let inboxCurrent = false
+
+/** Counts a live delivery the store took the Inbox from, after its arrival
+    bookkeeping (noteDelivery), and ends each restore the server accepted
+    before it, which it holds. */
+function tookInbox() {
+  inboxDeliveries++
+  inboxCurrent = true
+  for (const [id, accepted] of pendingRestores) if (accepted) pendingRestores.delete(id)
+}
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused), with the task each belongs to
    and, for a task the workspace does not hold, its organization. The
@@ -2453,7 +2506,8 @@ function shownWorkspace() {
       P.projects,
       P.archivedProjects,
       P.projectTags,
-      P.issues,
+      // the list P.issues shows, read past its test-build guard
+      tasks.issues(),
       P.milestones,
       P.comments,
       P.threadEvents,
@@ -2474,6 +2528,9 @@ function shownWorkspace() {
       P.CURRENT_USER,
       P.contextVersion,
       stillLoading,
+      tasksAll,
+      asked,
+      taskTrouble,
       // Roadmap's undo (P.roadmapUndo), which a task edit's answer ends
       roadmapVisit?.count ?? 0,
       !roadmapVisit || roadmapVisit.disabled,
@@ -2692,6 +2749,8 @@ function repaint(parts: {
       loadEnds = false
       stillLoading = null
     }
+    // the rows painted now hold every task once the delivery did
+    tasksAll = tasksNext
     rebuild()
     // which tasks the views' rows stand in for follows the workspace
     const models = reshapeViews()
@@ -2730,8 +2789,9 @@ function repaint(parts: {
   // what the window's delay reads besides its task shows with the
   // comments, an owner load or a group's facts from a view's row
   if (windowSpanMoved()) windowLoadNews = true
-  if (windowLoadNews) {
+  if (windowLoadNews || familyNews) {
     windowLoadNews = false
+    familyNews = false
     emit('comments')
   }
 }
@@ -3112,7 +3172,9 @@ function releaseViewRows(slot: ViewSlot) {
  * Registers view `slot`'s read of `query` for the arguments `key`, JSON in
  * a fixed key order, or none with null, as the view's effect runs: the
  * rules of P.watchBoard, which every view read follows. Another query or
- * other arguments, or a new `attempt`, drop what the read held.
+ * other arguments, or a new `attempt`, drop what the read held. Other
+ * arguments that only narrow what the held answer shows (`narrows`) keep
+ * that answer and its rows until the answer for `key` replaces them.
  */
 function watchView(
   slot: ViewSlot,
@@ -3121,6 +3183,7 @@ function watchView(
   attempt = 0,
   owner = 0,
   delays = true,
+  narrows = false,
 ) {
   let read = viewReads.get(slot)
   if (read && key === null && read.owner !== owner) return
@@ -3151,7 +3214,8 @@ function watchView(
   const retry = attempt !== read.attempt
   read.attempt = attempt
   const other =
-    key !== null && (read.query !== query || (read.held !== null && read.held.key !== key))
+    key !== null &&
+    (read.query !== query || (read.held !== null && read.held.key !== key && !narrows))
   if (key !== null && (retry || other)) {
     read.stop?.()
     read.stop = null
@@ -3320,7 +3384,8 @@ function windowDelayIssue(it: IssueVM) {
   )
   const facts = {
     datesKnown: detail ? detail.datesKnown : true,
-    loading: !detail && stillLoading !== null,
+    // a held group's subtasks may be still to come until every task is
+    loading: !detail && !tasksAll,
   }
   return { issue, facts }
 }
@@ -3333,6 +3398,9 @@ let windowLoad: string | null = null
 /* Whether an owner load the window reads changed since the comments last
    showed (the cache's `changed` repaints only the views). */
 let windowLoadNews = false
+/* Whether the task answer that a held task's family comes from before every
+   task is held changed since the comments last showed (receiveSection). */
+let familyNews = false
 /* Whether syncWindowLoad registers now, so the cache's news is its own. */
 let windowLoadSyncing = false
 
@@ -3340,7 +3408,8 @@ let windowLoadSyncing = false
     window's own key (WINDOW_LOADS, one owner, one card) while a window
     shows the task's details, the task's project shows delays, the
     workspace cannot judge the task (a task the window shows from its own
-    read, or a held one while tasks still load) and its verdict reads the
+    read, or a held one, such as the person's new task, before every task
+    is held) and its verdict reads the
     owner's load (issueNeedsLoad), and releases it otherwise. The desktop
     Inbox pane shows no details and registers nothing. A guest's or
     Viewer's calls are counted per view key, so the window's one owner
@@ -3351,7 +3420,7 @@ function syncWindowLoad() {
   const held = handle === undefined ? undefined : PLANNER.issueById[handle]
   const detail = t ? PLANNER.taskDetail(t) : null
   const shown = held ?? (detail?.answered === 'ok' ? (detail.view ?? undefined) : undefined)
-  const judged = !!shown && (!held || stillLoading !== null)
+  const judged = !!shown && (!held || !tasksAll)
   const need =
     judged && sectionOwners.size > 0 && shown && PLANNER.tracksDelay(shown)
       ? windowDelayIssue(shown).issue
@@ -3530,12 +3599,13 @@ function moveHandles(moved: ReadonlyMap<string, string>) {
 type WriteAbout = {
   task?: string
   background?: boolean
-  /** a write whose task or other end comes from a server answer rather
+  /** a write whose task, or other end, comes from a server answer rather
       than the workspace: the task the window shows from its own answer
       (answerTaskOf), a task a relation picker offered or a row of the
       window's Subtasks or Linked tasks that the workspace does not hold,
-      so a later guard against writes that need every task can tell it
-      apart by this mark */
+      or a task only a view's answer holds (updateViewTask), so the guard
+      against task writes before every task is asked lets it through
+      (guardTaskWrite); a create needs the ask all the same */
   answer?: true
 }
 
@@ -3623,6 +3693,44 @@ function sendAwaited<M extends FunctionReference<'mutation'>>(
   )
 }
 
+/* The task writes beside api.issues.*: they need a task the workspace
+   holds as much (guardTaskWrite). */
+const TASK_WRITES = new Set([
+  getFunctionName(api.labels.toggle),
+  getFunctionName(api.files.attach),
+  getFunctionName(api.files.removeAttachment),
+  getFunctionName(api.roadmap.change),
+  getFunctionName(api.roadmap.undo),
+])
+/* The creates, which paint a new task into the workspace's rows: only a
+   store that asked for every task keeps it on screen, since a delivery
+   without tasks drops the saved workspace layers. */
+const TASK_CREATES = new Set([
+  getFunctionName(api.issues.create),
+  getFunctionName(api.issues.createParent),
+  getFunctionName(api.issues.createLinked),
+])
+/* A restore paints nothing in the workspace and needs no task. */
+const RESTORE = getFunctionName(api.issues.unarchive)
+
+/** Test builds only (STRICT_LAYERS): a task write that goes out before the
+    store asked for every task is a fault, unless a server answer names
+    its task (WriteAbout.answer) or it is a restore. A create needs the ask
+    whatever its mark. So a write from a held task's path, which only a
+    store that holds every task can take, never goes out while tasks are
+    not asked. */
+function guardTaskWrite(name: string, about: WriteAbout | undefined) {
+  if (asked) return
+  const create = TASK_CREATES.has(name)
+  if (!create && !name.startsWith('issues:') && !TASK_WRITES.has(name)) return
+  if (!create && (about?.answer || name === RESTORE)) return
+  reportFault(
+    new Error(
+      `${name} went out before the store asked for every task: ${create ? 'a create asks first (P.askTasks)' : 'mark a write whose task comes from a server answer (WriteAbout.answer)'}`,
+    ),
+  )
+}
+
 /* send() and sendAwaited(): the pause first, then the layer and its paint,
    then dispatch, and one handler per answer (settleAccepted, settleRefused)
    that ends in `answer` or `refusal`, so a write costs its caller one step
@@ -3637,6 +3745,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   refusal: (error: unknown) => T,
 ): Promise<T> {
   const name = getFunctionName(m)
+  if (STRICT_LAYERS) guardTaskWrite(name, o.about)
   const batch = target !== 'none' && 'id' in target ? target : null
   const paused =
     DEMO_MODE && demoDisposed
@@ -4016,6 +4125,17 @@ export const __layerProbe = STRICT_LAYERS
       },
       /** The faults the store caught and reported, and forgets them. */
       faults: () => faults.splice(0),
+      /** Runs the guard against task writes before the ask
+          (guardTaskWrite) on write `name` with mark `about`, as start()
+          does, and answers the faults it reported. */
+      guardWrite(name: string, about?: WriteAbout) {
+        const before = faults.length
+        guardTaskWrite(name, about)
+        return faults.splice(before)
+      },
+      /** The reasons P.askTasks was called with since the last call, in
+          order. */
+      asks: () => askReasons.splice(0),
       /** Changes a task's title outside any layer and emits. The title
           changes in a painted copy, since the server's rows are frozen
           (writeServerRow). */
@@ -4041,6 +4161,21 @@ export const __layerProbe = STRICT_LAYERS
         const task = tasks.issues()[0]
         if (task) task.title = `${task.title}!`
         rebuild()
+      },
+      /** Paints task rows `issues` into the workspace's rows with no write
+          and no ask, the state of a store that holds some tasks before it
+          holds every task, which the app never reaches while not asked,
+          since a create asks first. The layer stays until the store
+          resets. */
+      plantTasks(issues: readonly Row<'issues'>[]) {
+        const paints = issues.map((row) => newTaskPaint(row, { num: null }))
+        const layer = layers.open('probe', {
+          workspace: () => {
+            for (const paint of paints) paint()
+          },
+        })
+        layers.send(layer, deliveryCounters())
+        showPaint(layer.view)
       },
       /** Paints a layer that reads the clock, which emits. */
       paintClock() {
@@ -5266,10 +5401,10 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
   return (await Promise.all(waits)).some(Boolean)
 }
 
-/** Shows the portraits that became ready or failed. While a large workspace
-    still loads its tasks, they wait for its next paint, which rebuilds from
-    them: each one would repaint the whole workspace while the parts still
-    to come need the page (store/liveParts.ts). */
+/** Shows the portraits that became ready or failed. While the task windows
+    an ask subscribed are on their way, they wait for the next paint, which
+    rebuilds from them: each one would repaint the whole workspace while
+    the parts still to come need the page (store/liveParts.ts). */
 function showPortraits() {
   if (stillLoading !== null) return
   rebuild()
@@ -5671,13 +5806,13 @@ function rebuild(now = new Date(), full = false) {
   if (HOME_ORG !== lastHome) lastMoves = withUnheldMoves(lastMoves, lastHome)
   lastHome = HOME_ORG
   lastMoves = refMoves(lastMoves)
-  // the delays a staged load held back (delayOf) show now: the tasks that
-  // show one paint again
-  if (rebuiltLoading && stillLoading === null) {
+  // the delays held back until every task is held (delayOf) show now: the
+  // tasks that show one paint again
+  if (rebuiltLoading && tasksAll) {
     const shown = [...tasks.delays].filter(([, d]) => DELAY_COLORS[d.status] !== null)
     tasks.renew(shown.map(([uuid]) => uuid))
   }
-  rebuiltLoading = stillLoading !== null
+  rebuiltLoading = !tasksAll
   P.issues = tasks.issues()
   P.issueById = tasks.issueById()
   if (STRICT_LAYERS && !unchecked) checkTasks(sources)
@@ -5861,35 +5996,37 @@ function taskSources(): TaskSources {
   }
 }
 
-/* Whether the last rebuild was while a large workspace still loaded. */
+/* Whether the last rebuild was before the workspace held every task. */
 let rebuiltLoading = false
 /* The Sets the last rebuild took for hiddenSubtaskParents and
    hiddenParentTasks. */
 let lastSubtaskParents: ReadonlySet<string> = new Set()
 let lastHiddenParents: ReadonlySet<string> = new Set()
 
-/** The tasks with subtasks this person is not shown. While a large
-    workspace loads (stillLoading), they include every task the server
-    says has subtasks (has_subtasks), as theirs may be still to come: a
+/** The tasks with subtasks this person is not shown. Until the workspace
+    holds every task (tasksAll), they include every held task the server
+    says has subtasks (has_subtasks), as theirs may be still to come, such
+    as the subtasks of a new task's parent the workspace does not hold: a
     parent never shows as a leaf, nor a group as done or with known
     progress, before every task arrived. A Set is kept while it holds the
     same tasks. */
 function subtaskParentsNow(): ReadonlySet<string> {
   const hidden = rows.hiddenSubtaskParents
-  if (stillLoading === null) return hidden
+  if (tasksAll) return hidden
   const next = new Set(hidden)
   for (const [uuid, row] of rows.issues) if (row.has_subtasks) next.add(uuid)
   return sameData(next, lastSubtaskParents) ? lastSubtaskParents : next
 }
 
-/** The tasks whose parent this person is not shown. While a large
-    workspace loads, they include every subtask whose parent is still to
-    come (parentLoading): such a task never reads as one without a parent,
-    nor is offered as a parent. A Set is kept while it holds the same
-    tasks. */
+/** The tasks whose parent this person is not shown. Until the workspace
+    holds every task, they include every held subtask whose parent is still
+    to come (parentLoading), such as the person's new subtask of a task
+    only a window's answer brings: such a task never reads as one without a
+    parent, nor is offered as a parent. A Set is kept while it holds the
+    same tasks. */
 function hiddenParentsNow(): ReadonlySet<string> {
   const hidden = rows.hiddenParentTasks
-  if (stillLoading === null) return hidden
+  if (tasksAll) return hidden
   const next = new Set(hidden)
   for (const [uuid, row] of rows.issues)
     if (row.parent_id && !rows.issues.has(row.parent_id)) next.add(uuid)
@@ -6478,6 +6615,8 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   }
   return send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
     over: overOf('issues', row, Object.keys(wire)),
+    // the task comes from a view's answer, not the workspace
+    about: { task: uuid, answer: true },
   })
 }
 
@@ -8192,69 +8331,39 @@ export const PLANNER = {
       milestones: meta ? PLANNER.milestones.filter((x) => x.project === meta.id) : [],
     }
   },
-  /* The issues a scope holds — its sub-projects', narrowed by the scope's own
-     `only` predicate. The three views each derived this by hand off
-     `subIdSet`, which is exactly the line "My view" had to reach. Typed on
-     the two fields it reads, so any scopeInfo() result passes. */
-  scopedIssues: (info: { subIdSet: Set<string>; only: ((it: IssueVM) => boolean) | null }) =>
-    PLANNER.issues.filter((i) => info.subIdSet.has(i.project) && (!info.only || info.only(i))),
-  /* completion over an arbitrary set of sub-projects — the scope-shaped
-     counterpart of projectProgress (one sub-project) and programProgress (one
-     project), which both remain for callers that name a single row. `only`
-     narrows it to the scope's own issues (My view counts mine, not everyone's). */
-  progressIn: (subIds: string[], only?: ((it: IssueVM) => boolean) | null) => {
-    const set = new Set(subIds)
-    const list = PLANNER.issues.filter(
-      (i) => set.has(i.project) && !PLANNER.isGroup(i) && (!only || only(i)),
-    )
-    const total = list.length
-    const done = list.filter((i) => i.status === 'done').length
-    return { total, done, pct: total ? Math.round((done / total) * 100) : 0 }
+  /** The tasks a scope holds, its sub-projects', narrowed by the scope's
+      own `only` predicate, from the workspace's tasks. Only a reader that
+      waits for every task calls it: the phone Roadmap (views/MobileRoadmap),
+      which mounts behind the Roadmap's ask, and the parity oracles and
+      tests of a store that holds every task. It goes with
+      t3/limits-roadmap-view. Typed on the two fields it reads, so any
+      scopeInfo() result passes. */
+  scopedIssues: (info: { subIdSet: Set<string>; only: ((it: IssueVM) => boolean) | null }) => {
+    if (STRICT_LAYERS) wholeListRead('P.scopedIssues')
+    return tasks
+      .issues()
+      .filter((i) => info.subIdSet.has(i.project) && (!info.only || info.only(i)))
   },
-  /* summed remaining hours of the not-done issues in a set of sub-projects —
-     own hours only, the same rule as projectRemaining (0066) */
-  remainingIn: (subIds: string[], only?: ((it: IssueVM) => boolean) | null) => {
-    const set = new Set(subIds)
-    const sum = PLANNER.issues
-      .filter(
-        (i) =>
-          set.has(i.project) && !PLANNER.isGroup(i) && i.status !== 'done' && (!only || only(i)),
-      )
-      .reduce((s, i) => s + (i.remaining || 0), 0)
-    return Math.round(sum * 10) / 10
-  },
-  /* progressIn for each of `groups`, lists of sub-projects, in one pass
-     over the tasks instead of one per group. Each result is exactly what
-     progressIn returns for that list. */
-  progressByGroups: (groups: string[][], only?: ((it: IssueVM) => boolean) | null) => {
-    const counts = groups.map(() => ({ total: 0, done: 0 }))
-    for (const it of PLANNER.issuesInGroups(groups, only))
-      for (const i of it.groups) {
-        counts[i].total++
-        if (it.issue.status === 'done') counts[i].done++
-      }
-    return counts.map(({ total, done }) => ({
-      total,
-      done,
-      pct: total ? Math.round((done / total) * 100) : 0,
-    }))
-  },
-  /* remainingIn for each of `groups` in one pass, summed in the same order,
-     so each result is exactly what remainingIn returns for that list. */
+  /** The summed remaining hours of the not-done leaf tasks in each of
+      `groups`, lists of sub-projects, in one pass, own hours only (0066),
+      for the Roadmap (views/Roadmap.tsx), which waits for every task, and
+      its oracle. It goes with t3/limits-roadmap-view. */
   remainingByGroups: (groups: string[][], only?: ((it: IssueVM) => boolean) | null) => {
     const sums = groups.map(() => 0)
     for (const it of PLANNER.issuesInGroups(groups, only))
       if (it.issue.status !== 'done') for (const i of it.groups) sums[i] += it.issue.remaining || 0
     return sums.map((sum) => Math.round(sum * 10) / 10)
   },
-  /* The leaf tasks in any of `groups` that `only` keeps, in task order,
-     each with the indexes of the groups whose sub-projects hold it. */
+  /** The leaf tasks in any of `groups` that `only` keeps, in task order,
+      each with the indexes of the groups whose sub-projects hold it, from
+      the workspace's tasks, for a reader that waits for every task. */
   issuesInGroups: function* (groups: string[][], only?: ((it: IssueVM) => boolean) | null) {
+    if (STRICT_LAYERS) wholeListRead('P.issuesInGroups')
     const groupsOf = new Map<string, number[]>()
     groups.forEach((subIds, i) => {
       for (const id of new Set(subIds)) groupsOf.set(id, [...(groupsOf.get(id) ?? []), i])
     })
-    for (const issue of PLANNER.issues) {
+    for (const issue of tasks.issues()) {
       const found = groupsOf.get(issue.project)
       if (found && !PLANNER.isGroup(issue) && (!only || only(issue))) yield { issue, groups: found }
     }
@@ -8918,8 +9027,9 @@ export const PLANNER = {
      as it is", which now covers three cases that all look alike, not tracked,
      done/no-signal, and on track. A token string otherwise, and only for the
      two states that carry pressure: yellow behind, red late. Neither judges
-     while tasks still load, since the load of the owners' tasks still to
-     come is missing. */
+     a task the workspace holds until it holds every task, since the load of
+     the owners' tasks still to come is missing: before an ask it holds
+     none, and during the load only the person's new tasks. */
   delayOf: (x: IssueVM | string): DelayInfo | null => {
     const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
     // a task only a view holds is judged from the owner-load cache, which
@@ -8928,11 +9038,12 @@ export const PLANNER = {
       const verdict = viewDelays.get(it.uuid)
       return verdict && verdict !== DELAY_UNKNOWN ? verdict : null
     }
-    return (stillLoading === null && it && delayMap.get(it.uuid)) || null
+    return (tasksAll && it && delayMap.get(it.uuid)) || null
   },
   /** The task window's delay verdict for `it` where the workspace cannot
-      judge it: for a task the window shows from its own read, and while
-      tasks still load. It reads the owner's load from the owner-load cache
+      judge it: for a task the window shows from its own read, and for a
+      held one, such as the person's new task, until the workspace holds
+      every task. It reads the owner's load from the owner-load cache
       (store/ownerLoadCache.ts), which the store asks for while a window
       shows the task's details (syncWindowLoad), by the Board's rules
       (store/viewDelay.ts judgeDelay), so a window over a Board card shows
@@ -8987,7 +9098,8 @@ export const PLANNER = {
       const d = PLANNER.delayOf(it)
       return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
     }
-    if (stillLoading !== null) return null
+    // a held task waits for every task, as delayOf does
+    if (!tasksAll) return null
     const d = delayMap.get(it.uuid)
     return d ? DELAY_COLORS[d.status] : DELAY_NEUTRAL
   },
@@ -9119,14 +9231,13 @@ export const PLANNER = {
       the workspace's subtasks once every task has loaded, else the whole
       list of leaf subtasks the watched task's own answer holds, neither
       failed nor running again, for a task the window shows from it or one
-      the workspace holds while tasks still load. Null while neither knows
-      them, a list that is not whole or holds a subtask stored before the
-      rule of one level, so both windows say they cannot read every
-      subtask, or wait for every task. */
+      the workspace holds before it holds every task, such as the person's
+      new task. Null while neither knows them, a list that is not whole or
+      holds a subtask stored before the rule of one level, so both windows
+      say they cannot read every subtask, or wait for every task. */
   familyOf: (it: IssueVM): TaskFamily | null => {
     const held = rows.issues.has(it.uuid)
-    if (held && stillLoading === null)
-      return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
+    if (held && tasksAll) return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
     const answer =
       watchedComments === it.uuid && sectionFailure.task === 'none' ? paintedAnswer() : null
     return answer ? answerFamilyOf(it, answer) : null
@@ -9161,14 +9272,24 @@ export const PLANNER = {
       null, as the view's effect runs. The view passes null while its page
       or the tab is hidden: the read stops and keeps its rows, which show
       again, as refreshing, when it asks for the same arguments. Other
-      arguments, or a new `attempt` (Try again), drop what it held. `owner`
-      names the mounted view: a leaving page stays mounted, hidden, until
-      the next one painted (components/KeptView.tsx), so the one that asks
-      last owns the read, and another's null asks nothing. `delays` says
-      whether the view shows its cards' delays, which then read owners'
-      loads (store/ownerLoadCache.ts). */
-  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0, delays = true) =>
-    watchView(slot, BOARD_QUERY, key, attempt, owner, delays),
+      arguments, or a new `attempt` (Try again), drop what it held.
+      Arguments that only narrow the held answer's text filter (`narrows`,
+      views/board/useBoardView.ts narrowsText) keep that answer and its
+      rows until the answer for `key` arrives, so the Board narrows its
+      cards on screen meanwhile. `owner` names the mounted view: a leaving
+      page stays mounted, hidden, until the next one painted
+      (components/KeptView.tsx), so the one that asks last owns the read,
+      and another's null asks nothing. `delays` says whether the view shows
+      its cards' delays, which then read owners' loads
+      (store/ownerLoadCache.ts). */
+  watchBoard: (
+    slot: ViewSlot,
+    key: string | null,
+    attempt = 0,
+    owner = 0,
+    delays = true,
+    narrows = false,
+  ) => watchView(slot, BOARD_QUERY, key, attempt, owner, delays, narrows),
   /** What view `slot`'s read of the Board's answer holds: the arguments'
       key its result answers (null for none), its value or error, whether
       it is the live subscription's on the current connection, and whether
@@ -9295,6 +9416,17 @@ export const PLANNER = {
       opens, as a role change since a search answered can change it. */
   handleNow: (uuid: string, orgId: string, num: number): string =>
     uuidToKey.get(uuid) ?? handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`),
+  /** The handle the views name the task that `open` opens by: a handle as
+      it is, and a reference that names a task's organization, number and
+      uuid (P.openTask) by the handle that task opens by now (P.handleNow),
+      as the Board names a card only its answer brings, so App reveals
+      that card. Any other reference as it is. */
+  handleOfOpen: (open: string): string => {
+    const named = refParts(open)
+    return named?.org && named.uuid && named.num !== undefined
+      ? PLANNER.handleNow(named.uuid, named.org, named.num)
+      : open
+  },
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,
@@ -9302,10 +9434,35 @@ export const PLANNER = {
       because the login's organization is being deleted or deactivated it,
       with when the login may create an organization, otherwise null. */
   seatless: (): Seatless | null => bootSeatless,
-  /** While a large workspace loads in stages, the share of its tasks that
-      arrived, from 0 to 1; null once every task did. Counts, totals and
-      verdicts over many tasks wait for null (store/liveParts.ts). */
-  stillLoading: (): number | null => stillLoading,
+  /** Null once the workspace holds every task, else the share of task
+      windows that answered since the ask, and 0 before one, so a wait that
+      reads it keeps waiting until every task is held. Prefer P.tasksHeld
+      for a reader that asks and P.tasksArriving for one that does not. */
+  stillLoading: (): number | null => (tasksAll ? null : (stillLoading ?? 0)),
+  /** Whether the workspace holds every task the person may see. The
+      readers that ask for every task (P.askTasks) wait for it. */
+  tasksHeld: (): boolean => tasksAll,
+  /** Whether the task windows an ask subscribed are on their way: asked,
+      not all held yet, and not stopped (P.taskLoad). A reader that does not
+      ask waits on it, so its wait never starts in a session that never
+      asks and never outlasts a load. */
+  tasksArriving: (): boolean => stillLoading !== null && !tasksAll && taskTrouble === null,
+  /** Where the load of every task stands, for the note at the bottom, the
+      pages that wait for every task and their Try again. It shows no share:
+      the windows' answers come as one or two large transitions after a
+      small first one. */
+  taskLoad: (): TaskLoad =>
+    tasksAll
+      ? { state: 'all' }
+      : taskTrouble
+        ? { state: 'failed', reason: taskTrouble.reason, retrying: taskTrouble.retrying }
+        : stillLoading !== null
+          ? { state: 'arriving' }
+          : { state: 'not_asked' },
+  /** Asks for every task for `reason`, once per store (askTasks). */
+  askTasks: (reason: AskReason) => askTasks(reason),
+  /** Try again for a stopped task load (retryTasks). */
+  retryTasks: () => retryTasks(),
   /** Task `it`'s subtasks, links and attachment count as the cap checks
       before a write count them: the larger of the workspace's and its whole
       section lists' (capInputs). */
@@ -9315,22 +9472,22 @@ export const PLANNER = {
       workspace does not hold it. */
   relatedTask: (uuid: string): RelatedTaskVM | null => relatedTask(uuid, undefined),
   /** The sections a window on task `uuid` shows: P.sections when they are
-      that task's, else, in a complete workspace, the workspace's own lists
-      of it (workspaceSections), so a window that has just switched to a
-      task, before the store follows it, lists that task's rows rather than
-      another's or none. Null while a large workspace still loads, when the
-      window says its lists load. */
+      that task's, else, in a workspace that holds every task, the
+      workspace's own lists of it (workspaceSections), so a window that has
+      just switched to a task, before the store follows it, lists that
+      task's rows rather than another's or none. Null before the workspace
+      holds every task, when the window says its lists load. */
   sectionsFor: (uuid: string): TaskSectionsVM | null => {
     if (PLANNER.sections?.task === uuid) return PLANNER.sections
-    const handle = stillLoading === null ? uuidToKey.get(uuid) : undefined
+    const handle = tasksAll ? uuidToKey.get(uuid) : undefined
     const it = handle === undefined ? undefined : PLANNER.issueById[handle]
     return it ? workspaceSections(it) : null
   },
-  /** Whether the parent of `x` is a task still to arrive while a large
-      workspace loads (hiddenParentsNow). */
+  /** Whether the parent of held task `x` is a task still to arrive before
+      the workspace holds every task (hiddenParentsNow). */
   parentLoading: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
-    const parent = it && stillLoading !== null ? rows.issues.get(it.uuid)?.parent_id : undefined
+    const parent = it && !tasksAll ? rows.issues.get(it.uuid)?.parent_id : undefined
     return !!parent && !rows.issues.has(parent)
   },
   /** Why Qivo cannot save now, or null (lib/syncStatus). Observe it through
@@ -9391,12 +9548,13 @@ export const PLANNER = {
      own, 0066, and a Done task has no work left, as in every other remaining
      total). Cycle-safe like progressOf. undefined when no unfinished leaf has
      hours entered. Only the parent/sub-issue tree feeds this, and linked
-     issues never count. A group has none while tasks still load. */
+     issues never count. A group has none before the workspace holds every
+     task, since its subtasks may be still to come. */
   remainingOf: (x: IssueVM | string): number | undefined => {
     const it = typeof x === 'string' ? PLANNER.issueById[x] : x
     if (!it) return undefined
     if (!PLANNER.isGroup(it)) return it.remaining
-    if (stillLoading !== null) return undefined
+    if (!tasksAll) return undefined
     let sum = 0
     let any = false
     eachDescendant(it, (child) => {
@@ -9405,30 +9563,6 @@ export const PLANNER = {
       any = true
     })
     return any ? Math.round(sum * 10) / 10 : undefined
-  },
-  projectProgress: (pid: string) => {
-    const list = PLANNER.issues.filter((i) => i.project === pid && !PLANNER.isGroup(i))
-    const total = list.length
-    const done = list.filter((i) => i.status === 'done').length
-    return { total, done, pct: total ? Math.round((done / total) * 100) : 0 }
-  },
-  /* summed remaining hours of a sub-project's not-done issues — own hours
-     only, so a parent (NULL since 0066) never double-counts its children,
-     and a cross-project parent's subtree stays with the projects that
-     actually hold the hours */
-  projectRemaining: (pid: string) => {
-    const sum = PLANNER.issues
-      .filter((i) => i.project === pid && !PLANNER.isGroup(i) && i.status !== 'done')
-      .reduce((s, i) => s + (i.remaining || 0), 0)
-    return Math.round(sum * 10) / 10
-  },
-  programProgress: (mid: string) => {
-    const m = PLANNER.projects.find((p) => p.id === mid)
-    const set = new Set((m?.children || []).filter((id) => PLANNER.canSee(id)))
-    const list = PLANNER.issues.filter((i) => set.has(i.project) && !PLANNER.isGroup(i))
-    const total = list.length
-    const done = list.filter((i) => i.status === 'done').length
-    return { total, done, pct: total ? Math.round((done / total) * 100) : 0 }
   },
 
   loadUI: preferences.load,
@@ -9550,6 +9684,9 @@ export const PLANNER = {
           },
         }
       : { workspace: paint }
+    // the new task paints into the workspace's rows, which only a load of
+    // every task keeps on screen: no delivery without tasks may settle it
+    askTasks('create')
     void send(
       api.issues.create,
       {
@@ -9577,6 +9714,9 @@ export const PLANNER = {
           created.num = result.num
           return view
         },
+        // its window reads its thread and lists from now on, also before a
+        // delivery holds it
+        onOk: () => tookCreate(uuid, row.org_id),
         ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
           toastWriteError(error)
@@ -9891,6 +10031,8 @@ export const PLANNER = {
             hiddenParent: shown.answer.task.has_hidden_parent,
           }
         : undefined
+    // the new parent paints into the workspace's rows (addIssue)
+    askTasks('create')
     return send(
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
@@ -9901,6 +10043,9 @@ export const PLANNER = {
           created.num = answer.parent_num
           return view
         },
+        // the new parent's window reads its thread and lists from now on,
+        // also before a delivery holds it (addIssue)
+        onOk: () => tookCreate(parentId, it.org),
         ...(over ? { over } : {}),
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
@@ -9975,6 +10120,8 @@ export const PLANNER = {
         rows.links.set(link.id, { ...link })
       },
     }
+    // the new task paints into the workspace's rows (addIssue)
+    askTasks('create')
     return send(
       api.issues.createLinked,
       { org_id: it.org, id: it.uuid, new_id: taskId, link_id: link.id, title: task.title, kind },
@@ -9985,6 +10132,9 @@ export const PLANNER = {
           created.num = answer.num
           return view
         },
+        // the new task's window reads its thread and lists from now on,
+        // also before a delivery holds it (addIssue)
+        onOk: () => tookCreate(taskId, it.org),
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
     )
@@ -10176,9 +10326,15 @@ export const PLANNER = {
     orgId?: string,
   ): Promise<boolean> => {
     const org = orgId || orgOfProject(projectId) || HOME_ORG
-    pendingRestoreIssueIds.add(issueUuid)
+    const seen = inboxDeliveries
+    pendingRestores.set(issueUuid, false)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
+      // a delivery taken since the send holds the restore (pendingRestores)
+      if (pendingRestores.has(issueUuid)) {
+        if (inboxCurrent && inboxDeliveries > seen) pendingRestores.delete(issueUuid)
+        else pendingRestores.set(issueUuid, true)
+      }
       // the parent was full (LIMITS.subtasks), or was deleted after this
       // task was archived and came back since
       if (out.left_parent) {
@@ -10192,7 +10348,7 @@ export const PLANNER = {
         )
       }
     } catch (e) {
-      pendingRestoreIssueIds.delete(issueUuid)
+      pendingRestores.delete(issueUuid)
       console.error('[qivo] restore failed:', e)
       toast(restoreErrorText(e))
       return false
@@ -10308,9 +10464,9 @@ export const PLANNER = {
     }
   },
   /** Whether the snapshot holds task `uuid` as an active task, such as an
-      archived one that someone restored. A task it holds is active even
-      while a large workspace still loads; one it lacks then may still be
-      on its way. */
+      archived one that someone restored. A task it holds is active also
+      before it holds every task; one it lacks then may be active all the
+      same, as it holds no task until something asks for every one. */
   isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
   /** Links two tasks the workspace holds, `type` as seen from task `srcId`.
       Resolves whether the server accepted it; false for a link it sent
@@ -10881,7 +11037,8 @@ export const PLANNER = {
     // from its window. A uuid without either loads an empty thread rather
     // than spinning forever, and so does a new task whose create is on its
     // way: it has no comments yet, and its thread subscribes once a
-    // delivery holds the task (subscribeWaitingThread).
+    // delivery holds the task or the server took its create
+    // (subscribeWaitingThread).
     const creating = watchedCreating()
     if (issueUuid && creating) {
       PLANNER.commentsLoaded = true
@@ -13290,14 +13447,26 @@ export const PLANNER = {
    The workspace arrives in live parts (convex/workspace.ts), which the
    registry (store/liveParts.ts) adopts once per Convex transition. Its first
    complete transition settles initStore; every later one that changed a
-   part is the new anchor the rows are built from (owe). A large workspace
-   settles initStore with its first partial transition instead, and shows
-   the task windows that arrived until its first complete one
-   (stillLoading). A part that fails after the first is snapshot trouble
-   (see snapshot health), and so is a later answer with no seat left.
-   Network drops only delay transitions until Convex reconnects and
-   resubscribes. The last workspace stays on screen and shared edits pause
-   until a later complete transition arrives and reaches the screen. */
+   part is the new anchor the rows are built from (owe).
+
+   Tasks load on demand. The workspace holds no task until something that
+   needs every task asks for them (P.askTasks), such as the Roadmap, Team
+   sync, a create or the Inbox's search, and keeps them once asked until
+   the store resets (`asked`). The views show the server's own answers
+   meanwhile. From the ask until every task window answered, the registry's
+   reports are partial and carry no task: they repaint the projects, people
+   and Inbox, hold no write, and move the share loaded (stillLoading), and
+   the store holds only the person's own new tasks. The paint of the
+   complete delivery that ends the load holds every task (tasksAll). A task
+   load that fails stops only that load (taskTrouble): the rest of the tab
+   keeps working, the readers that wait for every task offer Try again
+   (P.retryTasks), and writes made meanwhile show as made until the load
+   ends. A part that fails after the first is snapshot trouble (see
+   snapshot health), and so is a later answer with no seat left, and so is
+   a task window that fails once every task arrived. Network drops only
+   delay transitions until Convex reconnects and resubscribes. The last
+   workspace stays on screen and shared edits pause until a later complete
+   transition arrives and reaches the screen. */
 
 /* Whether the server delivered a workspace, never undone by a later answer
    with no seat. Its rows are staged in the base (store/workspaceBase.ts),
@@ -13310,16 +13479,62 @@ let hasSnapshot = false
    deactivated it (convex/lib/workspaceParts.ts readRoot), so AuthGate says
    so and offers a new organization only when the server allows one. */
 let bootSeatless: Seatless | null = null
-/* While a large workspace loads in stages (store/liveParts.ts), the share of
-   its task windows that arrived, from 0 to 1; null once it is complete. A
-   partial delivery holds no write for certain, since the window a write
-   changed may not have arrived, so it is no live good delivery: writes
-   accepted meanwhile stay saved until the complete one. */
+/* While the task windows an ask subscribed are on their way
+   (store/liveParts.ts), the share of them that answered, from 0 to 1; null
+   before the ask and once every task is held. A partial delivery holds no
+   write for certain, since the window a write changed may not have
+   arrived, so it is no live good delivery: writes accepted meanwhile stay
+   saved until the complete one. No reader shows the share
+   (P.taskLoad). */
 let stillLoading: number | null = null
-/* Whether the complete delivery that ends a staged load waits for its
-   paint, which sets stillLoading to null: until then the rows on screen
-   are the partial ones. */
+/* Whether the complete delivery that ends a task load waits for its
+   paint, which sets stillLoading to null and tasksAll true: until then the
+   rows on screen hold no task but the person's own new ones. */
 let loadEnds = false
+/* Whether this store asked for every task (P.askTasks). Every registry it
+   starts afterwards subscribes the task windows from the start
+   (startParts), after Try again and a new organization's re-init too, and
+   only disposeDemoStore and a reload undo it. */
+let asked = false
+/* Whether the workspace on screen holds every task: set by the boot's first
+   delivery and by the paint of a complete delivery that holds them
+   (tasksNext), so no reader sees it before the rows are rebuilt. The
+   store's checks that read every task held key on it, never on
+   stillLoading, which is null before an ask too. */
+let tasksAll = false
+/* Whether the latest complete delivery holds every task, which its paint
+   shows (tasksAll). */
+let tasksNext = false
+
+/** What asked for every task (P.askTasks): the readers that need every one
+    of them, and the scripts and the benchmark. */
+export type AskReason = 'roadmap' | 'team_sync' | 'create' | 'inbox' | 'script' | 'benchmark'
+
+/** Why a task load stopped while the rest of the workspace stays live:
+    the sentence the readers that wait for every task show beside Try
+    again, since when, and whether Try again runs (one RETRY_GAP_MS window).
+    It is not snapshot trouble, so it pauses no edit. */
+export type TaskTrouble = { reason: string; since: number; retrying: boolean }
+let taskTrouble: TaskTrouble | null = null
+let taskRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Where the load of every task stands (P.taskLoad): not asked, on its way
+    with no share, stopped, or done. */
+export type TaskLoad =
+  | { state: 'not_asked' }
+  | { state: 'arriving' }
+  | { state: 'failed'; reason: string; retrying: boolean }
+  | { state: 'all' }
+
+/* In tests, the reasons P.askTasks was called with, in order, for the
+   not-asked suites (__layerProbe.asks). */
+const askReasons: AskReason[] = []
+
+/** The sentence a stopped task load shows beside Try again, which says
+    that the person's changes show as made until the tasks load; its
+    reason (TaskTrouble) says what stopped it. */
+export const TASKS_FAILED_TEXT =
+  'Tasks did not load. Changes you make show as you made them until they do.'
 /* The live parts of the running store, null before boot and after
    disposal. */
 let parts: LiveParts | null = null
@@ -13425,13 +13640,16 @@ syncStatus.subscribe((ended) => {
    transition brought newer news of. */
 const bootSideNews = new Map<SideName, SideNews>()
 
-/** Starts the workspace's live parts. With `first`, the first transition
-    that completes or fails the workspace settles it (boot); without, every
-    report updates the store (a retry's or re-init's fresh parts). A boot
-    that fails before its first workspace ignores everything after. initStore
-    stops those parts, and a later error must not report trouble behind the
-    load-failed screen, where the pause would refuse the next boot's seat
-    claim. */
+/** Starts the workspace's live parts, with the task windows from the start
+    once this store asked for every task (`asked`, or TASKS.atBoot in
+    tests). With `first`, the first transition that completes or fails the
+    workspace settles it (boot); without, every report updates the store (a
+    retry's or re-init's fresh parts). A boot that waits for the whole
+    workspace takes a stopped task load as a failure, so it ends with a
+    visible one. A boot that fails before its first workspace ignores
+    everything after. initStore stops those parts, and a later error must
+    not report trouble behind the load-failed screen, where the pause would
+    refuse the next boot's seat claim. */
 function startParts(
   stillCurrent: () => boolean,
   first?: {
@@ -13439,7 +13657,7 @@ function startParts(
     reject: (err: unknown) => void
     /** whether the boot waits for the complete workspace, not a partial one */
     whole?: boolean
-    /** the task the boot's address names, read with the first stage */
+    /** the task the boot's address names, read with the first parts */
     address?: AddressedTask
   },
 ): LiveParts {
@@ -13447,6 +13665,10 @@ function startParts(
   let bootFailed = false
   // saves pause offline, and a stalled part is no fault while they do
   const online = () => savePause()?.kind !== 'offline'
+  if (TASKS.atBoot && !asked) {
+    asked = true
+    stillLoading ??= 0
+  }
   return createLiveParts(
     live,
     (news) => {
@@ -13460,26 +13682,39 @@ function startParts(
           const side = news.sides?.[name]
           if (side) bootSideNews.set(name, side)
         }
-        if (ws.state === 'held' || (ws.state === 'partial' && first?.whole)) return
+        if (ws.state === 'held') return
+        // a boot that waits for the whole workspace shows no partial one,
+        // and ends with a failure where the task load stopped
+        const failed =
+          ws.state === 'failed'
+            ? ws.error
+            : ws.state === 'partial' && first?.whole
+              ? ws.tasksFailed
+              : undefined
+        if (failed === undefined && ws.state === 'partial' && first?.whole) return
         settled = true
-        if (ws.state === 'failed') {
+        if (failed !== undefined) {
           bootFailed = true
-          if (DEMO_MODE && isDemoLifecycleRefusal(ws.error)) notifyDemoEnded(ws.error)
-          first?.reject(ws.error)
+          if (DEMO_MODE && isDemoLifecycleRefusal(failed)) notifyDemoEnded(failed)
+          first?.reject(failed)
           return
         }
+        if (ws.state === 'failed') return
         const snap = ws.value && anchor(ws.value)
         hasSnapshot = snap !== null
         bootSeatless = (ws.state === 'complete' && ws.seatless) || null
         // the boot paints this delivery before anything rebuilds
+        tasksAll = tasksNext = ws.state === 'complete' && ws.tasks === 'all'
         stillLoading = snap && ws.state === 'partial' ? ws.loaded : null
         loadEnds = false
+        if (ws.state === 'partial') noteTaskTrouble(ws.tasksFailed)
         if (snap) {
           if (ws.state !== 'partial') {
             snapshotCurrent = true
             snapshotDeliveries++
           }
           noteDelivery(base.stage(snap), snap)
+          tookInbox()
         }
         first?.resolve(snap)
         return
@@ -13496,8 +13731,8 @@ function startParts(
       })
     },
     online,
-    // a workspace once complete shows only a complete one again
-    first ? { whole: first.whole, address: first.address } : { whole: stillLoading === null },
+    // a store that asked for every task keeps asking for them
+    { ask: asked, ...(first?.address ? { address: first.address } : {}) },
   )
 }
 
@@ -13508,21 +13743,30 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // writes accepted meanwhile stay saved until a complete transition.
   if (ws.state === 'held') {
     snapshotCurrent = false
+    inboxCurrent = false
     return
   }
-  // A large workspace still loading shows the task windows that arrived.
-  // A workspace once complete never shrinks to a partial one: fresh parts
-  // after Try again hold it, as a held transition does.
+  // While the task windows an ask subscribed are on their way, the report
+  // holds no task: it repaints the projects, people and Inbox when one of
+  // them changed, else only moves the share, says whether the load
+  // stopped, and holds no write. A workspace that held every task never
+  // shrinks to one without them: fresh parts after Try again hold it, as a
+  // held transition does.
   if (ws.state === 'partial') {
     snapshotCurrent = false
-    if (stillLoading === null) return
+    if (stillLoading === null) {
+      inboxCurrent = false
+      return
+    }
     stillLoading = ws.loaded
+    const troubled = noteTaskTrouble(ws.tasksFailed)
+    subscribeWaitingThread()
     if (ws.changed) {
       const snap = anchor(ws.value)
       noteDelivery(base.stage(snap), snap)
-    }
-    subscribeWaitingThread()
-    owe('workspace')
+      owe('workspace')
+    } else if (troubled) emit()
+    tookInbox()
     return
   }
   if (ws.state === 'failed') {
@@ -13532,6 +13776,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (demoEnded) notifyDemoEnded(ws.error)
     console.error('[qivo] workspace part failed:', ws.error)
     snapshotCurrent = false
+    inboxCurrent = false
     if (!demoEnded) snapshotFailed(ws.error)
     return
   }
@@ -13541,6 +13786,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // recovering delivery not painted yet ends no trouble now.
   if (ws.value === null) {
     snapshotCurrent = false
+    inboxCurrent = false
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
@@ -13550,13 +13796,17 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   hasSnapshot = true
   snapshotCurrent = true
   snapshotDeliveries++
-  // the repaint that paints this delivery ends the load (repaint)
-  const loadedNow = stillLoading !== null
+  // the repaint that paints this delivery ends the load (repaint), and
+  // shows every task held from then on (tasksAll)
+  tasksNext = ws.tasks === 'all'
+  const loadedNow = stillLoading !== null && tasksNext
   if (loadedNow) loadEnds = true
+  if (tasksNext && taskTrouble) endTaskTrouble()
   if (ws.changed) {
     const snap = anchor(ws.value)
     noteDelivery(base.stage(snap), snap)
   } else lastDeliveryAt = new Date(at).toISOString()
+  tookInbox()
   subscribeWaitingThread()
   // a complete transition holds every write accepted before it
   const dropped = layers.dropSaved('workspace')
@@ -13582,8 +13832,73 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   // the parts run again have delivered nothing yet
   snapshotCurrent = false
+  inboxCurrent = false
   if (parts?.retry()) return
   // nothing failed any more, such as a stall: start every part afresh
+  const epoch = storeEpoch
+  stopParts()
+  parts = startParts(() => epoch === storeEpoch && !demoDisposed)
+}
+
+/** Asks for every task, once per store: the registry subscribes every task
+    window (store/liveParts.ts askTasks), and the readers that need every
+    task wait until they are held. Without a running registry, between
+    stopParts and the next startParts, the next one starts with them. A
+    create asks before its send, so no delivery that holds no task can
+    come between its paint and the load's end. In tests it records
+    `reason`. */
+function askTasks(reason: AskReason) {
+  if (STRICT_LAYERS) askReasons.push(reason)
+  if (asked) return
+  asked = true
+  stillLoading = 0
+  parts?.askTasks()
+  emit()
+}
+
+/** Sets the task load's trouble from a partial report's failure, or ends
+    it when the report names none, as when the windows run again after Try
+    again. Answers whether it changed. */
+function noteTaskTrouble(failed: unknown): boolean {
+  if (failed === undefined) {
+    if (!taskTrouble) return false
+    endTaskTrouble()
+    return true
+  }
+  const reason = loadFailureText(failed)
+  if (taskTrouble?.reason === reason) return false
+  if (!taskTrouble) console.error('[qivo] task load failed:', failed)
+  taskTrouble = {
+    reason,
+    since: taskTrouble?.since ?? Date.now(),
+    retrying: taskTrouble?.retrying ?? false,
+  }
+  return true
+}
+
+/** Forgets the task load's trouble without notifying. */
+function endTaskTrouble() {
+  taskTrouble = null
+  if (taskRetryTimer) clearTimeout(taskRetryTimer)
+  taskRetryTimer = null
+}
+
+/** Try again for a stopped task load: runs the task windows that failed or
+    stayed silent again (store/liveParts.ts retryTasks), at most once per
+    RETRY_GAP_MS, or starts every part afresh when none is left to run. The
+    rest of the workspace keeps showing meanwhile. */
+function retryTasks() {
+  const trouble = taskTrouble
+  if (!trouble || trouble.retrying) return
+  taskTrouble = { ...trouble, retrying: true }
+  emit()
+  taskRetryTimer = setTimeout(() => {
+    taskRetryTimer = null
+    if (!taskTrouble?.retrying) return
+    taskTrouble = { ...taskTrouble, retrying: false }
+    emit()
+  }, RETRY_GAP_MS)
+  if (parts?.retryTasks()) return
   const epoch = storeEpoch
   stopParts()
   parts = startParts(() => epoch === storeEpoch && !demoDisposed)
@@ -13647,10 +13962,18 @@ export function disposeDemoStore() {
   watchedSyncOwners = ''
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
-  pendingRestoreIssueIds.clear()
+  pendingRestores.clear()
+  inboxCurrent = false
+  lastMessageTasks = new Set()
+  tookCreates.clear()
   hasSnapshot = false
   stillLoading = null
   loadEnds = false
+  // the next demo asks for its own tasks
+  asked = false
+  tasksAll = false
+  tasksNext = false
+  endTaskTrouble()
   layers.clear()
   for (const read of viewReads.values()) read.stop?.()
   viewReads.clear()
@@ -13719,30 +14042,54 @@ export function disposeDemoStore() {
   emit()
 }
 
+/* The tasks the previous live delivery held messages of (noteDelivery). */
+let lastMessageTasks: ReadonlySet<string> = new Set()
+
+/* How long a message's commit can trail its created_at. A mutation reads
+   the clock when it starts and commits later, so a delivery can carry a
+   delivered_at past a message's created_at and still not hold it. A
+   message made this close before the previous delivery counts as new. */
+const COMMIT_SLACK_MS = 60_000
+
 /* The arrival bookkeeping of live delivery `snap`, once per delivery and
    never on a repaint: the stored messages of tasks that a restore brought
-   back, or that newly entered the working set, raise no desktop
-   notification, and new messages do. `newlyVisibleIssueIds` are the tasks
-   it holds that the previous delivery did not (base.stage), not the tasks
-   the painted rows lacked. */
+   back, or that newly came into view, raise no desktop notification, and
+   new messages do. Once the workspace holds every task, the tasks that
+   newly came into view are `newlyVisibleIssueIds`, the tasks it holds that
+   the previous delivery did not (base.stage), not the tasks the painted
+   rows lacked. Before that no task enters the delivery's rows, so they are
+   the tasks with a message in this delivery and none in the previous one,
+   as when access returns or a task moves back into view, and the Inbox
+   part brings its stored messages back. A message made within
+   COMMIT_SLACK_MS before the previous delivery, but whose commit reached
+   only this one, still counts as new, so a task's first mention notifies;
+   one made earlier than that counts as stored. */
 function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot) {
-  const arrived = [...pendingRestoreIssueIds].filter((id) => newlyVisibleIssueIds.has(id))
+  const byRows = tasksAll
+  const messageTasks = new Set(snap.messages.map((message) => message.issue_id))
+  const newly = byRows
+    ? newlyVisibleIssueIds
+    : new Set([...messageTasks].filter((id) => !lastMessageTasks.has(id)))
+  lastMessageTasks = messageTasks
+  const arrived = [...pendingRestores.keys()].filter((id) => newly.has(id))
   if (arrived.length > 0) {
     /* A child restore can also surface archived ancestors. Suppress the
        restored tasks and the ancestors that entered with them, so their
        historical messages that are still unread do not trigger desktop
        notifications. Every other task that entered with the delivery, such
-       as the rest of a large workspace's tasks arriving in the same
-       delivery, keeps the rule below, so its new messages still notify. */
+       as the rest of the tasks a load brings in the same delivery, keeps
+       the rule below, so its new messages still notify. Before every task
+       is held no ancestor enters, and the rule below covers their stored
+       messages. */
     const parentOf = new Map(snap.issues.map((issue) => [issue.id, issue.parent_id]))
     const restored = new Set<string>()
     for (const id of arrived) {
       for (let at: string | undefined = id; at !== undefined && !restored.has(at); ) {
-        if (!newlyVisibleIssueIds.has(at)) break
+        if (!newly.has(at)) break
         restored.add(at)
-        at = parentOf.get(at) ?? undefined
+        at = byRows ? (parentOf.get(at) ?? undefined) : undefined
       }
-      pendingRestoreIssueIds.delete(id)
+      pendingRestores.delete(id)
     }
     if (announcedMessages !== null) {
       for (const message of snap.messages) {
@@ -13752,12 +14099,14 @@ function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot)
   }
   /* A task also enters the working set when access returns or it moves back
      into view, and its stored messages come with it. Those created before the
-     previous delivery raise no desktop notification; newer ones still do. */
+     previous delivery, less the slack a commit can trail its clock read by,
+     raise no desktop notification; newer ones still do. */
   if (announcedMessages !== null && lastDeliveryAt !== null) {
+    const storedBefore = Date.parse(lastDeliveryAt) - COMMIT_SLACK_MS
     for (const message of snap.messages) {
       if (
-        newlyVisibleIssueIds.has(message.issue_id) &&
-        message.created_at <= lastDeliveryAt &&
+        newly.has(message.issue_id) &&
+        Date.parse(message.created_at) <= storedBefore &&
         !announcedMessages.has(message.id)
       )
         announcedMessages.set(message.id, message.woke_at)
@@ -13821,12 +14170,15 @@ function countInbox() {
 export async function initStore(
   onAuthenticated?: (accountId: string) => void,
   knownSession?: Awaited<ReturnType<typeof authClient.getSession>>,
-  /** `whole` waits for the complete workspace even when a large one could
-      show part of it first, as a new organization's boot does (P.createOrg).
-      `address` is the task the boot's address names under an organization's
-      slug (lib/router.ts addressedTask), which the live parts read with
-      their first stage, so the window shows it with the first paint
-      (store/liveParts.ts). */
+  /** `whole` waits for the complete workspace rather than a partial one, as
+      a new organization's boot does (P.createOrg): a store that asked for
+      every task keeps them on screen until the new workspace arrives with
+      every task, and one that never asked settles on the complete
+      workspace without tasks. A task load that stops during such a boot
+      fails it. `address` is the task the boot's address names under an
+      organization's slug (lib/router.ts addressedTask), which the live
+      parts read with their first parts, so the window shows it with the
+      first paint (store/liveParts.ts). */
   opts?: { whole?: boolean; address?: AddressedTask },
 ): Promise<{ profileId: string; homeOrg: string } | null> {
   stopDayWatch?.()
@@ -13869,6 +14221,7 @@ export async function initStore(
   // the new parts have delivered nothing yet; what shows stays partial, if
   // it is, until their first delivery paints
   snapshotCurrent = false
+  inboxCurrent = false
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {
@@ -13957,8 +14310,9 @@ export async function initStore(
     unconfirmedReport = text
     emit('health')
   })
-  // A large workspace's first part and the views' first render are two
-  // long tasks; a paint between them keeps each frame shorter.
+  // While a load of every task is on its way, the first parts and the
+  // views' first render are two long tasks; a paint between them keeps
+  // each frame shorter.
   if (stillLoading !== null) await afterPaint()
   if (!stillCurrent()) return null
   return { profileId: CURRENT_USER, homeOrg: HOME_ORG }
@@ -13976,6 +14330,35 @@ function afterPaint() {
         resolve()
       }, 0),
     )
+  })
+}
+
+/** Test builds only (STRICT_LAYERS): refuses a read of the whole task list
+    before the workspace holds every task, naming the reader, so a reader
+    that needs every task asks for them and waits (P.askTasks,
+    P.tasksHeld), and one that does not reads its view's own answer. */
+function wholeListRead(what: string) {
+  if (!tasksAll)
+    throw new Error(
+      `${what} was read before every task is held: ask for every task (P.askTasks) and wait for P.tasksHeld(), or read the view's own answer`,
+    )
+}
+
+/* In test builds P.issues is an accessor that refuses a read before every
+   task is held (wholeListRead); rebuild assigns through it. The store's
+   own reads go through the task index (tasks.issues()). */
+if (STRICT_LAYERS) {
+  let shownIssues = PLANNER.issues
+  Object.defineProperty(PLANNER, 'issues', {
+    get() {
+      wholeListRead('P.issues')
+      return shownIssues
+    },
+    set(list: IssueVM[]) {
+      shownIssues = list
+    },
+    enumerable: true,
+    configurable: true,
   })
 }
 

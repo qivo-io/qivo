@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
-import { vi } from 'vitest'
+import { afterEach, expect, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
@@ -46,6 +46,19 @@ const AT = '2026-09-14T08:00:00.000Z'
     under a shard's load on a Boat sandbox. */
 export const BOARD_TEST_TIMEOUT = 20_000
 
+/* The test-build probe of the store the last loadBoard loaded. */
+let lastProbe: { faults(): unknown[] } | null = null
+
+/* After each case of a file that uses loadBoard: the store reported no
+   fault (store/planner.ts reportFault), so no write went out on a path that
+   needs every task before an ask and no paint threw. A case that expects a
+   fault reads it from `probe.faults()`, which forgets it. */
+afterEach(() => {
+  const probe = lastProbe
+  lastProbe = null
+  if (probe) expect(probe.faults()).toEqual([])
+})
+
 /** A task row in the fixture's one project, owned by its one person. */
 export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], num: number): Row {
   return {
@@ -66,16 +79,46 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
   }
 }
 
+/** A top-level project, Plan, over three sub-projects, the fixture's and
+    two more, with `perSub` tasks in each, numbered from 1 across them and
+    To Do unless `statusOf` gives task number n another status: from 101 a
+    sub-project, more cards than one Board mounts at once (SYNC_LIMIT).
+    Keep within the design size: 300 open and 150 Done tasks a sub-project,
+    and 800 open and 200 Done tasks in the project, so at most 266 open
+    tasks a sub-project. The Board shows it with `scope: 'plan'`. */
+export const spread =
+  (perSub: number, statusOf: (num: number) => Row['status'] = () => 'todo') =>
+  (snap: Snapshot) => {
+    const base = snap.projects[0]
+    snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+    Object.assign(base, { parent_id: 'plan', name: 'One' })
+    snap.projects.push(
+      { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
+      { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
+    )
+    let num = 0
+    for (const project of [base.id, 'two', 'three'])
+      for (let n = 0; n < perSub; n++) {
+        num++
+        snap.issues.push({ ...taskRow(snap, `t${num}`, statusOf(num), num), project_id: project })
+      }
+  }
+
 /** Boots a fresh store on the fixture with the tasks `prepare` adds, and
     returns it with the Board and a way to deliver a changed snapshot. The
     Board is drawn in the `metaViz` layout, or as the phone's task list,
-    over the project `scope` (by default the fixture's one project). */
+    over the project `scope` (by default the fixture's one project). The
+    store boots without the workspace's tasks, as the app does, unless
+    `tasks` asks for every task at boot; a case that tests the Board over
+    tasks the workspace holds asks (`ask`). */
 export async function loadBoard(
   network: Network,
   prepare: (snapshot: Snapshot) => void,
-  { metaViz = 'swimlanes', phone = false, scope: scopeId = '' } = {},
+  { metaViz = 'swimlanes', phone = false, scope: scopeId = '', tasks = false } = {},
 ) {
   vi.resetModules()
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = tasks
   const snapshot = plannerFixture()
   prepare(snapshot)
   // the fixture's project as a sub-project, which the Board's query answers,
@@ -217,6 +260,7 @@ export async function loadBoard(
   )
   const store = await import('../store/planner')
   await store.initStore()
+  lastProbe = store.__layerProbe
   sees = (id) => store.P.canSee(id)
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')
@@ -303,6 +347,8 @@ export async function loadBoard(
   }
   return {
     P,
+    /** The store's test-build probe (store/planner.ts __layerProbe). */
+    probe: store.__layerProbe,
     snapshot,
     /** The Board's row for the task stored as `uuid`; the Board names a
         task by its key, also one only the Board's answer brings
@@ -339,6 +385,15 @@ export async function loadBoard(
     consumed,
     /** Answers the Board's open subscriptions now, as after a hold. */
     answer: () => act(async () => answerBoards()),
+    /** Asks for every task, as a page that needs them does, and waits
+        until the workspace holds them. */
+    ask: () =>
+      act(async () => {
+        P.askTasks('script')
+        for (let i = 0; i < 10 && !P.tasksHeld(); i++)
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        if (!P.tasksHeld()) throw new Error('every task did not load')
+      }),
     render: (root: Root, window?: Window) =>
       act(async () => root.render(<Screen window={window} />)),
     /** Renders `view` for the scope in place of the Board. A test imports
@@ -346,6 +401,15 @@ export async function loadBoard(
     renderView: (root: Root, view: (info: ScopeInfo) => ReactNode) =>
       act(async () => root.render(<View view={view} />)),
   }
+}
+
+/** loadBoard, then an ask for every task (`ask`), for the suites whose
+    cases test the Board over tasks the workspace holds: a task window's
+    edits, drags, reveals, focus and the Roadmap. */
+export async function loadBoardWithTasks(...args: Parameters<typeof loadBoard>) {
+  const board = await loadBoard(...args)
+  await board.ask()
+  return board
 }
 
 /* The data of the drag in progress. As in a browser, every event of one

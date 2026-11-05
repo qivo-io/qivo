@@ -3,7 +3,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { loadBoard, taskRow } from './boardFixture.setup'
+import { loadBoard, loadBoardWithTasks, taskRow } from './boardFixture.setup'
 
 /* The phone's task schedule mounts its first screen at once and the rest
    in slices, the Overview's lists show the server's batches with Load
@@ -128,7 +128,7 @@ describe('a long list on another view', () => {
   })
 
   it("mounts the first screen of the phone's task schedule, then the rest", async () => {
-    const board = await loadBoard(network, paused(LONG))
+    const board = await loadBoardWithTasks(network, paused(LONG))
     const { MobileRoadmap } = await import('./MobileRoadmap')
     const noop = () => {}
     await board.renderView(root, (info) => (
@@ -184,7 +184,7 @@ describe('an Overview row', () => {
 
 describe('a delivery on the desktop Roadmap', () => {
   it('renders the rows of the task it changed, not every row', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       // a sub-project's 300 open tasks at the design size, with due dates,
       // so every row draws its due mark when it renders
       for (let n = 1; n <= 300; n++)
@@ -241,7 +241,7 @@ describe('a delivery on the desktop Roadmap', () => {
   })
 
   it('keeps the rows that only shift when another task goes', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       for (let n = 1; n <= 100; n++) snap.issues.push(taskRow(snap, `t${n}`, 'todo', n))
     })
     const { Roadmap } = await import('./Roadmap')
@@ -281,7 +281,7 @@ describe('a delivery on the desktop Roadmap', () => {
 
 describe("Team sync's opening", () => {
   it('takes its loading marks with it when it goes before its lists finish', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       // urgent tasks with no owner: Needs an owner mounts in slices
       for (let n = 1; n <= LONG; n++)
         snap.issues.push({
@@ -353,8 +353,10 @@ describe("the Overview's group health", () => {
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
       typeof Overview
     >[0]['actions']
-    const progress = vi.spyOn(board.P, 'progressIn')
-    const remaining = vi.spyOn(board.P, 'remainingIn')
+    // the store's whole-list readers, which a read before every task is held
+    // would throw from too (store/planner.ts wholeListRead)
+    const groupsRead = vi.spyOn(board.P, 'issuesInGroups')
+    const remaining = vi.spyOn(board.P, 'remainingByGroups')
     const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.renderView(root, (info) => <Overview info={info} actions={actions} />)
     expect(count('[data-ov-strip]')).toBe(1)
@@ -367,8 +369,10 @@ describe("the Overview's group health", () => {
     }
     expect(count('[data-ov-health-more]')).toBe(0)
     // the scope's completion is the server's summary, the rows' figures the
-    // server's health table, and nothing on the page walks the tasks
-    expect(progress).not.toHaveBeenCalled()
+    // server's health table, and nothing on the page walks the tasks, which
+    // the workspace does not hold
+    expect(board.P.tasksHeld()).toBe(false)
+    expect(groupsRead).not.toHaveBeenCalled()
     expect(remaining).not.toHaveBeenCalled()
     expect(scoped).not.toHaveBeenCalled()
   })
@@ -386,7 +390,7 @@ describe('figures for many groups at once', () => {
   it('equal progressIn and remainingIn for every group', async () => {
     const random = seeded(7)
     const statuses = ['backlog', 'todo', 'progress', 'review', 'done'] as const
-    const board = await loadBoard(
+    const board = await loadBoardWithTasks(
       network,
       (snap) => {
         const base = snap.projects[0]
@@ -433,10 +437,14 @@ describe('figures for many groups at once', () => {
       [info.subIds[0], info.subIds[0]],
       [],
     ]
+    // the Overview's oracle holds the one-group sums the store gave up
+    const { progressByGroups, progressIn, remainingIn } = await import(
+      '../store/overviewOracle.setup'
+    )
     const mine = (it: { owner: string | null }) => it.owner === P.issues[0].owner
     for (const only of [null, mine]) {
-      expect(P.progressByGroups(lists, only)).toEqual(lists.map((l) => P.progressIn(l, only)))
-      expect(P.remainingByGroups(lists, only)).toEqual(lists.map((l) => P.remainingIn(l, only)))
+      expect(progressByGroups(lists, only)).toEqual(lists.map((l) => progressIn(l, only)))
+      expect(P.remainingByGroups(lists, only)).toEqual(lists.map((l) => remainingIn(l, only)))
     }
   })
 })

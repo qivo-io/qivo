@@ -37,6 +37,7 @@ import {
   ProjectName,
   Seg,
 } from '../components/qivo'
+import { TasksFailedNote } from '../components/TasksLoading'
 import { fmtDateTime } from '../lib/dates'
 import { closeOrAsk, typesText } from '../lib/discardQuestion'
 import { restoreFocus } from '../lib/focusVisibility'
@@ -176,9 +177,10 @@ function secondLine(m: MessageVM): string {
 }
 
 /* Where the row's task lives: its project, then its sub-project. Null while
-   the task is not loaded here — an older message can briefly outlive a
-   working snapshot update, and it still carries the title it was written
-   with even though it cannot say where the task is. */
+   the workspace does not hold the task, which before something asks for
+   every task is every task (store/planner.ts P.askTasks), or when an older
+   message outlives its task in the workspace; the row still carries the
+   title it was written with even though it cannot say where the task is. */
 function itemPlace(g: MessageGroupVM) {
   const it = g.issueKey ? P.issueById[g.issueKey] : null
   if (!it) return null
@@ -545,6 +547,16 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   }, [onExit, paneId, openTask])
 
   const q = mobile ? '' : search.trim()
+  // A row finds its task by ID and project names only where the workspace
+  // holds the task (itemPlace), so a search asks for every task on its
+  // first word and says that it searches every task once they have loaded,
+  // never showing what it matched so far as the whole result. A row's
+  // press asks nothing: the pane reads its task (IssueDetail).
+  const searching = q !== ''
+  useEffect(() => {
+    if (searching) P.askTasks('inbox')
+  }, [searching])
+  const searchLoad = searching && !P.tasksHeld() ? P.taskLoad() : null
   const visible = P.messageGroups
     .filter((g) => showSnoozed || !g.snoozed)
     .filter((g) => !unreadOnly || !g.read)
@@ -936,6 +948,26 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           )}
         </div>
         <div ref={listScrollRef} className="inbox-list-scroll" onContextMenu={(e) => openMenu(e)}>
+          {/* a search waits for every task, and the rows it matched so far
+              show below this note, never as the whole result */}
+          {searchLoad?.state === 'failed' ? (
+            <div
+              data-inbox-search-wait="failed"
+              className="[padding:10px] [font-size:var(--fs-sm)] [color:var(--text-2)]"
+            >
+              <TasksFailedNote reason={searchLoad.reason} retrying={searchLoad.retrying} />
+            </div>
+          ) : (
+            searchLoad && (
+              <div
+                data-inbox-search-wait
+                role="status"
+                className="[padding:10px] [font-size:var(--fs-sm)] [color:var(--text-2)]"
+              >
+                Searching every task once it has loaded…
+              </div>
+            )
+          )}
           {visible.map((g) => (
             <MessageRow
               key={g.id}
@@ -946,7 +978,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
               onMenu={openMenu}
             />
           ))}
-          {visible.length === 0 && (
+          {visible.length === 0 && !searchLoad && (
             <div
               data-inbox-empty
               // focus comes here when a phone's list lost its last row (focusRowAfter)

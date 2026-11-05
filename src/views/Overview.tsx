@@ -603,7 +603,9 @@ function OvList({
       </div>
     )
   })
-  const stalled = useStall(missing > 0 && P.stillLoading() === null, kind)
+  // as the Board's: a row with no model fails STALL.ms later while no task
+  // load is on its way, which could still bring its model
+  const stalled = useStall(missing > 0 && !P.tasksArriving(), kind)
   const end = list.end && missing === 0
   const state = missing > 0 ? (stalled ? 'incomplete' : 'loading') : list.state
   // where earlier batches went, the first batch left on screen keeps its

@@ -1,10 +1,11 @@
 /* The Board's server read (convex/tasks.ts board) against the app's own
- * rules. Each case boots the real store from the caller's real workspace,
- * as projectTags.test.ts does, and compares what tasks.board answers for
- * the same caller with what the app derives in the browser, as the Board
- * shows it until the answer arrives (src/views/board/useBoardView.ts
- * provisionalBoard): the phone set (scopedIssues with passesFilters), the
- * desktop cards (its leaves), each card's shown parent chain
+ * rules. Each case boots the real store, with every task, from the
+ * caller's real workspace, as projectTags.test.ts does, and compares what
+ * tasks.board answers for the same caller with the rules the Board still
+ * runs on screen over the answer (src/views/board/useBoardView.ts passes:
+ * P.passesFilters) and the Roadmap still runs over the workspace's tasks
+ * (P.isGroup, groupSpan, groupBoardCell): the phone set (scopedIssues with
+ * passesFilters), the desktop cards (its leaves), each card's shown parent chain
  * (groupBoardCell), the group facts (isGroup, isDone, the calculated span
  * and its partial flag, the hidden flags) and, without a filter Clear
  * clears, the lanes holdsScoped keeps. The clock is frozen so isStale's
@@ -354,7 +355,7 @@ const comparedUnheld = { rows: 0, groups: 0, flagged: 0 }
     except where the owner's load is unavailable: once with the workspace
     holding every other task, and once with every row of the answer, its
     groups and parents too, judged as a task the workspace does not hold, as
-    during a staged load, so the answer's own rows stand in for their
+    before every task is held, so the answer's own rows stand in for their
     spans. */
 async function expectDelays(
   t: T,

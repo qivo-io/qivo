@@ -160,8 +160,11 @@ try {
     },
   )
   orgId = setup.orgId
+  // tasks load on demand: the page's store holds the new task once it
+  // asked for every task
+  await manager.evaluate(() => window.PLANNER.askTasks('script'))
   await manager.waitForFunction(
-    (id) => window.PLANNER.issues.some((issue) => issue.uuid === id),
+    (id) => window.PLANNER.tasksHeld() && window.PLANNER.issues.some((issue) => issue.uuid === id),
     fixture.id,
   )
   const taskKey = await manager.evaluate(

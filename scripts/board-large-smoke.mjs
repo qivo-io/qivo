@@ -238,7 +238,7 @@ try {
   assert.ok(await page.evaluate(pending), 'The Board must still be mounting')
   await dragged.dragTo(progress, { targetPosition: { x: 12, y: 12 } })
   await page.waitForFunction(
-    (id) => window.PLANNER.issueById[id]?.status === 'progress',
+    (id) => window.PLANNER.anyTask(id)?.status === 'progress',
     draggedId,
     slow,
   )
@@ -277,7 +277,7 @@ try {
 
   const first = todo.locator('[data-card][draggable="true"]').first()
   const id = await first.getAttribute('data-card')
-  const title = await page.evaluate((id) => window.PLANNER.issueById[id].title, id)
+  const title = await page.evaluate((id) => window.PLANNER.anyTask(id).title, id)
   const titleButton = first.getByRole('button', { name: title, exact: true })
   const focusedCard = () =>
     page.evaluate(() => ({
@@ -316,7 +316,7 @@ try {
   writes = await page.evaluate(() => window.__perf.writes)
   await progress.scrollIntoViewIfNeeded()
   await first.dragTo(progress, { targetPosition: { x: 12, y: 12 } })
-  await page.waitForFunction((id) => window.PLANNER.issueById[id]?.status === 'progress', id, slow)
+  await page.waitForFunction((id) => window.PLANNER.anyTask(id)?.status === 'progress', id, slow)
   // the server counts a write once its results reach the page, which a
   // large workspace takes seconds to send; then no second write may follow
   await page.waitForFunction((count) => window.__perf.writes > count, writes, slow)
@@ -330,10 +330,11 @@ try {
   log('a drag between statuses writes once')
 
   // Find reaches the last card, wherever it is on the Board: the last task
-  // of the top-level project it shows.
+  // of the Board's answer, which the Board shows without the workspace
+  // holding its tasks (tasks load on demand).
   const last = await page.evaluate(() => {
-    const P = window.PLANNER
-    return P.scopedIssues(P.scopeInfo(P.visibleProjects()[0].id)).at(-1).title
+    const answer = window.PLANNER.boardRead('board:desktop').value
+    return answer?.state === 'ok' ? answer.rows.at(-1)?.title : null
   })
   assert.equal(
     await page.evaluate((text) => window.find(text, true), last),
@@ -363,8 +364,8 @@ try {
     const before = box().height
     // 40 of its cards move into its tallest column (the stand-in server
     // takes status changes, not moves between lanes)
-    const cards = [...bodies()[1].querySelectorAll('[data-card]')].map(
-      (card) => P.issueById[card.getAttribute('data-card')],
+    const cards = [...bodies()[1].querySelectorAll('[data-card]')].map((card) =>
+      P.anyTask(card.getAttribute('data-card')),
     )
     const count = new Map()
     for (const it of cards) count.set(it.status, (count.get(it.status) ?? 0) + 1)

@@ -4,11 +4,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { REVEAL_MS } from '../lib/reveal'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, loadBoardWithTasks, taskRow } from './boardFixture.setup'
 
 /* A jump to the Board (Team sync, the Inbox, the task crumb, search)
    scrolls the task's card into the middle of the Board and rings it for a
-   moment, mounting the card first when its cell still waits to mount it. */
+   moment, mounting the card first when its cell still waits to mount it,
+   also a card only the Board's answer brings, in a session that never
+   asked for every task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -98,13 +100,13 @@ const run = async (done = () => false) => {
 }
 const card = (id: string) => document.querySelector<HTMLElement>(`[data-card="${id}"]`)
 
-/* Plan, a parent project, over ten sub-projects of 100 To Do tasks each:
-   one swimlane per sub-project, and more cards than the Board mounts at
-   once. Task 900 is the last card of lane 9. */
-const lanes = (snap: Snapshot) => {
+/* Plan, a parent project, over `count` sub-projects of 100 To Do tasks
+   each: one swimlane per sub-project, and more cards than the Board mounts
+   at once. Task 100 × n is the last card of lane n. */
+const lanesOf = (count: number) => (snap: Snapshot) => {
   const base = snap.projects[0]
   snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
-  for (let lane = 1; lane <= 10; lane++) {
+  for (let lane = 1; lane <= count; lane++) {
     const id = lane === 1 ? base.id : `sub${lane}`
     if (lane === 1) Object.assign(base, { parent_id: 'plan', name: 'Lane 01' })
     else
@@ -122,10 +124,12 @@ const lanes = (snap: Snapshot) => {
     }
   }
 }
+/* Ten lanes; task 900 is the last card of lane 9. */
+const lanes = lanesOf(10)
 
 describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   it('scrolls a Team sync jump to task 900 in lane 9 into view and rings its card', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     expect(card(id)).toBeNull()
@@ -146,7 +150,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('keeps the ring while a task window makes the Board inert', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -167,7 +171,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold the ring for another task window opened after the first closed', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -185,7 +189,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold a ring that starts at once for a task window opened after it', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -202,7 +206,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it("rings the task's new card when a change in its window moved it", async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -227,7 +231,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('rings the row on the phone task list', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -238,7 +242,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('scrolls a near card smoothly and rings only its row in a shared card', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(
         taskRow(snap, 'parent', 'todo', 1),
         { ...taskRow(snap, 'a', 'todo', 2), parent_id: 'parent' },
@@ -254,8 +258,30 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
     expect(scrolled).toHaveBeenCalledWith({ top: 0, left: 0, behavior: 'smooth' })
   })
 
+  it('rings the card of a task picked in Search that only the answer brings, with no ask', async () => {
+    // three lanes of 100 open tasks, within the design size of a project
+    const board = await loadBoard(network, lanesOf(3), { scope: 'plan' })
+    await board.render(root)
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const row = board.snapshot.issues.find((issue) => issue.id === 't300')
+    if (!row) throw new Error('missing the task')
+    // Search opens a task the workspace does not hold by a reference, and
+    // App reveals the handle the Board's card carries
+    const opened = board.P.openTask(row.id, row.org_id, row.num)
+    expect(board.P.handleOf(row.id)).toBeNull()
+    const id = board.P.handleOfOpen(opened)
+    expect(id).not.toBe(opened)
+    far = id
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    await board.reveal(id)
+    await run(() => scrolled.mock.calls.length > 0)
+    expect(card(id)?.closest('.board-card')?.hasAttribute('data-board-revealed')).toBe(true)
+    expect(scrolled).toHaveBeenCalledWith({ top: 5000 + 50 - 400, left: 0, behavior: 'instant' })
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+
   it('shows nothing for a task a filter hides', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     await board.search('Task t1')

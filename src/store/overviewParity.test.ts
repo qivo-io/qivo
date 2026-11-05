@@ -787,7 +787,10 @@ describe('rules a drift would break', () => {
     // the oracle rounds once, as the server does; hours added up a
     // sub-project at a time do not
     expect(P.figures.healthRows(info, P.scopedIssues(info), true)[0]?.remaining).toBe(left)
-    const drifted = group.subIds.reduce((sum, id) => sum + P.remainingIn([id], info.only), 0)
+    const drifted = group.subIds.reduce(
+      (sum, id) => sum + P.figures.remainingIn([id], info.only),
+      0,
+    )
     expect(drifted).not.toBe(left)
     // names by their key's bytes put Ørsted after Pilot; the browser's
     // localeCompare puts it before

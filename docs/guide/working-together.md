@@ -215,8 +215,11 @@ you unsubscribe. Reviewers receive **Ready for your review**. Setting a
 reviewer before review does not subscribe them yet. Tasks with subtasks stay
 with their assignee and do not hand over ([Task ownership](./how-work-is-organized.md#the-task)).
 
-**Reading messages.** Each task has one inbox row showing its title, age,
-project and sub-project. New updates refresh that row and increase its unread
+**Reading messages.** Each task has one inbox row showing its title and
+age, and its project and sub-project once the task has loaded into the
+workspace, which it does once every task has loaded for a page that needs
+them. Until then a row shows the title its message stored, not a later
+rename. New updates refresh that row and increase its unread
 counter. Opening the row or the task marks its messages read and leaves only
 the latest message in the inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
@@ -233,7 +236,10 @@ messages.
 The Inbox badge counts tasks with unread updates and shows **99+** above 99.
 Read state follows you across devices. Sort by newest or oldest, or filter for unread,
 snoozed, mention, comment or change messages. Desktop search includes the
-messages grouped in each row and their project names.
+messages grouped in each row, and their task IDs and project names once
+every task has loaded. Typing a search starts that load, and until it ends
+the list says **Searching every task once it has loaded…** above the rows
+it matched so far.
 
 On desktop, selecting a row opens the task's discussion pane and marks the
 row read. The pane opens the task at once, read from the server, also before
@@ -269,8 +275,9 @@ and is on by default. Turning it off leaves your Inbox messages available.
 Your operating system's notification settings also apply.
 
 **Managing messages.** Right-click a row, or use its phone actions button, for
-**Open task in board**, **Mark as read / unread** and **Remove notification**.
-Read and removal actions apply to all messages in that row.
+**Mark as read / unread** and **Remove notification**, and **Open task in
+board** once the task has loaded into the workspace. Read and removal
+actions apply to all messages in that row.
 
 The Inbox toolbar and context menu also offer:
 

@@ -45,6 +45,15 @@ let initialLayout
 let initialFocus
 let passed = false
 
+/* Tasks load on demand: the workspace holds none until something that
+   needs every task asks for them. A step that reads the whole list
+   (PLANNER.issues or issueById) asks first, after each load of the page,
+   and waits until its store holds every task. */
+async function everyTask() {
+  await page.evaluate(() => window.PLANNER.askTasks('script'))
+  await page.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
+}
+
 async function assertActualCards(ids) {
   await page.waitForFunction(
     ({ ids, shown }) => {
@@ -299,6 +308,7 @@ try {
     })
     return { electronics: electronics.id, firmware: firmware.id, nora: nora.id, leo: leo.id }
   }, fixtures)
+  await everyTask()
   await page.waitForFunction(
     (uuids) => uuids.every((uuid) => window.PLANNER.issues.some((issue) => issue.uuid === uuid)),
     fixtures.map((task) => task.id),
@@ -428,6 +438,8 @@ try {
   await page.locator('[data-group-menu]').waitFor({ state: 'visible' })
   await page.getByPlaceholder('Filter tasks…').fill(prefix)
   await assertActualCards(childIds)
+  // a fresh load holds no task until it asks
+  await everyTask()
   const persisted = await page.evaluate(
     (ids) =>
       ids.map((id) => {

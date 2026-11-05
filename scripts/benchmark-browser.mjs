@@ -114,10 +114,15 @@ if (!process.argv.includes('--serve'))
       process.exit(code)
     })
 // the timed phases, each with its script, layout and style time and the
-// number of App renders in it
+// number of App renders in it. Tasks load on demand: `startup` is the
+// startup without task windows, and the phases before `taskLoad` (BEFORE_ASK)
+// run before any task is held; taskLoad times the ask for every task
+// (P.askTasks) to every task held, and every phase after it reads or edits
+// held tasks
 const PHASES = [
   'searchOpen',
   'search',
+  'taskLoad',
   'navigation',
   'drag',
   'comments',
@@ -157,6 +162,9 @@ const PHASES = [
       ]
     : []),
 ]
+/* The phases that run before the ask for every task (taskLoad), on a
+   workspace that holds no task; the report names them (report.beforeAsk). */
+const BEFORE_ASK = ['startup', 'searchOpen', 'search']
 // the medians --baseline prints side by side
 const COMPARED = [
   ...[
@@ -186,6 +194,9 @@ const COMPARED = [
     'phoneBoard',
     'overviewAfterBoardRemote',
   ].map((phase) => `${phase}WireBytes`),
+  // the startup without task windows, and the ask for every task after it
+  'startup',
+  'taskLoad',
   // opening the Board from the click until every card is in
   'boardOpenToCompleteMs',
   'boardLongestSliceMs',
@@ -224,6 +235,8 @@ const report = {
   samples,
   timeoutMs: timeout,
   kind: 'authenticated production UI; synthetic transport',
+  // the phases before the ask for every task; every other one runs after it
+  beforeAsk: BEFORE_ASK,
   scenarios: [],
   // the one-minute load average after each sample
   loads: [],
@@ -609,8 +622,8 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   const { context, page, cdp, errors, settle, appRenders, timed } = opened
   await page.locator('[data-view-switch]').waitFor()
   await settle()
+  // the startup without task windows, as the app boots
   metrics.startup.push(await page.evaluate(() => performance.now()))
-  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
   const searchButton = await handle(page.locator('[data-sidebar-search]'))
   phase('searchOpen')
   metrics.searchOpen.push(
@@ -634,6 +647,26 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   )
   assert.equal(await page.locator('[cmdk-item]').count(), searchRows)
   await page.keyboard.press('Escape')
+  await settle()
+  // From the ask for every task (P.askTasks) to every task held, before the
+  // first phase that needs them. A build from before tasks loaded on demand
+  // has no ask and loads every task as it boots, so the phase waits for that
+  // load to end (P.stillLoading), which a whole boot has ended already.
+  phase('taskLoad')
+  metrics.taskLoad.push(
+    await timed(async () => {
+      await page.evaluate(() => window.PLANNER.askTasks?.('benchmark'))
+      await page.waitForFunction(
+        () =>
+          typeof window.PLANNER.tasksHeld === 'function'
+            ? window.PLANNER.tasksHeld()
+            : window.PLANNER.stillLoading() === null,
+        null,
+        { timeout: timeout * 10 },
+      )
+    }),
+  )
+  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
   const roadmap = await viewButton(page, 'Roadmap')
   phase('navigation')
   metrics.navigation.push(
@@ -1051,6 +1084,9 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     .locator('[data-view-switch]')
     .getByRole('radio', { name: 'Roadmap', exact: true })
     .click({ timeout: timeout * 10 })
+  // the phone Roadmap asks for every task as it mounts and shows its
+  // schedule button once they are held, so the timed phase starts after
+  // that load, as it started after the whole boot before
   const schedule = await handle(page.getByRole('button', { name: 'Task schedule', exact: true }))
   await settle()
   phase('variedPhoneRoadmap')

@@ -454,6 +454,37 @@ describe('who the page speaks to', () => {
   })
 })
 
+describe('in a session that never asked for every task', () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('../../store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('../../store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  it('opens and restores a task with no ask', async () => {
+    await open()
+    const store = await import('../../store/planner')
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    answers['deletedItems:restore'] = async (args) => {
+      push([task(2)])
+      return { restored: args.ids as string[], refused: [], deferred: [] }
+    }
+    await deliver([task(1, { deleted_at: at(14, 9) }), task(2)])
+    expect(rowIds()).toEqual(['item-1', 'item-2'])
+    await click(find<HTMLButtonElement>('[data-deleted-row="item-1"] [data-restore]'))
+    expect(calls('deletedItems:restore')).toEqual([{ org_id: ORG, ids: ['item-1'] }])
+    expect(window.showToast).toHaveBeenCalledWith('Restored QN-1', undefined)
+    expect(has('[data-deleted-row="item-1"]')).toBe(false)
+    // the page asked for no task, and no write needed one
+    expect(store.__layerProbe?.asks()).toEqual([])
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.__layerProbe?.faults()).toEqual([])
+  })
+})
+
 describe('the rows', () => {
   it('folds a long run of one who, opens it, and keeps it open through a delivery', async () => {
     await open()

@@ -246,8 +246,13 @@ try {
     },
     { tasks, milestone },
   )
+  // tasks load on demand: the page's store holds the new tasks once it
+  // asked for every task, as the Roadmap does when it opens
+  await page.evaluate(() => window.PLANNER.askTasks('script'))
   await page.waitForFunction(
-    (ids) => ids.every((id) => window.PLANNER.issues.some((it) => it.uuid === id)),
+    (ids) =>
+      window.PLANNER.tasksHeld() &&
+      ids.every((id) => window.PLANNER.issues.some((it) => it.uuid === id)),
     tasks.map(({ id }) => id),
   )
   const [parent, child, leaf] = await page.evaluate(

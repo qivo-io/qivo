@@ -4,9 +4,10 @@
  * weeks as its strip derives them (src/views/Resources.tsx), kept as the
  * oracle store/roadmapParity.test.ts compares the server's Roadmap reads
  * (convex/lib/roadmap.ts) and planning.ownerLoads' answers with, and which
- * the Roadmap view stage's stand-in can use. The stage that stops loading
- * every task ends or rewrites it. The test imports it after the store it
- * boots, so it reads that store. */
+ * the Roadmap view stage's stand-in can use. It reads the workspace's tasks
+ * of a store that holds every task, and stays until t3/limits-roadmap-view
+ * moves the Roadmap onto the server's reads. The test imports it after the
+ * store it boots, so it reads that store. */
 
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { type AutoMove, autoMoves, type DepPair, dependencyPairs } from '../lib/schedule'

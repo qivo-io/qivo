@@ -9,8 +9,9 @@ import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
-/* An Inbox item whose task is still to arrive while a large workspace loads
-   in stages (store/liveParts.ts): picking it reads its messages at once
+/* An Inbox item whose task the workspace does not hold, while every task
+   loads (store/liveParts.ts) or in a session that never asked for them:
+   picking it reads its messages at once
    and opens its task in the pane from the server, by a reference with the
    message's organization (lib/taskReference.ts), and the pane's window
    stays the same window when the task arrives, or the home organization
@@ -103,7 +104,7 @@ async function loadingInbox(
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  // a task in the first stage's windows, which have loaded, with its own item
+  // a task in the first task window, which answers, with its own item
   snap.issues.push({
     id: '00000000-a',
     org_id: snap.orgs[0].id,
@@ -511,13 +512,8 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
       '[data-message="00000000-a"] .inbox-message-open',
     )
     await act(async () => open?.click())
-    const popOut = await vi.waitFor(() => {
-      const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
-      if (!button) throw new Error('missing the pop-out button')
-      return button
-    })
-    await act(async () => popOut.click())
-    // the pop-out reads the held task's subtasks, one still to arrive
+    // the pane reads the row's task, which the workspace does not hold while
+    // every task loads, with its subtask, one still to arrive
     const kid = snap.issues.find((it) => it.id === 'fd000000-b')
     const {
       description: _text,
@@ -525,18 +521,24 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
       has_hidden_parent: _p,
       ...short
     } = kid ?? {}
-    const held = snap.issues.find((it) => it.id === '00000000-a')
+    const row = snap.issues.find((it) => it.id === '00000000-a')
+    const answer = {
+      ...answerOf(snap),
+      task: { ...row, has_subtasks: true },
+      subtasks: {
+        rows: [{ ...short, parent_id: '00000000-a', has_subtasks: false, level: 'user' }],
+        complete: true,
+      },
+    }
     await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
-    await act(async () =>
-      windowReads.at(-1)?.next({
-        ...answerOf(snap),
-        task: { ...held, has_subtasks: true },
-        subtasks: {
-          rows: [{ ...short, parent_id: '00000000-a', has_subtasks: false, level: 'user' }],
-          complete: true,
-        },
-      }),
-    )
+    await act(async () => windowReads.at(-1)?.next(answer))
+    const popOut = await vi.waitFor(() => {
+      const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
+      if (!button) throw new Error('missing the pop-out button')
+      return button
+    })
+    await act(async () => popOut.click())
+    await act(async () => windowReads.at(-1)?.next(answer))
     const related = await vi.waitFor(() => {
       const row = document.querySelector<HTMLButtonElement>('[data-related-task] button')
       if (!row) throw new Error('missing the related row')
@@ -594,9 +596,15 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
   })
 
   it('closes the pop-out, then the pane, on Escape, also over a task still to arrive', async () => {
-    const { store, snap, opened, goTo } = await loadingInbox()
-    const task = store.P.issues.find((it) => it.uuid === '00000000-a')
-    await goTo(task?.id ?? null)
+    const { snap, opened, goTo } = await loadingInbox()
+    // the workspace holds no task while every task loads: the pane reads it
+    const { taskRef } = await import('../lib/taskReference')
+    await goTo(taskRef({ org: snap.orgs[0].id, uuid: '00000000-a' }))
+    const row = snap.issues.find((it) => it.id === '00000000-a')
+    await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
+    await act(async () =>
+      windowReads.at(-1)?.next({ ...answerOf(snap), task: { ...row, has_subtasks: false } }),
+    )
     const popOut = await vi.waitFor(() => {
       const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
       if (!button) throw new Error('missing the pop-out button')
@@ -605,7 +613,6 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     await act(async () => popOut.click())
     expect(document.querySelector('[data-task-scrim]')).not.toBeNull()
     // Back to a task still to arrive, which both windows follow
-    const { taskRef } = await import('../lib/taskReference')
     await goTo(taskRef({ org: snap.orgs[0].id, num: 2 }))
     expect(container.querySelector('[data-task-loading]')).not.toBeNull()
     expect(document.querySelector('[data-task-scrim]')).not.toBeNull()
@@ -626,7 +633,66 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     )
     await act(async () => open?.click())
     expect(opened.at(-1)).toBeTruthy()
+    await act(async () =>
+      windowReads.at(-1)?.next({ ...answerOf(snap), task: { ...row, has_subtasks: false } }),
+    )
     expect(container.querySelector('[data-task-popout]')).not.toBeNull()
     expect(document.querySelector('[data-task-scrim]')).toBeNull()
+  })
+})
+
+describe('the Inbox of a session that never asked for every task', { timeout: 20_000 }, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('../store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
+  })
+
+  /** Types `text` into the Inbox's search, as a person does. */
+  const search = (text: string) =>
+    act(async () => {
+      const input = container.querySelector<HTMLInputElement>('[data-inbox-search]')
+      if (!input) throw new Error('missing the search')
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  const rows = () =>
+    [...container.querySelectorAll<HTMLElement>('[data-message]')].map((row) => row.dataset.message)
+
+  it('opens a row’s task in the pane from its own read, asking nothing', async () => {
+    const { store } = await loadingInbox()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="00000000-a"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+
+  it('searches every task once it has loaded, and never says nothing matches before', async () => {
+    const { store } = await loadingInbox()
+    expect(rows()).toHaveLength(2)
+    // QN-2 is the soak test's task ID, which only a task the workspace holds
+    // gives its row
+    await search('QN-2')
+    expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
+    expect(container.querySelector('[data-inbox-search-wait]')?.textContent).toBe(
+      'Searching every task once it has loaded…',
+    )
+    expect(rows()).toEqual([])
+    expect(container.querySelector('[data-inbox-empty]')).toBeNull()
+    expect(container.textContent).not.toContain('No messages match')
+    // every task arrives, and the search finds the row by its task ID
+    await arrive()
+    expect(store.P.tasksHeld()).toBe(true)
+    expect(container.querySelector('[data-inbox-search-wait]')).toBeNull()
+    expect(rows()).toEqual(['fd000000-b'])
   })
 })

@@ -859,7 +859,8 @@ export const ownerSettled = (task: Doc<'issues'>): boolean =>
  * The reader's own tasks in projects they cannot see are read too, and
  * charged at lib/limits.ts TASK_ROW_MAX_BYTES, those they are shown at their
  * real size. A task a legacy writer stored on a top-level project is in no
- * selection, as in the app's scopes (src/store/planner.ts scopedIssues).
+ * selection, as in the app's scopes (src/store/planner.ts scopeInfo, whose
+ * sub-projects the Board and the Roadmap select by).
  * lib/ownerLoads.ts ownerLoadReader reads the same two indexes for one
  * owner's load, but leaves Done out, stops at its own bounds and reads the
  * rule as for a task without subtasks, so this does not build on it.

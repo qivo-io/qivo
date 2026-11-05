@@ -3,7 +3,13 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { IssueVM } from '../store/planner'
-import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+import {
+  BOARD_TEST_TIMEOUT,
+  cell,
+  dragEvent,
+  loadBoardWithTasks,
+  taskRow,
+} from './boardFixture.setup'
 
 /* Dragging a Board card on the real store. */
 
@@ -69,7 +75,7 @@ afterEach(async () => {
 
 /* A card in To Do and twenty in In Progress. */
 const crowded = () =>
-  loadBoard(network, (snap) => {
+  loadBoardWithTasks(network, (snap) => {
     snap.issues.push(taskRow(snap, 'a', 'todo', 1))
     for (let n = 0; n < 20; n++) snap.issues.push(taskRow(snap, `p${n}`, 'progress', n + 2))
   })
@@ -146,7 +152,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('ends once the dragged card has left the page', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
     })
     await board.render(root)
@@ -167,7 +173,7 @@ describe('dragging a Board card', { timeout: BOARD_TEST_TIMEOUT }, () => {
   })
 
   it('keeps a drag whose card is still on the page', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1))
     })
     await board.render(root)

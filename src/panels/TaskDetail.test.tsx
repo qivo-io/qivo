@@ -16,7 +16,7 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    read-only window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
    tasks (QN-40 on) are on the server but not in the workspace: in a task
-   window still to arrive while it loads in stages (`loading`), else not in
+   window still to arrive while every task loads (`loading`), else not in
    it at all. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -54,11 +54,10 @@ const READ_ONLY = 'Read-only project access'
 const STALE_SAVE =
   "Couldn't save yet. Saving is available once Qivo can check this task for changes."
 
-/* The family task, in the first task window, which a staged load brings
-   first. */
+/* The family task, in the first task window. */
 const FAM = '01000000-0000-4000-8000-000000000027'
 /* Far tasks: ids in the last of 64 task windows, which starts at fc000000,
-   so a staged load holds them back. */
+   which a test holds back so every task is still on its way. */
 const FAR = 'fd000000-0000-4000-8000-000000000040'
 const FAR_RO = 'fd000000-0000-4000-8000-000000000041'
 const FAR_KID = 'fd000000-0000-4000-8000-000000000042'
@@ -1673,7 +1672,7 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
 
   it('says the delay of a held group is unknown while some of its subtasks load, naming them as the cause', async () => {
     // the family task is a group due in two weeks: one subtask ends within
-    // a week, in the first task window, and one in three weeks, still to come
+    // a week, and one in three weeks, still to come
     await load(true, (next) => {
       const fam = next.issues.find((t) => t.id === FAM)
       Object.assign(fam ?? {}, { due_date: day(14), has_subtasks: true })
@@ -1686,7 +1685,15 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         task(FAR_KID, 42, { parent_id: FAM, start_week: day(0), end_week: day(21) }),
       )
     })
-    await openWindow('QN-27')
+    // the workspace holds no task while every task loads; the group and its
+    // near subtask held before the rest, as the person's own new tasks are
+    const { __layerProbe } = await import('../store/planner')
+    await act(async () =>
+      __layerProbe?.plantTasks(
+        snap.issues.filter((t) => t.id === FAM || t.id === '01000000-0000-4000-8000-000000000029'),
+      ),
+    )
+    await openWindow(P.handleOf(FAM) ?? '')
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(delayChip()?.dataset.delayChip).toBe('unknown')
     expect(await hintOf(delayChip())).toBe(
@@ -1923,5 +1930,65 @@ describe('the archived task window', { timeout: 30_000 }, () => {
     expect(dialog()?.dataset.taskArchived).toBeUndefined()
     expect(document.querySelector('[data-task-gone-place]')?.textContent).toBe('Plan, Work')
     expect(dialog()?.textContent).not.toContain('No description.')
+  })
+})
+
+describe('the task window in a session that never asked for every task', {
+  timeout: 30_000,
+}, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('../store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
+  })
+
+  it('opens nothing for a handle it knows nothing of, and never says it loads', async () => {
+    // the far tasks are on the server; no task window is subscribed
+    await load(true)
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
+    await openWindow('QN-99')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    // no load is on its way that could bring it, so the window does not wait
+    expect(document.querySelector('[data-task-loading], [data-task-gone]')).toBeNull()
+    expect(dialog()?.getAttribute('aria-hidden')).toBe('true')
+    expect(reads()).toEqual([])
+  })
+
+  it("opens the Parent, Subtasks and Linked tasks pickers of a task shown from its answer on the server's candidates, with no ask", async () => {
+    await load(true)
+    const held = holdRelations()
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    const org = snap.orgs[0].id
+    const { __layerProbe } = await import('../store/planner')
+    for (const [label, kind, picked] of [
+      ['Add subtask', 'subtask', task(PICKED_2, 45, { title: 'Wire it' })],
+      ['Link task', 'link', task(PICKED_3, 46, { title: 'Test the range' })],
+      ['Set parent', 'parent', task(PICKED, 44, { title: 'Build the mast' })],
+    ] as const) {
+      await click(document.querySelector(`[aria-label="${label}"]`))
+      await nextFrame()
+      expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind })
+      await held.at(-1)?.answer(pickerBatch([pickerRow(picked)]))
+      expect(document.querySelector(`[data-picker-row="${picked.id}"]`)).not.toBeNull()
+      // a parent picked from the answer goes out marked, with no ask
+      if (kind === 'parent') {
+        await click(document.querySelector(`[data-picker-row="${picked.id}"]`))
+        expect(sentArgs('issues:update').at(-1)).toMatchObject({
+          id: FAR,
+          patch: { parent_id: PICKED },
+        })
+      }
+    }
+    expect(__layerProbe?.asks()).toEqual([])
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })

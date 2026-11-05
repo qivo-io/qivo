@@ -124,9 +124,10 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 }
 const NO_PROFILE = '__none__'
 /* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
-   a task the workspace holds waits while tasks still load and no answer of
-   its own serves its subtasks, since each acts on subtasks and blockers
-   that may be still to arrive. WAITS_FOR_CHECK says why a change to a task
+   a task the workspace holds waits before it holds every task and no answer
+   of its own serves its subtasks, as for the person's new task during a
+   load, since each acts on subtasks and blockers that may be still to
+   arrive. WAITS_FOR_CHECK says why a change to a task
    the window shows from its own read waits while that read failed or runs
    again, the Parent, Subtasks and Linked tasks changes included, and
    FAMILY_UNKNOWN why Move and Archive or delete are off while that read
@@ -1860,17 +1861,15 @@ function IssueDetail({
   // whether the window's read of the task has said nothing yet, or runs
   // again after a failure
   const unanswered = !detail || detail.state === 'loading' || detail.state === 'retrying'
-  // a handle the window cannot name while tasks still load may be a task
-  // still to arrive, and so may a task it showed before whose read has not
-  // answered yet: the window says it loads. A task opened by a reference
-  // and never shown shows its own loading line instead (TaskGone). A
-  // complete workspace without the handle's task opens nothing, and says
-  // nothing of it.
+  // a handle the window cannot name while the tasks an ask loads are on
+  // their way may be a task still to arrive, and so may a task it showed
+  // before whose read has not answered yet: the window says it loads. It
+  // never waits in a session that never asks, nor after a load stopped
+  // (P.tasksArriving). A task opened by a reference and never shown shows
+  // its own loading line instead (TaskGone). Otherwise a handle without a
+  // task opens nothing, and says nothing of it.
   const waiting =
-    !it &&
-    !!issueId &&
-    P.stillLoading() !== null &&
-    (identity ? !identity.opened && unanswered : !ref)
+    !it && !!issueId && P.tasksArriving() && (identity ? !identity.opened && unanswered : !ref)
   // the window shows no active task for the task it is about, other than by
   // this window's own archive or delete while that is on its way: the
   // window says what became of it (TaskGone), also once its own call was
@@ -1964,8 +1963,7 @@ function IssueDetail({
     setCopiedReason(copied)
   }, [goneUuid])
   // a task that leaves the workspace while the window goes on showing it
-  // from its answer, as during a staged load, closes the pickers and the
-  // Move window it had open. The title typed for it stays, to save through
+  // from its answer closes the pickers and the Move window it had open. The title typed for it stays, to save through
   // the answer, when the answer gives its editor Edit; otherwise it goes,
   // as for a task that leaves the board
   const heldNow = useRefID({ taskKey, uuid: held?.uuid })
@@ -2293,8 +2291,9 @@ function IssueDetail({
   // This task's own Subtasks, Linked tasks and Attachments (P.sectionsFor).
   // The store follows the task a window shows from that window's effects,
   // after the render that first shows it, so a task opened in place first
-  // finds another task's sections in the store; it shows its own lists from
-  // a complete workspace, and loading lines while the workspace loads.
+  // finds another task's sections in the store; it shows its own lists
+  // from the workspace once it holds every task, and loading lines before
+  // then until its own lists answer.
   const sections = it ? P.sectionsFor(it.uuid) : null
   const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
   const linked = sections?.links ?? LOADING_SECTION
@@ -3867,13 +3866,15 @@ function IssueDetail({
                           // with delay tracking (0064) the chip carries the projected
                           // status — "Delayed" covers overdue; without it, the plain
                           // overdue chip stays as before. Where the workspace cannot
-                          // judge it, while tasks still load or for a task shown from
-                          // its answer, the owner's load comes from the server, as for
-                          // a Board card (P.windowDelay)
+                          // judge it, before it holds every task or for a task shown
+                          // from its answer, the owner's load comes from the server,
+                          // as for a Board card (P.windowDelay), so the window of a
+                          // task the person created during a load can show a verdict
+                          // its card waits for
                           const verdict =
                             archived || !P.tracksDelay(it)
                               ? null
-                              : held && P.stillLoading() === null
+                              : held && P.tasksHeld()
                                 ? P.delayOf(it)
                                 : P.windowDelay(it)
                           const unknown = verdict === DELAY_UNKNOWN
@@ -4239,10 +4240,10 @@ function IssueDetail({
                               </div>
                             ) : (
                               <div className="text-sm text-text-2 italic">
-                                {/* the answer's word is exact while tasks load */}
-                                {P.stillLoading() === null || fromAnswer
-                                  ? 'No parent task.'
-                                  : 'No parent task yet.'}
+                                {/* a held task's parent is held, or marked hidden
+                                    while it may be still to come (hiddenParentsNow),
+                                    and the answer's word is exact */}
+                                No parent task.
                               </div>
                             )}
                           </section>

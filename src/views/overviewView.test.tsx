@@ -342,6 +342,39 @@ describe('the Overview from its answers', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(list('paused')?.dataset.ovListEnd).toBe('')
   })
 
+  it('says a list is incomplete STALL.ms after a row with no task to show, in a session that never asked for every task', async () => {
+    const { board, render } = await overview(work())
+    // the store's own copy, which the Overview reads, once loadBoard loaded it
+    const { STALL } = await import('../store/liveParts')
+    const stall = STALL.ms
+    STALL.ms = 40
+    try {
+      expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+      expect(list('paused')?.dataset.ovListState).toBe('ok')
+      // the source of a row's task brings nothing for held0, which the
+      // answer still names
+      const viewTask = board.P.viewTask.bind(board.P)
+      const anyTask = board.P.anyTask.bind(board.P)
+      vi.spyOn(board.P, 'viewTask').mockImplementation((slot, uuid) =>
+        uuid === 'held0' ? undefined : viewTask(slot, uuid),
+      )
+      vi.spyOn(board.P, 'anyTask').mockImplementation((id) => {
+        const it = anyTask(id)
+        return it?.uuid === 'held0' ? undefined : it
+      })
+      await render()
+      expect(list('paused')?.dataset.ovListState).toBe('loading')
+      expect(list('paused')?.dataset.ovListEnd).toBeUndefined()
+      // no load is on its way that could bring it, so the list says so
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 100)))
+      expect(list('paused')?.dataset.ovListState).toBe('incomplete')
+      expect(list('paused')?.dataset.ovListEnd).toBeUndefined()
+      expect(rows('paused')).toHaveLength(2)
+    } finally {
+      STALL.ms = stall
+    }
+  })
+
   it('loads more of a list to its end, never sorting or cutting a batch', async () => {
     await overview(work(25))
     expect(rows('paused')).toHaveLength(10)
@@ -556,6 +589,8 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
 
   it('takes away at once the row of a task the person archives, and nothing else', async () => {
     const { board } = await overview(work())
+    // the archive of a task the workspace holds
+    await board.ask()
     // the server accepts the archive; no delivery holds it yet
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'issues:archive' ? Promise.resolve(null) : new Promise(() => {}),
@@ -1301,9 +1336,9 @@ describe('the health table', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(cards()).toHaveLength(2)
   })
 
-  it('shows the table from the server while the workspace still loads', async () => {
+  it('shows the table from the server while every task loads', async () => {
     const { board, render } = await overview(work())
-    vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.4)
+    vi.spyOn(board.P, 'tasksArriving').mockReturnValue(true)
     const scoped = vi.spyOn(board.P, 'scopedIssues')
     await render()
     expect(document.querySelector('[data-ov-table]')).not.toBeNull()

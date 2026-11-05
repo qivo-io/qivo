@@ -105,7 +105,7 @@ import {
   loadTeamSync,
   workspaceModules,
 } from './lib/workspaceChunks'
-import { P } from './store/planner'
+import { P, TASKS_FAILED_TEXT } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
 import { BOARD_SLOTS } from './views/board/useBoardView'
 import type { SyncPlace } from './views/TeamSync'
@@ -811,24 +811,27 @@ const pageKey = (s: Omit<UiState, 'openIssue'>) =>
   ])
 
 /** Says politely, through the page's announcer (lib/announce), which modal
-    layers leave audible, when a large workspace starts loading its tasks
-    and when every task has loaded. The caller renders on every store
-    change (usePlannerVersion). */
+    layers leave audible, when every task starts loading for a page or
+    action that needs them, when every task has loaded, and when the load
+    stopped. The caller renders on every store change (usePlannerVersion). */
 function useTasksLoadingNews() {
-  const loading = P.stillLoading() !== null
+  const load = P.taskLoad()
+  const state = load.state
+  const reason = load.state === 'failed' ? load.reason : ''
   // whether the start was said, so the end is said only after it
   const said = useRef(false)
   useEffect(() => {
-    if (loading) {
+    if (state === 'arriving') {
       said.current = true
-      announce(
-        'Loading tasks. Lists show the tasks that have arrived. Counts and reports wait until every task is in.',
-      )
+      announce('Loading every task. Pages that need them open once they are in.')
+    } else if (state === 'failed') {
+      said.current = true
+      announce(`${TASKS_FAILED_TEXT} ${reason}`)
     } else if (said.current) {
       said.current = false
       announce('Every task has loaded.')
     }
-  }, [loading])
+  }, [state, reason])
 }
 
 /* ---------- root ---------- */
@@ -1153,7 +1156,7 @@ function App() {
     scope?: string
     preferred: string | null
   } | null>(bootHold)
-  /* The boot reads the task its address names with its first stage
+  /* The boot reads the task its address names with the first parts
      (AuthGate, store/liveParts.ts `address`), and the window that opens it
      takes that read over. An address the router reads as no task, such as
      a mistyped one, opens no window, so the read stops once App shows. */
@@ -1203,8 +1206,9 @@ function App() {
   const refRev = useSyncExternalStore(P.updates.comments.subscribe, () =>
     isTaskRef(openIssue) ? P.updates.comments.getSnapshot() : null,
   )
-  // Views over every task wait while a large workspace still loads them
-  const tasksLoading = P.stillLoading() !== null
+  // The Roadmap and Team sync need every task: they ask for them as they
+  // mount (TasksLoadingView) and wait until the workspace holds them
+  const tasksLoading = !P.tasksHeld()
   useTasksLoadingNews()
 
   // date rendering follows the organization's format setting; set during
@@ -1535,7 +1539,8 @@ function App() {
         setProjectsOpen(false)
       }
       setOpenIssue(k)
-      if (k && revealing) reveal(k)
+      // the views name a task by its handle, also one a reference opens
+      if (k && revealing) reveal(P.handleOfOpen(k))
     })
   const navOpenIssue = (k) => openNav(k, false)
   // another task in the open window, or none (the Inbox pane, Team sync)
@@ -2012,12 +2017,13 @@ function App() {
 
   // the palette searches on the server (Palette.tsx) and needs only the two
   // ways to open what it found, a project as the scope and a task by its
-  // handle, which may name a task the workspace does not hold, such as an
-  // archived one. A task picked while the Board shows opens over its
-  // revealed card when the workspace holds it, as only such a task has one.
+  // handle or a reference, which may name a task the workspace does not
+  // hold, such as an archived one. A task picked while the Board shows opens
+  // over its revealed card, which the Board shows from its answer; one the
+  // Board does not show reveals nothing, as a filtered task does.
   const paletteCtx = {
     setScope: navScope,
-    openIssue: (id: string) => openNav(id, boardActive && !!P.issueById[id]),
+    openIssue: (id: string) => openNav(id, boardActive),
   }
 
   /* An address that now names a DIFFERENT organization than the last time this
@@ -2235,7 +2241,7 @@ function App() {
            page must not vanish on a stray key. */
         if (!syncPlace) return null
         return tasksLoading ? (
-          <TasksLoadingView what="Team sync" />
+          <TasksLoadingView what="Team sync" reason="team_sync" />
         ) : (
           <TeamSync
             place={syncPlace}
@@ -2254,7 +2260,7 @@ function App() {
       case 'roadmap':
         if (!scopeInfo) return null
         return tasksLoading ? (
-          <TasksLoadingView what="The roadmap" />
+          <TasksLoadingView what="The roadmap" reason="roadmap" />
         ) : (
           /* The roadmap's toolbar row is its own — the window controls and
              the Auto-move count are both local to it and cannot be handed up

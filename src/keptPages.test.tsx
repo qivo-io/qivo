@@ -102,6 +102,38 @@ type Snapshot = ReturnType<typeof plannerFixture>
 /** Boots App on the fixture workspace, with what `prepare` adds, and the
     task window from `held` on still to load. Answers the organization's
     slug. */
+/* Whether boot's server answers the task window's read of a task
+   (windowTask), which the suite of Plan on roadmap turns on. */
+let answersTasks = false
+
+/** The task window's read (convex/taskWindow.ts task) of the task `ref`
+    names in `snap`, by its number (QN-n) or uuid, as an editor's, with its
+    subtasks, or null for none. */
+function windowTask(snap: Snapshot, ref: string) {
+  const row = snap.issues.find((it) => it.id === ref || `QN-${it.num}` === ref.toUpperCase())
+  if (!row) return null
+  const subtasks = snap.issues
+    .filter((it) => it.parent_id === row.id)
+    .map(
+      ({
+        description: _d,
+        parent_id: _p,
+        has_hidden_parent: _hp,
+        has_hidden_subtasks: _hs,
+        ...short
+      }) => ({ ...short, has_subtasks: false, level: 'lead' }),
+    )
+  return {
+    state: 'ok',
+    task: { ...row, has_subtasks: subtasks.length > 0 },
+    level: 'lead',
+    labels: [],
+    follow: null,
+    parent: null,
+    subtasks: { rows: subtasks, complete: true },
+  }
+}
+
 async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string | null = null) {
   vi.resetModules()
   const snap = plannerFixture()
@@ -116,7 +148,12 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
-    else if (name === 'snapshot:threadComments') {
+    else if (name === 'taskWindow:task' && answersTasks) {
+      // the window's own read of a task the workspace does not hold, by its
+      // number or uuid; another stays on its way
+      const answer = windowTask(snap, String((args as { ref: string }).ref))
+      if (answer) next(answer)
+    } else if (name === 'snapshot:threadComments') {
       next({ comments: [], earlier: false })
       const thread = { stopped: false }
       threads.push(thread)
@@ -486,11 +523,26 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
   })
 })
 
-describe('Plan on roadmap while the tasks load', { timeout: 30_000 }, () => {
-  /* QN-5, Plan the launch, unassigned and unplanned, which the first task
-     window brings, so its own window opens while the last one, from
-     fc000000, still loads. */
+describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
+  /* QN-5, Plan the launch, unassigned and unplanned. The store boots
+     without the workspace's tasks, as the app does, so its window shows it
+     from its own read, and Plan on roadmap opens the Roadmap, which asks
+     for every task and waits while the last task window, from fc000000,
+     still loads. */
   const LAUNCH = '01000000-0000-4000-8000-000000000005'
+  beforeEach(async () => {
+    answersTasks = true
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    answersTasks = false
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('./store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
+  })
   /* The writes of a planning session, which gives an unscheduled task its
      starter bar. */
   const dateWrites = () =>
@@ -498,10 +550,10 @@ describe('Plan on roadmap while the tasks load', { timeout: 30_000 }, () => {
       .map(([ref]) => getFunctionName(ref))
       .filter((name) => name === 'issues:update' || name === 'roadmap:change')
 
-  /** Boots while the tasks load in stages, opens QN-5's window and presses
-      Plan on roadmap, or Show on roadmap when `group` gives QN-5 a subtask,
-      which shows the Roadmap's notice meanwhile. Answers the organization's
-      slug. */
+  /** Boots without the tasks, opens QN-5's window and presses Plan on
+      roadmap, or Show on roadmap when `group` gives QN-5 a subtask, which
+      asks for every task and shows the Roadmap's notice meanwhile. Answers
+      the organization's slug. */
   async function planWhileLoading(group = false) {
     // 12,800 task numbers make 64 task windows; the last starts at fc000000
     const org = await boot((snap) => {
@@ -519,15 +571,26 @@ describe('Plan on roadmap while the tasks load', { timeout: 30_000 }, () => {
         })
     }, 'fc000000')
     network.mutation.mockClear()
+    // the journal answers how many operations the visit holds, as the
+    // server's roadmap.change does
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'roadmap:change' ? { count: 1 } : null,
+    )
     await go(`/app/${org}/board/tasks/qn-5`)
     const plan = await waitFor(
       () => document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]'),
       'Plan on roadmap',
     )
     expect(plan.textContent).toBe(group ? 'Show on roadmap' : 'Plan on roadmap')
+    const { P } = await import('./store/planner')
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await act(async () => plan.click())
     const roadmap = await shownPage('roadmap')
     expect(roadmap.textContent).toContain('opens once every task has loaded')
+    // the Roadmap asked for every task as it mounted, and nothing else did
+    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    const { __layerProbe } = await import('./store/planner')
+    expect(__layerProbe?.asks()).toEqual(['roadmap'])
     return org
   }
 

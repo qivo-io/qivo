@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_CARD_PITCH } from '../lib/boardGroups'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from './boardFixture.setup'
 
 /* Opening the Board on the real store renders it once, and a large Board
    mounts its first screen at once and the rest in slices. The slices are
@@ -95,11 +95,11 @@ const tasks =
 describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
     const board = await loadBoard(network, tasks(25, 25))
-    // the Board asks for the scope's tasks once per render
+    // the Board walks no task list of the workspace, which holds none
     const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.render(root)
     expect(cards()).toHaveLength(50)
-    expect(scoped).toHaveBeenCalledTimes(1)
+    expect(scoped).not.toHaveBeenCalled()
     expect(pane()?.hasAttribute('data-board-mount')).toBe(false)
   })
 
@@ -120,44 +120,55 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(pane()?.hasAttribute('aria-busy')).toBe(false)
   })
 
-  it("mounts the rest in slices while the Board's answer is still on its way", async () => {
-    const board = await loadBoard(network, tasks(500))
+  it("shows no card while the Board's answer is on its way, then its first screen at once", async () => {
+    // 330 cards over three sub-projects
+    const board = await loadBoard(network, spread(110), { scope: 'plan' })
     board.server.hold = true
     await board.render(root)
     expect(state()).toBe('loading')
-    expect(cards().length).toBeLessThanOrEqual(EAGER)
-    // the answer's wait holds no slice back
-    await finish()
-    expect(state()).toBe('loading')
-    expect(cards()).toHaveLength(500)
-    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
+    expect(cards()).toHaveLength(0)
     await board.answer()
     expect(state()).toBe('ok')
-    expect(cards()).toHaveLength(500)
+    // the frame's render, with no card, sets no first screen
+    expect(cards().length).toBeGreaterThan(0)
+    expect(cards().length).toBeLessThanOrEqual(EAGER)
+    await finish()
+    expect(cards()).toHaveLength(330)
+    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
   })
 
-  it('mounts the phone rows in slices while its answer is on its way', async () => {
-    const board = await loadBoard(network, tasks(500), { phone: true })
+  it('mounts the phone rows of its first screen once its answer arrives, then the rest', async () => {
+    const board = await loadBoard(network, spread(110), { phone: true, scope: 'plan' })
     board.server.hold = true
     await board.render(root)
     const rows = () => document.querySelectorAll('.mobile-task-row')
-    expect(rows().length).toBeLessThan(500)
+    expect(rows()).toHaveLength(0)
+    await board.answer()
+    expect(rows().length).toBeGreaterThan(0)
+    expect(rows().length).toBeLessThan(330)
     await finish()
-    expect(state()).toBe('loading')
-    expect(rows()).toHaveLength(500)
+    expect(state()).toBe('ok')
+    expect(rows()).toHaveLength(330)
   })
 
   it('lands an answer that adds and drops cards after the slices mounted', async () => {
-    const board = await loadBoard(network, tasks(500))
-    board.server.hold = true
+    // 330 cards over three sub-projects
+    const board = await loadBoard(network, spread(110), { scope: 'plan' })
     await board.render(root)
     await finish()
-    expect(cards()).toHaveLength(500)
+    expect(cards()).toHaveLength(330)
+    // the last cards of the first sub-project's To Do cell, which the
+    // answer changes
+    const first = document.querySelector('[data-board-cell][data-status="todo"]')
     const kept = new Map(
-      [...cards()].slice(-20).map((card) => [card.getAttribute('data-card'), card]),
+      [...(first?.querySelectorAll('[data-card]') ?? [])]
+        .slice(-20)
+        .map((card) => [card.getAttribute('data-card'), card]),
     )
-    // the server holds a new urgent task and leaves five out
-    const dropped = ['t0', 't1', 't2', 't3', 't4']
+    expect(kept.size).toBe(20)
+    // the server holds a new urgent task in that sub-project and leaves
+    // five of its tasks out
+    const dropped = ['t1', 't2', 't3', 't4', 't5']
     board.snapshot.issues.push({
       ...taskRow(board.snapshot, 'top', 'todo', 900),
       priority: 'urgent',
@@ -170,7 +181,7 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     await board.deliver()
     await finish()
     expect(state()).toBe('ok')
-    expect(cards()).toHaveLength(496)
+    expect(cards()).toHaveLength(326)
     expect(cards()[0].textContent).toContain('Task top')
     for (const id of dropped) expect(board.card(id)).toBeNull()
     for (const [id, node] of kept) expect(document.querySelector(`[data-card="${id}"]`)).toBe(node)
