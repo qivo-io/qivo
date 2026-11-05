@@ -14,6 +14,7 @@ import {
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import {
   addDays,
+  addsQuery,
   deleteOutcome,
   evaluate,
   FIXTURE_STATUS,
@@ -24,6 +25,7 @@ import {
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
+  ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_OVERDUE_DAYS,
@@ -53,6 +55,7 @@ import {
   TASK_LINK_STEP,
   TASK_LINK_UNKNOWN,
   TASK_PAGES_MAX,
+  TASK_WINDOWS_QUERY,
   THREAD_PAGE,
   taskPages,
   WAITS,
@@ -129,6 +132,35 @@ describe('staging check REST contract', () => {
     })
     // a number the server's ref grammar reads, which no organization reaches
     expect(Number(TASK_LINK_UNKNOWN.ref.slice(3))).toBeLessThanOrEqual(2147483647)
+  })
+  it('tells a frame that subscribes the task windows from every other frame', () => {
+    expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')
+    expect(TASK_WINDOWS_QUERY).toBe('workspace:tasks')
+    // the registry subscribes the workspace's task windows by that name
+    const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
+    expect(parts).toContain('tasks: api.workspace.tasks')
+    const add = (udfPath) => ({ type: 'Add', queryId: 1, udfPath, args: [{}] })
+    const frame = (...modifications) =>
+      JSON.stringify({ type: 'ModifyQuerySet', baseVersion: 0, newVersion: 1, modifications })
+    expect(addsQuery(frame(add('workspace:tasks')), TASK_WINDOWS_QUERY)).toBe(true)
+    expect(
+      addsQuery(frame(add('workspace:root'), add('workspace:tasks')), TASK_WINDOWS_QUERY),
+    ).toBe(true)
+    // the other parts, a removal, another message and no JSON are not one
+    expect(addsQuery(frame(add('workspace:projects')), TASK_WINDOWS_QUERY)).toBe(false)
+    expect(
+      addsQuery(
+        frame({ type: 'Remove', queryId: 1, udfPath: 'workspace:tasks' }),
+        TASK_WINDOWS_QUERY,
+      ),
+    ).toBe(false)
+    expect(
+      addsQuery(
+        JSON.stringify({ type: 'Mutation', udfPath: 'workspace:tasks' }),
+        TASK_WINDOWS_QUERY,
+      ),
+    ).toBe(false)
+    expect(addsQuery('not json', TASK_WINDOWS_QUERY)).toBe(false)
   })
   it("checks the relation pickers in the picker's own words", () => {
     const picker = readFileSync(
