@@ -946,7 +946,7 @@ the removal window's floor (the release after v0.1.120) already holds.
 
 Billing reads its usage from `billing.currentUsage` and its Storage by
 project list from `billing.storageProjects`, once on opening and on each
-Refresh and never subscribed, which the release after v0.1.130 first ships
+Refresh and never subscribed, which the release after v0.1.131 first ships
 together with the app that reads them. Current storage comes from the
 stored-byte totals, files in Deleted items included, and Billing shows the
 paid period's storage sample beside it. An app from that release, against
@@ -1268,7 +1268,7 @@ shifts it. Each project and task row names its organization and its
 project's or task's number, which the organization never gives another, so
 a task or project that takes the id of a purged one, in any organization,
 counts in a row of its own and never changes another's. From the release
-after v0.1.130, Billing's current storage and its Storage by project list
+after v0.1.131, Billing's current storage and its Storage by project list
 read the totals (`billing.currentUsage` and `billing.storageProjects`).
 The storage sample at the start of a paid period and the legacy
 `billing.usageReport` still scan the attachment rows. A new organization
