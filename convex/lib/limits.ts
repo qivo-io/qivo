@@ -164,9 +164,10 @@ export const ROADMAP_TASKS = 1000
 
 /** The rows one batch of an app list holds before Load more, such as the
  * labels of Settings > Labels and of the task label picker (labels.ts), a
- * project's access lists (projectSettings.ts), and a person's projects and
- * a project's sub-projects for navigation (projectNav.ts). A batch size,
- * not a limit on what the list holds. */
+ * project's access lists (projectSettings.ts), and a person's projects, a
+ * project's sub-projects and the directory's name search across a
+ * person's projects and sub-projects for navigation (projectNav.ts). A
+ * batch size, not a limit on what the list holds. */
 export const LIST_BATCH = 25
 
 /** The most ids one call that looks rows up by id may name, such as

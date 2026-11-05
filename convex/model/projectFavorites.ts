@@ -16,7 +16,9 @@
  * The navigation reads (model/projectNavReads.ts) read a seat's live rows
  * in name order (favoritesIndex) and judge each with favoriteShows:
  * projectNav.page lists the rows that pass first, leaves their projects
- * out of the list of the rest, and marks `favorite` on each row, and
+ * out of the list of the rest, and marks `favorite` on each row;
+ * projectNav.search does the same for the rows whose copied name key
+ * matches its search, which it matches before it judges a row; and
  * projectNav.resolve answers a top-level project's favorite state by the
  * same verdict.
  *

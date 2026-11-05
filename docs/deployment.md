@@ -745,6 +745,19 @@ app to an earlier commit stays safe. A person whose access Qivo cannot
 finish checking within those limits now gets that refusal on a task's
 history too, as on the workspace. There is no schema change and no backfill.
 
+The directory's name search across a person's projects and sub-projects,
+`projectNav.search`, first ships in the release after v0.1.125. No app
+calls it yet, so that release sets no rollback floor and needs no step, and
+returning the backend to a commit before it stays safe while no app calls
+the search. The release whose app first calls it makes the release that
+shipped it the backend's floor, and its own paragraph here says so. The
+search reads only the reach rows and name keys every deployment holds since
+v0.1.97 and the favorites rows below, and the release changes no table,
+field or index. It answers `not_ready` for an organization without both of
+its `org_ready` stamps, and it skips the favorites a rollback past the
+favorites release leaves, by the reader rule the favorites paragraph below
+describes, as the navigation reads do.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

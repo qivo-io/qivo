@@ -9,14 +9,12 @@
  * size, one figure a case, under Convex's transaction limits, which the last
  * suite logs. */
 
-import { ConvexError, compareValues } from 'convex/values'
+import { compareValues } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import type { QueryCtx } from '../_generated/server'
 import { ACCESS_UNCHECKED, accessOf, OWN_READS, ordinaryOf, projectLevel } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
-import type { Refusal } from '../lib/functions'
+import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import {
   indexAfter,
@@ -32,10 +30,6 @@ import { insertTask } from '../model/descriptions'
 import {
   CHILDREN_LIST,
   FAVORITES,
-  type NavBatch,
-  type NavCursorArgs,
-  type NavRefusal,
-  type NavResolveArgs,
   navChildrenOf,
   navPageOf,
   navResolveOf,
@@ -46,20 +40,32 @@ import {
   subProjectIndex,
 } from '../model/projectNavReads'
 import { SHAPES } from './accessShapes.setup'
-import {
-  as,
-  NOW,
-  newT,
-  type OrgFixture,
-  plantLogin,
-  plantSeat,
-  type T,
-  uuid,
-  withOrg,
-} from './helpers.setup'
-import { keyOrg } from './nameKeys.setup'
+import { as, NOW, newT, plantLogin, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 import { expectedChildren, expectedPage, navSees } from './projectNav.setup'
-import { withReach } from './projectReach.setup'
+import {
+  badRequest,
+  kids,
+  mapOf,
+  measured,
+  measuredWalk,
+  names,
+  now,
+  ok,
+  page,
+  pageAt,
+  person,
+  plantGrants,
+  plantMetas,
+  plantShares,
+  plantStar,
+  plantSubs,
+  plantTeam,
+  type Read,
+  ready,
+  resolved,
+  row,
+  walk,
+} from './projectNavFixtures.setup'
 
 /* Cursors are sealed with a key derived from BETTER_AUTH_SECRET
  * (lib/archiveCursorSeal.ts). */
@@ -74,229 +80,6 @@ afterEach(() => {
   Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   Object.assign(PROJECT_NAV, structuredClone(DEFAULT_NAV))
 })
-
-/* --------------------------------------------------------------- fixtures */
-
-type Seats = readonly Doc<'profiles'>[]
-
-/** A login's active seats by organization, as lib/functions.ts myProfiles. */
-const mapOf = (seats: Seats) => new Map(seats.map((seat) => [seat.org_id, seat]))
-
-const page = (t: T, seats: Seats, a: NavCursorArgs = {}) =>
-  t.run((ctx) => navPageOf(ctx, mapOf(seats), a))
-
-const kids = (t: T, seats: Seats, project_id: string, a: NavCursorArgs = {}) =>
-  t.run((ctx) => navChildrenOf(ctx, mapOf(seats), { project_id, ...a }))
-
-const resolved = (t: T, seats: Seats, a: NavResolveArgs) =>
-  t.run((ctx) => navResolveOf(ctx, mapOf(seats), a))
-
-/** The batch `answer` holds, failing unless it holds one. */
-function ok<R>(answer: NavBatch<R> | NavRefusal): NavBatch<R> {
-  if (answer.state !== 'ok') throw new Error(`not a batch: ${JSON.stringify(answer)}`)
-  return answer
-}
-
-/** Every batch of a list from its start, following `next`. */
-async function walk<R>(read: (after?: string) => Promise<NavBatch<R> | NavRefusal>, most = 60) {
-  const rows: R[] = []
-  const batches: NavBatch<R>[] = []
-  let after: string | undefined
-  for (let round = 0; round < most; round++) {
-    const batch = ok(await read(after))
-    batches.push(batch)
-    rows.push(...batch.rows)
-    if (batch.next === null) return { rows, batches }
-    after = batch.next
-  }
-  throw new Error('the list did not end')
-}
-
-/* Distinct numbers and keys for the projects these suites plant. */
-let planted = 5000
-
-/** Top-level metas of `orgId`, one for each name, planted raw with `extra`,
- * in order. Their name keys and archive states come from ready. */
-const plantMetas = (
-  t: T,
-  orgId: string,
-  names: readonly string[],
-  extra: Partial<Doc<'projects'>> = {},
-): Promise<Doc<'projects'>[]> =>
-  t.run(async (ctx) => {
-    const out: Doc<'projects'>[] = []
-    for (const name of names) {
-      const n = planted++
-      const _id = await ctx.db.insert('projects', {
-        id: uuid(),
-        org_id: orgId,
-        type: 'meta',
-        key: n.toString(36).toUpperCase(),
-        name,
-        description: '',
-        sort_order: n,
-        num: n,
-        track_delay: false,
-        created_at: NOW,
-        window_key: newWindowKey(),
-        ...extra,
-      })
-      out.push((await ctx.db.get(_id)) as Doc<'projects'>)
-    }
-    return out
-  })
-
-/** Sub-projects of `parent`, one for each name, planted raw. */
-const plantSubs = (
-  t: T,
-  parent: Doc<'projects'>,
-  names: readonly string[],
-  extra: Partial<Doc<'projects'>> = {},
-) => plantMetas(t, parent.org_id, names, { type: 'project', parent_id: parent.id, ...extra })
-
-/** User grants of `seat` on `projects`, planted raw. */
-const plantGrants = (
-  t: T,
-  seat: Doc<'profiles'>,
-  projects: readonly Doc<'projects'>[],
-  level: 'user' | 'viewer' = 'user',
-) =>
-  t.run(async (ctx) => {
-    for (const p of projects)
-      await ctx.db.insert('project_access', { project_id: p.id, profile_id: seat.id, level })
-  })
-
-/** Team shares of `teamId` on `projects`, planted raw. */
-const plantShares = (t: T, teamId: string, projects: readonly Doc<'projects'>[]) =>
-  t.run(async (ctx) => {
-    for (const p of projects)
-      await ctx.db.insert('project_team_access', {
-        project_id: p.id,
-        team_id: teamId,
-        level: 'user',
-      })
-  })
-
-/** A team of `orgId` with `members`, planted raw, and its id. */
-const plantTeam = (t: T, orgId: string, name: string, members: Seats = []) =>
-  t.run(async (ctx) => {
-    const id = uuid()
-    await ctx.db.insert('teams', {
-      id,
-      org_id: orgId,
-      name,
-      track_delay_default: false,
-      created_at: NOW,
-    })
-    for (const m of members)
-      await ctx.db.insert('team_members', { team_id: id, profile_id: m.id, is_leader: false })
-    return id
-  })
-
-/** A favorites row of `seat` on `p` with its copies, as a star writes it,
- * and `fields` over it. */
-const plantStar = (
-  t: T,
-  seat: Doc<'profiles'>,
-  p: Doc<'projects'>,
-  fields: Partial<Doc<'project_favorites'>> = {},
-) =>
-  t.run((ctx) =>
-    ctx.db.insert('project_favorites', {
-      org_id: seat.org_id,
-      profile_id: seat.id,
-      project_id: p.id,
-      name_key: nameKey(p.name),
-      live: p.archived_at === undefined,
-      created_at: NOW,
-      ...fields,
-    }),
-  )
-
-/** A person of `orgId` who can call as(), planted raw. */
-const person = (t: T, orgId: string, name: string, extra: Partial<Doc<'profiles'>> = {}) =>
-  plantSeat(t, { org_id: orgId, name, auth_user_id: `auth_${uuid()}`, ...extra })
-
-/** Names `prefix` 000 to `prefix` n-1, in the order they sort. */
-const names = (prefix: string, n: number) =>
-  Array.from({ length: n }, (_, i) => `${prefix}${String(i).padStart(3, '0')}`)
-
-/** The name keys, archive states and reach rows of every organization, as
- * on every deployment. Call after the last project, grant or share a case
- * plants raw. */
-async function ready(t: T, f: Pick<OrgFixture, 'org' | 'otherOrg'>): Promise<void> {
-  await keyOrg(t, f.org.id)
-  await keyOrg(t, f.otherOrg.id)
-  await withReach(t)
-}
-
-/** `p` as a navigation row. */
-const row = (p: Doc<'projects'>) => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
-
-/** The project with id `id` as it is stored now. */
-const now = (t: T, id: string) =>
-  t.run(async (ctx) => {
-    const p = await byId(ctx, 'projects', id)
-    if (p === null) throw new Error(`no project ${id}`)
-    return p
-  })
-
-/** The refusal `promise` rejects with, failing unless it is a bad_request. */
-async function badRequest(promise: Promise<unknown>): Promise<string> {
-  const e = await promise.then(
-    () => null,
-    (error: unknown) => error,
-  )
-  if (!(e instanceof ConvexError)) throw new Error(`expected a refusal, got ${String(e)}`)
-  const data = e.data as Refusal
-  expect(data.code).toBe('bad_request')
-  return data.message
-}
-
-/** What one transaction read, from Convex's metrics. */
-type Read = { ranges: number; documents: number; bytes: number }
-
-/** `run` in its own transaction, with what that transaction read. */
-async function measured<R>(
-  t: T,
-  run: (ctx: QueryCtx) => Promise<R>,
-): Promise<{ out: R; read: Read }> {
-  return await t.run(async (ctx) => {
-    const out = await run(ctx)
-    const m = await ctx.meta.getTransactionMetrics()
-    return {
-      out,
-      read: {
-        ranges: m.databaseQueries.used,
-        documents: m.documentsRead.used,
-        bytes: m.bytesRead.used,
-      },
-    }
-  })
-}
-
-/** Every batch of a list from its start, each measured. */
-async function measuredWalk<R>(
-  t: T,
-  read: (ctx: QueryCtx, after?: string) => Promise<NavBatch<R> | NavRefusal>,
-) {
-  const calls: (Read & { rows: number; stopped: boolean })[] = []
-  const rows: R[] = []
-  let after: string | undefined
-  for (let round = 0; round < 60; round++) {
-    const { out, read: r } = await measured(t, (ctx) => read(ctx, after))
-    const batch = ok(out)
-    calls.push({ ...r, rows: batch.rows.length, stopped: batch.stopped })
-    rows.push(...batch.rows)
-    if (batch.next === null) return { calls, rows }
-    after = batch.next
-  }
-  throw new Error('the list did not end')
-}
-
-/** The position `cursor` of the page seals, opened. */
-const pageAt = (cursor: string | null) =>
-  cursor === null ? Promise.resolve(null) : openNamedCursor(cursor, PAGE_LIST, [])
 
 /* ----------------------------------------------------------- the arguments */
 

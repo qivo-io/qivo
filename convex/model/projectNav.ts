@@ -29,9 +29,10 @@
  * search found from these rows, without walking a top-level project's
  * sub-projects (main Search, lib/mainSearch.ts).
  *
- * The readers beside these writers: projectNav.page, children and resolve
- * page a person's projects, favorites first, and a project's sub-projects
- * from these rows and judge one project for navigation
+ * The readers beside these writers: projectNav.page, children, resolve and
+ * search page a person's projects, favorites first, and a project's
+ * sub-projects from these rows, judge one project for navigation and
+ * search a person's projects and sub-projects by name
  * (model/projectNavReads.ts). */
 
 import type { GenericDocument, WithoutSystemFields } from 'convex/server'
@@ -796,8 +797,11 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * lib/access.ts canSeeProject, from reach rows read within the search's
  * budget, where projectLevelsOf's navigation reads them within OWN_READS
  * and, without nav_at, a top-level project's sub-projects (projectLevelsOf
- * navigates). Main Search's seats searched whole ask it (lib/mainSearch.ts),
- * and so can the directory's name search. Each project is judged once.
+ * navigates). Main Search's seats searched whole ask it (lib/mainSearch.ts).
+ * The directory's name search finds its candidates in the person's own rows
+ * and the live sub-projects of the top-level projects they hold a source on
+ * instead (model/projectNavReads.ts navSearchOf). Each project is judged
+ * once.
  *
  * A sub-project shows when the person sees it (access.visible), which never
  * walks navigation. A top-level project must be a meta, and shows when the

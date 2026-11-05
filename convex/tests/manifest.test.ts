@@ -669,6 +669,7 @@ profiles:update mutation public {"type":"object","value":{"id":{"fieldType":{"ty
 projectNav:children query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:page query public {"type":"object","value":{"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:resolve query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
+projectNav:search query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:setFavorite mutation public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"favorite":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1144,13 +1145,16 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Project navigation. The reads span organizations like main Search. They
   // read a person's projects across every active seat, and a project named
   // by id, or by its organization and number, judged with the caller's seat
-  // in its organization, by ordinary access. A star is the seat's own
-  // preference, refused like following a task while the organization is
-  // read-only.
+  // in its organization, by ordinary access. The name search reads every
+  // seat, or the one in the organization it is given, and an organization
+  // without the caller's seat answers an empty list. A star is the seat's
+  // own preference, refused like following a task while the organization
+  // is read-only.
   projectNav: {
     page: 'authedQuery',
     children: 'authedQuery',
     resolve: 'authedQuery',
+    search: 'authedQuery',
     setFavorite: 'orgMutation',
   },
   // A project's Settings page read from the server. get addresses a project
@@ -1227,7 +1231,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 223
+const PUBLIC_COUNT = 224
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

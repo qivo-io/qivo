@@ -1,5 +1,5 @@
-/* Project navigation: the All projects directory, the sidebar and startup
- * selection.
+/* Project navigation: the All projects directory with its name search,
+ * the sidebar, startup selection and the project pickers.
  *
  * - page: one batch of the top-level projects the caller sees for
  *   navigation across every active seat of their login, the favorites of
@@ -10,21 +10,26 @@
  * - resolve: whether one project, named by id or by its organization and
  *   number, is open to the caller for navigation, with its parent and its
  *   favorite state; a check a bound stopped answers apart from a loss.
+ * - search: one batch of the projects and sub-projects the caller sees for
+ *   navigation whose own name holds every word of a search, across every
+ *   active seat or in one organization, the matching favorites first and
+ *   then every other match by name, 25 a batch, each sub-project with its
+ *   parent.
  * - setFavorite: stars or unstars a top-level project for the caller's seat
  *   in the organization (model/projectFavorites.ts).
  *
  * The reads are live queries, in model/projectNavReads.ts. Each judges every
  * project by the caller's ordinary access, so admin status alone adds
- * none, and reads no task. page and children find their candidates in the
- * caller's own reach and favorite rows and the projects they name, or, for
- * the sub-projects of a project the caller sees for a reason of its own,
- * in that project's live sub-projects. They answer `not_ready` until the
- * organization's reach rows and name keys are complete and `stopped` where
- * the read budget ends a batch, never a partial list as complete. resolve
- * judges only the project it is asked about and answers before those rows
- * and keys are complete. Where a check a bound stopped, each read answers
- * the access_unchecked refusal, never a loss of access. No app calls them
- * or stars yet. */
+ * none, and reads no task. page, children and search find their
+ * candidates in the caller's own reach and favorite rows and the projects
+ * they name, or, for the sub-projects of a project the caller sees for a
+ * reason of its own, in that project's live sub-projects. They answer
+ * `not_ready` until the organization's reach rows and name keys are
+ * complete and `stopped` where the read budget ends a batch, never a
+ * partial list as complete. resolve judges only the project it is asked
+ * about and answers before those rows and keys are complete. Where a check
+ * a bound stopped, each read answers the access_unchecked refusal, never a
+ * loss of access. No app calls them or stars yet. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'
@@ -33,9 +38,11 @@ import {
   type NavChildren,
   type NavPage,
   type NavResolve,
+  type NavSearch,
   navChildrenOf,
   navPageOf,
   navResolveOf,
+  navSearchOf,
 } from './model/projectNavReads'
 
 /** The cursors of a navigation batch: its start (`after`, none for the
@@ -77,6 +84,25 @@ export const resolve = authedQuery({
     num: v.optional(v.number()),
   },
   handler: (ctx, a): Promise<NavResolve> => navResolveOf(ctx, ctx.myProfiles, a),
+})
+
+/** One batch of the projects and sub-projects the caller sees for
+ * navigation whose own name holds every word of `search`, in any order,
+ * ignoring case and accents (model/projectNavReads.ts navSearchOf), across
+ * every active seat, or only the seat in `org_id` when given. The matching
+ * favorites come first, then every other match, top-level projects and
+ * sub-projects together, each group in name key order with the project id
+ * breaking ties. Rows are `{ id, org_id, name, num, parent, favorite }`, a
+ * sub-project's `parent` its top-level project and its `favorite` null. A
+ * search with nothing to match, an empty org_id or a cursor of another
+ * list, login, organization or search is a bad_request, and a search past
+ * its limit is refused with the limit's sentence. An org_id without the
+ * caller's seat answers an empty last batch. `not_ready` while a searched
+ * organization's reach rows or name keys are not complete; `unavailable`
+ * with access_unchecked where a check stopped. */
+export const search = authedQuery({
+  args: { search: v.string(), org_id: v.optional(v.string()), ...vNavCursors },
+  handler: (ctx, a): Promise<NavSearch> => navSearchOf(ctx, ctx.authUserId, ctx.myProfiles, a),
 })
 
 /** Stars (`favorite` true) or unstars top-level project `project_id` for

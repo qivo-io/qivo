@@ -1,9 +1,10 @@
 /* Name-ordered lists read a batch at a time: Settings > Labels and the task
  * label picker (model/labels.ts labelBatch), API access's person filter
  * (apiAccess.ts people), a project's access lists and its access and lead
- * pickers (model/projectSettings.ts), a person's projects for navigation
- * and a project's sub-projects (model/projectNavReads.ts), and later the
- * people and team lists of Settings and the REST and MCP lists. A list is
+ * pickers (model/projectSettings.ts), a person's projects for navigation,
+ * a project's sub-projects and the directory's name search across a
+ * person's projects and sub-projects (model/projectNavReads.ts), and later
+ * the people and team lists of Settings and the REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -30,8 +31,9 @@
  * A merge throws when two streams hand out one position, which would mean
  * their ranges overlap. Only the project navigation lists merge streams
  * whose rows at one position name one thing, the reach rows of a seat and
- * of its teams on one project, and they ask the merge to hand out one of
- * those rows (mergeNamed's `ties`).
+ * of its teams on one project and, for the search, a sub-project's own
+ * document beside a child reach row of it, and they ask the merge to hand
+ * out one of those rows (mergeNamed's `ties`).
  *
  * A position names a place in that order, just after the row with its key
  * and tie, so a batch reads only what follows it, however long the list, and
@@ -204,7 +206,10 @@ export function inGroup<Row, Tie extends NamedTie>(
  * row it handed out when the budget has no room left. Right only where rows
  * at one position name one thing and are alike for the batch's `keep`, as
  * the reach rows of one seat and of its teams on one project are for the
- * project navigation lists (model/projectNavReads.ts). */
+ * project navigation lists (model/projectNavReads.ts), and as a
+ * sub-project's document and a child reach row of it are for the search,
+ * which puts the documents' streams first so the row handed out is the
+ * document. */
 export type MergeTies = { ties: 'first'; reads: NamedReads }
 
 /** What mergeNamed is asked: the direction its streams read in, ascending
