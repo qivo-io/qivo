@@ -12,7 +12,7 @@
  * group shows only when its task is in the seat's working set, the rule of
  * inbox.summary, inbox.item and the workspace inbox part (lib/access.ts
  * accessOf holds), the task read and checked by its own project. An item's
- * project_id is only a hint: a project the seat cannot hold items in lets
+ * project_id is only a hint. A project the seat cannot hold items in lets
  * the walk skip the item without reading its task, and never shows one. So
  * an item whose task a move of more than model/inboxItems.ts REKEY.inline
  * rows took from a hidden project into a visible one shows once its re-key
@@ -32,7 +32,7 @@
  * organizations hold one task id. Equal list times come in task id order,
  * descending newest first, the index's order, where the app sorted by id
  * ascending and reversed the list for Oldest first. A position is a value,
- * so the page is live: an item that gets a new message between pages moves,
+ * so the page is live. An item that gets a new message between pages moves,
  * newest first before the cursor and so onto an earlier page, oldest first
  * past it and so onto a later page again, and never shows twice on one
  * page.
@@ -140,7 +140,8 @@ import { inboxScope, unreadChange } from './inboxReads'
  *   documents;
  * - a group of an archived task in a visible project costs one range and
  *   two documents, so a page passes about 2,000 of them, half a page for
- *   each 1,000 such groups.
+ *   each 1,000 such groups. One sub-project's 3,000 such groups take about
+ *   2 pages and one project's 10,000 about 5.
  * A page answers at most 50 rows in about 42 KB. Every case answers whole
  * except the searches that say stopped above, which go on from `next`.
  */
@@ -276,13 +277,17 @@ export type InboxWalk<Out> = NamedBatch<Out> & {
  * `o.row` builds for a group the walk keeps. REST and MCP are to call it
  * for one profile with their own limit, row and cursor list.
  *
- * Each seat's readiness comes first (seatReady): a seat that is not ready
- * adds its organization to `not_ready` and no stream. The walk reads the
- * ready seats' items in the order of `ask` (itemIndex, merged by
- * lib/namedPages.ts mergeNamed and batched by readBatch under `o.ceiling`,
- * so it always reads its first item, a stop is never an end, and a full
- * batch reads one item more to say whether it ended). Each item is judged
- * in order, each step reading only what the one before let through:
+ * Each seat's readiness comes first (seatReady). A seat that is not ready
+ * adds its organization to `not_ready` and no stream. Unlike
+ * projectNav.page, which answers `not_ready` for the whole page, the walk
+ * names a seat that is not ready and leaves it out while the other seats'
+ * groups show, as inbox.summary counts them (design specification row
+ * 387). The walk reads the ready seats' items in the order of `ask`
+ * (itemIndex, merged by lib/namedPages.ts mergeNamed and batched by
+ * readBatch under `o.ceiling`, so it always reads its first item, a stop
+ * is never an end, and a full batch reads one item more to say whether it
+ * ended). Each item is judged in order, each step reading only what the
+ * one before let through:
  *
  * 1. the kind filter, on the item's counts, without a read;
  * 2. the hint, whether the item's project_id can hold a task the seat is

@@ -449,7 +449,7 @@ export type NamedBatch<Out> = {
  * `order` is the direction `stream` reads in, ascending by default, which
  * decides what lies past `through`. Each position the stream hands out must
  * come after the one before it, and the first after `after`, in that
- * direction, else the batch throws: a stream that disagrees with its
+ * direction, else the batch throws, since a stream that disagrees with its
  * batch's direction, or with the order of its index, would skip rows.
  */
 export async function readBatch<Row extends GenericDocument, Out>(

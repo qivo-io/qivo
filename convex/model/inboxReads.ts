@@ -295,7 +295,7 @@ const tellsChange = (message: Pick<Doc<'messages'>, 'kind' | 'detail'>): boolean
  * rule (src/lib/spine.ts unreadStart): a change, or a mention in the
  * description. The item counts its changes and mentions read or not, so
  * the unread ones are those beyond the read ones, which the prune keeps to
- * at most one: the answer reads the item's read messages, one normally,
+ * at most one, so the answer reads the item's read messages, one normally,
  * and, only when no change is unread and a mention is, walks the unread
  * messages up to the first mention in the description, at most
  * ITEM_UNREAD_CAP (model/messages.ts) on an item the cap keeps. An item

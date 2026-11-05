@@ -240,8 +240,8 @@ export function blendInbox<M extends Ordered & Pick<Doc<'messages'>, 'snoozed_un
 export type KindCounts = Pick<Doc<'inbox_items'>, 'mentions' | 'changes' | 'comments'>
 
 /* The count of each kind, written in the order of lib/enums.ts
- * MESSAGE_KINDS, which this module cannot import: lib/enums.ts loads
- * convex-helpers at run time. */
+ * MESSAGE_KINDS, which this module cannot import, because lib/enums.ts
+ * loads convex-helpers at run time. */
 const KIND_COUNT = {
   mention: 'mentions',
   change: 'changes',
@@ -249,8 +249,9 @@ const KIND_COUNT = {
 } as const satisfies Record<MessageKind, keyof KindCounts>
 
 /** The kinds of an item's messages, those it counts at least one of, in
- * the order of MESSAGE_KINDS (lib/enums.ts), as the app gathers them
- * (store/viewModels.ts shapeMessageGroup `kinds`). */
+ * the order of MESSAGE_KINDS (lib/enums.ts). The app (store/viewModels.ts
+ * shapeMessageGroup `kinds`) gathers the same kinds in the order of their
+ * oldest messages. */
 export const itemKinds = (counts: KindCounts): MessageKind[] =>
   (Object.keys(KIND_COUNT) as MessageKind[]).filter((kind) => counts[KIND_COUNT[kind]] > 0)
 
