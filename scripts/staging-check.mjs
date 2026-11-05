@@ -4640,8 +4640,8 @@ export const BILLING_STORAGE_EXPECTED = {
   counting: 'Being counted. Check again later.',
 }
 
-/** Billing's storage figures on the deployment's answers
- *  (billing.currentUsage and billing.storageProjects): the run makes
+/** Checks Billing's storage figures on the deployment's answers
+ *  (billing.currentUsage and billing.storageProjects). The run makes
  *  `<tag> Billing storage` under its project M over REST, a sub-project no
  *  other step uploads to, with one task, and uploads one file of
  *  BILLING_STORAGE_EXPECTED.bytes to it over REST. In the app, as Nora, an

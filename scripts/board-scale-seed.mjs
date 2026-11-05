@@ -235,7 +235,7 @@ const LABEL_TOPICS = [
   'Power budget',
   'Release notes',
 ]
-/* The most sub-projects --files makes: eight batches of Storage by project,
+/* The most sub-projects --files makes, eight batches of Storage by project,
    far past the first. */
 const MOST_FILES = 200
 /* The most live sub-projects --files puts under one project, the design
