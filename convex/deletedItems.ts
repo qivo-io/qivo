@@ -13,18 +13,17 @@
  * seat in its own organization may see it (model/deletedItems.ts viewOf);
  * page reads one organization's seat when its scope names one. An
  * organization admin keeps every item that is not purging and reads its
- * tasks as their role reads them: every task until the admin access split,
+ * tasks as their role reads them, every task until the admin access split
  * and after it only the tasks their ordinary access reaches, with a hidden
- * row for a task item whose root they cannot read. roles, people and
- * purgeSummary answer what the page shows beside its entries, so it needs
- * no roster or loaded list: each seat's role, the people of one
- * organization a batch at a time for Deleted by and the assignee filter,
- * and what Delete now deletes with a project item. No app calls them yet
- * either. restore and purge act in one organization and load each id
- * through myItem, the same rule: an unknown id, another organization's item
- * and one hidden from the caller all answer not_found, before any state or
- * permission reason. They answer per item and never throw for one item's
- * problem.
+ * row for a task item whose root they cannot read. roles answers each
+ * seat's role, people the people of one organization a batch at a time for
+ * Deleted by and the assignee filter, and purgeSummary what Delete now
+ * deletes with a project item, so the page needs no roster or loaded list
+ * beside its entries. No app calls them yet either. restore and purge act
+ * in one organization and load each id through myItem, the same rule: an
+ * unknown id, another organization's item and one hidden from the caller
+ * all answer not_found, before any state or permission reason. They answer
+ * per item and never throw for one item's problem.
  *
  * step runs one bounded step of an item's job, whatever its phase (moving,
  * restoring or purging), and schedules the next. recover (every minute,
@@ -133,7 +132,7 @@ export const page = authedQuery({
 /* ------------------------------------------------------------------ roles
  * Each active seat of the login with its organization, its role in
  * Deleted items and whether Delete now applies there
- * (model/deletedItemsChoices.ts rolesFor): `admin` sees every delete,
+ * (model/deletedItemsChoices.ts rolesFor). `admin` sees every delete,
  * `lead` its own and those in projects it leads, live, archived or in
  * Deleted items, and `user` its own. Seats come in no particular order; the
  * client orders them and words the subtitle. */
@@ -159,12 +158,12 @@ export const people = authedQuery({
 })
 
 /* ----------------------------------------------------------- purgeSummary
- * Delete now's summary of one item for an organization admin's seat of the
- * login (model/deletedItemsChoices.ts purgeSummaryOf): how many items
- * Delete now deletes with it, through the ranges its purge reads, exactly
- * or, past a read bound, at least (`exact: false`). A task item deletes
- * nothing with it. Null for an unknown, another organization's, purging,
- * moving or restoring item and for any seat but an admin's alike. */
+ * How many items Delete now deletes with one item, for an organization
+ * admin's seat of the login (model/deletedItemsChoices.ts purgeSummaryOf),
+ * counted through the ranges its purge reads, exactly or, past a read
+ * bound, at least (`exact: false`). A task item deletes nothing with it.
+ * Null for an unknown, another organization's, purging, moving or restoring
+ * item and for any seat but an admin's alike. */
 export const purgeSummary = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }): Promise<PurgeSummary | null> =>

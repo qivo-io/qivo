@@ -40,8 +40,8 @@
  * reference predicate, and `via` narrows them to 'app', a kind of
  * credential (its bare table, which every viewer may know) or one
  * credential where the seat may know which (`table:id`). `someone` keeps
- * the deletes whose deleter line says Someone for the seat: no profile that
- * passes the reference predicate deleted them. No index serves it, so the
+ * the deletes whose deleter line says Someone for the seat, deleted by no
+ * profile that passes the reference predicate. No index serves it, so the
  * seat reads its usual ranges and keeps those in code (deletedAsAsked).
  *
  * Order and cursor. Project entries come before task entries. Within each,
@@ -265,8 +265,8 @@ export type DeletedPage = {
   scope_needed?: true
   /** the scope needs more sources than one page merges; choose fewer projects */
   too_wide?: true
-  /** entries that sort before the last one may be missing: `reads` after a
-   * budget stop, and `matches` on every search page of a seat whose role
+  /** entries that sort before the last one may be missing, `reads` after
+   * a budget stop and `matches` on every search page of a seat whose role
    * does not read every task, or after a search source of one whose role
    * does read its whole allowance */
   missing?: 'matches' | 'reads'
@@ -444,11 +444,11 @@ const keyOf = (a: Asked): Promise<string> =>
 
 /** One seat the page reads, with its sight of its organization. `admin`
  * decides the management parts, since an organization admin keeps every
- * item: the organization's ranges, heldFor, the admin's assignee index and
- * olderRows' probe. `readsAll` decides the search's notes: whether the
- * seat's role reads every task (model/deletedItems.ts roleReadsEveryTask),
- * which equals `admin` until the admin access split and is false for
- * everyone after it. */
+ * item, which are the organization's ranges, heldFor, the admin's assignee
+ * index and olderRows' probe. `readsAll`, whether the seat's role reads
+ * every task (model/deletedItems.ts roleReadsEveryTask), decides the
+ * search's notes. It equals `admin` until the admin access split and is
+ * false for everyone after it. */
 type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean; readsAll: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
@@ -507,13 +507,14 @@ const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean
   view.projects.some((p) => scope.ids.has(p.id))
 
 /** Whether `item` passes the deleter filters for `seat`. With `someone`,
- * its deleter line says Someone: no profile that passes the reference
- * predicate deleted it, as deletedItemsList.ts deleterOf decides. With
- * `deletedBy`, the person it names deleted it while their profile is the
- * one that deleted, and, with `via`, the way `via` names: the way the seat
- * may know it (deletedItemsList.ts howOf), or that way's table for a bare
- * table, since a row shows the kind of credential to every viewer, while a
- * `table:id` the seat may not know matches nothing. */
+ * its deleter line says Someone, since no profile that passes the
+ * reference predicate deleted it, as deletedItemsList.ts deleterOf
+ * decides. With `deletedBy`, the person it names deleted it while their
+ * profile is the one that deleted, and with `via` it was deleted the way
+ * `via` names, as the seat may know it (deletedItemsList.ts howOf) or by
+ * that way's table for a bare table, since a row shows the kind of
+ * credential to every viewer. A `table:id` the seat may not know matches
+ * nothing. */
 function deletedAsAsked(seat: Seat, a: Asked, item: Item): boolean {
   if (a.someone) {
     const id = item.deleted_by
@@ -1112,7 +1113,7 @@ const assignedAsAsked = (seat: Seat, a: Asked, item: Item, task: Task): boolean 
   (task.assignee_id === a.assignee && sameReference(seat.sight.profiles.get(a.assignee), item))
 
 /** Whether `view` lets its viewer read the project of `task`, so they may
- * be told about it: every candidate of the search, task reference and
+ * be told about it. Every candidate of the search, task reference and
  * assignee entry passes it. */
 const shows = (view: ItemView, task: Task): boolean =>
   view.readable.some((p) => p.id === task.project_id)

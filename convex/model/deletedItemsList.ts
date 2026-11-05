@@ -194,8 +194,8 @@ export type DeletedRow = {
   reason?: string
   state: Exclude<Item['state'], 'purging'>
   redacted?: true
-  /** an admin's task item whose root they cannot read: `title` is empty,
-   * and `status` and `reason` are left out (model/deletedItems.ts ItemView) */
+  /** an admin's task item whose root they cannot read, with an empty
+   * `title` and no `status` or `reason` (model/deletedItems.ts ItemView) */
   hidden?: true
   can_restore: boolean
   blocked?: BlockDetail
@@ -627,7 +627,7 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * longer text instead of hiding the rest: the search finds one visible
  * match past the cap. It is decided by visible matches alone, but for a
  * login whose every seat's role reads every task (model/deletedItems.ts
- * roleReadsEveryTask: an organization admin's until the admin access
+ * roleReadsEveryTask, an organization admin's until the admin access
  * split), a budget stop says it too. For anyone else the scan's
  * MATCHES.scan results and the budget also count tasks the seat cannot
  * read, so a stop at either is not reported, or `capped` would tell that

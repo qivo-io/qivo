@@ -1,14 +1,14 @@
 /* What the Deleted items page shows beside its entries
- * (model/deletedItemsChoices.ts): each seat's role (deletedItems.roles),
- * the people for Deleted by and the assignee filter (deletedItems.people)
- * and Delete now's summary (deletedItems.purgeSummary), with the page's two
- * filters that complete the Deleted by choices, `someone` and a `via` of a
- * credential kind (model/deletedItemsPage.ts deletedAsAsked). Fake timers
- * keep steps from running until a test releases them. DELETED_PEOPLE,
- * PURGE_ALONG and DELETED_PAGE are lowered where a case needs a stop and
- * restored after each case. The last block reads at the design size, one
- * figure raised a case, and logs its reads as
- * tests/deletedItemsPageReads.test.ts does. */
+ * (model/deletedItemsChoices.ts), which is each seat's role
+ * (deletedItems.roles), the people for Deleted by and the assignee filter
+ * (deletedItems.people) and Delete now's summary
+ * (deletedItems.purgeSummary), with the page's two filters that complete
+ * the Deleted by choices, `someone` and a `via` of a credential kind
+ * (model/deletedItemsPage.ts deletedAsAsked). Fake timers keep steps from
+ * running until a test releases them. DELETED_PEOPLE, PURGE_ALONG and
+ * DELETED_PAGE are lowered where a case needs a stop and restored after
+ * each case. The last block reads at the design size, one figure raised a
+ * case, and logs its reads as tests/deletedItemsPageReads.test.ts does. */
 /// <reference types="vite/client" />
 
 import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
@@ -259,8 +259,8 @@ describe('deletedItems.roles', () => {
     await patch(t, 'profiles', dora.id, { created_at: new Date(Date.now()).toISOString() })
     const reused = (await t.run((ctx) => byId(ctx, 'profiles', dora.id))) as Profile
     expect((await roles(t, reused))[0].role).toBe('user')
-    // a project the new seat led, deleted since: a lead again, unless the
-    // item is purging
+    // a project the new seat led, deleted since, makes it a lead again,
+    // unless the item is purging
     later()
     const named = plantedProject(f, new Date(Date.now()).toISOString())
     await t.run(async (ctx) => {
@@ -271,8 +271,9 @@ describe('deletedItems.roles', () => {
     await patch(t, 'deleted_items', named.id, { state: 'purging' })
     expect((await roles(t, reused))[0].role).toBe('user')
     await patch(t, 'deleted_items', named.id, { state: 'ready' })
-    // the approximation: a newer row of the earlier holder hides the older
-    // row that names the new seat, since the role reads the newest row only
+    // the approximation, where a newer row of the earlier holder hides the
+    // older row that names the new seat, since the role reads the newest
+    // row only
     const earlier = plantedProject(f, new Date(START - 86_400_000).toISOString())
     await t.run(async (ctx) => {
       await ctx.db.insert('deleted_items', earlier)
@@ -299,7 +300,8 @@ describe('deletedItems.roles', () => {
     expect(await roles(t, f.otherAdmin)).toEqual([
       { org_id: f.otherOrg.id, org_name: 'Other', role: 'admin', can_purge: true },
     ])
-    // billing on and no subscription: read-only, so Delete now is refused
+    // billing on and no subscription make it read-only, so Delete now is
+    // refused
     vi.stubEnv('BILLING_ENABLED', 'true')
     expect((await roles(t, f.admin)).find((r) => r.org_id === f.org.id)).toMatchObject({
       role: 'admin',
@@ -656,8 +658,8 @@ describe("the page's someone", () => {
     }
     await removeProfile(t, kim.id)
     const scope = { org_id: f.org.id, all: true as const }
-    // the reads that find items may read four documents: a page reads the
-    // first item of its range and three more, and a later page its
+    // the reads that find items may read four documents, so a page reads
+    // the first item of its range and three more, and a later page its
     // cursor's item again first
     DELETED_PAGE.find = { bytes: 1 << 30, rows: 4, ranges: 1e6 }
     const walked = await walk(t, f.admin, { scope, kind: 'task', someone: true })

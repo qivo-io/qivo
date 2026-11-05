@@ -124,8 +124,8 @@ const PEOPLE_LIST = 'deletedItems.people'
 export const PEOPLE_BATCH = 25
 
 /**
- * What one batch of the people may read: at most `candidates` profiles,
- * and `read` past what the call read before the batch (lib/namedPages.ts
+ * What one batch of the people may read, at most `candidates` profiles and
+ * `read` past what the call read before the batch (lib/namedPages.ts
  * namedCeiling), checked with the transaction's metrics as it reads
  * (readGuard). The profiles come from one or two index ranges, a few
  * hundred bytes each with ordinary text, so `candidates` stops a batch
@@ -133,23 +133,23 @@ export const PEOPLE_BATCH = 25
  * batch answers what it found with a cursor, marked as stopped early.
  * Measured on 5 November 2026 in convex-test in an organization of 1,000
  * people with ordinary names (tests/deletedItemsChoices.test.ts, "reads at
- * the design size"), without the login's own reads: the first batch
- * without a search reads 2 index ranges, 27 documents and 0.01 MiB, and a
- * search whose only matches sit last in name order reads to `candidates`,
- * 2 ranges, 402 documents and 0.14 MiB a batch, and answers them in its
- * third batch. A mutable object, so tests can lower it; replace `read`
- * whole rather than change its fields.
+ * the design size") without the login's own reads, the first batch without
+ * a search reads 2 index ranges, 27 documents and 0.01 MiB, and a search
+ * whose only matches sit last in name order reads to `candidates`, 2
+ * ranges, 402 documents and 0.14 MiB a batch, and answers them in its third
+ * batch. A mutable object, so tests can lower it; replace `read` whole
+ * rather than change its fields.
  */
 export const DELETED_PEOPLE: { candidates: number; read: ReadCeiling } = {
   candidates: 400,
   read: { ranges: 256, documents: 2_000, bytes: 2 * MIB },
 }
 
-/** One person or agent of the batch: lib's person row, with `pending`
- * for a person nobody has claimed yet, who can hold work but has deleted
- * nothing, and `you` for the caller's own seat. A public demo's seeded
- * seats have no login either and read as pending here; the app keeps its
- * demo exception (src/store/viewModels.ts). */
+/** One person or agent of the batch, as model/projectSettings.ts personRow
+ * gives it, with `pending` for a person nobody has claimed yet, who can
+ * hold work but has deleted nothing, and `you` for the caller's own seat. A
+ * public demo's seeded seats have no login either and read as pending here;
+ * the app keeps its demo exception (src/store/viewModels.ts). */
 export type DeletedPerson = PersonRow & { you: boolean }
 
 /** One batch of the people (deletedItems.people), or `not_ready` while the
@@ -255,20 +255,20 @@ function upTo<Row>(
 /* ------------------------------------------------- Delete now's summary */
 
 /**
- * What Delete now's summary may read for one project item: `items`, the
- * most dependents it counts, and the documents (`rows`), estimated `bytes`
- * and index `ranges` it reads, each read of a range being one. A project
- * item of 71 projects opens 4 ranges a project, one a kind and purgeable
- * state (model/deletedItems.ts dependentRanges), 284 ranges, and each
- * sub-project item it finds 4 more. Measured on 5 November 2026 in
- * convex-test for a project item that stores 30 live and 40 archived
+ * What Delete now's summary may read for one project item. `items` is the
+ * most dependents it counts, and `rows`, `bytes` and `ranges` are the
+ * documents, estimated bytes and index ranges it reads, each read of a
+ * range being one. A project item of 71 projects opens 4 ranges a project,
+ * one a kind and purgeable state (model/deletedItems.ts dependentRanges),
+ * 284 ranges, and each sub-project item it finds 4 more. Measured on 5
+ * November 2026 in convex-test (tests/deletedItemsChoices.test.ts, "reads
+ * at the design size"), a project item that stores 30 live and 40 archived
  * sub-projects, with a task item in each live one and three earlier
- * sub-project items each with one task item (tests/deletedItemsChoices.test.ts,
- * "reads at the design size"): 36 items in 297 index ranges, 37 documents
- * and 0.04 MiB with the item's own read, answered exactly. Past any bound it
- * answers the count so far with `exact: false`. A subscription query
- * reruns when a dependent changes state or is added, inside the same
- * bounds. A mutable object, so tests can lower it.
+ * sub-project items each with one task item, counts its 36 items exactly
+ * in 297 index ranges, 37 documents and 0.04 MiB with the item's own read.
+ * Past any bound it answers the count so far with `exact: false`. A
+ * subscription query reruns when a dependent changes state or is added,
+ * inside the same bounds. A mutable object, so tests can lower it.
  */
 export const PURGE_ALONG = { items: 1_000, rows: 2_000, bytes: 4 * MIB, ranges: 1_024 }
 
@@ -277,8 +277,8 @@ export const PURGE_ALONG = { items: 1_000, rows: 2_000, bytes: 4 * MIB, ranges: 
 export type PurgeSummary = { along: number; exact: boolean }
 
 /**
- * Delete now's summary of item `id` (deletedItems.purgeSummary): for an
- * organization admin's seat of the login in the item's organization, a
+ * Delete now's summary of item `id` (deletedItems.purgeSummary), for an
+ * organization admin's seat of the login in the item's organization and a
  * ready or stuck item that seat sees (model/deletedItems.ts seesItem, which
  * reads no level for an admin). A task item deletes nothing with it. A
  * project item deletes the items that could never come back without it,

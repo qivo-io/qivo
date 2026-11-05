@@ -1,7 +1,7 @@
 /* Deleted items as an organization admin reads it (model/deletedItems.ts
  * viewOf and roleReadsEveryTask). An admin keeps every item that is not
  * purging, with its metadata, Restore by the ordinary rule and Delete now,
- * and reads its tasks as their role reads them: every task today, and once
+ * and reads its tasks as their role reads them, every task today and, once
  * the admin access split takes the role's blanket level away, only the
  * tasks their ordinary access reaches.
  *
@@ -9,18 +9,17 @@
  * access split" spy on lib/access.ts levelsFrom and projectLevel so that
  * they judge an admin through ordinaryOf, as they will once the split
  * removes their admin branches (standInForTheSplit), as
- * tests/accessRemovalPreview.test.ts does for its own reader. Its first case
- * fails without the spies. When the split lands it drops the helper and
- * keeps those assertions as plain cases, and the cases of "an admin today"
- * change with it. A split that removed only one of the two admin branches
- * fails those plain cases: roleReadsEveryTask asks levelsFrom, while the
- * view of a task item and a restore ask projectLevel through liveLevel. The
- * spies reach the calls in model/deletedItems.ts (viewOf, sightOf,
- * storedLevels, roleReadsEveryTask and restoreBlock), not those inside
- * lib/access.ts, such as a reveal's rechecks (hasProjectLevel,
- * projectLevelsForOrg), and no case here claims more. installTrashTimers'
- * afterEach restores the spies, and the afterEach below the budgets the
- * cases lower.
+ * tests/accessRemovalPreview.test.ts does for its own reader. Its first
+ * case fails without the spies. When the split lands it drops the helper
+ * and keeps those assertions as plain cases, and the cases of "an admin
+ * today" change with it. A split that removed only one of the two admin
+ * branches fails those plain cases, since roleReadsEveryTask asks
+ * levelsFrom while a restore asks projectLevel through liveLevel. The spies
+ * reach the calls in model/deletedItems.ts (viewOf, sightOf, storedLevels,
+ * roleReadsEveryTask and restoreBlock), not those inside lib/access.ts,
+ * such as a reveal's rechecks (hasProjectLevel, projectLevelsForOrg), and
+ * no case here claims more. installTrashTimers' afterEach restores the
+ * spies, and the afterEach below the budgets the cases lower.
  *
  * The last block reads at the design size, one figure raised a case, and
  * logs its reads as tests/deletedItemsPageReads.test.ts does. */
@@ -78,7 +77,7 @@ type Item = Doc<'deleted_items'>
 /* The functions the stand-in wraps, as lib/access.ts exports them. */
 const real = { levelsFrom: access.levelsFrom, projectLevel: access.projectLevel }
 
-/** Stands in for the admin access split until it lands: levelsFrom and
+/** Stands in for the admin access split until it lands. levelsFrom and
  * projectLevel judge an organization admin as ordinary access does
  * (lib/access.ts ordinaryOf), as they will once the split removes their
  * admin branches. installTrashTimers' afterEach restores both. */
@@ -787,8 +786,8 @@ describe('under a stand-in for the admin access split', () => {
       for (const id of unreadable) expect(JSON.stringify(walked.pages)).not.toContain(id)
     }
     expectOnlyReadable(await walk(t, f.admin, { scope, assignee: mia.id }))
-    // two rows of the index a page: pages that end at a row they dropped
-    // say nothing about it but where the next page starts
+    // two rows of the index a page, so pages that end at a row they
+    // dropped say nothing about it but where the next page starts
     DELETED_PAGE.find = { ...DEFAULT_PAGE.find, rows: 2 }
     const paged = await walk(t, f.admin, { scope, assignee: mia.id })
     expect(paged.pages.length).toBeGreaterThan(2)
@@ -1096,8 +1095,8 @@ async function plantTaskItem(t: T, f: OrgFixture, p: ProjectRow, top: string, at
   return id
 }
 
-/** What one page read: its answer, Convex's counts as convex-test keeps
- * them, and the page's own (pageFor's spend). */
+/** What one page read, with its answer, Convex's counts as convex-test
+ * keeps them, and the page's own (pageFor's spend). */
 async function readPage(t: T, me: Profile, args: PageArgs) {
   return await as(t, me).query(async (ctx) => {
     const spend: PageSpend = {}
