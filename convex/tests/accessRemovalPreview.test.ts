@@ -60,6 +60,9 @@ import { northstarId, plantNorthstar } from './northstar.setup'
 
 type Ok = Extract<RemovalPreview, { state: 'ok' }>
 
+/* PREVIEW.items as the module sets it, which the hooks below put back. */
+const ITEMS = PREVIEW.items
+
 const preview = (t: T, caller: Doc<'profiles'>, change: RemovalChange) =>
   as(t, caller).query(api.accessRemovals.preview, { org_id: caller.org_id, change })
 
@@ -295,7 +298,7 @@ describe('the removal preview and the write it previews', () => {
     PREVIEW.items = 10_000
   })
   afterEach(() => {
-    PREVIEW.items = 100
+    PREVIEW.items = ITEMS
   })
 
   it("previews a person's grant on a top-level project", async () => {
@@ -330,13 +333,15 @@ describe('the removal preview and the write it previews', () => {
       changers: [{ id: s.pia.id, projects: [s.f.sub2.id], more: 0 }],
       allowed: true,
       refusal: null,
+      offered: true,
+      permitted: true,
     })
     // each project the answer names, once, in the app's order
     expect(p.projects).toEqual([
       { id: s.f.meta.id, name: s.f.meta.name, key: s.f.meta.key, parent_id: null },
       { id: s.f.sub2.id, name: s.f.sub2.name, key: s.f.sub2.key, parent_id: s.f.meta.id },
     ])
-    expect(p.reassign).toEqual({ allowed: true, refusal: null })
+    expect(p.reassign).toEqual({ allowed: true, refusal: null, permitted: true })
     expect(p.leave_only).toBe(false)
   })
 
@@ -506,7 +511,7 @@ describe('the removal preview and the write it previews', () => {
     })
     expect(titles(p)).toEqual(['In Firmware', 'Elsewhere'])
     expect(p.keep).toMatchObject({ allowed: false, refusal: NO_USER_MANAGEMENT })
-    expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS })
+    expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS, permitted: false })
   })
 
   /* Lena, a user who leads Hardware, which shares Elsewhere at User, and
@@ -538,14 +543,14 @@ describe('the removal preview and the write it previews', () => {
   it('uses the edit access a leader keeps after removing a member', async () => {
     const { p } = await expectParity(() => leaderScenario('mia'))
     expect(titles(p)).toEqual(["Mia's task"])
-    expect(p.reassign).toEqual({ allowed: true, refusal: null })
+    expect(p.reassign).toEqual({ allowed: true, refusal: null, permitted: true })
   })
 
   it('uses the edit access a leader loses by leaving their own team', async () => {
     const { p } = await expectParity(() => leaderScenario('lena'))
     // she reads it now and could edit it, but not once she has left
     expect(titles(p)).toEqual(["Lena's task"])
-    expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS })
+    expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS, permitted: false })
     expect(p.keep).toMatchObject({ allowed: false, refusal: NO_USER_MANAGEMENT })
   })
 
@@ -612,12 +617,17 @@ describe('the removal preview and the write it previews', () => {
     }
     const { p } = await expectParity(() => plant('user'))
     expect(p.tasks).toBe(LIMITS.reassign.max + 1)
-    expect(p.reassign).toEqual({ allowed: false, refusal: reassignTooLarge(true) })
+    expect(p.reassign).toEqual({
+      allowed: false,
+      refusal: reassignTooLarge(true),
+      permitted: true,
+    })
     // without Keep as Viewer, the sentence does not suggest it
     const viewer = await plant('viewer')
     expect((await previewOk(viewer.t, viewer.caller, viewer.change)).reassign).toEqual({
       allowed: false,
       refusal: reassignTooLarge(false),
+      permitted: true,
     })
   })
 
@@ -636,7 +646,7 @@ describe('the removal preview and the write it previews', () => {
     expect(p.people).toHaveLength(LIMITS.removalHolders.max + 1)
     const capped = { allowed: false, refusal: LIMITS.removalHolders.refusal }
     expect(p.keep).toMatchObject(capped)
-    expect(p.reassign).toEqual(capped)
+    expect(p.reassign).toEqual({ ...capped, permitted: true })
   })
 
   it('previews nothing to remove once the access is gone', async () => {
@@ -653,8 +663,15 @@ describe('the removal preview and the write it previews', () => {
       items_total: 0,
       hidden: 0,
       projects: [],
-      keep: { targets: [], changers: [], allowed: true, refusal: null },
-      reassign: { allowed: true, refusal: null },
+      keep: {
+        targets: [],
+        changers: [],
+        allowed: true,
+        refusal: null,
+        offered: true,
+        permitted: true,
+      },
+      reassign: { allowed: true, refusal: null, permitted: true },
     }
     const changes: RemovalChange[] = [
       { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id },
@@ -675,7 +692,7 @@ describe('the removal preview on Northstar', () => {
     PREVIEW.items = 10_000
   })
   afterEach(() => {
-    PREVIEW.items = 100
+    PREVIEW.items = ITEMS
   })
 
   /* Northstar with an admin who can take over any task, previewed by Nora. */
@@ -762,7 +779,7 @@ describe('what the removal preview lists', () => {
       expect(p.items_total).toBe(7)
       expect(p.tasks).toBe(5)
     } finally {
-      PREVIEW.items = 100
+      PREVIEW.items = ITEMS
     }
   })
 
@@ -813,7 +830,7 @@ describe('what the removal preview lists', () => {
       expect(p.hidden).toBe(2)
       // the admin still manages TBED, so may know its name and keep Mia
       expect(p.keep).toMatchObject({ targets: [b.f.meta.id], allowed: true })
-      expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS })
+      expect(p.reassign).toEqual({ allowed: false, refusal: NO_WRITE_ACCESS, permitted: false })
     } finally {
       spy.mockRestore()
     }

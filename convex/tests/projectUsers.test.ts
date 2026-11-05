@@ -4,12 +4,25 @@
  * and must list whom canAccessProject admits and mark `assignable` whom
  * profileCanBeAssigned admits, which is how it was computed before and how
  * the task writes still decide. The per-profile walk is kept here as the
- * reference. */
+ * reference.
+ *
+ * The removal window's Reassign picker reads the same levels with a
+ * removal's rows left out (projectLevelsForProfiles `without`), which must
+ * equal projectLevelsForPeople's with the same rows left out, the reads the
+ * removal's own findLost makes, and checks its room before each read
+ * (`guard`). */
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { canAccessProject, profileCanBeAssigned, projectLevelsForProfiles } from '../lib/access'
+import {
+  canAccessProject,
+  orgProjects,
+  profileCanBeAssigned,
+  projectLevelsForPeople,
+  projectLevelsForProfiles,
+  type RemovedAccess,
+} from '../lib/access'
 import { listProjectUsersCore, listUsersCore, userJson } from '../lib/core'
 import { ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { newTeam, SHAPES } from './accessShapes.setup'
@@ -171,5 +184,143 @@ describe('listProjectUsersCore', () => {
       await t.query(internal.machine.mcp.listProjectUsers, { ...as_, project: 'FW' }),
     )
     expect(mcp).toHaveLength(CROWD + 4)
+  })
+})
+
+describe('projectLevelsForProfiles with a removal left out', () => {
+  it("equals projectLevelsForPeople's level, navigation aside, for every access shape, role and removed row", async () => {
+    // whether some removal changed the subject's level, so the comparison
+    // is not only of levels nothing removes
+    const seen = new Set<string>()
+    for (const [name, plant] of SHAPES) {
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      await t.run(async (ctx) => {
+        const projects = await orgProjects(ctx, f.org.id)
+        const asked = projects.filter((p) =>
+          [f.meta.id, f.sub.id, f.sub2.id, f.hidden.id].includes(p.id),
+        )
+        // every row a removal could take from the subject: each grant, each
+        // share on the organization's projects, each membership, each team
+        // those name, and nothing
+        const grants = await ctx.db
+          .query('project_access')
+          .withIndex('by_profile', (q) => q.eq('profile_id', subject.id))
+          .collect()
+        const shares = (
+          await Promise.all(
+            projects.map((p) =>
+              ctx.db
+                .query('project_team_access')
+                .withIndex('by_project', (q) => q.eq('project_id', p.id))
+                .collect(),
+            ),
+          )
+        ).flat()
+        const memberships = await ctx.db
+          .query('team_members')
+          .withIndex('by_profile', (q) => q.eq('profile_id', subject.id))
+          .collect()
+        const teams = [
+          ...new Set([...memberships.map((m) => m.team_id), ...shares.map((s) => s.team_id)]),
+        ]
+        const removals: RemovedAccess[] = [
+          {},
+          ...grants.map((g) => ({ grant: g._id })),
+          ...shares.map((s) => ({ share: s._id })),
+          ...memberships.map((m) => ({
+            membership: { team_id: m.team_id, profile_id: subject.id },
+          })),
+          ...teams.map((team) => ({ team })),
+        ]
+        for (const org_role of ORG_ROLES) {
+          await ctx.db.patch(subject._id, { org_role })
+          const me = (await ctx.db.get(subject._id)) as Doc<'profiles'>
+          for (const without of removals) {
+            const people = (
+              await projectLevelsForPeople(ctx, [me], projects, async () => {}, without)
+            ).get(me.id)
+            for (const project of asked) {
+              const expected = people?.navigationOnly(project.id)
+                ? null
+                : (people?.levelOf(project) ?? null)
+              const got = (await projectLevelsForProfiles(ctx, project, { without }))(me)
+              expect(
+                got,
+                `${name}: ${org_role} on ${project.key} without ${JSON.stringify(without)}`,
+              ).toBe(expected)
+              const whole = (await projectLevelsForProfiles(ctx, project))(me)
+              seen.add(got === whole ? 'same' : 'changed')
+            }
+          }
+        }
+      })
+    }
+    expect([...seen].sort()).toEqual(['changed', 'same'])
+  }, 60_000)
+
+  it('runs its guard before each read, so a guard that refuses stops it before it reads more', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      const second = await newTeam(ctx, f.org.id)
+      await ctx.db.insert('team_members', {
+        team_id: second,
+        profile_id: subject.id,
+        is_leader: false,
+      })
+      for (const [project, team_id] of [
+        [f.meta, f.team.id],
+        [f.sub, second],
+      ] as const)
+        await ctx.db.insert('project_team_access', {
+          project_id: project.id,
+          team_id,
+          level: 'user',
+        })
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subject.id,
+        level: 'viewer',
+      })
+    })
+    const ranges = (ctx: QueryCtx) =>
+      ctx.meta.getTransactionMetrics().then((m) => m.databaseQueries.used)
+    // how many times it guards and how many index ranges it reads for FW,
+    // its root's and its own grants and shares and both teams
+    const { calls, read } = await t.run(async (ctx) => {
+      const before = await ranges(ctx)
+      let calls = 0
+      await projectLevelsForProfiles(ctx, f.sub, {
+        guard: async () => {
+          calls++
+        },
+      })
+      return { calls, read: (await ranges(ctx)) - before }
+    })
+    expect(read).toBeGreaterThan(5)
+    expect(calls).toBeGreaterThanOrEqual(read)
+    // a guard that refuses at its k-th run leaves at most k - 1 ranges read
+    for (let k = 1; k <= calls; k++) {
+      const stopped = await t.run(async (ctx) => {
+        const before = await ranges(ctx)
+        let run = 0
+        try {
+          await projectLevelsForProfiles(ctx, f.sub, {
+            guard: async () => {
+              if (++run === k) throw new Error('full')
+            },
+          })
+        } catch (e) {
+          if (!(e instanceof Error) || e.message !== 'full') throw e
+          return (await ranges(ctx)) - before
+        }
+        throw new Error(`the guard's run ${k} did not stop it`)
+      })
+      expect(stopped, `refused at run ${k}`).toBeLessThanOrEqual(k - 1)
+    }
   })
 })

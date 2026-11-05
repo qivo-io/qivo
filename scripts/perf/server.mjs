@@ -97,6 +97,23 @@
 //                        too) or incomplete (its subtask list is not
 //                        whole, so the window shows the task as a group
 //                        whose subtasks it cannot all read)
+//   removal              a state the removal window's reads answer
+//                        whatever the workspace says, for screenshots of
+//                        states a seeded backend cannot reach inside the
+//                        design size (src/store/removalStandIn.setup.ts):
+//                        many (40 more tasks than it lists), over
+//                        (Reassign refused past LIMITS.reassign.max),
+//                        capped (both choices refused past
+//                        LIMITS.removalHolders.max), too_large, refused,
+//                        leave_only, unsettled (a caller who may make
+//                        neither choice, for the notice), slow (both reads
+//                        answer after two seconds), and for the Reassign
+//                        picker choices-stopped, choices-not-ready and
+//                        choices-error; several joined by commas. With the
+//                        parameter at all, removal=open for no forced
+//                        state, the first team shares each program at
+//                        User, so a removal on Settings' team or program
+//                        pages opens the window
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -112,7 +129,12 @@
 // access or read budget. So are Settings › Labels' batches
 // (labels:settingsPage), through the stand-in the jsdom tests use
 // (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
-// reads no read budget.
+// reads no read budget. So are the removal window's reads
+// (accessRemovals:preview and reassignChoices), through
+// src/store/removalStandIn.setup.ts, which takes the removed people's open
+// tasks in the projects the change reaches as the lost holdings and every
+// person who can hold work as the choices, and answers a chosen person's
+// holder_eligible by that rule, without the server's rules.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
@@ -121,6 +143,7 @@ import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
+import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
@@ -191,6 +214,8 @@ const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
 const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
+/* The removal window's forced states (the `removal` parameter). */
+const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
 const fixtureTime = new Date()
 const now = fixtureTime.toISOString()
 const day = (offset) => {
@@ -307,6 +332,14 @@ const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
 const projects = programs.flatMap((p) => p.children)
 // a grant on each program reaches its sub-projects; the hidden one has none
 const access = programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' }))
+/* With the `removal` parameter, the first team shares each program at
+   User, so a member's removal on its team page, or the team's own on a
+   program's page, takes its members' tasks out of their sight and opens
+   the removal window (src/store/removalStandIn.setup.ts). Without it there
+   are no shares, as the benchmark measures. */
+const removalShares = parameters.has('removal')
+  ? programs.map((p) => ({ project_id: p.meta.id, team_id: teams[0].id, level: 'user' }))
+  : []
 /* What the labels past the first twelve are about, as a team names its
    labels; each is numbered, so no two share a name. */
 const LABEL_TOPICS = [
@@ -548,7 +581,7 @@ const snapshot = {
   teams,
   teamMembers,
   access,
-  teamAccess: [],
+  teamAccess: removalShares,
   links,
   milestones,
   labels,
@@ -988,6 +1021,11 @@ const read = (name, args = {}) => {
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':
       return ownerLoadsStandIn(snapshot, args)
+    // the removal window's reads (src/store/removalStandIn.setup.ts)
+    case 'accessRemovals:preview':
+      return removalPreviewStandIn(snapshot, args.change, forcedRemoval, args.reassign_to)
+    case 'accessRemovals:reassignChoices':
+      return reassignChoicesStandIn(snapshot, args, forcedRemoval)
     case 'messages:bulkReach':
       // as convex/model/messages.ts readBulkReach does, per seat
       return {
@@ -1374,6 +1412,9 @@ self.onmessage = async ({ data }) => {
     }
     case 'query':
       await delay()
+      // removal=slow holds the removal window's reads for two seconds
+      if (forcedRemoval.has('slow') && data.name.startsWith('accessRemovals:'))
+        await new Promise((resolve) => setTimeout(resolve, 2000))
       await deliver(data.id, () => read(data.name, data.args))
       return
     case 'mutation': {

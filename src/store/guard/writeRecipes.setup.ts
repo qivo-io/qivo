@@ -1235,7 +1235,7 @@ export const recipes: Recipe[] = [
     what: "a person's access removed",
     pause: 'P',
     act: (P) =>
-      P.removeAccess({ kind: 'userGrant', projectId: 'plan', userId: PAT }, { keep: true }, []),
+      P.removeAccess({ kind: 'userGrant', projectId: 'plan', userId: PAT }, { keep: true }),
     truth: (snap) => {
       snap.access = []
     },
@@ -1246,7 +1246,7 @@ export const recipes: Recipe[] = [
     what: 'a member leaving a team',
     pause: 'P',
     act: (P) =>
-      P.removeAccess({ kind: 'teamMember', teamId: 'team-a', userId: PAT }, { keep: true }, []),
+      P.removeAccess({ kind: 'teamMember', teamId: 'team-a', userId: PAT }, { keep: true }),
     truth: (snap) => {
       snap.teamMembers = snap.teamMembers.filter((m) => m.profile_id !== PAT)
     },
@@ -1383,7 +1383,7 @@ export const recipes: Recipe[] = [
     mutator: 'removeAtOnce',
     what: 'a deleted team',
     pause: 'P',
-    act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }, []),
+    act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }),
     truth: (snap) => {
       snap.teams = [snap.teams[0]]
     },

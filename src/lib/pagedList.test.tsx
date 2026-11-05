@@ -345,14 +345,21 @@ describe('a list read once a batch', () => {
     }
     await act(async () => root.render(<Held />))
     expect(helds.at(-1)?.phase).toBe('held')
+    expect(helds.at(-1)?.failure).toBeNull()
     expect(listEnd(helds.at(-1) as unknown as PagedList<unknown, unknown>, false)).toBe('held')
     // Retry starts a held list again
     await act(async () => helds.at(-1)?.retry())
     expect(helds.at(-1)?.rows).toHaveLength(25)
     await act(async () => helds.at(-1)?.more())
-    // a later batch with no rows is a failure that keeps the rows
+    // a later batch with no rows is a failure that keeps the rows, and its
+    // answer for the page to say why
     expect(helds.at(-1)?.phase).toBe('failed')
     expect(helds.at(-1)?.rows).toHaveLength(25)
+    expect(helds.at(-1)?.failure).toBe('not ready')
+    // a read that fails outright leaves no answer
+    await act(async () => helds.at(-1)?.retry())
+    expect(helds.at(-1)?.phase).toBe('failed')
+    expect(helds.at(-1)?.failure).toBeNull()
   })
 
   it('drops an answer for an older key and one that arrives after the page left', async () => {

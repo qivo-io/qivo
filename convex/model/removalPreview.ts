@@ -2,8 +2,11 @@
  * anything: who would lose sight of open tasks they are assigned to or
  * reviewing, which of those tasks the caller may read, and whether the
  * caller could keep those people as Viewers or reassign their tasks. The
- * app's removal window asks it (accessRemovals.preview) before it removes a
- * person's or a team's project access, a member from a team or a whole team.
+ * app's removal window asks it (accessRemovals.preview) when a removal is
+ * pressed and again before it saves, for a person's or a team's project
+ * access, a member leaving a team or a whole team, and its Reassign picker
+ * lists who could take the tasks from the same reads
+ * (accessRemovals.reassignChoices, reassignChoicesOf).
  *
  * It runs the write's own checks in the write's order, with their sentences
  * (model/projectAccess.ts removeProjectGrantCore, model/teams.ts
@@ -11,10 +14,10 @@
  * (model/projectAccess.ts findLost). Where the write deletes the rows and
  * reads sight again, the preview leaves those rows out of the same reads
  * (lib/access.ts RemovedAccess), so the two agree on who loses sight of
- * which tasks and, but for the checks of a new holder of reassigned tasks
- * (RemovalEffect), on the rules each choice meets. Each write's other
- * changes decide no one's sight: a grant's or share's reach rows
- * (model/projectNav.ts), a membership's team count
+ * which tasks and on the rules each choice meets. A new holder of
+ * reassigned tasks is checked the same way, with the removed rows left out
+ * (takerRule). Each write's other changes decide no one's sight: a grant's
+ * or share's reach rows (model/projectNav.ts), a membership's team count
  * (model/teamCounts.ts), and for a deleted team also its reach rows, its
  * count and the legacy team_id it clears on projects (model/cascade.ts
  * deleteTeamDeep). Levels come only from grants, shares, memberships, the
@@ -39,18 +42,25 @@ import { ConvexError, getConvexSize, type Infer, v } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
+  canHoldWork,
   levelRank,
   NO_USER_MANAGEMENT,
   type OrgProjectLevels,
+  projectLevelReads,
   projectLevelsForPeople,
+  projectLevelsForProfiles,
   type RemovedAccess,
 } from '../lib/access'
 import { orgWriteBlock } from '../lib/billingAccess'
 import { byId } from '../lib/db'
+import type { AccessLevel } from '../lib/enums'
 import type { Refusal } from '../lib/functions'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { indexAfter, type ListBatch, listBatch, mergeNamed, namedCeiling } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
-import { NO_WRITE_ACCESS } from './issues'
+import { allWordsMatcher } from '../lib/search'
+import { ancestorsFrom, NO_WRITE_ACCESS } from './issues'
+import { nameKeysReady, profileRoleIndex } from './nameKeys'
 import {
   type AccessSubject,
   assertManagesAccess,
@@ -67,6 +77,7 @@ import {
   reassignTooLarge,
   withinRoom,
 } from './projectAccess'
+import { listAsk, type PersonRow, personRow } from './projectSettings'
 import {
   assertDeletesTeam,
   assertManagesMembers,
@@ -90,14 +101,21 @@ export const vRemovalChange = v.union(
 export type RemovalChange = Infer<typeof vRemovalChange>
 
 /** The bounds of one answer. `items`: for how many held tasks the caller
- * may read the preview lists their holdings, by task number; 100 fill the
- * removal window's scroll box several times over. `changerProjects`: how
- * many of the projects one person can still change it names, as many as
- * the window's Keep text names before it counts the rest. `bytes`: the most one answer holds, as Convex sizes a value
- * (getConvexSize). 1 MiB is many times what the window shows, and an
- * answer past Convex's own limit would fail instead of answering, so a
- * larger one answers too_large. Tests change them. */
-export const PREVIEW = { items: 100, changerProjects: 3, bytes: 1024 * 1024 }
+ * may read the preview lists their holdings, by task number. It is
+ * LIMITS.reassign.max, the most tasks one reassignment hands over, so the
+ * removal window lists every task Reassign changes and a choice applies
+ * only to tasks the person read; past it Reassign is refused anyway, and
+ * the window counts the rest. `changerProjects`: how many of the projects
+ * one person can still change it names, as many as the window's Keep text
+ * names before it counts the rest. `bytes`: the most one answer holds, as
+ * Convex sizes a value (getConvexSize). 1 MiB is many times what the window
+ * shows, and an answer past Convex's own limit would fail instead of
+ * answering, so a larger one answers too_large. Tests change them. */
+export const PREVIEW: { items: number; changerProjects: number; bytes: number } = {
+  items: LIMITS.reassign.max,
+  changerProjects: 3,
+  bytes: 1024 * 1024,
+}
 
 /* Convex's limit on the elements of one array in a value. */
 const ARRAY_MAX = 8192
@@ -113,19 +131,35 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * `items_total` counts every holding the caller can see, and `hidden` the
  * tasks in projects the caller cannot see. `keep` and `reassign` say
  * whether the removal window's two choices would pass the write's rules,
- * and with which sentence the write would refuse them. `reassign` covers
- * the rules that do not depend on who takes the tasks, so it answers for a
- * new holder who passes the write's own checks of them once the access is
- * gone (model/projectAccess.ts assertCanTakeOver, then the task update's
- * holder rules). The write checks a new holder's standing on each task's
- * project (assertCanTakeOver) before the caller's Edit access, so a new
- * holder who fails that is refused with their own sentence, marked
- * HELD_TASKS_REFUSED. It checks whether the new holder can see a subtask's
- * parent only after the caller's Edit access (updateIssueCore), so where the
- * caller loses Edit the write refuses with the caller's sentence first. The
- * window offers only new holders who pass. The preview leaves the new
- * holder out because those checks read their access as it is before the
- * removal, which may be one of its people.
+ * and with which sentence the write would refuse them.
+ *
+ * `keep.offered` is false only for a person's removed Viewer grant, which
+ * cannot be kept as Viewer (model/projectAccess.ts grantKeepRefusal), and
+ * `keep.permitted` says whether the caller manages the users of every
+ * project Keep as Viewer would grant Viewer on. `reassign.permitted` says
+ * whether the caller can still edit every lost task's project once the
+ * access is gone (model/issues.ts assertCanEdit). Both answer the caller's
+ * authority whatever the size or the read-only block, which a `refusal`
+ * names first, so the window can tell a removal the caller may settle
+ * from one they may not (src/store/planner.ts startRemoval).
+ *
+ * `reassign` covers the rules that do not depend on who takes the tasks, so
+ * it answers for a new holder who passes the write's own checks of them
+ * once the access is gone (model/projectAccess.ts assertCanTakeOver, then
+ * the task update's holder rules). The write checks a new holder's standing
+ * on each task's project (assertCanTakeOver) before the caller's Edit
+ * access, so a new holder who fails that is refused with their own
+ * sentence, marked HELD_TASKS_REFUSED. It checks whether the new holder can
+ * see a subtask's parent only after the caller's Edit access
+ * (updateIssueCore), so where the caller loses Edit the write refuses with
+ * the caller's sentence first. The write runs those checks after it deletes
+ * the removed rows, in the same transaction, and the preview writes
+ * nothing, so it reads the new holder's access with those rows left out
+ * (takerRule). Asked with `reassign_to`, it answers
+ * `reassign.holder_eligible`, whether that person could take every task
+ * once the access is gone, false while Reassign itself is refused. The
+ * Reassign picker lists the people that rule lets take them
+ * (reassignChoicesOf).
  *
  * `keep.targets` are the projects Keep as Viewer would grant Viewer on, and
  * `keep.changers` name, for each person who can still change a listed
@@ -162,23 +196,34 @@ export type RemovalEffect = {
     changers: { id: string; projects: string[]; more: number }[]
     allowed: boolean
     refusal: string | null
+    offered: boolean
+    permitted: boolean
   }
-  reassign: { allowed: boolean; refusal: string | null }
+  reassign: {
+    allowed: boolean
+    refusal: string | null
+    permitted: boolean
+    holder_eligible?: boolean
+  }
 }
 
-/** The preview's answer. `unavailable`: the project or team, or a grant's
+/** The answers the preview and the Reassign picker give alike for a removal
+ * they cannot go on with. `unavailable`: the project or team, or a grant's
  * person, is not one of the organization's; a member removal looks for the
- * membership only, so one of someone without a membership answers `ok` with
- * `pending: false`, as the write removes nothing. `refused`: the write
- * would refuse the removal itself, with its sentence. `too_large`: working
- * out who loses sight would not fit in one request, or the answer would
- * pass PREVIEW.bytes or hold a list longer than Convex allows
- * (REMOVAL_FULL). */
-export type RemovalPreview =
+ * membership only, so one of someone without a membership answers as a
+ * removal with nothing to remove, as the write removes nothing.
+ * `refused`: the write would refuse the removal itself, with its sentence.
+ * `too_large`: working out who loses sight would not fit in one request,
+ * or the answer would pass PREVIEW.bytes or hold a list longer than Convex
+ * allows (REMOVAL_FULL). */
+export type Unanswered =
   | { state: 'unavailable' }
   | { state: 'refused'; message: string }
   | { state: 'too_large'; message: string }
-  | ({ state: 'ok' } & RemovalEffect)
+
+/** The preview's answer: one of Unanswered, or `ok` with the effect, whose
+ * `pending` is false when there is nothing left to remove. */
+export type RemovalPreview = Unanswered | ({ state: 'ok' } & RemovalEffect)
 
 /* What the write removes and what it reads to settle the held tasks, for a
  * removal that has something to remove. */
@@ -271,15 +316,26 @@ async function planOf(
   }
 }
 
-/* The preview's answer for a refusal the write's own checks or reads threw,
- * or null for anything else. */
-function answerOf(e: unknown): RemovalPreview | null {
+/* The answer for a refusal the write's own checks or reads threw, or null
+ * for anything else. */
+function answerOf(e: unknown): Unanswered | null {
   if (!(e instanceof ConvexError)) return null
   const { code, message } = e.data as Refusal
   if (code === 'not_found') return { state: 'unavailable' }
   if (message === REMOVAL_FULL) return { state: 'too_large', message }
   if (code === 'forbidden' || code === 'rule') return { state: 'refused', message }
   return null
+}
+
+/* What `step` answers, or the answer for a refusal it threw (answerOf). */
+async function answering<T>(step: () => Promise<T>): Promise<T | Unanswered> {
+  try {
+    return await step()
+  } catch (e) {
+    const answer = answerOf(e)
+    if (answer === null) throw e
+    return answer
+  }
 }
 
 const projectRef = (p: Doc<'projects'>): ProjectRef => ({
@@ -304,42 +360,79 @@ function fits(effect: RemovalEffect): boolean {
 const bySortOrder = (a: Doc<'projects'>, b: Doc<'projects'>) =>
   a.sort_order - b.sort_order || a.id.localeCompare(b.id)
 
+/* A removal read as the preview answers it, with what a check of a new
+ * holder reads further: the holdings the write would settle, the rows it
+ * takes away and the organization's projects findLost read. */
+type Taken = {
+  state: 'taken'
+  effect: RemovalEffect
+  lost: readonly Lost[]
+  without: RemovedAccess
+  orgProjects: readonly Doc<'projects'>[]
+}
+
+/* The preview's reads of removing `change`, as `me`, and the effect they
+ * give, or the answer for a removal it cannot go on with. The read-only
+ * block comes first, as the wrappers check it before the write reads
+ * anything: a team deletion is an orgMutation and the other removals
+ * accessRemovalMutations (lib/functions.ts), which let an organization
+ * admin leave the tasks only. A refusal of the write's own checks throws;
+ * run it inside answering. */
+async function removalOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  change: RemovalChange,
+): Promise<Unanswered | Taken> {
+  const block = await orgWriteBlock(ctx, me.org_id)
+  if (block !== null && (change.kind === 'delete_team' || me.org_role !== 'admin'))
+    return { state: 'refused', message: block.message }
+  const readOnly = block?.message ?? null
+  const plan = await planOf(ctx, me, change)
+  if (plan === 'unavailable') return { state: 'unavailable' }
+  if (plan === null)
+    return { state: 'taken', effect: nothing(readOnly), lost: [], without: {}, orgProjects: [] }
+  const read = await withinRoom(() => effectOf(ctx, me, plan, readOnly))
+  // an answer too large to send says so, as one too large to work out does
+  if (!fits(read.effect)) return { state: 'too_large', message: REMOVAL_FULL }
+  return { state: 'taken', ...read, without: plan.without }
+}
+
 /**
  * What removing `change` would do, worked out by `me` without writing, as
- * accessRemovals.preview answers it (see there). The read-only block comes
- * first, as the wrappers check it before the write reads anything: a team
- * deletion is an orgMutation and the other removals accessRemovalMutations
- * (lib/functions.ts), which let an organization admin leave the tasks only.
+ * accessRemovals.preview answers it (see there). With `reassignTo`, the
+ * answer also says whether that person could take every task the removal
+ * takes out of sight once the access is gone (reassign.holder_eligible,
+ * takerRule), false for an unknown or foreign id and while Reassign is
+ * refused. That check reads the levels of the lost tasks' projects and of
+ * the projects of the tasks above them, in the same room as the rest.
  */
 export async function previewRemoval(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   change: RemovalChange,
+  reassignTo?: string,
 ): Promise<RemovalPreview> {
-  const block = await orgWriteBlock(ctx, me.org_id)
-  if (block !== null && (change.kind === 'delete_team' || me.org_role !== 'admin'))
-    return { state: 'refused', message: block.message }
-  const readOnly = block?.message ?? null
-  try {
-    const plan = await planOf(ctx, me, change)
-    if (plan === 'unavailable') return { state: 'unavailable' }
-    if (plan === null) return { state: 'ok', ...nothing(readOnly) }
-    const effect = await withinRoom(() => effectOf(ctx, me, plan, readOnly))
-    // an answer too large to send says so, as one too large to work out does
-    if (!fits(effect)) return { state: 'too_large', message: REMOVAL_FULL }
-    return { state: 'ok', ...effect }
-  } catch (e) {
-    const answer = answerOf(e)
-    if (answer === null) throw e
-    return answer
-  }
+  return await answering(async (): Promise<RemovalPreview> => {
+    const taken = await removalOf(ctx, me, change)
+    if (taken.state !== 'taken') return taken
+    const { effect } = taken
+    if (reassignTo === undefined) return { state: 'ok', ...effect }
+    let eligible = false
+    if (effect.reassign.allowed) {
+      const person = await byId(ctx, 'profiles', reassignTo)
+      if (person !== null && person.org_id === me.org_id)
+        eligible = (await withinRoom(() => takerRule(ctx, me, taken)))(person)
+    }
+    return { state: 'ok', ...effect, reassign: { ...effect.reassign, holder_eligible: eligible } }
+  })
 }
 
 /* The effect of a removal with nothing to remove: someone else removed the
  * access first. Either choice then removes nothing, unless `readOnly`, the
- * read-only block's sentence, refuses it. */
+ * read-only block's sentence, refuses it. The caller's authority over
+ * nothing is not in question, so both choices are offered and permitted. */
 function nothing(readOnly: string | null): RemovalEffect {
-  const settles = { allowed: readOnly === null, refusal: readOnly }
+  const settles = { allowed: readOnly === null, refusal: readOnly, permitted: true }
   return {
     pending: false,
     leave_only: readOnly !== null,
@@ -349,20 +442,21 @@ function nothing(readOnly: string | null): RemovalEffect {
     items_total: 0,
     hidden: 0,
     projects: [],
-    keep: { targets: [], changers: [], ...settles },
+    keep: { targets: [], changers: [], ...settles, offered: true },
     reassign: settles,
   }
 }
 
-/* The effect of `plan`. `readOnly`, the read-only block's sentence, refuses
- * both choices. It checks the room before each read of its own, so call it
- * within withinRoom. */
+/* The effect of `plan`, with the holdings it found and the organization's
+ * projects findLost read. `readOnly`, the read-only block's sentence,
+ * refuses both choices. It checks the room before each read of its own, so
+ * call it within withinRoom. */
 async function effectOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   plan: Plan,
   readOnly: string | null,
-): Promise<RemovalEffect> {
+): Promise<{ effect: RemovalEffect; lost: Lost[]; orgProjects: Doc<'projects'>[] }> {
   // what a 'leave' write of a grant or member removal reads to find who
   // loses sight; it settles nothing
   const found = await findLost(ctx, {
@@ -423,7 +517,11 @@ async function effectOf(
     targetOf.set(h.project.id, await plan.viewerOn(h.project))
   }
   const targets = [...new Map([...targetOf.values()].map((p) => [p.id, p])).values()]
-  const canKeep =
+  // whether the caller manages the users of every target, the check
+  // canKeepAsViewers makes after the removal's own keepRefusal, asked
+  // without it so a removed Viewer grant still answers the caller's
+  // authority
+  const permitted =
     lost.length === 0 ||
     (await canKeepAsViewers(
       ctx,
@@ -434,10 +532,10 @@ async function effectOf(
           await assertRoom(ctx)
           return targetOf.get(project.id) ?? (await plan.viewerOn(project))
         },
-        keepRefusal: plan.keepRefusal,
       },
       lost,
     ))
+  const canKeep = lost.length === 0 || (plan.keepRefusal === undefined && permitted)
   const keepAllowed = readOnly === null && !capped && canKeep
   // what each person can still change in the listed projects and their
   // sub-projects once the access is gone, for the window's Keep text
@@ -470,7 +568,8 @@ async function effectOf(
 
   // Reassign: the caller needs Edit on every lost task's project once the
   // access is gone (model/issues.ts assertCanEdit), checked after the count
-  // and, in the write, after the new holder's own checks (see RemovalEffect)
+  // and, in the write, after the new holder's own checks (see RemovalEffect).
+  // The Reassign picker refuses with this sentence too (reassignChoicesOf).
   const tasks = new Set(lost.map((h) => h.task.id)).size
   const edits = lost.every((h) => levelRank(later?.levelOf(h.project) ?? null) >= levelRank('user'))
   const reassignRefusal =
@@ -483,7 +582,7 @@ async function effectOf(
           ? null
           : NO_WRITE_ACCESS)
 
-  return {
+  const effect: RemovalEffect = {
     pending: true,
     leave_only: readOnly !== null,
     people: people.map((p) => ({ id: p.id, name: p.name, kind: p.kind, org_role: p.org_role })),
@@ -507,7 +606,241 @@ async function effectOf(
         ? null
         : (readOnly ??
           (capped ? LIMITS.removalHolders.refusal : (plan.keepRefusal ?? NO_USER_MANAGEMENT))),
+      offered: plan.keepRefusal === undefined,
+      permitted,
     },
-    reassign: { allowed: reassignRefusal === null, refusal: reassignRefusal },
+    reassign: { allowed: reassignRefusal === null, refusal: reassignRefusal, permitted: edits },
   }
+  return { effect, lost, orgProjects: found.orgProjects }
+}
+
+/**
+ * Whether a person could take every task `taken` takes out of its holders'
+ * sight, once the access is gone: the rule of the write's handover, read
+ * with the removed rows left out. They can hold work (lib/access.ts
+ * canHoldWork: an active admin, user or guest of the caller's
+ * organization, an agent with the user role included), are not one of the
+ * people who lose sight of those tasks (row 329 of the design
+ * specification; the level rule below leaves them out anyway, since each
+ * lost sight of a listed task's project), hold User or Lead on every lost
+ * task's project (model/projectAccess.ts assertCanTakeOver, model/issues.ts
+ * assertAssigneeRule), and hold a level on the project of every task above
+ * a lost subtask (the chain check of model/issues.ts updateIssueCore,
+ * ASSIGNEE_SIGHT_RULE and REVIEWER_SIGHT_RULE). A subtask may sit in
+ * another sub-project of its parent's top-level project, so the second
+ * check can leave out someone the first lets in, and it answers about a
+ * project the caller may not see, which the write's refusal answers for
+ * one chosen person too. The chain check also counts the sight a
+ * top-level project gives, read-only, to whoever reaches one of its
+ * sub-projects (lib/access.ts canSeeProject), and so does this rule. That
+ * sight decides only for a parent task that older code stored directly
+ * under a top-level project.
+ *
+ * It reads the tasks above each lost subtask (model/issues.ts
+ * ancestorsFrom) and, once for each of those projects and each lost task's
+ * project, every profile's level from the project's side (lib/access.ts
+ * projectLevelsForProfiles with the removal's rows left out), and for such
+ * a parent's top-level project also each of its sub-projects, live and
+ * archived. It shares the reads of a top-level project and of a team
+ * between them, then answers each person without a read. Levels come only
+ * from levelsFrom, so an organization admin can take every task while it
+ * gives them Lead, and follows ordinary access after the admin access
+ * split. It checks the room before each read, so call it within
+ * withinRoom. With nothing lost it lets in everyone who can hold work, as
+ * the write then checks no new holder.
+ */
+async function takerRule(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  taken: Taken,
+): Promise<(profile: Doc<'profiles'>) => boolean> {
+  const { lost, without } = taken
+  const losing = new Set(taken.effect.people.map((p) => p.id))
+  const projects = new Map(taken.orgProjects.map((p) => [p.id, p]))
+  const guard = () => assertRoom(ctx)
+  // the projects whose Edit the write asks of a new holder, and those whose
+  // sight its chain check asks
+  const edit = new Map(lost.map((h) => [h.project.id, h.project]))
+  const sight = new Set<string>()
+  const parents = new Set<string>()
+  for (const h of lost) {
+    const parent = h.task.parent_id
+    if (parent === undefined || parents.has(parent)) continue
+    parents.add(parent)
+    for (const above of await ancestorsFrom(ctx, parent, guard)) sight.add(above.project_id)
+  }
+  const reads = projectLevelReads()
+  const levels = new Map<string, (profile: Doc<'profiles'>) => AccessLevel | null>()
+  for (const id of new Set([...edit.keys(), ...sight])) {
+    const project = edit.get(id) ?? projects.get(id)
+    // the chain check lets nobody in for a task above whose project is gone
+    levels.set(
+      id,
+      project === undefined
+        ? () => null
+        : await projectLevelsForProfiles(ctx, project, { without, guard, reads }),
+    )
+  }
+  const levelOn = (id: string, profile: Doc<'profiles'>) => levels.get(id)?.(profile) ?? null
+  // A top-level project shows, read-only, to whoever holds a level on one
+  // of its sub-projects of their own or leads it (lib/access.ts
+  // projectLevel's navigation), and the chain check counts that. A level on
+  // a sub-project that comes from the top-level project itself shows it
+  // anyway, so any level on a sub-project counts here.
+  const reaches = new Map<string, ((profile: Doc<'profiles'>) => AccessLevel | null)[]>()
+  for (const id of sight) {
+    const top = projects.get(id)
+    if (top === undefined || top.parent_id !== undefined) continue
+    const subs: ((profile: Doc<'profiles'>) => AccessLevel | null)[] = []
+    for (const sub of taken.orgProjects) {
+      if (sub.parent_id !== id) continue
+      subs.push(
+        levels.get(sub.id) ?? (await projectLevelsForProfiles(ctx, sub, { without, guard, reads })),
+      )
+    }
+    reaches.set(id, subs)
+  }
+  const sees = (id: string, profile: Doc<'profiles'>) =>
+    levelOn(id, profile) !== null ||
+    (reaches.get(id) ?? []).some((level) => level(profile) !== null)
+  return (profile) =>
+    profile.org_id === me.org_id &&
+    canHoldWork(profile) &&
+    !losing.has(profile.id) &&
+    [...edit.keys()].every((id) => levelRank(levelOn(id, profile)) >= levelRank('user')) &&
+    [...sight].every((id) => sees(id, profile))
+}
+
+/** What the Reassign picker answers: one of Unanswered as the preview
+ * answers it, `refused` with Reassign's own sentence while Reassign is
+ * refused, `not_ready` until the organization's people hold their name
+ * keys, or one batch of people in name order. */
+export type ReassignChoices =
+  | Unanswered
+  | { state: 'not_ready' }
+  | ({ state: 'ready' } & ListBatch<PersonRow>)
+
+/** What the Reassign picker is asked for: the removal, a search, and the
+ * cursor of the batch's start. */
+export type ReassignArgs = { change: RemovalChange; search?: string; after?: string }
+
+/* The roles that can hold work (lib/access.ts canHoldWork). */
+const HOLDER_ROLES = ['admin', 'user', 'guest'] as const
+
+/* The removal's kind and ids in a fixed order, which a picker cursor seals
+ * beside the organization and the search. */
+function changeScope(change: RemovalChange): string[] {
+  switch (change.kind) {
+    case 'user_grant':
+      return [change.kind, change.project_id, change.user_id]
+    case 'team_grant':
+      return [change.kind, change.project_id, change.team_id]
+    case 'team_member':
+      return [change.kind, change.team_id, change.user_id]
+    case 'delete_team':
+      return [change.kind, change.team_id]
+  }
+}
+
+/**
+ * accessRemovals.reassignChoices for `me`: one batch of LIST_BATCH people
+ * who could take every open task removing `a.change` takes out of its
+ * holders' sight, once the access is gone (takerRule), in name order, with
+ * a search. It works the removal out from the change itself on every
+ * batch, never from tasks the app names. In order:
+ *
+ * 1. The arguments (model/projectSettings.ts listAsk): a search past
+ *    LIMITS.search is refused with that limit's sentence, and a cursor
+ *    that is not one of this list's for the same organization, removal and
+ *    search with badRequest.
+ * 2. The removal, read as the preview reads it (removalOf): the read-only
+ *    block, the write's own checks in the write's order, then findLost,
+ *    the caller's sight and the Keep checks. Its `unavailable`, `refused`
+ *    and `too_large` answer as the preview's do.
+ * 3. Reassign's refusal, as the preview answers it: the read-only block,
+ *    LIMITS.removalHolders past 700 holders, reassignTooLarge past
+ *    LIMITS.reassign.max tasks, or NO_WRITE_ACCESS for a caller without
+ *    Edit on every lost task's project once the access is gone. It answers
+ *    `refused` with that sentence and no row, so the list says nothing
+ *    about a removal the caller cannot reassign.
+ * 4. `not_ready` until the organization's rows hold their name keys
+ *    (model/nameKeys.ts nameKeysReady), as the project settings pickers.
+ * 5. The levels of takerRule, inside the room; past it `too_large`.
+ * 6. The walk: the admins, users and guests of the organization merged in
+ *    name order (model/nameKeys.ts profileRoleIndex) after the cursor,
+ *    keeping each person takerRule lets in whose name holds every word of
+ *    the search, ignoring case and accents, as a person row. It reads its
+ *    own share of the request past steps 1 to 5 (lib/namedPages.ts
+ *    namedCeiling, NAMED_READ), and a kept row reads nothing more, so a
+ *    batch costs one document a person it passes. Past its share it stops
+ *    and says so, never answering an end it did not reach.
+ *
+ * With nothing left to remove no task is lost and the write checks no new
+ * holder, so the batch lists everyone who can hold work.
+ *
+ * Its reads are the preview's (accessRemovals.preview), the tasks above
+ * the lost subtasks, a few index ranges for each of their projects and
+ * the lost tasks' projects (and for a parent stored directly under a
+ * top-level project, each of its sub-projects) and each team that shares
+ * them, and the profiles it walks. Measured with convex-test at the
+ * design size on 5 November 2026 (tests/reassignChoices.test.ts "inside
+ * Convex's limits"), one figure at a time, a first batch read:
+ * - a member of a 995-member team who holds two tasks leaving, in an
+ *   organization of 1,000 people: 37 index ranges, 1,091 documents and
+ *   219 KB, and a search for the last name, which walks every person,
+ *   2,063 documents and 605 KB;
+ * - the same with three people keeping Edit through their own grants
+ *   beside the team's Viewer share: 35 ranges, 2,065 documents, 606 KB;
+ * - the 995-member team's share removed, 29 members holding a task, and the
+ *   team deleted: 100 ranges, 9,033 documents and 2.1 MB, the most of
+ *   these, of which the preview's own reads are 8,034 documents;
+ * - a member holding a task in each of 50 shared sub-projects, beside 150
+ *   archived shares: 511 ranges, 2,501 documents, 978 KB;
+ * - a grant removed from a sub-project shared with five teams: 38 ranges,
+ *   193 documents, 54 KB;
+ * - 800 open and 200 Done tasks in one project, one person holding 100:
+ *   35 ranges, 1,036 documents, 474 KB;
+ * - a project of 30 live and 40 archived sub-projects, the person holding
+ *   one of the 3 open tasks in each live one: 143 ranges, 283 documents,
+ *   112 KB;
+ * - an organization of 2,000 projects, live and archived: 28 ranges, 2,083
+ *   documents, 769 KB.
+ * The app reads it once a batch and never subscribes, as it reads the
+ * preview.
+ */
+export async function reassignChoicesOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: ReassignArgs,
+): Promise<ReassignChoices> {
+  const ask = await listAsk(
+    'accessRemovals.reassignChoices',
+    [me.org_id, ...changeScope(a.change)],
+    {
+      search: a.search,
+      after: a.after,
+    },
+  )
+  const gate = await answering(async () => {
+    const taken = await removalOf(ctx, me, a.change)
+    if (taken.state !== 'taken') return taken
+    const refusal = taken.effect.reassign.refusal
+    if (refusal !== null) return { state: 'refused' as const, message: refusal }
+    if (!(await nameKeysReady(ctx, me.org_id))) return { state: 'not_ready' as const }
+    return { state: 'walk' as const, canTake: await withinRoom(() => takerRule(ctx, me, taken)) }
+  })
+  if (gate.state !== 'walk') return gate
+  const { canTake } = gate
+  const streams = HOLDER_ROLES.map((role) =>
+    indexAfter(profileRoleIndex(ctx, me.org_id, role), ask.after),
+  )
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: (reads) => mergeNamed(streams.map((stream) => stream(reads))),
+    keep: async (profile: Doc<'profiles'>) =>
+      canTake(profile) && matches(nameKey(profile.name)) ? personRow(profile) : null,
+    limit: LIST_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
 }

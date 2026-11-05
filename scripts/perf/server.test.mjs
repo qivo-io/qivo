@@ -350,6 +350,93 @@ describe('the benchmark server', () => {
     expect((await page('')).answer.error).toContain('only organization admins')
   }, 60_000)
 
+  it("answers the removal window's reads from the workspace, with the states the page asks for", async () => {
+    /** What `name` answers with `args(snap)` on a workspace with page
+        parameters `params`. */
+    const ask = async (params, name, args) => {
+      const { posted, send } = await server(`tasks=100&people=60&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, ...args(snap) },
+      })
+      const answer = posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    // the third person of the first team leaves it
+    const leaving = (snap) => ({
+      change: { kind: 'team_member', team_id: snap.teams[0].id, user_id: snap.profiles[2].id },
+    })
+    const plain = await ask('removal=open', 'accessRemovals:preview', leaving)
+    expect(plain.snap.teamAccess).toHaveLength(1)
+    expect(plain.answer).toMatchObject({ state: 'ok', pending: true, leave_only: false })
+    expect(plain.answer.people.map((p) => p.id)).toEqual([plain.snap.profiles[2].id])
+    expect(plain.answer.tasks).toBeGreaterThan(0)
+    expect(plain.answer.items.every((i) => i.holder_id === plain.snap.profiles[2].id)).toBe(true)
+    expect(plain.answer.reassign).toEqual({ allowed: true, refusal: null, permitted: true })
+    // without the parameter no team shares a program, as the benchmark measures
+    expect((await ask('', 'accessRemovals:preview', leaving)).snap.teamAccess).toEqual([])
+    // the forced states
+    const many = await ask('removal=many', 'accessRemovals:preview', leaving)
+    expect(many.answer.tasks - new Set(many.answer.items.map((i) => i.task_id)).size).toBe(40)
+    expect(many.answer.reassign.allowed).toBe(false)
+    const capped = await ask('removal=capped', 'accessRemovals:preview', leaving)
+    expect(capped.answer.keep.allowed || capped.answer.reassign.allowed).toBe(false)
+    const unsettled = await ask('removal=unsettled', 'accessRemovals:preview', leaving)
+    expect(unsettled.answer.reassign.permitted).toBe(false)
+    expect((await ask('removal=too_large', 'accessRemovals:preview', leaving)).answer.state).toBe(
+      'too_large',
+    )
+    // the picker: everyone who can hold work but the person leaving, 25 a batch
+    const first = await ask('removal=open', 'accessRemovals:reassignChoices', leaving)
+    expect(first.answer.rows).toHaveLength(25)
+    expect(first.answer.rows.map((r) => r.id)).not.toContain(first.snap.profiles[2].id)
+    expect(first.answer).toMatchObject({ state: 'ready', next: '25', stopped: false })
+    const last = await ask('removal=open', 'accessRemovals:reassignChoices', (snap) => ({
+      ...leaving(snap),
+      after: '50',
+    }))
+    expect(last.answer.rows).toHaveLength(9)
+    expect(last.answer.next).toBeNull()
+    const zoe = await ask('removal=open', 'accessRemovals:reassignChoices', (snap) => ({
+      ...leaving(snap),
+      search: 'zoe 4',
+    }))
+    expect(zoe.answer.rows.map((r) => r.name)).toEqual([
+      'Zoë 24',
+      'Zoë 4',
+      'Zoë 40',
+      'Zoë 44',
+      'Zoë 48',
+    ])
+    // a chosen person: one the picker lists can take the tasks, the person
+    // leaving cannot, and nobody can while Reassign is refused
+    const asking = (who) => (snap) => ({ ...leaving(snap), reassign_to: who(snap) })
+    const listed = () => first.answer.rows[0].id
+    const eligible = await ask('removal=open', 'accessRemovals:preview', asking(listed))
+    expect(eligible.answer.reassign).toMatchObject({ allowed: true, holder_eligible: true })
+    const leaver = await ask(
+      'removal=open',
+      'accessRemovals:preview',
+      asking((snap) => snap.profiles[2].id),
+    )
+    expect(leaver.answer.reassign.holder_eligible).toBe(false)
+    const refused = await ask('removal=over', 'accessRemovals:preview', asking(listed))
+    expect(refused.answer.reassign).toMatchObject({ allowed: false, holder_eligible: false })
+    const stopped = await ask('removal=choices-stopped', 'accessRemovals:reassignChoices', leaving)
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(13)
+    expect(
+      (await ask('removal=choices-not-ready', 'accessRemovals:reassignChoices', leaving)).answer,
+    ).toEqual({ state: 'not_ready' })
+    expect(
+      (await ask('removal=choices-error', 'accessRemovals:reassignChoices', leaving)).answer.error,
+    ).toContain('fails')
+  }, 60_000)
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open

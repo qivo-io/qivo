@@ -18,13 +18,14 @@ import { hasTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { grouped, LIMITS } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
+import { issueKey } from '../../convex/lib/taskRefs'
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
-import { Avatar, DateSelect, FieldSelect, Icon } from '../components/qivo'
+import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
-import { limitSentence, overLimit } from '../lib/fieldLimits'
+import { limitSentence, overLimit, sentence } from '../lib/fieldLimits'
 import { restoreFocus } from '../lib/focusVisibility'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
 import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
@@ -35,6 +36,7 @@ import {
   creatorNote,
   requestedAccess,
 } from '../lib/newProjectAccess'
+import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -42,7 +44,6 @@ import { exactWeekForDate } from '../lib/weekDrafts'
 import {
   type AccessRemoval,
   andList,
-  type Holder,
   type IssueVM,
   type MilestoneVM,
   type NewIssueInput,
@@ -50,6 +51,10 @@ import {
   P,
   type ProjectRemovalSummary,
   type ProjectVM,
+  REMOVAL_UNCHECKED,
+  type ReassignChoice,
+  type ReassignChoices,
+  type RemovalAnswer,
   type TaskFamily,
   type TeamAccessLevel,
   teamNoun,
@@ -941,66 +946,110 @@ function MoveIssueModal({
    Shown before access is removed when someone would lose sight of open
    tasks they are assigned to or reviewing: a person's or a team's grant in
    project settings, or a member leaving a team or a team being deleted in
-   Team settings. Keeping them as Viewers is selected first; reassigning
-   hands every listed task to one person, or to nobody, and then removes the
-   access. Removing someone whose grant is already Viewer leaves only the
-   reassignment. The lists are taken when the window opens, so a choice
-   applies only to the tasks the person read; if they or the chosen person's
-   eligibility changed meanwhile, the window shows the new lists and asks
-   again. It stays open, and keeps the settings behind it out of reach, until
-   the server has accepted the removal. If a write is refused the access
-   stays and so does the window, listing the tasks that remain. If someone
-   else removed the access meanwhile, it closes and says so. If the
-   organization turns read-only for its admin meanwhile, the window closes
-   and the removal goes ahead, leaving the tasks (P.removalLeavesTasks). A
-   removal the read-only organization refuses closes it (P.removalRefused). */
-const NOBODY = '__nobody__'
+   Team settings. The press asks the server's preview first
+   (useAccessRemoval, P.startRemoval), and the window shows that answer
+   only: who loses sight, the tasks the caller may read (up to
+   LIMITS.reassign.max, with a count of the rest and of those in projects
+   the caller cannot see), and whether each choice passes the write's
+   rules, never a task or a figure from the tasks the workspace holds.
+   Keeping them as Viewers is selected first; reassigning hands every
+   listed task to one person the server lists (ReassignPicker), or to
+   nobody, and then removes the access. Removing someone whose grant is
+   already Viewer leaves only the reassignment. A choice the server refuses
+   is disabled with its sentence, and with both refused only Cancel acts.
+   The window asks the server again before it saves, with the chosen
+   person, so a choice applies only to the tasks the person read. If they
+   or the chosen person's eligibility changed meanwhile, the window shows
+   the new answer and asks again. It stays open, and keeps the settings
+   behind it out of reach, until the server has accepted the removal. A
+   check that fails or that the server cannot answer removes nothing and
+   says so. If a write is refused the access stays and so does the window,
+   with the answer the server gives then. If someone else removed the
+   access meanwhile, it closes and says so. If the organization turns
+   read-only for its admin meanwhile, the window closes and the removal goes
+   ahead, leaving the tasks (P.removeLeavingTasks); a removal the read-only
+   organization refuses closes it with the server's sentence. */
+
+/* What the window compares before it saves: each listed holding, the
+   people who lose sight (also of tasks it does not list, whom Keep as
+   Viewer grants Viewer), the counts, the Keep targets and what the Keep
+   text says each person can still change, and which choices the server
+   offers and allows. */
+const removalKey = (a: RemovalAnswer): string =>
+  JSON.stringify([
+    a.items.map((i) => `${i.task_id}:${i.project_id}:${i.role}:${i.holder_id}`).sort(),
+    a.people.map((p) => p.id).sort(),
+    a.tasks,
+    a.hidden,
+    a.items_total,
+    a.keep.targets,
+    a.keep.changers.map((c) => `${c.id}:${c.projects.join(',')}:${c.more}`).sort(),
+    a.keep.offered,
+    a.keep.allowed,
+    a.reassign.allowed,
+  ])
+
+/** The person Reassign hands the tasks to, as the picker named them, null
+    for Unassigned. */
+type Taker = { id: string; name: string } | null
+
 function AccessRemovalModal({
   change,
+  answer,
   onClose,
   focusAfterClose,
 }: {
   change: AccessRemoval
+  /** the server's preview that opened the window (P.startRemoval) */
+  answer: RemovalAnswer
   onClose: () => void
   /** what takes focus as the window closes, as the removal takes the row
       of the button that opened it away before the server accepts it */
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const read = () => {
-    const removal = P.accessRemoval(change)
-    return { ...removal, choices: P.reassignChoices(change, removal.items) }
-  }
-  const [{ people, items, projects, choices }, setView] = useStateM(read)
+  const [shown, setShown] = useStateM(answer)
   const [changed, setChanged] = useStateM(false)
   const [saving, setSaving] = useStateM(false)
-  const [canKeep] = useStateM(
-    () =>
-      !(
-        change.kind === 'userGrant' &&
-        P.project(change.projectId)?.access?.[change.userId] === 'viewer'
-      ),
-  )
-  const [keep, setKeep] = useStateM(canKeep)
-  const [to, setTo] = useStateM(NOBODY)
+  const keepOk = shown.keep.offered && shown.keep.allowed
+  const reassignOk = shown.reassign.allowed
+  const [keep, setKeep] = useStateM(answer.keep.offered && answer.keep.allowed)
+  const [to, setTo] = useStateM<Taker>(null)
+  // the name of the chosen person the server said can no longer take the
+  // tasks, until a new choice in the picker
+  const [dropped, setDropped] = useStateM<string | null>(null)
   // when the window last asked again: the click right after (a double click,
-  // a repeated Enter) must not apply to lists nobody has read yet
+  // a repeated Enter) must not apply to an answer nobody has read yet
   const askedAt = useRefM(0)
-  if (!items.length) return null
-  const names = people.map((id) => P.user(id)?.name || 'Someone')
-  // one row per role, but a task held twice counts once
-  const count = new Set(items.map((i) => i.task.id)).size
+  // answers that arrive after the window closed do nothing
+  const open = useRefM(true)
+  useEffectM(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
+  const names = shown.people.map((p) => p.name || 'Someone')
+  const count = shown.tasks
   const tasks = `${count} task${count === 1 ? '' : 's'}`
   // "the task" and "this task" read better than "the 1 task"
   const theTasks = count === 1 ? 'the task' : `the ${tasks}`
-  const these = count === 1 ? 'this task' : 'these tasks'
   const team = 'teamId' in change ? P.teams.find((t) => t.id === change.teamId) : null
   const teamName = `the ${teamNoun(team?.name)}`
-  const person = 'userId' in change ? P.user(change.userId)?.name || 'Someone' : ''
-  const places = projects.flatMap((id) => P.project(id) || [])
-  const shown = places.length > 3 ? places.slice(0, 2) : places
-  const more = places.length - shown.length
+  const person =
+    'userId' in change
+      ? shown.people.find((p) => p.id === change.userId)?.name ||
+        P.user(change.userId)?.name ||
+        'Someone'
+      : ''
+  const refs = new Map(shown.projects.map((p) => [p.id, p]))
+  const places = shown.keep.targets.flatMap((id) => refs.get(id) ?? [])
+  const placesShown = places.length > 3 ? places.slice(0, 2) : places
+  const more = places.length - placesShown.length
   const deleting = change.kind === 'deleteTeam'
-  const keepText = P.keepText(change, { people, items, projects })
+  // the distinct tasks listed, the rest the caller may read, and those in
+  // projects the caller cannot see, which the list never names
+  const listed = new Set(shown.items.map((i) => i.task_id)).size
+  const unlisted = count - shown.hidden - listed
   const title =
     change.kind === 'userGrant'
       ? `Remove ${person}?`
@@ -1013,74 +1062,105 @@ function AccessRemovalModal({
     change.kind === 'teamMember'
       ? 'Keep as Viewer and remove'
       : deleting
-        ? `Keep as Viewer${people.length === 1 ? '' : 's'} and delete`
+        ? `Keep as Viewer${shown.people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
-  // once the organization is read-only, an admin's removal can only leave
-  // the tasks, so it goes ahead without the window, and a removal the server
-  // would refuse says so (P.startRemoval)
-  const handOver = () => {
-    if (!P.removalLeavesTasks(change) && !P.removalRefused(change)) return false
-    onClose()
-    P.startRemoval(change)
-    return true
+  // Reassign waits for a new choice once the chosen person was dropped
+  const choosing = keep ? keepOk : reassignOk && dropped === null
+  // what the window shows after a refused write or a changed answer, with
+  // the choice moved to the other one when the new answer refuses it
+  const showAgain = (next: RemovalAnswer, eligible: boolean) => {
+    askedAt.current = Date.now()
+    setShown(next)
+    setChanged(true)
+    if (!eligible) {
+      setDropped(to?.name || 'Someone')
+      setTo(null)
+    }
+    const nextKeep = next.keep.offered && next.keep.allowed
+    setKeep((chosen) =>
+      chosen ? nextKeep || !next.reassign.allowed : !next.reassign.allowed && nextKeep,
+    )
   }
+  /* After a refused write, the window asks the server again: an answer it
+     cannot read keeps the window with its lists, a refusal closes it, as the
+     write's own message already said why, and a read-only organization
+     hands over to the removal that leaves the tasks. */
   const finish = (removal: Promise<boolean>) => {
     setSaving(true)
-    void removal.then((removed) => {
-      // a read-only refusal already said why, and every retry would repeat it
-      if (!removed && P.removalRefused(change)) return onClose()
-      if (!removed && handOver()) return
-      const left = removed ? null : read()
-      if (!left || (!left.items.length && !P.removalPending(change))) return onClose()
+    void removal.then(async (removed) => {
+      if (removed) return onClose()
+      const now = await P.previewRemoval(change)
+      if (!open.current) return
       setSaving(false)
-      // a refused removal whose tasks are now covered keeps its list, to retry
-      if (left.items.length) setView(left)
+      if (now === null || now.state === 'too_large') return
+      if (now.state === 'refused') return onClose()
+      if (now.state === 'unavailable' || !now.pending) return onClose()
+      if (now.leave_only) {
+        onClose()
+        void P.removeLeavingTasks(change, now)
+        return
+      }
+      // a refused removal whose tasks are now covered keeps its answer, so
+      // a retry checks again and takes the plain removal
+      if (now.tasks > 0) showAgain(now, true)
     })
   }
   const submit = () => {
-    if (saving || Date.now() - askedAt.current < 1000 || handOver()) return
-    const now = read()
-    // a task that moved, or a grant that now lands elsewhere, asks again
-    const key = (list: Holder[], where: string[]) =>
-      `${list
-        .map((i) => `${i.task.id}:${i.task.project}:${i.role}:${i.uid}`)
-        .sort()
-        .join()}|${where.join()}`
-    const lost = !keep && to !== NOBODY && !now.choices.some((u) => u.id === to)
-    if (lost || key(now.items, now.projects) !== key(items, projects)) {
-      if (!now.items.length) {
-        // someone else removed this access meanwhile: say so instead of a silent close
-        if (!P.removalPending(change)) {
-          const gone =
-            change.kind === 'userGrant'
-              ? `${person} no longer has this access.`
-              : change.kind === 'teamGrant'
-                ? `The ${teamNoun(team?.name)} no longer has this access.`
-                : change.kind === 'teamMember'
-                  ? `${person} has already left ${teamName}.`
-                  : `The ${teamNoun(team?.name)} was already deleted.`
-          window.showToast?.(`${gone} Nothing was changed.`, 'info')
-          onClose()
-          return
-        }
-        // nobody loses sight of anything any more: the plain removal applies
-        finish(P.removeAccess(change, { to: null }, []))
+    if (saving || !choosing || Date.now() - askedAt.current < 1000) return
+    if (P.refusePausedEdit()) return
+    const taker = !keep && to !== null ? to.id : undefined
+    setSaving(true)
+    void P.previewRemoval(change, taker).then((now) => {
+      if (!open.current) return
+      if (now === null) {
+        setSaving(false)
+        window.showToast?.(REMOVAL_UNCHECKED, 'error')
         return
       }
-      askedAt.current = Date.now()
-      setView(now)
-      setChanged(true)
-      if (!now.choices.some((u) => u.id === to)) setTo(NOBODY)
-      return
-    }
-    finish(
-      P.removeAccess(change, keep ? { keep: true } : { to: to === NOBODY ? null : to }, now.items),
-    )
+      if (now.state === 'unavailable' || (now.state === 'ok' && !now.pending)) {
+        // someone else removed this access meanwhile: say so instead of a silent close
+        window.showToast?.(`${P.removalGoneText(change)} Nothing was changed.`, 'info')
+        onClose()
+        return
+      }
+      if (now.state === 'refused') {
+        window.showToast?.(sentence(now.message), 'error')
+        onClose()
+        return
+      }
+      if (now.state === 'too_large') {
+        // the check with a chosen person reads more than the press did, so
+        // the person may still choose Unassigned or Keep as Viewer
+        setSaving(false)
+        window.showToast?.(sentence(now.message), 'error')
+        return
+      }
+      if (now.leave_only) {
+        onClose()
+        void P.removeLeavingTasks(change, now)
+        return
+      }
+      // nobody loses sight of anything any more, so the plain removal applies
+      if (now.tasks === 0) {
+        finish(P.removeAccess(change, { to: null }))
+        return
+      }
+      const eligible = taker === undefined || now.reassign.holder_eligible === true
+      if (!eligible || removalKey(now) !== removalKey(shown)) {
+        setSaving(false)
+        showAgain(now, eligible)
+        return
+      }
+      finish(P.removeAccess(change, keep ? { keep: true } : { to: to?.id ?? null }, now))
+    })
   }
-  const option = (selected: boolean) =>
+  const option = (selected: boolean, enabled: boolean) =>
     cn(
       'flex flex-col rounded-lg border p-3',
-      selected ? '[border-color:var(--primary)] [background:var(--accent-soft)]' : 'border-border',
+      selected && enabled
+        ? '[border-color:var(--primary)] [background:var(--accent-soft)]'
+        : 'border-border',
+      !enabled && 'opacity-70',
     )
   return (
     <ModalShell
@@ -1090,7 +1170,7 @@ function AccessRemovalModal({
       focusAfterClose={focusAfterClose}
       busy={saving}
       onSubmit={submit}
-      canSubmit={!saving}
+      canSubmit={!saving && choosing}
       submitLabel={
         saving
           ? 'Saving…'
@@ -1104,59 +1184,106 @@ function AccessRemovalModal({
     >
       <div data-access-removal className="flex flex-col gap-3">
         <p className="[font-size:var(--fs-base)] [color:var(--text-2)] [line-height:1.5]">
-          {andList(names)} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks} in{' '}
-          {shown.map((p, i) => (
+          {andList(names)} {names.length === 1 ? 'is' : 'are'} assigned to or reviewing {tasks}
+          {placesShown.length > 0 && ' in '}
+          {placesShown.map((p, i) => (
             <Fragment key={p.id}>
-              {i > 0 && (i === shown.length - 1 && !more ? ' and ' : ', ')}
+              {i > 0 && (i === placesShown.length - 1 && !more ? ' and ' : ', ')}
               <b className="text-text-1">{P.projectLabel(p)}</b>
             </Fragment>
           ))}
           {more > 0 && ` and ${more} other projects`}.
         </p>
-        {changed && (
-          <p className="text-sm [color:var(--danger)]">
-            Access or tasks changed while this window was open. Check them and choose again.
-          </p>
-        )}
-        <div className="max-h-48 overflow-auto rounded-lg border border-border">
-          {items.map((i) => (
-            <div
-              key={`${i.task.id}:${i.role}:${i.uid}`}
-              className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
-            >
-              <span className="w-12 shrink-0 font-mono text-xs text-text-2">{i.task.key}</span>
-              <span className="min-w-0 flex-1 truncate text-text-1">{i.task.title}</span>
-              <span className="shrink-0 text-xs text-text-2">
-                {names.length > 1 ? `${P.user(i.uid)?.name.split(' ')[0]}, ` : ''}
-                {i.role === 'reviewer' ? 'Reviewer' : 'Assignee'}
-              </span>
-            </div>
-          ))}
+        {/* a live region from the start, so a screen reader reads each
+            notice as the window asks again; no gap of its own while empty */}
+        <div role="status" data-access-removal-notice className="-mt-3">
+          {changed && (
+            <p className="mt-3 text-sm [color:var(--danger)]">
+              Access or tasks changed while this window was open. Check them and choose again.
+            </p>
+          )}
+          {dropped !== null && (
+            <p className="mt-1 text-sm [color:var(--danger)]">
+              {dropped} can no longer take {count === 1 ? 'the task' : 'these tasks'}. Choose
+              someone else or Unassigned.
+            </p>
+          )}
         </div>
-        {canKeep && (
-          <div className={option(keep)}>
-            <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
+        <div className="max-h-48 overflow-auto rounded-lg border border-border">
+          {shown.items.map((i) => {
+            const holder = shown.people.find((p) => p.id === i.holder_id)
+            return (
+              <div
+                key={`${i.task_id}:${i.role}:${i.holder_id}`}
+                data-access-removal-task={i.task_id}
+                className="flex items-center gap-2.5 border-t border-border px-3 py-2 text-sm first:border-t-0"
+              >
+                <span className="w-12 shrink-0 font-mono text-xs text-text-2">
+                  {issueKey(i.num)}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-text-1">{i.title}</span>
+                <span className="shrink-0 text-xs text-text-2">
+                  {names.length > 1 ? `${(holder?.name || 'Someone').split(' ')[0]}, ` : ''}
+                  {i.role === 'reviewer' ? 'Reviewer' : 'Assignee'}
+                </span>
+              </div>
+            )
+          })}
+          {unlisted > 0 && (
+            <div className="border-t border-border px-3 py-2 text-sm text-text-2 first:border-t-0">
+              and {unlisted} more task{unlisted === 1 ? '' : 's'}
+            </div>
+          )}
+          {shown.hidden > 0 && (
+            <div
+              data-access-removal-hidden
+              className="border-t border-border px-3 py-2 text-sm text-text-2 first:border-t-0"
+            >
+              {shown.hidden} task{shown.hidden === 1 ? '' : 's'} in projects you can't see
+            </div>
+          )}
+        </div>
+        {shown.keep.offered && (
+          <div className={option(keep, keepOk)} data-access-removal-keep>
+            <Label
+              className={cn(
+                'flex items-start gap-2.5 font-normal',
+                keepOk ? 'cursor-pointer' : 'cursor-default',
+              )}
+            >
               <Input
                 type="radio"
                 name="access-removal"
-                checked={keep}
+                checked={keep && keepOk}
+                // as the picker, so the choice on screen stays the one saved
+                disabled={!keepOk || saving}
                 onChange={() => setKeep(true)}
                 className="mt-0.5"
               />
               <span className="flex flex-col gap-0.5">
                 <span className="text-base font-semibold text-text-1">Keep as Viewer</span>
-                <span className="text-sm text-text-2">{keepText}</span>
+                <span className="text-sm text-text-2">
+                  {keepOk
+                    ? P.keepText(change, shown)
+                    : sentence(shown.keep.refusal ?? 'Keeping them as Viewers is not possible.')}
+                </span>
               </span>
             </Label>
           </div>
         )}
-        <div className={option(!keep)}>
-          <Label className="flex cursor-pointer items-start gap-2.5 font-normal">
-            {canKeep && (
+        <div className={option(!keep, reassignOk)} data-access-removal-reassign>
+          <Label
+            className={cn(
+              'flex items-start gap-2.5 font-normal',
+              reassignOk ? 'cursor-pointer' : 'cursor-default',
+            )}
+          >
+            {shown.keep.offered && (
               <Input
                 type="radio"
                 name="access-removal"
-                checked={!keep}
+                checked={!keep && reassignOk}
+                disabled={!reassignOk || saving}
                 onChange={() => setKeep(false)}
                 className="mt-0.5"
               />
@@ -1166,36 +1293,208 @@ function AccessRemovalModal({
                 Reassign {theTasks}, then {deleting ? 'delete the team' : 'remove'}
               </span>
               <span className="text-sm text-text-2">
-                Reviewer roles move to the same person.
-                {/* the server's fixed cap (LIMITS.reassign); its room for one
-                    request cannot be known here, so only the count is checked */}
-                {count > LIMITS.reassign.max &&
-                  ` One removal reassigns at most ${grouped(LIMITS.reassign.max)} tasks, so ${canKeep ? `keep ${names.length === 1 ? `${names[0].split(' ')[0]} as a Viewer` : 'them as Viewers'} or ` : ''}reassign some of ${these} first.`}
+                {reassignOk
+                  ? 'Reviewer roles move to the same person.'
+                  : sentence(shown.reassign.refusal ?? 'Reassigning these tasks is not possible.')}
               </span>
             </span>
           </Label>
           {/* outside the label, so opening the picker never toggles the radio */}
-          <FieldSelect
-            aria-label="New assignee"
-            className={cn('mt-2', canKeep && 'ml-6.5')}
-            menuWidth={240}
-            value={to}
-            options={[
-              { value: NOBODY, label: 'Unassigned' },
-              ...choices.map((u) => ({
-                value: u.id,
-                label: u.name,
-                icon: <Avatar id={u.id} size={28} />,
-              })),
-            ]}
-            onChange={(v) => {
-              setTo(v)
-              setKeep(false)
-            }}
-          />
+          <div className={cn('mt-2 min-w-0', shown.keep.offered && 'ml-6.5')}>
+            <ReassignPicker
+              change={change}
+              to={to}
+              disabled={!reassignOk || saving}
+              onPick={(taker) => {
+                setTo(taker)
+                setDropped(null)
+                setKeep(false)
+              }}
+            />
+          </div>
         </div>
       </div>
     </ModalShell>
+  )
+}
+
+/** The most people the Reassign picker gathers with Load more, as API
+    access's person filter does; past it a search narrows the list. */
+const TAKERS_MOST = 500
+
+/* The Reassign picker: a button naming Unassigned or the chosen person
+   that opens a list read from the server a batch at a time
+   (P.reassignChoices), as API access's person filter does. The chosen
+   person stays named on the button through later searches, also when no
+   loaded batch holds them, and the window checks them again before it
+   saves. */
+function ReassignPicker({
+  change,
+  to,
+  disabled,
+  onPick,
+}: {
+  change: AccessRemoval
+  to: Taker
+  disabled: boolean
+  onPick: (taker: Taker) => void
+}) {
+  const label = to?.name ?? 'Unassigned'
+  return (
+    <Popover
+      width={280}
+      backLayer
+      onEscapeKeyDown={(event) => {
+        // Escape clears the search first (ReassignChoiceList), and closes
+        // the list once the search is empty, never the window
+        const field = event.target
+        if (field instanceof HTMLInputElement && field.matches('[data-reassign-search]'))
+          if (field.value !== '') event.preventDefault()
+      }}
+      wrapStyle={{ minWidth: 0 }}
+      button={(toggle, open) => (
+        <Button
+          type="button"
+          variant="outline"
+          data-reassign-to={to?.id ?? ''}
+          data-on={open ? '' : undefined}
+          aria-label={`New assignee: ${label}`}
+          disabled={disabled}
+          onClick={toggle}
+          // sized and drawn as the select it replaces (FieldSelect), taller
+          // with the chosen person's avatar
+          className="h-control max-w-full gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1 has-[[data-slot=avatar]]:h-auto has-[[data-slot=avatar]]:min-h-[46px] has-[[data-slot=avatar]]:py-2"
+        >
+          {to !== null && <Avatar id={to.id} size={28} />}
+          <span className="min-w-0 truncate">{label}</span>
+          <Icon name="chevronDown" size={14} color="var(--text-2)" />
+        </Button>
+      )}
+    >
+      {(close) => (
+        <ReassignChoiceList
+          change={change}
+          to={to}
+          onPick={(taker) => close(() => onPick(taker))}
+        />
+      )}
+    </Popover>
+  )
+}
+
+/* The open Reassign picker: Unassigned, a search, then the people the
+   server lists in name order, matching the search once typing rests, with
+   Load more. It reads its batches on demand through the shared paged list
+   (lib/pagedList.ts), never live, and drops them when it closes. A batch
+   the read budget stopped, that failed or that holds no row never reads as
+   the end of the list, and one the server answered without rows, the
+   first or a Load more, says why. */
+function ReassignChoiceList({
+  change,
+  to,
+  onPick,
+}: {
+  change: AccessRemoval
+  to: Taker
+  onPick: (taker: Taker) => void
+}) {
+  const [text, setText] = useStateM('')
+  const { tooLong, settled: query } = useSettledSearch(text, LIMITS.search)
+  const list = usePagedList({
+    key: `${JSON.stringify(change)}|${query}`,
+    source: { kind: 'once', read: (at) => P.reassignChoices(change, query, at.after) },
+    batch: (answer: ReassignChoices) => (answer.state === 'ready' ? answer : null),
+    id: (person: ReassignChoice) => person.id,
+    most: TAKERS_MOST,
+  })
+  const end = listEnd(list, query !== '')
+  // the answer of a read that holds no rows says why: the first read's, or
+  // a Load more's, after which Try again would only ask the same
+  const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
+  const heldLine =
+    held === undefined
+      ? "People can't be listed yet."
+      : held.state === 'not_ready'
+        ? "People can't be listed yet."
+        : held.state === 'refused' || held.state === 'too_large'
+          ? sentence(held.message)
+          : held.state === 'unavailable'
+            ? 'This removal can no longer be checked.'
+            : null
+  return (
+    <div data-reassign-people="" className="flex flex-col gap-1">
+      <LimitedInput
+        limit={LIMITS.search}
+        aria-label="Search people"
+        data-reassign-search=""
+        placeholder="Search people"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          // Escape clears the search first; an empty field closes the list
+          if (e.key === 'Escape' && text) {
+            e.stopPropagation()
+            setText('')
+          }
+        }}
+        className="h-control text-sm"
+      />
+      <div className="max-h-[280px] overflow-y-auto">
+        <MenuItem active={to === null} onClick={() => onPick(null)} data-reassign-choice="">
+          Unassigned
+        </MenuItem>
+        {list.rows.map((person) => (
+          <MenuItem
+            key={person.id}
+            active={to?.id === person.id}
+            onClick={() => onPick({ id: person.id, name: person.name })}
+            data-reassign-choice={person.id}
+          >
+            <Avatar id={person.id} size={20} />
+            <span className="min-w-0 truncate">{person.name}</span>
+            {person.kind === 'agent' && <span className="ml-auto text-xs text-text-2">agent</span>}
+          </MenuItem>
+        ))}
+        {tooLong ? (
+          <p className="px-2 py-1 text-sm text-text-2">{limitSentence(LIMITS.search)}</p>
+        ) : end === 'loading' ? (
+          <p role="status" className="px-2 py-1 text-sm text-text-2">
+            Loading people…
+          </p>
+        ) : end === 'held' || (end === 'failed' && list.failure !== null) ? (
+          <p role="status" data-reassign-held="" className="px-2 py-1 text-sm text-text-2">
+            {heldLine}
+          </p>
+        ) : end === 'failed' ? (
+          <div role="alert" className="flex items-center gap-2 px-2 py-1 text-sm text-danger">
+            Couldn't load people.
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-control-sm text-sm"
+              // a failed Load more keeps its place; a failed first batch
+              // starts again
+              onClick={() => list.retry()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : end === 'full' ? (
+          <p className="px-2 py-1 text-sm text-text-2">Search to narrow the list.</p>
+        ) : end === 'more' ? (
+          <>
+            {list.stopped && (
+              <p className="px-2 py-1 text-sm text-text-2">Showing the people found so far.</p>
+            )}
+            <MenuItem data-reassign-more="" disabled={list.phase === 'more'} onClick={list.more}>
+              {list.phase === 'more' ? 'Loading…' : 'Load more'}
+            </MenuItem>
+          </>
+        ) : end === 'none' ? (
+          <p className="px-2 py-1 text-sm text-text-2">No one matches.</p>
+        ) : null}
+      </div>
+    </div>
   )
 }
 

@@ -8,11 +8,14 @@
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access reads everything. Load more reads after the last batch's
-     `next`; one read runs at a time, so a second press or a Retry while one
-     runs reads nothing. A failed batch keeps the rows and the place, and
-     Retry reads it again, or starts again when the first batch failed.
-     Nothing is subscribed, so a hidden tab has nothing to pause.
+     access and the removal window's Reassign picker read everything. Load
+     more reads after the last batch's `next`; one read runs at a time, so a
+     second press or a Retry while one runs reads nothing. A failed batch
+     keeps the rows and the place, and Retry reads it again, or starts again
+     when the first batch failed. A first answer with no rows stays in
+     `answers`, as the live engine keeps it, and a later one, which fails
+     the list, in `failure`, so a page can say why. Nothing is subscribed,
+     so a hidden tab has nothing to pause.
    - `live`: each batch is a live read (lib/liveView.ts watchLive) that
      runs again whenever what it read changes, on the rules of the
      Overview's lists (store/overviewLists.ts):
@@ -133,6 +136,9 @@ export type PagedList<A, Row> = {
   rows: readonly Row[]
   /** the answers on screen, in batch order, for fields beside the rows */
   answers: readonly A[]
+  /** for a list read once, the answer with no rows of the Load more that
+      failed the list, so a page can say why; null otherwise */
+  failure: A | null
   batches: readonly PagedBatch<Row>[]
   /** `first` until the first batch answers; `held` for a first answer with
       no rows; `failed` when the list's last read failed; `more` while Load
@@ -232,6 +238,7 @@ type Engine<A, Row> = {
 const empty = <A, Row>(): ListState<A, Row> => ({
   rows: [],
   answers: [],
+  failure: null,
   batches: [],
   phase: 'first',
   next: false,
@@ -266,6 +273,10 @@ function onceEngine<A, Row>(
   // start and leaving the page move it on, so an older answer is dropped
   let sequence = 0
   let reads: Read[] = []
+  // a first answer with no rows, which `answers` shows
+  let held: A | null = null
+  // a later answer with no rows, which failed the list (`failure`)
+  let failure: A | null = null
   let phase: PagedList<A, Row>['phase'] = 'first'
   // a read on its way, so a second press or a Retry reads nothing
   let reading = false
@@ -289,10 +300,13 @@ function onceEngine<A, Row>(
     if (n !== sequence) return
     reading = false
     const batch = answer === null ? null : options().batch(answer)
+    failure = null
     if (answer === null || batch === null) {
       // a first answer with no rows is held; a later one is a failure that
-      // keeps the rows and the place
+      // keeps the rows and the place, and the answer for `failure`
       phase = answer !== null && after === null ? 'held' : 'failed'
+      if (phase === 'held') held = answer
+      else failure = answer
     } else {
       reads = [...reads, { answer, batch }]
       phase = 'ready'
@@ -303,6 +317,8 @@ function onceEngine<A, Row>(
   function start() {
     sequence++
     reads = []
+    held = null
+    failure = null
     phase = 'first'
     reading = false
     if (key !== null) read(null)
@@ -327,6 +343,8 @@ function onceEngine<A, Row>(
     stop() {
       sequence++
       reads = []
+      held = null
+      failure = null
       reading = false
     },
     view() {
@@ -342,7 +360,8 @@ function onceEngine<A, Row>(
       const end = last()?.batch
       return {
         rows,
-        answers: reads.map((r) => r.answer),
+        answers: held !== null && phase === 'held' ? [held] : reads.map((r) => r.answer),
+        failure: phase === 'failed' ? failure : null,
         batches,
         phase,
         next: (end?.next ?? null) !== null,
@@ -689,6 +708,7 @@ function liveEngine<A, Row>(
     return {
       rows,
       answers,
+      failure: null,
       batches,
       phase,
       next: open && nextAt !== null && nextAt !== last.after,

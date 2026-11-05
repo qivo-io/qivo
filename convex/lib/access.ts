@@ -1508,6 +1508,20 @@ export function levelsFrom(
   }
 }
 
+/** What projectLevelsForProfiles read about projects and the teams that
+ * share them: each project's grants and shares, and each sharing team's
+ * members in the organization. A caller that asks about several projects of
+ * one organization passes one of these (projectLevelReads) to every call, so
+ * a top-level project's rows and a team's members are read once however
+ * many of its sub-projects it asks about. */
+export type ProjectLevelReads = {
+  rows: Map<string, { grants: Doc<'project_access'>[]; shares: Doc<'project_team_access'>[] }>
+  members: Map<string, string[]>
+}
+
+/** An empty ProjectLevelReads. */
+export const projectLevelReads = (): ProjectLevelReads => ({ rows: new Map(), members: new Map() })
+
 /** The level every profile of `project`'s organization holds on it, leaving
  * out the read-only navigation a parent gets from its sub-projects. It is
  * projectLevel(ctx, profile, project, false) for many profiles at once, so a
@@ -1519,11 +1533,27 @@ export function levelsFrom(
  * profile plus one per sharing team, so the project user list of a large
  * organization passed Convex's 4,096. A profile of another organization, and
  * every profile on a project whose root is in another organization, gets
- * null. A missing parent or a cycle throws not found, as in rootMetaOf. */
+ * null. A missing parent or a cycle throws not found, as in rootMetaOf.
+ *
+ * The removal window's Reassign picker (model/removalPreview.ts
+ * reassignChoicesOf) asks it for the levels as they will be once an access
+ * removal is done. `without` names the rows the removal takes away, which
+ * it leaves out as projectLevelsForPeople does: the grant and the share it
+ * names, every share of a deleted team, whose members it then does not
+ * read, and the one membership that goes. Each profile's answer then equals
+ * projectLevelsForPeople's level with the same `without`, navigation aside,
+ * which tests/projectUsers.test.ts pins over every access shape. `guard`
+ * runs before each read and after every LEVELS_READ.guardRows rows of one,
+ * so the picker stops before the reads fill the transaction, and `reads`
+ * keeps what one call read for the next (ProjectLevelReads). Without them
+ * it reads as it always has. */
 export async function projectLevelsForProfiles(
   ctx: QueryCtx,
   project: Doc<'projects'>,
+  o: { without?: RemovedAccess; guard?: () => Promise<void>; reads?: ProjectLevelReads } = {},
 ): Promise<(profile: Doc<'profiles'>) => AccessLevel | null> {
+  const { without = {}, guard = async () => {}, reads = projectLevelReads() } = o
+  await guard()
   const root = await rootMetaOf(ctx, project)
   if (root.org_id !== project.org_id) return () => null
   const tree = project.id === root.id ? [project] : [root, project]
@@ -1537,22 +1567,38 @@ export async function projectLevelsForProfiles(
     if (held === undefined) to.set(profileId, [level])
     else held.push(level)
   }
-  const teamMembers = new Map<string, string[]>()
+  const left = without.membership
   for (const { id } of tree) {
-    const grants = ctx.db
-      .query('project_access')
-      .withIndex('by_project', (q) => q.eq('project_id', id))
-    for await (const grant of grants) add(grantsOf, grant.profile_id, grant)
-    const teamShares = ctx.db
-      .query('project_team_access')
-      .withIndex('by_project', (q) => q.eq('project_id', id))
-    for await (const share of teamShares) {
-      let members = teamMembers.get(share.team_id)
-      if (members === undefined) {
-        members = await sameOrgTeamMembers(ctx, share.team_id, project.org_id)
-        teamMembers.set(share.team_id, members)
+    let rows = reads.rows.get(id)
+    if (rows === undefined) {
+      rows = {
+        grants: await guardedRows(
+          ctx.db.query('project_access').withIndex('by_project', (q) => q.eq('project_id', id)),
+          guard,
+        ),
+        shares: await guardedRows(
+          ctx.db
+            .query('project_team_access')
+            .withIndex('by_project', (q) => q.eq('project_id', id)),
+          guard,
+        ),
       }
-      for (const profileId of members) add(sharesOf, profileId, share)
+      reads.rows.set(id, rows)
+    }
+    for (const grant of rows.grants)
+      if (grant._id !== without.grant) add(grantsOf, grant.profile_id, grant)
+    for (const share of rows.shares) {
+      // a deleted team's shares go with it, so its members are not read
+      if (share._id === without.share || share.team_id === without.team) continue
+      let members = reads.members.get(share.team_id)
+      if (members === undefined) {
+        members = await sameOrgTeamMembers(ctx, share.team_id, project.org_id, guard)
+        reads.members.set(share.team_id, members)
+      }
+      for (const profileId of members) {
+        if (left?.team_id === share.team_id && left.profile_id === profileId) continue
+        add(sharesOf, profileId, share)
+      }
     }
   }
   return (profile) => {
@@ -1682,17 +1728,24 @@ export async function projectSightForProfiles(
 }
 
 /* The profile ids of team `teamId`, or none when the team is gone or belongs
- * to another organization than `orgId`, the teams teamGrantOn skips. */
-async function sameOrgTeamMembers(ctx: QueryCtx, teamId: string, orgId: string): Promise<string[]> {
+ * to another organization than `orgId`, the teams teamGrantOn skips.
+ * `guard` runs before each read and as guardedRows runs it. */
+async function sameOrgTeamMembers(
+  ctx: QueryCtx,
+  teamId: string,
+  orgId: string,
+  guard: () => Promise<void>,
+): Promise<string[]> {
+  await guard()
   const team = await ctx.db
     .query('teams')
     .withIndex('by_uuid', (q) => q.eq('id', teamId))
     .unique()
   if (team === null || team.org_id !== orgId) return []
-  const members = await ctx.db
-    .query('team_members')
-    .withIndex('by_team', (q) => q.eq('team_id', teamId))
-    .collect()
+  const members = await guardedRows(
+    ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', teamId)),
+    guard,
+  )
   return members.map((member) => member.profile_id)
 }
 

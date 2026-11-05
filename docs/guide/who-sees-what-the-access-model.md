@@ -21,15 +21,24 @@ individual grants or organization administration intact.
 Removing a person's or a team's grant asks first when someone would lose
 sight of open tasks they are assigned to or reviewing in that project or its
 sub-projects. Removing a member from a team, or deleting a team, asks the same
-way for every project the team shares. The window lists those tasks and
-offers two choices. **Keep as Viewer** gives each of those people a Viewer
+way for every project the team shares. Qivo works this out on the server over
+every task, not only the tasks the app has loaded, so the project and team
+pages open at once while tasks are still loading. A removal Qivo cannot check
+removes nothing, and the app says so. The window lists up to 120 of those
+tasks, says how many more there are, and counts any in projects you cannot
+see without naming them. It offers two choices. **Keep as Viewer** gives each of those people a Viewer
 grant, so they keep the tasks and can read the project. They can change only
 what another grant of their own still allows, such as a sub-project where they
 have User access, and the window names those projects.
 For a team, each person's grant is on each project the team shared that holds
 their own listed tasks. **Reassign** hands every listed task, reviewer roles included,
-to one person who keeps User or Lead access to those tasks, or to
-**Unassigned**, and removes the access. Every removal, deleting a team
+to one person, or to **Unassigned**, and removes the access. It lists 25 people
+at a time in name order, with a search and **Load more**. They are the people
+who keep User or Lead access to every listed task's project and can see every
+task above it once the access is gone, never the people who lose sight of these
+tasks. When
+you save, the window checks the chosen person again and asks again if they can
+no longer take the tasks or the tasks changed. Every removal, deleting a team
 included, saves the removal and the choice together. If a task cannot be
 reassigned or a Viewer grant cannot be given, nothing changes, the team stays
 when you were deleting it, and the window lists the tasks again. Such a
@@ -37,14 +46,14 @@ removal reassigns at most 120 tasks, and fewer when the change is too large
 to save at once. Their followers hear of it a few seconds later. With more
 than 120, keep the people as Viewers and hand the tasks over later, or
 reassign some of the tasks first. The message says which of these you can
-choose, and the window says so before you save when it lists more than 120
-tasks. Keeping people as Viewers is refused the same way when their grants are
+choose. With more than 120 tasks, **Reassign** is unavailable in the window,
+which says why. Keeping people as Viewers is refused the same way when their grants are
 too many to save at once; remove some of those people first, or reassign the
 tasks. Keeping people as Viewers or reassigning their tasks is refused when
 more than 700 of the team's members work on open tasks there; leave the tasks
 with them, or remove some of the team's members first. Any removal whose
-people and tasks are too many to check at once is refused too; remove fewer
-people at once, or reassign some of the tasks first.
+people and tasks are too many to check at once is refused too, and removes
+nothing; remove fewer people at once, or reassign some of the tasks first.
 Removing a person's grant that is already Viewer offers only the reassignment.
 Done tasks keep their assignee and are not listed.
 

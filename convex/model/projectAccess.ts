@@ -15,12 +15,12 @@
  * that are not archived, whose active assignee, or whose reviewer when the
  * task has no subtasks, could see them before and cannot after (findLost).
  * accessRemovals.preview (model/removalPreview.ts) works them out through
- * findLost too, without writing, for the app's removal window, which still
- * works them out from its loaded tasks (src/store/planner.ts accessRemoval)
- * until it asks the preview instead. The caller chooses what happens to
- * them, and the removal and that choice land in one transaction or not at
- * all (removeAndSettle). Removing a team member and deleting a team
- * (model/teams.ts) settle the members' tasks through the same function. While billing or a
+ * findLost too, without writing, for the app's removal window, and
+ * accessRemovals.reassignChoices lists who could take them. The caller
+ * chooses what happens to them, and the removal and that choice land in one
+ * transaction or not at all (removeAndSettle). Removing a team member and
+ * deleting a team (model/teams.ts) settle the members' tasks through the
+ * same function. While billing or a
  * pending deletion makes the organization read-only, an organization admin
  * can still remove access, in the app and over REST and MCP, but only by
  * leaving the tasks, because the other choices write more. */

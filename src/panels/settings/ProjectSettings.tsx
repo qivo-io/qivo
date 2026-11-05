@@ -28,9 +28,10 @@ import {
 } from '../../lib/focusWhenGone'
 import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import type { AccessLevel, AccessRemoval, ArchivedProjectVM, ProjectVM } from '../../store/planner'
+import type { AccessLevel, ArchivedProjectVM, ProjectVM } from '../../store/planner'
 import { P } from '../../store/planner'
-import { AccessRemovalModal, ArchiveOrDeleteProjectModal } from '../Modals'
+import { ArchiveOrDeleteProjectModal } from '../Modals'
+import { useAccessRemoval } from '../useAccessRemoval'
 import { BackLink, DemoCapabilityNotice, TextField, Toggle } from './controls'
 import { InviteOutcome } from './UserControls'
 
@@ -581,21 +582,11 @@ function ProjectSettingsFields({
   onRemove: () => void
 }) {
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
-  /* Removing a grant that would leave someone unable to see tasks they work
-     on first asks whether to keep them as Viewers or reassign their tasks. */
-  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  /* Where focus goes as the removal window closes, taken as it opens. A
-     removal that needs no window takes the row away at once, and focus
-     goes there as it renders. */
-  const removalFocus = React.useRef<() => HTMLElement | null>(() => null)
-  const focusAfterRender = useFocusAfterRender()
-  const removeOrAsk = (change: AccessRemoval, focus: () => HTMLElement | null) => {
-    removalFocus.current = focus
-    if (P.startRemoval(change)) setRemoval(change)
-    else focusAfterRender(focus)
-  }
-  // a read-only organization's admin removes without the window
-  React.useEffect(() => P.watchWriteBlock(proj.org), [proj.org])
+  /* Removing a grant asks the server which open tasks it would take out of
+     someone's sight, and when some, whether to keep them as Viewers or
+     reassign their tasks (useAccessRemoval). Focus then goes to the target
+     taken as the press starts (focusAfterAccessRemoval). */
+  const removal = useAccessRemoval()
   const [inviteEmail, setInviteEmail] = useStateS('')
   const [inviting, setInviting] = useStateS(false)
   /* The seats this form's invitations emailed, newest last, for
@@ -868,7 +859,7 @@ function ProjectSettingsFields({
             access={proj.access || {}}
             onTeamChange={(teamId, level) =>
               level === null
-                ? removeOrAsk(
+                ? removal.press(
                     { kind: 'teamGrant', projectId: proj.id, teamId },
                     focusAfterAccessRemoval('team', teamId),
                   )
@@ -876,11 +867,18 @@ function ProjectSettingsFields({
             }
             onUserChange={(userId, level) =>
               level === null
-                ? removeOrAsk(
+                ? removal.press(
                     { kind: 'userGrant', projectId: proj.id, userId },
                     focusAfterAccessRemoval('user', userId),
                   )
                 : P.setProjectAccess(proj.id, userId, level)
+            }
+            checking={(kind, id) =>
+              removal.checking(
+                kind === 'team'
+                  ? { kind: 'teamGrant', projectId: proj.id, teamId: id }
+                  : { kind: 'userGrant', projectId: proj.id, userId: id },
+              )
             }
             role={grantRole}
             onRoleChange={setGrantRole}
@@ -888,14 +886,7 @@ function ProjectSettingsFields({
             canManageTeams={canManageTeams}
             canManageUser={(userId) => P.canManageProjectUser(proj.id, userId)}
           />
-          {removal && (
-            <AccessRemovalModal
-              key={JSON.stringify(removal)}
-              change={removal}
-              onClose={() => setRemoval(null)}
-              focusAfterClose={() => removalFocus.current()}
-            />
-          )}
+          {removal.window}
           {/* External invitees gain a guest seat with access to this project. */}
           {DEMO_MODE ? (
             <DemoCapabilityNotice>Inviting people is unavailable in the demo.</DemoCapabilityNotice>

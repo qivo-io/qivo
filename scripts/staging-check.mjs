@@ -40,7 +40,12 @@
  * its run tag over REST and puts it on a fixture task, opens Settings ›
  * Labels on the deployment's live batches (labels.settingsPage), finds the
  * label by search with its count of active tasks, renames it in place and
- * deletes it in its window (ui/settings-labels). Every task, comment,
+ * deletes it in its window (ui/settings-labels). It makes a sub-project of
+ * its own under its second project with a task of the Standard agent's,
+ * removes the agent's grant there in the app, whose removal window lists
+ * the task from the deployment's preview (accessRemovals.preview), and
+ * hands the task to Nora through the window's picker
+ * (accessRemovals.reassignChoices) (ui/removal-window). Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
  * refused, and removes everything it made, also after a failure
@@ -1576,7 +1581,7 @@ async function sweep(tag, label) {
               await evaluate(
                 app,
                 (id) =>
-                  window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }, []),
+                  window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }),
                 team.id,
               ),
               'the app could not delete it',
@@ -3926,6 +3931,105 @@ async function settingsLabelsCheck() {
   })
 }
 
+/** The step that checks the removal window (removalWindowCheck). */
+export const REMOVAL_STEP = 'ui/removal-window'
+
+/** What the removal window shows and presses (removalWindowCheck): the
+ *  submit button once Reassign is chosen, and the picker button's name for
+ *  the person the run chooses. */
+export const REMOVAL_EXPECTED = {
+  submit: 'Reassign and remove',
+  chosen: (name) => `New assignee: ${name}`,
+}
+
+/** The removal window on the deployment's answers (accessRemovals.preview
+ *  and reassignChoices): the run makes `<tag> Removal` under its second
+ *  project N over REST, gives the Standard agent a User grant there and a
+ *  To Do task, then in the app presses the agent's Remove in that
+ *  sub-project's access editor. The window must list the task's key and
+ *  title from the preview; the step chooses Reassign, searches the picker
+ *  for Nora's name, chooses her and presses REMOVAL_EXPECTED.submit, which
+ *  must close the window. Over REST the task must then be Nora's and the
+ *  sub-project must hold no grant for the agent. Not under M, where the
+ *  agent's Viewer grant keeps its sight of every sub-project, so the
+ *  removal would take no task out of sight and open no window. Without an
+ *  N it makes a tagged top-level project of its own (run.projects.R), which
+ *  the cleanup deletes and the sweep finds by its tag. The task goes to
+ *  run.created. It runs while the run's projects are active, after
+ *  ui/settings-labels, and needs a backend from the release of the
+ *  removal window or later. Against an older one the press cannot read
+ *  the preview, so the window never opens and the step fails waiting for
+ *  it. */
+async function removalWindowCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  await check(REMOVAL_STEP, async () => {
+    let parent = run.projects.N
+    if (!parent) {
+      parent = await restOk(w, 'POST', '/projects', { name: `${run.tag} removal project` })
+      run.projects.R = parent
+    }
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Removal`,
+      parent: parent.id,
+    })
+    await restOk(w, 'PUT', `/projects/${sub.id}/access/users/${std.id}`, { level: 'user' })
+    const t = await restOk(w, 'POST', '/tasks', {
+      project: sub.id,
+      title: `${run.tag} removal window`,
+      status: 'todo',
+      assignee_id: std.id,
+    })
+    run.created.push(t)
+    eq(t.assignee_id, std.id, "the task's assignee")
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/project/${sub.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const remove = app.locator(
+      `[data-project-access-user="${std.id}"] [data-project-access-remove]`,
+    )
+    await remove.waitFor({ timeout: 60_000 })
+    await remove.click()
+    const dialog = app.locator('[data-modal-shell] [data-access-removal]')
+    await dialog.waitFor({ timeout: 60_000 })
+    const row = dialog.locator(`[data-access-removal-task="${t.id}"]`)
+    expect(await until(async () => (await row.count()) === 1), `the window does not list ${t.key}`)
+    const listed = ((await row.textContent()) ?? '').trim()
+    expect(listed.includes(t.key) && listed.includes(t.title), `the row reads ${short(listed)}`)
+    await dialog.locator('[data-access-removal-reassign] input[type="radio"]').check()
+    const picker = dialog.locator('[data-reassign-to]')
+    await picker.click()
+    await app.locator('[data-reassign-search]').fill(run.nora.name)
+    const nora = app.locator(`[data-reassign-choice="${run.nora.id}"]`)
+    await nora.waitFor({ timeout: 30_000 })
+    await nora.click()
+    expect(
+      await until(
+        async () =>
+          (await picker.getAttribute('aria-label')) === REMOVAL_EXPECTED.chosen(run.nora.name),
+      ),
+      `the picker does not name ${run.nora.name}`,
+    )
+    await app
+      .locator('[data-modal-shell] button')
+      .filter({ hasText: new RegExp(`^${REMOVAL_EXPECTED.submit}$`) })
+      .click()
+    expect(
+      await until(async () => (await dialog.count()) === 0, 30_000),
+      'the window did not close',
+    )
+    expect(
+      await until(
+        async () => (await restOk(w, 'GET', `/tasks/${t.key}`)).assignee_id === run.nora.id,
+      ),
+      `${t.key} is not ${run.nora.name}'s`,
+    )
+    const grants = (await restOk(w, 'GET', `/projects/${sub.id}`)).grants.users.map((g) => g.id)
+    expect(!grants.includes(std.id), `${sub.name} still holds a grant for the agent`)
+    return `removed the agent's grant on ${sub.name} in the window from the preview, which listed ${t.key}, and handed it to ${run.nora.name} through the picker`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -5352,11 +5456,14 @@ async function main() {
   await overviewCheck()
   // Settings › Labels with a label of its own on a fixture task
   await settingsLabelsCheck()
+  // the removal window and its Reassign picker on a sub-project of its own
+  await removalWindowCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
     await deleteProjectInApp(c.writeToken, run.projects.M)
     if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
+    if (run.projects.R) await deleteProjectInApp(c.writeToken, run.projects.R)
     for (const t of run.created)
       eq(
         (await rest(c.writeToken, 'GET', `/tasks/${t.id}`)).status,
@@ -5372,7 +5479,7 @@ async function main() {
       expect(
         await evaluate(
           app,
-          (id) => window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }, []),
+          (id) => window.PLANNER.removeAccess({ kind: 'deleteTeam', teamId: id }, { to: null }),
           run.team.id,
         ),
         'refused',

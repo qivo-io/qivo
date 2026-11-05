@@ -91,7 +91,8 @@ const actual = rows.map((r) => `${r.module}:${r.name} ${r.kind} ${r.vis} ${r.arg
 /* ------------------------------------------------- the committed baseline */
 
 const MANIFEST = `
-accessRemovals:preview query public {"type":"object","value":{"change":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"user_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_member"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"delete_team"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}}]},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+accessRemovals:preview query public {"type":"object","value":{"change":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"user_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_member"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"delete_team"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}}]},"optional":false},"reassign_to":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+accessRemovals:reassignChoices query public {"type":"object","value":{"change":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"user_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_grant"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team_member"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false},"user_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"delete_team"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 admin:addOperator mutation internal {"type":"object","value":{"email":{"fieldType":{"type":"string"},"optional":false},"note":{"fieldType":{"type":"string"},"optional":true}}}
 admin:auditLog query public {"type":"object","value":{"limit":{"fieldType":{"type":"number"},"optional":true},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
 admin:isOperator query public {"type":"object","value":{}}
@@ -1111,10 +1112,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     setDisplayName: 'authedMutation',
     setMessageRetention: 'authedMutation',
   },
-  // The removal window's preview of the three removals below
-  // (projects.removeAccess, teams.removeMember, teams.deleteDeep): a read
-  // that runs the writes' own checks, read once, never subscribed.
-  accessRemovals: { preview: 'orgQuery' },
+  // The removal window's reads of the three removals below
+  // (projects.removeAccess, teams.removeMember, teams.deleteDeep), the
+  // preview and the Reassign picker's people. Each runs the writes' own
+  // checks and is read once, never subscribed.
+  accessRemovals: { preview: 'orgQuery', reassignChoices: 'orgQuery' },
   // Removing a person's or team's access stays open to org admins during a
   // billing pause; giving or changing access does not. A restore schedules
   // regroup:restoredStep (internal), which clears the own hours of parents
@@ -1220,7 +1222,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 220
+const PUBLIC_COUNT = 221
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
