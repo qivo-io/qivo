@@ -396,6 +396,15 @@ describe('app uploads on tickets', () => {
       }),
       'forbidden',
     )
+    await expectRefusal(
+      as(t, fx.otherAdmin).mutation(api.files.uploadUrl, {
+        org_id: fx.otherOrg.id,
+        issue_id: issue.id,
+        size: 1,
+        name: 'a.pdf',
+      }),
+      'not_found',
+    )
     expect(await ticketRows(t)).toEqual([])
   })
 })
