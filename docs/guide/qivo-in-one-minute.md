@@ -32,9 +32,9 @@ created, unless its window has read every subtask of it. An open task's
 subtasks, linked tasks and attachments load on their own, and its
 **Parent**, **Subtasks** and **Linked tasks** pickers search every task on
 the server. Settings and all its pages open at once. A link to one task
-opens without loading every task. If loading stops, the note says that
-loading stopped, and the pages that wait for every task say why and offer
-**Try again**.
+opens without loading every task. If loading stops, the note says why and
+that changes you make show as you made them until every task has loaded,
+and it offers **Try again**, as the pages that wait for every task do.
 
 If your organization uses Microsoft and sign-in asks for admin approval, see
 [Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).

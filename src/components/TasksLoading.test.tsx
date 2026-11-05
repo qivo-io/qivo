@@ -9,7 +9,7 @@ import { TooltipProvider } from './ui/tooltip'
    (TasksLoading.tsx): the load shows with no share, since the task windows'
    answers come as one or two large transitions after a small first one, a
    page that needs every task asks for them as it mounts, and a stopped load
-   offers Try again. */
+   offers Try again on the note and on those pages. */
 
 const store = vi.hoisted(() => ({
   load: { state: 'not_asked' } as TaskLoad,
@@ -69,14 +69,33 @@ describe('the note while every task loads', () => {
     expect(container.textContent).not.toMatch(/\d+%/)
   })
 
-  it('says the load stopped, with no bar', async () => {
+  it('says why the load stopped and that changes show as made, with Try again and no bar', async () => {
     const { TasksLoadingBar } = await import('./TasksLoading')
     store.load = { state: 'failed', reason: 'Every task did not arrive in time.', retrying: false }
-    await act(async () => root.render(<TasksLoadingBar />))
-    expect(container.querySelector('[data-tasks-loading]')?.textContent).toBe(
-      'Tasks stopped loading',
+    const render = () =>
+      act(async () =>
+        root.render(
+          <TooltipProvider>
+            <TasksLoadingBar />
+          </TooltipProvider>,
+        ),
+      )
+    await render()
+    const note = container.querySelector('[data-tasks-loading]')
+    expect(note?.textContent).toContain(
+      'Tasks did not load. Changes you make show as you made them until they do.',
     )
+    expect(note?.textContent).toContain('Every task did not arrive in time.')
     expect(bar()).toBeNull()
+    const retry = () =>
+      [...container.querySelectorAll('button')].find((b) => b.textContent === 'Try again')
+    expect(retry()?.disabled).toBe(false)
+    await act(async () => retry()?.click())
+    expect(store.retryTasks).toHaveBeenCalledTimes(1)
+    // while Try again runs, it waits
+    store.load = { state: 'failed', reason: 'Every task did not arrive in time.', retrying: true }
+    await render()
+    expect(retry()?.disabled).toBe(true)
   })
 })
 
