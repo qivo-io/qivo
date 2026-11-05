@@ -325,17 +325,20 @@ export function findProjectRef(cat: Catalogue, ref: string): Doc<'projects'> | u
  * What the caller holds on each project of its organization (core.ts:307-318's
  * successor). `read` is canSeeProject and `write` is hasProjectLevel 'user'
  * through a credential that may write (machineAccess). projectLevelsForOrg,
- * the snapshot's batched form of those rules, answers both for every project
- * from the caller's grants and team shares, a few index ranges in all. Asking
- * the predicates project by project read about three ranges per project for
- * a writer who is not an admin, so such a writer's every call passed Convex's
- * 4,096 at about 1,300 projects. A project outside a top-level meta, such as
- * one whose parent is missing, gets neither flag. The level carries the
- * viewer ceiling (cappedLevel), so an org-role-viewer agent and a grant-viewer
- * agent both get `write: false`, and so does every project seen through a
- * read-only credential. (asMachineCaller refuses those writes before they get
- * this far.) Here code sees everything and CHOOSES what to disclose; these
- * flags are that choice's only input. */
+ * the batched form of those rules, answers both for every project from the
+ * caller's grants and team shares. With the catalogue that is a read at the
+ * design size's sum, 15 index ranges, 3,711 documents and 1.15 MiB as
+ * convex-test counts them for REST GET /v1/projects of a person who reads 700
+ * sub-projects by grants in 5 teams of 200 shares (lib/access.ts accessRowsOf
+ * says why it stays). Asking the predicates project by project read about
+ * three ranges per project for a writer who is not an admin, so such a
+ * writer's every call passed Convex's 4,096 at about 1,300 projects. A project
+ * outside a top-level meta, such as one whose parent is missing, gets neither
+ * flag. The level carries the viewer ceiling (cappedLevel), so an
+ * org-role-viewer agent and a grant-viewer agent both get `write: false`, and
+ * so does every project seen through a read-only credential. (asMachineCaller
+ * refuses those writes before they get this far.) Here code sees everything
+ * and CHOOSES what to disclose; these flags are that choice's only input. */
 
 export type AccessFlag = { read: boolean; write: boolean }
 

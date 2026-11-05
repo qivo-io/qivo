@@ -348,7 +348,14 @@ export type NewProject = {
 }
 
 /* Where a new project goes in its list: after every sibling, archived and
- * hidden ones included. */
+ * hidden ones included. A top-level project counts the organization's
+ * top-level metas (by_org_parent with parent_id absent), at most 500 rows
+ * at the design size, live and archived, so a meta stored with a parent,
+ * which no writer makes, no longer counts toward its place. A sub-project
+ * counts its parent's sub-projects, at most 70 at the design size, the
+ * same rows projectLevel's navigation walk reads under that parent, a read
+ * accepted at the design size's sum. Only REST and MCP creates reach it;
+ * the app sends its own sort_order. */
 async function siblingCount(
   ctx: QueryCtx,
   orgId: string,
@@ -357,7 +364,9 @@ async function siblingCount(
   let n = 0
   const rows =
     parentId === undefined
-      ? ctx.db.query('projects').withIndex('by_org', (q) => q.eq('org_id', orgId))
+      ? ctx.db
+          .query('projects')
+          .withIndex('by_org_parent', (q) => q.eq('org_id', orgId).eq('parent_id', undefined))
       : ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
   for await (const p of rows) if (p.type === (parentId === undefined ? 'meta' : 'project')) n++
   return n

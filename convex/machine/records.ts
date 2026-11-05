@@ -499,9 +499,11 @@ type ActivityJson = {
  * taskHistoryPage, the app's rule), the newest rows or those before the row
  * `before` names, oldest first, with actor names. An empty page means there
  * is no earlier history the caller receives, so a page that found none with
- * history left refuses with HISTORY_HIDDEN. An actor whose profile is gone
- * reads as null, also on rows a profile removal has not cleared yet
- * (profileRemovals.ts clears older rows in the background). */
+ * history left refuses with HISTORY_HIDDEN. A page whose check of a project
+ * its rows name a bound stopped refuses with access_unchecked and its
+ * sentence, a `rule` refusal as REST's 400 and MCP's error text. An actor
+ * whose profile is gone reads as null, also on rows a profile removal has not
+ * cleared yet (profileRemovals.ts clears older rows in the background). */
 async function activityOut(
   ctx: QueryCtx,
   me: Caller,

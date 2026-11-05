@@ -4,7 +4,8 @@
  *
  *   1. Creating projects and sub-projects: the creation setting per kind of
  *      caller, Lead on the parent, a hidden parent read as missing, the
- *      creator's own grant and who may name another lead.
+ *      creator's own grant, who may name another lead, and where a REST or
+ *      MCP create places a new project and what counting its siblings reads.
  *   2. Changing a project: settings with Lead access, archive and restore as
  *      a field, and the lead handover that keeps the old lead as User.
  *   3. Access one user or team at a time, and what a removal does with the
@@ -18,10 +19,12 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
 import { creatorGrant, grantsAfterHandover } from '../lib/projectGrants'
 import { sha256hex } from '../machine/auth'
+import { meterDb } from '../model/deletedItems'
 import {
   HELD_TASKS_SHAPE,
   type HeldTasks,
@@ -29,6 +32,7 @@ import {
   parseHeldTasks,
   removeProjectGrantCore,
 } from '../model/projectAccess'
+import { createProjectCore } from '../model/projects'
 import {
   activityFor,
   as,
@@ -546,6 +550,128 @@ describe('creating projects and sub-projects', () => {
     expect(await grants(fx.t, kept.id)).toEqual({ [fx.user.id]: 'user' })
     const declined = await create('NONE', { [fx.user.id]: null })
     expect(await grants(fx.t, declined.id)).toEqual({})
+  })
+
+  it('places a REST or MCP project after every sibling, archived ones included, and keeps the place the app sends', async () => {
+    const fx = await setup()
+    // an archived top-level project and an archived sub-project of TBED,
+    // which both count
+    await plantProject(fx.t, { org_id: fx.org.id, archived_at: NOW })
+    await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      archived_at: NOW,
+    })
+    /* the organization's stored top-level metas and TBED's sub-projects */
+    const stored = () =>
+      fx.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
+          .collect()
+        return {
+          tops: rows.filter((p) => p.type === 'meta' && p.parent_id === undefined).length,
+          subs: rows.filter((p) => p.type === 'project' && p.parent_id === fx.meta.id).length,
+        }
+      })
+    const restCreate = async (name: string, parent?: string) =>
+      (
+        (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+          ...rest(fx.user),
+          body: JSON.stringify({ name, ...(parent === undefined ? {} : { parent }) }),
+        })) as Json
+      ).id as string
+    const mcpCreate = async (name: string, parent?: string) =>
+      (
+        await parsed(
+          fx.t.mutation(internal.machine.projects.mcpCreateProject, {
+            ...as_(fx.user),
+            name,
+            ...(parent === undefined ? {} : { parent }),
+          }),
+        )
+      ).id as string
+    for (const [surface, create] of [
+      ['REST', restCreate],
+      ['MCP', mcpCreate],
+    ] as const) {
+      const before = await stored()
+      const top = await create(`Top over ${surface}`)
+      expect((await projectRow(fx.t, top))?.sort_order, `${surface}, top-level`).toBe(before.tops)
+      const sub = await create(`Sub over ${surface}`, 'TBED')
+      expect((await projectRow(fx.t, sub))?.sort_order, `${surface}, sub-project`).toBe(before.subs)
+    }
+    expect(await stored()).toEqual({ tops: 5, subs: 5 })
+    // the app sends its own place, whatever the siblings
+    const app = await as(fx.t, fx.user).mutation(api.projects.create, {
+      org_id: fx.org.id,
+      id: uuid(),
+      type: 'meta',
+      key: 'APP',
+      name: 'App placed',
+      sort_order: 1,
+    })
+    expect((await projectRow(fx.t, app.id))?.sort_order).toBe(1)
+  })
+
+  it('places a top-level project by the top-level metas only, not a meta stored with a parent', async () => {
+    const fx = await setup()
+    // createProjectCore refuses a meta with a parent; only bad data has one
+    await fx.t.run((ctx) => ctx.db.patch(fx.sub._id, { type: 'meta' }))
+    const out = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.admin),
+      body: JSON.stringify({ name: 'Optics' }),
+    })) as Json
+    // after TBED and SKNK, where the count over every project of the
+    // organization also counted the meta under TBED
+    expect((await projectRow(fx.t, out.id as string))?.sort_order).toBe(2)
+  })
+
+  it("counts a new top-level project's siblings from the top-level projects alone", async () => {
+    const fx = await setup()
+    /* The project documents a top-level create by the admin reads, and the
+     * organization's top-level projects stored before it. Each create
+     * stays, so each names its own key and reads no other key's row. */
+    const measure = async (key: string) =>
+      await fx.t.run(async (ctx) => {
+        const tops = (
+          await ctx.db
+            .query('projects')
+            .withIndex('by_org_parent', (q) => q.eq('org_id', fx.org.id).eq('parent_id', undefined))
+            .collect()
+        ).length
+        let reads = 0
+        const counted = meterDb(ctx, {
+          range: () => {},
+          doc: (doc) => {
+            if (ctx.db.normalizeId('projects', (doc as { _id: string })._id) !== null) reads += 1
+          },
+        })
+        const admin = await byId(ctx, 'profiles', fx.admin.id)
+        if (admin === null) throw new Error('the admin is gone')
+        await createProjectCore(counted, {
+          me: admin,
+          now: NOW,
+          project: { id: uuid(), type: 'meta', name: `Counted ${key}`, key },
+        })
+        return { tops, reads }
+      })
+    const base = await measure('CNTA')
+    // 20 top-level projects the admin holds nothing on
+    const parents: Doc<'projects'>[] = []
+    for (let i = 0; i < 20; i++) parents.push(await plantProject(fx.t, { org_id: fx.org.id }))
+    const withTops = await measure('CNTB')
+    expect(withTops.tops - base.tops).toBe(21)
+    expect(withTops.reads - base.reads).toBe(21)
+    // three sub-projects under each, the everyday shape, which the count of
+    // the organization's every project read too
+    for (const parent of parents)
+      for (let i = 0; i < 3; i++)
+        await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: parent.id })
+    const withSubs = await measure('CNTC')
+    expect(withSubs.tops - withTops.tops).toBe(1)
+    expect(withSubs.reads - withTops.reads).toBe(1)
   })
 
   it('creatorGrant: an own entry decides, else User for a non-admin naming another lead', () => {

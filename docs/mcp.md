@@ -2249,8 +2249,12 @@ task's history is refused with `before must be the id of a row in this task's
 history`. The call reads on past rows you do not receive, and when it cannot
 find one you receive before it has read as much as one call may, it is
 refused with `too many of this task's changes are hidden from you to read them
-at once; an organization admin can read them`. Deleting a task for good from
-Deleted items deletes its history.
+at once; an organization admin can read them`. When Qivo cannot finish
+checking which projects you can see for the projects a page's rows name, the
+call is refused with `Qivo could not finish checking which projects you can
+see in one request. Contact support@qivo.io so we can help.` rather than
+answering without those rows. Deleting a task for good from Deleted items
+deletes its history.
 
 ### Workload
 

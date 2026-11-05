@@ -3,14 +3,17 @@
  * threadHistory and historyBefore), REST and MCP read the same pages
  * (taskHistoryPage below), the window WINDOW_HISTORY_PAGE rows a page and
  * REST and MCP HISTORY_PAGE_MAX. Organization admins receive every task row;
- * memberSeesActivity decides for everyone else. Rows about anything but a
- * task reach no client; admins read them in the organization export. */
+ * memberSeesActivity decides for everyone else, asking the member's access
+ * (lib/access.ts accessOf) about each project the page's rows name, so a
+ * page reads and reruns only on those projects and the member's rows on
+ * them, never on every project of the organization. Rows about anything but
+ * a task reach no client; admins read them in the organization export. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { accessOf, isAccessUnchecked } from './access'
 import { byId, usedMoreThan } from './db'
 import { badRequest } from './functions'
-import { type OrgProjectView, orgProjectView } from './visibility'
 import type { Shown } from './workingSet'
 
 /* A project move written before related_project_id existed names a
@@ -39,20 +42,26 @@ function withoutLegacySubtaskCount(ev: Doc<'activity_events'>): Doc<'activity_ev
  * of one task (memberSight) counts that task as in the working set whatever
  * its state, archived included, since its reader already found the member
  * can read it (REST and MCP through lib/core.ts findIssue, the task window
- * through snapshot.ts threadTask). Seeing a parent only to reach one of its
- * sub-projects is not access. Deleting a
- * project clears project_id on its rows (model/deletedItems.ts
- * purgeActivity), so a task that moved out first keeps those rows. A row that
- * names another task (a parent change or a link) also needs access to that
- * task where it is now; one naming a deleted task reaches admins only. Task
- * rows list the tasks they name in named_task_nums, and one without the list
- * fails closed. Rows about anything but a task never reach a member. The
- * answer is 'unchecked' for a row naming a task the read had no room to look
- * up, which the member may or may not receive. */
+ * through snapshot.ts threadTask). Access is canAccessProject's rule, so
+ * seeing a parent only to reach one of its sub-projects is not access.
+ * Deleting a project clears project_id on its rows (model/deletedItems.ts
+ * purgeActivity), so a task that moved out first keeps those rows. A row
+ * that names another task (a parent change or a link) also needs access to
+ * that task where it is now; one naming a deleted task reaches admins only.
+ * Task rows list the tasks they name in named_task_nums, and one without
+ * the list fails closed. Rows about anything but a task never reach a
+ * member. The checks that read nothing come first, so a row they refuse
+ * asks about no project; then the related project, the row's own project
+ * and each named task with its current project. The answer is 'unchecked'
+ * for a row naming a task or a project the read had no room to look up,
+ * which the member may or may not receive. A check a bound of lib/access.ts
+ * OWN_READS stopped rejects with accessUnchecked, never answering 'no'. */
 async function memberSeesActivity(
   ev: Doc<'activity_events'>,
   a: {
-    view: OrgProjectView
+    /* whether the member may access the project with this id
+     * (canAccessProject), or UNCHECKED where the read had no room to ask */
+    accessible: (projectId: string) => Promise<boolean | typeof UNCHECKED>
     /* whether the task is in the member's working set */
     inWorkingSet: Shown
     /* the current project of the org's task with this number, if any */
@@ -60,35 +69,66 @@ async function memberSeesActivity(
   },
 ): Promise<Sight> {
   if (ev.target_type !== 'issue') return 'no'
-  if (ev.related_project_id !== undefined && !a.view.accessible(ev.related_project_id)) return 'no'
   if (!a.inWorkingSet(ev.target_id)) return 'no'
   if (isUnrecordedProjectMove(ev)) return 'no'
-  if (ev.project_id !== undefined && !a.view.accessible(ev.project_id)) return 'no'
   const named = ev.named_task_nums
   if (named === undefined) return 'no'
+  /* the answer of one project's check, or undefined where it passes */
+  const check = async (projectId: string): Promise<Sight | undefined> => {
+    const ok = await a.accessible(projectId)
+    if (ok === UNCHECKED) return 'unchecked'
+    return ok ? undefined : 'no'
+  }
+  for (const projectId of [ev.related_project_id, ev.project_id]) {
+    if (projectId === undefined) continue
+    const answer = await check(projectId)
+    if (answer !== undefined) return answer
+  }
   for (const num of named) {
     const projectId = await a.taskProject(num)
     if (projectId === UNCHECKED) return 'unchecked'
-    if (projectId === undefined || !a.view.accessible(projectId)) return 'no'
+    if (projectId === undefined) return 'no'
+    const answer = await check(projectId)
+    if (answer !== undefined) return answer
   }
   return 'yes'
 }
 
-/* Whether a member receives a row: 'unchecked' when the read had no room to
- * look up a task it names (memberSeesActivity). */
+/* Whether a member receives a row, 'unchecked' where the read had no room
+ * to look up a task or a project it names (memberSeesActivity). */
 type Sight = 'yes' | 'no' | 'unchecked'
 
 /* What a lookup the read had no room for answers. */
 const UNCHECKED = Symbol('unchecked')
 
-/** How full a member's history page may get while it looks up the
- * tasks its rows name (lib/db.ts usedMoreThan). Each lookup reads a whole
- * task, and a row can name two. Past `room`, a row naming a task not yet
- * looked up is not checked: a page ends before it, so the next page checks
- * it with room of its own, and taskWriters leaves it out. The read so fails
- * closed instead of failing on Convex's limits. The rest serves the caller:
- * REST and MCP read one profile per actor next (machine/records.ts
- * activityOut). Tests may lower it. */
+/** How full a member's history page may get while it looks up what its
+ * rows name (lib/db.ts usedMoreThan): the tasks a row names, each a whole
+ * task, and the projects it and those tasks name, each a question to the
+ * member's access (lib/access.ts accessOf) of at most 6 ranges and 134
+ * documents (OWN_READS, "One question"). A row can name two tasks and four
+ * projects. Past `room`, a row naming a task or a project not looked up yet
+ * is not checked. A page ends before it, so the next page checks it with
+ * room of its own, and taskWriters leaves it out. The first row a page
+ * reads is checked whatever the room, so every page moves on.
+ *
+ * The rest holds what a question started below `room` may read once for the
+ * page, OWN_READS' shared reads without navigation, and then the caller's
+ * own reads, where REST and MCP read one profile per distinct actor
+ * (machine/records.ts activityOut), up to 500 ranges. Inside the design
+ * size the shared reads come to at most about 1,800 documents and 110
+ * ranges (the person's grants tried at the steps, 675; the shares of their
+ * 5 teams, 1,001; at most the organization's 50 teams asked, by membership
+ * and by row), a few hundred KiB, inside the 6,400 documents, 819 ranges
+ * and 3.2 MiB Convex leaves past 0.8, so inside the design size a page ends
+ * before a row it could not check and never fails on Convex's limits. Past
+ * the design size they can reach about 6,400 documents and 460 ranges, for
+ * a person in 256 teams of an organization whose teams pass the read of the
+ * organization's teams (the steps' grants, 675, and memberships, 419; the
+ * teams' shares, 256 ranges and 1,001 documents; the organization's teams,
+ * 4,001; 65 membership lookups; OWN_READS.teamReads' 128 ranges), and with
+ * REST and MCP's profiles more than 819 ranges. There Convex's own read
+ * limit refuses the call, which widens nothing and shows nothing as
+ * complete. Tests may lower it. */
 export const NAMED_TASK_ROOM = { room: 0.8 }
 
 /** The most rows one page of a task's history holds over REST and MCP,
@@ -224,19 +264,24 @@ export type HistoryPage = {
  * task window shows beside its comments under All. It holds the newest
  * `size` rows `me` receives, HISTORY_PAGE_MAX unless the caller names
  * another size, or with `before` the newest ones before that row
- * (historyAnchor), oldest first in insertion order, which follows time. The caller has already resolved a task `me` can read
- * (lib/core.ts findIssue), which counts as the task being shown, as every
- * machine read counts the tasks it can read, archived ones included.
- * Organization admins receive every row; other members get the rows
- * memberSeesActivity allows, without legacy subtask counts. For members it
- * also reads the organization's projects and grants (lib/visibility.ts
- * orgProjectView) and one task for each distinct number the rows name,
- * until the read passes NAMED_TASK_ROOM. The page ends before a row naming a
- * task it had no room to look up, and before the read passes HISTORY_ROOM,
- * so it reads on past rows it leaves out but never past a row it could not
- * check. Its first row is checked whatever the room, so it always moves on.
- * `next` says where the page before it starts, which is the page's first row
- * unless it read rows it left out.
+ * (historyAnchor), oldest first in insertion order, which follows time. The
+ * caller has already resolved a task `me` can read (lib/core.ts findIssue),
+ * which counts as the task being shown, as every machine read counts the
+ * tasks it can read, archived ones included. Organization admins receive
+ * every row; other members get the rows memberSeesActivity allows, without
+ * legacy subtask counts. For members it also reads one task for each
+ * distinct number the rows name and asks the member's access about each
+ * distinct project the rows and those tasks name (memberSight), until the
+ * read passes NAMED_TASK_ROOM. The page ends before a row naming a task or
+ * a project it had no room to look up, and before the read passes
+ * HISTORY_ROOM, so it reads on past rows it leaves out but never past a row
+ * it could not check. Its first row is checked whatever the room, so it
+ * always moves on. Where a bound of lib/access.ts OWN_READS stops a
+ * project's check, the page refuses whole with accessUnchecked
+ * (access_unchecked) and never answers a row it could not check as hidden;
+ * inside the design size no bound stops one. `next` says where the page
+ * before it starts, which is the page's first row unless it read rows it
+ * left out.
  */
 export async function taskHistoryPage(
   ctx: QueryCtx,
@@ -263,7 +308,7 @@ export async function taskHistoryPage(
     const rows = await read(n)
     for (const ev of rows) {
       if (newest.length === size) return page(true)
-      sees ??= admin ? async () => 'yes' : await memberSight(ctx, me, issue)
+      sees ??= admin ? async () => 'yes' : memberSight(ctx, me, issue)
       // The first row is checked whatever the room, so every page moves on.
       // A later one the read has no room to check ends the page, and the
       // next page checks it with room of its own.
@@ -279,7 +324,10 @@ export async function taskHistoryPage(
 
 /** Which of `rows`, rows of the history of `issue`, `me` receives, in their
  * order: all of them for an organization admin, else those
- * memberSeesActivity allows (memberSight). */
+ * memberSeesActivity allows (memberSight). A row it had no room to check,
+ * or whose check a bound of lib/access.ts OWN_READS stopped, is left out,
+ * so model/issues.ts taskWriters names nobody for it and the refused edit
+ * keeps its conflict sentence. */
 export async function receivedRows(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -287,24 +335,52 @@ export async function receivedRows(
   rows: Doc<'activity_events'>[],
 ): Promise<Doc<'activity_events'>[]> {
   if (me.org_role === 'admin' || rows.length === 0) return rows
-  const sees = await memberSight(ctx, me, issue)
+  const sees = memberSight(ctx, me, issue)
   const out: Doc<'activity_events'>[] = []
-  // a row it had no room to check is left out
-  for (const ev of rows) if ((await sees(ev)) === 'yes') out.push(ev)
+  for (const ev of rows) {
+    const sight = await sees(ev).catch((e: unknown): Sight => {
+      if (isAccessUnchecked(e)) return 'unchecked'
+      throw e
+    })
+    if (sight === 'yes') out.push(ev)
+  }
   return out
 }
 
 /* Whether member `me` receives a row about `issue` (memberSeesActivity),
- * with the organization's projects read once and each named task looked up
- * once, until the read passes NAMED_TASK_ROOM, past which a row naming a task
- * not looked up yet is 'unchecked'. With `anyRoom` it looks a row's tasks up
- * whatever the room, at most two tasks, for the first row a page reads. */
-async function memberSight(
+ * with each named task looked up once and each project asked once through
+ * the member's access (lib/access.ts accessOf, canAccessProject's rule
+ * within OWN_READS), until the read passes NAMED_TASK_ROOM, past which a
+ * row naming a task or a project not looked up yet is 'unchecked'. With
+ * `anyRoom` it looks a row's tasks and projects up whatever the room, at
+ * most two tasks and four projects, for the first row a page reads. A page
+ * so reads, and reruns on, the projects its rows name with the member's
+ * grant and team shares on each, not every project of the organization.
+ * From OWN_READS.steps' first step, 32 projects asked (a sub-project and
+ * its parent count two), accessOf tries the member's own grants,
+ * memberships and their teams' shares at once, so a page that asks that
+ * many also reads, and reruns on, those rows, at most about 1,700
+ * documents inside the design size. A check a bound stopped rejects with
+ * accessUnchecked, which this passes on. */
+function memberSight(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   issue: Doc<'issues'>,
-): Promise<(ev: Doc<'activity_events'>, anyRoom?: boolean) => Promise<Sight>> {
-  const view = await orgProjectView(ctx, me)
+): (ev: Doc<'activity_events'>, anyRoom?: boolean) => Promise<Sight> {
+  const access = accessOf(ctx, me)
+  const asked = new Map<string, Promise<boolean>>()
+  /* whether `me` may access the project with this id, asked once; a project
+   * not asked yet past the room is UNCHECKED, but for the first row a page
+   * reads */
+  const accessible = async (id: string, anyRoom: boolean): Promise<boolean | typeof UNCHECKED> => {
+    let known = asked.get(id)
+    if (known === undefined) {
+      if (!anyRoom && (await usedMoreThan(ctx, NAMED_TASK_ROOM.room))) return UNCHECKED
+      known = access.accessible(id)
+      asked.set(id, known)
+    }
+    return await known
+  }
   const projects = new Map<number, Promise<string | undefined>>()
   const taskProject = async (
     num: number,
@@ -324,7 +400,7 @@ async function memberSight(
   }
   return (ev, anyRoom = false) =>
     memberSeesActivity(ev, {
-      view,
+      accessible: (id) => accessible(id, anyRoom),
       inWorkingSet: (taskId) => taskId === issue.id,
       taskProject: (num) => taskProject(num, anyRoom),
     })

@@ -347,9 +347,11 @@ const WRITERS_ROOM = 0.5
  * writers that log no row (a carried subtask, a cleared holder or parent's
  * hours, a detach) touch the task, so a task touched after its newest row
  * names nobody: such a writer may have put back a value an older row
- * printed. A newer row the caller cannot see hides the person rather than
- * naming an older one. It reads the task's newest HISTORY_PAGE_MAX rows, so
- * a field last written before them names nobody. */
+ * printed. A newer row the caller cannot see, or whose check a bound of
+ * lib/access.ts OWN_READS stopped, hides the person rather than naming an
+ * older one, so the edit keeps its conflict sentence. It reads the task's
+ * newest HISTORY_PAGE_MAX rows, so a field last written before them names
+ * nobody. */
 export async function taskWriters(
   read: Read,
   issue: Doc<'issues'>,
