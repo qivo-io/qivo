@@ -1014,6 +1014,9 @@ function AccessRemovalModal({
   const reassignOk = shown.reassign.allowed
   const [keep, setKeep] = useStateM(answer.keep.offered && answer.keep.allowed)
   const [to, setTo] = useStateM<Taker>(null)
+  // the name of the chosen person the server said can no longer take the
+  // tasks, until a new choice in the picker
+  const [dropped, setDropped] = useStateM<string | null>(null)
   // when the window last asked again: the click right after (a double click,
   // a repeated Enter) must not apply to an answer nobody has read yet
   const askedAt = useRefM(0)
@@ -1061,14 +1064,18 @@ function AccessRemovalModal({
       : deleting
         ? `Keep as Viewer${shown.people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
-  const choosing = keep ? keepOk : reassignOk
+  // Reassign waits for a new choice once the chosen person was dropped
+  const choosing = keep ? keepOk : reassignOk && dropped === null
   // what the window shows after a refused write or a changed answer, with
   // the choice moved to the other one when the new answer refuses it
   const showAgain = (next: RemovalAnswer, eligible: boolean) => {
     askedAt.current = Date.now()
     setShown(next)
     setChanged(true)
-    if (!eligible) setTo(null)
+    if (!eligible) {
+      setDropped(to?.name || 'Someone')
+      setTo(null)
+    }
     const nextKeep = next.keep.offered && next.keep.allowed
     setKeep((chosen) =>
       chosen ? nextKeep || !next.reassign.allowed : !next.reassign.allowed && nextKeep,
@@ -1187,11 +1194,21 @@ function AccessRemovalModal({
           ))}
           {more > 0 && ` and ${more} other projects`}.
         </p>
-        {changed && (
-          <p className="text-sm [color:var(--danger)]">
-            Access or tasks changed while this window was open. Check them and choose again.
-          </p>
-        )}
+        {/* a live region from the start, so a screen reader reads each
+            notice as the window asks again; no gap of its own while empty */}
+        <div role="status" data-access-removal-notice className="-mt-3">
+          {changed && (
+            <p className="mt-3 text-sm [color:var(--danger)]">
+              Access or tasks changed while this window was open. Check them and choose again.
+            </p>
+          )}
+          {dropped !== null && (
+            <p className="mt-1 text-sm [color:var(--danger)]">
+              {dropped} can no longer take {count === 1 ? 'the task' : 'these tasks'}. Choose
+              someone else or Unassigned.
+            </p>
+          )}
+        </div>
         <div className="max-h-48 overflow-auto rounded-lg border border-border">
           {shown.items.map((i) => {
             const holder = shown.people.find((p) => p.id === i.holder_id)
@@ -1290,6 +1307,7 @@ function AccessRemovalModal({
               disabled={!reassignOk || saving}
               onPick={(taker) => {
                 setTo(taker)
+                setDropped(null)
                 setKeep(false)
               }}
             />

@@ -555,7 +555,7 @@ describe('saving the removal window', () => {
     expect(writes()).toEqual([])
   })
 
-  it('asks the server whether the chosen person can still take the tasks, and asks again with Unassigned when not', async () => {
+  it('asks the server whether the chosen person can still take the tasks, and names them and waits for a new choice when not', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     onTestFinished(() => {
       vi.useRealTimers()
@@ -566,13 +566,24 @@ describe('saving the removal window', () => {
     await click(find('[data-reassign-choice="ada-berg"]'))
     expect(pickerButton().getAttribute('aria-label')).toBe('New assignee: Ada Berg')
     preview = async (args) =>
-      answer({ reassign: { holder_eligible: args.reassign_to === 'ada-berg' ? false : true } })
+      answer({ reassign: { holder_eligible: args.reassign_to !== 'ada-berg' } })
     await click(shellButton('Reassign and remove'))
     expect(reads('accessRemovals:preview').at(-1)).toMatchObject({ reassign_to: 'ada-berg' })
-    expect(windowText()).toContain('Access or tasks changed')
+    // a live region the window held from the start says who was dropped
+    const notice = find('[data-access-removal-notice]')
+    expect(notice.getAttribute('role')).toBe('status')
+    expect(notice.textContent).toContain('Access or tasks changed')
+    expect(notice.textContent).toContain(
+      'Ada Berg can no longer take the task. Choose someone else or Unassigned.',
+    )
     expect(pickerButton().getAttribute('aria-label')).toBe('New assignee: Unassigned')
-    expect(writes()).toEqual([])
+    // the Unassigned the window fell back to is no choice until made
     vi.setSystemTime(Date.now() + 1000)
+    expect(shellButton('Reassign and remove')?.disabled).toBe(true)
+    await click(pickerButton())
+    await click(find('[data-reassign-choice=""]'))
+    expect(notice.textContent).not.toContain('Ada Berg')
+    expect(writes()).toEqual([])
     preview = async () => answer()
     await click(shellButton('Reassign and remove'))
     expect(writes()).toEqual([['projects:removeAccess', { reassign_to: null }]])
