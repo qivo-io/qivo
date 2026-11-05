@@ -758,6 +758,15 @@ its `org_ready` stamps, and it skips the favorites a rollback past the
 favorites release leaves, by the reader rule the favorites paragraph below
 describes, as the navigation reads do.
 
+The task window's relation picker read, `taskWindow.relationCandidates`,
+first ships in the release after v0.1.120. No app calls it yet, so the read
+sets no rollback floor of its own and adds nothing to the floors above
+until the task window's Parent, Subtasks and Linked tasks pickers switch to
+it. The release that switches them makes the release that shipped the read
+the backend's floor for that app, and its own paragraph here says so. The
+app is to read it once a batch and never subscribe to it. There is no
+schema change, no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
