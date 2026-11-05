@@ -1079,6 +1079,18 @@ describe('order', () => {
 
 /* ------------------------------------------------------------ continuation */
 
+/** Archived sub-projects beneath archived project `parent`, archived with
+ * it, in name order: Chip 000 to Chip 023, two named Chip 024, then Chip
+ * 025 and Chip 026. The first batch ends on the first Chip 024, so its
+ * cursor rests on a name two rows share and only the tie places the next. */
+async function plantChips(t: T, parent: Doc<'projects'>) {
+  const at = { archived_at: parent.archived_at }
+  return [
+    ...(await plantSubs(t, parent, names('Chip ', 24), at)),
+    ...(await plantSubs(t, parent, ['Chip 024', 'Chip 024', 'Chip 025', 'Chip 026'], at)),
+  ]
+}
+
 describe('continuation', () => {
   for (const admin of [true, false])
     it(`hands out every row once over batches with renames, a new project, an archive and a restore between them, for ${admin ? 'an admin' : 'a lead'}`, async () => {
@@ -1147,7 +1159,7 @@ describe('continuation', () => {
       ).toEqual([restored.name])
     })
 
-  it('keeps reading a cursor of projects, its search, Archived projects and sub-projects across a change of the seat’s role between admin and user', async () => {
+  it('keeps reading a cursor of projects, its search, Archived projects, sub-projects and archived sub-projects across a change of the seat’s role between admin and user', async () => {
     const t = newT()
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
@@ -1155,8 +1167,13 @@ describe('continuation', () => {
     // the design size of live sub-projects under one project, two batches
     await plantSubs(t, tops[0], names('Sub ', 30))
     await plantMetas(t, f.org.id, names('Old ', 40), { lead_id: pia.id, archived_at: NOW })
+    // an archived project Pia sees as a user only through the archived
+    // sub-projects beneath it, so a user's chips come from her reach rows
+    // and an admin's from the project's own
+    const [shelf] = await plantMetas(t, f.org.id, ['Shelf'], { archived_at: NOW })
+    const chips = await plantChips(t, shelf)
     // the same projects for either role
-    await plantGrants(t, pia, [f.meta, f.hidden])
+    await plantGrants(t, pia, [f.meta, f.hidden, ...chips])
     await ready(t, f)
     /* A first batch as `before` reads it, then the rest as `after` reads
      * it from that batch's cursor, against every batch as `after` reads
@@ -1193,7 +1210,48 @@ describe('continuation', () => {
       )
       await across('archived', (seat, after) => lists.archived(t, seat, { after }), from, to)
       await across('subs', (seat, after) => lists.subs(t, seat, tops[0].id, { after }), from, to)
+      await across('chips', (seat, after) => lists.chips(t, seat, shelf.id, { after }), from, to)
     }
+  })
+
+  it('keeps reading a cursor of archived sub-projects when the seat’s grant on their archived parent goes and comes back, between its own sight and sight through them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    const [shelf] = await plantMetas(t, f.org.id, ['Shelf'], { archived_at: NOW })
+    const chips = await plantChips(t, shelf)
+    await plantGrants(t, pia, [shelf, ...chips])
+    await ready(t, f)
+    const whole = (await expectedChips(t, pia, shelf)) ?? []
+    expect(whole).toHaveLength(chips.length)
+    const grant = { org_id: f.org.id, id: shelf.id, user_id: pia.id }
+    /* The first batch, then the rest from that batch's cursor after
+     * `change`, by which Pia still sees every one, by the other sight. */
+    const carried = async (label: string, change: () => Promise<unknown>) => {
+      const first = batchOf(await lists.chips(t, pia, shelf.id))
+      expect(first.rows, label).toEqual(whole.slice(0, LIST_BATCH))
+      await change()
+      expect(await expectedChips(t, pia, shelf), label).toEqual(whole)
+      const rest = await walked((after) =>
+        lists.chips(t, pia, shelf.id, { after: after ?? first.next ?? '' }),
+      )
+      expect(rest.rows, label).toEqual(whole.slice(LIST_BATCH))
+    }
+    // her own sight reads the project's archived sub-projects, and sight
+    // through them her archived child reach rows under it
+    await carried('own to through', async () =>
+      expect(
+        await as(t, f.admin).mutation(api.projects.removeAccess, {
+          ...grant,
+          on_held_tasks: 'leave',
+        }),
+      ).toMatchObject({ removed: true }),
+    )
+    await carried('through to own', async () =>
+      expect(
+        await as(t, f.admin).mutation(api.projects.setAccess, { ...grant, level: 'user' }),
+      ).toEqual({ changed: true }),
+    )
   })
 })
 
