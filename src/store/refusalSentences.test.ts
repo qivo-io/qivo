@@ -19,6 +19,14 @@ vi.mock('../lib/auth', () => ({
   signOut: vi.fn(),
 }))
 
+// the browser's image re-encoding, which hands back `compression.to` when a
+// case sets it and the file it was given otherwise
+const compression = vi.hoisted(() => ({ to: null as File | null }))
+vi.mock('../lib/images', async (original) => ({
+  ...(await original<typeof import('../lib/images')>()),
+  compressImage: async (file: File) => compression.to ?? file,
+}))
+
 const NOW = '2026-09-14T08:00:00.000Z'
 
 /* Awaited restores and uploads quote the server's refusal after a sentence of
@@ -71,6 +79,7 @@ describe('refusal sentences in restore and upload toasts', () => {
   })
 
   afterEach(() => {
+    compression.to = null
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -171,6 +180,25 @@ describe('refusal sentences in restore and upload toasts', () => {
       'Couldn\'t upload "notes.txt". The file is larger than the most this upload URL takes; start a new upload.',
       'error',
     )
+  })
+
+  it('declares the size and name of the compressed file, and sends that file', async () => {
+    const small = new File(['webp'], 'shot.webp', { type: 'image/webp' })
+    compression.to = small
+    answers['files:uploadUrl'] = () => Promise.resolve('https://upload.example.test/u')
+    // the attach refuses, so the upload ends after it
+    answers['files:attach'] = () =>
+      Promise.resolve({ refused: { code: 'rule', message: 'a file must be smaller' } })
+    const post = vi.fn(async (_url: string, _init?: RequestInit) =>
+      Response.json({ storageId: 'stored-1' }),
+    )
+    vi.stubGlobal('fetch', post)
+    const shot = new File([new Uint8Array(4096)], 'shot.png', { type: 'image/png' })
+    expect(await P.addAttachment('task-1', shot)).toBeNull()
+    expect(sentWith('files:uploadUrl')).toMatchObject({ size: 4, name: 'shot.webp' })
+    expect(post).toHaveBeenCalledOnce()
+    expect(post.mock.calls[0][1]?.body).toBe(small)
+    expect(sentWith('files:attach')).toMatchObject({ name: 'shot.webp', mime: 'image/webp' })
   })
 
   it('says the upload did not finish when its POST ends without the receiver’s answer', async () => {
