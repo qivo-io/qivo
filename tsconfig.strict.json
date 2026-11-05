@@ -41,6 +41,7 @@
     "src/store/overviewLists.ts",
     "src/store/overviewStandIn.setup.ts",
     "src/store/preferences.ts",
+    "src/store/relationPickerStandIn.setup.ts",
     "src/store/updates.ts"
   ]
 }

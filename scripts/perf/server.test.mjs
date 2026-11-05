@@ -314,6 +314,45 @@ describe('the benchmark server', () => {
     expect(failing.posted.find((m) => m.to === 'task')?.error).toContain('window=error')
   })
 
+  it("answers the relation pickers' read from its stand-in, never as an attachments list", async () => {
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000&relations=rows-2')
+    const org = '00000000-0000-4000-8000-000000000001'
+    const ask = (to, args) =>
+      send({ type: 'query', id: to, name: 'taskWindow:relationCandidates', args })
+    const answer = (to) => JSON.parse(posted.find((m) => m.to === to).text)
+    await ask('link', { org_id: org, issue_id: TASK_1, kind: 'link' })
+    const first = answer('link')
+    expect(first).toMatchObject({ state: 'ok', stopped: false, blocked: null })
+    expect(first.rows).toHaveLength(2)
+    expect(first).not.toHaveProperty('count')
+    // the next batch goes on from the first one's cursor, without repeats
+    await ask('next', { org_id: org, issue_id: TASK_1, kind: 'link', cursor: first.next })
+    const second = answer('next')
+    expect(second.rows).toHaveLength(2)
+    expect(second.rows.map((r) => r.id)).not.toContain(first.rows[0].id)
+    // a cursor of another search is refused
+    await ask('other', {
+      org_id: org,
+      issue_id: TASK_1,
+      kind: 'link',
+      search: 'x',
+      cursor: first.next,
+    })
+    expect(posted.find((m) => m.to === 'other')?.error).toBeTruthy()
+    const stopped = await server('tasks=40&latency=0&mbps=100000&relations=stopped')
+    await stopped.send({
+      type: 'query',
+      id: 's',
+      name: 'taskWindow:relationCandidates',
+      args: { org_id: org, issue_id: TASK_1, kind: 'link', search: 'nothing-matches' },
+    })
+    expect(JSON.parse(stopped.posted.find((m) => m.to === 's').text)).toMatchObject({
+      state: 'ok',
+      rows: [],
+      stopped: true,
+    })
+  })
+
   it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
     const modeOf = async (params) => {
       const { posted, send } = await server(`tasks=20&latency=0&mbps=100000${params}`)
