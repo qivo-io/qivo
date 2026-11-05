@@ -40,6 +40,8 @@ import {
   send,
   syncsWith,
   TAG_ANY,
+  TASK_LINK_STEP,
+  TASK_LINK_UNKNOWN,
   TASK_PAGES_MAX,
   THREAD_PAGE,
   taskPages,
@@ -102,6 +104,20 @@ describe('staging check REST contract', () => {
     expect(REMOVAL_STEP).toBe('ui/removal-window')
     expect(REMOVAL_EXPECTED.submit).toBe('Reassign and remove')
     expect(REMOVAL_EXPECTED.chosen('Nora Berg')).toBe('New assignee: Nora Berg')
+  })
+  it("opens task links in the window's own words, with the unknown number past every organization's", () => {
+    const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
+    expect(window).toContain(
+      " can't be opened. It may not exist, or you may not have access to it.`",
+    )
+    expect(window).toContain(' was archived. Restore it to bring it back to the board.`')
+    expect(TASK_LINK_STEP).toBe('ui/task-link')
+    expect(TASK_LINK_UNKNOWN).toEqual({
+      ref: 'qn-99999999',
+      note: "QN-99999999 can't be opened. It may not exist, or you may not have access to it.",
+    })
+    // a number the server's ref grammar reads, which no organization reaches
+    expect(Number(TASK_LINK_UNKNOWN.ref.slice(3))).toBeLessThanOrEqual(2147483647)
   })
   it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
     const table = readFileSync(
