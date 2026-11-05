@@ -602,10 +602,10 @@ export function ProjectPage({
 
 /* A project page's Back link and title. Until the first answer they read
    Projects and "Project settings"; then the title names the project, and
-   a sub-project's Back goes to the project above it, the target the
-   delete picks. The heading stays one element through both, so the focus
-   Settings gives it as it opens the page by keyboard stays once the
-   fields come. */
+   a sub-project's Back goes to the project above it, where the delete
+   also goes while the workspace holds that project. The heading stays one
+   element through both, so the focus Settings gives it as it opens the
+   page by keyboard stays once the fields come. */
 function ProjectPageTitle({
   answer,
   onBackPage,
