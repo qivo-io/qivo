@@ -954,6 +954,34 @@ describe('continuation', () => {
     expect(capped.stopped).toBe(true)
     expect((await pageAt(capped.next))?.key).toBe(`1${nameKey('P098')}`)
   })
+
+  it('follows a children cursor across a change of access, from a grant on the parent to grants on some of its sub-projects and back', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    const [parent] = await plantMetas(t, f.org.id, ['Parent'], { lead_id: f.user.id })
+    const subs = await plantSubs(t, parent, names('Sub ', 30))
+    // one before the first batch's end and three past it
+    const held = [subs[3], subs[25], subs[27], subs[29]]
+    await plantGrants(t, pia, [parent, ...held])
+    await ready(t, f)
+    const first = ok(await kids(t, [pia], parent.id))
+    expect(first.rows.map((r) => r.name)).toEqual(names('Sub ', 25))
+    const from = (after?: string) => kids(t, [pia], parent.id, { after: after ?? first.next ?? '' })
+    // the grant on the parent goes, and the sub-projects' grants stay, so
+    // the batches after the cursor read Pia's reach rows under it instead
+    const grant = { org_id: f.org.id, id: parent.id, user_id: pia.id }
+    await as(t, f.user).mutation(api.projects.removeAccess, { ...grant, on_held_tasks: 'leave' })
+    expect((await expectedChildren(t, pia, parent))?.map((r) => r.id)).toEqual(
+      held.map((p) => p.id),
+    )
+    const onward = await walk(from)
+    expect(onward.rows.map((r) => r.id)).toEqual([subs[25].id, subs[27].id, subs[29].id])
+    // and with the grant back, every sub-project after the cursor
+    await as(t, f.user).mutation(api.projects.setAccess, { ...grant, level: 'user' })
+    const back = await walk(from)
+    expect(back.rows.map((r) => r.name)).toEqual(names('Sub ', 30).slice(25))
+  })
 })
 
 /* -------------------------------------------------------------- the budgets */
