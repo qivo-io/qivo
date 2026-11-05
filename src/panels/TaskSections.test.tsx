@@ -1043,4 +1043,55 @@ describe('a new task while every task loads', { timeout: 20_000 }, () => {
     expect(P.tasksHeld()).toBe(true)
     expect(P.familyOf(P.issueById[key ?? ''])).not.toBeNull()
   })
+
+  it("moves, archives or deletes once the new task's own answer is current, before every task has loaded", async () => {
+    const next = fixture()
+    next.orgs[0].next_issue_num = 64 * 200
+    await load(next, async () => {
+      const { TASKS } = await import('../store/liveParts')
+      TASKS.atBoot = false
+    })
+    double.live?.holdWindow('fc000000')
+    // the server takes the create
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:create' ? { num: 64 * 200 + 1 } : null,
+    )
+    let key: string | null = null
+    await act(async () => {
+      key = P.addIssue({ project: 'work', title: 'Order the spare sensors' })
+    })
+    const uuid = P.issueById[key ?? '']?.uuid ?? ''
+    await openTask(uuid)
+    await act(async () => {
+      await vi.waitFor(() => {
+        const frame = document.querySelector('[role="dialog"]')
+        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
+      })
+    })
+    // its own answer: no subtask, the whole list
+    const made = task(uuid, 64 * 200 + 1, { title: 'Order the spare sensors', status: 'backlog' })
+    const reads = open('taskWindow:task').filter((s) => s.args.ref === uuid)
+    expect(reads).toHaveLength(1)
+    await act(async () =>
+      reads[0].deliver({
+        state: 'ok',
+        task: { ...made, has_subtasks: false, has_hidden_subtasks: false },
+        level: 'lead',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [], complete: true },
+      }),
+    )
+    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    expect(P.familyOf(P.issueById[key ?? ''])).not.toBeNull()
+    await act(async () =>
+      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
+    )
+    const move = [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes('Move to sub-project'),
+    )
+    expect(move?.disabled).toBe(false)
+    expect(document.querySelector<HTMLButtonElement>('[data-task-fate]')?.disabled).toBe(false)
+  })
 })

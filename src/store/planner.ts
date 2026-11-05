@@ -897,17 +897,27 @@ function orgOfTask(uuid: string): string | undefined {
   return uuid === watchedComments ? (watchedOrg ?? undefined) : undefined
 }
 
+/* The tasks this store created that the server took, by uuid, with their
+   organization. Until a delivery holds such a task, as while every task
+   loads, when no delivery holds any (askTasks), its window reads its
+   thread and its lists from the server all the same, so its Move and
+   Archive or delete wait only for its own answer (P.familyOf). */
+const tookCreates = new Map<string, string>()
+
 /* Whether the watched task is one whose create is on its way: the rows
-   show it and the last snapshot delivery does not hold it, or the store
-   knows no organization for it. Such a task gets an empty, complete thread,
-   history and lists until a delivery holds it (subscribeWaitingThread). */
+   show it, the last snapshot delivery does not hold it and the server has
+   not taken its create yet (tookCreates), or the store knows no
+   organization for it. Such a task gets an empty, complete thread, history
+   and lists until a delivery holds it or the server takes the create
+   (subscribeWaitingThread). */
 function watchedCreating(): boolean {
   const t = watchedComments
-  return !!t && !serverTask(t) && (rows.issues.has(t) || !watchedOrg)
+  return !!t && !serverTask(t) && !tookCreates.has(t) && (rows.issues.has(t) || !watchedOrg)
 }
 
-/* Subscribes to the watched thread once the snapshot holds its task, for a
-   task watched while its create was on its way (watchComments), and with
+/* Subscribes to the watched thread once the snapshot holds its task or the
+   server took its create (tookCreates), for a task watched while its
+   create was on its way (watchComments), and with
    the kept organization (watchedOrg) for a task the workspace does not
    hold. Asking earlier for a task whose create is on its way would refuse
    with not_found, which the server logs as an error, and so would asking
@@ -919,7 +929,9 @@ function subscribeWaitingThread() {
   const t = watchedComments
   if (!t || threadWatched || watchedGone()) return
   const row = serverTask(t)
+  const took = tookCreates.get(t)
   if (row) subscribeThread(t, row.org_id)
+  else if (took) subscribeThread(t, took)
   else if (watchedOrg && !rows.issues.has(t)) subscribeThread(t, watchedOrg)
 }
 
@@ -1104,7 +1116,8 @@ function watchedGone(): boolean {
    stops and drops its answer, while a re-init of the parts (stopParts)
    keeps the answers until the new subscriptions deliver. A task whose
    create is on its way gets complete, empty lists (CREATING) until a
-   delivery holds it, also when a window shows its sections again. It runs
+   delivery holds it or the server took its create (tookCreates), also when
+   a window shows its sections again. It runs
    as the sections build (rebuildSections), after the thread (syncThread),
    so whether the workspace holds the task is the rows' word in the same
    repaint. Answers whether an answer changed. */
@@ -9635,6 +9648,12 @@ export const PLANNER = {
           created.num = result.num
           return view
         },
+        // its window reads its thread and lists from now on, also before a
+        // delivery holds it
+        onOk: () => {
+          tookCreates.set(uuid, row.org_id)
+          if (watchedComments === uuid) repaint({ thread: true, sections: true })
+        },
         ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
           toastWriteError(error)
@@ -10943,7 +10962,8 @@ export const PLANNER = {
     // from its window. A uuid without either loads an empty thread rather
     // than spinning forever, and so does a new task whose create is on its
     // way: it has no comments yet, and its thread subscribes once a
-    // delivery holds the task (subscribeWaitingThread).
+    // delivery holds the task or the server took its create
+    // (subscribeWaitingThread).
     const creating = watchedCreating()
     if (issueUuid && creating) {
       PLANNER.commentsLoaded = true
@@ -13859,6 +13879,7 @@ export function disposeDemoStore() {
   PLANNER.lastCommentsCut = []
   pendingRestoreIssueIds.clear()
   lastMessageTasks = new Set()
+  tookCreates.clear()
   hasSnapshot = false
   stillLoading = null
   loadEnds = false
