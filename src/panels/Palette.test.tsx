@@ -7,14 +7,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { taskRef } from '../lib/taskReference'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from '../store/projectNavStandIn.setup'
 
 /* Main Search's palette on the real store, with the network mocked. The
-   person is an organization admin of Testbed Labs, who sees Luma Sensor
+   person is an organization admin of Testbed Labs who leads Luma Sensor,
    with its sub-projects Firmware and Electronics, and, with `partner`,
    holds a guest seat in Partner Co with its project Partner portal. Each
    search:page call waits until the test answers it, so a test can answer
-   calls out of order. Typing runs on fake timers, so the palette's 250 ms
-   pause takes no real time. */
+   calls out of order. Search in's picker reads the navigation reads from
+   their stand-in (store/projectNavStandIn.setup.ts) over the workspace,
+   and projectNav.resolve, which the project Search opens on goes through,
+   answers when `resolving` lets it. Typing runs on fake timers, so the
+   palette's 250 ms pause takes no real time. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -63,6 +71,10 @@ let PARTNER: string
 let PORTAL: string
 let palette: typeof import('./Palette')
 let pageStarts: typeof import('../lib/pageStarts')
+let store: typeof import('../store/planner')
+// what projectNav.resolve answers: the stand-in's answer, or one the test
+// gives, and whether it waits until the test lets it go
+let resolving: { answer?: () => Promise<unknown>; hold?: Promise<void> }
 
 /* Lets answers and renders land. */
 const settle = async () => {
@@ -99,7 +111,15 @@ function fixture(partner: boolean): Snapshot {
   const next = plannerFixture()
   ORG = next.orgs[0].id
   const base = next.projects[0]
-  const meta = { ...base, id: crypto.randomUUID(), type: 'meta' as const, key: 'LUMA' }
+  // the person leads Luma Sensor, so the navigation reads, which judge an
+  // admin by ordinary access, list it
+  const meta = {
+    ...base,
+    id: crypto.randomUUID(),
+    type: 'meta' as const,
+    key: 'LUMA',
+    lead_id: next.profiles[0].id,
+  }
   const sub = (key: string, name: string, num: number) => ({
     ...base,
     id: crypto.randomUUID(),
@@ -130,6 +150,7 @@ function fixture(partner: boolean): Snapshot {
       org_id: PARTNER,
       key: 'PART',
       name: 'Partner portal',
+      lead_id: undefined,
     })
     next.access.push({ project_id: PORTAL, profile_id: seat, level: 'user' })
   }
@@ -149,15 +170,23 @@ async function open({
   vi.resetModules()
   snap = fixture(partner)
   calls = []
-  network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') {
+  resolving = {}
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
+    if (name === 'workspace:whole') {
       publish = next
       next(structuredClone(snap))
     }
     return () => {}
   })
-  network.query.mockImplementation((ref, args) => {
-    if (getFunctionName(ref) !== 'search:page') return Promise.resolve(null)
+  network.query.mockImplementation(async (ref, args) => {
+    const name = getFunctionName(ref)
+    if (name === 'projectNav:resolve') {
+      await resolving.hold
+      return resolving.answer ? resolving.answer() : queryProjectNav(snap, name, args)
+    }
+    if (name !== 'search:page') return null
     return new Promise((resolve, reject) => {
       calls.push({
         args,
@@ -177,7 +206,7 @@ async function open({
     })
   })
   network.mutation.mockResolvedValue(null)
-  const store = await import('../store/planner')
+  store = await import('../store/planner')
   await store.initStore()
   palette = await import('./Palette')
   pageStarts = await import('../lib/pageStarts')
@@ -288,17 +317,19 @@ async function click(element: HTMLElement | null) {
   await act(async () => element.click())
   await settle()
 }
-/** Chooses `value` under Search in from the keyboard, and with `rest`
-    waits past the pause such a choice rests for. */
-async function choose(value: string, { rest = true } = {}) {
-  const select = find<HTMLSelectElement>('[data-palette-scope]')
-  await act(async () => {
-    select.value = value
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
-  if (rest) await wait(300)
-  else await settle()
+/** Picks `value` under Search in: '' for All projects, `org:<id>` for an
+    organization's All projects, or a project, showing Luma Sensor's
+    sub-projects first for one of them. */
+async function choose(value: string) {
+  await click(find('[data-palette-scope]'))
+  if (value === '') return click(find('[data-project-pick-all=""]'))
+  if (value.startsWith('org:')) return click(find(`[data-project-pick-all="${value.slice(4)}"]`))
+  if (!document.querySelector(`[data-project-pick="${value}"]`))
+    await click(find(`[data-project-expand="${META}"]`))
+  await click(find(`[data-project-pick="${value}"]`))
 }
+/** What Search in's trigger says. */
+const scopeLabel = () => find('[data-palette-scope]').textContent
 const toggle = () => click(find('[data-palette-archived]'))
 
 describe('the Search palette', { timeout: 20_000 }, () => {
@@ -372,43 +403,98 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(calls).toHaveLength(6)
   })
 
-  it('starts Search in on the sub-project it opened for', async () => {
-    await open({ searchIn: () => FW })
-    expect(find<HTMLSelectElement>('[data-palette-scope]').value).toBe(FW)
+  it('starts Search in on the sub-project it opened for, once the server resolves it', async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // resolve waits, so the fixture exists before it answers
+    await open({
+      searchIn: () => {
+        resolving.hold ??= held
+        return FW
+      },
+    })
+    expect(scopeLabel()).toBe('Loading…')
     await type('firm')
-    expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
+    // nothing searches a scope wider or narrower than asked meanwhile
+    expect(calls).toHaveLength(0)
+    expect(find('[cmdk-list]').getAttribute('aria-busy')).toBe('true')
+    await act(async () => release())
+    await settle()
+    expect(scopeLabel()).toBe('Luma Sensor › Firmware')
+    expect(calls.map((c) => c.args)).toEqual([
+      { text: 'firm', include_archived: false, scope: { org_id: ORG, project_id: FW } },
+    ])
     await last().answer([task(14)])
     await choose('')
     expect(last().args).toEqual({ text: 'firm', include_archived: false })
   })
 
-  it('asks once for a scope scanned with the keyboard, and at once for one picked with the pointer', async () => {
+  it('starts on All projects where the project it opened for does not resolve', async () => {
+    for (const answer of [
+      async () => ({ state: 'unavailable' }),
+      async () => ({
+        state: 'unavailable',
+        reason: 'access_unchecked',
+        message: 'Qivo could not finish checking which projects you can see.',
+      }),
+      async () => {
+        throw new Error('the read failed')
+      },
+    ]) {
+      await open({
+        searchIn: () => {
+          resolving.answer ??= answer
+          return FW
+        },
+      })
+      expect(scopeLabel()).toBe('All projects')
+      await type('firm')
+      expect(last().args).toEqual({ text: 'firm', include_archived: false })
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
+  it('asks at once for a pick from the keyboard, with no rest', async () => {
     await open()
     await type('firm')
     await last().answer([task(14)])
-    // the arrows walk the list, each step a change
-    for (const value of [META, FW, '', META]) await choose(value, { rest: false })
-    expect(calls).toHaveLength(1)
-    expect(status()).toBe('Updating results…')
-    expect(find('[cmdk-list]').getAttribute('aria-busy')).toBe('true')
-    await wait(300)
+    await click(find('[data-palette-scope]'))
+    const field = find('[data-project-picker-search]')
+    expect(document.activeElement).toBe(field)
+    // All projects, then Luma Sensor
+    await press(field, 'ArrowDown')
+    await press(field, 'ArrowDown')
+    await press(field, 'Enter')
     expect(calls).toHaveLength(2)
     expect(last().args.scope).toEqual({ org_id: ORG, project_id: META })
-    await last().answer([task(14)])
-    // a walk back to the scope on screen asks nothing
-    await choose(FW, { rest: false })
-    await choose(META, { rest: false })
+    expect(document.querySelector('[data-project-picker]')).toBeNull()
+    expect(document.activeElement).toBe(find('[data-palette-scope]'))
+  })
+
+  it('closes only the picker on Escape, and reads none of the workspace’s projects', async () => {
+    await open()
+    const spies = [
+      vi.spyOn(store.P, 'visibleProjects'),
+      vi.spyOn(store.P, 'canSee'),
+      vi.spyOn(store.P, 'projectLabel'),
+    ]
+    await click(find('[data-palette-scope]'))
+    const field = find<HTMLInputElement>('[data-project-picker-search]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(field, 'lum')
+      field.dispatchEvent(new Event('input', { bubbles: true }))
+    })
     await wait(300)
-    expect(calls).toHaveLength(2)
-    // a pointer pick asks at once
-    document.documentElement.dataset.focusModality = 'pointer'
-    try {
-      await choose(FW, { rest: false })
-      expect(calls).toHaveLength(3)
-      expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
-    } finally {
-      delete document.documentElement.dataset.focusModality
-    }
+    await press(field, 'Escape')
+    expect(field.value).toBe('')
+    await press(field, 'Escape')
+    expect(document.querySelector('[data-project-picker]')).toBeNull()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(document.querySelector('[cmdk-input]')).not.toBeNull()
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled()
   })
 
   it('shows only the newest answer, also when an older one lands later', async () => {
@@ -603,27 +689,40 @@ describe('the Search palette', { timeout: 20_000 }, () => {
 
   it('offers All projects, each organization, and each project with its sub-projects', async () => {
     await open({ partner: true })
-    const options = [...find<HTMLSelectElement>('[data-palette-scope]').options].map((o) => [
-      o.value,
-      o.textContent?.trim(),
-    ])
-    expect(options).toEqual([
+    expect(scopeLabel()).toBe('All projects')
+    await click(find('[data-palette-scope]'))
+    const fixed = [...document.querySelectorAll<HTMLElement>('[data-project-pick-all]')].map(
+      (el) => [el.dataset.projectPickAll, el.textContent],
+    )
+    expect(fixed).toEqual([
       ['', 'All projects'],
-      [`org:${ORG}`, 'All projects in Testbed Labs'],
-      [`org:${PARTNER}`, 'All projects in Partner Co'],
-      [META, 'Luma Sensor, whole project'],
-      [FW, 'Firmware'],
-      [expect.any(String), 'Electronics'],
-      [PORTAL, 'Partner portal, whole project'],
+      [ORG, 'All projects in Testbed Labs'],
+      [PARTNER, 'All projects in Partner Co'],
     ])
-    expect(find<HTMLSelectElement>('[data-palette-scope]').value).toBe('')
+    await click(find(`[data-project-expand="${META}"]`))
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-project-pick]')].map((el) => [
+      el.dataset.projectPick,
+      el.textContent,
+    ])
+    // a project of another organization names it
+    expect(rows).toEqual([
+      [META, 'Luma Sensor'],
+      [expect.any(String), 'Electronics'],
+      [FW, 'Firmware'],
+      [PORTAL, 'Partner portalPartner Co'],
+    ])
+    await press(find('[data-project-picker-search]'), 'Escape')
     await type('portal')
     await choose(`org:${PARTNER}`)
+    expect(scopeLabel()).toBe('All projects in Partner Co')
     expect(last().args.scope).toEqual({ org_id: PARTNER })
     await last().answer([])
-    // a chosen project that leaves the list returns the search to All projects
+    // a chosen project that leaves the workspace stays chosen; the server
+    // answers it as any project the person cannot see
     await choose(FW)
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
     await last().answer([])
+    const asked = calls.length
     await act(async () =>
       publish({
         ...structuredClone(snap),
@@ -632,8 +731,8 @@ describe('the Search palette', { timeout: 20_000 }, () => {
       }),
     )
     await settle()
-    expect(find<HTMLSelectElement>('[data-palette-scope]').value).toBe('')
-    expect(last().args).toEqual({ text: 'portal', include_archived: false })
+    expect(scopeLabel()).toBe('Luma Sensor › Firmware')
+    expect(calls).toHaveLength(asked)
   })
 
   it('says what a page could not cover, never no results, and offers a project', async () => {
@@ -649,8 +748,11 @@ describe('the Search palette', { timeout: 20_000 }, () => {
       )
       expect(status()).not.toMatch(/no results/i)
     }
+    // the offer opens Search in's picker
     await click(find('[data-palette-choose]'))
-    expect(document.activeElement).toBe(find('[data-palette-scope]'))
+    expect(document.activeElement).toBe(find('[data-project-picker-search]'))
+    await press(find('[data-project-picker-search]'), 'Escape')
+    expect(document.querySelector('[data-project-picker]')).toBeNull()
     await type('firm organizations')
     await last().answer([task(3)], null, {
       complete: false,

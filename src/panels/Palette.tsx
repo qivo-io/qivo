@@ -2,21 +2,26 @@
    searches tasks and projects on the server (P.fetchSearchPage,
    search:page): every project the person can open in every organization of
    the login, whatever page it opened on, or the narrower scope chosen under
-   Search in, which lasts while the palette is open. It starts on All
-   projects, or on the sub-project it opened for (searchIn, the Board's
-   Search this sub-project). Typing rests 250 ms
-   before a request, and so does a scope picked from the keyboard, which
-   scanning the list walks through; a scope picked with the pointer or a
-   change of Include archived tasks asks at once, and any change starts at
-   the first page. Only the newest request's
-   answer shows. One list in the server's order, 25 rows a page at most,
-   with Previous and Next, and a note when the search could not cover
-   everything (lib/searchNote.ts), which it never calls no results. An empty
-   search reads nothing, and nothing subscribes, so a hidden tab reads
-   nothing. A task result opens by its handle or by a reference the task
-   window reads from the server (openTaskResult). Opening a project result
-   and the Search in choices still use the workspace (openProjectResult,
-   scopeChoices), the places later stages switch. */
+   Search in, which lasts while the palette is open. Search in is the
+   shared project picker (components/ProjectPicker.tsx), which lists the
+   person's projects from the server's navigation reads, never from the
+   workspace: All projects, an organization's All projects when the login
+   holds several seats, a project with its sub-projects, or one sub-project.
+   Search starts on All projects, or on the project it opened for
+   (searchIn, the Board's and the Overview's Search this sub-project),
+   which it resolves on the server first (P.resolveProject); until that
+   answers nothing is searched, and a project the person cannot open, or a
+   check the server could not finish, leaves All projects. Typing rests
+   250 ms before a request; a pick and a change of Include archived tasks
+   ask at once, and any change starts at the first page. Only the newest
+   request's answer shows. One list in the server's order, 25 rows a page
+   at most, with Previous and Next, and a note when the search could not
+   cover everything (lib/searchNote.ts), which it never calls no results.
+   An empty search reads nothing, and nothing subscribes, so a hidden tab
+   reads nothing. A task result opens by its handle or by a reference the
+   task window reads from the server (openTaskResult). Only opening a
+   project result still uses the workspace (openProjectResult), which
+   startup selection switches. */
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -29,18 +34,18 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { CommandDialog, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Label } from '@/components/ui/label'
-import { NativeSelect } from '@/components/ui/native-select'
 import { LIMITS } from '../../convex/lib/limits'
 import { searchTerms } from '../../convex/lib/searchTerms'
+import { ProjectPicker } from '../components/ProjectPicker'
 import { Icon, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
-import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
+import { restoreFocus } from '../lib/focusVisibility'
 import { withStart } from '../lib/pageStarts'
+import { type PickRules, type ProjectPick, searchScopeOf } from '../lib/projectPick'
 import { type SearchCoverage, searchNote } from '../lib/searchNote'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import {
   P,
-  type ProjectVM,
   type SearchProjectRow,
   type SearchRow,
   type SearchScope,
@@ -94,6 +99,10 @@ type Failed = { ask: Ask; starts: (string | null)[]; move: Move }
 /* The key a text over LIMITS.search stands for, which is never sent. */
 const TOO_LONG = 'too-long'
 
+/* The key while the project Search opened for waits for the server to
+   resolve it, which asks nothing yet. */
+const WAITING = 'waiting'
+
 /* A letter or digit, as searchTerms reads words. A text that holds one but
    no term holds only words too long for Convex to index
    (CONVEX_WORD_BYTES). */
@@ -122,55 +131,12 @@ const keepKeys = (event: KeyboardEvent) => {
 const resultValue = (row: SearchRow): string =>
   row.kind === 'task' ? `issue-${row.handle}` : `project-${row.id}`
 
-/** One choice of Search in: its value, its label and the scope it
-    searches, null for every organization. */
-type ScopeChoice = { value: string; label: string; scope: SearchScope | null }
+/** How Search in picks: one project or sub-project, All projects, or an
+    organization's All projects (lib/projectPick.ts). */
+const SCOPE_RULES: PickRules = { many: false, oneOrg: false, all: 'every' }
 
-/**
- * The choices of Search in, built from the workspace's projects as the
- * Archived tasks chooser builds them: All projects first, then All
- * projects of each organization with visible projects when the login holds
- * seats in more than one, then each visible top-level project with its
- * sub-projects, "<name>, whole project" first. The shared bounded project
- * picker replaces this once the workspace stops carrying every project.
- */
-function scopeChoices(): {
-  all: ScopeChoice[]
-  groups: { label: string; choices: ScopeChoice[] }[]
-} {
-  const metas = P.visibleProjects()
-  const orgs = [...new Set(metas.map((meta) => meta.org))]
-  const all: ScopeChoice[] = [{ value: '', label: 'All projects', scope: null }]
-  if (P.orgs.length > 1)
-    for (const org of orgs)
-      all.push({
-        value: `org:${org}`,
-        label: `All projects in ${P.orgs.find((o) => o.id === org)?.name ?? 'another organization'}`,
-        scope: { org_id: org },
-      })
-  const groups = metas.map((meta) => {
-    const subs = (meta.children || [])
-      .map((id: string) => P.project(id))
-      .filter((sp): sp is ProjectVM => !!sp && P.canSee(sp.id))
-    const label = P.projectLabel(meta)
-    return {
-      label,
-      choices: [
-        {
-          value: meta.id,
-          label: `${label}, whole project`,
-          scope: { org_id: meta.org, project_id: meta.id },
-        },
-        ...subs.map((sp) => ({
-          value: sp.id,
-          label: P.projectLabel(sp),
-          scope: { org_id: sp.org, project_id: sp.id },
-        })),
-      ],
-    }
-  })
-  return { all, groups }
-}
+/** Search in's starting pick, All projects. */
+const EVERY: ProjectPick = { kind: 'every' }
 
 /**
  * Opens task result `row` with `open` (App openNav): by its handle when the
@@ -202,10 +168,10 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   // when a control changes or the text holds no term
   const [settled, setSettled] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
-  // the Search in choice, '' for All projects, and the one a search asks
-  // with, which waits for a choice from the keyboard to rest
-  const [choice, setChoice] = useState(searchIn ?? '')
-  const [settledChoice, setSettledChoice] = useState(searchIn ?? '')
+  // the Search in pick, and whether the project Search opened for still
+  // waits for the server to resolve it, while nothing is searched
+  const [pick, setPick] = useState<ProjectPick>(EVERY)
+  const [resolving, setResolving] = useState(searchIn !== null)
   const [shown, setShown] = useState<Shown | null>(null)
   const [running, setRunning] = useState<Running | null>(null)
   const [failed, setFailed] = useState<Failed | null>(null)
@@ -218,7 +184,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   // answers to an older request are dropped
   const seqRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const scopeRef = useRef<HTMLSelectElement>(null)
+  const scopeRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   // what the commit that shows a new page does: the list starts at its
   // top, where its first row is selected, and after a page move focus goes
@@ -238,6 +204,25 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     },
     [],
   )
+  // the project Search opened for, as the server resolves it for this
+  // person: a project they can open is the pick, and anything else, a
+  // project they cannot open, a check the server could not finish or a
+  // failed read, leaves All projects
+  useEffect(() => {
+    if (searchIn === null) return
+    let live = true
+    void P.resolveProject(searchIn).then((answer) => {
+      if (!live) return
+      if (answer?.state === 'ok') {
+        const { id, org_id, name, num, parent } = answer.project
+        setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
+      }
+      setResolving(false)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
 
   const pendingActionRef = useRef<(() => void) | null>(null)
   const closeLayer = useMobileBackLayer(true, () => {
@@ -255,45 +240,21 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     closeLayer()
   }
 
-  const { all, groups } = scopeChoices()
-  const offered = [...all, ...groups.flatMap((g) => g.choices)]
-  // a project that left the choices, as when it is archived or access to
-  // it ends, returns the search to All projects
-  const chosen = offered.find((c) => c.value === choice)
-  const left = !chosen
-  useEffect(() => {
-    if (!left) return
-    setChoice('')
-    setSettledChoice('')
-  }, [left])
-  const scope = chosen?.scope ?? null
-  const askedScope = offered.find((c) => c.value === settledChoice)?.scope ?? null
-  // the text as typed now, for a choice that rests
-  const textRef = useRef(text)
-  textRef.current = text
-  // whether the newest choice came from the pointer, which asks at once
-  const pickedByPointer = useRef(false)
-  useEffect(() => {
-    if (choice === settledChoice) return
-    const settle = () => {
-      setSettledChoice(choice)
-      setSettled(textRef.current)
-    }
-    if (pickedByPointer.current) {
-      settle()
-      return
-    }
-    const timer = window.setTimeout(settle, SEARCH_DELAY_MS)
-    return () => window.clearTimeout(timer)
-  }, [choice])
+  // the scope Search in names. A project picked here that is archived or
+  // hidden later answers on the server as any project the person cannot
+  // see, so the pick stays until the person changes it
+  const scope = searchScopeOf(pick) ?? null
 
   const tooLong = overLimit(LIMITS.search, text)
   // the search the input and the controls describe now, and the one the
-  // palette asks for, which waits for typing to rest
+  // palette asks for, which waits for typing to rest and, for the project
+  // Search opened for, for the server to resolve it
   const typed = tooLong ? TOO_LONG : searchKeyOf(text, includeArchived, scope)
-  const wanted = overLimit(LIMITS.search, settled)
-    ? TOO_LONG
-    : searchKeyOf(settled, includeArchived, askedScope)
+  const wanted = resolving
+    ? WAITING
+    : overLimit(LIMITS.search, settled)
+      ? TOO_LONG
+      : searchKeyOf(settled, includeArchived, scope)
   useEffect(() => {
     if (text === settled) return
     if (searchKeyOf(text, false, null) === null) {
@@ -351,6 +312,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
      newest request's key, or the screen's when none runs, needs nothing;
      a key that returns to the screen's drops the request on its way. */
   useLayoutEffect(() => {
+    if (wanted === WAITING) return
     if (wanted === null || wanted === TOO_LONG) {
       seqRef.current++
       setRunning(null)
@@ -366,7 +328,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
       setFailed(null)
       return
     }
-    ask({ key: wanted, text: settled, includeArchived, scope: askedScope }, [null], 'first')
+    ask({ key: wanted, text: settled, includeArchived, scope }, [null], 'first')
   }, [wanted])
 
   /* Moves to the next or the previous page of the search on screen. */
@@ -397,6 +359,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   // text without terms and one past the limit wait for nothing.
   const busy =
     running !== null ||
+    (resolving && typed !== null) ||
     (typed !== wanted && typed !== null && typed !== TOO_LONG && typed !== shown?.ask.key)
   const rows = tooLong || typed === null ? [] : (shown?.rows ?? [])
   const moving = running && running.move !== 'first' ? running.move : null
@@ -443,7 +406,7 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
           variant="ghost"
           size="sm"
           data-palette-choose
-          onClick={() => scopeRef.current?.focus()}
+          onClick={() => scopeRef.current?.click()}
         >
           {note.offer}
         </Button>
@@ -526,37 +489,24 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
           <Label htmlFor="palette-scope" className="shrink-0 text-sm font-normal text-text-2">
             Search in
           </Label>
-          <NativeSelect
-            ref={scopeRef}
-            id="palette-scope"
-            data-palette-scope
-            size="sm"
-            value={chosen ? choice : ''}
-            onChange={(event) => {
-              pickedByPointer.current = lastInputWasPointer()
-              setChoice(event.target.value)
+          <ProjectPicker
+            triggerRef={scopeRef}
+            trigger={{ id: 'palette-scope', 'data-palette-scope': '' }}
+            busyLabel={resolving ? 'Loading…' : null}
+            pick={pick}
+            rules={SCOPE_RULES}
+            label="Search projects to search in"
+            // a pick asks at once, with the text as typed
+            onPick={(next) => {
+              if (next === null) return
+              setPick(next)
+              setSettled(text)
             }}
-            className="h-control-sm max-w-[260px] cursor-pointer bg-surface-1 font-sans text-sm"
-          >
-            {all.map((c) => (
-              <option key={c.value} value={c.value}>
-                {c.label}
-              </option>
-            ))}
-            {groups.map((g) => (
-              <optgroup key={g.choices[0].value} label={g.label}>
-                {g.choices.map((c, i) => (
-                  // option padding is not portable (phones and Firefox draw
-                  // their own list), so NBSPs indent sub-projects one step
-                  // under their "whole project" row
-                  <option key={c.value} value={c.value}>
-                    {i > 0 && '    '}
-                    {c.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </NativeSelect>
+            // the palette is a modal dialog, which keeps scrolling to its own
+            // content unless the open picker holds a lock of its own
+            modal
+            className="h-control-sm"
+          />
         </div>
         <div className="flex items-center gap-2">
           <Checkbox
@@ -567,7 +517,6 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
               // the toggle asks at once, with the scope chosen so far
               setIncludeArchived(checked === true)
               setSettled(text)
-              setSettledChoice(chosen ? choice : '')
             }}
           />
           <Label htmlFor="palette-archived" className="text-sm font-normal text-text-2">
