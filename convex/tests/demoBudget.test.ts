@@ -444,6 +444,53 @@ describe('the private demo shares 5 MiB', () => {
   })
 })
 
+describe('a demo upload that never attaches', () => {
+  it('stops counting once its reservation expired and the sweep ran, while an attached one keeps counting', async () => {
+    const d = await setup()
+    const url = await reserve(d, 2 * MiB)
+    const loose = (await (await post(d.t, url, new Uint8Array(2 * MiB))).json()) as {
+      storageId: Id<'_storage'>
+    }
+    const kept = await attachFile(d, 2 * MiB)
+    await expectRefusal(reserve(d, 2 * MiB), 'rule')
+    // within its reservation the unattached file still counts and attaches
+    const [row] = await d.t.run((ctx) =>
+      ctx.db
+        .query('demo_uploads')
+        .withIndex('by_storage', (q) => q.eq('storage_id', loose.storageId))
+        .collect(),
+    )
+    expect(row.expires_at).toBeLessThanOrEqual(NOW + 10 * 60_000)
+    vi.setSystemTime(row.expires_at + 1)
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    expect(await d.t.run((ctx) => ctx.db.system.get(loose.storageId))).toBeNull()
+    expect(await d.t.run((ctx) => ctx.db.get(row._id))).toBeNull()
+    // the attached file stays, counted until the demo ends
+    const [used] = await d.t.run((ctx) =>
+      ctx.db
+        .query('demo_uploads')
+        .withIndex('by_storage', (q) => q.eq('storage_id', kept.storageId))
+        .collect(),
+    )
+    expect(used.expires_at).toBe(d.receipt.expires_at)
+    expect(await d.t.run((ctx) => ctx.db.system.get(kept.storageId))).not.toBeNull()
+    await reserve(d, 3 * MiB)
+    await expectRefusal(reserve(d, 1), 'rule')
+    // the unattached file's attach is refused once the sweep erased it
+    await expectRefusal(
+      d.caller.mutation(api.files.attach, {
+        org_id: d.fx.org.id,
+        id: uuid(),
+        issue_id: d.issue.id,
+        storage_id: loose.storageId,
+        name: 'notes.bin',
+        inline: false,
+      }),
+      'forbidden',
+    )
+  })
+})
+
 describe('outside the demo', () => {
   it('takes a size for a picture or background, checks its shape and reserves nothing', async () => {
     vi.stubEnv('APP_MODE', '')

@@ -272,6 +272,26 @@ export async function beginDemoUpload(
   return ticket
 }
 
+/**
+ * Records `storageId` as the file of reservation `id`, which the receiver of
+ * login `authId` claimed, and shrinks the reservation to the file's size, so
+ * a file stored smaller than declared frees the rest. Refuses a file larger
+ * than its reservation, and a reservation that expired, lost its claim or
+ * whose demo can no longer be read.
+ *
+ * The row keeps its own expiry, at most 10 minutes after files.uploadUrl or
+ * files.avatarUploadUrl, 15 after appearance.createUpload and 10 after a
+ * preview's reservation, not the demo's end. Within a minute of it the sweep
+ * (demoUploads.ts sweep) moves the expiry of a file in use to the demo's end
+ * and erases a file nothing uses with its row, so an upload that never
+ * attaches, after a refused attach or a closed tab, stops counting instead
+ * of holding its bytes until the demo ends. An attach after the expiry and
+ * before the sweep still works, since the row is still stored; after the
+ * sweep erased the file, the ownership check (assertDemoFileOwnership)
+ * refuses it and the person uploads again. The attach follows the POST
+ * within seconds in practice, and the POST itself must come before the
+ * expiry (beginDemoUpload).
+ */
 export async function retainDemoUpload(
   ctx: MutationCtx,
   id: string,
@@ -291,13 +311,11 @@ export async function retainDemoUpload(
     throw forbidden('This demo upload has expired.')
   if (!meta || meta.size > ticket.reserved_bytes)
     throw rule('this file exceeds the demo upload limit.')
-  const receipt = await requireActiveDemo(ctx, authId)
   await ctx.db.patch(ticket._id, {
     state: 'stored',
     storage_id: storageId,
     reserved_bytes: meta.size,
     lease_until: undefined,
-    expires_at: receipt.expires_at,
   })
 }
 
