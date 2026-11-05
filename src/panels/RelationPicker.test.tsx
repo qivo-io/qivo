@@ -392,7 +392,7 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     // the button still goes on, and Enter read nothing more
     expect(document.querySelector('[data-picker-all]')).not.toBeNull()
     expect(reads).toHaveLength(2)
-    // none in the project: Enter creates, as the row beside the button does
+    // with none in the project, Enter creates, as the row beside the button does
     await typeInto('fresh wire')
     await rest()
     await reads[2].answer(batch([], null, { all_projects: 'all-2' }))

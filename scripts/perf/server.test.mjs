@@ -380,8 +380,8 @@ describe('the benchmark server', () => {
     expect(await rowsOf('link', 18, 21)).toEqual([])
     expect(await rowsOf('parent', 6, 5)).toEqual([])
     expect(await rowsOf('subtask', 5, 6)).toEqual([])
-    // one program and no other project: Search all your projects still
-    // shows at the family's end, and goes on to an empty end
+    // with one program and no other project, Search all your projects
+    // still shows at the family's end, and goes on to an empty end
     await send({
       type: 'query',
       id: 'end',

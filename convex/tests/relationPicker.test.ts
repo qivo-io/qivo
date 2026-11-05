@@ -902,7 +902,7 @@ describe('order and continuation', () => {
     const inPcb = await plantTasks(t, f.sub2, 3)
     RELATION_PICKER.rows = 3
     const first = okOf(await pick(t, f.user, open.id, 'link'))
-    // FW's two tasks, then PCB's first: the batch stands inside PCB
+    // FW's two tasks, then PCB's first, so the batch stands inside PCB
     expect(first.rows.map((r) => r.id)).toEqual([...inFw, inPcb[0]].map((x) => x?.id))
     const cursor = first.next as string
     // the same cursor goes on while the task stays, and the family's end
@@ -912,7 +912,7 @@ describe('order and continuation', () => {
     const all = second.all_projects as string
     expect(all).toEqual(expect.any(String))
     // someone moves the opened task into PCB, so the cursors' places no
-    // longer name the projects they read: read on, the first would skip
+    // longer name the projects they read. Read on, the first would skip
     // PCB's last tasks and FW and end the list
     await t.run((ctx) => ctx.db.patch(open._id, { project_id: f.sub2.id }))
     for (const [why, at] of [
