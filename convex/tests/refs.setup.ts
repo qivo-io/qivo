@@ -306,11 +306,13 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'panorama_refills.actor_auth_id',
   // Deleted items name what they hold by id while those rows are absent from
   // the live tables: the root, its project and parent, a stored row's owner
-  // and own id, a stored project's lead, a stored task and its project, and
-  // a stored task's assignee and the copies of its item's project and
-  // parent (model/deletedItemsPage.ts). Restore and the list check each
-  // again (model/deletedItems.ts sameReference). The bytes are a _storage
-  // id like issue_attachments'.
+  // and own id, a stored project's lead, a stored task and its project.
+  // Restore and the list check each again (model/deletedItems.ts
+  // sameReference). A stored task also names its assignee, which the page
+  // checks against its item's deletion (sameReference), and copies its
+  // item's project and parent, which only filter the page's search, whose
+  // candidates the page judges by their item (model/deletedItemsPage.ts).
+  // The bytes are a _storage id like issue_attachments'.
   'deleted_items.target_id',
   'deleted_items.project_id',
   'deleted_items.parent_project_id',
