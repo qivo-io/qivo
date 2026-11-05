@@ -94,8 +94,8 @@ async function memberSeesActivity(
   return 'yes'
 }
 
-/* Whether a member receives a row: 'unchecked' when the read had no room to
- * look up a task it names (memberSeesActivity). */
+/* Whether a member receives a row, 'unchecked' where the read had no room
+ * to look up a task or a project it names (memberSeesActivity). */
 type Sight = 'yes' | 'no' | 'unchecked'
 
 /* What a lookup the read had no room for answers. */
@@ -107,13 +107,13 @@ const UNCHECKED = Symbol('unchecked')
  * member's access (lib/access.ts accessOf) of at most 6 ranges and 134
  * documents (OWN_READS, "One question"). A row can name two tasks and four
  * projects. Past `room`, a row naming a task or a project not looked up yet
- * is not checked: a page ends before it, so the next page checks it with
+ * is not checked. A page ends before it, so the next page checks it with
  * room of its own, and taskWriters leaves it out. The first row a page
  * reads is checked whatever the room, so every page moves on.
  *
- * The rest holds what a question started below `room` may read once for
- * the page, OWN_READS' shared reads without navigation, and then the
- * caller's own reads: REST and MCP read one profile per distinct actor
+ * The rest holds what a question started below `room` may read once for the
+ * page, OWN_READS' shared reads without navigation, and then the caller's
+ * own reads, where REST and MCP read one profile per distinct actor
  * (machine/records.ts activityOut), up to 500 ranges. Inside the design
  * size the shared reads come to at most about 1,800 documents and 110
  * ranges (the person's grants tried at the steps, 675; the shares of their
@@ -122,12 +122,12 @@ const UNCHECKED = Symbol('unchecked')
  * and 3.2 MiB Convex leaves past 0.8, so inside the design size a page ends
  * before a row it could not check and never fails on Convex's limits. Past
  * the design size they can reach about 6,400 documents and 460 ranges, for
- * a person in 256 teams of an organization whose teams pass the read of
- * the organization's teams (the steps' grants, 675, and memberships, 419;
- * the teams' shares, 256 ranges and 1,001 documents; the organization's
- * teams, 4,001; 65 membership lookups; OWN_READS.teamReads' 128 ranges),
- * and with REST and MCP's profiles more than 819 ranges. There Convex's own
- * read limit refuses the call, which widens nothing and shows nothing as
+ * a person in 256 teams of an organization whose teams pass the read of the
+ * organization's teams (the steps' grants, 675, and memberships, 419; the
+ * teams' shares, 256 ranges and 1,001 documents; the organization's teams,
+ * 4,001; 65 membership lookups; OWN_READS.teamReads' 128 ranges), and with
+ * REST and MCP's profiles more than 819 ranges. There Convex's own read
+ * limit refuses the call, which widens nothing and shows nothing as
  * complete. Tests may lower it. */
 export const NAMED_TASK_ROOM = { room: 0.8 }
 

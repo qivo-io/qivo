@@ -193,15 +193,15 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
  * navigation walk"). Past the design size Convex's own read limit refuses
  * the call with a generic server error, which widens nothing and shows
  * nothing as complete (agent decision, 5 November 2026, closing
- * t3/limits-reach-access-checks). The figure is per call: a request that
+ * t3/limits-reach-access-checks). The figure is per call, so a request that
  * asks about one parent twice walks it twice, as a REST or MCP sub-project
  * create does (machine/projects.ts readableProject, then model/projects.ts
  * subProjectParent). canSeeProject, profileCanSeeProject and
  * subProjectParent's default level ask with navigation; canAccessProject
  * and hasProjectLevel ask without it, since navigation only ever gives
  * 'viewer'. The walk never runs for a sub-project, so a task in a
- * sub-project never walks; a legacy task stored on a top-level project
- * does (snapshot.ts threadTask, lib/core.ts findIssue). */
+ * sub-project never walks; a legacy task stored on a top-level project does
+ * (snapshot.ts threadTask, lib/core.ts findIssue). */
 export async function projectLevel(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1077,9 +1077,9 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * reads (model/projectNavReads.ts, which answer it `unavailable` with
  * access_unchecked as well) and a member's task history
  * (lib/activityVisibility.ts, whose pages in the task window, REST and MCP
- * refuse a page whose check stopped, and whose taskWriters names nobody
- * for such a row) apply this one rule, each with its own answer for that
- * refusal. */
+ * refuse a page whose check stopped, and whose receivedRows leaves such a
+ * row out, so model/issues.ts taskWriters names nobody for it) apply this
+ * one rule, each with its own answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1282,9 +1282,9 @@ export type OrgProjectLevels = {
 }
 
 /** Every project of organization `orgId`, archived ones included, oldest
- * first: the catalogue's 2,000 projects and sub-projects at the design
- * size, a read at the design size's sum that projectLevelsForOrg and
- * lib/visibility.ts orgProjectView make beside accessRowsOf (whose
+ * first. At the design size that is the catalogue's 2,000 projects and
+ * sub-projects, a read at the design size's sum that projectLevelsForOrg
+ * and lib/visibility.ts orgProjectView make beside accessRowsOf (whose
  * docstring has the figures and why it stays). */
 export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects'>[]> =>
   ctx.db
@@ -1293,12 +1293,13 @@ export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects
     .collect()
 
 /* Amortized counterpart of projectLevel, used by REST and MCP access flags
- * and lists (lib/core.ts accessFlags and orgReach) and Deleted items
- * (model/deletedItems.ts seenBy). Evaluate actual projects rather than
- * reusing the parent's answer for all siblings. Navigation-only parent
- * visibility is never inherited back down. Callers that already loaded the
- * complete org project list can reuse it. It reads every project of the
- * organization (orgProjects) and every grant and team share of the person
+ * and lists (lib/core.ts accessFlags and orgReach), Deleted items
+ * (model/deletedItems.ts seenBy) and projectLevelsForPeople for people of
+ * another organization. Evaluate actual projects rather than reusing the
+ * parent's answer for all siblings. Navigation-only parent visibility is
+ * never inherited back down. Callers that already loaded the complete org
+ * project list can reuse it. It reads every project of the organization
+ * (orgProjects) and every grant and team share of the person
  * (accessRowsOf), a read at the design size's sum: 13 index ranges, 3,710
  * documents and 1.15 MiB as convex-test counts them for the catalogue of
  * 2,000 projects and accessRowsOf's person, accepted as accessRowsOf says. */
