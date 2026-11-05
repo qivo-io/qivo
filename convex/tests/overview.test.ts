@@ -523,9 +523,16 @@ describe('lists', () => {
     const cursor = risky.next
     expect(await attention({ cursor })).toMatchObject({ state: 'ok' })
     const shifted = WEEKS.week_starts.map((s, i) => (i >= 20 ? s - 3_600_000 : s))
+    // a later week keeps its clock well formed, its starts and end a day
+    // later too, so the cursor's binding is what refuses it
+    const laterWeek = {
+      week: shift(DAY, 1),
+      week_starts: WEEKS.week_starts.map((s) => s + 86_400_000),
+      week_end: WEEKS.week_end + 86_400_000,
+    }
     for (const over of [
       { day: shift(DAY, 4) },
-      { week: shift(DAY, 1) },
+      laterWeek,
       { week_starts: shifted },
       { week_end: WEEKS.week_end + 3_600_000 },
     ])
