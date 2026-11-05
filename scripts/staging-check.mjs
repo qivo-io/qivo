@@ -12,8 +12,10 @@
  * name the credential. It uploads, downloads and deletes attachments, one of
  * them at the per-file limit, checks that an upload URL stores one file, checks
  * the text, name, list and request size limits, unknown arguments, comment
- * paging, cursor paging of the active and archived task lists and of the
- * workload's people (machine/workload-pages), task progress, last comment
+ * paging, cursor paging of the active and archived task lists, of the
+ * workload's people (machine/workload-pages) and of the user, label, team
+ * and member lists with their name search (machine/people-lists), task
+ * progress, last comment
  * times, delay and project completion, which it waits to read whole again
  * after an archive or a restore regroups its counts, and the live group
  * rule. It fills one task with a
@@ -171,6 +173,27 @@ export const WORKLOAD_REFUSALS = {
  *  agents takes few requests, and two over MCP, so its pages follow a
  *  cursor however small the organization is. */
 export const WORKLOAD_PAGE = { rest: 5, mcp: 2 }
+
+/** The sentences REST GET /v1/users and MCP list_users refuse a page's
+ *  `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and the
+ *  limits registry's listUsers), which the script's tests pin. The label,
+ *  team and member lists name their own rows in the first two. */
+export const PEOPLE_REFUSALS = {
+  offset: 'offset does not apply to users; pass next_cursor as cursor',
+  limit: LIMITS.listUsers.refusal,
+  cursor: LIST_REFUSALS.cursor,
+}
+
+/** The rows one page of the people-lists step asks for: users as the
+ *  workload step asks for people, and one member a page, so the run's two
+ *  members take a cursor. */
+export const PEOPLE_PAGE = { rest: 5, mcp: 2, members: 1 }
+
+/** The MCP tools that took no arguments before November 2026 and still
+ *  answer a call that sends none of their own arguments, such as a
+ *  placeholder alone, as a call of the older catalogue (convex/machine/mcp.ts
+ *  FORMERLY_BARE), which the script's tests pin. */
+export const FORMERLY_BARE = ['list_users', 'list_labels', 'list_teams']
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -498,6 +521,7 @@ const READ_TOOLS = new Set([
   'list_projects',
   'list_task_activity',
   'list_tasks',
+  'list_team_members',
   'list_teams',
   'list_users',
 ])
@@ -744,8 +768,9 @@ async function readOk(cred, path) {
   }
 }
 
-/** readOk for a route that answers a list. Task lists answer pages
- *  instead (taskPages). */
+/** readOk for a route that answers a whole list, as the project list does.
+ *  The task, user, label, team and member lists answer pages instead
+ *  (taskPages, restRows). */
 async function readList(cred, path) {
   const rows = await readOk(cred, path)
   expect(Array.isArray(rows), `GET ${path.split('?')[0]} answered no list`)
@@ -798,12 +823,12 @@ export async function listPages(read, what, field, most = TASK_PAGES_MAX) {
  *  (listPages over `tasks`). */
 export const taskPages = (read, what) => listPages(read, what, 'tasks')
 
-/** Every person of the REST or MCP workload (listPages over `people`, at
- *  most WORKLOAD_PAGES_MAX pages). A next_cursor equal to the cursor the
- *  page was read with fails at once. Every page moves on, and a cursor
- *  that names the same person seals to the same text
+/** Every row of a REST or MCP list that pages with a cursor (listPages
+ *  over `field`, at most `most` pages). A next_cursor equal to the cursor
+ *  the page was read with fails at once. Every page moves on, and a cursor
+ *  that names the same position seals to the same text
  *  (convex/lib/archiveCursorSeal.ts), so that answer means a stuck list. */
-export const workloadPeople = (read, what) =>
+export const movingPages = (read, what, field, most) =>
   listPages(
     async (cursor) => {
       const page = await read(cursor)
@@ -814,13 +839,69 @@ export const workloadPeople = (read, what) =>
       return page
     },
     what,
-    'people',
-    WORKLOAD_PAGES_MAX,
+    field,
+    most,
   )
+
+/** Every person of the REST or MCP workload (movingPages over `people`, at
+ *  most WORKLOAD_PAGES_MAX pages). */
+export const workloadPeople = (read, what) => movingPages(read, what, 'people', WORKLOAD_PAGES_MAX)
+
+/** The most pages a check reads of a user, label, team or member list at
+ *  `limit` rows a page: the pages of an organization's people at the design
+ *  size (WORKLOAD_PEOPLE) and two more. Each page reads its first row
+ *  whatever its read budget says (convex/lib/listCursor.ts namedListPage),
+ *  and these lists' rows are few beside that budget, so a correct
+ *  deployment never fails it and a next_cursor that never ends still fails
+ *  the check. */
+export const peoplePagesMax = (limit) => Math.ceil(WORKLOAD_PEOPLE / limit) + 2
+
+/** `path` with the query parameters of `q` that are set, URL-encoded. */
+export const withQuery = (path, q) => {
+  const set = Object.entries(q).filter(([, value]) => value !== undefined && value !== null)
+  if (!set.length) return path
+  const query = set.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&')
+  return `${path}${path.includes('?') ? '&' : '?'}${query}`
+}
+
+/** The search a sweep for `tag` sends the user, label and team lists: the
+ *  run's tag, or for any run's tag (TAG_ANY) the prefix they share. The
+ *  sweep still keeps only the rows hasTag names. */
+export const searchOf = (tag) => (typeof tag === 'string' ? tag : TAG_PREFIX)
 
 /** `path`, a REST task list query, with `cursor` added unless it is null. */
 const withCursor = (path, cursor) =>
   cursor === null ? path : `${path}&cursor=${encodeURIComponent(cursor)}`
+
+/** Every row under `field` of the REST list `path` (`/users`, `/labels`,
+ *  `/teams` or `/teams/{id}/members`), with `search` when it is set, in
+ *  pages of `limit`, each read with readOk, so a cleanup read never takes a
+ *  failed answer for an empty list. */
+const restRows = (cred, path, field, { search, limit = 200 } = {}) =>
+  movingPages(
+    (cursor) => readOk(cred, withQuery(path, { search, limit, cursor })),
+    `GET /v1${path.split('?')[0]}`,
+    field,
+    peoplePagesMax(limit),
+  )
+
+/** Every row under `field` of the MCP list tool `name` for `args`. */
+const mcpRows = (cred, name, field, args = {}) =>
+  movingPages(
+    (cursor) => toolOk(cred, name, cursor === null ? args : { ...args, cursor }),
+    name,
+    field,
+    peoplePagesMax(args.limit ?? 50),
+  )
+
+/** Fails unless `page` is one page of a list, `{next_cursor, <field>}`. */
+function expectPage(page, field, what) {
+  expect(
+    Array.isArray(page?.[field]) &&
+      (page.next_cursor === null || typeof page.next_cursor === 'string'),
+    `${what} answered no {next_cursor, ${field}} page`,
+  )
+}
 
 /** Every task the REST task list `path` (`/tasks?…`) holds, each page read
  *  with restOk. */
@@ -1593,7 +1674,8 @@ async function sweep(tag, label) {
           })
       })
       await step('teams', async () => {
-        for (const team of (await readList(cleaner, '/teams')).filter((t) => matches(t.name)))
+        const tagged = await restRows(cleaner, '/teams', 'teams', { search: searchOf(tag) })
+        for (const team of tagged.filter((t) => matches(t.name)))
           await step(`team ${team.name}`, async () => {
             await app.waitForFunction((id) => window.PLANNER.canDeleteTeam(id), team.id, {
               timeout: 30_000,
@@ -1639,7 +1721,7 @@ async function sweep(tag, label) {
           expect(
             await until(async () =>
               cleaner
-                ? !(await readList(cleaner, '/users')).some((u) => u.id === agent.id)
+                ? (await rest(cleaner, 'GET', `/users/${agent.id}`)).status === 404
                 : !(await agentListedAfterReload(agent.id)),
             ),
             'it is still in the organization',
@@ -1657,9 +1739,14 @@ async function sweep(tag, label) {
           ...(await readList(cleaner, '/projects?archived=true')),
         ].filter((p) => matches(p.name))
         const tasks = await findTasks(cleaner, tag)
-        const teams = (await readList(cleaner, '/teams')).filter((t) => matches(t.name))
-        const labels = (await readList(cleaner, '/labels')).filter((l) => matches(l.name))
-        const users = (await readList(cleaner, '/users')).filter(
+        const search = searchOf(tag)
+        const teams = (await restRows(cleaner, '/teams', 'teams', { search })).filter((t) =>
+          matches(t.name),
+        )
+        const labels = (await restRows(cleaner, '/labels', 'labels', { search })).filter((l) =>
+          matches(l.name),
+        )
+        const users = (await restRows(cleaner, '/users', 'users', { search })).filter(
           (u) => u.kind === 'agent' && matches(u.name),
         )
         const left = [
@@ -1856,13 +1943,18 @@ async function checkReads(cred) {
         Array.isArray(await restOk(cred, 'GET', `/tasks/${run.t0.key}/attachments`)),
         'attachments',
       )
-      const users = await restOk(cred, 'GET', '/users')
+      const users = await restRows(cred, '/users', 'users', { search: run.tag })
       expect(
         users.some((u) => u.id === run.agents.std.id),
         'the roster lacks the Standard agent',
       )
-      await restOk(cred, 'GET', '/labels')
-      await restOk(cred, 'GET', '/teams')
+      eq(
+        (await restOk(cred, 'GET', `/users/${run.agents.std.id}`)).id,
+        run.agents.std.id,
+        'GET /v1/users/{id}',
+      )
+      expectPage(await restOk(cred, 'GET', '/labels?limit=1'), 'labels', 'GET /v1/labels')
+      expectPage(await restOk(cred, 'GET', '/teams?limit=1'), 'teams', 'GET /v1/teams')
       await restOk(cred, 'GET', '/workload?weeks=1')
       return 'me, projects, project, tasks, task, comments, activity, attachments, users, labels, teams, workload'
     })
@@ -1879,10 +1971,12 @@ async function checkReads(cred) {
     expect(Array.isArray(await toolOk(cred, 'list_comments', { ref: run.t0.key })), 'list_comments')
     expect(Array.isArray(await toolOk(cred, 'list_task_activity', { ref: run.t0.key })), 'activity')
     expect(
-      (await toolOk(cred, 'list_users')).some((u) => u.id === run.agents.std.id),
+      (await mcpRows(cred, 'list_users', 'users', { search: run.tag })).some(
+        (u) => u.id === run.agents.std.id,
+      ),
       'list_users',
     )
-    await toolOk(cred, 'list_teams')
+    expectPage(await toolOk(cred, 'list_teams', { limit: 1 }), 'teams', 'list_teams')
     await toolOk(cred, 'get_workload', { weeks: 1 })
     return 'list_projects, get_project, list_tasks, get_task, list_comments, list_task_activity, list_users, list_teams, get_workload'
   })
@@ -1946,6 +2040,119 @@ async function workloadPageChecks() {
       'get_workload offset 3',
     )
     return `${ids.length} people in REST pages of ${WORKLOAD_PAGE.rest} and MCP pages of ${WORKLOAD_PAGE.mcp}; another window's cursor, an offset and limit=0 refused`
+  })
+}
+
+/** The user, label, team and member lists page with a cursor and search by
+ *  name on both surfaces (#users, #teams, #labels): pages of PEOPLE_PAGE
+ *  users hold every user once, the run's agents among them, the same over
+ *  REST and MCP, and a search with the run's tag finds exactly those
+ *  agents. The run's team, with the two agents put in it for the step, has
+ *  a member_count equal to the members its pages list one a page on both
+ *  surfaces, and they leave it again, so later steps find it as before. A
+ *  label the step makes is found by a search without its accent, and the
+ *  sweep deletes it. An offset, a limit out of range, a cursor of another
+ *  search and a users cursor sent to the teams list are refused, and a
+ *  users cursor of REST continues on MCP. */
+async function peopleListChecks() {
+  const w = run.creds.writeToken
+  await check('machine/people-lists', async () => {
+    const agents = [run.agents.std, run.agents.viewer]
+    const agentIds = agents.map((a) => a.id).sort()
+    const ids = (rows) => rows.map((r) => r.id)
+    const rest = await restRows(w, '/users', 'users', { limit: PEOPLE_PAGE.rest })
+    expect(new Set(ids(rest)).size === rest.length, 'the REST pages list a user twice')
+    for (const agent of agents)
+      eq(rest.filter((u) => u.id === agent.id).length, 1, `${agent.name} in the REST pages`)
+    same(
+      ids(await mcpRows(w, 'list_users', 'users', { limit: PEOPLE_PAGE.mcp })),
+      ids(rest),
+      'the users of list_users pages',
+    )
+    same(
+      ids(await restRows(w, '/users', 'users', { search: run.tag })).sort(),
+      agentIds,
+      'the users GET /v1/users finds by the run tag',
+    )
+    same(
+      ids(await mcpRows(w, 'list_users', 'users', { search: run.tag.toUpperCase() })).sort(),
+      agentIds,
+      'the users list_users finds by the run tag',
+    )
+    // the run's team with the two agents in it, then without them again
+    const team = run.team
+    expect(team, 'the run has no team')
+    for (const agent of agents) await restOk(w, 'PUT', `/teams/${team.id}/members/${agent.id}`, {})
+    try {
+      const summary = await restOk(w, 'GET', `/teams/${team.id}`)
+      eq(summary.member_count, 2, 'the team member_count')
+      expect(!('members' in summary), 'GET /v1/teams/{id} still answers members')
+      const paged = { limit: PEOPLE_PAGE.members }
+      const restMembers = await restRows(w, `/teams/${team.id}/members`, 'members', paged)
+      same(ids(restMembers).sort(), agentIds, "the team's members over REST")
+      const mcpMembers = await mcpRows(w, 'list_team_members', 'members', {
+        team_id: team.id,
+        ...paged,
+      })
+      same(ids(mcpMembers), ids(restMembers), "the team's members over MCP")
+      const page = await toolOk(w, 'list_team_members', { team_id: team.id, limit: 1 })
+      eq(page.team.member_count, restMembers.length, 'member_count beside the member pages')
+      same(
+        await restRows(w, '/teams', 'teams', { search: run.tag }),
+        [{ id: team.id, name: summary.name, member_count: 2 }],
+        'the teams GET /v1/teams finds by the run tag',
+      )
+    } finally {
+      for (const agent of agents)
+        await rest(w, 'DELETE', `/teams/${team.id}/members/${agent.id}`, {
+          on_held_tasks: 'leave',
+        })
+    }
+    eq((await restOk(w, 'GET', `/teams/${team.id}`)).member_count, 0, 'the team after the step')
+    // a label of the step's own, found without its accent
+    const label = await restOk(w, 'POST', '/labels', {
+      name: `${run.tag} Étiquette`,
+      color: '#2563EB',
+    })
+    same(
+      ids(await restRows(w, '/labels', 'labels', { search: `etiquette ${run.tag}` })),
+      [label.id],
+      'the label GET /v1/labels finds without its accent',
+    )
+    same(
+      ids(await mcpRows(w, 'list_labels', 'labels', { search: `${run.tag} ETIQUETTE` })),
+      [label.id],
+      'the label list_labels finds without its accent',
+    )
+    // the refusals, and a REST cursor that MCP continues
+    await restRefusal(w, 'GET', '/users?offset=1', undefined, 400, PEOPLE_REFUSALS.offset)
+    await restRefusal(w, 'GET', '/users?limit=0', undefined, 400, PEOPLE_REFUSALS.limit)
+    eq(
+      await toolRefusal(w, 'list_users', { offset: 1 }),
+      PEOPLE_REFUSALS.offset,
+      'list_users offset 1',
+    )
+    const first = await restOk(w, 'GET', '/users?limit=1')
+    expect(typeof first?.next_cursor === 'string', 'a users page of one ended the list')
+    await restRefusal(
+      w,
+      'GET',
+      withQuery('/users', { limit: 1, search: run.tag, cursor: first.next_cursor }),
+      undefined,
+      400,
+      PEOPLE_REFUSALS.cursor,
+    )
+    await restRefusal(
+      w,
+      'GET',
+      withQuery('/teams', { cursor: first.next_cursor }),
+      undefined,
+      400,
+      PEOPLE_REFUSALS.cursor,
+    )
+    const second = await toolOk(w, 'list_users', { limit: 1, cursor: first.next_cursor })
+    eq(second.users[0]?.id, ids(rest)[1], 'list_users after a cursor of GET /v1/users')
+    return `${rest.length} users in REST pages of ${PEOPLE_PAGE.rest} and MCP pages of ${PEOPLE_PAGE.mcp}, the run's agents by its tag, its team's 2 members one a page and its label without the accent on both surfaces; offset, limit=0 and other lists' cursors refused`
   })
 }
 
@@ -2946,7 +3153,7 @@ async function threadPageChecks() {
     // Each label a PATCH adds or removes writes its own history row, so
     // putting all of them on and taking them off again fills the history
     // with few requests.
-    const labels = (await readList(w, '/labels')).slice(0, LIMITS.labels.max).map((l) => l.id)
+    const labels = (await readOk(w, `/labels?limit=${LIMITS.labels.max}`)).labels.map((l) => l.id)
     expect(labels.length > 0, 'the organization has no labels to put on the task')
     const rounds = Math.ceil((THREAD_PAGE.history + 10) / (2 * labels.length))
     for (let i = 0; i < rounds; i++) {
@@ -3184,7 +3391,7 @@ async function nameCapChecks() {
     eq(await toolRefusal(w, 'set_team', { name: over }), TEAM, 'set_team')
     run.team = await restOk(w, 'POST', '/teams', { name: `${run.tag} team` })
     await restRefusal(w, 'PATCH', `/teams/${run.team.id}`, { name: over }, 400, TEAM)
-    const teams = await restOk(w, 'GET', '/teams')
+    const teams = await restRows(w, '/teams', 'teams', { search: run.tag })
     eq(teams.filter((t) => t.name.startsWith(`${run.tag} `)).length, 1, 'teams of this run')
   })
   await check('name-caps/app/organization', async () => {
@@ -3350,24 +3557,36 @@ async function unknownArgumentChecks() {
   await check('unknown-args/mcp/every-tool', async () => {
     let refusing = 0
     let ignoring = 0
+    let formerly = 0
+    const refused = (r, name) =>
+      expect(
+        r.isError &&
+          r.text?.startsWith(schemaText(name, '')) &&
+          r.text.endsWith('Unrecognized key: "stgchk_probe"'),
+        `${name} did not refuse an unknown argument: ${r.isError ? short(r.text) : 'a result'}`,
+      )
     for (const [name, def] of run.tools) {
       const takes = Object.keys(def.inputSchema?.properties ?? {}).length > 0
       const r = await tool(w, name, { stgchk_probe: true })
-      if (takes) {
-        expect(
-          r.isError &&
-            r.text?.startsWith(schemaText(name, '')) &&
-            r.text.endsWith('Unrecognized key: "stgchk_probe"'),
-          `${name} did not refuse an unknown argument: ${r.isError ? short(r.text) : 'a result'}`,
-        )
+      if (takes && FORMERLY_BARE.includes(name)) {
+        // a probe alone is a call of the older catalogue, answered; beside
+        // one of the tool's own arguments it is refused
+        expect(!r.isError && r.json?.result, `${name} refused a placeholder sent alone`)
+        refused(await tool(w, name, { stgchk_probe: true, limit: 1 }), name)
+        formerly++
+      } else if (takes) {
+        refused(r, name)
         refusing++
       } else {
         expect(!r.isError && r.json?.result, `${name} refused an argument it ignores`)
         ignoring++
       }
     }
-    expect(refusing > 20 && ignoring === 4, `${refusing} refusing and ${ignoring} ignoring tools`)
-    return `${refusing} tools refuse an unknown argument, ${ignoring} without arguments ignore it`
+    expect(
+      refusing > 20 && ignoring === 1 && formerly === FORMERLY_BARE.length,
+      `${refusing} refusing, ${formerly} formerly without arguments and ${ignoring} ignoring tools`,
+    )
+    return `${refusing} tools refuse an unknown argument, ${formerly} that took none before answer one alone and refuse it beside a real one, ${ignoring} without arguments ignores it`
   })
   await check('unknown-args/mcp/shapes', async () => {
     eq(
@@ -3490,7 +3709,7 @@ async function unknownArgumentChecks() {
       )
       // without the run's team only the user routes could be checked
       expect(team, `the run has no team, so only ${routes.length} routes were checked`)
-      eq((await restOk(w, 'GET', `/teams/${team.id}`)).members.length, 0, 'team members')
+      eq((await restRows(w, `/teams/${team.id}/members`, 'members')).length, 0, 'team members')
       return `${routes.length} routes`
     })
   run.standardGrant = await restoreStandardGrant('fixture/standard-grant-after-routes')
@@ -4023,7 +4242,9 @@ async function settingsLabelsCheck() {
     await name.press('Enter')
     expect(
       await until(async () =>
-        (await readList(w, '/labels')).some((l) => l.id === label.id && l.name === renamed),
+        (await restRows(w, '/labels', 'labels', { search: run.tag })).some(
+          (l) => l.id === label.id && l.name === renamed,
+        ),
       ),
       'GET /labels does not name it renamed',
     )
@@ -4041,7 +4262,12 @@ async function settingsLabelsCheck() {
       .click()
     expect(await until(async () => (await row.count()) === 0), 'its row did not go')
     expect(
-      await until(async () => !(await readList(w, '/labels')).some((l) => l.id === label.id)),
+      await until(
+        async () =>
+          !(await restRows(w, '/labels', 'labels', { search: run.tag })).some(
+            (l) => l.id === label.id,
+          ),
+      ),
       'GET /labels still lists it',
     )
     return `found ${label.name} by search with ${LABELS_EXPECTED.count}, renamed it in place and deleted it in its window`
@@ -5312,7 +5538,7 @@ async function billingPauseChecks() {
   const grants = async () =>
     (await restOk(w, 'GET', `/projects/${N1.id}`)).grants.users.map((g) => g.id).sort()
   const members = async () =>
-    team ? (await restOk(w, 'GET', `/teams/${team.id}`)).members.map((m) => m.id).sort() : []
+    team ? (await restRows(w, `/teams/${team.id}/members`, 'members')).map((m) => m.id).sort() : []
   let before = null
   try {
     await check(`${name}/setup`, async () => {
@@ -5573,9 +5799,8 @@ async function setup() {
   run.creds.readToken.userId = me.user.id
   run.nora.id = me.user.id
   await must('setup/rest/agent-roles', async () => {
-    const users = await restOk(w, 'GET', '/users')
-    const s = users.find((u) => u.id === std.id)
-    const v = users.find((u) => u.id === viewer.id)
+    const s = await restOk(w, 'GET', `/users/${std.id}`)
+    const v = await restOk(w, 'GET', `/users/${viewer.id}`)
     eq(s?.kind, 'agent', 'Standard agent kind')
     eq(s?.org_role, 'user', 'Standard agent role')
     eq(v?.org_role, 'viewer', 'Viewer agent role')
@@ -5799,6 +6024,7 @@ async function main() {
   await unknownArgumentChecks()
   await listOrderChecks()
   await workloadPageChecks()
+  await peopleListChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()

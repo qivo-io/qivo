@@ -17,6 +17,7 @@ import {
   deleteOutcome,
   evaluate,
   FIXTURE_STATUS,
+  FORMERLY_BARE,
   hasTag,
   historyRows,
   isSiteOf,
@@ -26,10 +27,13 @@ import {
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_OVERDUE_DAYS,
+  PEOPLE_PAGE,
+  PEOPLE_REFUSALS,
   PICKER_EXPECTED,
   PICKER_STEP,
   pace,
   parseArgs,
+  peoplePagesMax,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -41,9 +45,11 @@ import {
   redact,
   request,
   resolveConfig,
+  searchOf,
   send,
   syncsWith,
   TAG_ANY,
+  TAG_PREFIX,
   TASK_LINK_STEP,
   TASK_LINK_UNKNOWN,
   TASK_PAGES_MAX,
@@ -56,6 +62,7 @@ import {
   WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  withQuery,
   workloadPeople,
 } from './staging-check.mjs'
 
@@ -192,6 +199,27 @@ describe('staging check REST contract', () => {
     expect(WORKLOAD_PAGE.rest).toBeGreaterThanOrEqual(2)
     // a regroup's steps run in moments; the wait outlasts a busy deployment's
     expect(REGROUP_WAIT).toBe(30_000)
+  })
+  it("expects the server's sentences for a users page's offset, limit and cursor", () => {
+    expect(PEOPLE_REFUSALS).toEqual({
+      offset: offsetRefusal('users'),
+      limit: LIMITS.listUsers.refusal,
+      cursor: CURSOR_REFUSAL,
+    })
+    // pages small enough to follow a cursor, within the server's ranges
+    for (const limit of [PEOPLE_PAGE.rest, PEOPLE_PAGE.mcp])
+      expect(limit).toBeGreaterThanOrEqual(LIMITS.listUsers.min)
+    expect(PEOPLE_PAGE.rest).toBeLessThan(10)
+    expect(PEOPLE_PAGE.mcp).toBeLessThan(PEOPLE_PAGE.rest)
+    // the run's team holds two members for the step, so one a page pages
+    expect(PEOPLE_PAGE.members).toBe(LIMITS.listTeamMembers.min)
+  })
+  it('names the tools that answer a placeholder sent alone as the server does', () => {
+    const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')
+    const set = mcp.match(/const FORMERLY_BARE: ReadonlySet<string> = new Set\(\[([^\]]*)\]\)/)
+    expect(set?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(
+      FORMERLY_BARE,
+    )
   })
 })
 
@@ -749,5 +777,27 @@ describe('task list pages', () => {
     )
     expect(WORKLOAD_PAGES_MAX).toBe(1002)
     expect(n).toBe(WORKLOAD_PAGES_MAX)
+  })
+  it('bounds a user, label, team or member list by the pages of the design size’s people', () => {
+    expect(peoplePagesMax(1)).toBe(WORKLOAD_PEOPLE + 2)
+    expect(peoplePagesMax(PEOPLE_PAGE.rest)).toBe(202)
+    expect(peoplePagesMax(200)).toBe(7)
+    expect(peoplePagesMax(50)).toBe(22)
+  })
+  it('writes a list query with the parameters that are set, URL-encoded', () => {
+    expect(withQuery('/users', {})).toBe('/users')
+    expect(withQuery('/users', { search: 'stgchk-0a1b2c Étiquette', limit: 2, cursor: null })).toBe(
+      '/users?search=stgchk-0a1b2c%20%C3%89tiquette&limit=2',
+    )
+    expect(withQuery('/labels?limit=20', { cursor: 'a+b/c' })).toBe(
+      '/labels?limit=20&cursor=a%2Bb%2Fc',
+    )
+  })
+  it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
+    expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')
+    expect(searchOf(TAG_ANY)).toBe(TAG_PREFIX)
+    // every tagged name holds the search, which the server matches as a word fragment
+    for (const name of ['stgchk-0a1b2c team', 'stgchk-ffffff Standard agent'])
+      expect(name.toLowerCase().includes(searchOf(TAG_ANY))).toBe(true)
   })
 })
