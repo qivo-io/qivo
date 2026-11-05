@@ -453,6 +453,38 @@ describe('the page before and after its answer', () => {
     ])
   })
 
+  it('keeps every write control off and the failure line while Try again waits for an answer', async () => {
+    await open()
+    server.force = { fail: ['get'] }
+    await rerun()
+    expect(pageState()).toBe('failed')
+    server.force = {}
+    server.reads.hold(true)
+    await click(button('Try again'))
+    expect(pageState()).toBe('refreshing')
+    expect(has('[data-project-settings-failed]')).toBe(true)
+    const controls = () => [
+      find<HTMLButtonElement>('[data-project-delay-toggle] button'),
+      find<HTMLButtonElement>('[data-project-lead-picker]'),
+      picker(),
+      roleOf('leo'),
+      removeOf('leo'),
+      find<HTMLButtonElement>('[data-remove-project]'),
+      find<HTMLInputElement>('[data-invite-email]'),
+    ]
+    for (const control of controls())
+      expect(control.disabled, control.outerHTML.slice(0, 80)).toBe(true)
+    expect(nameField().readOnly).toBe(true)
+    // a current answer turns them on again
+    server.reads.hold(false)
+    await rerun()
+    expect(pageState()).toBe('ok')
+    expect(has('[data-project-settings-failed]')).toBe(false)
+    for (const control of controls())
+      expect(control.disabled, control.outerHTML.slice(0, 80)).toBe(false)
+    expect(nameField().readOnly).toBe(false)
+  })
+
   it('reads nothing while the tab is hidden, and is refreshing on return with what was typed', async () => {
     await open()
     await act(async () => reviewField().focus())

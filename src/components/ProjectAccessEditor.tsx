@@ -347,10 +347,12 @@ type Kept = { kind: Kind; id: string; name: string; level: AccessLevel }
 /**
  * A project's Teams and Users access lists and the Add team or user
  * picker. `canManageUsers`, `canManageTeams` and `canChangeLead` are the
- * page's rights (projectSettings.get). `current` is false while the page's
- * read failed or its project is no longer available (unavailable or
- * archived), and every control that writes is off then. A refreshing page
- * keeps the controls of the answer it kept.
+ * page's rights (projectSettings.get). `current` is false from a failure
+ * of the page's read until a new answer comes, Try again's wait included,
+ * and while its project is no longer available (unavailable or archived),
+ * and every control that writes is off then. A page refreshing for another
+ * reason, as after the tab showed again, keeps the controls of the answer
+ * it kept.
  * `onLevel` sends one grant's level, or Lead through the Lead field's
  * write, with the level the row showed (null for a new grant), and
  * resolves whether the server accepted it; the row shows the chosen level,

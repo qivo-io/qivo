@@ -16,7 +16,8 @@ type SettingsArchived = Extract<ProjectSettingsAnswer, { state: 'archived' }>
       until one comes;
     - `ok` with a current answer;
     - `refreshing` while the read has no current answer, as after the tab
-      showed again or a reconnect, with the last `ok` answer kept;
+      showed again, a reconnect or Try again after a failure, with the
+      last `ok` answer kept;
     - `failed` when the read failed, with the kept answer if it had one;
     - `unavailable` and `archived` as the server answers them, with the
       kept answer, so the page holds still while Settings moves on.
@@ -24,6 +25,10 @@ type SettingsArchived = Extract<ProjectSettingsAnswer, { state: 'archived' }>
     store worked out. */
 export type ProjectSettingsRead = {
   state: 'loading' | 'ok' | 'refreshing' | 'failed' | 'unavailable' | 'archived'
+  /** whether the read failed since its last `ok` answer. It stays true
+      until a new `ok` answer, through Try again's `refreshing`, so the
+      page keeps its writes off until an answer is current again. */
+  afterFailure: boolean
   answer: SettingsOk | null
   /** an archived answer's names */
   archived: SettingsArchived | null
@@ -47,14 +52,18 @@ export function useProjectSettings(projectId: string | null): ProjectSettingsRea
   const key = projectId === null ? null : JSON.stringify({ id: projectId })
   const view = useLiveView<ProjectSettingsAnswer>(api.projectSettings.get, key)
   const kept = React.useRef<{ id: string; answer: SettingsOk } | null>(null)
+  // the key whose read failed since its last ok answer
+  const failedKey = React.useRef<string | null>(null)
   const value = key !== null && view.key === key ? view.value : undefined
+  const failed = key !== null && view.key === key && 'error' in view
   if (value?.state === 'ok' && projectId !== null) kept.current = { id: projectId, answer: value }
+  if (value?.state === 'ok') failedKey.current = null
+  else if (failed) failedKey.current = key
   const answer = kept.current && kept.current.id === projectId ? kept.current.answer : null
-  const retry = view.retry
-  if (value?.state === 'ok') return { state: 'ok', answer: value, archived: null, retry }
-  if (value?.state === 'unavailable') return { state: 'unavailable', answer, archived: null, retry }
-  if (value?.state === 'archived') return { state: 'archived', answer, archived: value, retry }
-  if (key !== null && view.key === key && 'error' in view)
-    return { state: 'failed', answer, archived: null, retry }
-  return { state: answer ? 'refreshing' : 'loading', answer, archived: null, retry }
+  const read = { afterFailure: key !== null && failedKey.current === key, retry: view.retry }
+  if (value?.state === 'ok') return { ...read, state: 'ok', answer: value, archived: null }
+  if (value?.state === 'unavailable') return { ...read, state: 'unavailable', answer, archived: null }
+  if (value?.state === 'archived') return { ...read, state: 'archived', answer, archived: value }
+  if (failed) return { ...read, state: 'failed', answer, archived: null }
+  return { ...read, state: answer ? 'refreshing' : 'loading', answer, archived: null }
 }

@@ -698,10 +698,10 @@ function ProjectSettingsFields({
 }) {
   const { project } = answer
   const shown = { orgId: project.org_id }
-  // a failure or a project that left: nothing writes until an answer is
-  // current again
-  const blocked =
-    read.state === 'failed' || read.state === 'unavailable' || read.state === 'archived'
+  // after a failure, Try again's wait included, or for a project that
+  // left, nothing writes until an answer is current again
+  const gone = read.state === 'unavailable' || read.state === 'archived'
+  const blocked = read.afterFailure || gone
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
   /* Removing a grant asks the server which open tasks it would take out of
      someone's sight, and when some, whether to keep them as Viewers or
@@ -730,7 +730,7 @@ function ProjectSettingsFields({
     grantRemoval(kind, project.id, id, project.org_id, isMeta)
   return (
     <>
-      {read.state === 'failed' && (
+      {read.afterFailure && !gone && (
         <div
           role="alert"
           data-project-settings-failed=""
