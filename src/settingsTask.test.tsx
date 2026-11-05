@@ -201,7 +201,7 @@ beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
-  // jsdom does not scroll: a scroll to a place, as the Board's reveal
+  // jsdom does not scroll, so a scroll to a place, as the Board's reveal
   // makes, sets the element's offset
   Element.prototype.scrollTo = function (this: Element, options?: ScrollToOptions | number) {
     if (typeof options === 'object') this.scrollTop = options.top ?? 0
