@@ -759,7 +759,7 @@ favorites release leaves, by the reader rule the favorites paragraph below
 describes, as the navigation reads do.
 
 The task window's relation picker read, `taskWindow.relationCandidates`,
-first ships in the release after v0.1.120. No app calls it yet, so the read
+first ships in the release after v0.1.123. No app calls it yet, so the read
 sets no rollback floor of its own and adds nothing to the floors above
 until the task window's Parent, Subtasks and Linked tasks pickers switch to
 it. The release that switches them makes the release that shipped the read
