@@ -2077,7 +2077,7 @@ export const UNAVAILABLE_COMPLETION: CompletionJson = {
 export const COMPLETION_RESERVE: ReadCeiling = { ranges: 1200, documents: 2400, bytes: 4 * MIB }
 
 /* One count row as the completion keeps room for it, as the Overview's
- * figures do (lib/overview.ts COUNT_ROW), since its fields are ids and
+ * figures do (lib/viewReads.ts COUNT_ROW), since its fields are ids and
  * numbers of a few hundred bytes. */
 const COUNT_ROW_BYTES = 1024
 

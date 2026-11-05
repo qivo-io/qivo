@@ -1,7 +1,10 @@
 /* The row bounds lib/limits.ts states for projects, teams and tasks
  * (PROJECT_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES, TASK_ROW_MAX_BYTES), at which
  * read budgets count a project, a team, the rows a project read brings
- * along and a task the reader may not be shown. Each case
+ * along and a task the reader may not be shown, and the label assignment
+ * and link rows the Board's search and the Roadmap's dependency read count
+ * at a fixed size (lib/viewFilters.ts LABEL_ASSIGNMENT_BYTES, lib/roadmap.ts
+ * LINK_ROW_BYTES). Each case
  * builds the largest row the writers accept through their own helpers,
  * with every field the schema has set, stores it so the schema checks it,
  * and measures it as Convex counts a document. A field added to one of
@@ -22,6 +25,7 @@ import {
   TEAM_ROW_MAX_BYTES,
 } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
+import { LINK_ROW_BYTES } from '../lib/roadmap'
 import { cleanTitle } from '../model/issues'
 import { assertNameShape } from '../model/people'
 import { cleanProjectName, projectDescription } from '../model/projects'
@@ -256,5 +260,30 @@ describe('a label assignment row', () => {
     const size = await measured('issue_labels', row)
     console.log(`a label assignment row: ${size} bytes`)
     expect(size).toBeLessThanOrEqual(LABEL_ASSIGNMENT_BYTES)
+  })
+})
+
+describe('a link row', () => {
+  const [a, b] = [uuid(), uuid()].sort()
+  const row: WithoutSystemFields<Doc<'issue_links'>> = {
+    org_id: uuid(),
+    id: uuid(),
+    source_id: a,
+    target_id: b,
+    type: 'relates',
+    pair_key: `${a}:${b}`,
+    created_at: NOW,
+    task_archived: true,
+    task_key: newWindowKey(),
+  }
+
+  it('sets every field the schema has', () => {
+    expect(Object.keys(row).sort()).toEqual(fieldsOf('issue_links'))
+  })
+
+  it("stays within the Roadmap dependency read's LINK_ROW_BYTES", async () => {
+    const size = await measured('issue_links', row)
+    console.log(`a link row: ${size} bytes`)
+    expect(size).toBeLessThanOrEqual(LINK_ROW_BYTES)
   })
 })

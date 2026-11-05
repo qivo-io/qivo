@@ -1,7 +1,8 @@
 /* The reads the app's view queries share: the Board's (lib/board.ts), the
- * Overview's (lib/overview.ts), and the Roadmap's and Team sync's to come.
- * They hold no rule of one view, only what a view reads and how it stays
- * within its budget:
+ * Overview's (lib/overview.ts), the Roadmap's (lib/roadmap.ts), and Team
+ * sync's to come. They hold no rule of one view, only what a view reads and
+ * how it stays within its budget. The filter row's read, which the Board
+ * and the Roadmap apply on top of these, is lib/viewFilters.ts filterRead.
  *
  * - viewBudget, the guard every read goes through, over the request's
  *   totals as Convex counts them, the caller's access rows included;
@@ -16,6 +17,9 @@
  *   shows of its subtasks, and firstSubtaskCheck, which tasks are groups
  *   from each one's first subtask alone;
  * - shownParents, the ancestors of a view's rows that the reader is shown;
+ * - projectCounts and mineCounts, the leaf counts of a project selection's
+ *   sub-projects or of a person's own rows (model/overviewCounts.ts), which
+ *   the Overview and the Roadmap's headings read;
  * - viewRow, a task as a view sends it.
  *
  * Every read follows the working-set rules (lib/workingSet.ts): a view
@@ -35,7 +39,7 @@
  * - how many subtasks a shown group has, hidden ones included, as the tasks
  *   part's kidsOf (lib/workspaceParts.ts) reads them;
  * - how many of a person's own tasks are in projects they cannot see
- *   (ownTasks);
+ *   (ownTasks), and how many count rows they hold there (mineCounts);
  * - how many of a selected top-level project's sub-projects the reader
  *   cannot see (projectSelection reads every one);
  * - the grant and team share rows the reader's access reads on a hidden
@@ -49,16 +53,25 @@
  *   nav_at), the sub-projects the access reads of such a top-level project
  *   on the legacy path, which every deployment left behind with
  *   internal/navBackfill;
- * - and a view's own reads that follow the organization, as the Board's
- *   search through a label's assignments (lib/board.ts boardSearch). */
+ * - and a view's own reads that follow the organization or a task's links,
+ *   as the filter row's search through a label's assignments
+ *   (lib/viewFilters.ts filterSearch) and the Roadmap's dependency read
+ *   through each link of a task (lib/roadmap.ts readDependencies). */
 
 import { getDocumentSize } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import {
+  countsOfRows,
+  countsReady,
+  familyCounts,
+  type LeafCounts,
+  ownerRows,
+} from '../model/overviewCounts'
 import { accessOf, inMetaTree, OWN_READS } from './access'
 import type { ReadCeiling } from './archivedTasks'
 import { byId } from './db'
-import { ISSUE_STATUSES, type IssueStatus } from './enums'
+import { type AccessLevel, ISSUE_STATUSES, type IssueStatus } from './enums'
 import { MIB, PROJECT_ROW_MAX_BYTES, TASK_ROW_MAX_BYTES, TEAM_ROW_MAX_BYTES } from './limits'
 import { taskOwnerId } from './review'
 import { parentLink, type Shown } from './workingSet'
@@ -394,6 +407,18 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
     live,
     /** Whether the reader can see each project (Access.visible). */
     visible,
+    /** The reader's level on each project (Access.level), null where they
+     * cannot see it, asked within the guard as `visible` asks. For a
+     * sub-project these are the same reads, so a project asked about before
+     * takes no more room. */
+    levels: (ids: readonly string[]): Promise<(AccessLevel | null)[]> =>
+      inRounds(ids, asked, PROJECT_ASK, async (id) => {
+        const answer = await access.level(id)
+        rows.add(id)
+        await chargeOnce(id)
+        await chargeOnce((await access.project(id))?.parent_id)
+        return answer
+      }),
     /** Whether each task is in the reader's working set (Access.holds). */
     async holds(tasks: readonly Doc<'issues'>[]): Promise<boolean[]> {
       const isLive = await live(tasks.map((t) => t.project_id))
@@ -1195,6 +1220,116 @@ export function groupBy<T>(rows: readonly T[], key: (row: T) => string): Map<str
   const out = new Map<string, T[]>()
   for (const row of rows) out.set(key(row), [...(out.get(key(row)) ?? []), row])
   return out
+}
+
+// --- the counts -------------------------------------------------------------------
+
+/** One count row as a read keeps room for it: a few hundred bytes, the
+ * same for every row, as its fields are ids and numbers. */
+export const COUNT_ROW: Reads = { bytes: 1024, documents: 1, ranges: 0 }
+
+/** What familyCounts reads for one sub-project: its range and its rows. */
+export const SUB_COUNTS: Reads = { bytes: 4 * COUNT_ROW.bytes, documents: 4, ranges: 1 }
+
+/** A project scope's counts by sub-project id, or null while they are not
+ * whole: the organization's readiness once, which a regroup in any family
+ * holds back, then each selected sub-project's rows (model/overviewCounts.ts
+ * familyCounts). The Overview's project scope and the Roadmap's headings
+ * read it (lib/overview.ts, lib/roadmap.ts). */
+export async function projectCounts(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  selection: Selection,
+): Promise<Map<string, LeafCounts> | null> {
+  const family = selection.project.parent_id ?? selection.project.id
+  await guard.take(RANGE, 3)
+  await guard.take(SUB_COUNTS, selection.subProjects.length)
+  return await familyCounts(ctx.db, selection.project.org_id, family, selection.subProjects)
+}
+
+/** The counts of each seat's person in the live sub-projects they can see,
+ * by sub-project id, or null while any seat's organization is not counted,
+ * a backfill counts it or a regroup runs in it: for each seat the
+ * organization's readiness (model/overviewCounts.ts countsReady, three
+ * ranges), every count row of the person (model/overviewCounts.ts
+ * ownerRows, one range), then whether each row's project is live, a
+ * sub-project and one they see. The rows of projects they cannot see are
+ * read too; they are alike in size, so only how many there are, and where
+ * their projects' ids sort among the others (by one count row's bytes, as
+ * tests/roadmapRead.test.ts found), can move an answer, at the budget's
+ * margin. With `parents`, it also notes each answered sub-project's
+ * top-level project there, for the Overview health table's rows. My view's
+ * Overview and its Roadmap's headings read it (lib/overview.ts,
+ * lib/roadmap.ts). */
+export async function mineCounts(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  seats: ViewSeats,
+  parents?: Map<string, string>,
+): Promise<Map<string, LeafCounts> | null> {
+  const out = new Map<string, LeafCounts>()
+  for (const seat of seats.values()) {
+    // every seat's organization counted, with no count or regroup under way
+    // in it, before its rows say anything: a person may hold no row yet in
+    // an organization still counting, or in a family a regroup is reading
+    await guard.take(RANGE, 3)
+    if (!(await countsReady(ctx.db, seat.me.org_id))) return null
+    const rows: Doc<'overview_counts'>[] = []
+    for await (const step of inSteps(guard, [ownerRange(ctx, seat.me.id)], COUNT_ROW))
+      rows.push(...step)
+    const byProject = groupBy(rows, (r) => r.project_id)
+    const ids = [...byProject.keys()]
+    const live = await seat.live(ids)
+    const liveIds = ids.filter((_, i) => live[i])
+    const shown = await seat.visible(liveIds)
+    const subs: Doc<'projects'>[] = []
+    for (const [i, id] of liveIds.entries()) {
+      const p = await seat.project(id)
+      if (shown[i] && p !== null && p.parent_id !== undefined) subs.push(p)
+    }
+    for (const p of subs) {
+      const counts = countsOfRows(byProject.get(p.id) ?? [], p)
+      if (counts === null) return null
+      out.set(p.id, counts)
+      if (p.parent_id !== undefined) parents?.set(p.id, p.parent_id)
+    }
+  }
+  return out
+}
+
+/** The count rows of person `ownerId` (counts by_owner_project), ordered by
+ * project, read in steps: a step that ends on a row goes on with the rest
+ * of that row's project from its creation time, then the later projects. */
+export function ownerRange(
+  ctx: QueryCtx,
+  ownerId: string,
+  from?: { project: string; part: 'same' | 'later' },
+): StepRange<Doc<'overview_counts'>> {
+  const index = (at?: number) =>
+    from === undefined
+      ? ownerRows(ctx.db, ownerId)
+      : ctx.db.query('overview_counts').withIndex('by_owner_project', (q) => {
+          const own = q.eq('owner_id', ownerId)
+          if (from.part === 'later') return own.gt('project_id', from.project)
+          const same = own.eq('project_id', from.project)
+          return at === undefined ? same : same.gte('_creationTime', at)
+        })
+  return {
+    open: (at) => index(at),
+    after: (last, rows) => [
+      {
+        ...ownerRange(ctx, ownerId, { project: last.project_id, part: 'same' }),
+        after: undefined,
+        start: {
+          from: last._creationTime,
+          seen: rows.filter(
+            (r) => r.project_id === last.project_id && r._creationTime === last._creationTime,
+          ),
+        },
+      },
+      ownerRange(ctx, ownerId, { project: last.project_id, part: 'later' }),
+    ],
+  }
 }
 
 // --- rows -------------------------------------------------------------------------

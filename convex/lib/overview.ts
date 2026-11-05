@@ -82,15 +82,7 @@ import type { TransactionMetrics } from 'convex/server'
 import { compareValues, type Value } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import {
-  addCounts,
-  countsOfRows,
-  countsReady,
-  familyCounts,
-  type LeafCounts,
-  noCounts,
-  ownerRows,
-} from '../model/overviewCounts'
+import { addCounts, type LeafCounts, noCounts } from '../model/overviewCounts'
 import {
   ACCESS_UNCHECKED,
   type Access,
@@ -122,14 +114,15 @@ import {
   inSteps,
   isGroupKnown,
   isOverBudget,
+  mineCounts,
   noSubtasks,
   ownerSettled,
   ownHeldTasks,
   ownTasks,
   PROJECT_ASK,
   PROJECT_READ,
+  projectCounts,
   projectSelection,
-  RANGE,
   type Reads,
   ROW,
   type Selection,
@@ -320,12 +313,13 @@ const DAY_MS = 86_400_000
 const WEEK_MS = 7 * DAY_MS
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
 
-/* The days since 1970-01-01 of YYYY-MM-DD `iso`, or NaN. */
-const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00.000Z`) / DAY_MS
+/** The days since 1970-01-01 of YYYY-MM-DD `iso`, or NaN. */
+export const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00.000Z`) / DAY_MS
 
 /** The day number of `value`, a real YYYY-MM-DD day, or a badRequest naming
- * argument `name`. */
-function dayArg(value: string, name: string): number {
+ * argument `name`. The Overview's days and the Roadmap's window
+ * (lib/roadmap.ts) take their days through it. */
+export function dayArg(value: string, name: string): number {
   const n = dayNumber(value)
   if (
     !ISO_DAY.test(value) ||
@@ -491,114 +485,14 @@ async function bounded<T extends object>(figure: () => Promise<Figure<T>>): Prom
 
 // --- the counts ------------------------------------------------------------------------
 
-/** One count row as a read keeps room for it: a few hundred bytes, the
- * same for every row, as its fields are ids and numbers. */
-const COUNT_ROW: Reads = { bytes: 1024, documents: 1, ranges: 0 }
-
-/* What familyCounts reads for one sub-project: its range and its rows. */
-const SUB_COUNTS: Reads = { bytes: 4 * COUNT_ROW.bytes, documents: 4, ranges: 1 }
+/* The counts readers, projectCounts for a project scope and mineCounts for
+ * My view, are lib/viewReads.ts's, which the Roadmap's headings share. */
 
 /* The summed counts of `parts`. */
 const sumCounts = (parts: Iterable<LeafCounts>): LeafCounts => {
   let sum = noCounts()
   for (const c of parts) sum = addCounts(sum, c)
   return sum
-}
-
-/* A project scope's counts: the organization's readiness once, which a
- * regroup in any family holds back, then each selected sub-project's rows
- * (model/overviewCounts.ts familyCounts). */
-async function projectCounts(
-  ctx: QueryCtx,
-  guard: ViewBudget,
-  selection: Selection,
-): Promise<Map<string, LeafCounts> | null> {
-  const family = selection.project.parent_id ?? selection.project.id
-  await guard.take(RANGE, 3)
-  await guard.take(SUB_COUNTS, selection.subProjects.length)
-  return await familyCounts(ctx.db, selection.project.org_id, family, selection.subProjects)
-}
-
-/* The counts of each seat's person in the live sub-projects they can see,
- * by sub-project id, or null while any seat's organization is not counted,
- * a backfill counts it or a regroup runs in it: for each seat the
- * organization's readiness (model/overviewCounts.ts countsReady, three
- * ranges), every count row of the person (model/overviewCounts.ts
- * ownerRows, one range), then whether each row's project is live, a
- * sub-project and one they see.
- * The rows of projects they cannot see are read too; they are alike in
- * size, so only how many there are can move an answer, at the budget's
- * margin. With `parents`, it also notes each answered sub-project's
- * top-level project there, for the health table's rows. */
-async function mineCounts(
-  ctx: QueryCtx,
-  guard: ViewBudget,
-  seats: ViewSeats,
-  parents?: Map<string, string>,
-): Promise<Map<string, LeafCounts> | null> {
-  const out = new Map<string, LeafCounts>()
-  for (const seat of seats.values()) {
-    // every seat's organization counted, with no count or regroup under way
-    // in it, before its rows say anything: a person may hold no row yet in
-    // an organization still counting, or in a family a regroup is reading
-    await guard.take(RANGE, 3)
-    if (!(await countsReady(ctx.db, seat.me.org_id))) return null
-    const rows: Doc<'overview_counts'>[] = []
-    for await (const step of inSteps(guard, [ownerRange(ctx, seat.me.id)], COUNT_ROW))
-      rows.push(...step)
-    const byProject = groupBy(rows, (r) => r.project_id)
-    const ids = [...byProject.keys()]
-    const live = await seat.live(ids)
-    const liveIds = ids.filter((_, i) => live[i])
-    const shown = await seat.visible(liveIds)
-    const subs: Doc<'projects'>[] = []
-    for (const [i, id] of liveIds.entries()) {
-      const p = await seat.project(id)
-      if (shown[i] && p !== null && p.parent_id !== undefined) subs.push(p)
-    }
-    for (const p of subs) {
-      const counts = countsOfRows(byProject.get(p.id) ?? [], p)
-      if (counts === null) return null
-      out.set(p.id, counts)
-      if (p.parent_id !== undefined) parents?.set(p.id, p.parent_id)
-    }
-  }
-  return out
-}
-
-/* The count rows of person `ownerId` (counts by_owner_project), ordered by
- * project, read in steps: a step that ends on a row goes on with the rest
- * of that row's project from its creation time, then the later projects. */
-function ownerRange(
-  ctx: QueryCtx,
-  ownerId: string,
-  from?: { project: string; part: 'same' | 'later' },
-): StepRange<Doc<'overview_counts'>> {
-  const index = (at?: number) =>
-    from === undefined
-      ? ownerRows(ctx.db, ownerId)
-      : ctx.db.query('overview_counts').withIndex('by_owner_project', (q) => {
-          const own = q.eq('owner_id', ownerId)
-          if (from.part === 'later') return own.gt('project_id', from.project)
-          const same = own.eq('project_id', from.project)
-          return at === undefined ? same : same.gte('_creationTime', at)
-        })
-  return {
-    open: (at) => index(at),
-    after: (last, rows) => [
-      {
-        ...ownerRange(ctx, ownerId, { project: last.project_id, part: 'same' }),
-        after: undefined,
-        start: {
-          from: last._creationTime,
-          seen: rows.filter(
-            (r) => r.project_id === last.project_id && r._creationTime === last._creationTime,
-          ),
-        },
-      },
-      ownerRange(ctx, ownerId, { project: last.project_id, part: 'later' }),
-    ],
-  }
 }
 
 // --- candidate ranges ----------------------------------------------------------------

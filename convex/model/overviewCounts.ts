@@ -835,8 +835,10 @@ export async function subProjectCounts(
  * three ranges, then reads each sub-project's OVERVIEW_SHARDS rows, a range
  * and up to OVERVIEW_SHARDS documents each, all at once, so a caller that
  * bounds its reads takes room for them first. The Overview's project scope
- * (lib/overview.ts) and REST's and MCP's project completion (lib/core.ts
- * projectCompletion) read it, Completion being leaves.done over the sum of
+ * and the Roadmap's headings (lib/viewReads.ts projectCounts, for
+ * lib/overview.ts and lib/roadmap.ts) and REST's and MCP's project
+ * completion (lib/core.ts projectCompletion) read it, Completion being
+ * leaves.done over the sum of
  * the leaves of the family's readable live sub-projects: 3 + n ranges and
  * at most 4n documents beside the readiness rows for n of them, whatever
  * their tasks.
@@ -864,8 +866,9 @@ export async function familyCounts(
 /** Every count row of person `ownerId`, by sub-project, up to
  * OVERVIEW_SHARDS rows each, in one range. A caller keeps the rows of the
  * live sub-projects the person may see and whose counts are whole
- * (countsReady), each of its current generation (countsOfRows), as My view
- * does: an archived sub-project's rows wait for a restore's regroup. */
+ * (countsReady), each of its current generation (countsOfRows), as My
+ * view's Overview and Roadmap do (lib/viewReads.ts mineCounts): an archived
+ * sub-project's rows wait for a restore's regroup. */
 export const ownerRows = (db: Reader, ownerId: string) =>
   db.query('overview_counts').withIndex('by_owner_project', (q) => q.eq('owner_id', ownerId))
 

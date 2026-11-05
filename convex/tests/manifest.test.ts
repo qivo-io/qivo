@@ -698,6 +698,8 @@ taskWindow:attachments query public {"type":"object","value":{"issue_id":{"field
 taskWindow:links query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:task query public {"type":"object","value":{"ref":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tasks:board query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"stale_before":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"focus":{"fieldType":{"type":"boolean"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
+tasks:roadmap query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"window":{"fieldType":{"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"planned_task":{"fieldType":{"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
+tasks:roadmapDependencies query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1173,11 +1175,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // links and its attachment list under ordinary access, and a task they
   // may not open answers unavailable.
   taskWindow: { task: 'orgQuery', links: 'orgQuery', attachments: 'orgQuery' },
-  // The Board's selection with its filters applied: any signed-in login
-  // reads a project selection with its seat in that organization, or My
-  // view across its seats, under ordinary access, and a selection it does
-  // not hold answers unavailable.
-  tasks: { board: 'authedQuery' },
+  // The Board's and the Roadmap's selection with its filters applied, and
+  // the Roadmap's dependency inputs. Any signed-in login reads a project
+  // selection with its seat in that organization, or My view across its
+  // seats, under ordinary access, and a selection it does not hold answers
+  // unavailable.
+  tasks: { board: 'authedQuery', roadmap: 'authedQuery', roadmapDependencies: 'authedQuery' },
   // Team sync: staff stamp the person a change was made on (often not
   // themselves); any member reads the latest comment per visible open task.
   teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
@@ -1217,7 +1220,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 218
+const PUBLIC_COUNT = 220
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
