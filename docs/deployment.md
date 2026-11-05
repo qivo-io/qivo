@@ -889,7 +889,7 @@ REST `GET /v1/users`, `/v1/labels` and `/v1/teams` and MCP `list_users`,
 `list_labels` and `list_teams` page with a cursor and take a name search,
 every team answer is `{id, name, member_count}` without its members, and a
 team's members have their own list, REST `GET /v1/teams/{id}/members` and
-MCP `list_team_members`, from the release after v0.1.130, which makes the
+MCP `list_team_members`, from the release after v0.1.131, which makes the
 lists answer `{next_cursor, …}`. From that release `GET` and `PATCH
 /v1/users/{id}` read their one user by id. Returning the backend to a commit
 before it makes the three lists answer whole arrays again and every team
