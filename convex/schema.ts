@@ -150,10 +150,19 @@ const projectsTable = defineTable({
   .index('by_org', ['org_id'])
   // A parent's sub-projects, or with parent_id absent the organization's
   // top-level projects, of one archive state in name order, the id breaking
-  // ties: the admin Settings list, expanded sub-project lists and the chips
-  // of an archived parent.
+  // ties: an organization admin's Settings list of projects, expanded
+  // sub-project lists (projectNav.children and Settings'), the archived
+  // sub-projects beneath an archived parent and the archived sub-projects of
+  // a live one in Archived projects (model/projectSettingsLists.ts).
   .index('by_org_parent_state_name', ['org_id', 'parent_id', 'archive_state', 'name_key', 'id'])
-  // The organization's Archived projects entries ('listed') by archive time.
+  // Every project and sub-project of the organization of one archive state
+  // in name order, the id breaking ties: an organization admin's Settings
+  // search across its live projects and sub-projects in one range
+  // (model/projectSettingsLists.ts).
+  .index('by_org_state_name', ['org_id', 'archive_state', 'name_key', 'id'])
+  // The organization's Archived projects ('listed', and beneath an archived
+  // parent 'under' for a search) by archive time, newest first for an
+  // organization admin's Archived projects (model/projectSettingsLists.ts).
   .index('by_org_state_archived', ['org_id', 'archive_state', 'archived_at'])
   // the app's project windows: a range of window keys (lib/workspaceParts.ts)
   .index('by_org_window', ['org_id', 'window_key'])
@@ -170,11 +179,12 @@ const projectsTable = defineTable({
   // The nightly archive pages the live projects (archived_at absent).
   .index('by_archived_org', ['archived_at', 'org_id'])
   // Name search of main Search (search.ts, its seats searched whole),
-  // Settings and Archived projects, within one organization and archive
-  // state. The directory's name search reads the person's own reach and
-  // favorite rows, and the live sub-projects of the top-level projects they
-  // hold a source on, in name order instead (model/projectNavReads.ts
-  // navSearchOf).
+  // within one organization and archive state. The directory's name search
+  // reads the person's own reach and favorite rows, and the live
+  // sub-projects of the top-level projects they hold a source on, in name
+  // order instead (model/projectNavReads.ts navSearchOf), and Settings'
+  // project lists and Archived projects read the indexes above or the same
+  // rows as the directory (model/projectSettingsLists.ts).
   .searchIndex('search_name', { searchField: 'name', filterFields: ['org_id', 'archive_state'] })
 
 /* `name_key` on a membership, a grant or a team share is a server-owned copy
