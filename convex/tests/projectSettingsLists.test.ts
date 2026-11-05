@@ -412,6 +412,15 @@ describe('management sight', () => {
     })
     const [retired] = await plantSubs(t, alpha, ['Retired work'], { archived_at: NOW })
     const [part] = await plantSubs(t, old, ['Old part'])
+    // the same three shapes archived, which every Archived projects list
+    // leaves out too
+    await plantMetas(t, f.org.id, ['Loose old'], { type: 'project', archived_at: NOW })
+    await plantSubs(t, f.sub, ['Deep old'], { archived_at: NOW })
+    await plantMetas(t, f.org.id, ['Orphan old'], {
+      type: 'project',
+      parent_id: uuid(),
+      archived_at: NOW,
+    })
     await ready(t, f)
     await archive(t, f.admin, old.id)
     const admin = await seatNow(t, f.admin)
@@ -443,6 +452,8 @@ describe('management sight', () => {
       ['Retired work', 'Alpha', null],
     ])
     expect(archived.every((row) => row.can_restore && row.can_delete)).toBe(true)
+    const oldOnes = await walked((after) => lists.archived(t, admin, { search: 'old', after }))
+    expect(namesOf(oldOnes.rows).sort()).toEqual(['Old part', 'Old works'])
     expect(batchOf(await lists.archived(t, admin, { search: 'part' })).rows).toEqual([
       expect.objectContaining({
         id: part.id,
@@ -731,6 +742,17 @@ describe('fail closed', () => {
             }),
           )
         }
+      // beneath the parent she sees only through Old mine, first in name
+      // order, so a read of the organization's range beneath that parent
+      // (has_sub_projects) reads another document here
+      if (hidden)
+        await insert(
+          project('hu-first', 'Aa hidden', {
+            type: 'project',
+            parent_id: 'twin-oldnav',
+            archived_at: '2026-02-02T00:00:00.000Z',
+          }),
+        )
       return (await ctx.db.get(_id)) as Doc<'profiles'>
     })
     await keyOrg(t, org)
@@ -742,14 +764,14 @@ describe('fail closed', () => {
     /* Every batch of every list for Pia, each with what it read. */
     const run = async (hidden: boolean) => {
       const { t, pia } = await twin(hidden)
-      const calls: { out: SettingsListAnswer<unknown>; ranges: number; documents: number }[] = []
+      const calls: ({ out: SettingsListAnswer<unknown> } & Read)[] = []
       const each = async <R>(
         read: (ctx: QueryCtx, after?: string) => Promise<SettingsListAnswer<R>>,
       ) => {
         let after: string | undefined
         for (let round = 0; round < 20; round++) {
           const { out, read: r } = await measured(t, (ctx) => read(ctx, after))
-          calls.push({ out, ranges: r.ranges, documents: r.documents })
+          calls.push({ out, ...r })
           if (out.state !== 'ready' || out.next === null) return
           after = out.next
         }
