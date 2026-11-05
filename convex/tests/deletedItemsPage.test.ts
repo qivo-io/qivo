@@ -1085,12 +1085,27 @@ describe('stops', () => {
     const f = await withOrg(t)
     const org_id = f.org.id
     const inHidden = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    // outside the scope below, under a top-level project nobody leads
+    const away = await tree(t, f, 'Elsewhere', undefined, [
+      { name: 'Over there' },
+      { name: 'Gone' },
+    ])
     const a = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Spring' })
     const b = await plantIssue(t, { org_id, project_id: inHidden.id, title: 'Spring' })
+    // in the scope, and hidden from the guest, who neither leads nor deleted it
+    const c = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Spring coil' })
+    const d = await plantIssue(t, { org_id, project_id: away.subs[0].id, title: 'Spring' })
     await deleteTask(t, f.guest, a.id)
     later()
     await deleteTask(t, f.user, b.id)
-    const items = [(await itemFor(t, b.id)).id, (await itemFor(t, a.id)).id]
+    later()
+    await deleteTask(t, f.user, c.id)
+    later()
+    await deleteTask(t, f.admin, d.id)
+    later()
+    await deleteProject(t, f.admin, away.subs[1].id)
+    const id = async (target: string) => (await itemFor(t, target)).id
+    const items = [await id(c.id), await id(b.id), await id(a.id)]
     const scope = { org_id, project_ids: [f.meta.id, f.hidden.id] }
     // the user's own deletes and the two top-level projects they lead
     Object.assign(DELETED_PAGE, { sources: 2 })
@@ -1117,6 +1132,8 @@ describe('stops', () => {
       too_wide: true,
     })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
+    // the organization's ranges of each kind, which hold the task item and
+    // the deleted sub-project of Elsewhere, both left out
     Object.assign(DELETED_PAGE, { sources: 1, adminSources: 1 })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
     // a search past the lowered searches reads the whole organization
@@ -1125,6 +1142,14 @@ describe('stops', () => {
     expect(found.entries.map((e) => e.item_id)).toEqual(items)
     expect(found.missing).toBe('matches')
     expect(found.too_wide).toBeUndefined()
+    // and judges each candidate: the guest's own match only, without the
+    // one in Firmware hidden from them
+    Object.assign(DELETED_PAGE, { searches: 0 })
+    const guests = await page(t, f.guest, {
+      scope: { org_id, project_ids: [f.meta.id] },
+      search: 'spring',
+    })
+    expect(guests.entries.map((e) => e.item_id)).toEqual([await id(a.id)])
   })
 
   it('counts each sub-project a member leads without its top-level project toward the lowered sources', async () => {
