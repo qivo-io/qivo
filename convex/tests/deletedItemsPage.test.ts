@@ -29,7 +29,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { installTrashTimers, itemFor, START } from './trash.setup'
+import { installTrashTimers, itemFor, runSteps, START } from './trash.setup'
 
 installTrashTimers()
 const DEFAULT_PAGE = {
@@ -1113,6 +1113,35 @@ describe('the assignee filter', () => {
     // no project entry while the filter is set, and someone else's tasks only for them
     expect(await keysOf(t, f.admin, { ...args, kind: 'project' })).toEqual([])
     expect(await keysOf(t, f.admin, { ...args, assignee: a.rex.id })).toHaveLength(2)
+  })
+
+  it("pages an admin's assignee filter over a project item's tasks, which share its deleted_at, reading only the rows after each cursor", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const sam = await person(t, org_id, 'Sam')
+    const leaving = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    const tasks: Doc<'issues'>[] = []
+    for (let i = 0; i < 12; i++)
+      tasks.push(await plantIssue(t, { org_id, project_id: leaving.id, assignee_id: sam.id }))
+    await deleteProject(t, f.user, leaving.id)
+    await runSteps(t)
+    const item = (await itemFor(t, leaving.id)).id
+    // a page of 4 may read 5 rows of the index: its 4 and the row of its
+    // cursor, which it passes over; every row before the cursor would pass
+    // that from the second page on
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 5, ranges: 1e6 } })
+    const walked = await walk(t, f.admin, {
+      scope: { org_id, all: true },
+      assignee: sam.id,
+      limit: 4,
+    })
+    expect(walked.pages.map((p) => p.entries.length)).toEqual([4, 4, 4, 0])
+    expect(walked.pages.map((p) => p.missing ?? null)).toEqual([null, null, null, null])
+    expect(walked.ids).toEqual(tasks.map(() => item))
+    expect(walked.entries.map((e) => e.task?.key).sort()).toEqual(
+      tasks.map((task) => `QN-${task.num}`).sort(),
+    )
   })
 
   it("shows a task item once on the admin's index however its assigned tasks fall across pages", async () => {

@@ -64,6 +64,7 @@
  * main Search). Rows stored before the page's release hold none of its
  * fields; `legacy` says so (olderRows). */
 
+import type { IndexRange } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { digestText, openCursorText, sealCursorText } from '../lib/archiveCursorSeal'
@@ -493,29 +494,70 @@ async function seatOf(run: Run, me: Profile): Promise<Seat> {
 
 /* ----------------------------------------------------------- the ranges */
 
-/* A range of documents in an index's order, deleted_at then _creationTime
- * and _id, all descending: from the start (`at` null), or from deleted_at
- * `at` down, one index range either way. */
-type Opener<D> = (ctx: QueryCtx, at: string | null) => AsyncIterable<D>
+/* Where a range of an index starts, newest first, on the deleted_at that
+ * follows its equality prefix: at the range's start (null), from deleted_at
+ * `at` down (`lte`), below it (`lt`), or within `at` from _creationTime
+ * `ct` down (`eq`), the field every index orders by after its own. */
+type Bound = null | { op: 'lte' | 'lt'; at: string } | { op: 'eq'; at: string; ct: number }
 
-/** The documents of `open` after `from`, in index order, read through
- * `ctx`, whose meter counts them. It reads one range from `from`'s
- * deleted_at down and skips the documents of that deleted_at that sort at
- * or before `from`, so a source costs one range on every page, as on the
- * first. */
+/* A range of documents in an index's order, deleted_at then _creationTime
+ * and _id, all descending, from `bound` down, one index range. */
+type Opener<D> = (ctx: QueryCtx, bound: Bound) => AsyncIterable<D>
+
+/** An index range whose next field is deleted_at, as its equality prefix
+ * leaves it. */
+type AtRange = IndexRange & {
+  lte(field: 'deleted_at', at: string): IndexRange
+  lt(field: 'deleted_at', at: string): IndexRange
+  eq(field: 'deleted_at', at: string): { lte(field: '_creationTime', ct: number): IndexRange }
+}
+
+/** The range `r` narrowed to `bound`. */
+function bounded(r: AtRange, bound: Bound): IndexRange {
+  if (bound === null) return r
+  if (bound.op === 'eq') return r.eq('deleted_at', bound.at).lte('_creationTime', bound.ct)
+  return bound.op === 'lt' ? r.lt('deleted_at', bound.at) : r.lte('deleted_at', bound.at)
+}
+
+/**
+ * The documents of `open` after `from`, in index order, read through
+ * `ctx`, whose meter counts each range it opens.
+ *
+ * With `seek` it starts at `from` itself: the documents of `from`'s
+ * deleted_at from its _creationTime down, then, once those end, a second
+ * range below that deleted_at. A later page then reads none of the rows
+ * before its cursor however many share one deleted_at, as every task of a
+ * project item does in deleted_tasks (assigneeEntries).
+ *
+ * Without `seek` it reads one range from `from`'s deleted_at down and
+ * passes over the documents of that deleted_at that sort at or before
+ * `from`, so each source of an item part costs one range on a later page,
+ * as on the first, which DELETED_PAGE.find is sized for. An item's
+ * deleted_at is when its own delete began, one item to a transaction
+ * (model/deletedItems.ts insertItem), so items share one only as deletes
+ * begun in the same millisecond do, and those are all it passes over.
+ *
+ * Either way it passes over the documents that share `from`'s
+ * _creationTime and sort at or before it, which Convex can give two
+ * documents.
+ */
 async function* rangeAfter<D extends { deleted_at?: string; _creationTime: number; _id: string }>(
   ctx: QueryCtx,
   open: Opener<D>,
   from: At | null,
+  seek = false,
 ): AsyncGenerator<D> {
-  for await (const doc of open(ctx, from?.at ?? null))
-    if (
-      from === null ||
-      doc.deleted_at !== from.at ||
-      doc._creationTime < from.ct ||
-      (doc._creationTime === from.ct && doc._id < from.id)
-    )
-      yield doc
+  if (from === null) {
+    yield* open(ctx, null)
+    return
+  }
+  const after = (doc: D) =>
+    doc.deleted_at !== from.at ||
+    doc._creationTime < from.ct ||
+    (doc._creationTime === from.ct && doc._id < from.id)
+  const first: Bound = seek ? { op: 'eq', at: from.at, ct: from.ct } : { op: 'lte', at: from.at }
+  for await (const doc of open(ctx, first)) if (after(doc)) yield doc
+  if (seek) yield* open(ctx, { op: 'lt', at: from.at })
 }
 
 const items = (ctx: QueryCtx) => ctx.db.query('deleted_items')
@@ -523,30 +565,25 @@ const items = (ctx: QueryCtx) => ctx.db.query('deleted_items')
 /** An organization's items of `kind`. */
 const kindRange =
   (org: string, kind: DeletedItemKind): Opener<Item> =>
-  (ctx, at) =>
+  (ctx, bound) =>
     items(ctx)
-      .withIndex('by_org_kind_deleted', (q) => {
-        const r = q.eq('org_id', org).eq('kind', kind)
-        return at === null ? r : r.lte('deleted_at', at)
-      })
+      .withIndex('by_org_kind_deleted', (q) => bounded(q.eq('org_id', org).eq('kind', kind), bound))
       .order('desc')
 
 /** One person's deletes of `kind`, or of both kinds without one. */
 const deleterRange =
   (org: string, by: string, kind?: DeletedItemKind): Opener<Item> =>
-  (ctx, at) =>
+  (ctx, bound) =>
     kind === undefined
       ? items(ctx)
-          .withIndex('by_org_deleter', (q) => {
-            const r = q.eq('org_id', org).eq('deleted_by', by)
-            return at === null ? r : r.lte('deleted_at', at)
-          })
+          .withIndex('by_org_deleter', (q) =>
+            bounded(q.eq('org_id', org).eq('deleted_by', by), bound),
+          )
           .order('desc')
       : items(ctx)
-          .withIndex('by_org_deleter_kind_deleted', (q) => {
-            const r = q.eq('org_id', org).eq('deleted_by', by).eq('kind', kind)
-            return at === null ? r : r.lte('deleted_at', at)
-          })
+          .withIndex('by_org_deleter_kind_deleted', (q) =>
+            bounded(q.eq('org_id', org).eq('deleted_by', by).eq('kind', kind), bound),
+          )
           .order('desc')
 
 /** The items of `kind` under top-level project `parent`, or of both kinds
@@ -554,43 +591,41 @@ const deleterRange =
  * sub-projects. */
 const parentRange =
   (org: string, parent: string, kind?: DeletedItemKind): Opener<Item> =>
-  (ctx, at) =>
+  (ctx, bound) =>
     kind === undefined
       ? items(ctx)
-          .withIndex('by_org_parent', (q) => {
-            const r = q.eq('org_id', org).eq('parent_project_id', parent)
-            return at === null ? r : r.lte('deleted_at', at)
-          })
+          .withIndex('by_org_parent', (q) =>
+            bounded(q.eq('org_id', org).eq('parent_project_id', parent), bound),
+          )
           .order('desc')
       : items(ctx)
-          .withIndex('by_org_parent_kind_deleted', (q) => {
-            const r = q.eq('org_id', org).eq('parent_project_id', parent).eq('kind', kind)
-            return at === null ? r : r.lte('deleted_at', at)
-          })
+          .withIndex('by_org_parent_kind_deleted', (q) =>
+            bounded(q.eq('org_id', org).eq('parent_project_id', parent).eq('kind', kind), bound),
+          )
           .order('desc')
 
 /** The items rooted in `project`, of either kind: the planner keeps task
  * items only, since a project item rooted there can be restoring. */
 const projectRange =
   (org: string, project: string): Opener<Item> =>
-  (ctx, at) =>
+  (ctx, bound) =>
     items(ctx)
-      .withIndex('by_org_project', (q) => {
-        const r = q.eq('org_id', org).eq('project_id', project)
-        return at === null ? r : r.lte('deleted_at', at)
-      })
+      .withIndex('by_org_project', (q) =>
+        bounded(q.eq('org_id', org).eq('project_id', project), bound),
+      )
       .order('desc')
 
-/** The tasks of one assignee in an organization, by delete, newest first. */
+/** The tasks of one assignee in an organization, by delete, newest first.
+ * A project item's tasks all share its deleted_at, so the admin's assignee
+ * path reads it with `seek` (rangeAfter). */
 const assigneeRange =
   (org: string, person: string): Opener<Task> =>
-  (ctx, at) =>
+  (ctx, bound) =>
     ctx.db
       .query('deleted_tasks')
-      .withIndex('by_org_assignee', (q) => {
-        const r = q.eq('org_id', org).eq('assignee_id', person)
-        return at === null ? r : r.lte('deleted_at', at)
-      })
+      .withIndex('by_org_assignee', (q) =>
+        bounded(q.eq('org_id', org).eq('assignee_id', person), bound),
+      )
       .order('desc')
 
 /* ------------------------------------------------------------ the plans */
@@ -983,11 +1018,13 @@ const scanEntry =
 /**
  * The assignee filter for an organization admin's seat without a search:
  * the person's tasks in the organization (deleted_tasks by_org_assignee),
- * newest delete first, in that index's order, after `from`. A task item is
- * one entry, at the first of its assigned tasks in that order that sits in
- * a project the admin's view holds, so it shows once however its rows fall
- * across pages; a project item is an entry for each such task. A budget
- * stop ends the page at the last row it looked at.
+ * newest delete first, in that index's order, after `from`. It seeks to
+ * `from` itself (rangeAfter), as every task of a project item shares one
+ * deleted_at, so a later page reads none of the rows before it. A task item
+ * is one entry, at the first of its assigned tasks in that order that sits
+ * in a project the admin's view holds, so it shows once however its rows
+ * fall across pages; a project item is an entry for each such task. A
+ * budget stop ends the page at the last row it looked at.
  */
 async function assigneeEntries(run: Run, seat: Seat, scope: Scoped, from: At | null) {
   const person = run.a.assignee
@@ -1026,7 +1063,7 @@ async function assigneeEntries(run: Run, seat: Seat, scope: Scoped, from: At | n
     }
     return known
   }
-  const rows = rangeAfter(finder, assigneeRange(org, person), from)
+  const rows = rangeAfter(finder, assigneeRange(org, person), from, true)
   let looked: At | null = null
   try {
     for (;;) {
