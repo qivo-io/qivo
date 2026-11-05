@@ -1202,25 +1202,40 @@ describe('reads at the design size', () => {
     }
   }
 
-  /** Pia with grants on `live` top-level projects, three sub-projects under
-   * each of the first ten and none under the rest, and `archived` archived
-   * top-level projects she holds grants on too. */
+  /** Pia with grants on `live` live top-level projects, the organization's
+   * every one: withOrg's two and `live` - 2 planted, three sub-projects
+   * under each of the first ten planted and none under the rest, and on
+   * `archived` archived top-level projects too. */
   async function topLevel(live: number, archived = 0) {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
-    const tops = await plantMetas(t, f.org.id, names('Live project ', live))
+    const planted = await plantMetas(t, f.org.id, names('Live project ', live - 2))
     const old = await plantMetas(t, f.org.id, names('Archived project ', archived), {
       archived_at: NOW,
     })
-    for (const p of tops.slice(0, 10)) await plantSubs(t, p, names(`${p.name} sub `, 3))
+    for (const p of planted.slice(0, 10)) await plantSubs(t, p, names(`${p.name} sub `, 3))
+    const tops = [f.meta, f.hidden, ...planted]
     await plantGrants(t, pia, [...tops, ...old])
     return { t, f, pia, tops }
   }
 
+  /** How many live top-level projects organization `orgId` holds. */
+  const liveTops = (t: T, orgId: string) =>
+    t.run(
+      async (ctx) =>
+        (
+          await ctx.db
+            .query('projects')
+            .withIndex('by_org_parent', (q) => q.eq('org_id', orgId).eq('parent_id', undefined))
+            .collect()
+        ).filter((p) => p.archived_at === undefined).length,
+    )
+
   it('pages 200 top-level projects the person holds grants on, every batch and one kept live to 100 rows', async () => {
     const { t, f, pia } = await topLevel(200)
     await ready(t, f)
+    expect(await liveTops(t, f.org.id)).toBe(200)
     const seats = mapOf([pia])
     const walked = await measuredWalk(t, (ctx, after) => navPageOf(ctx, seats, { after }))
     console.log('page, 200 projects by grant, per batch', walked.calls)
@@ -1236,6 +1251,7 @@ describe('reads at the design size', () => {
   it('pages the same 200 as favorites', async () => {
     const { t, f, pia, tops } = await topLevel(200)
     await ready(t, f)
+    expect(await liveTops(t, f.org.id)).toBe(200)
     for (const p of tops) await plantStar(t, pia, p)
     const seats = mapOf([pia])
     const walked = await measuredWalk(t, (ctx, after) => navPageOf(ctx, seats, { after }))
@@ -1252,10 +1268,11 @@ describe('reads at the design size', () => {
      * would read at once (the sum rule); these reads ask no question that
      * reads them. */
     const first = async (archived: number) => {
-      const { t, f, pia } = await topLevel(197, archived)
+      const { t, f, pia } = await topLevel(199, archived)
       const [nav] = await plantMetas(t, f.org.id, ['Aaa shown for navigation'])
-      await plantGrants(t, pia, [f.meta, f.hidden, ...(await plantSubs(t, nav, ['Aaa nav sub']))])
+      await plantGrants(t, pia, await plantSubs(t, nav, ['Aaa nav sub']))
       await ready(t, f)
+      expect(await liveTops(t, f.org.id)).toBe(200)
       return await measured(t, (ctx) => navPageOf(ctx, mapOf([pia]), {}))
     }
     const without = await first(0)
