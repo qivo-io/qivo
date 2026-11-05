@@ -1218,8 +1218,12 @@ describe('reads at the design size, under the stand-in', () => {
     const searched = await readPage(t, f.admin, { scope, search: 'calibrate' })
     record('the same, searching a word every task holds', searched.figures)
     // the 52 tasks of the two shared sub-projects count, wherever their
-    // results fall among the ones the search reads
+    // results fall among the ones the search reads, and no other task does
     expect(searched.figures.missing).toBe('matches')
+    const shared = new Set(Array.from({ length: 2 * 26 }, (_, i) => title(i)))
+    expect(searched.page.entries.length).toBeGreaterThan(0)
+    for (const entry of searched.page.entries)
+      expect(shared.has(entry.task?.title ?? '')).toBe(true)
   })
 
   it('reads an everyday project item of 3 sub-projects through its stored rows, for an admin in 5 teams', async () => {
