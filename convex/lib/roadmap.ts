@@ -683,7 +683,7 @@ async function roadmapAnswer(
  * filters or the window. The read takes them, their group checks and a
  * group's facts, and each one with a span's links (issue_links by_source
  * and by_target, two ranges, relates links dropped). Where that does not
- * fit ROADMAP's reads it answers over_budget whole. Then the parts grow
+ * fit DEPENDENCIES.reads it answers over_budget whole. Then the parts grow
  * outward through links, parents and subtasks. A task a link or a parent
  * names is read by id, counted at lib/limits.ts TASK_ROW_MAX_BYTES, and
  * kept only where the reader's working set holds it (lib/viewReads.ts

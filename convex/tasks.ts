@@ -56,19 +56,19 @@
  * for every reason, or with `reason: 'access_unchecked'` where a bound of
  * the caller's own access reads stopped a check (lib/access.ts
  * accessUnchecked). roadmap answers the same states by lib/roadmap.ts
- * ROADMAP and ROADMAP_TASKS, roadmapDependencies `ok` with Auto-move's
- * inputs or their own over_budget, `over_budget` and `unavailable`. Live
- * queries: a change to a document one of those reads returned or would now
- * return reruns them, such as a task of a selected sub-project or of the
- * person, a subtask or parent they read, a project or access row they asked
- * about, for a search a profile, text, label or label row, for roadmap a
- * count row of its sub-projects (any leaf write there), and for
- * roadmapDependencies a link row or a task of its parts; edits to other
- * projects' tasks do not. A new filter, window or scope is a new
- * subscription; roadmapDependencies takes neither filters nor window, so
- * panning and typing never rerun it. authedQuery, not orgQuery, as My view
- * spans seats and a project selection whose seat goes away answers
- * `unavailable` instead of throwing in a subscription. */
+ * ROADMAP and lib/limits.ts ROADMAP_TASKS, roadmapDependencies `ok` with
+ * Auto-move's inputs or their own over_budget, `over_budget` and
+ * `unavailable`. All three are live queries. A change to a document one of
+ * those reads returned or would now return reruns them, such as a task of
+ * a selected sub-project or of the person, a subtask or parent they read, a
+ * project or access row they asked about, for a search a profile, text,
+ * label or label row, for roadmap a count row of its sub-projects (any leaf
+ * write there), and for roadmapDependencies a link row or a task of its
+ * parts; edits to other projects' tasks do not. A new filter, window or
+ * scope is a new subscription; roadmapDependencies takes neither filters
+ * nor window, so panning and typing never rerun it. authedQuery, not
+ * orgQuery, as My view spans seats and a project selection whose seat goes
+ * away answers `unavailable` instead of throwing in a subscription. */
 
 import { v } from 'convex/values'
 import { readBoard } from './lib/board'

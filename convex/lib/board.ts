@@ -134,9 +134,10 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * each, before it tries each label that can finish their matches by its
  * assignments, many to a range, and `labelScan` how many assignments a
  * candidate that try reads before it goes back to the own rows, as a label
- * may be on thousands of other tasks (boardSearch). `ceiling` is the most
- * matching tasks without subtasks a Board answers, lib/limits.ts
- * BOARD_TASKS, which the app reads too; tests lower it here alone. */
+ * may be on thousands of other tasks (lib/viewFilters.ts filterSearch).
+ * `ceiling` is the most matching tasks without subtasks a Board answers,
+ * lib/limits.ts BOARD_TASKS, which the app reads too; tests lower it here
+ * alone. */
 export const BOARD = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   context: 2000,
