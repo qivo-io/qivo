@@ -450,9 +450,12 @@ async function positionOf(text: string, key: string): Promise<Position> {
   const field = (x: unknown) =>
     typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))
   if (!Array.isArray(place) || place.length === 0 || !place.every(field)) throw refuse()
-  if (time !== null && (typeof time !== 'number' || !Number.isFinite(time))) throw refuse()
+  // compared, not narrowed by its type, because the app's loose tsconfig
+  // narrows `unknown` only so
+  const at = typeof time === 'number' && Number.isFinite(time) ? time : null
+  if (time !== null && at === null) throw refuse()
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw refuse()
-  return { place: place as Place, time, ids: ids as string[] }
+  return { place: place as Place, time: at, ids: ids as string[] }
 }
 
 // --- the opened task and its family ---------------------------------------------
