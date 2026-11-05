@@ -86,8 +86,9 @@
  * its project with one task, uploads a file there over REST and opens
  * Billing, whose current storage must show a figure rather than Being
  * counted (billing.currentUsage) and whose Storage by project, searched for
- * its run tag, must list that sub-project alone with the file's size
- * (billing.storageProjects), then deletes the file (ui/billing-storage).
+ * its run tag and the word storage, must list that sub-project alone with
+ * the file's size (billing.storageProjects), then deletes the file
+ * (ui/billing-storage).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
