@@ -10,6 +10,7 @@ import {
   draftUnsaved,
   EMAIL,
   PERSON_NAME,
+  REVIEW_HOURS,
   TRIMMED,
   wholeNumber,
 } from './savedDraft'
@@ -339,6 +340,12 @@ describe('a settings field’s draft', () => {
     expect(hours.same(' 32', '32')).toBe(true)
     expect(hours.same('', '40')).toBe(false)
     expect(hours.same('32', '40')).toBe(false)
+    // review time rounds to its 0.1 h grain inside 0 to 999, never outside
+    expect(REVIEW_HOURS.same('2.04', '2')).toBe(true)
+    expect(REVIEW_HOURS.same('2.06', '2')).toBe(false)
+    expect(REVIEW_HOURS.same('-0.04', '0')).toBe(false)
+    expect(REVIEW_HOURS.same('999.04', '999')).toBe(false)
+    expect(REVIEW_HOURS.same('', '0')).toBe(false)
     // a draft of only spaces is no change, and a new value replaces it
     const spaces = run(
       TRIMMED,

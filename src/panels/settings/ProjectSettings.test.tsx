@@ -619,6 +619,26 @@ describe('Review time on the draft model', () => {
     expect(reviewField().placeholder).toBe('2')
   })
 
+  it('keeps a number just outside 0 to 999 marked and unsaved, though it rounds to the saved value', async () => {
+    for (const [saved, typed] of [
+      [0, '-0.04'],
+      [999, '999.04'],
+    ] as const) {
+      await load((snap) => {
+        snap.projects[0].review_hours = saved
+      })
+      await open()
+      const { hasUnsaved } = await import('../../lib/leaveGuard')
+      await enter(reviewField(), typed)
+      expect(reviewField().value, typed).toBe(typed)
+      expect(reviewField().getAttribute('aria-invalid'), typed).toBe('true')
+      expect(hasUnsaved(), typed).toBe(true)
+      expect(requests).toEqual([])
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
   it('keeps the draft when the saved value changes elsewhere, and saves only after Keep mine', async () => {
     await open()
     await act(async () => reviewField().focus())

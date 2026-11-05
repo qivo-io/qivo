@@ -24,6 +24,7 @@
 
 import { useId, useLayoutEffect, useReducer, useRef } from 'react'
 import { asciiEmail } from '../../convex/lib/email'
+import { LIMITS } from '../../convex/lib/limits'
 import { roundReviewHours } from '../../convex/lib/review'
 import type { Writer } from '../store/fieldNotice'
 import { cleanName } from './fieldLimits'
@@ -403,7 +404,9 @@ export function wholeNumber<T extends number | null | undefined>(fallback: numbe
 /** A project's review time in hours, null for none, which shows empty: the
     field then means the inherited time. Texts compare as the numbers the
     store saves, rounded to the 0.1 h grain (roundReviewHours), so 2 and
-    2.04 are one; two empty texts are one too. */
+    2.04 are one; two empty texts are one too. A number outside
+    LIMITS.reviewHours is never saved, so it compares unrounded: -0.04 is
+    not 0 and 999.04 is not 999, and the refused entry stays unsaved. */
 export const REVIEW_HOURS: DraftForm<number | null> = {
   text: (value) => (value === null ? '' : String(value)),
   same: (a, b) => {
@@ -412,6 +415,9 @@ export const REVIEW_HOURS: DraftForm<number | null> = {
     if (x === '' || y === '') return x === y
     const m = Number(x)
     const n = Number(y)
-    return Number.isFinite(m) && Number.isFinite(n) && roundReviewHours(m) === roundReviewHours(n)
+    if (!Number.isFinite(m) || !Number.isFinite(n)) return false
+    const { min, max } = LIMITS.reviewHours
+    if (m < min || m > max || n < min || n > max) return m === n
+    return roundReviewHours(m) === roundReviewHours(n)
   },
 }
