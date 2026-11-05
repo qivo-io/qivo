@@ -87,7 +87,6 @@ import {
   type DeletedRow,
   hitPath,
   howOf,
-  LIST,
   type Reads,
   rowOf,
   spending,
@@ -99,46 +98,74 @@ type Task = Doc<'deleted_tasks'>
 type Profile = Doc<'profiles'>
 
 /**
- * What one page reads and answers. `rows` entries a page. `sources` ordered
- * ranges one seat's browse or assignee scan merges side by side, past which
- * an admin reads the organization's range and keeps the scope in code, and
- * anyone else gets too_wide. `searches` search queries one call plans,
- * past which the seat's search reads its organization through one query
- * and judges every candidate. `candidates` results one search query reads
- * at most, below the 1,024 one Convex search query can scan, and `results`
- * the results the call's search queries read together, split into equal
- * allowances before any of them reads.
+ * What one page reads and answers. `rows` entries a page.
  *
- * `call` and `find` are the list's (model/deletedItemsList.ts LIST): every
- * read of the call, and the share the ranges that find items may spend.
- * `gather` is the part of `call` a page's task search keeps for itself,
- * so a page that lists project entries first leaves the search the same
- * room as a page that starts with it, and every page gathers the same
+ * `sources` bounds the ranges one seat's browse or assignee scan merges.
+ * For anyone but an admin it counts the ordered ranges: their own deletes,
+ * and one for each project in the scope that they lead, or whose top-level
+ * project they lead, and that the range of no top-level project in the
+ * scope covers. That is each such top-level project, and each sub-project
+ * whose top-level project they do not lead or the scope leaves out, live
+ * and archived alike. The assignee scan merges the ranges of both parts,
+ * so there their own deletes and each led top-level project with
+ * sub-projects count twice. Past the bound they get too_wide. For an
+ * admin's scope of some projects it counts the ordered and the
+ * cross-project ranges together (taskPlan, searchPlan), and past it the
+ * admin reads the organization's range of the kind and keeps the scope in
+ * code. `searches` search queries one call plans, past which the seat's
+ * search reads its organization through one query and judges every
+ * candidate. `candidates` results one search query reads at most, below
+ * the 1,024 one Convex search query can scan, and `results` the results
+ * the call's search queries read together, split into equal allowances
+ * before any of them reads.
+ *
+ * Convex stops a query at 16 MiB, 32,000 documents or 4,096 ranges. `call`
+ * covers every read of the call and takes five eighths of each: 10 MiB,
+ * 20,000 documents and 2,560 ranges. The other three eighths hold what
+ * runs past its last check: the sight of the seat it opened last, the rows
+ * of the page's entries (answerOf), and the reads authedQuery makes for
+ * the login.
+ * `find` is the share of `call` the ranges that find items may spend:
+ * 6 MiB, 12,000 documents and 1,024 ranges, which leaves about 4 MiB,
+ * 8,000 documents and 1,536 ranges for sights and rows, which read mostly
+ * ranges. `gather` is the part of `call` a page's task search keeps for
+ * itself, so a page that lists project entries first leaves the search the
+ * same room as a page that starts with it, and every page gathers the same
  * candidates. Every search result counts as an index range, as Convex
  * fetches each by id. A mutable object, so tests can lower it; replace
  * `call`, `find` and `gather` whole rather than change their fields.
  *
  * Measured on 5 November 2026 in convex-test at the design size with
- * ordinary text, one figure raised a case (tests/deletedItemsPageReads.test.ts),
- * as the page counts its reads, each search result a range. Every case
- * answered whole. A project item of 30 live and 40 archived sub-projects
- * with 800 open tasks: an admin's search for a word every task holds reads
- * its 256 results and 526 ranges, 527 documents and 0.40 MiB in all, and
- * says `matches`; its lead's search 234 ranges and 0.23 MiB. A sub-project
- * item of 300 tasks: the same search 526 ranges and 0.43 MiB, an admin's
- * assignee page 12 ranges and 39 documents, a lead's scan 27 and 42. A lead
- * of 234 top-level projects with 200 live and 500 archived sub-projects
- * under them: a browse opens 235 ordered and 700 cross-project ranges,
- * 935 of the 1,024 `find` allows, so a page that read the project entries
- * first ends with next_cursor at the task entries, and the next page reads
- * 942 ranges, 1,030 documents and 0.45 MiB for its 25 entries; its search,
- * past `searches`, reads the organization in one query, 845 ranges and
- * 0.86 MiB. The sight of a seat beside the catalogue of 2,000 projects
- * reads 2,010 documents and 0.78 MiB, beside 1,000 people 1,011 and 0.36
- * MiB, and for a person whose team shares 200 projects 416 and 0.12 MiB.
- * `sources` holds that lead's 235 ordered ranges; a lead of more than 255
- * top-level projects, past the design size at three sub-projects each, gets
- * too_wide.
+ * ordinary text, one figure raised a case
+ * (tests/deletedItemsPageReads.test.ts), as the page counts its reads,
+ * each search result a range. Every case answered whole. A project item of
+ * 30 live and 40 archived sub-projects with 800 open tasks: an admin's
+ * search for a word every task holds reads its 256 results and 269 ranges,
+ * 271 documents and 0.20 MiB in all, since no older row shares its
+ * allowance, and says `matches`; its lead's search 234 ranges and 0.22
+ * MiB. A sub-project item of 300 tasks: the same search 269 ranges and
+ * 0.21 MiB, an admin's assignee page 12 ranges and 39 documents, a lead's
+ * scan 27 and 42. A lead of 234 top-level projects with 200 live and 500
+ * archived sub-projects under them: a browse opens 235 ordered and 700
+ * cross-project ranges, 935 of the 1,024 `find` allows, so a page that
+ * read the project entries first ends with next_cursor at the task
+ * entries, and the next page reads 942 ranges, 1,030 documents and 0.41
+ * MiB for its 25 entries; its search, past `searches`, reads the
+ * organization in one query, 845 ranges and 0.80 MiB. The sight of a seat
+ * beside the catalogue of 2,000 projects reads 2,010 documents and 0.70
+ * MiB, beside 1,000 people 1,011 and 0.32 MiB, and for a person whose
+ * team shares 200 projects 416 and 0.11 MiB.
+ * `sources` holds that lead's 235 ordered ranges.
+ *
+ * too_wide refuses shapes inside the design size. A member who leads more
+ * than 255 projects in the scope that are not under a top-level project
+ * they lead there, live and archived together, gets too_wide for that
+ * scope: 256 of the organization's 200 live and 300 archived top-level
+ * projects, or 256 of the 200 live and 500 archived sub-projects one
+ * person may read, each led one by one. A scope of fewer projects serves
+ * them. A larger `sources` alone would not serve the sub-project shape:
+ * 700 sub-projects led one by one need 701 ordered and 700 cross-project
+ * ranges, past the 1,024 of `find`.
  */
 export const DELETED_PAGE = {
   rows: 25,
@@ -146,8 +173,8 @@ export const DELETED_PAGE = {
   searches: 96,
   candidates: 256,
   results: 512,
-  call: { ...LIST.call },
-  find: { ...LIST.find },
+  call: { bytes: 10 * 1024 * 1024, rows: 20_000, ranges: 2_560 },
+  find: { bytes: 6 * 1024 * 1024, rows: 12_000, ranges: 1_024 },
   gather: { bytes: 4 * 1024 * 1024, rows: 8_000, ranges: 1_536 },
 }
 
@@ -1138,15 +1165,22 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
  * is split into equal allowances (DELETED_PAGE.results across the queries,
  * at most DELETED_PAGE.candidates each), and each lookup of a task number
  * counts as LOOKUP, so what one source reads does not change how many
- * results another may read. The older rows' title source (search_title) has
- * an allowance of its own and adds nothing to `missing`. A candidate counts
- * when its item passes viewOf, is not purging and meets the scope and
- * filters, its project is one the seat's view of the item holds, and its
- * number, title and readable description hold every term (matchesTerms). A
- * stop of the gathering sets `reads` for an admin only; anyone else's search
- * page says `matches` whatever it read.
+ * results another may read. The older rows' title source (search_title)
+ * is read only when `older` (olderRows), has an allowance of its own and
+ * adds nothing to `missing`. A candidate counts when its item passes
+ * viewOf, is not purging and meets the scope and filters, its project is
+ * one the seat's view of the item holds, and its number, title and
+ * readable description hold every term (matchesTerms). A stop of the
+ * gathering sets `reads` for an admin only; anyone else's search page says
+ * `matches` whatever it read.
  */
-async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: At | null) {
+async function gatherTasks(
+  run: Run,
+  seats: Seat[],
+  scope: Scoped | null,
+  from: At | null,
+  older: boolean,
+) {
   const { a } = run
   const text = convexText(a.terms)
   const refs = a.terms.filter((t) => t.num != null)
@@ -1203,7 +1237,6 @@ async function gatherTasks(run: Run, seats: Seat[], scope: Scoped | null, from: 
       if (plan.cut) cut = true
       planned.push({ seat, plan })
     }
-  const older = scope !== null && a.assignee === undefined
   const sources =
     planned.reduce((n, p) => n + p.plan.queries.length, 0) + (older ? planned.length : 0)
   const allowance = Math.max(
@@ -1314,8 +1347,11 @@ class Stop extends Error {}
  * an admin's page asks the organization once whether it holds such a row
  * (by_org_assignee with neither field), and anyone else's always says so
  * while this path exists, as the look also sees rows hidden from them.
- * A later release removes the path, its search_title source and this flag
- * once a read-only count finds no such row on any deployment.
+ * The same answer decides whether a search reads the older rows' title
+ * source (gatherTasks), so an admin's search reads it only while such a
+ * row exists. A later release removes the path, its search_title source
+ * and this flag once a read-only count finds no such row on any
+ * deployment.
  */
 async function olderRows(run: Run, seat: Seat): Promise<boolean> {
   if (!seat.admin) return true
@@ -1436,7 +1472,8 @@ async function unscoped(
     }
     all.push(await seatOf(run, me))
   }
-  await gatherTasks(run, all, null, from?.part === 1 ? from.at : null)
+  // a task reference finds older rows by number, so no title source reads
+  await gatherTasks(run, all, null, from?.part === 1 ? from.at : null, false)
 }
 
 /** The page of one scope in the seat `me`. Answers a whole answer of its
@@ -1482,8 +1519,10 @@ async function scoped(
     }
   }
   if (project === 'too_wide' || scan === 'too_wide') return { ...EMPTY, too_wide: true }
-  if (tasks && (search || a.assignee !== undefined) && (await olderRows(run, seat)))
-    head.legacy = true
+  // whether the search and the assignee filter may miss older rows: the
+  // probe's answer for an admin, always for anyone else
+  const legacy = tasks && (search || a.assignee !== undefined) && (await olderRows(run, seat))
+  if (legacy) head.legacy = true
   if (search && !seat.admin) run.matches = true
   const first = project !== null && (from === null || from.part === 0)
   if (first) {
@@ -1501,7 +1540,8 @@ async function scoped(
   }
   if (!tasks || room(run) === 0) return null
   const after = from?.part === 1 ? from.at : null
-  if (search) await gatherTasks(run, [seat], scope, after)
+  // the older rows' title source only while such a row may exist
+  if (search) await gatherTasks(run, [seat], scope, after, legacy && a.assignee === undefined)
   else if (viaIndex) await assigneeEntries(run, seat, scope, after)
   else if (scan !== null) {
     const judge = a.assignee === undefined ? taskEntry(run) : scanEntry(run)
@@ -1517,7 +1557,12 @@ const notThisPath = () => badRequest('cursor must be the next_cursor of an earli
 /** The page `run` gathered: its entries with their hits, each item's row
  * once, and the cursor and notes. */
 async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Promise<DeletedPage> {
-  if (head.too_wide === true) return { ...EMPTY, too_wide: true }
+  if (head.too_wide === true)
+    return {
+      ...EMPTY,
+      too_wide: true,
+      ...(head.scope_needed === true ? { scope_needed: true as const } : {}),
+    }
   const reader = spending(run.ctx, run.call)
   const rows = new Map<string, DeletedRow | null>()
   const entries: DeletedEntry[] = []
