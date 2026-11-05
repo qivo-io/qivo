@@ -93,6 +93,17 @@ export function cleanAttachmentName(raw: string): string {
   return name
 }
 
+/** The refusal of a declared upload size that is not a whole number of
+ * bytes, the same on the app, REST and MCP. */
+export const UPLOAD_SIZE_SHAPE = 'size must be the file size in bytes, a whole number'
+
+/** Answers `size`, a size an upload declares, when it is a whole number of
+ * bytes, at least 0. Refuses any other number as a bad request. */
+export function uploadSize(size: number): number {
+  if (!Number.isInteger(size) || size < 0) throw badRequest(UPLOAD_SIZE_SHAPE)
+  return size
+}
+
 /* System fields and the organization stay internal; optional columns come
  * back ABSENT. */
 const pub = ({ _id, _creationTime, org_id: _orgId, ...row }: Doc<'issue_attachments'>) => row

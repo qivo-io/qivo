@@ -176,14 +176,18 @@ describe('private demo upload boundaries', () => {
   it('reserves simultaneous upload quota and waits for receiving work during purge', async () => {
     const { t, fx, issue, receipt, caller } = await setup()
     const urls = await Promise.all(
-      Array.from({ length: 10 }, () =>
-        caller.mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
+      Array.from({ length: 5 }, () =>
+        caller.mutation(api.files.uploadUrl, {
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          size: DEMO_STORAGE_BYTES / 5,
+        }),
       ),
     )
     await expectRefusal(
-      caller.mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
+      caller.mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id, size: 1 }),
       'rule',
-      /50 MiB/,
+      /at most 5 MiB of files in total, and none of it is free/,
     )
     expect(
       await t.run(async (ctx) =>

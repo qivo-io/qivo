@@ -33,7 +33,6 @@ import { conflictRetrying } from './machine/registry'
 import { registerRestRoutes } from './machine/rest'
 import { WRITE_CONFLICT, WRITE_CONFLICT_RETRY_AFTER } from './machine/shared'
 import { registerUploadRoutes } from './machine/uploads'
-import { DEMO_FILE_BYTES } from './model/demoUploads'
 
 const http = httpRouter()
 registerBilling(http)
@@ -484,10 +483,13 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
 declare const Blob: { new (parts: Uint8Array[], options: { type: string }): Blob }
 
 /* An image or demo upload's bytes, at most `maxBytes` and within 30 s, else
- * the refusal that says why (lib/requestBody.ts readLimitedBody). */
+ * the refusal that says why (lib/requestBody.ts readLimitedBody). A longer
+ * body is refused with `tooLarge`, the demo reservation's own sentence
+ * (model/demoUploads.ts demoBodyRefusal), or one that names `maxBytes`. */
 async function readBackgroundBody(
   request: Request,
-  maxBytes = isDemoDeployment() ? DEMO_FILE_BYTES : PANORAMA_MAX_BYTES,
+  maxBytes: number,
+  tooLarge = `Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`,
 ): Promise<Uint8Array> {
   const read = await readLimitedBody(request, maxBytes, 30_000)
   if (read.outcome === 'read') return read.bytes
@@ -496,7 +498,7 @@ async function readBackgroundBody(
       ? 'Choose an image file to upload.'
       : read.outcome === 'too_slow'
         ? 'The image upload timed out. Try again.'
-        : `Choose a file no larger than ${maxBytes / 1024 / 1024} MiB.`,
+        : tooLarge,
   )
 }
 
@@ -546,7 +548,8 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
   let storageId: import('./_generated/dataModel').Id<'_storage'> | undefined
   let startedDemoWork = false
   try {
-    await runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
+    // the demo's reservation bounds the body; elsewhere the image limit does
+    const demoWork = await runMutation(internal.appearance.beginDemoUploadWork, { id, minter: m })
     startedDemoWork = isDemoDeployment()
     const mime = request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() ?? ''
     // Validate MIME before reading the body, and size after bounded streaming.
@@ -555,7 +558,11 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
     } catch (error) {
       throw badRequest(error instanceof Error ? error.message : 'Choose a valid image.')
     }
-    const bytes = await readBackgroundBody(request)
+    const bytes = await readBackgroundBody(
+      request,
+      demoWork?.maxBytes ?? PANORAMA_MAX_BYTES,
+      demoWork?.tooLarge,
+    )
     let dimensions: { width: number; height: number }
     try {
       dimensions = manualImageDimensions(bytes, mime)
@@ -646,7 +653,7 @@ http.route({
     try {
       const ticket = await ctx.runMutation(internal.demoUploads.begin, { id, minter, exp })
       started = true
-      const bytes = await readBackgroundBody(request, ticket.maxBytes)
+      const bytes = await readBackgroundBody(request, ticket.maxBytes, ticket.tooLarge)
       const mime =
         request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() ||
         'application/octet-stream'
@@ -658,10 +665,14 @@ http.route({
       })
       return new Response(JSON.stringify(result), { status: 200, headers })
     } catch (error) {
-      if (started)
-        await ctx
-          .runMutation(internal.demoUploads.abandon, { id, minter, storage_id: storageId })
-          .catch(() => {})
+      const stored = started
+        ? await ctx
+            .runMutation(internal.demoUploads.abandon, { id, minter, storage_id: storageId })
+            .catch(() => null)
+        : null
+      // finish committed but its answer was lost: the file is the upload's
+      if (stored !== null)
+        return new Response(JSON.stringify({ storageId: stored }), { status: 200, headers })
       const data = error instanceof ConvexError ? (error.data as { message?: string }) : null
       return new Response(
         JSON.stringify({ error: data?.message ?? 'The upload failed. Try again.' }),

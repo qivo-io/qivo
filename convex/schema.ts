@@ -541,6 +541,8 @@ export default defineSchema({
 
   // Demo uploads reserve capacity before bytes are accepted. Kept after
   // attachment so ownership is independent of editable planning records.
+  // One demo's live rows store and reserve at most DEMO_STORAGE_BYTES
+  // together (model/demoUploads.ts reserveDemoUpload).
   demo_uploads: defineTable({
     id: v.string(),
     demo_id: v.string(),
@@ -558,6 +560,11 @@ export default defineSchema({
     lease_until: v.optional(v.number()),
     started_at: v.optional(v.number()),
     storage_id: v.optional(v.id('_storage')),
+    // true when reserved_bytes is the size the app declared for the file,
+    // so the receiver refuses a longer body as one its upload did not
+    // declare; absent for a reservation an app without sizes asked for, and
+    // for a preview. Only the demo writes it.
+    declared: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
     .index('by_demo', ['demo_id'])

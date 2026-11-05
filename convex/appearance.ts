@@ -29,11 +29,12 @@ import {
   removeCustomBackground,
   requireAppearanceAccount,
 } from './model/appearance'
+import { uploadSize } from './model/attachments'
 import {
   beginDemoUpload,
-  DEMO_FILE_BYTES,
   demoCanRead,
   demoFileExpiry,
+  demoReceipt,
   demoUploadFor,
   reserveDemoUpload,
   retainDemoUpload,
@@ -110,10 +111,13 @@ export const save = authedMutation({
 })
 
 export const createUpload = authedMutation({
-  args: { name: v.string() },
+  // the image's size in bytes, which an app loaded before this release does
+  // not send. Only the demo reserves it; elsewhere background_uploads keeps
+  // a person to five tickets and the receiver reads at most 8 MiB.
+  args: { name: v.string(), size: v.optional(v.number()) },
   handler: async (
     ctx,
-    { name },
+    { name, size },
   ): Promise<{ ticket_id: string; upload_url: string; expires_at: number }> => {
     await requireAppearanceAccount(ctx, ctx.authUserId)
     name = limitedText(LIMITS.backgroundName, name)
@@ -129,6 +133,7 @@ export const createUpload = authedMutation({
       else active++
     }
     if (active >= 5) throw rule('finish or cancel an existing image upload before starting another')
+    if (size !== undefined) uploadSize(size)
     const settings = await ensureSettings(ctx, ctx.authUserId)
     const id = crypto.randomUUID()
     const exp = await demoFileExpiry(
@@ -142,7 +147,7 @@ export const createUpload = authedMutation({
         kind: 'background',
         targetId: id,
         id,
-        bytes: DEMO_FILE_BYTES,
+        size,
         expiresAt: exp * 1000,
       })
     await ctx.db.insert('background_uploads', {
@@ -387,13 +392,15 @@ export const clearForDeletedLogin = internalMutation({
   handler: async (ctx, { auth_user_id }) => clearAccountAppearance(ctx, auth_user_id),
 })
 
+/* The background receiver's claim of its demo reservation (http.ts). On
+ * the demo it answers the most bytes the POST may store and the refusal of
+ * a longer body (model/demoUploads.ts demoReceipt), and null elsewhere. */
 export const beginDemoUploadWork = internalMutation({
   args: { id: v.string(), minter: v.string() },
   handler: async (ctx, { id, minter }) => {
     if (!isDemoDeployment()) return null
     const ticket = await ticketFor(ctx, id)
     if (!ticket || ticket.auth_user_id !== minter) throw notFound('upload not found')
-    await beginDemoUpload(ctx, id, minter)
-    return null
+    return demoReceipt(await beginDemoUpload(ctx, id, minter))
   },
 })

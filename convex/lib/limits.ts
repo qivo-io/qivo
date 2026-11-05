@@ -237,10 +237,22 @@ export const PLAN_CURRENCY = `a billing plan must be priced in ${PLAN_CURRENCIES
 /** Bytes in one MiB, for size checks written in MiB. */
 export const MIB = 1024 * 1024
 
-/** The largest file a public demo stores, a background image included
- * (model/demoUploads.ts). The demo app checks it before it uploads a
- * background image or an attachment. */
+/** The largest attachment, description image or background image a private
+ * demo stores (model/demoUploads.ts), within the demo's shared
+ * DEMO_STORAGE_BYTES. The demo app checks it before it uploads a background
+ * image or an attachment, and the server refuses a larger declared size
+ * before any bytes are sent. */
 export const DEMO_FILE_BYTES = 5 * MIB
+
+/** The most one private demo stores in total, 5 MiB: its attachments,
+ * description images, uploaded profile pictures, custom backgrounds and
+ * the previews Qivo makes of them, counted as stored bytes plus pending
+ * reservations (model/demoUploads.ts). It keeps the storage cost of the
+ * free temporary demo small. It is one total for the demo, not a per-file
+ * limit or an allowance per person, and regular organizations have no
+ * total storage cap (owner, 24 October 2026). No LIMITS entry: only the
+ * demo meets it, and its refusal says how much is free. */
+export const DEMO_STORAGE_BYTES = 5 * MIB
 
 /** The largest request body the sign-in endpoints under /api/auth take
  * (http.ts readAuthBody), 64 KiB. The largest any of them needs is an OAuth

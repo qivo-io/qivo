@@ -68,12 +68,13 @@ import {
   type AttachResult,
   assertAttachmentRoom,
   attachFileCore,
+  cleanAttachmentName,
   removeAttachmentCore,
   storageIdInUse,
+  uploadSize,
 } from './model/attachments'
 import {
   assertDemoFileOwnership,
-  DEMO_FILE_BYTES,
   demoCanRead,
   demoFileExpiry,
   reserveDemoUpload,
@@ -121,14 +122,22 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
  * that residual (unchanged from 0090:20-29) is what reapOrphans exists for. */
 
 export const uploadUrl = orgMutation({
-  args: { issue_id: v.string() },
-  handler: async (ctx, { issue_id }) => {
+  args: {
+    issue_id: v.string(),
+    // the file's size in bytes and its name, which an app loaded before this
+    // release does not send
+    size: v.optional(v.number()),
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, { issue_id, size, name }) => {
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
     // a full task is refused before any bytes are sent
     await assertAttachmentRoom(ctx, issue.id)
-    if (isDemoDeployment())
-      return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, DEMO_FILE_BYTES)
+    // the attach names the file; this only refuses a name it would refuse
+    if (name !== undefined) cleanAttachmentName(name)
+    if (size !== undefined) uploadSize(size)
+    if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, size)
     return await ctx.storage.generateUploadUrl()
   },
 })
@@ -152,11 +161,13 @@ async function avatarTarget(ctx: AuthedCtx, profileId: string): Promise<Doc<'pro
 }
 
 export const avatarUploadUrl = authedMutation({
-  args: { profile_id: v.string() },
-  handler: async (ctx, { profile_id }) => {
+  // the picture's size in bytes, which an app loaded before this release
+  // does not send. Outside the demo files.setAvatar checks the stored size.
+  args: { profile_id: v.string(), size: v.optional(v.number()) },
+  handler: async (ctx, { profile_id, size }) => {
     await avatarTarget(ctx, profile_id)
-    if (isDemoDeployment())
-      return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, AVATAR_MAX_BYTES)
+    if (size !== undefined) uploadSize(size)
+    if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, size)
     return await ctx.storage.generateUploadUrl()
   },
 })
@@ -726,19 +737,22 @@ export const restoreWitness = internalMutation({
   handler: async (): Promise<null> => null,
 })
 
+/* The /demo-uploads/ URL of a new reservation for an upload of `kind` to
+ * `targetId` with the declared `size`, or without one the kind's limit or
+ * the free space (model/demoUploads.ts reserveDemoUpload). */
 async function demoUploadUrl(
   ctx: MutationCtx,
   authId: string,
   kind: 'attachment' | 'avatar',
   targetId: string,
-  bytes: number,
+  size: number | undefined,
 ) {
   const requested = await demoFileExpiry(ctx, authId, Math.floor(Date.now() / 1000) + 600)
   const ticket = await reserveDemoUpload(ctx, {
     authId,
     kind,
     targetId,
-    bytes,
+    size,
     expiresAt: requested * 1000,
   })
   const exp = ticket.expiresAt / 1000

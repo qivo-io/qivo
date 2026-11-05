@@ -1,17 +1,73 @@
+/* The private demo's upload ledger. Every upload of a demo, an attachment or
+ * description image, a profile picture, a custom background or the preview
+ * Qivo makes of one, reserves room in one demo_uploads row before any bytes
+ * are sent, and the demo holds at most DEMO_STORAGE_BYTES of stored bytes and
+ * pending reservations together (lib/limits.ts). A reservation is the size
+ * the app declared, checked against the kind's per-file limit and the free
+ * space, and the receivers store at most that many bytes. Nothing is ever
+ * deleted to make room: a refusal says how much is free and how to free
+ * more, and a demo above the budget admits nothing until enough is freed or
+ * it ends. */
+
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { storageIdInUse } from '../files'
 import { isDemoDeployment, requireActiveDemo } from '../lib/demo'
 import { forbidden, rule } from '../lib/functions'
+import { DEMO_FILE_BYTES, DEMO_STORAGE_BYTES, LIMITS, MIB } from '../lib/limits'
+import { uploadSize } from './attachments'
 import { eraseFile } from './fileHolds'
 
 declare const crypto: { randomUUID(): string }
 
-export { DEMO_FILE_BYTES } from '../lib/limits'
-export const DEMO_STORAGE_BYTES = 50 * 1024 * 1024
+export { DEMO_FILE_BYTES, DEMO_STORAGE_BYTES } from '../lib/limits'
+/** The most files one demo holds, live ledger rows of every kind. */
+export const DEMO_UPLOAD_ROWS = 200
 export const DEMO_PREVIEW_BYTES = 1024 * 1024
 export const DEMO_UPLOAD_LEASE_MS = 2 * 60 * 1000
 export const DEMO_PROCESSOR_LEASE_MS = 11 * 60 * 1000
+
+/* How long a reservation waits for its file unless its caller sets a
+ * sooner end. */
+const DEMO_RESERVATION_MS = 10 * 60 * 1000
+
+/* The step every refusal of a full demo ends with. The path is the guide's
+ * (docs/guide/administration-guard-rails-and-the-demo.md). */
+const FREE_SOME =
+  'Remove a file, a picture or your background, or delete items for good in Settings → Projects → Deleted items, then try again.'
+
+/* How much of the budget is free, `free` bytes in MiB rounded down to one
+ * decimal. */
+function freePart(free: number): string {
+  if (free <= 0) return 'none of it is free'
+  const tenths = Math.floor((free * 10) / MIB)
+  return tenths === 0 ? 'less than 0.1 MiB of it is free' : `${tenths / 10} MiB of it is free`
+}
+
+/** The refusal of an upload that does not fit in the demo's shared storage,
+ * which has `free` bytes left. */
+export const demoStorageFull = (free: number): string =>
+  `the demo stores at most ${DEMO_STORAGE_BYTES / MIB} MiB of files in total, and ${freePart(free)}. ${FREE_SOME}`
+
+/** The refusal of an upload once the demo holds DEMO_UPLOAD_ROWS files. */
+export const DEMO_FILES_FULL = `the demo stores at most ${DEMO_UPLOAD_ROWS} files. ${FREE_SOME}`
+
+/** The refusal of an attachment, description image or background whose
+ * declared size is over DEMO_FILE_BYTES. */
+export const DEMO_FILE_TOO_LARGE = `a demo file must be at most ${DEMO_FILE_BYTES / MIB} MiB. Choose a smaller file.`
+
+/** The receivers' refusal of a body longer than the size its upload
+ * declared (demoBodyRefusal). */
+export const DEMO_BODY_TOO_LONG = 'The file is larger than its upload said. Choose it again.'
+
+type UploadKind = Exclude<Doc<'demo_uploads'>['kind'], 'preview'>
+
+/* Each kind's per-file limit and the refusal of a larger declared size. */
+const KINDS: Record<UploadKind, { max: number; tooLarge: string }> = {
+  attachment: { max: DEMO_FILE_BYTES, tooLarge: DEMO_FILE_TOO_LARGE },
+  background: { max: DEMO_FILE_BYTES, tooLarge: DEMO_FILE_TOO_LARGE },
+  avatar: { max: LIMITS.avatarSize.max * MIB, tooLarge: LIMITS.avatarSize.refusal },
+}
 
 export const demoUploadFor = (ctx: QueryCtx, id: string) =>
   ctx.db
@@ -39,24 +95,21 @@ export async function demoFileExpiry(ctx: QueryCtx, authId: string, requestedSec
   return Math.min(requestedSeconds, Math.floor(receipt.expires_at / 1000))
 }
 
-export async function reserveDemoUpload(
+/* What demo `demoId`'s live rows hold: the bytes they store or reserve and
+ * how many there are. It deletes the rows that no longer count on the way,
+ * a stored row whose file was removed and a pending one past its expiry.
+ * The demo never holds more than DEMO_UPLOAD_ROWS rows after a reservation,
+ * so the one range reads them all; a longer one counts as full. */
+async function demoLedger(
   ctx: MutationCtx,
-  args: {
-    authId: string
-    kind: Doc<'demo_uploads'>['kind']
-    targetId: string
-    bytes: number
-    id?: string
-    expiresAt?: number
-  },
-) {
-  const receipt = await requireActiveDemo(ctx, args.authId)
+  demoId: string,
+): Promise<{ reserved: number; count: number }> {
   const rows = await ctx.db
     .query('demo_uploads')
-    .withIndex('by_demo', (q) => q.eq('demo_id', receipt.id))
-    .take(201)
-  let reserved = 0,
-    count = 0
+    .withIndex('by_demo', (q) => q.eq('demo_id', demoId))
+    .take(DEMO_UPLOAD_ROWS + 1)
+  let reserved = 0
+  let count = 0
   for (const row of rows) {
     // Completed files that were removed no longer consume quota. Pending
     // work retains its reservation until its bounded receiver settles.
@@ -69,22 +122,132 @@ export async function reserveDemoUpload(
       count++
     }
   }
-  if (count >= 200 || reserved + args.bytes > DEMO_STORAGE_BYTES)
-    throw rule('The demo can store up to 50 MiB. Remove a file before uploading another.')
-  const id = args.id ?? crypto.randomUUID()
-  const expiresAt = Math.min(args.expiresAt ?? Date.now() + 10 * 60 * 1000, receipt.expires_at)
+  if (rows.length > DEMO_UPLOAD_ROWS) count = Math.max(count, DEMO_UPLOAD_ROWS)
+  return { reserved, count }
+}
+
+/** A reservation: its ledger row's id, when it expires, in epoch
+ * milliseconds, and the bytes it holds. */
+export type DemoReservation = { id: string; expiresAt: number; bytes: number }
+
+/* Records a pending reservation of `bytes` for `receipt`'s demo. It expires
+ * after DEMO_RESERVATION_MS, at `expiresAt` when that is sooner, and never
+ * after the demo. */
+async function insertReservation(
+  ctx: MutationCtx,
+  a: {
+    receipt: Doc<'demo_sessions'>
+    authId: string
+    kind: Doc<'demo_uploads'>['kind']
+    targetId: string
+    bytes: number
+    declared?: boolean
+    id?: string
+    expiresAt?: number
+  },
+): Promise<DemoReservation> {
+  const id = a.id ?? crypto.randomUUID()
+  const expiresAt = Math.min(a.expiresAt ?? Date.now() + DEMO_RESERVATION_MS, a.receipt.expires_at)
   await ctx.db.insert('demo_uploads', {
     id,
-    demo_id: receipt.id,
-    auth_user_id: args.authId,
-    kind: args.kind,
-    target_id: args.targetId,
-    reserved_bytes: args.bytes,
+    demo_id: a.receipt.id,
+    auth_user_id: a.authId,
+    kind: a.kind,
+    target_id: a.targetId,
+    reserved_bytes: a.bytes,
     expires_at: expiresAt,
     state: 'pending',
+    ...(a.declared ? { declared: true as const } : {}),
   })
-  return { id, expiresAt }
+  return { id, expiresAt, bytes: a.bytes }
 }
+
+/**
+ * Reserves room in the private demo of login `authId` for one upload of
+ * `kind` to `targetId`, before any bytes are sent, and answers the
+ * reservation. `size` is the size the app declared. It must be a whole
+ * number of bytes (a bad request otherwise) within the kind's per-file
+ * limit, and it must fit in the free space, DEMO_STORAGE_BYTES less what
+ * the demo's live rows store or reserve. The row is then `declared`, and
+ * the receiver stores at most that many bytes. Without `size`, as from an
+ * app loaded before uploads declared one, it reserves the kind's limit or
+ * the free space, whichever is smaller, so a small file still fits. It
+ * refuses with a `rule` at DEMO_UPLOAD_ROWS files, when nothing is free and
+ * when a declared size does not fit, and never deletes a file to make room.
+ * Reads one range of at most DEMO_UPLOAD_ROWS + 1 rows under 1 KB each and
+ * one stored file for each stored row, inside Convex's limits.
+ */
+export async function reserveDemoUpload(
+  ctx: MutationCtx,
+  args: {
+    authId: string
+    kind: UploadKind
+    targetId: string
+    size?: number
+    id?: string
+    expiresAt?: number
+  },
+): Promise<DemoReservation> {
+  const receipt = await requireActiveDemo(ctx, args.authId)
+  const { max, tooLarge } = KINDS[args.kind]
+  const size = args.size === undefined ? undefined : uploadSize(args.size)
+  if (size !== undefined && size > max) throw rule(tooLarge)
+  const { reserved, count } = await demoLedger(ctx, receipt.id)
+  if (count >= DEMO_UPLOAD_ROWS) throw rule(DEMO_FILES_FULL)
+  const free = Math.max(0, DEMO_STORAGE_BYTES - reserved)
+  const bytes = size ?? Math.min(max, free)
+  if (free === 0 || bytes > free) throw rule(demoStorageFull(free))
+  return await insertReservation(ctx, {
+    ...args,
+    receipt,
+    bytes,
+    declared: size !== undefined,
+  })
+}
+
+/**
+ * Reserves room for the preview of custom background `targetId` of login
+ * `authId`: DEMO_PREVIEW_BYTES or the free space, whichever is smaller.
+ * Answers null and reserves nothing when nothing is free or the demo holds
+ * DEMO_UPLOAD_ROWS files, so the background shows without a preview instead
+ * of the upload failing (backgroundPreviews.ts beginDemoWork). Reads what
+ * reserveDemoUpload reads.
+ */
+export async function reserveDemoPreview(
+  ctx: MutationCtx,
+  args: { authId: string; targetId: string },
+): Promise<DemoReservation | null> {
+  const receipt = await requireActiveDemo(ctx, args.authId)
+  const { reserved, count } = await demoLedger(ctx, receipt.id)
+  const free = Math.max(0, DEMO_STORAGE_BYTES - reserved)
+  if (count >= DEMO_UPLOAD_ROWS || free === 0) return null
+  return await insertReservation(ctx, {
+    ...args,
+    receipt,
+    kind: 'preview',
+    bytes: Math.min(DEMO_PREVIEW_BYTES, free),
+  })
+}
+
+/** The receivers' refusal of a body longer than reservation `row`: the
+ * declared-size sentence for a declared size, the budget's for a sizeless
+ * reservation the free space bounded, and otherwise the kind's per-file
+ * sentence. */
+export function demoBodyRefusal(row: Doc<'demo_uploads'>): string {
+  if (row.declared) return DEMO_BODY_TOO_LONG
+  if (row.kind === 'preview') return demoStorageFull(row.reserved_bytes)
+  const { max, tooLarge } = KINDS[row.kind]
+  return row.reserved_bytes < max ? demoStorageFull(row.reserved_bytes) : tooLarge
+}
+
+/** What a receiver reads of reservation `row` once it began: the most bytes
+ * it may store, whether that is a declared size, and the refusal of a
+ * longer body (demoBodyRefusal). */
+export const demoReceipt = (row: Doc<'demo_uploads'>) => ({
+  maxBytes: row.reserved_bytes,
+  declared: row.declared === true,
+  tooLarge: demoBodyRefusal(row),
+})
 
 export async function beginDemoUpload(
   ctx: MutationCtx,
@@ -127,7 +290,7 @@ export async function retainDemoUpload(
   )
     throw forbidden('This demo upload has expired.')
   if (!meta || meta.size > ticket.reserved_bytes)
-    throw rule('This file exceeds the demo upload limit.')
+    throw rule('this file exceeds the demo upload limit.')
   const receipt = await requireActiveDemo(ctx, authId)
   await ctx.db.patch(ticket._id, {
     state: 'stored',
