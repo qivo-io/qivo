@@ -653,6 +653,16 @@ describe('the access lists', () => {
     expect(listText('user')).toBe('No one matches.')
   })
 
+  it("finds the lead by a search with no no-match line under the lead's row", async () => {
+    await open()
+    // the server answers the lead beside the rows, which hold none
+    await type(find('[data-project-access-list-search="user"]'), 'mira')
+    await rest()
+    expect(rows('user')).toEqual(['Mira Holm'])
+    expect(listText('user')).not.toContain('No one matches.')
+    expect(has('[data-project-access-end="none"]')).toBe(false)
+  })
+
   it('loads more a batch at a time, moves focus to the first new row and asks for a search past the cap', async () => {
     server.force = { batch: 1 }
     // the module the page holds, which load() imported afresh

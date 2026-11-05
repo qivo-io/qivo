@@ -168,12 +168,14 @@ const noteClass = 'px-0.5 py-1 text-sm text-text-2'
    Load more and Retry, in that list's words. A list that answered no rows
    says why, and never that the list is empty: `held` names the answer.
    The empty line shows only at the list's real end with nothing shown,
-   and takes focus when the last row leaves. */
+   and takes focus when the last row leaves. A search's no-match line
+   shows only when the search matched no row, the lead's included. */
 function AccessEndLine({
   kind,
   end,
   held,
   shown,
+  matched,
   stopped,
   first,
   loading,
@@ -187,6 +189,9 @@ function AccessEndLine({
   held: string | undefined
   /** whether any row shows, the lead's and kept ones included */
   shown: boolean
+  /** whether the search matched a row outside the batches' rows, as the
+      lead's row, which the server answers beside them */
+  matched: boolean
   stopped: boolean
   /** whether the list holds its first batch at most */
   first: boolean
@@ -254,7 +259,8 @@ function AccessEndLine({
     case 'partial':
       return null
     case 'none':
-      return line(team ? 'No teams match.' : 'No one matches.')
+      // not `shown`: a kept Added row shows whatever the search
+      return matched ? null : line(team ? 'No teams match.' : 'No one matches.')
     case 'end':
       return shown || searching ? null : (
         <p data-project-access-none={kind} tabIndex={-1} className="text-sm text-text-2">
@@ -665,6 +671,7 @@ export function ProjectAccessEditor({
     rows: ReactNode[],
     more: () => void,
     search: React.RefObject<HTMLInputElement | null>,
+    matched = false,
   ) => {
     const state = stateOf(of.list)
     return (
@@ -682,6 +689,7 @@ export function ProjectAccessEditor({
             end={of.end}
             held={of.list.phase === 'held' ? of.list.answers[0]?.state : undefined}
             shown={rows.length > 0}
+            matched={matched}
             stopped={of.list.stopped}
             first={of.list.batches.length <= 1}
             loading={of.list.phase === 'more'}
@@ -707,6 +715,7 @@ export function ProjectAccessEditor({
           items('user', users.list, userRow, lead ? [leadRow(lead)] : []),
           moreUsers,
           userSearch,
+          lead !== null,
         )}
       </SettingsGroup>
 
