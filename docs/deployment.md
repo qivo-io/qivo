@@ -782,7 +782,7 @@ app already sends (`issues.update`, `issues.create`, `issues.createParent`,
 expected values that read showed. There is no schema change, no backfill
 and no release step.
 
-From the release after v0.1.126, `teamSync.agenda` answers one Team sync
+From the release after v0.1.127, `teamSync.agenda` answers one Team sync
 meeting for one scope, a project, a team or All projects, with every task
 the page shows, the people it walks and their week's hours, within Team
 sync's ceiling of 1,000 tasks. No app calls it yet, so that release sets
