@@ -121,7 +121,7 @@ async function load() {
 type Options = {
   kind?: RelationKind
   task?: typeof TASK
-  current?: (RelatedTaskVM & { type?: string; row?: RelationCandidate })[]
+  current?: (RelatedTaskVM & { type?: string; row?: RelationCandidate; locked?: boolean })[]
   note?: string | null
   locked?: boolean
   toggle?: (...args: unknown[]) => Promise<boolean> | boolean
@@ -499,6 +499,34 @@ describe('the relation picker', { timeout: 20_000 }, () => {
       { on: false, busy: false, parent: { id: null, hidden: false } },
     ])
     expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('keeps a current row checked and locked once the person can no longer change it, and lists one they never could not at all', async () => {
+    await load()
+    const kid = relation(45, 'Mount the board')
+    await show({ current: [kid, { ...relation(47, 'Seal the case'), locked: true }] })
+    await reads[0].answer(batch([row(47, { title: 'Seal the case' })]))
+    // QN-47 is a subtask the person cannot change, so the picker lists it
+    // from no source, neither as current nor as a task to pick
+    expect(rowIds()).toEqual(['task-45'])
+    expect((rowOf('task-45') as HTMLButtonElement | null)?.disabled).toBe(false)
+    // their access to QN-45 drops while the picker is open; it is still a
+    // subtask, so it stays checked, and takes no press
+    await show({ current: [{ ...kid, locked: true }] })
+    const locked = rowOf('task-45') as HTMLButtonElement | null
+    expect(locked?.dataset.pickerCurrent).toBe('')
+    expect(locked?.getAttribute('aria-pressed')).toBe('true')
+    expect(locked?.disabled).toBe(true)
+    await click(locked)
+    expect(picks).not.toHaveBeenCalled()
+    // their access comes back, and it takes a press again
+    await show({ current: [kid] })
+    expect((rowOf('task-45') as HTMLButtonElement | null)?.disabled).toBe(false)
+    // it leaves the window's list, a removal, so it shows as one to pick
+    await show({ current: [] })
+    expect(rowOf('task-45')?.dataset.pickerCurrent).toBeUndefined()
+    expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('false')
+    expect((rowOf('task-45') as HTMLButtonElement | null)?.disabled).toBe(false)
   })
 
   it('reads the list again from its start once the task moves to another project', async () => {

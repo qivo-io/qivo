@@ -23,12 +23,14 @@
      tasks.", which is this picker's own choice.
    - The window's own current relations of the picker's kind show first,
      from the window's lists, checked, matched in the browser by the rule
-     the server matches with (lib/search.ts matchesAllWords). While the
-     window's own removal of them waits (`locked`), they show without
-     taking a press. In Subtasks and Linked tasks a row that showed as
-     current stays listed for the picker's life with its last data,
-     unchecked once it leaves the window's list, so a relation taken off
-     can be chosen again. A task shows once.
+     the server matches with (lib/search.ts matchesAllWords), those the
+     person can change. While the window's own removal of them waits
+     (`locked`), they show without taking a press, and so does one the
+     person can no longer change, as after their access changed, which
+     stays checked as long as the window lists it. In Subtasks and Linked
+     tasks a row that showed as current stays listed for the picker's life
+     with its last data, unchecked once it leaves the window's list, so a
+     relation taken off can be chosen again. A task shows once.
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
@@ -86,16 +88,23 @@ export function PickerRefusal({ limit }: { limit: Limit }) {
 }
 
 /** A task of the window's own lists of the picker's relation: the Parent
-    row, a Subtasks row the person can change, or a Linked tasks row with
-    its relation as seen from the window's task. A Subtasks row the
-    workspace does not hold carries `row`, its short row as a picker's row
-    without a parent, which a press that makes it a subtask again sends. */
-export type CurrentRelation = RelatedTaskVM & { type?: string; row?: RelationCandidate }
+    row, a Subtasks row, or a Linked tasks row with its relation as seen
+    from the window's task. A Subtasks row the workspace does not hold
+    carries `row`, its short row as a picker's row without a parent, which
+    a press that makes it a subtask again sends. `locked` marks one the
+    person cannot change, which the picker lists, checked and without
+    taking a press, only once it listed it as one they could, as after
+    their access changed while it is open. */
+export type CurrentRelation = RelatedTaskVM & {
+  type?: string
+  row?: RelationCandidate
+  locked?: boolean
+}
 
-/** The window's current relations of the picker's kind, which show first,
-    a note while the list they come from is not whole, and `locked` while
-    the window's own removal of them waits, so they show without taking a
-    press. */
+/** The window's current relations of the picker's kind, every one its
+    list holds, which show first, a note while that list is not whole, and
+    `locked` while the window's own removal of them waits, so they show
+    without taking a press. */
 export type CurrentRelations = {
   rows: readonly CurrentRelation[]
   note: string | null
@@ -269,7 +278,12 @@ export function RelationPicker({
   // picker's life, so one taken off stays listed and can be pressed again;
   // a picker that closes after one pick (Parent) keeps none
   const wasCurrent = useRef(new Map<string, CurrentRelation>())
-  if (!single) for (const row of current.rows) wasCurrent.current.set(row.uuid, row)
+  // a current relation the person cannot change lists only once it showed
+  // as one they could, and then stays current, checked and locked, as
+  // long as the window lists it, rather than show as taken off
+  const listed = (row: CurrentRelation) => !row.locked || wasCurrent.current.has(row.uuid)
+  if (!single)
+    for (const row of current.rows) if (listed(row)) wasCurrent.current.set(row.uuid, row)
   // the server's rows only for the text they answer, so a new text's rows
   // start empty until its answer arrives
   const served = answered ? list.rows : []
@@ -277,9 +291,14 @@ export function RelationPicker({
   const choices: Choice[] = []
   for (const row of current.rows) {
     const key = issueKey(row.num)
-    if (shownIds.has(row.uuid) || !matches(key, row.title)) continue
+    if (shownIds.has(row.uuid)) continue
+    // a relation the picker does not list is still current, so no other
+    // source lists it as one to make
+    if (!listed(row)) shownIds.add(row.uuid)
+    if (!listed(row) || !matches(key, row.title)) continue
     shownIds.add(row.uuid)
-    choices.push({ uuid: row.uuid, key, title: row.title, current: row, locked: !!current.locked })
+    const locked = !!current.locked || !!row.locked
+    choices.push({ uuid: row.uuid, key, title: row.title, current: row, locked })
   }
   for (const row of wasCurrent.current.values()) {
     const key = issueKey(row.num)

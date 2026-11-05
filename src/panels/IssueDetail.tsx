@@ -2537,9 +2537,9 @@ function IssueDetail({
   const linkEditor = (row: RelatedTaskVM) => canRelate || rowEditor(row)
   const canUnlink = (row: RelatedTaskVM) => current && !waits(linked) && linkEditor(row)
   const canDetach = (row: RelatedTaskVM) => current && !waits(subtasks) && rowEditor(row)
-  // the links the person could take off in any state of the window's read,
-  // so a read that fails or runs again locks them in the picker rather
-  // than lists them as taken off
+  // the links the picker lists, those the person could take off in any
+  // state of the window's read, so a picker opened while that read fails
+  // or runs again lists them, locked
   const linkLister = (row: RelatedTaskVM) => canLabel || answerEditorOn || rowEditor(row)
   // the removals on their way of rows the workspace does not hold, which
   // stay listed until their answer drops them
@@ -2558,7 +2558,10 @@ function IssueDetail({
   // The pickers show the window's own current relations first, checked,
   // those the person could take off, and say so while the list they come
   // from is not whole. While a removal waits (canDetach, canUnlink) they
-  // show without taking a press. A subtask the workspace does not hold
+  // show without taking a press. Each picker gets every relation its list
+  // holds, those the person cannot take off marked `locked`, so one whose
+  // access changed while the picker is open stays checked and locked
+  // rather than show as taken off. A subtask the workspace does not hold
   // carries its row from the window's answer, so the picker can make it a
   // subtask again once it took it off.
   const notWhole = (section: SectionVM<unknown>, what: string) =>
@@ -2569,17 +2572,20 @@ function IssueDetail({
         : `Some current ${what} could not be loaded.`
   const currentParent: CurrentRelations = { rows: parentRow ? [parentRow] : [], note: null }
   const currentSubtasks: CurrentRelations = {
-    rows: subtasks.rows.filter(rowEditor).map(
+    rows: subtasks.rows.map(
       (row): CurrentRelation => ({
         ...row,
         row: row.held ? undefined : (P.subtaskPickRow(row.uuid) ?? undefined),
+        ...(rowEditor(row) ? {} : { locked: true }),
       }),
     ),
     note: notWhole(subtasks, 'subtasks'),
     locked: !current || waits(subtasks),
   }
   const currentLinks: CurrentRelations = {
-    rows: linked.rows.filter(linkLister).map((row): CurrentRelation => ({ ...row })),
+    rows: linked.rows.map(
+      (row): CurrentRelation => ({ ...row, ...(linkLister(row) ? {} : { locked: true }) }),
+    ),
     note: notWhole(linked, 'linked tasks'),
     locked: !current || waits(linked),
   }

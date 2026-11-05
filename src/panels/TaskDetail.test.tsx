@@ -787,6 +787,31 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     ])
   })
 
+  it('keeps a current subtask checked and locked in the Subtasks picker once access to it drops while the picker is open', async () => {
+    await load()
+    const held = holdRelations()
+    await openWindow(await noteTask(far()))
+    const kid = task(FAR_KID, 42, { title: 'Mount the antenna', parent_id: FAR })
+    const withKid = (level: string) =>
+      okAnswer(far(), { subtasks: { rows: [{ ...short(kid), level }], complete: true } })
+    await answer('taskWindow:task', withKid('lead'))
+    await click(document.querySelector('[aria-label="Add subtask"]'))
+    await nextFrame()
+    await held.at(-1)?.answer(pickerBatch([]))
+    const rowOf = () => document.querySelector<HTMLButtonElement>(`[data-picker-row="${FAR_KID}"]`)
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(false)
+    // the window's next answer says Mira only views QN-42's project now
+    await answer('taskWindow:task', withKid('viewer'))
+    // it is still a subtask, so it stays checked, and takes no press
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(true)
+    await click(rowOf())
+    expect(sentArgs('issues:update')).toEqual([])
+  })
+
   it('keeps a link that only its Edit on the task takes off listed, checked and locked, while the read of a task shown from its answer fails', async () => {
     await load()
     const held = holdRelations()

@@ -129,31 +129,32 @@ task matches. Attachments support drag-and-drop and follow the
 organization's per-file size limit ([Attachment limits](./organization-and-team-settings.md)).
 
 The **Parent**, **Subtasks** and **Linked tasks** pickers search on the
-server and show 25 tasks at a time, with **Load more** for the next 25.
-The search covers every task you could choose, also tasks that have not
-loaded into the workspace yet, and finds a task when every word you type
-occurs in its ID or title. The task's current parent, subtasks and links
-show first, checked, so you can take them off, and one you take off stays
-listed, unchecked, so you can choose it again. When someone else changes
-one of them while the picker is open, the picker shows the change once the
-window does, also for one you just picked. While the window is still
-loading them, or could not load them all, the picker says so, and while
-their list could not load, they stay checked and cannot be taken off
-there. The pickers list the task's own sub-project first, then the other
+server and show 25 tasks at a time, with **Load more** for the next 25. The
+search covers every task you could choose, also tasks that have not loaded
+into the workspace yet, and finds a task when every word you type occurs in
+its ID or title. The task's current parent, subtasks and links show first,
+checked, so you can take them off, and one you take off stays listed,
+unchecked, so you can choose it again. When someone else changes one of
+them while the picker is open, the picker shows the change once the window
+does, also for one you just picked. While the window is still loading them,
+or could not load them all, the picker says so, and while their list could
+not load, they stay checked and cannot be taken off there. So does one you
+can no longer change while the picker is open, as after your access
+changed. The pickers list the task's own sub-project first, then the other
 sub-projects of its project, each in the order its tasks were created. If
 the task moves to another project meanwhile, the picker lists them again
 from the start. **Linked tasks** stops at the end of the task's own
-project, and **Search all your projects** goes on into your other
-projects. A typed task ID, such as QN-12, finds that task first, anywhere
-you could link it. In a large organization a picker can say **Qivo checked
-part of the tasks. Load more continues.**, and **Load more** goes on from
-there. After 200 tasks a picker asks you to search to find more.
-**No matching tasks.** appears only once the whole list and the task's
-current relations have loaded, beside the row that creates a task where
-you can create one. Enter picks the only task shown, or creates a task
-when none matches, once the whole list and the task's current relations
-have loaded, and in **Linked tasks** also at the end of the task's own
-project. A typed task ID picks its task at once.
+project, and **Search all your projects** goes on into your other projects.
+A typed task ID, such as QN-12, finds that task first, anywhere you could
+link it. In a large organization a picker can say **Qivo checked part of
+the tasks. Load more continues.**, and **Load more** goes on from there.
+After 200 tasks a picker asks you to search to find more. **No matching
+tasks.** appears only once the whole list and the task's current relations
+have loaded, beside the row that creates a task where you can create one.
+Enter picks the only task shown, or creates a task when none matches, once
+the whole list and the task's current relations have loaded, and in
+**Linked tasks** also at the end of the task's own project. A typed task ID
+picks its task at once.
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.
