@@ -973,7 +973,7 @@ describe('hidden data', () => {
     }
   })
 
-  it("answers the same, and stops at the same budget, whatever a team's archived and foreign shared projects hold", async () => {
+  it("answers the same, and stops at the same budget, whatever a team's archived, foreign and hidden shared projects hold", async () => {
     const answers: unknown[] = []
     const least: number[] = []
     for (const wide of [false, true]) {
@@ -995,8 +995,20 @@ describe('hidden data', () => {
           }),
         )
       unseen.push(await plantProject(t, { org_id: f.otherOrg.id, key: 'S9', num: 509, ...text(9) }))
+      // a sub-project of the shared meta the viewer cannot see, shared on
+      // its own after the meta, so the read takes it through the meta's
+      // range and again by id; SKNK's share after it asks the access a
+      // fresh question, so a budget decision follows the second read
+      const sibling = await plantHiddenSibling(t, f, f.viewer)
+      await t.run((ctx) => ctx.db.patch(sibling._id, text(8)))
       // the viewer, no member of the team, reads the rows of its live share
-      const team = await plantTeam(t, f.org.id, 'Shares', [f.user], [...unseen, f.meta])
+      const team = await plantTeam(
+        t,
+        f.org.id,
+        'Shares',
+        [f.user],
+        [...unseen, f.meta, sibling, f.hidden],
+      )
       for (let n = 0; n < 3; n++)
         await task(t, f.sub, {
           title: ordinary(n).title,

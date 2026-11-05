@@ -615,7 +615,9 @@ export type Selection = {
  * returns charged at PROJECT_ROW_MAX_BYTES, as the reader may not see them,
  * one it answers null for as another organization's or an archived one
  * included, before it asks the reader's access about the meta and each of
- * them.
+ * them. The read by id is charged each time, so a project the view read
+ * before, as a team's share of a meta and of one of its sub-projects reads
+ * the sub-project twice, counts at the fixed size both times.
  */
 export async function projectSelection(
   ctx: QueryCtx,
@@ -625,24 +627,29 @@ export async function projectSelection(
 ): Promise<Selection | null> {
   await guard.take(BY_ID)
   const project = await byId(ctx, 'projects', projectId)
-  return project === null ? null : await selectionOf(ctx, guard, seat, project)
+  if (project === null) return null
+  guard.charge(project, PROJECT_ROW_MAX_BYTES)
+  return await selectionOf(ctx, guard, seat, project, true)
 }
 
 /**
  * projectSelection for `project`, a project row the view read itself, such
  * as one a range of the organization's top-level projects returned
  * (lib/teamSyncAgenda.ts All projects), which it keeps (ViewAccess seen)
- * rather than reading again by id. The same rules and reads follow.
+ * rather than reading again by id. It charges the row once a view unless
+ * the caller charged this read itself (`chargedByView`). The same rules
+ * and reads follow.
  */
 export async function selectionOf(
   ctx: QueryCtx,
   guard: ViewBudget,
   seat: ViewAccess,
   project: Doc<'projects'>,
+  chargedByView = false,
 ): Promise<Selection | null> {
   // charged before the checks, so another organization's or an archived
   // project's name and description move no answer either
-  seat.seen(project)
+  seat.seen(project, chargedByView)
   if (project.org_id !== seat.me.org_id || project.archived_at !== undefined) return null
   if (project.parent_id !== undefined)
     return (await seat.visible([project.id]))[0] ? { project, subProjects: [project] } : null
