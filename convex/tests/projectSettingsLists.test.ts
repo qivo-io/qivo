@@ -1612,7 +1612,9 @@ describe('reads at the design size', () => {
   it('reads an admin’s archive at its sum, 300 archived top-level projects and 1,000 archived sub-projects, half entries under live parents and half beneath archived ones', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const live = await plantMetas(t, f.org.id, names('Live ', 198))
+    // as many live top-level projects as 500 sub-projects need at 3 each
+    // beside withOrg's two, not the live figure, which this read leaves out
+    const live = await plantMetas(t, f.org.id, names('Live ', 167))
     const old = await plantMetas(t, f.org.id, names('Old ', 300), { archived_at: NOW })
     await spread(t, live, 500, 'gone', { archived_at: NOW })
     await spread(t, old, 500, 'part', { archived_at: NOW })
