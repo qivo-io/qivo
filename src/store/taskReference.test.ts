@@ -393,6 +393,25 @@ describe('the read of a reference', () => {
     expect(P.reference?.state).toBe('loading')
     one('taskWindow:task').deliver(okAnswer(FAR, 40))
     expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org } })
+    // a walk every seat said unavailable for reads them again after a
+    // change, and keeps a later seat's read through the next change
+    P.watchTaskRef(taskRef({ org: null, uuid: OTHER }))
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    expect(open('taskWindow:task')).toEqual([])
+    snap.access.push({ project_id: GUEST_PROJECT, profile_id: 'me-guest', level: 'user' })
+    publishWhole(snap)
+    await turn()
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    const again = one('taskWindow:task')
+    expect(again.args).toEqual({ org_id: GUEST, ref: OTHER })
+    snap.access[0] = { ...snap.access[0], level: 'viewer' }
+    publishWhole(snap)
+    await turn()
+    expect(one('taskWindow:task')).toBe(again)
+    expect(P.reference?.state).toBe('unavailable')
+    again.deliver({ state: 'unavailable' })
+    expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: OTHER })
   })
 
   it("hands a uuid's read over to the window's task side with no second subscription, which turns editable at once and runs again on Retry", () => {
