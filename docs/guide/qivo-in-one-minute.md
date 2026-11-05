@@ -24,7 +24,8 @@ Search, a link, a bookmark, Back or Forward, an Inbox row, or a task's
 subtasks or linked tasks before it has arrived
 shows at once, and you can change it at once, apart from setting or
 changing its parent, its subtasks and its links, which wait until it has
-arrived. Moving, archiving and
+arrived. A task opened by the number in its link takes changes once the
+window has read it on its own. Moving, archiving and
 deleting such a task work at once too, once its window has read every
 subtask of it. The Overview shows its figures,
 lists and health table from the server meanwhile. The Roadmap and Team sync

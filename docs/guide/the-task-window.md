@@ -180,8 +180,9 @@ the window and its address stay until you close it. If Qivo cannot reach
 the server, the window says **Couldn't open QN-12.**, with **Retry**. A
 task you open by the number in its link takes no change, which says
 **Available once Qivo can check this task for changes**, until the window
-has read the task on its own, a moment later. If you can edit its project, you can
-change it at once: its fields, its description and the images in it, its
+has read the task on its own, which on a large workspace comes after the
+first tasks have loaded. Then, if you can edit its project, you can
+change it: its fields, its description and the images in it, its
 labels and its files, and **Remove parent**. Each change shows at once and
 is saved against the task as the window showed it, so a change someone else
 made meanwhile is not overwritten. You can also move, archive or delete it
@@ -355,7 +356,7 @@ restarts its auto-archive clock. Archived tasks appear only in **Archived
 tasks** and in Search with **Include archived tasks** on. A shared link to an
 archived task opens it read-only under the note that it was archived, with
 **Restore** for someone who can edit its project. When its project is
-archived too, the note says so: restore the project first, then the task
+archived too, the note says to restore the project first, then the task
 from Archived tasks.
 
 When someone else archives a task you have open, its window stays, says the
