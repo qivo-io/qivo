@@ -15,9 +15,18 @@
  * (admin), Leo and Ben over every selection; the small fixture runs every
  * access shape for a user, a guest and a viewer, and the admin. Cases that
  * must fail if a rule drifts compare a drifted rule with the server's
- * answer. */
+ * answer.
+ *
+ * Team utilization's inputs come the same way. planning.ownerLoads for
+ * every person of the organization, asked as the owner-load cache asks
+ * and compared with the stand-in, read as the Roadmap view stage reads
+ * them (spans with a task id by their project, the paused list as paused
+ * work), give each person's hours a week and paused weeks that the strip
+ * derives from the workspace, under All projects and This project, in the
+ * default window and over 52 weeks. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import type {
   AutoMoveInputs,
@@ -26,6 +35,7 @@ import type {
   RoadmapFilters,
   RoadmapScope,
 } from '../../convex/lib/roadmap'
+import type { OwnerLoadsJson } from '../../convex/planning'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
 import {
@@ -45,7 +55,11 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
+import type { LoadIssue } from '../lib/workload'
+import { CALL_OWNERS } from './ownerLoadCache'
+import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import type { Snapshot } from './plannerFixture.setup'
+import type { TeamMode } from './roadmapOracle.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -777,5 +791,365 @@ describe('the planning session', () => {
       const ids = expectRows(P, answer, storeScope, weeks, row, `${label}, planned`, it.id)
       expect(ids.has(it.uuid), `${label}, planned`).toBe(kept)
     }
+  })
+})
+
+// ---------------------------------------------------------- Team utilization
+
+/** One owner of planning.ownerLoads' answers that is not `not_read`. */
+type OwnerAnswer = Exclude<OwnerLoadsJson['owners'][number], { state: 'not_read' }>
+
+/** planning.ownerLoads' answers for every person of `ids`, asked as the
+ * owner-load cache asks for `profile`, at most CALL_OWNERS a call for a
+ * staff seat, the not_read ones again, and one a call for a guest or
+ * Viewer. Each answer is compared with the stand-in's from the store's
+ * workspace (ownerLoadsStandIn.setup.ts), which the jsdom Board and the
+ * benchmark answer with. */
+async function ownerLoadsFor(t: T, P: Store, profile: Doc<'profiles'>, ids: readonly string[]) {
+  const staff = profile.org_role === 'admin' || profile.org_role === 'user'
+  const out: OwnerAnswer[] = []
+  for (let ask = [...ids]; ask.length > 0; ) {
+    const batch = staff ? ask.slice(0, CALL_OWNERS) : ask.slice(0, 1)
+    const args = { org_id: profile.org_id, owner_ids: batch }
+    const answer = await as(t, profile).query(api.planning.ownerLoads, args)
+    expect(ownerLoadsStandIn(P.snapshot, args), `${profile.name}: owner-load stand-in`).toEqual(
+      answer,
+    )
+    const notRead: string[] = []
+    for (const one of answer.owners)
+      if (one.state === 'not_read') notRead.push(one.owner_id)
+      else out.push(one)
+    // the first owner of a call is always read
+    if (notRead.length === batch.length) throw new Error(`${profile.name}: no owner read`)
+    ask = [...notRead, ...ask.slice(batch.length)]
+  }
+  return out
+}
+
+/** What a reading of the answers leaves out or ignores, for the cases
+ * that must fail. */
+type Drift = { keepHidden?: boolean; dropPaused?: boolean }
+
+/** The tasks Team utilization spreads from `owners`' answers on store
+ * `P`'s grid, as the Roadmap view stage reads them. Each span with a task
+ * id as a task of its project, the weeks by isoToWeek with the end at
+ * least the start as an IssueVM's, its hours and their measurement week,
+ * not paused; each paused span as a paused task; spans without a task id
+ * left out, as the strip counts visible projects. */
+function teamTasksOf(P: Store, owners: readonly OwnerAnswer[], drift: Drift = {}): LoadIssue[] {
+  const weeks = (s: { start_week: string; end_week: string }) => {
+    const start = P.dates.isoToWeek(s.start_week)
+    return { start, end: Math.max(start, P.dates.isoToWeek(s.end_week)) }
+  }
+  const out: LoadIssue[] = []
+  for (const one of owners) {
+    if (one.state !== 'ok') throw new Error(`${one.owner_id} is ${one.state}`)
+    for (const span of one.spans) {
+      if (span.issue_id === null && !drift.keepHidden) continue
+      out.push({
+        owner: one.owner_id,
+        project: span.project_id ?? 'hidden',
+        ...weeks(span),
+        remaining: span.remaining,
+        remainingSet:
+          span.remaining_set_at === null ? null : P.dates.tsToWeek(span.remaining_set_at),
+        paused: false,
+      })
+    }
+    if (!drift.dropPaused)
+      for (const span of one.paused)
+        out.push({ owner: one.owner_id, project: span.project_id, ...weeks(span), paused: true })
+  }
+  return out
+}
+
+/** Each of `people`'s hours in each week of `weeks` and their paused weeks
+ * in Team utilization's figures `load`, hours to a millionth (the two
+ * sides add the same floats in different orders); a person `load` does
+ * not name has no hours and no paused weeks. */
+function teamFigures(
+  load: ReturnType<Store['oracle']['teamLoad']>,
+  people: readonly string[],
+  [w0, w1]: Weeks,
+) {
+  return Object.fromEntries(
+    people.map((id) => {
+      const hours: number[] = []
+      for (let w = w0; w <= w1; w++) {
+        let total = 0
+        load.loads
+          .get(id)
+          ?.get(w)
+          ?.forEach((h) => {
+            total += h
+          })
+        hours.push(Math.round(total * 1e6) / 1e6)
+      }
+      return [id, { hours, paused: [...(load.paused.get(id) ?? [])].sort((a, b) => a - b) }]
+    }),
+  )
+}
+
+/** The profile ids of organization `orgId`, every one of them. */
+const orgPeople = (t: T, orgId: string) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('profiles')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .collect()
+    ).map((p) => p.id),
+  )
+
+/** The windows Team compares, in store `P`'s weeks, the app's default and
+ * 52 weeks around it. */
+function teamWindows(P: Store): [string, Weeks][] {
+  const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
+  return [
+    ['the default window', [w0, w1]],
+    ['52 weeks', [w0 - 20, w0 + 31]],
+  ]
+}
+
+/** Compares Team utilization from `owners`' answers with what store `P`
+ * derives, for every selection of `scopes`, both modes where the strip
+ * offers them and every window. Answers how many hours, paused weeks and
+ * paused people the comparison saw. */
+function expectTeam(
+  P: Store,
+  owners: readonly OwnerAnswer[],
+  scopes: readonly string[],
+  label: string,
+) {
+  const people = owners.map((o) => o.owner_id)
+  const tasks = teamTasksOf(P, owners)
+  const seen = { hours: 0, paused: 0, pausedPeople: new Set<string>() }
+  for (const scopeId of scopes) {
+    const info = P.scopeInfo(scopeId)
+    if (info === null) continue
+    const modes: TeamMode[] = info.wide ? ['all'] : ['all', 'scope']
+    for (const [windowLabel, weeks] of teamWindows(P))
+      for (const mode of modes) {
+        const what = `${label}, ${info.name}, ${mode}, ${windowLabel}`
+        const derived = P.oracle.teamLoad(info, mode, ...weeks)
+        // every person the strip shows was asked
+        for (const id of [...derived.loads.keys(), ...derived.paused.keys()])
+          expect(people, `${what}: ${id} asked`).toContain(id)
+        const want = teamFigures(derived, people, weeks)
+        expect(
+          teamFigures(P.oracle.teamLoad(info, mode, ...weeks, tasks), people, weeks),
+          what,
+        ).toEqual(want)
+        for (const [id, f] of Object.entries(want)) {
+          seen.hours += f.hours.filter((h) => h > 0).length
+          seen.paused += f.paused.length
+          if (f.paused.length > 0) seen.pausedPeople.add(id)
+        }
+      }
+  }
+  return seen
+}
+
+/** Whether Team utilization from `owners`' answers read with `drift`, or
+ * under `serverMode` where the strip shows `mode`, differs from what store
+ * `P` derives anywhere in `scopes`. */
+function teamDiffers(
+  P: Store,
+  owners: readonly OwnerAnswer[],
+  scopes: readonly string[],
+  drift: Drift,
+  mode: TeamMode,
+  serverMode: TeamMode = mode,
+) {
+  const people = owners.map((o) => o.owner_id)
+  const tasks = teamTasksOf(P, owners, drift)
+  return scopes.some((scopeId) => {
+    const info = P.scopeInfo(scopeId)
+    if (info === null || (mode === 'scope' && info.wide)) return false
+    return teamWindows(P).some(([, weeks]) => {
+      const want = teamFigures(P.oracle.teamLoad(info, mode, ...weeks), people, weeks)
+      const got = teamFigures(P.oracle.teamLoad(info, serverMode, ...weeks, tasks), people, weeks)
+      return JSON.stringify(got) !== JSON.stringify(want)
+    })
+  })
+}
+
+/** Every selection a Team case compares for store `P`, All projects, My
+ * view, each top-level project the store shows and each of their
+ * sub-projects it shows. */
+function teamScopes(P: Store): string[] {
+  const out = [P.ALL_SCOPE, P.MINE_SCOPE]
+  for (const meta of P.visibleProjects()) {
+    out.push(meta.id)
+    for (const id of meta.children ?? []) if (P.canSee(id)) out.push(id)
+  }
+  return out
+}
+
+/** The work every Team access case plants over the withOrg fixture for
+ * `subject`, dated around NOW's week. The subject and the user get
+ * scheduled hours in FW, PCB, a sibling sub-project of TBED and a
+ * sub-project of SKNK, and a review hand-off. The subject gets a paused
+ * leaf in each of those projects, a paused group, a paused review hand-off
+ * and an unscheduled paused task, and the user a legacy paused Backlog
+ * leaf. */
+async function plantTeam(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
+  const org_id = f.org.id
+  const skunk = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+  const sibling = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+  const task = (project: Doc<'projects'>, fields: Partial<Doc<'issues'>>) =>
+    plantIssue(t, { org_id, project_id: project.id, ...fields })
+  const planned = (from: number, weeks: number, hours: number) => ({
+    start_week: weekDay(from),
+    end_week: weekDay(from + weeks - 1),
+    remaining_hours: hours,
+    remaining_set_at: NOW,
+  })
+  const projects = [f.sub, f.sub2, sibling, skunk]
+  for (const [i, project] of projects.entries()) {
+    await task(project, { title: 'Subject work', assignee_id: subject.id, ...planned(i - 1, 3, 6) })
+    await task(project, { title: 'User work', assignee_id: f.user.id, ...planned(i, 2, 5) })
+    await task(project, {
+      title: 'Subject paused',
+      assignee_id: subject.id,
+      paused: true,
+      ...planned(i + 1, 2, 4),
+    })
+  }
+  await task(f.sub2, {
+    title: 'Handed to the user',
+    status: 'review',
+    assignee_id: subject.id,
+    reviewer_id: f.user.id,
+    ...planned(0, 1, 2.5),
+  })
+  await task(f.sub, {
+    title: 'Paused hand-off',
+    status: 'review',
+    assignee_id: subject.id,
+    reviewer_id: f.user.id,
+    paused: true,
+    ...planned(2, 2, 1),
+  })
+  const group = await task(f.sub, {
+    title: 'Paused group',
+    assignee_id: subject.id,
+    paused: true,
+    ...planned(-2, 6, 9),
+  })
+  await task(f.sub, { title: 'Its subtask', parent_id: group.id, ...planned(0, 1, 1) })
+  // a status write clears a pause, so this is legacy data
+  await task(sibling, {
+    title: 'Paused in Backlog',
+    status: 'backlog',
+    assignee_id: f.user.id,
+    paused: true,
+    ...planned(3, 1, 2),
+  })
+  await task(f.sub, { title: 'Paused, unplanned', assignee_id: subject.id, paused: true })
+  await countOrg(t, org_id)
+  return { skunk, sibling }
+}
+
+/** A Team access case: `shape` planted for a fresh seat of `role`, its
+ * store booted and every person's answers read. */
+async function teamShape(shape: (typeof SHAPES)[number] | null, role: 'user' | 'guest' | 'viewer') {
+  const t = newT()
+  const f = await withOrg(t)
+  const subject = await plantSeat(t, {
+    org_id: f.org.id,
+    org_role: role,
+    auth_user_id: `auth_${uuid()}`,
+  })
+  if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
+  const planted = await plantTeam(t, f, subject)
+  const P = await storeOf(t, subject, Date.parse(NOW) + 86_400_000)
+  const owners = await ownerLoadsFor(t, P, subject, await orgPeople(t, f.org.id))
+  return { t, f, P, subject, owners, ...planted }
+}
+
+describe('Team utilization', () => {
+  it('derives each person’s hours and paused weeks from the owner loads as the strip does, for Nora, Leo and Ben on Northstar', async () => {
+    const t = newT()
+    const { org, profiles } = await plantNorthstar(t)
+    await withReach(t)
+    const person = async (key: string) => {
+      const id = await northstarId(`person:${key}`)
+      const p = profiles.find((profile) => profile.id === id)
+      if (p === undefined) throw new Error(`no ${key}`)
+      return p
+    }
+    const [nora, leo, ben, emil, daniel] = await Promise.all(
+      ['nora', 'leo', 'ben', 'emil', 'daniel'].map(person),
+    )
+    const people = await orgPeople(t, org.id)
+    const now = Date.parse('2026-09-09T18:00:00.000Z')
+    for (const profile of [nora, leo, ben]) {
+      const P = await storeOf(t, profile, now)
+      const owners = await ownerLoadsFor(t, P, profile, people)
+      const scopes = teamScopes(P)
+      const seen = expectTeam(P, owners, scopes, profile.name)
+      expect(seen.hours, `${profile.name}: hours compared`).toBeGreaterThan(0)
+      if (profile !== nora) continue
+      // the stand-in was compared for both paused tasks' owners, and the
+      // strip marks their weeks
+      for (const owner of [emil, daniel]) {
+        const one = owners.find((o) => o.owner_id === owner.id)
+        expect(one?.state === 'ok' && one.paused.length, owner.name).toBe(1)
+        expect(seen.pausedPeople.has(owner.id), owner.name).toBe(true)
+      }
+      // these must fail, dropping the paused list, and reading every span
+      // as in the selection under This project
+      expect(teamDiffers(P, owners, scopes, { dropPaused: true }, 'all')).toBe(true)
+      expect(teamDiffers(P, owners, scopes, {}, 'scope', 'all')).toBe(true)
+      // and the answers read as built match everywhere
+      expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
+      expect(teamDiffers(P, owners, scopes, {}, 'scope')).toBe(false)
+    }
+  })
+
+  for (const role of ['user', 'guest', 'viewer'] as const)
+    it(`derives what the strip does for a ${role} in every shape`, async () => {
+      let paused = 0
+      for (const shape of SHAPES) {
+        const { P, owners, subject } = await teamShape(shape, role)
+        const seen = expectTeam(P, owners, teamScopes(P), `${subject.name}, ${shape[0]}`)
+        paused += seen.paused
+      }
+      expect(paused).toBeGreaterThan(0)
+    })
+
+  it('differs from a reading that keeps spans without a task, ignores their projects or drops the paused list', async () => {
+    // a user who sees TBED and not SKNK
+    const onTbed: (typeof SHAPES)[number] = [
+      'user grant on TBED',
+      (ctx, f, me) =>
+        ctx.db.insert('project_access', {
+          project_id: f.meta.id,
+          profile_id: me.id,
+          level: 'user',
+        }),
+    ]
+    const { P, owners, f, subject, sibling } = await teamShape(onTbed, 'user')
+    const scopes = teamScopes(P)
+    // the user's work in SKNK, which the subject cannot see, comes as busy
+    // time without a task id to a staff seat
+    const user = owners.find((o) => o.owner_id === f.user.id)
+    expect(user?.state === 'ok' && user.spans.some((s) => s.issue_id === null)).toBe(true)
+    expect(teamDiffers(P, owners, scopes, { keepHidden: true }, 'all')).toBe(true)
+    // the subject's work in PCB and the sibling, outside FW
+    expect(P.scopeInfo(f.sub.id)?.wide).toBe(false)
+    expect(teamDiffers(P, owners, [f.sub.id], {}, 'scope', 'all')).toBe(true)
+    expect(teamDiffers(P, owners, [f.sub.id, sibling.id], {}, 'scope')).toBe(false)
+    // the subject's paused leaves
+    expect(teamDiffers(P, owners, scopes, { dropPaused: true }, 'all')).toBe(true)
+    // the subject's paused leaves of FW, PCB and the sibling; the paused
+    // group, the leaf in SKNK and the unplanned one stay out, and the paused
+    // hand-off is its reviewer's
+    const me = owners.find((o) => o.owner_id === subject.id)
+    expect(me?.state === 'ok' && me.paused.map((p) => p.project_id).sort()).toEqual(
+      [f.sub.id, f.sub2.id, sibling.id].sort(),
+    )
+    expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
   })
 })
