@@ -150,7 +150,8 @@ const named = (row: { id: string; name: string }) => ({ id: row.id, name: row.na
  * organization, which list_team_members (machine/mcp.ts) answers too. */
 export const mcpTeamMissing = (ref: string): ConvexError<Refusal> =>
   notFound(`team "${ref}" not found in your organization`)
-/* MCP's sentence for a user ref that matches nothing in the caller's organization. */
+/* MCP's sentence for a user ref that matches nothing in the caller's
+ * organization. */
 const mcpUserMissing = (ref: string): ConvexError<Refusal> =>
   badRequest(`user "${ref}" not found in your organization`)
 

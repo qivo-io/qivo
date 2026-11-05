@@ -1,16 +1,17 @@
 /* Team member counts (schema.ts team_counts): for each team, its
  * memberships whose profile exists in the team's organization and is not a
  * guest. REST and MCP answer them as each team's member_count
- * (model/teams.ts teamSummary); Settings does not show them yet. Every write of a membership moves the count in its own transaction
- * (countMemberAdded, countMemberRemoved), given the organization whose
- * teams count the membership's profile, as the profile was before the write
- * (countingOrg). The profile writes that change that answer delete the
- * profile's memberships in the same transaction: becoming a guest and
- * leaving the guest role (profiles.update, model/orgs.ts leaveAllTeams). A
- * profile removal deletes the profile with as many memberships as its
- * budget allows; the rest keep counting through the removal row until its
- * background steps delete them (countingOrgOf). Creating a team adds its
- * row (insertTeamCount); deleting one deletes it (deleteTeamCount). The
+ * (model/teams.ts teamSummary); Settings does not show them yet. Every write
+ * of a membership moves the count in its own transaction (countMemberAdded,
+ * countMemberRemoved), given the organization whose teams count the
+ * membership's profile, as the profile was before the write (countingOrg).
+ * The profile writes that change that answer delete the profile's
+ * memberships in the same transaction: becoming a guest and leaving the
+ * guest role (profiles.update, model/orgs.ts leaveAllTeams). A profile
+ * removal deletes the profile with as many memberships as its budget allows;
+ * the rest keep counting through the removal row until its background steps
+ * delete them (countingOrgOf). Creating a team adds its row
+ * (insertTeamCount); deleting one deletes it (deleteTeamCount). The
  * teardowns that delete an organization's work over many steps delete its
  * counts before the memberships (model/orgDeletion.ts,
  * internal/demoCleanup.ts), so none reads wrong meanwhile.
