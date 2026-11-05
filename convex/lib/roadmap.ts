@@ -128,10 +128,12 @@ import {
  * - My view of 400 of the reader's own tasks over the 200 sub-projects
  *   their three teams share: 803, 1,239 and 0.55. A person in 5 teams, each
  *   sharing 20 sub-projects with one task of theirs: 298, 334 and 0.15.
- * - The largest My view the ceiling allows, 1,000 of the person's subtasks
- *   under 1,000 parents of others over 21 sub-projects of 3 projects, each
- *   shared with each of the person's 3 teams: 3,106, 3,195 and 1.87. One
- *   more answers over_ceiling from the counts in 84 ranges.
+ * - The largest My view the ceiling allows, which raises the person's own
+ *   tasks, a figure without a design size, to the ceiling that bounds them:
+ *   1,000 of the person's subtasks under 800 parents of others, every other
+ *   figure everyday, the person in 3 teams that share 20 projects of 3
+ *   sub-projects, 30 open tasks a sub-project: 2,785, 3,181 and 1.84. One
+ *   more answers over_ceiling from the counts in 163 ranges.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks, as on the Board, and a group's facts

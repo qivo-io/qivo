@@ -1169,63 +1169,46 @@ describe('real limits', () => {
     expect(answer.state).toBe('ok')
   })
 
-  it("answers the largest My view the ceiling allows, 1,000 of the person's subtasks under 1,000 parents over 21 sub-projects", async () => {
+  it("answers the largest My view the ceiling allows, 1,000 of the person's subtasks under 800 parents, every other figure everyday", async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
-    const tops: Doc<'projects'>[] = []
-    const subs: Doc<'projects'>[] = []
-    for (let k = 0; k < 3; k++) {
-      const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
-      tops.push(top)
-      subs.push(...(await plantSubs(t, top, 7)))
-    }
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 3; i++) {
-        const team = uuid()
-        const name = `Team ${i + 1}`
-        await ctx.db.insert('teams', {
-          id: team,
-          org_id: f.org.id,
-          ...named(name),
-          track_delay_default: true,
-          created_at: NOW,
-        })
-        await ctx.db.insert('team_members', {
-          team_id: team,
-          profile_id: me.id,
-          is_leader: false,
-          name_key: nameKey(me.name),
-        })
-        for (const sub of subs)
-          await ctx.db.insert('project_team_access', {
-            project_id: sub.id,
-            team_id: team,
-            level: 'user',
-            name_key: nameKey(name),
-          })
-      }
+    const me = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `auth_${uuid()}`,
+      accepted_at: NOW,
     })
-    // 1,000 subtasks of the person's, each under a parent of its own in its
-    // sub-project, 60 in the first sub-project and 47 in each other
+    // It raises one figure, the person's own tasks, which have no design
+    // size, to the ceiling that bounds them. They are subtasks under
+    // parents of others, so the read takes each parent by id. Every other
+    // figure keeps its everyday value: the person is in 3 teams, which
+    // share 20 projects of 3 sub-projects in turn, about 20 sub-projects a
+    // team, and each sub-project holds 30 open tasks, 17 or 16 of the
+    // person's subtasks under 13 or 14 parents
+    const { subs } = await plantShared(t, f.org.id, f.user, me, { tops: 20, subs: 3 })
+    const firstParents: Doc<'issues'>[] = []
     for (const [i, sub] of subs.entries()) {
-      const n = i === 0 ? 60 : 47
-      const own = await plantTasks(t, sub, n, ordinary)
+      const n = i < 40 ? 17 : 16
+      const parents = await plantTasks(t, sub, 30 - n, ordinary)
+      if (i === 0) firstParents.push(...parents)
       await plantTasks(t, sub, n, (j) => ({
         ...ordinary(j),
-        parent_id: own[j].id,
+        parent_id: parents[j % parents.length].id,
         assignee_id: me.id,
       }))
     }
     await withReach(t)
     await countOrg(t, f.org.id)
     const mine = await roadmapRead(t, [me], { kind: 'mine' })
-    record("My view, 1,000 of the person's subtasks under 1,000 parents", mine.answer, mine.read)
+    record("My view, 1,000 of the person's subtasks under 800 parents", mine.answer, mine.read)
     expect(stateOf(mine.answer)).toEqual({ state: 'ok', rows: 1000 })
-    if (mine.answer.state === 'ok') expect(mine.answer.parents).toHaveLength(1000)
+    if (mine.answer.state === 'ok') expect(mine.answer.parents).toHaveLength(800)
     // one more, which its write counts, so the counts bound answers
-    const parent = await task(t, subs[0], { title: ordinary(0).title })
-    await task(t, subs[0], { title: ordinary(1).title, parent_id: parent.id, assignee_id: me.id })
+    await task(t, subs[0], {
+      title: ordinary(1).title,
+      parent_id: firstParents[0].id,
+      assignee_id: me.id,
+    })
     const over = await roadmapRead(t, [me], { kind: 'mine' })
     record("My view, 1,001 of the person's subtasks", over.answer, over.read)
     expect(over.answer).toEqual({ state: 'over_ceiling', ceiling: ROADMAP_TASKS })
