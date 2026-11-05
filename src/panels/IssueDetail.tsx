@@ -23,7 +23,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { hasTooltip } from '@/lib/passEscapeOn'
 import { cn } from '@/lib/utils'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
-import { LIMITS, type Limit, MIB } from '../../convex/lib/limits'
+import { LIMITS, MIB } from '../../convex/lib/limits'
 import type { DescEditorHandle } from '../components/descEditor'
 import { IssueSubscribers } from '../components/IssueSubscribers'
 import { LimitedTextarea } from '../components/LimitedField'
@@ -62,15 +62,10 @@ import {
   useUnsaved,
   useUnsentScope,
 } from '../lib/leaveGuard'
-import {
-  parentBlock,
-  parentCandidatesFor,
-  subtaskBlock,
-  subtaskCandidatesFor,
-} from '../lib/relationCandidates'
+import { parentBlock, subtaskBlock } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { buildPath, issueLink, sameTask } from '../lib/router'
-import { matchesAllWords, moreMatches } from '../lib/search'
+import { matchesAllWords } from '../lib/search'
 import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
@@ -105,6 +100,12 @@ import {
   WAITS_FOR_CHECK,
   WAITS_FOR_TASKS,
 } from './Modals'
+import {
+  type CurrentRelation,
+  type CurrentRelations,
+  PickerRefusal,
+  RelationPicker,
+} from './RelationPicker'
 import { useTaskKey } from './taskKey'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
@@ -125,17 +126,11 @@ const NO_PROFILE = '__none__'
 /* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
    a task the workspace holds waits while tasks still load and no answer of
    its own serves its subtasks, since each acts on subtasks and blockers
-   that may be still to arrive, and why removing a related task the
-   workspace does not hold yet waits, since the removal edits its row
-   there. WAITS_FOR_CHECK says why a change to a task the window shows from
-   its own read waits while that read failed or runs again, and
+   that may be still to arrive. WAITS_FOR_CHECK says why a change to a task
+   the window shows from its own read waits while that read failed or runs
+   again, the Parent, Subtasks and Linked tasks changes included, and
    FAMILY_UNKNOWN why Move and Archive or delete are off while that read
    holds no whole subtask list. */
-/* Why the Parent, Subtasks and Linked tasks changes of a task the window
-   shows from its own read (P.taskDetail) wait, for someone who could make
-   them: each edits another task's row or the link rows, which
-   t3/limits-relation-pickers lets the window change from its answer. */
-const WAITS_FOR_TASK = 'Available once this task has loaded'
 /* Why the fields of an archived task the window shows read-only are off,
    for someone who could restore it. */
 const RESTORE_TO_CHANGE = 'Restore this task to change it'
@@ -148,7 +143,9 @@ const READ_ONLY = 'Read-only project access'
    workspace is listed rather than left out. Opening it passes its handle
    on, or for a task the workspace does not hold, a reference with its
    organization, number and uuid (lib/taskReference.ts), so the window
-   shows it from its own read and the address names it. */
+   shows it from its own read and the address names it. Its × removes the
+   relation from the row as the window shows it, whether or not the
+   workspace holds the task, and shows busy until that write answers. */
 function MiniIssueRow({
   task,
   onOpen,
@@ -159,8 +156,15 @@ function MiniIssueRow({
   onOpen: (id: string) => void
   relation?: { label: string; glyph: string; completedLabel?: string }
   // disabled when the server would refuse the removal for read-only access,
-  // with `hint` saying why when it is another reason
-  remove?: { label: string; onClick: () => void; disabled?: boolean; hint?: string }
+  // with `hint` saying why when it is another reason, and `busy` while its
+  // write is on its way, so a second press sends nothing
+  remove?: {
+    label: string
+    onClick: () => void
+    disabled?: boolean
+    hint?: string
+    busy?: boolean
+  }
 }) {
   const proj = P.project(task.project)
   const done = task.done
@@ -208,7 +212,11 @@ function MiniIssueRow({
           aria-label={remove.label}
           title={remove.disabled ? (remove.hint ?? READ_ONLY) : remove.label}
           disabled={remove.disabled}
-          onClick={remove.onClick}
+          aria-busy={remove.busy || undefined}
+          {...(remove.busy ? { 'data-remove-busy': '' } : {})}
+          onClick={() => {
+            if (!remove.busy) remove.onClick()
+          }}
         >
           <Icon name="close" size={16} />
         </Button>
@@ -797,170 +805,6 @@ export function LabelPickerPopup({
           </Button>
         )}
       </div>
-    </AnchoredPop>
-  )
-}
-
-/* In a picker, where its create row would be: why a query too long to
-   name the new record creates nothing. */
-function PickerRefusal({ limit }: { limit: Limit }) {
-  return (
-    <p data-picker-refusal role="status" className="px-2 py-1.5 text-sm text-danger">
-      {limitSentence(limit)}
-    </p>
-  )
-}
-
-/* The most tasks the issue picker lists at once; it says how many more match. */
-const ISSUE_PICKER_SHOWN = 8
-
-/* Issue picker: same floating-popup concept as the label picker — search
-   existing issues by key or title and pick on click. `single` closes after
-   one pick (parent), otherwise it stays open for multiple toggles
-   (sub-issues, linked issues). When the query matches nothing, a
-   clearly-marked create row appears — the new issue is created in the same
-   sub-project. `header` slots extra controls into the search row (the
-   linked-issues relation selector). */
-function IssuePickerPopup({
-  anchor,
-  onDone,
-  placeholder,
-  candidates,
-  isOn,
-  onPick,
-  single,
-  createLabel,
-  onCreate,
-  header,
-}: {
-  anchor: { x: number; y: number }
-  onDone: () => void
-  placeholder: string
-  candidates: IssueVM[]
-  isOn: (x: IssueVM) => boolean
-  onPick: (x: IssueVM) => void
-  single?: boolean
-  createLabel: string
-  onCreate?: (title: string) => void
-  header?: React.ReactNode
-}) {
-  const [q, setQ] = useStateID('')
-  const ql = q.trim().toLowerCase()
-  const pool = ql
-    ? candidates.filter((x) => matchesAllWords(`${x.key}\n${x.title}`, ql))
-    : candidates
-  const matches = pool.slice(0, ISSUE_PICKER_SHOWN)
-  // like the label picker: no create row when the query IS an existing issue,
-  // so an exact search can't accidentally create a duplicate
-  const canCreate = !!ql && !!onCreate && !pool.some((x) => x.title.toLowerCase() === ql)
-  // the query becomes the new task's title, so a longer one creates nothing
-  const tooLong = overLimit(LIMITS.title, q)
-  const pick = (x: IssueVM) => {
-    onPick(x)
-    if (single) onDone()
-    else setQ('')
-  }
-  const create = () => {
-    // a paused create keeps the typed title and the picker open
-    if (tooLong || P.refusePausedEdit()) return
-    onCreate?.(q.trim())
-    if (single) onDone()
-    else setQ('')
-  }
-  return (
-    <AnchoredPop
-      x={anchor.x}
-      y={anchor.y}
-      width={Math.min(340, window.innerWidth - 24)}
-      onClose={onDone}
-    >
-      {/* unruled like the label pop above it (deviation #65) */}
-      <div className="[display:flex] [align-items:center] [gap:8px] [padding:10px_12px_8px]">
-        {header}
-        <Input
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              if (matches.length === 1) pick(matches[0])
-              else if (canCreate && matches.length === 0) create()
-            }
-          }}
-          placeholder={placeholder}
-          className="[flex:1] [min-width:0] [background:transparent] [border:none] [outline:none] [color:var(--text-1)] [font-size:var(--fs-base)] [font-family:var(--sans)] [padding:0]"
-        />
-      </div>
-      <div className="[display:flex] [flex-direction:column] [gap:2px] [max-height:260px] [overflow-y:auto] [padding:5px]">
-        {matches.map((x) => {
-          const on = isOn(x)
-          return (
-            <Button
-              type="button"
-              key={x.id}
-              onClick={() => pick(x)}
-              className={cn(
-                'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
-                on && 'font-semibold',
-              )}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--hover)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent'
-              }}
-              variant="unstyled"
-            >
-              <IssueKey id={x.key} />
-              <span className="[flex:1] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                {x.title}
-              </span>
-              {on && (
-                <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />
-              )}
-            </Button>
-          )
-        })}
-        {matches.length === 0 && !canCreate && (
-          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
-            {P.stillLoading() !== null
-              ? 'No matching tasks yet. Tasks are still loading.'
-              : ql
-                ? 'No matching tasks.'
-                : 'No eligible tasks.'}
-          </div>
-        )}
-        {canCreate && tooLong && <PickerRefusal limit={LIMITS.title} />}
-        {canCreate && !tooLong && (
-          <Button
-            type="button"
-            onClick={create}
-            className={`flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 pb-1.5 pt-2 text-left text-base text-text-1 hover:bg-hover ${matches.length ? 'mt-1.5' : ''}`}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--hover)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-            }}
-            variant="unstyled"
-          >
-            <Icon name="plus" size={13} color="var(--text-2)" />
-            <span className="[font-weight:600]">{createLabel}</span>
-            <span className="[color:var(--text-3)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-              “{q.trim()}”
-            </span>
-          </Button>
-        )}
-      </div>
-      {/* under the scrolling list, so it shows however long the list is */}
-      {pool.length > matches.length && (
-        <div
-          data-picker-more={pool.length - matches.length}
-          className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_17px_10px]"
-        >
-          {moreMatches(pool.length - matches.length)}
-        </div>
-      )}
     </AnchoredPop>
   )
 }
@@ -2469,12 +2313,14 @@ function IssueDetail({
           : groupTotals(subtasks)
       : null
   const prog = totals?.progress
-  // the Parent row: the workspace's, or the answer's for a task shown from it
+  // the Parent row: the workspace's, or the answer's for a task shown from
+  // it, and for a held task whose parent the workspace does not hold, as
+  // one the Parent picker offered, the window's own answer's
   const parentUuid = held?.parent ? P.issueById[held.parent]?.uuid : undefined
   const parentRow = held
     ? parentUuid
       ? P.relatedTask(parentUuid)
-      : null
+      : P.shownParent(held.uuid)
     : (detail?.parent ?? null)
   const meta = it ? P.metaOf(it.project) : null
   // A task lives in its sub-project. The parent may be navigation-only for a
@@ -2486,7 +2332,7 @@ function IssueDetail({
   // write sends the values the window showed as its expected values, which
   // the server checks. A task shown from the read of the reference it was
   // opened by takes none until the window's own read answered. Its
-  // relations wait (WAITS_FOR_TASK).
+  // relations take the same rule (canEdit).
   const answerEdits = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
   const canEdit = canLabel || answerEdits
   // Comments on a task shown from its answer need edit access by both the
@@ -2509,9 +2355,6 @@ function IssueDetail({
       : fromAnswer && answerEditor && archived
         ? RESTORE_TO_CHANGE
         : READ_ONLY
-  // the Parent, Subtasks and Linked tasks changes of a task shown from its
-  // answer wait for the task, for someone who could make them
-  const relationTip = fromAnswer && answerEditorOn ? WAITS_FOR_TASK : roTip
   // The phone's Activity view keeps the two frequent edits within reach.
   // Details uses the same controls, with the same choices and access checks.
   // Pause / Resume is the last row of the status menu: a pause is a state of
@@ -2661,23 +2504,6 @@ function IssueDetail({
     )
   }
 
-  // picker candidates, only while open, are tasks of the same top-level
-  // project that the person can edit, without cycles (lib/relationCandidates.ts)
-  const sameOrg = (x) => x.org === it.org
-  const sameProjFirst = (a, b) =>
-    Number(b.project === it.project) - Number(a.project === it.project)
-  const relationView = {
-    byId: P.issueById,
-    topLevelOf: P.topLevelOf,
-    canWrite: (pid: string) => P.canWrite(pid),
-  }
-  // the picker counts the subtasks as the Add subtask button does
-  // (P.capInputs), so a whole list at the cap offers nothing more
-  const subCandidates =
-    it && subAnchor
-      ? subtaskCandidatesFor({ ...it, children: P.capInputs(it).children }, P.issues, relationView)
-      : []
-  const parentCandidates = it && parentAnchor ? parentCandidatesFor(it, P.issues, relationView) : []
   // one level of subtasks, at most LIMITS.subtasks.max active ones: why this task can
   // take no subtask, or no parent, if it cannot
   // The caps count the larger of the workspace's list and the whole section
@@ -2685,21 +2511,60 @@ function IssueDetail({
   // more and never allows more.
   const noSubtask = it ? subtaskBlock({ ...it, children: P.capInputs(it).children }) : undefined
   const noParent = it ? parentBlock(it) : undefined
-  // Adding or removing a link needs edit access to either task, so a
-  // read-only task can still be linked to one the person can edit.
-  const canLink = (otherId: string) => canLabel || P.canWrite(P.issueById[otherId]?.project)
-  const linkable = (x: IssueVM) => sameOrg(x) && x.id !== it.id && canLink(x.id)
-  // a task shown from its answer links nothing yet
-  const canLinkAny = !!held && (canLabel || P.issues.some(linkable))
-  // the per-task cap on links: a full task takes no new link. Another full
-  // task stays listed, so a search for its title finds it rather than
-  // offering to create one, and picking it says why (P.addLink)
+  const hasParent = !!it && (!!it.parent || it.hasHiddenParent || !!parentRow)
+  // the per-task cap on links: a full task takes no new link, and the
+  // server's Linked tasks picker says so (convex/lib/relationPicker.ts)
   const noLink = it ? linkBlock(P.capInputs(it).links) : undefined
-  let linkCandidates = []
-  if (it && linkAnchor) {
-    // anything except the issue itself; already-linked issues show a check
-    // and toggle off (link direction has no cycle concerns)
-    linkCandidates = P.issues.filter(linkable).sort(sameProjFirst)
+  // The Parent, Subtasks and Linked tasks changes of the window's task take
+  // the window's rule for its fields (canEdit): a held task the person can
+  // edit, or one shown from a current answer that both the answer and the
+  // workspace give them Edit on. A related row's change also reads that
+  // row's level together with the workspace's, so a stale source only
+  // takes a control away, and waits for a current read of the window's
+  // task, as a task shown from the read of its reference takes no change.
+  const current = !!held || (!!it && P.editsFromAnswer(it.id))
+  const canRelate = canEdit
+  const rowEditor = (row: RelatedTaskVM) =>
+    (row.level === 'lead' || row.level === 'user') && P.canWrite(row.project)
+  // a link needs Edit on either task (convex/model/issues.ts linkAccess),
+  // so someone who only views this task links it to a task they can edit
+  const canLinkAny = !!it && current && !archived && (canRelate || P.editsSomeProject(it.org))
+  const canUnlink = (row: RelatedTaskVM) =>
+    current &&
+    linked.state !== 'failed' &&
+    linked.state !== 'retrying' &&
+    (canRelate || rowEditor(row))
+  const canDetach = (row: RelatedTaskVM) => current && rowEditor(row)
+  // the removals on their way of rows the workspace does not hold, which
+  // stay listed until their answer drops them
+  const [removing, setRemoving] = useStateID<ReadonlySet<string>>(new Set())
+  const removeOnce = (uuid: string, send: () => Promise<boolean>) => {
+    if (removing.has(uuid)) return
+    setRemoving((now) => new Set(now).add(uuid))
+    void send().then(() =>
+      setRemoving((now) => {
+        const next = new Set(now)
+        next.delete(uuid)
+        return next
+      }),
+    )
+  }
+  // The pickers show the window's own current relations first, checked,
+  // and say so while the list they come from is not whole.
+  const notWhole = (section: SectionVM<unknown>, what: string) =>
+    section.state === 'loading'
+      ? `Loading the current ${what}…`
+      : section.state === 'ready' && section.complete
+        ? null
+        : `Some current ${what} could not be loaded.`
+  const currentParent: CurrentRelations = { rows: parentRow ? [parentRow] : [], note: null }
+  const currentSubtasks: CurrentRelations = {
+    rows: subtasks.rows.filter(canDetach),
+    note: notWhole(subtasks, 'subtasks'),
+  }
+  const currentLinks: CurrentRelations = {
+    rows: linked.rows.filter(canUnlink).map((row): CurrentRelation => ({ ...row })),
+    note: notWhole(linked, 'linked tasks'),
   }
 
   // the discussion spine: this issue's comments and activity interleaved in
@@ -4302,21 +4167,16 @@ function IssueDetail({
                                 variant="ghost"
                                 size="icon"
                                 className="task-heading-action"
-                                aria-label={
-                                  it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent'
-                                }
+                                aria-label={hasParent ? 'Change parent' : 'Set parent'}
                                 title={
-                                  relationTip ||
-                                  (it.parent ? undefined : noParent) ||
-                                  (it.parent || it.hasHiddenParent ? 'Change parent' : 'Set parent')
+                                  roTip ||
+                                  (hasParent ? undefined : noParent) ||
+                                  (hasParent ? 'Change parent' : 'Set parent')
                                 }
-                                disabled={!canLabel || (!it.parent && !!noParent)}
+                                disabled={!canRelate || (!hasParent && !!noParent)}
                                 onClick={() => openPickerUnder(parentSecRef, setParentAnchor, 340)}
                               >
-                                <Icon
-                                  name={it.parent || it.hasHiddenParent ? 'pen' : 'plus'}
-                                  size={16}
-                                />
+                                <Icon name={hasParent ? 'pen' : 'plus'} size={16} />
                               </Button>
                             </SectionHead>
                             {parentRow ? (
@@ -4382,8 +4242,8 @@ function IssueDetail({
                                 size="icon"
                                 className="task-heading-action"
                                 aria-label="Add subtask"
-                                title={relationTip || noSubtask || 'Add subtask'}
-                                disabled={!canLabel || !!noSubtask}
+                                title={roTip || noSubtask || 'Add subtask'}
+                                disabled={!canRelate || !!noSubtask}
                                 onClick={() => openPickerUnder(subSecRef, setSubAnchor, 340)}
                               >
                                 <Icon name="plus" size={16} />
@@ -4398,16 +4258,23 @@ function IssueDetail({
                                     onOpen={onOpen}
                                     remove={{
                                       label: 'Remove subtask',
-                                      onClick: () => P.updateIssue(row.handle, { parent: null }),
-                                      // detaching edits the subtask, not this task, and its
-                                      // row in the workspace; a task shown from its answer
-                                      // waits for the task (relationTip)
-                                      disabled: fromAnswer || !row.held || !P.canWrite(row.project),
-                                      hint: fromAnswer
-                                        ? relationTip
-                                        : row.held
-                                          ? undefined
-                                          : WAITS_FOR_TASKS,
+                                      // detaching edits the subtask, not this task, from
+                                      // its row as the window shows it
+                                      onClick: () =>
+                                        removeOnce(row.uuid, () =>
+                                          P.setSubtaskParent(
+                                            it.id,
+                                            {
+                                              uuid: row.uuid,
+                                              parent: it.uuid,
+                                              hiddenParent: false,
+                                            },
+                                            false,
+                                          ),
+                                        ),
+                                      disabled: !canDetach(row),
+                                      hint: current ? undefined : roTip,
+                                      busy: removing.has(row.uuid),
                                     }}
                                   />
                                 ))}
@@ -4436,7 +4303,7 @@ function IssueDetail({
                                 size="icon"
                                 className="task-heading-action"
                                 aria-label="Link task"
-                                title={canLinkAny ? noLink || 'Link task' : relationTip}
+                                title={canLinkAny ? noLink || 'Link task' : roTip}
                                 disabled={!canLinkAny || !!noLink}
                                 onClick={() => openPickerUnder(linkSecRef, setLinkAnchor, 340)}
                               >
@@ -4453,19 +4320,19 @@ function IssueDetail({
                                     relation={relMapID[row.type]}
                                     remove={{
                                       label: 'Remove link (both directions)',
-                                      onClick: () => P.removeLink(it.id, row.handle),
-                                      // the removal edits the workspace's link row
-                                      // and the other task's
-                                      disabled:
-                                        fromAnswer ||
-                                        !row.held ||
-                                        !row.linkHeld ||
-                                        !canLink(row.handle),
-                                      hint: fromAnswer
-                                        ? relationTip
-                                        : row.held && row.linkHeld
-                                          ? undefined
-                                          : WAITS_FOR_TASKS,
+                                      // the relation the row shows goes out as the one
+                                      // expected
+                                      onClick: () =>
+                                        removeOnce(row.uuid, () =>
+                                          P.unlinkTasks(it.id, { uuid: row.uuid }, row.type),
+                                        ),
+                                      disabled: !canUnlink(row),
+                                      hint: current
+                                        ? linked.state === 'failed' || linked.state === 'retrying'
+                                          ? WAITS_FOR_CHECK
+                                          : undefined
+                                        : roTip,
+                                      busy: removing.has(row.uuid),
                                     }}
                                   />
                                 ))}
@@ -4523,17 +4390,47 @@ function IssueDetail({
       {it && (held || canEdit) && labelAnchor && (
         <LabelPickerPopup it={it} anchor={labelAnchor} onDone={() => setLabelAnchor(null)} />
       )}
-      {held && subAnchor && (
-        <IssuePickerPopup
+      {/* The relation pickers, for the window's task held or shown from its
+          answer (lib/relationCandidates.ts names the window's own blocks,
+          RelationPicker.tsx how each reads the server). Each keys on the
+          window's task, so a reference that turns into its handle keeps
+          the picker's rows and busy rows. */}
+      {it && active && subAnchor && (
+        <RelationPicker
+          key={`sub-${taskKey}`}
+          kind="subtask"
+          task={it}
           anchor={subAnchor}
           onDone={() => setSubAnchor(null)}
           placeholder="Add subtasks: ID or title…"
-          candidates={subCandidates}
-          isOn={(x) => x.parent === it.id}
-          onPick={(x) => P.updateIssue(x.id, { parent: x.parent === it.id ? null : it.id })}
+          current={currentSubtasks}
+          seenOf={(c) =>
+            c.current
+              ? { on: true, busy: false, parent: { id: it.uuid, hidden: false } }
+              : {
+                  on: false,
+                  busy: false,
+                  parent: {
+                    id: c.candidate?.parent_id ?? null,
+                    hidden: !!c.candidate?.has_hidden_parent,
+                  },
+                }
+          }
+          toggle={(choice, on, seen) =>
+            P.setSubtaskParent(
+              it.id,
+              {
+                uuid: choice.uuid,
+                row: choice.candidate,
+                parent: seen.parent?.id ?? null,
+                hiddenParent: seen.parent?.hidden ?? false,
+              },
+              on,
+            )
+          }
           createLabel="Create new subtask:"
           onCreate={
-            noSubtask
+            noSubtask || !canRelate
               ? undefined
               : (title) => {
                   P.addIssue({ project: it.project, title, parent: it.id })
@@ -4541,12 +4438,16 @@ function IssueDetail({
           }
         />
       )}
-      {held && linkAnchor && (
-        <IssuePickerPopup
+      {it && active && linkAnchor && (
+        <RelationPicker
+          key={`link-${taskKey}`}
+          kind="link"
+          task={it}
           anchor={linkAnchor}
           onDone={() => setLinkAnchor(null)}
           placeholder="Link tasks: ID or title…"
-          candidates={linkCandidates}
+          current={currentLinks}
+          linkKind={linkType}
           header={
             <NativeSelect
               value={linkType}
@@ -4558,29 +4459,51 @@ function IssueDetail({
               <option value="relates">relates to</option>
             </NativeSelect>
           }
-          isOn={(x) => (it.links || []).some((l) => l.id === x.id)}
-          onPick={(x) => {
-            if ((it.links || []).some((l) => l.id === x.id)) P.removeLink(it.id, x.id)
-            else P.addLink(it.id, linkType, x.id)
-          }}
+          seenOf={(c) =>
+            c.current
+              ? { on: true, busy: false, link: c.current.type ?? null }
+              : { on: false, busy: false, link: null }
+          }
+          toggle={(choice, on, seen) =>
+            on
+              ? P.linkTasks(it.id, linkType, { uuid: choice.uuid })
+              : P.unlinkTasks(it.id, { uuid: choice.uuid }, seen.link ?? 'relates')
+          }
           createLabel="Create new linked task:"
           // the new task lands in this task's project, so only with edit access there
           onCreate={
-            canLabel && !noLink ? (title) => P.createLinked(it.id, linkType, title) : undefined
+            canRelate && !noLink
+              ? (title) => {
+                  void P.createLinked(it.id, linkType, title)
+                }
+              : undefined
           }
         />
       )}
-      {held && parentAnchor && (
-        <IssuePickerPopup
+      {it && active && parentAnchor && (
+        <RelationPicker
+          key={`parent-${taskKey}`}
+          kind="parent"
+          task={it}
           anchor={parentAnchor}
           onDone={() => setParentAnchor(null)}
           single
           placeholder="Set parent: ID or title…"
-          candidates={parentCandidates}
-          isOn={(x) => it.parent === x.id}
-          onPick={(x) => upd({ parent: it.parent === x.id ? null : x.id })}
+          current={currentParent}
+          seenOf={(c) => ({ on: !!c.current, busy: false })}
+          toggle={(choice, on) =>
+            on && choice.candidate
+              ? P.updateIssue(it.id, { parent: choice.uuid }, { parentRow: choice.candidate })
+              : P.updateIssue(it.id, { parent: null })
+          }
           createLabel="Create new parent task:"
-          onCreate={noParent ? undefined : (title) => P.createParent(it.id, title)}
+          onCreate={
+            noParent || !canRelate
+              ? undefined
+              : (title) => {
+                  void P.createParent(it.id, title)
+                }
+          }
         />
       )}
       {/* stacked ModalShell (like the sub-issue modal): nothing moves until

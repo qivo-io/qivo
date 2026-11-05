@@ -257,6 +257,37 @@ function one(name: string): Live {
   return live[0]
 }
 const answer = (name: string, value: unknown) => act(async () => one(name).deliver(value))
+/* The writes of mutation `name` the store sent, their arguments in order. */
+const sentArgs = (name: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === name)
+    .map(([, args]) => args as Record<string, unknown>)
+/* The relation pickers' reads, held until the test answers each. */
+function holdRelations() {
+  const held: { args: Record<string, unknown>; answer: (value: unknown) => Promise<void> }[] = []
+  network.query.mockImplementation((ref, args) =>
+    getFunctionName(ref) === 'taskWindow:relationCandidates'
+      ? new Promise((resolve) =>
+          held.push({ args, answer: (value) => act(async () => resolve(value)) }),
+        )
+      : Promise.resolve(null),
+  )
+  return held
+}
+/* Task `row` as a relation picker's row, and an ended batch of `rows`. */
+const pickerRow = (task: Task) => {
+  const { has_subtasks: _group, ...rest } = short(task)
+  return rest
+}
+const pickerBatch = (rows: unknown[], extra: Record<string, unknown> = {}) => ({
+  state: 'ok',
+  rows,
+  next: null,
+  all_projects: null,
+  stopped: false,
+  blocked: null,
+  ...extra,
+})
 const fail = (name: string) => act(async () => one(name).fail(new Error('Server Error')))
 /* Delivers what the server holds of the family task to the three lists. */
 const answerAll = async () => {
@@ -500,9 +531,6 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(far.textContent).toContain('Work')
     expect(far.querySelector('[role="img"][aria-label="In Progress"]')).not.toBeNull()
     expect(far.querySelector('[data-avatar="leo"]')).not.toBeNull()
-    const remove = far.querySelector<HTMLButtonElement>('.task-related-remove')
-    expect(remove?.disabled).toBe(true)
-    expect(await hintOf(remove)).toBe('Available once every task has loaded')
     // opening it passes a reference with its organization, number and
     // uuid, which the window reads from the server
     await act(async () => far.querySelector<HTMLElement>('button')?.click())
@@ -512,6 +540,19 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       num: 39,
       uuid: 'far',
     })
+    // its × works from the short row, with this task as the parent it
+    // shows, and the row leaves the list at once
+    const remove = far.querySelector<HTMLButtonElement>('.task-related-remove')
+    expect(remove?.disabled).toBe(false)
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    await act(async () => remove?.click())
+    expect(sentArgs('issues:update').at(-1)).toEqual({
+      org_id: snap.orgs[0].id,
+      id: 'far',
+      patch: { parent_id: null },
+      expected: { parent_id: 'fam', has_hidden_parent: false },
+    })
+    expect(section('subtasks').querySelector('[data-related-task="QN-39"]')).toBeNull()
   })
 
   it('draws a short group without a status, and a short task in review with its reviewer', async () => {
@@ -551,7 +592,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(titlesOf('subtasks')).toEqual(['Mount the new board', 'Order parts', 'Read the manual'])
   })
 
-  it('keeps the removal of a link the workspace does not hold yet waiting, between held tasks', async () => {
+  it('removes a link only the links answer holds, between held tasks, with the kind it shows', async () => {
     await load()
     await openTask()
     // a link to a held task that no workspace delivery holds yet
@@ -566,9 +607,20 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
       section('links').querySelector<HTMLButtonElement>(
         `[data-related-task="${handle}"] .task-related-remove`,
       )
-    expect(removeOf('QN-32')?.disabled).toBe(true)
-    expect(await hintOf(removeOf('QN-32'))).toBe('Available once every task has loaded')
+    expect(removeOf('QN-32')?.disabled).toBe(false)
     expect(removeOf('QN-31')?.disabled).toBe(false)
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    await act(async () => removeOf('QN-32')?.click())
+    expect(sentArgs('issues:removeLink').at(-1)).toEqual({
+      org_id: snap.orgs[0].id,
+      a: 'fam',
+      b: 'manual',
+      expected: { kind: 'blocks' },
+    })
+    // busy until its answer, so a second press sends nothing
+    expect(removeOf('QN-32')?.dataset.removeBusy).toBe('')
+    await act(async () => removeOf('QN-32')?.click())
+    expect(sentArgs('issues:removeLink')).toHaveLength(1)
   })
 
   it('keeps Read-only project access on a held row the person cannot edit', async () => {
@@ -688,32 +740,46 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(rollup()).toEqual(['visible', 'Σ 3h'])
   })
 
-  it('offers no new subtask in the picker once the whole list holds the cap', async () => {
+  it('offers no new subtask in the picker once the server says the task is full, and keeps the current ones to take off', async () => {
     await load()
+    const reads = holdRelations()
     await openTask()
+    await answerAll()
     await act(async () =>
       document.querySelector<HTMLElement>('button[aria-label="Add subtask"]')?.click(),
     )
     // the picker opens a frame after the press
     await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
-    // the candidates, by key: a picker row starts with its key
     const offered = () =>
-      [...document.querySelectorAll('button')]
-        .map((b) => b.textContent ?? '')
-        .filter((text) => /^QN-\d+/.test(text))
-        .map((text) => text.match(/^QN-\d+/)?.[0])
-    expect(offered()).toContain('QN-31')
-    // the server lists 100 subtasks while the workspace holds three
-    const far = Array.from({ length: LIMITS.subtasks.max - 3 }, (_, n) =>
-      short(task(`far-${n}`, 100 + n, { title: `Step ${n}`, parent_id: 'fam' })),
+      [...document.querySelectorAll<HTMLElement>('[data-picker-row]')].map(
+        (b) => b.dataset.pickerRow,
+      )
+    // the window's current subtasks Mira can edit first, then the batch
+    expect(reads.at(-1)?.args).toMatchObject({ issue_id: 'fam', kind: 'subtask' })
+    await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
+    expect(offered()).toEqual(['kid-1', 'kid-2', 'other'])
+    // the server counts 100 active subtasks, hidden and archived ones
+    // included, which the window does not list: no candidate, and the
+    // window's sentence
+    const search = document.querySelector<HTMLInputElement>('[data-relation-picker] input')
+    await act(async () => {
+      if (!search) return
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        search,
+        'ship',
+      )
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 300)))
+    await reads.at(-1)?.answer(pickerBatch([], { blocked: 'full' }))
+    expect(offered()).toEqual([])
+    expect(
+      document.querySelector<HTMLElement>('[data-relation-picker]')?.dataset.pickerBlocked,
+    ).toBe('full')
+    expect(document.querySelector('[data-relation-picker]')?.textContent).toContain(
+      `This task has ${LIMITS.subtasks.max} active subtasks, the most a task can have.`,
     )
-    await answer(
-      'taskWindow:task',
-      taskAnswer([short(row('kid-1')), short(row('kid-2')), short(row('kid-ro')), ...far]),
-    )
-    expect(offered()).not.toContain('QN-31')
-    // the current subtasks Mira can edit stay listed, to take off
-    expect(offered()).toEqual(expect.arrayContaining(['QN-28', 'QN-29']))
+    expect(document.querySelector('[data-picker-create]')).toBeNull()
   })
 
   it("never shows a task's lists under the subtask opened from them", async () => {
@@ -855,7 +921,7 @@ describe('while a large workspace still loads', { timeout: 20_000 }, () => {
     return next
   }
 
-  it('lists the subtasks still to arrive, keeps their removal and the task menu waiting, and stays at the cap', async () => {
+  it('lists the subtasks still to arrive, removes one at once, keeps the task menu waiting, and stays at the cap', async () => {
     const next = await staged()
     expect(P.stillLoading()).not.toBeNull()
     await openTask('01000000-fam')
@@ -892,9 +958,9 @@ describe('while a large workspace still loads', { timeout: 20_000 }, () => {
     for (const name of ['subtasks', 'links', 'attachments']) expect(stateOf(name)).toBe('complete')
     const first = section('subtasks').querySelector('[data-related-task="QN-100"]')
     expect(first?.textContent).toContain('Step 1')
+    // its × works before the workspace holds it
     const remove = first?.querySelector<HTMLButtonElement>('.task-related-remove')
-    expect(remove?.disabled).toBe(true)
-    expect(await hintOf(remove)).toBe('Available once every task has loaded')
+    expect(remove?.disabled).toBe(false)
     // the cap counts the whole list, which the workspace holds none of yet
     const add = document.querySelector<HTMLButtonElement>('[aria-label="Add subtask"]')
     expect(add?.disabled).toBe(true)
