@@ -2104,7 +2104,7 @@ let lastDeliveryAt: string | null = null
    Before every task is held, a task only shows that it came back when it
    brings a message, and one with no message for the restorer never does,
    so a restore also ends with the delivery that holds it, whether or not
-   its task's messages came: Convex hands that delivery to the listeners
+   its task's messages came. Convex hands that delivery to the listeners
    before the write resolves, so a restore accepted after such a delivery
    ends at once, and one accepted before any ends with the next one the
    store takes (tookInbox). A restore left waiting would swallow the
@@ -3172,9 +3172,9 @@ function releaseViewRows(slot: ViewSlot) {
  * Registers view `slot`'s read of `query` for the arguments `key`, JSON in
  * a fixed key order, or none with null, as the view's effect runs: the
  * rules of P.watchBoard, which every view read follows. Another query or
- * other arguments, or a new `attempt`, drop what the read held, except
- * other arguments that only narrow what the held answer shows (`narrows`):
- * that answer and its rows stay until the answer for `key` replaces them.
+ * other arguments, or a new `attempt`, drop what the read held. Other
+ * arguments that only narrow what the held answer shows (`narrows`) keep
+ * that answer and its rows until the answer for `key` replaces them.
  */
 function watchView(
   slot: ViewSlot,
@@ -9272,10 +9272,10 @@ export const PLANNER = {
       null, as the view's effect runs. The view passes null while its page
       or the tab is hidden: the read stops and keeps its rows, which show
       again, as refreshing, when it asks for the same arguments. Other
-      arguments, or a new `attempt` (Try again), drop what it held, except
-      arguments that only narrow the held answer's text filter (`narrows`,
-      views/board/useBoardView.ts narrowsText): that answer and its rows
-      stay until the answer for `key` arrives, so the Board narrows its
+      arguments, or a new `attempt` (Try again), drop what it held.
+      Arguments that only narrow the held answer's text filter (`narrows`,
+      views/board/useBoardView.ts narrowsText) keep that answer and its
+      rows until the answer for `key` arrives, so the Board narrows its
       cards on screen meanwhile. `owner` names the mounted view: a leaving
       page stays mounted, hidden, until the next one painted
       (components/KeptView.tsx), so the one that asks last owns the read,
