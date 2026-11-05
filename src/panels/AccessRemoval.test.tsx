@@ -910,6 +910,25 @@ describe('the press on the Settings pages', () => {
     },
   )
 
+  it('says so and sends nothing when another row is pressed while a removal is being checked', async () => {
+    await load({ ada: true })
+    let answered: (value: unknown) => void = () => {}
+    preview = () => new Promise((resolve) => (answered = resolve))
+    await projectPage()
+    await press(remove('leo'))
+    expect(remove('ada-berg')?.disabled).toBe(false)
+    await press(remove('ada-berg'))
+    expect(window.showToast).toHaveBeenLastCalledWith(
+      'Another removal is still being checked. Try again once it finishes.',
+      'info',
+    )
+    expect(reads('accessRemovals:preview')).toHaveLength(1)
+    await act(async () => answered(answer()))
+    await settle()
+    expect(windowText()).toContain('Leo Berg is assigned to or reviewing 1 task')
+    expect(writes()).toEqual([])
+  })
+
   it("gives focus to the row's own Remove after Change to Viewer, and to the next row's once the row leaves", async () => {
     await load({ ada: true })
     await projectPage()

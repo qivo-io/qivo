@@ -12,11 +12,16 @@ import { AccessRemovalModal } from './Modals'
 /* One removal as a key, to tell the pressed control apart. */
 const keyOf = (change: AccessRemoval) => JSON.stringify(change)
 
+/** What a press says while another removal of the page is being checked,
+    as it then removes nothing. */
+const REMOVAL_BUSY = 'Another removal is still being checked. Try again once it finishes.'
+
 /**
  * The press that starts a removal on a Settings page, and the removal
  * window it may open. `press(change, focus)` asks the server's preview
- * (P.startRemoval) and does nothing while another press of the page is
- * being checked. When the answer asks, it opens the window with it, and
+ * (P.startRemoval). While another press of the page is being checked it
+ * removes nothing and says so (REMOVAL_BUSY), as only the pressed control
+ * is disabled. When the answer asks, it opens the window with it, and
  * `focus` takes focus as the window closes; otherwise the store has done
  * what the answer called for, and `focus` takes focus once the page renders
  * the outcome, after the pressed control is enabled again.
@@ -45,7 +50,10 @@ export function useAccessRemoval(): {
   }, [])
   const focusAfterRender = useFocusAfterRender()
   const press = (change: AccessRemoval, focus: () => HTMLElement | null) => {
-    if (busy.current) return
+    if (busy.current) {
+      window.showToast?.(REMOVAL_BUSY, 'info')
+      return
+    }
     busy.current = true
     focusRef.current = focus
     setChecking(keyOf(change))
