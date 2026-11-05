@@ -8660,12 +8660,13 @@ export const PLANNER = {
       shows the task's details (syncWindowLoad), by the Board's rules
       (store/viewDelay.ts judgeDelay), so a window over a Board card shows
       the card's verdict. Null while that load's first answer is on its
-      way, DELAY_UNKNOWN where it came back unavailable, failed or past the
-      cap, or where a group's subtasks are not all there. A task shown from
-      its answer takes its group facts from P.taskDetail, a held one from
-      the workspace's tasks. Only a held group can have subtasks still to
-      load: those an answer leaves out are hidden from the person, which
-      no load changes. */
+      way, DELAY_UNKNOWN where it came back unavailable or failed, or where
+      a group's subtasks are not all there. The window's own registration
+      is never capped, since a guest's cap counts the calls of one view. A
+      task shown from its answer takes its group facts from P.taskDetail, a
+      held one from the workspace's tasks. Only a held group can have
+      subtasks still to load: those an answer leaves out are hidden from
+      the person, which no load changes. */
   windowDelay: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
     const { issue, facts } = windowDelayIssue(it)
     return judgeDelay(issue, it.org, viewDelayCtx, facts)

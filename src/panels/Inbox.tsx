@@ -976,7 +976,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
       {/* right: the task window itself, filling the pane, for every task the
           pane opens: it says itself when the task loads, can't be opened or
           couldn't be opened. Keyed on the task so switching rows remounts
-          it — the same reset an in-place issue swap does inside the floating
+          it, the same reset an in-place issue swap does inside the floating
           window, and the only thing that re-freezes the New mark for the
           item just clicked. The key is the task's (useTaskKey), not the
           string that names it, so a reference that turns into its handle,

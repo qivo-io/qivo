@@ -693,7 +693,7 @@ describe('buildPath', () => {
   })
 })
 
-describe('sameTask — whether two names name one task', () => {
+describe('sameTask, whether two names name one task', () => {
   it('compares by uuid, or by number in one organization, never by the strings alone', () => {
     const home5 = taskRef({ org: HOME, num: 5 })
     // a reference and the handle it moves to name one task
@@ -1229,7 +1229,7 @@ describe('phone page navigation', () => {
   })
 })
 
-describe('addressedTask — the task a boot reads with its first stage', () => {
+describe('addressedTask, the task a boot reads with its first stage', () => {
   it('names the slug and the ref taskWindow.task reads, from a path or a legacy hash', () => {
     const qn7 = { slug: 'northstar', ref: 'QN-7' }
     expect(addressedTask('/app/northstar/board/tasks/QN-7', '')).toEqual(qn7)

@@ -853,7 +853,7 @@ describe('the task window when its task leaves the board', { timeout: 20_000 }, 
     const task = await open('admin', undefined, 'inbox')
     await dropTask({ archived: true })
     // the pop-out names the task only by its handle, which the workspace
-    // no longer holds: it finds the task the pane noted
+    // no longer holds: it names the task the pane watches (P.unheldTask)
     await click(document.querySelector<HTMLElement>('[data-task-popout]'))
     const windows = () => [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
     await act(async () => {
