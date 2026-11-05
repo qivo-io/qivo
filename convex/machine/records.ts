@@ -781,7 +781,7 @@ export const RECORD_TOOLS: McpTool[] = [
       name: 'confirm_attachment_upload',
       title: 'Confirm attachment upload',
       description:
-        'Attach the file sent to the upload_url from start_attachment_upload. Give the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Only the same user can confirm it, for the same task and once. Answers the attachment as get_task lists it.',
+        'Attach the file sent to the upload_url from start_attachment_upload. Give the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Only the user that started the upload can confirm it, for the same task, and the file attaches once. A confirm sent again with the same ticket and storage_id, as after a lost answer, answers the same attachment, and any other ticket is refused. Answers the attachment as get_task lists it.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
