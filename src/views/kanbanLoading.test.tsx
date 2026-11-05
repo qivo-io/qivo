@@ -145,15 +145,38 @@ describe('the Board while every task loads', () => {
   it(
     'mounts its first screen at once and the rest in slices',
     async () => {
-      // more cards than the Board mounts at once (SYNC_LIMIT)
+      // more cards than the Board mounts at once (SYNC_LIMIT), 107 in each
+      // of three sub-projects of Plan, under the design size of one
       const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
-      const board = await loadBoard(network, (snapshot) => {
-        snapshot.orgs[0].next_issue_num = 64 * 200
-        snapshot.issues.push(
-          ...ids.map((id, i) => taskRow(snapshot, id, 'progress', i + 1)),
-          taskRow(snapshot, 'fd000000-b', 'progress', 321),
-        )
-      })
+      const board = await loadBoard(
+        network,
+        (snapshot) => {
+          snapshot.orgs[0].next_issue_num = 64 * 200
+          const base = snapshot.projects[0]
+          snapshot.projects.push({
+            ...base,
+            id: 'plan',
+            type: 'meta',
+            key: 'PLAN',
+            num: 2,
+            name: 'Plan',
+          })
+          Object.assign(base, { parent_id: 'plan', name: 'One' })
+          snapshot.projects.push(
+            { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
+            { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
+          )
+          const projects = [base.id, 'two', 'three']
+          snapshot.issues.push(
+            ...ids.map((id, i) => ({
+              ...taskRow(snapshot, id, 'progress', i + 1),
+              project_id: projects[i % 3],
+            })),
+            { ...taskRow(snapshot, 'fd000000-b', 'progress', 321), project_id: 'three' },
+          )
+        },
+        { scope: 'plan' },
+      )
       board.server.hold = true
       await board.render(root)
       // the frame holds no card, and the first answer's render mounts the

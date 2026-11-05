@@ -91,6 +91,26 @@ const tasks =
       snap.issues.push(taskRow(snap, `p${n}`, 'progress', count + n + 1))
   }
 
+/** A top-level project, Plan, over three sub-projects, the fixture's and
+    two more, with `perSub` To Do tasks in each: more cards than one Board
+    mounts at once (SYNC_LIMIT), at most the design size of 300 open tasks a
+    sub-project. The Board shows it with `scope: 'plan'`. */
+const spread = (perSub: number) => (snap: Snapshot) => {
+  const base = snap.projects[0]
+  snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+  Object.assign(base, { parent_id: 'plan', name: 'One' })
+  snap.projects.push(
+    { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
+    { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
+  )
+  let num = 0
+  for (const project of [base.id, 'two', 'three'])
+    for (let n = 0; n < perSub; n++) {
+      num++
+      snap.issues.push({ ...taskRow(snap, `t${num}`, 'todo', num), project_id: project })
+    }
+}
+
 // Slices size themselves by the real clock, so a busy machine makes them small.
 describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
@@ -121,7 +141,8 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   })
 
   it("shows no card while the Board's answer is on its way, then its first screen at once", async () => {
-    const board = await loadBoard(network, tasks(500))
+    // 330 cards over three sub-projects
+    const board = await loadBoard(network, spread(110), { scope: 'plan' })
     board.server.hold = true
     await board.render(root)
     expect(state()).toBe('loading')
@@ -132,22 +153,22 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(cards().length).toBeGreaterThan(0)
     expect(cards().length).toBeLessThanOrEqual(EAGER)
     await finish()
-    expect(cards()).toHaveLength(500)
+    expect(cards()).toHaveLength(330)
     expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
   })
 
   it('mounts the phone rows of its first screen once its answer arrives, then the rest', async () => {
-    const board = await loadBoard(network, tasks(500), { phone: true })
+    const board = await loadBoard(network, spread(110), { phone: true, scope: 'plan' })
     board.server.hold = true
     await board.render(root)
     const rows = () => document.querySelectorAll('.mobile-task-row')
     expect(rows()).toHaveLength(0)
     await board.answer()
     expect(rows().length).toBeGreaterThan(0)
-    expect(rows().length).toBeLessThan(500)
+    expect(rows().length).toBeLessThan(330)
     await finish()
     expect(state()).toBe('ok')
-    expect(rows()).toHaveLength(500)
+    expect(rows()).toHaveLength(330)
   })
 
   it('lands an answer that adds and drops cards after the slices mounted', async () => {
