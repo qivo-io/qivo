@@ -682,7 +682,10 @@ function focusAfterAccessRemoval(kind: 'team' | 'user', id: string) {
     ProjectPage, which owns the Archive or delete window that `onRemove`
     opens and gives focus back to `removeButton`. Every right comes from the
     answer. While the answer is not current after a failure, or the project
-    has gone, every control that writes is off, and a typed text stays. */
+    has gone, every control of the page that writes is off, and a typed text
+    stays. A removal window or the Archive or delete window that is already
+    open acts on its own server preview, and the server checks each of its
+    writes again. */
 function ProjectSettingsFields({
   answer,
   read,
@@ -699,7 +702,7 @@ function ProjectSettingsFields({
   const { project } = answer
   const shown = { orgId: project.org_id }
   // after a failure, Try again's wait included, or for a project that
-  // left, nothing writes until an answer is current again
+  // left, no control of the page writes until an answer is current again
   const gone = read.state === 'unavailable' || read.state === 'archived'
   const blocked = read.afterFailure || gone
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
