@@ -15,7 +15,10 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
+  live: null as null | {
+    holdWindow(from: string | null): void
+    failWindow(from: string | null): void
+  },
 }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
@@ -306,9 +309,15 @@ const answerAll = async () => {
 }
 
 async function openTask(uuid = 'fam') {
-  const { IssueDetail } = await import('./IssueDetail')
   const handle = P.handleOf(uuid)
   if (!handle) throw new Error(`missing ${uuid}`)
+  await openHandle(handle)
+}
+
+/* Opens the window on `handle`, a handle or a reference
+   (lib/taskReference.ts). */
+async function openHandle(handle: string) {
+  const { IssueDetail } = await import('./IssueDetail')
   await act(async () =>
     root.render(
       <TooltipProvider>
@@ -988,6 +997,7 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
 describe('a new task while every task loads', { timeout: 20_000 }, () => {
   afterEach(async () => {
     double.live?.holdWindow(null)
+    double.live?.failWindow(null)
     const { TASKS } = await import('../store/liveParts')
     TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
@@ -1138,4 +1148,76 @@ describe('a new task while every task loads', { timeout: 20_000 }, () => {
     expect(move?.disabled).toBe(false)
     expect(document.querySelector<HTMLButtonElement>('[data-task-fate]')?.disabled).toBe(false)
   })
+
+  for (const [made, stopped] of [
+    ['parent', 'held'],
+    ['parent', 'failed'],
+    ['linked task', 'held'],
+    ['linked task', 'failed'],
+  ] as const)
+    it(`reads a new ${made}'s thread and lists once the server took it, while the load of every task is ${stopped}`, async () => {
+      const next = fixture()
+      next.orgs[0].next_issue_num = 64 * 200
+      await load(next, async () => {
+        const { TASKS } = await import('../store/liveParts')
+        TASKS.atBoot = false
+      })
+      // the last of 64 task windows answers nothing, or fails
+      if (stopped === 'held') double.live?.holdWindow('fc000000')
+      else double.live?.failWindow('fc000000')
+      // a task without subtasks, which the workspace does not hold, from
+      // its answer
+      const { taskRef } = await import('../lib/taskReference')
+      await openHandle(taskRef({ org: snap.orgs[0].id, num: 31, uuid: 'other' }))
+      await answer('taskWindow:task', taskAnswer([], true, false, 'other'))
+      expect(P.handleOf('other')).toBeNull()
+      // the server takes the create
+      network.mutation.mockImplementation(async (ref) => {
+        const name = getFunctionName(ref)
+        if (name === 'issues:createParent') return { parent_num: 64 * 200 + 1 }
+        return name === 'issues:createLinked' ? { num: 64 * 200 + 1 } : null
+      })
+      let took = false
+      await act(async () => {
+        took =
+          made === 'parent'
+            ? await P.createParent('QN-31', 'Build the rig')
+            : await P.createLinked('QN-31', 'blocks', 'Wire the rig')
+      })
+      expect(took).toBe(true)
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+      expect(P.taskLoad().state).toBe(stopped === 'held' ? 'arriving' : 'failed')
+      const sent =
+        made === 'parent'
+          ? sentArgs('issues:createParent').at(-1)?.parent_id
+          : sentArgs('issues:createLinked').at(-1)?.new_id
+      const uuid = typeof sent === 'string' ? sent : ''
+      // the new task, painted, opens in the window
+      await openTask(uuid)
+      // no delivery holds it, and its window reads its thread and its own
+      // answer all the same
+      const thread = open('snapshot:threadComments').filter((s) => s.args.issue_id === uuid)
+      expect(thread).toHaveLength(1)
+      const reads = open('taskWindow:task').filter((s) => s.args.ref === uuid)
+      expect(reads).toHaveLength(1)
+      const title = made === 'parent' ? 'Build the rig' : 'Wire the rig'
+      const own = task(uuid, 64 * 200 + 1, { title, status: 'backlog' })
+      const kids = made === 'parent' ? [short(row('other'))] : []
+      await act(async () =>
+        reads[0].deliver({
+          state: 'ok',
+          task: { ...own, has_subtasks: kids.length > 0, has_hidden_subtasks: false },
+          level: 'lead',
+          labels: [],
+          follow: null,
+          parent: null,
+          subtasks: { rows: kids, complete: true },
+        }),
+      )
+      // a new parent lists the task it was made for, and Move and Archive
+      // or delete wait only for this answer
+      expect(titlesOf('subtasks')).toEqual(made === 'parent' ? ['Ship firmware'] : [])
+      expect(stateOf('subtasks')).toBe('complete')
+      expect(P.familyOf(P.issueById[P.handleOf(uuid) ?? ''])).not.toBeNull()
+    })
 })

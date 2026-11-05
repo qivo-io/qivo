@@ -904,6 +904,14 @@ function orgOfTask(uuid: string): string | undefined {
    Archive or delete wait only for its own answer (P.familyOf). */
 const tookCreates = new Map<string, string>()
 
+/* Notes that the server took the create of task `uuid` in organization
+   `org` (tookCreates), from P.addIssue, P.createParent or P.createLinked,
+   and has a window watching it read its thread and lists at once. */
+function tookCreate(uuid: string, org: string) {
+  tookCreates.set(uuid, org)
+  if (watchedComments === uuid) repaint({ thread: true, sections: true })
+}
+
 /* Whether the watched task is one whose create is on its way: the rows
    show it, the last snapshot delivery does not hold it and the server has
    not taken its create yet (tookCreates), or the store knows no
@@ -9658,10 +9666,7 @@ export const PLANNER = {
         },
         // its window reads its thread and lists from now on, also before a
         // delivery holds it
-        onOk: () => {
-          tookCreates.set(uuid, row.org_id)
-          if (watchedComments === uuid) repaint({ thread: true, sections: true })
-        },
+        onOk: () => tookCreate(uuid, row.org_id),
         ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
           toastWriteError(error)
@@ -9988,6 +9993,9 @@ export const PLANNER = {
           created.num = answer.parent_num
           return view
         },
+        // the new parent's window reads its thread and lists from now on,
+        // also before a delivery holds it (addIssue)
+        onOk: () => tookCreate(parentId, it.org),
         ...(over ? { over } : {}),
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
@@ -10074,6 +10082,9 @@ export const PLANNER = {
           created.num = answer.num
           return view
         },
+        // the new task's window reads its thread and lists from now on,
+        // also before a delivery holds it (addIssue)
+        onOk: () => tookCreate(taskId, it.org),
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
     )
