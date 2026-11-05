@@ -3957,8 +3957,9 @@ export const REMOVAL_EXPECTED = {
  *  the cleanup deletes and the sweep finds by its tag. The task goes to
  *  run.created. It runs while the run's projects are active, after
  *  ui/settings-labels, and needs a backend from the release of the
- *  removal window or later. Against an older one the picker fails, and so
- *  does the step. */
+ *  removal window or later. Against an older one the press cannot read
+ *  the preview, so the window never opens and the step fails waiting for
+ *  it. */
 async function removalWindowCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
