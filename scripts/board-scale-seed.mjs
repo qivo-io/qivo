@@ -79,10 +79,11 @@
  * differ and every fourth label is on none. The tasks are the seeded ones
  * still active, or Northstar's own active tasks where the run holds none
  * (--tasks 0), in their order, and a task never passes LIMITS.labels.max.
- * Each label's id comes from its number, and a name Northstar holds in any
- * case counts as made, so a second run adds only what is missing and puts
- * a label on a task only once. It runs after the tasks and --relations and
- * before --archived.
+ * Each label's id comes from its number. A label whose id Northstar holds
+ * counts as made under whatever name a person gave it since, and so does a
+ * name Northstar holds in any case, so a second run adds only what is
+ * missing and puts a label on a task only once. It runs after the tasks
+ * and --relations and before --archived.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
@@ -300,22 +301,28 @@ export const seededLabelName = (n) =>
 
 /**
  * The --labels work still to do in organization `org` for the first
- * `count` seeded labels: `create`, the labels:create calls of those whose
- * name `present` (the organization's labels) lacks in any case, and
- * `toggle`, the labels:toggle calls that put label n on n % 4 of `tasks`
- * (task ids in a fixed order), the tasks from n * 3 on, skipping a task
- * that carries it already in `on` (label ids by task id) and one that
- * would pass LIMITS.labels.max.
+ * `count` seeded labels: `create`, the labels:create calls of those that
+ * `present` (the organization's labels) holds neither by the label's own
+ * id nor by its name in any case, and `toggle`, the labels:toggle calls
+ * that put label n on n % 4 of `tasks` (task ids in a fixed order), the
+ * tasks from n * 3 on, skipping a task that carries it already in `on`
+ * (label ids by task id) and one that would pass LIMITS.labels.max.
+ *
+ * The id comes first, so a seeded label a person renamed counts as made
+ * and keeps its new name. Planning it again by its name would send its
+ * id to labels:create, which refuses an id that is taken.
  */
 export function planLabels({ org, count, present, tasks, on }) {
+  const ids = new Set(present.map((label) => label.id))
   const byName = new Map(present.map((label) => [label.name.toLowerCase(), label.id]))
   const carried = new Map([...on].map(([task, labels]) => [task, new Set(labels)]))
   const plan = { create: [], toggle: [] }
   for (let n = 0; n < count; n++) {
     const name = seededLabelName(n)
-    let id = byName.get(name.toLowerCase())
+    const own = uuidOf(`board-scale-seed label ${n}`)
+    let id = ids.has(own) ? own : byName.get(name.toLowerCase())
     if (id === undefined) {
-      id = uuidOf(`board-scale-seed label ${n}`)
+      id = own
       plan.create.push({ org_id: org, id, name, color: LABEL_COLORS[n % LABEL_COLORS.length] })
     }
     for (let k = 0; k < n % 4 && tasks.length > 0; k++) {

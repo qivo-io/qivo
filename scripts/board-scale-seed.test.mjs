@@ -233,6 +233,24 @@ describe('board-scale-seed', () => {
     ).toEqual([])
   })
 
+  it('keeps a seeded label a person renamed and adds only the labels after it', () => {
+    const tasks = ['t1', 't2', 't3', 't4', 't5']
+    const first = planLabels({ org: 'o', count: 4, present: [], tasks, on: new Map() })
+    const on = new Map()
+    for (const t of first.toggle) on.set(t.issue_id, [...(on.get(t.issue_id) ?? []), t.label_id])
+    // a person renames "Bench rig 01", seeded label 2, then a run asks for 8
+    const renamed = first.create[2].id
+    const present = first.create.map((c) => ({
+      id: c.id,
+      name: c.id === renamed ? 'Bench trials' : c.name,
+    }))
+    const again = planLabels({ org: 'o', count: 8, present, tasks, on })
+    expect(again.create.map((c) => c.name)).toEqual([4, 5, 6, 7].map(seededLabelName))
+    expect(again.create.map((c) => c.id)).not.toContain(renamed)
+    // its tasks carry it already, so nothing goes on them again
+    expect(again.toggle.filter((t) => t.label_id === renamed)).toEqual([])
+  })
+
   it('takes an archived count up to the task count', () => {
     expect(parseSeedArgs([...local, '--tasks', '400', '--archived', '160']).archived).toBe(160)
     expect(parseSeedArgs([...local, '--tasks', '400', '--archived', '400']).archived).toBe(400)
