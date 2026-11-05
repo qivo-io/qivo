@@ -734,11 +734,14 @@ export const TASK_PAGES_MAX = 200
  *  invitations included, which the workload checks page through. */
 export const WORKLOAD_PEOPLE = 1000
 
-/** The most pages a workload check reads at `limit` people a page: every
- *  person of an organization at the design size, and two more pages, so a
- *  correct deployment never fails it and a next_cursor that never ends
- *  still fails the check. */
-export const workloadPagesMax = (limit) => Math.ceil(WORKLOAD_PEOPLE / limit) + 2
+/** The most pages a workload check reads, at any page size. A page can
+ *  end before `limit` people once busy people spend the call's room, or
+ *  list none, but it always reads the first person after its cursor
+ *  (convex/planning.ts workloadPage), so every page moves on by one person
+ *  at least. A page for each person of an organization at the design size,
+ *  and two more, so a correct deployment never fails it and a next_cursor
+ *  that never ends still fails the check. */
+export const WORKLOAD_PAGES_MAX = WORKLOAD_PEOPLE + 2
 
 /**
  * Every row of one REST or MCP list that pages with a cursor, read page by
@@ -769,10 +772,25 @@ export async function listPages(read, what, field, most = TASK_PAGES_MAX) {
  *  (listPages over `tasks`). */
 export const taskPages = (read, what) => listPages(read, what, 'tasks')
 
-/** Every person of the REST or MCP workload read in pages of `limit`
- *  people (listPages over `people`, at most workloadPagesMax pages). */
-export const workloadPeople = (read, what, limit) =>
-  listPages(read, what, 'people', workloadPagesMax(limit))
+/** Every person of the REST or MCP workload (listPages over `people`, at
+ *  most WORKLOAD_PAGES_MAX pages). A next_cursor equal to the cursor the
+ *  page was read with fails at once. Every page moves on, and a cursor
+ *  that names the same person seals to the same text
+ *  (convex/lib/archiveCursorSeal.ts), so that answer means a stuck list. */
+export const workloadPeople = (read, what) =>
+  listPages(
+    async (cursor) => {
+      const page = await read(cursor)
+      expect(
+        cursor === null || page?.next_cursor !== cursor,
+        `${what} answered the cursor it was read with as its next_cursor`,
+      )
+      return page
+    },
+    what,
+    'people',
+    WORKLOAD_PAGES_MAX,
+  )
 
 /** `path`, a REST task list query, with `cursor` added unless it is null. */
 const withCursor = (path, cursor) =>
@@ -1859,7 +1877,6 @@ async function workloadPageChecks() {
     const rest = await workloadPeople(
       (cursor) => restOk(w, 'GET', withCursor(`${q}&limit=${WORKLOAD_PAGE.rest}`, cursor)),
       'GET /v1/workload',
-      WORKLOAD_PAGE.rest,
     )
     const ids = rest.map((p) => p.id)
     expect(new Set(ids).size === ids.length, 'the REST pages list a person twice')
@@ -1878,7 +1895,6 @@ async function workloadPageChecks() {
           ...(cursor === null ? {} : { cursor }),
         }),
       'get_workload',
-      WORKLOAD_PAGE.mcp,
     )
     same(
       mcp.map((p) => p.id),
