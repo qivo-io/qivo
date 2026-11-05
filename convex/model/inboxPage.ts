@@ -35,22 +35,30 @@
  * so the page is live. An item that gets a new message between pages moves,
  * newest first before the cursor and so onto an earlier page, oldest first
  * past it and so onto a later page again, and never shows twice on one
- * page.
+ * page. A page kept live beside the pages after it takes its own `next` as
+ * `through` and then holds every group after its `after` up to and
+ * including that position, so a group that moves or leaves changes only
+ * the pages it moves between, and the loaded pages together hold every
+ * group once, as the app's other live lists do (lib/namedPages.ts
+ * listBatch). Such a page holds at most four times INBOX_PAGE.rows rows
+ * and stops there as if the read budget stopped it, and the list splits
+ * it.
  *
  * What the answer says. `stopped` is a page the read budget ended before it
- * held INBOX_PAGE.rows rows, whose rows are every match up to `next`,
- * possibly none; `next` then always moves forward. `checked_to` is the list
- * time of the last group the page examined whose task the caller is shown,
- * matched or not, so the list can say how far a stopped search looked. The
- * kind filter applies before the access check, without a read, so a page
- * the kind filter fills with misses can stop with `checked_to` null, and
- * the list then says it searched part of the Inbox. `not_ready` names the
- * seats whose items are not complete (model/inboxItems.ts seatReady), which
- * the page leaves out, and `unchecked` says a check of the caller's access
- * that a bound stopped (lib/access.ts accessUnchecked, roomSpent included)
- * left a group out. Only a page with no rows, `next` null, no seat in
- * `not_ready` and `unchecked` false says that nothing matches, and on a
- * page after the first only that nothing more does.
+ * held INBOX_PAGE.rows rows or reached `through`, whose rows are every
+ * match up to `next`, possibly none; `next` then always moves forward.
+ * `checked_to` is the list time of the last group the page examined whose
+ * task the caller is shown, matched or not, so the list can say how far a
+ * stopped search looked. The kind filter applies before the access check,
+ * without a read, so a page the kind filter fills with misses can stop
+ * with `checked_to` null, and the list then says it searched part of the
+ * Inbox. `not_ready` names the seats whose items are not complete
+ * (model/inboxItems.ts seatReady), which the page leaves out, and
+ * `unchecked` says a check of the caller's access that a bound stopped
+ * (lib/access.ts accessUnchecked, roomSpent included) left a group out.
+ * Only a page with no rows, `next` null, no seat in `not_ready` and
+ * `unchecked` false says that nothing matches, and on a page after the
+ * first only that nothing more does.
  *
  * What a stop can tell. The page reads every item of a seat's range up to
  * where it ends, those about tasks the caller is not shown included, and
@@ -142,8 +150,10 @@ import { inboxScope, unreadChange } from './inboxReads'
  *   two documents, so a page passes about 2,000 of them, half a page for
  *   each 1,000 such groups. One sub-project's 3,000 such groups take about
  *   2 pages and one project's 10,000 about 5.
- * A page answers at most 50 rows in about 42 KB. Every case answers whole
- * except the searches that say stopped above, which go on from `next`.
+ * A page answers at most 50 rows in about 42 KB, and a page kept live with
+ * `through` at most 200, under the same read budget. Every case answers
+ * whole except the searches that say stopped above, which go on from
+ * `next`.
  */
 export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
   rows: 50,
@@ -154,9 +164,10 @@ export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
  * their own (lib/listCursor.ts). */
 export const INBOX_LIST = 'inbox.page'
 
-/** The refusal of an `after` that is not a `next` of this list. */
+/** The refusal of an `after` or `through` that is not a `next` of this
+ * list. */
 export const NOT_INBOX_CURSOR =
-  'after must be the next of an earlier Inbox page with the same order, filters and search; start again from the first page'
+  'after and through must be cursors from an earlier Inbox page with the same order, filters and search; start again from the first page'
 
 /* ------------------------------------------------------------- the order */
 
@@ -274,8 +285,10 @@ export type InboxWalk<Out> = NamedBatch<Out> & {
 /**
  * One batch of the Inbox of `seats`, the caller's active profiles, by
  * `ask`, after position `o.after`, holding up to `o.limit` rows, each what
- * `o.row` builds for a group the walk keeps. REST and MCP are to call it
- * for one profile with their own limit, row and cursor list.
+ * `o.row` builds for a group the walk keeps, and none past position
+ * `o.through` when it is not null (lib/namedPages.ts readBatch). REST and
+ * MCP are to call it for one profile with their own limit, row and cursor
+ * list.
  *
  * Each seat's readiness comes first (seatReady). A seat that is not ready
  * adds its organization to `not_ready` and no stream. Unlike
@@ -317,6 +330,7 @@ export async function inboxWalk<Out>(
   ask: InboxAsk,
   o: {
     after: NamedAt<InboxTie> | null
+    through: NamedAt<InboxTie> | null
     limit: number
     ceiling: ReadCeiling
     row: (group: InboxGroup, guard: ReadGuard) => Promise<Out>
@@ -375,7 +389,7 @@ export async function inboxWalk<Out>(
       ),
     keep,
     limit: o.limit,
-    through: null,
+    through: o.through,
     ceiling: o.ceiling,
     after: o.after,
     order: ask.order,
@@ -596,7 +610,9 @@ export type InboxPage = {
   unchecked: boolean
 }
 
-/** What inbox.page is asked. */
+/** What inbox.page is asked. `after` is the `next` of the page before,
+ * absent for the first page, and `through` this page's own `next`, to keep
+ * a loaded page live without its end moving. */
 export type InboxPageArgs = {
   order: 'newest' | 'oldest'
   unread_only: boolean
@@ -604,6 +620,7 @@ export type InboxPageArgs = {
   kinds: MessageKind[]
   search?: string
   after?: string
+  through?: string
 }
 
 /* `p` as a row names it. */
@@ -665,12 +682,16 @@ async function inboxRow(ctx: QueryCtx, group: InboxGroup, guard: ReadGuard): Pro
  *
  * `next` is a cursor sealed with the login, the order and a digest of the
  * filters and search (lib/namedPages.ts namedCursor), null when no group of
- * the ready seats follows. Refuses a kind named twice, a search past
- * LIMITS.search with its sentence, and an `after` that is not the `next` of
- * an earlier page of the same login, order, filters and search
- * (NOT_INBOX_CURSOR), after which the list starts again from the first
- * page. A blank search is no search. The header above says what the answer
- * means.
+ * the ready seats follows. With `a.through`, a cursor sealed the same way,
+ * the page holds every match after `a.after` up to and including it, at most
+ * four times INBOX_PAGE.rows, and answers `stopped` with a `next` before
+ * `through` past that, as lib/namedPages.ts listBatch answers. Refuses a
+ * kind named twice, a search past LIMITS.search with its sentence, an
+ * `after` or `through` that is not the `next` of an earlier page of the
+ * same login, order, filters and search (NOT_INBOX_CURSOR), after which the
+ * list starts again from the first page, and a `through` that does not come
+ * after `after` in the page's order. A blank search is no search. The
+ * header above says what the answer means.
  */
 export async function readInboxPage(
   ctx: QueryCtx,
@@ -693,12 +714,16 @@ export async function readInboxPage(
       search: search === '' ? null : search,
     }),
   ]
-  const after = a.after === undefined ? null : await openAfter(a.after, scope)
+  const order: NamedOrder = a.order === 'newest' ? 'desc' : 'asc'
+  const after = a.after === undefined ? null : await openCursor(a.after, scope)
+  const through = a.through === undefined ? null : await openCursor(a.through, scope)
+  if (after !== null && through !== null && compareIn(order, through, after) <= 0)
+    throw badRequest('through must be a cursor after the one in after')
   const walk = await inboxWalk(
     ctx,
     seats,
     {
-      order: a.order === 'newest' ? 'desc' : 'asc',
+      order,
       unread_only: a.unread_only,
       include_snoozed: a.include_snoozed,
       kinds,
@@ -706,15 +731,18 @@ export async function readInboxPage(
     },
     {
       after,
-      limit: INBOX_PAGE.rows,
+      through,
+      limit: through === null ? INBOX_PAGE.rows : 4 * INBOX_PAGE.rows,
       ceiling,
       row: (group, guard) => inboxRow(ctx, group, guard),
     },
   )
+  // a page under `through` that stopped short of it holds too many rows
+  const short = !walk.ended && through !== null && compareIn(order, walk.at, through) < 0
   return {
     rows: walk.rows,
     next: walk.ended ? null : await namedCursor(INBOX_LIST, scope, walk.at),
-    stopped: walk.stopped,
+    stopped: walk.stopped || short,
     checked_to: walk.checked_to,
     not_ready: walk.not_ready,
     unchecked: walk.unchecked,
@@ -724,7 +752,7 @@ export async function readInboxPage(
 /* The position cursor `text` names in the Inbox list with `scope`, or a
  * refusal (NOT_INBOX_CURSOR) for any other text or a tie of another
  * shape. */
-async function openAfter(text: string, scope: readonly string[]): Promise<NamedAt<InboxTie>> {
+async function openCursor(text: string, scope: readonly string[]): Promise<NamedAt<InboxTie>> {
   const at = await openNamedCursor(text, INBOX_LIST, scope)
   const [issue, recipient] = at?.tie ?? []
   if (

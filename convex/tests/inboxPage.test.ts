@@ -432,7 +432,7 @@ describe('the arguments', () => {
     expect(await drift(t)).toEqual([])
   })
 
-  it('refuse a cursor of another login, order, filter or search, a changed one and another list’s', async () => {
+  it('refuse an after or through of another login, order, filter or search, a changed one and another list’s', async () => {
     const t = newT()
     const f = await withOrg(t)
     // the guest and the viewer both see TBED's sub-projects
@@ -483,14 +483,28 @@ describe('the arguments', () => {
       ['an active tasks cursor', f.guest, { ...asked, after: active }],
       ['not a cursor', f.guest, { ...asked, after: 'abc' }],
       ['a tie of another shape', f.guest, { ...asked, after: shape }],
+      ['through of another login', f.viewer, { ...asked, through: next }],
+      ['through of another order', f.guest, { ...asked, order: 'oldest', through: next }],
+      ['through of other kinds', f.guest, { ...asked, kinds: ['change'], through: next }],
+      ['a changed through', f.guest, { ...asked, through: flipped }],
+      ['through of another list', f.guest, { ...asked, through: labels }],
     ]
     for (const [why, who, a] of refused) {
       const args = Object.fromEntries(Object.entries(a).filter(([, value]) => value !== undefined))
       await expect(
-        expectRefusal(pageOf(t, who, args), 'bad_request', /next of an earlier Inbox page/),
+        expectRefusal(pageOf(t, who, args), 'bad_request', /cursors from an earlier Inbox page/),
         why,
       ).resolves.toBeDefined()
     }
+    // a through that does not come after `after`
+    await expectRefusal(
+      pageOf(t, f.guest, { ...asked, after: next, through: next }),
+      'bad_request',
+      /through must be a cursor after the one in after/,
+    )
+    expect(
+      (await pageOf(t, f.guest, { ...asked, after: next, through: same.next as string })).rows,
+    ).toEqual(same.rows)
     expect(NOT_INBOX_CURSOR).toMatch(/start again from the first page/)
     expect(await drift(t)).toEqual([])
   })
@@ -1139,6 +1153,67 @@ describe('continuation', () => {
     const unreadNext = await pageOf(t, f.guest, { unread_only: true, after: unread.next as string })
     expect(ids(unreadNext.rows)).not.toContain(tasks[30].id)
     expect(ids(unreadNext.rows)).toContain(tasks[29].id)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('keeps loaded pages live with through, together holding every group once as groups move, leave or are read, and stops one past four times its rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const tasks = await plantGroups(t, f.guest, 12, () => f.sub.id)
+    INBOX_PAGE.rows = 4
+    // three pages loaded, the first two kept live up to their own next
+    const loaded = async (a: Partial<InboxPageArgs> = {}) => {
+      const [one, two, three] = await pages(t, f.guest, a)
+      expect(three.next).toBeNull()
+      const [c1, c2] = [one.next as string, two.next as string]
+      const read = async () => [
+        await pageOf(t, f.guest, { ...a, through: c1 }),
+        await pageOf(t, f.guest, { ...a, after: c1, through: c2 }),
+        await pageOf(t, f.guest, { ...a, after: c2 }),
+      ]
+      return { c1, read }
+    }
+    const browse = await loaded()
+    expect((await browse.read()).map((p) => ids(p.rows))).toEqual([
+      newestFirst(tasks.slice(8)),
+      newestFirst(tasks.slice(4, 8)),
+      newestFirst(tasks.slice(0, 4)),
+    ])
+    // a group of the second page gets a new message and moves to the top
+    // of the first, and a group of the first leaves; each page keeps its
+    // end, so no group falls between two pages or shows on two
+    await deliver(t, f.guest, tasks[5], { minute: 100 })
+    await guest.mutation(api.messages.removeItem, { org_id: f.org.id, issue_id: tasks[10].id })
+    const moved = await browse.read()
+    expect(moved.map((p) => ids(p.rows))).toEqual([
+      [tasks[5], tasks[11], tasks[9], tasks[8]].map((x) => x.id),
+      [tasks[7], tasks[6], tasks[4]].map((x) => x.id),
+      newestFirst(tasks.slice(0, 4)),
+    ])
+    expect(moved.every((p) => !p.stopped)).toBe(true)
+    // under Unread only, a group read on the first page leaves that page alone
+    const unread = await loaded({ unread_only: true })
+    await guest.mutation(api.messages.readItem, { org_id: f.org.id, issue_id: tasks[9].id })
+    expect((await unread.read()).map((p) => ids(p.rows))).toEqual([
+      [tasks[5], tasks[11], tasks[8]].map((x) => x.id),
+      [tasks[7], tasks[6], tasks[4], tasks[3]].map((x) => x.id),
+      newestFirst(tasks.slice(0, 3)),
+    ])
+    // a live page that would hold more than four times INBOX_PAGE.rows
+    // stops there, as if the read budget stopped it, and the page after
+    // that stop takes the rest up to the same end
+    const fresh = await plantGroups(t, f.guest, 17, () => f.sub.id, {
+      sent: (i) => [{ minute: 200 + i }],
+    })
+    const capped = await pageOf(t, f.guest, { through: browse.c1 })
+    expect(capped.stopped).toBe(true)
+    expect(ids(capped.rows)).toEqual(newestFirst(fresh).slice(0, 4 * INBOX_PAGE.rows))
+    const split = await pageOf(t, f.guest, { after: capped.next as string, through: browse.c1 })
+    expect(split.stopped).toBe(false)
+    expect(ids(split.rows)).toEqual(
+      [fresh[0], tasks[5], tasks[11], tasks[9], tasks[8]].map((x) => x.id),
+    )
     expect(await drift(t)).toEqual([])
   })
 

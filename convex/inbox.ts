@@ -47,12 +47,16 @@
  *   newest or oldest first by list time, with Unread only, Show snoozed,
  *   the kind filter and the search applied before the page is cut, and a
  *   sealed `next` that continues after the last group it examined
- *   (model/inboxPage.ts). Each row names its task, its project and the
- *   project above it, its newest message with its actor, its counts, kinds
- *   and snooze, its oldest unread time, `unread_change` as item answers it
- *   and the `through` the item actions take. `stopped` says the read
- *   budget ended the page before it was full, `checked_to` how far it
- *   looked, `not_ready` which seats' items are not complete and
+ *   (model/inboxPage.ts). A loaded page stays live without its end moving
+ *   when it passes its own `next` back as the `through` cursor. It then
+ *   holds every group up to that position, at most 200, so the loaded
+ *   pages hold every group once as groups move. Each row names its task,
+ *   its project and the project above it, its newest message with its
+ *   actor, its counts, kinds and snooze, its oldest unread time,
+ *   `unread_change` as item answers it and the row's `through`, the cutoff
+ *   the item actions take. `stopped` says the read budget ended the page
+ *   before it was full or reached the `through` cursor, `checked_to` how
+ *   far it looked, `not_ready` which seats' items are not complete and
  *   `unchecked` that a check a bound stopped left a group out, so an
  *   unfinished read never answers as an empty Inbox. It reads each seat's
  *   readiness and its items up to where the page ends, the task, project
@@ -88,6 +92,7 @@ export const page = authedQuery({
     kinds: v.array(vMessageKind),
     search: v.optional(v.string()),
     after: v.optional(v.string()),
+    through: v.optional(v.string()),
   },
   handler: async (ctx, args) =>
     await readInboxPage(ctx, ctx.authUserId, [...ctx.myProfiles.values()], args),
