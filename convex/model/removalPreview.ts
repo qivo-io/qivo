@@ -152,9 +152,10 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * sentence, marked HELD_TASKS_REFUSED. It checks whether the new holder can
  * see a subtask's parent only after the caller's Edit access
  * (updateIssueCore), so where the caller loses Edit the write refuses with
- * the caller's sentence first. Those checks read the new holder's access as
- * it is before the removal, so the preview reads it with the removed rows
- * left out instead (takerRule). Asked with `reassign_to`, it answers
+ * the caller's sentence first. The write runs those checks after it deletes
+ * the removed rows, in the same transaction, and the preview writes
+ * nothing, so it reads the new holder's access with those rows left out
+ * (takerRule). Asked with `reassign_to`, it answers
  * `reassign.holder_eligible`, whether that person could take every task
  * once the access is gone, false while Reassign itself is refused. The
  * Reassign picker lists the people that rule lets take them
