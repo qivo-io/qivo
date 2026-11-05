@@ -3,8 +3,10 @@
  * (apiAccess.ts people), a project's access lists and its access and lead
  * pickers (model/projectSettings.ts), a person's projects for navigation,
  * a project's sub-projects and the directory's name search across a
- * person's projects and sub-projects (model/projectNavReads.ts), and later
- * the people and team lists of Settings and the REST and MCP lists. A list is
+ * person's projects and sub-projects (model/projectNavReads.ts), Settings ›
+ * Projects with its search and sub-projects and the archived sub-projects
+ * of an archived project (model/projectSettingsLists.ts), and later the
+ * people and team lists of Settings and the REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -21,7 +23,9 @@
  * A list reads in one direction (NamedOrder): ascending, as every
  * name-ordered list reads, or descending. The Inbox's pages
  * (model/inboxPage.ts) read a list keyed by time, newest or oldest first,
- * through the same functions. The direction is an option of indexAfter,
+ * and Archived projects (model/projectSettingsLists.ts) one keyed by
+ * archive time, newest first, through the same functions. The direction is
+ * an option of indexAfter,
  * inGroup, mergeNamed, readBatch and listBatch, ascending by default, and
  * each compares positions with compareIn. readBatch throws when a stream
  * hands out a position that does not move in the batch's direction, so a
@@ -618,8 +622,9 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * without its end moving, and one that would hold more than four times
  * `limit` stops there as if the read budget stopped it, and the app splits
  * it, as model/labels.ts labelBatch does. The project settings lists and
- * pickers (model/projectSettings.ts) and the project navigation lists
- * (model/projectNavReads.ts) answer through it. `o.order` is the direction
+ * pickers (model/projectSettings.ts), the project navigation lists
+ * (model/projectNavReads.ts) and the Settings project lists
+ * (model/projectSettingsLists.ts) answer through it. `o.order` is the direction
  * `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,

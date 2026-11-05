@@ -671,10 +671,14 @@ projectNav:page query public {"type":"object","value":{"after":{"fieldType":{"ty
 projectNav:resolve query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":true},"num":{"fieldType":{"type":"number"},"optional":true}}}
 projectNav:search query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true}}}
 projectNav:setFavorite mutation public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"favorite":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:archived query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:archivedSubProjects query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:candidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"lead_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:inviteTarget query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:leadCandidates query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":true},"parent_id":{"fieldType":{"type":"string"},"optional":true},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:projects query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"sub_project_parents":{"fieldType":{"type":"boolean"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+projectSettings:subProjects query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:teams query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projectSettings:users query public {"type":"object","value":{"project_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 projects:addMilestone mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1163,7 +1167,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // by id and judges it with the caller's seat in its organization; the
   // lists and pickers take the organization. Whoever sees or manages the
   // project reads its settings and lists; a picker refuses whom the write
-  // would refuse.
+  // would refuse. The Settings project lists (projects, subProjects,
+  // archived, archivedSubProjects) take the organization too and judge an
+  // admin's seat by management, every project of the organization, and any
+  // other seat by ordinary sight, what it sees for navigation.
   projectSettings: {
     get: 'authedQuery',
     users: 'orgQuery',
@@ -1171,6 +1178,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     candidates: 'orgQuery',
     leadCandidates: 'orgQuery',
     inviteTarget: 'orgQuery',
+    projects: 'orgQuery',
+    subProjects: 'orgQuery',
+    archived: 'orgQuery',
+    archivedSubProjects: 'orgQuery',
   },
   // Main Search spans organizations like Deleted items: one page of task
   // results across every active seat, or one organization the caller
@@ -1241,7 +1252,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 226
+const PUBLIC_COUNT = 230
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
