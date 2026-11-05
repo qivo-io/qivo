@@ -47,6 +47,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 
 /* edge-runtime provides TextEncoder; convex/tsconfig's ESNext-only lib lacks
  * it. */
@@ -1294,7 +1295,8 @@ async function plantAgent(t: T, orgId: string, org_role: 'user' | 'viewer') {
 }
 
 /* withOrg plus one credential of every shape. Both agents hold User on the
- * meta, so only the Viewer's role keeps it from writing. */
+ * meta, so only the Viewer's role keeps it from writing. Every row holds its
+ * name key, as on a deployment, so the lists in name order answer. */
 async function credentials() {
   const t = newT()
   t.registerComponent('betterAuth', authSchema, import.meta.glob('../betterAuth/**/*.*s'))
@@ -1346,6 +1348,7 @@ async function credentials() {
       })
     })
   }
+  await keyOrg(t, f.org.id)
   // the fixture's real Better Auth login for the user
   const authUserId = f.user.auth_user_id!
   /* An approved OAuth connection with these scopes and one live access token. */
@@ -1517,14 +1520,21 @@ describe('read-only credentials over HTTP', () => {
       get_project: { project: c.f.sub.key },
       get_task: { ref: MISSING_TASK },
       list_comments: { ref: MISSING_TASK },
+      list_team_members: { team_id: c.f.team.id },
     }
+    // the lists every seat reads answer a page, not a refusal
+    const pages = ['list_users', 'list_labels', 'list_teams', 'list_team_members']
     for (const secret of [c.readToken, c.viewerKey, readGrant]) {
       for (const tool of READ_TOOLS) {
         const res = await callTool(c.t, secret, tool.def.name, args[tool.def.name] ?? {})
         expect(res.status, tool.def.name).toBe(200)
-        const { text } = toolText(res.body)
+        const { text, isError } = toolText(res.body)
         expect(text, tool.def.name).not.toBe(CREDENTIAL_READS_ONLY)
         expect(text, tool.def.name).not.toBe(VIEWER_AGENT_READS_ONLY)
+        if (pages.includes(tool.def.name)) {
+          expect(isError, `${tool.def.name}: ${text}`).toBe(false)
+          expect(Object.keys(JSON.parse(text))[0], tool.def.name).toBe('next_cursor')
+        }
         // a project row never offers a write this credential cannot make
         if (tool.def.name === 'list_projects' || tool.def.name === 'get_project') {
           const rows = [JSON.parse(text)].flat() as { access: { write: boolean } }[]
@@ -1536,7 +1546,8 @@ describe('read-only credentials over HTTP', () => {
         }
       }
     }
-    for (const path of ['/v1/me', '/v1/projects', '/v1/tasks', '/v1/users']) {
+    const lists = ['/v1/users', '/v1/labels', '/v1/teams', `/v1/teams/${c.f.team.id}/members`]
+    for (const path of ['/v1/me', '/v1/projects', '/v1/tasks', ...lists]) {
       for (const secret of [c.readToken, c.viewerKey]) {
         expect((await restCall(c.t, secret, 'GET', path)).status, path).toBe(200)
       }

@@ -57,6 +57,7 @@ import {
 import { labelJson, setTaskLabel } from '../model/labels'
 import { linkKindFrom, linksOf, type TaskLinkKind } from '../model/links'
 import { followersOf } from '../model/messages'
+import { idTieOf, nameKeysReady, profileIndex } from '../model/nameKeys'
 import { attachmentLimitMb } from '../model/orgs'
 import { familyCounts, OVERVIEW_SHARDS } from '../model/overviewCounts'
 import {
@@ -102,10 +103,17 @@ import {
   type ProfileKind,
   type ProjectType,
 } from './enums'
-import { badRequest, forbidden, notFound, type Refusal } from './functions'
+import { badRequest, forbidden, notFound, type Refusal, rule } from './functions'
 import { limitedText } from './limitRules'
 import { LIMITS, MIB } from './limits'
-import { CURSOR_REFUSAL, offsetRefusal } from './listCursor'
+import {
+  CURSOR_REFUSAL,
+  NAMES_NOT_READY,
+  type NamedListPage,
+  namedListPage,
+  namedScope,
+  offsetRefusal,
+} from './listCursor'
 import { countsAsSubtask, layerOf, liveIn, type ProjectLive, projectLiveness } from './liveTasks'
 import {
   type DelayJson,
@@ -114,8 +122,10 @@ import {
   noForecast,
   taskForecaster,
 } from './machineDelay'
+import { nameKey } from './nameKey'
 import { canCreateProjects } from './projectCreators'
 import { taskOwnerId } from './review'
+import { allWordsMatcher } from './search'
 import type { EventOwner } from './taskEvents'
 import { INT4_MAX, issueKey, parseIssueRef, UUID } from './taskRefs'
 import { groupRemainingHours, linkShown, parentLink, type Shown } from './workingSet'
@@ -725,15 +735,86 @@ export async function taskListRequest(
   }
 }
 
-/* The organization's roster — people and agents alike, ordered by name. Not
- * gated on a project grant on either surface: the roster belongs to the org
- * the credential authenticates, and it is how an agent learns its own id. */
+/* The organization's whole roster, people and agents alike, ordered by
+ * name. Not gated on a project grant: the roster belongs to the org the
+ * credential authenticates. REST GET /v1/users and MCP list_users page it
+ * with userPage instead; only listProjectUsersCore and the REST and MCP
+ * inbox's actor names (machine/discussion.ts) read it whole, until
+ * t3/limits-machine-project-details and t3/limits-machine-inbox replace
+ * those reads. */
 export async function listUsersCore(ctx: QueryCtx, me: Caller): Promise<Doc<'profiles'>[]> {
   const rows = await ctx.db
     .query('profiles')
     .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
     .collect()
   return rows.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+}
+
+/* The list name a users cursor seals (lib/listCursor.ts). REST and MCP
+ * answer the same rows, so they share it, and a cursor of one continues on
+ * the other. */
+const USERS_LIST = 'machine.users'
+
+/** One page of the organization's roster, as REST GET /v1/users and MCP
+ * list_users answer it, the cursor first. */
+export type UsersPageJson = { next_cursor: string | null; users: ReturnType<typeof userJson>[] }
+
+/**
+ * One page of the people and agents of `me`'s organization for REST
+ * GET /v1/users and MCP list_users, after `p.cursor`, the next_cursor of an
+ * earlier page, at most `p.limit` of them.
+ *
+ * Every profile of the organization is listed: people and agents, inactive
+ * people, Viewers, guests and seats not yet claimed, each as userJson, with
+ * no email, auth id or picture. Every seat reads the same pages, guests
+ * and Viewers included, as the app's people window holds the whole roster
+ * for every seat, and no row depends on what a caller may see, so every
+ * caller's pages end at the same places. Not gated on a project grant: the
+ * roster is how an agent learns its own id. A user on it is not proof of
+ * assignment eligibility (list_project_users answers that).
+ *
+ * The people come in name order (profiles.by_org_name, by the name key,
+ * which ignores case and accents, in Convex's byte order, then the id).
+ * With `p.search`, the rows are those whose name holds every
+ * whitespace-separated word of it in any order, ignoring case and accents
+ * (lib/search.ts allWordsMatcher over lib/nameKey.ts nameKey of both),
+ * matched over the whole roster on the server before the limit. The page
+ * reads within the call's share (lib/listCursor.ts namedListPage), so a
+ * search that matches few people can answer a short page, or an empty one,
+ * with a cursor, and next_cursor is null only once the roster ended.
+ *
+ * The cursor is sealed with the organization, `me` and the search's name
+ * key, so it opens only for that list, on either surface, and "Café" and
+ * "cafe" share cursors; any other cursor, or a changed one, is refused with
+ * CURSOR_REFUSAL. Pages are not a snapshot, so a person added or renamed
+ * between pages lands where their name puts them. A page refuses with
+ * NAMES_NOT_READY until the organization's name keys are all written
+ * (model/nameKeys.ts nameKeysReady).
+ *
+ * A page reads the readiness row, two index ranges and one profile past
+ * the page. Measured in convex/tests/peopleLists.test.ts ("at the design
+ * size"), the call's own reads included: 1,000 people take 5 pages at
+ * limit 200, the heaviest 5 ranges, 203 documents and 0.07 MB, and a search
+ * that matches nobody reads all 1,000 in one page of 4 ranges, 1,002
+ * documents and 0.33 MB.
+ */
+export async function userPage(
+  ctx: QueryCtx,
+  me: Caller,
+  p: { limit: number; cursor: string | null; search: string },
+): Promise<UsersPageJson> {
+  if (!(await nameKeysReady(ctx, me.org_id))) throw rule(NAMES_NOT_READY)
+  const matches = allWordsMatcher(nameKey(p.search))
+  const page: NamedListPage<ReturnType<typeof userJson>> = await namedListPage(ctx, {
+    list: USERS_LIST,
+    scope: await namedScope(me, p.search),
+    cursor: p.cursor,
+    tieOf: idTieOf,
+    index: profileIndex(ctx, me.org_id),
+    keep: async (profile) => (matches(nameKey(profile.name)) ? userJson(profile) : null),
+    limit: p.limit,
+  })
+  return { next_cursor: page.next_cursor, users: page.rows }
 }
 
 /* A project's people for the machine surfaces' project roster (REST

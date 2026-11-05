@@ -959,7 +959,9 @@ describe('REST labels', () => {
       callerId: fx.agent.id,
       access: 'read',
     })
-    expect(list.map((l) => l.name)).toEqual(['Alpha', 'zeta'])
+    // one page, the cursor first and null at the end
+    expect(list.next_cursor).toBeNull()
+    expect(list.labels.map((l) => l.name)).toEqual(['Alpha', 'zeta'])
     await refused(
       create({ name: 'Red', color: 'red' }),
       'bad_request',
@@ -1395,7 +1397,10 @@ describe('MCP task parity', () => {
       callerId: fx.agent.id,
       access: 'read',
     })
-    expect(JSON.parse(labels)).toEqual([{ id: made.id, name: 'Hardware', color: '#123ABC' }])
+    expect(JSON.parse(labels)).toEqual({
+      next_cursor: null,
+      labels: [{ id: made.id, name: 'Hardware', color: '#123ABC' }],
+    })
     await refused(
       mcpWrite(fx, internal.machine.mcp.setLabel, { name: 'Lonely' }),
       'bad_request',

@@ -30,6 +30,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
 /* ------------------------------------------------------------ wire helpers */
@@ -134,8 +135,8 @@ const SERVER_META = { 'io.modelcontextprotocol/serverInfo': { name: 'qivo', vers
 
 /* sha256 of the current tools/list bytes (legacy data line, id 2; modern
  * whole body, id 3). */
-const SHA_TOOLS_LEGACY = 'dc5357c66d9116edc64b1f1bfd654957a5904ee57bef67c1ef518aaa415b04f2'
-const SHA_TOOLS_MODERN = '2d2c42f32647561fa46abd846d8011c69350a5545f26ae8351bace53f48fba73'
+const SHA_TOOLS_LEGACY = '9b910f784a5bc7d34039e4d1aedf529773e455196f979dead1179abaa5108901'
+const SHA_TOOLS_MODERN = '697594e15f30350420d901a8dd34b67536fcf713fdcb4a0499e414a0e52dc195'
 
 /* ----------------------------------------------------------------- fixture */
 
@@ -466,6 +467,7 @@ describe('body shape and leg selection', () => {
     expect(catalogue.result.tools.map((tool) => tool.name)).toEqual([
       'get_me',
       'list_teams',
+      'list_team_members',
       'list_projects',
       'list_users',
       'list_project_users',
@@ -946,21 +948,36 @@ describe('body shape and leg selection', () => {
 /* --------------------------------------------------------- tools: reads */
 
 describe('read tools', () => {
-  test('list_teams / list_projects / list_users shapes and key order', async () => {
+  test('list_teams / list_team_members / list_projects / list_users shapes and key order', async () => {
     const fx = await machineOrg()
+    await keyOrg(fx.t, fx.org.id)
     const teams = JSON.parse(
       await fx.t.query(internal.machine.mcp.listTeams, { callerId: fx.admin.id, access: 'read' }),
     )
-    expect(teams).toEqual([
-      {
-        id: fx.team.id,
-        name: 'Hardware',
-        members: [
-          { id: fx.admin.id, name: 'admin', leader: false },
-          { id: fx.user.id, name: 'user', leader: true },
-        ],
-      },
-    ])
+    // a page of summaries, the cursor first; withOrg plants no count row,
+    // so the count is null, never 0
+    expect(teams).toEqual({
+      next_cursor: null,
+      teams: [{ id: fx.team.id, name: 'Hardware', member_count: null }],
+    })
+    expect(Object.keys(teams)).toEqual(['next_cursor', 'teams'])
+    expect(Object.keys(teams.teams[0])).toEqual(['id', 'name', 'member_count'])
+    const members = JSON.parse(
+      await fx.t.query(internal.machine.mcp.listTeamMembers, {
+        callerId: fx.admin.id,
+        access: 'read',
+        team_id: fx.team.id,
+      }),
+    )
+    expect(members).toEqual({
+      next_cursor: null,
+      team: { id: fx.team.id, name: 'Hardware', member_count: null },
+      members: [
+        { id: fx.admin.id, name: 'admin', leader: false },
+        { id: fx.user.id, name: 'user', leader: true },
+      ],
+    })
+    expect(Object.keys(members)).toEqual(['next_cursor', 'team', 'members'])
 
     // guest reads only the granted meta tree; admin reads all four
     const guestProjects = JSON.parse(
@@ -992,9 +1009,11 @@ describe('read tools', () => {
     ) as Record<string, unknown>[]
     expect(adminProjects.map((p) => p.key)).toEqual(['FW', 'PCB', 'SKNK', 'TBED'])
 
-    const users = JSON.parse(
+    const usersPage = JSON.parse(
       await fx.t.query(internal.machine.mcp.listUsers, { callerId: fx.agent.id, access: 'read' }),
-    ) as Record<string, unknown>[]
+    ) as { next_cursor: string | null; users: Record<string, unknown>[] }
+    expect(Object.keys(usersPage)).toEqual(['next_cursor', 'users'])
+    const users = usersPage.users
     const agentRow = users.find((u) => u.id === fx.agent.id)
     expect(agentRow).toBeDefined()
     expect(agentRow?.plannable_hours).toBeNull() // null for an agent, never 0

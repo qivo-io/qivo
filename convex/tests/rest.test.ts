@@ -45,6 +45,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 import { lowered, restPage, restPages } from './taskPages.setup'
 import { itemFor, plantCredential, storedRows } from './trash.setup'
 
@@ -530,10 +531,15 @@ describe('/v1/users', () => {
   it('the roster is org-fenced, name-ordered, shape-exact — null hours for agents, no email', async () => {
     const t = newT()
     const f = await machineOrg(t)
-    const rows = await t.query(internal.machine.rest.listUsers, {
+    await keyOrg(t, f.org.id)
+    const page = await t.query(internal.machine.rest.listUsers, {
       callerId: f.agent.id,
       access: 'read',
     })
+    // a page now, the cursor first, null at the roster's end
+    expect(Object.keys(page)).toEqual(['next_cursor', 'users'])
+    expect(page.next_cursor).toBeNull()
+    const rows = page.users
     expect(rows.map((u) => u.name)).toEqual(['admin', 'guest', 'Relay', 'user', 'viewer'])
     const relay = rows.find((u) => u.id === f.agent.id)
     expect(relay).toEqual({
@@ -552,14 +558,15 @@ describe('/v1/users', () => {
   it('not gated on a project grant — a grantless agent still reads the roster', async () => {
     const t = newT()
     const f = await withOrg(t)
-    const rows = await t.query(internal.machine.rest.listUsers, {
+    await keyOrg(t, f.org.id)
+    const page = await t.query(internal.machine.rest.listUsers, {
       callerId: f.agent.id,
       access: 'read',
     })
-    expect(rows.length).toBe(5)
+    expect(page.users.length).toBe(5)
   })
 
-  it('GET /v1/users/{id}: case-insensitive exact id; unknown → 404', async () => {
+  it('GET /v1/users/{id}: case-insensitive exact id; unknown, foreign or no uuid → 404', async () => {
     const t = newT()
     const f = await machineOrg(t)
     const one = await t.query(internal.machine.rest.getUser, {
@@ -568,11 +575,13 @@ describe('/v1/users', () => {
       ref: f.user.id.toUpperCase(),
     })
     expect(one.id).toBe(f.user.id)
-    await refused(
-      t.query(internal.machine.rest.getUser, { callerId: f.agent.id, access: 'read', ref: uuid() }),
-      'not_found',
-      'user not found',
-    )
+    for (const ref of [uuid(), f.otherAdmin.id, 'user', '']) {
+      await refused(
+        t.query(internal.machine.rest.getUser, { callerId: f.agent.id, access: 'read', ref }),
+        'not_found',
+        'user not found',
+      )
+    }
   })
 })
 

@@ -1,7 +1,8 @@
 /* Teams over REST and MCP (machine/teams.ts) and the shared team rules the
  * app runs too (model/teams.ts, model/projectAccess.ts removeAndSettle).
  *
- *   1. Listing teams with their members and who leads them.
+ *   1. Listing teams as summaries with their member counts, and a team's
+ *      members with who leads it, a page at a time.
  *   2. Creating teams (organization admins) and renaming them (admins and
  *      the team's leaders), with names trimmed and never blank.
  *   3. Adding members and making or unmaking leaders: people only, a leader
@@ -22,11 +23,13 @@ import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { LIMITS } from '../lib/limits'
+import { nameKey } from '../lib/nameKey'
 import { sha256hex } from '../machine/auth'
 import { deleteTeamDeep } from '../model/cascade'
 import { LAST_TEAM_RULE } from '../model/orgs'
 import { HELD_TASKS_SHAPE, KEEP_TOO_LARGE, REMOVAL_FULL } from '../model/projectAccess'
-import { deleteTeamCore, TEAM_RUNS_RULE, teamsJson } from '../model/teams'
+import { insertTeamCount } from '../model/teamCounts'
+import { deleteTeamCore, memberPage, TEAM_RUNS_RULE, teamPage } from '../model/teams'
 import {
   activityFor,
   as,
@@ -40,6 +43,8 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
+import { teamsJson } from './teamMembers.setup'
 
 const VIA_REST = 'via the REST API (drive)'
 
@@ -68,7 +73,8 @@ type Fx = OrgFixture & {
  * TBED only through the team: he is assigned an open task in FW, reviews
  * another and was assigned a Done one. Pia, outside the team, holds User on
  * FW. The fixture's user leads both Hardware and TBED; the admin is a plain
- * member. */
+ * member. Hardware is counted with its three members, and every row holds
+ * its name key, as on a deployment (nameKeys.setup.ts keyOrg). */
 async function setup(): Promise<Fx> {
   const t = newT()
   const f = await withOrg(t)
@@ -109,6 +115,8 @@ async function setup(): Promise<Fx> {
     reviewer_id: emil.id,
   })
   const done = await task({ title: 'Done', status: 'done', assignee_id: emil.id })
+  await t.run((ctx) => insertTeamCount(ctx, f.team, 3))
+  await keyOrg(t, f.org.id)
   return { ...f, t, emil, pia, open, reviewing, done }
 }
 
@@ -146,43 +154,84 @@ const teamRow = (t: T, id: string) =>
       .unique(),
   )
 
-/* A leader row written straight to the table, as an older rule allowed. */
-const plantLeaderRow = (fx: Fx, profileId: string) =>
+/* A leader row written straight to the table, as an older rule allowed,
+ * with its copy of the person's name key and without moving the count. */
+const plantLeaderRow = (fx: Fx, profile: Doc<'profiles'>) =>
   fx.t.run(async (ctx) => {
     await ctx.db.insert('team_members', {
       team_id: fx.team.id,
-      profile_id: profileId,
+      profile_id: profile.id,
       is_leader: true,
+      name_key: nameKey(profile.name),
     })
   })
 
-/* A second team row in `orgId`. */
+/* A second team row in `orgId`, keyed and counted with no members. */
 const plantTeam = (fx: Fx, orgId: string, name: string) =>
   fx.t.run(async (ctx) => {
     const id = uuid()
-    await ctx.db.insert('teams', {
+    const _id = await ctx.db.insert('teams', {
       id,
       org_id: orgId,
       name,
+      name_key: nameKey(name),
       track_delay_default: true,
       created_at: NOW,
     })
+    const team = await ctx.db.get(_id)
+    if (team !== null) await insertTeamCount(ctx, team, 0)
     return id
   })
 
 /* ------------------------------------------------------------- 1. lists */
 
+/* The tables `read` queries through ctx.db.query, in order. */
+async function tablesRead<R>(fx: Fx, read: (ctx: QueryCtx) => Promise<R>) {
+  const tables: string[] = []
+  const out = await fx.t.run(async (ctx) => {
+    const db = new Proxy(ctx.db, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop)
+        if (prop === 'query') {
+          return (table: 'profiles') => {
+            tables.push(table)
+            return target.query(table)
+          }
+        }
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    return await read({ ...ctx, db } as QueryCtx)
+  })
+  return { out, tables }
+}
+
 describe('listing teams', () => {
-  it('lists each team with its members and who leads it, alike on both surfaces', async () => {
+  it('lists each team with its count and its members with who leads it, alike on both surfaces', async () => {
     const fx = await setup()
     // an agent's leader row from before agents were refused grants nothing,
-    // and a guest's old row is no membership at all, as on Team settings
-    await plantLeaderRow(fx, fx.agent.id)
-    await plantLeaderRow(fx, fx.guest.id)
+    // and a guest's old row is no membership at all, as on Team settings;
+    // planted straight, neither moves the count
+    await plantLeaderRow(fx, fx.agent)
+    await plantLeaderRow(fx, fx.guest)
     const assembly = await plantTeam(fx, fx.org.id, 'Assembly')
-    const hardware = {
-      id: fx.team.id,
-      name: 'Hardware',
+    const hardware = { id: fx.team.id, name: 'Hardware', member_count: 3 }
+    const expected = {
+      next_cursor: null,
+      teams: [{ id: assembly, name: 'Assembly', member_count: 0 }, hardware],
+    }
+    // a Viewer reads them like anyone in the organization
+    const read = { callerId: fx.viewer.id, access: 'read' as const }
+    const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.listTeams, read))
+    expect(mcp).toEqual(expected)
+    expect(Object.keys(mcp.teams[1])).toEqual(['id', 'name', 'member_count'])
+    expect(await fx.t.query(internal.machine.teams.restListTeams, read)).toEqual(expected)
+    expect(
+      await fx.t.query(internal.machine.teams.restGetTeam, { ...read, ref: fx.team.id }),
+    ).toEqual(hardware)
+    const members = {
+      next_cursor: null,
+      team: hardware,
       members: [
         { id: fx.admin.id, name: 'admin', leader: false },
         { id: fx.emil.id, name: 'emil', leader: false },
@@ -190,19 +239,20 @@ describe('listing teams', () => {
         { id: fx.user.id, name: 'user', leader: true },
       ],
     }
-    const expected = [{ id: assembly, name: 'Assembly', members: [] }, hardware]
-    // a Viewer reads them like anyone in the organization
-    const read = { callerId: fx.viewer.id, access: 'read' as const }
-    const mcp = JSON.parse(await fx.t.query(internal.machine.mcp.listTeams, read))
-    expect(mcp).toEqual(expected)
-    expect(Object.keys(mcp[1])).toEqual(['id', 'name', 'members'])
-    expect(await fx.t.query(internal.machine.teams.restListTeams, read)).toEqual(expected)
     expect(
-      await fx.t.query(internal.machine.teams.restGetTeam, { ...read, ref: fx.team.id }),
-    ).toEqual(hardware)
+      JSON.parse(
+        await fx.t.query(internal.machine.mcp.listTeamMembers, { ...read, team_id: fx.team.id }),
+      ),
+    ).toEqual(members)
+    expect(
+      await fx.t.query(internal.machine.teams.restListTeamMembers, { ...read, ref: fx.team.id }),
+    ).toEqual(members)
+    // the old whole-team reader lists the same members
+    const whole = await fx.t.run((ctx) => teamsJson(ctx, fx.viewer))
+    expect(whole.map((t) => t.members)).toEqual([[], members.members])
   })
 
-  it('reads the organization profiles once, however many members the teams have', async () => {
+  it('reads no profile for a page of teams, and one for each member a page lists', async () => {
     const fx = await setup()
     const assembly = await plantTeam(fx, fx.org.id, 'Assembly')
     await fx.t.run(async (ctx) => {
@@ -211,27 +261,29 @@ describe('listing teams', () => {
           team_id: assembly,
           profile_id: who.id,
           is_leader: false,
+          name_key: nameKey(who.name),
         })
       }
     })
-    const tables: string[] = []
-    const teams = await fx.t.run(async (ctx) => {
-      const db = new Proxy(ctx.db, {
-        get(target, prop) {
-          const value: unknown = Reflect.get(target, prop)
-          if (prop === 'query') {
-            return (table: 'profiles') => {
-              tables.push(table)
-              return target.query(table)
-            }
-          }
-          return typeof value === 'function' ? value.bind(target) : value
-        },
-      })
-      return await teamsJson({ ...ctx, db } as QueryCtx, fx.viewer)
-    })
-    expect(teams.map((t) => t.members.length)).toEqual([3, 3])
-    expect(tables.filter((t) => t === 'profiles')).toEqual(['profiles'])
+    const paging = { limit: 50, cursor: null, search: '' }
+    const teams = await tablesRead(fx, (ctx) => teamPage(ctx, fx.viewer, paging))
+    expect(teams.out.teams.map((t) => t.name)).toEqual(['Assembly', 'Hardware'])
+    expect(teams.tables.filter((t) => t === 'profiles')).toEqual([])
+    const team = (await teamRow(fx.t, assembly)) as Doc<'teams'>
+    const members = await tablesRead(fx, (ctx) => memberPage(ctx, fx.viewer, team, paging))
+    expect(members.out.members.map((m) => m.name)).toEqual(['emil', 'pia', 'viewer'])
+    // the unkeyed check reads no profile when every membership holds a copy
+    expect(members.tables.filter((t) => t === 'profiles')).toEqual([
+      'profiles',
+      'profiles',
+      'profiles',
+    ])
+    // a search that matches no member reads no profile
+    const miss = await tablesRead(fx, (ctx) =>
+      memberPage(ctx, fx.viewer, team, { ...paging, search: 'nobody here' }),
+    )
+    expect(miss.out).toMatchObject({ next_cursor: null, members: [] })
+    expect(miss.tables.filter((t) => t === 'profiles')).toEqual([])
   })
 
   it('answers a team outside the organization like a missing one', async () => {
@@ -255,7 +307,8 @@ describe('creating and renaming teams', () => {
     const mcp = await parsed(
       fx.t.mutation(internal.machine.teams.mcpSetTeam, { ...as_(fx.admin), name: '  Optics ' }),
     )
-    expect(mcp).toMatchObject({ name: 'Optics', members: [], created: true })
+    // the new team's summary, counted from its new row, with no members array
+    expect(mcp).toEqual({ id: mcp.id, name: 'Optics', member_count: 0, created: true })
     expect(await teamRow(fx.t, mcp.id as string)).toMatchObject({
       org_id: fx.org.id,
       name: 'Optics',
@@ -265,7 +318,7 @@ describe('creating and renaming teams', () => {
       ...as_(fx.admin),
       body: JSON.stringify({ name: 'Firmware' }),
     })
-    expect(restOut).toMatchObject({ name: 'Firmware', members: [] })
+    expect(restOut).toEqual({ id: restOut.id, name: 'Firmware', member_count: 0 })
     expect(await activityFor(fx.t, fx.org.id)).toEqual([])
   })
 
@@ -307,7 +360,7 @@ describe('creating and renaming teams', () => {
         name,
       })
     const renamed = await parsed(rename(' HW '))
-    expect(renamed).toMatchObject({ id: fx.team.id, name: 'HW', created: false })
+    expect(renamed).toEqual({ id: fx.team.id, name: 'HW', member_count: 3, created: false })
     await refused(rename('  '), 'rule', 'a team name cannot be blank')
     const patch = (who: Doc<'profiles'>, body: unknown, ref = fx.team.id) =>
       fx.t.mutation(internal.machine.teams.restUpdateTeam, {
@@ -325,9 +378,13 @@ describe('creating and renaming teams', () => {
     )
     expect((await teamRow(fx.t, fx.team.id))?.name).toBe('HW')
     // names are trimmed
-    expect(await patch(fx.admin, { name: ' Hardware ' })).toMatchObject({ name: 'Hardware' })
+    expect(await patch(fx.admin, { name: ' Hardware ' })).toEqual({
+      id: fx.team.id,
+      name: 'Hardware',
+      member_count: 3,
+    })
     // an agent's leader row grants nothing, so the agent does not lead
-    await plantLeaderRow(fx, fx.agent.id)
+    await plantLeaderRow(fx, fx.agent)
     for (const who of [fx.emil, fx.agent]) {
       await refused(patch(who, { name: 'Mine' }), 'forbidden', TEAM_RUNS_RULE)
     }
@@ -417,7 +474,7 @@ describe('adding members and leaders', () => {
 
   it('answers whether the user leads afterwards, so an old agent leader row reads false', async () => {
     const fx = await setup()
-    await plantLeaderRow(fx, fx.agent.id)
+    await plantLeaderRow(fx, fx.agent)
     const put = (who: Doc<'profiles'>) =>
       fx.t.mutation(internal.machine.teams.restPutMember, {
         ...rest(fx.admin),
@@ -441,7 +498,7 @@ describe('adding members and leaders', () => {
   it('lets only a person who runs the team change its members', async () => {
     const fx = await setup()
     // an agent with an older leader row is refused as an agent, like any agent
-    await plantLeaderRow(fx, fx.agent.id)
+    await plantLeaderRow(fx, fx.agent)
     const set = (who: Doc<'profiles'>, args: { member: boolean; leader?: boolean }) =>
       fx.t.mutation(internal.machine.teams.mcpSetTeamMember, {
         ...as_(who),
@@ -1243,8 +1300,47 @@ describe('team routes over HTTP', () => {
     const { call } = await httpAs(fx, fx.user)
     const listed = await call('GET', '/v1/teams')
     expect(listed.status).toBe(200)
-    expect((listed.body as Json[]).map((t) => t.name)).toEqual(['Hardware'])
+    expect(listed.body).toEqual({
+      next_cursor: null,
+      teams: [{ id: fx.team.id, name: 'Hardware', member_count: 3 }],
+    })
     const members = `/v1/teams/${fx.team.id}/members`
+    // one member a page, by name, with the team on every page
+    const first = await call('GET', `${members}?limit=1`)
+    expect(first).toMatchObject({
+      status: 200,
+      body: {
+        team: { id: fx.team.id, member_count: 3 },
+        members: [{ id: fx.admin.id, name: 'admin', leader: false }],
+      },
+    })
+    const cursor = (first.body as { next_cursor: string }).next_cursor
+    expect(
+      await call('GET', `${members}?limit=2&cursor=${encodeURIComponent(cursor)}`),
+    ).toMatchObject({
+      status: 200,
+      body: {
+        next_cursor: null,
+        members: [
+          { id: fx.emil.id, name: 'emil', leader: false },
+          { id: fx.user.id, name: 'user', leader: true },
+        ],
+      },
+    })
+    expect(await call('GET', `${members}?search=emi`)).toMatchObject({
+      status: 200,
+      body: { team: { member_count: 3 }, members: [{ id: fx.emil.id }] },
+    })
+    expect(await call('GET', `${members}?page=2`)).toEqual({
+      status: 400,
+      body: {
+        error: 'unknown query parameter "page"; this request takes search, limit, cursor, offset',
+      },
+    })
+    expect(await call('GET', `/v1/teams/${uuid()}/members`)).toEqual({
+      status: 404,
+      body: { error: 'team not found' },
+    })
     expect(await call('PUT', `${members}/${fx.pia.id}`, { leader: true })).toMatchObject({
       status: 200,
       body: { leader: true, changed: true },
