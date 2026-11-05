@@ -28,7 +28,16 @@
  * takes the absent archived_at filter and still returns active matches
  * (convex/lib/mainSearch.ts ARCHIVED_FILTER), and that the deployment
  * answers an archived task's text and history (taskWindow.task,
- * snapshot.threadHistory). It opens task links in fresh loads: that
+ * snapshot.threadHistory). In Archived tasks it also chooses through the
+ * shared project picker on the deployment's navigation reads
+ * (ui/project-picker): it finds its project by name, lists its two
+ * sub-projects from projectNav.children and chooses both, which must list
+ * exactly its three archived tasks, takes Zulu's chip off, finds Zulu by
+ * name with its project from projectNav.search, and opens an archived task
+ * over Settings, read-only with its description, which leaves the page as
+ * it was. In Search it narrows to Zulu through the same picker, where
+ * Include archived tasks must find exactly the task it archived there. It
+ * opens task links in fresh loads: that
  * archived task's, which must show read-only with its note and title, a
  * number no task has, which must say it can't be opened, and an active
  * task's, which must show its title (ui/task-link), so the deployment
@@ -4138,10 +4147,30 @@ async function removalWindowCheck() {
   })
 }
 
+/** Chooses project `id` in the shared project picker that `trigger`
+ *  opens, found by searching `name` (src/components/ProjectPicker.tsx). A
+ *  picker of one project (`many` false, Search in) closes on the pick; one
+ *  of several stays open, so Escape, in its emptied field, closes it. */
+async function pickProject(trigger, name, id, many = true) {
+  await trigger.click()
+  const field = app.locator('[data-project-picker-search]')
+  await field.waitFor({ timeout: 30_000 })
+  await field.fill(name)
+  const row = app.locator(`[data-project-pick="${id}"]`)
+  await row.waitFor({ timeout: 30_000 })
+  await row.click()
+  if (many) {
+    await field.fill('')
+    await field.press('Escape')
+  }
+  await field.waitFor({ state: 'detached', timeout: 10_000 })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
- *  matches no other task of the run's project. */
+ *  matches no other task of the run's project. The project is chosen
+ *  through the shared project picker, found by its name. */
 async function archivedTasksPageCheck(target) {
   await check('ui/archived-tasks-page', async () => {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-archived-tasks`, {
@@ -4162,7 +4191,11 @@ async function archivedTasksPageCheck(target) {
       await evaluate(box, (el) => el === document.activeElement),
       'the search does not have focus when the page opens',
     )
-    await page.locator('[data-archive-project]').selectOption(run.projects.M.id)
+    await pickProject(
+      page.locator('[data-archive-project]'),
+      run.projects.M.name,
+      run.projects.M.id,
+    )
     // without a search the newest archived tasks are listed
     await page.locator(`[data-archive-row="${target.id}"]`).waitFor()
     expect(
@@ -4188,6 +4221,131 @@ async function archivedTasksPageCheck(target) {
     await box.fill(nothing)
     await page.getByText(`No archived tasks match “${nothing}”.`).waitFor()
     return `found ${target.key} by search`
+  })
+}
+
+/** The step that chooses projects through the shared project picker
+ *  (projectPickerCheck). */
+export const PICKER_STEP = 'ui/project-picker'
+
+/** What the picker and the pages around it say and mark, which the step
+ *  waits for (src/components/ProjectPicker.tsx,
+ *  src/panels/settings/ArchivedTasks.tsx). */
+export const PICKER_EXPECTED = {
+  /** the separator between a sub-project's project and its own name */
+  place: ' › ',
+  /** a row's open button, by the task's id */
+  open: 'data-archive-open',
+  /** a chosen project's chip, by the project's id */
+  chip: 'data-archive-pick',
+  /** a top-level row's arrow, by the project's id */
+  expand: 'data-project-expand',
+}
+
+/** Archived tasks chooses through the shared project picker on the
+ *  deployment's navigation reads, and opens a task over Settings; Search
+ *  narrows through the same picker. `tasks` are the run's three archived
+ *  tasks, 1 and 3 in Alpha and 2 in Zulu. It only reads, and must run
+ *  before the run archives its project. */
+async function projectPickerCheck(tasks) {
+  await check(PICKER_STEP, async () => {
+    const { M, A, Z } = run.projects
+    const [one, two, three] = tasks
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-archived-tasks`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const page = app.locator('[data-archived-tasks]')
+    await page.waitFor({ timeout: 45_000 })
+    const listed = () =>
+      page
+        .locator('[data-archive-row]')
+        .evaluateAll((els) => els.map((el) => el.getAttribute('data-archive-row')).sort())
+    const exactly = async (ids) =>
+      until(async () => JSON.stringify(await listed()) === JSON.stringify([...ids].sort()))
+    // Alpha and Zulu from projectNav.children, both chosen
+    const trigger = page.locator('[data-archive-project]')
+    await trigger.click()
+    const field = app.locator('[data-project-picker-search]')
+    await field.fill(M.name)
+    await app.locator(`[${PICKER_EXPECTED.expand}="${M.id}"]`).click()
+    for (const p of [A, Z]) {
+      const row = app.locator(`[data-project-pick="${p.id}"]`)
+      await row.waitFor({ timeout: 30_000 })
+      await row.click()
+    }
+    await field.fill('')
+    await field.press('Escape')
+    expect(
+      await exactly([one.id, two.id, three.id]),
+      'Alpha and Zulu do not list exactly 1, 2 and 3',
+    )
+    await page.locator(`[${PICKER_EXPECTED.chip}="${Z.id}"]`).click()
+    expect(await exactly([one.id, three.id]), 'Alpha alone does not list exactly 1 and 3')
+    // Zulu by its own name, with its project, from projectNav.search
+    await trigger.click()
+    await field.fill(Z.name)
+    const zulu = app.locator(`[data-project-pick="${Z.id}"]`)
+    await zulu.waitFor({ timeout: 30_000 })
+    eq(
+      ((await zulu.textContent()) ?? '').trim(),
+      `${M.name}${PICKER_EXPECTED.place}${Z.name}`,
+      'the search row of Zulu',
+    )
+    await field.press('Escape')
+    await field.press('Escape')
+    await field.waitFor({ state: 'detached', timeout: 10_000 })
+    // a row opens its task over Settings, read-only with its text
+    await page.locator(`[${PICKER_EXPECTED.open}="${three.id}"]`).click()
+    const opened = app.locator('[role="dialog"][data-task-archived]')
+    await opened.waitFor({ timeout: 30_000 })
+    expect(
+      await until(async () =>
+        ((await opened.locator('[data-task-description]').textContent()) ?? '').includes(
+          archivedNotes(),
+        ),
+      ),
+      `the window of ${three.key} does not show its description`,
+    )
+    expect(
+      app.url().endsWith('/settings/projects-archived-tasks'),
+      `the address left Archived tasks: ${app.url()}`,
+    )
+    await opened.locator('[data-task-close]').click()
+    await opened.waitFor({ state: 'detached', timeout: 10_000 })
+    expect(await exactly([one.id, three.id]), 'the page lost its rows when the window closed')
+    eq(await page.locator(`[${PICKER_EXPECTED.chip}="${A.id}"]`).count(), 1, "Alpha's chip")
+    // Search narrowed to Zulu finds only the task archived there
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/all`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const search = app.locator('button[data-sidebar-search]')
+    await search.waitFor({ timeout: 60_000 })
+    await search.click()
+    const palette = app.getByRole('dialog', { name: 'Search tasks and projects', exact: true })
+    await pickProject(palette.locator('[data-palette-scope]'), Z.name, Z.id, false)
+    eq(
+      ((await palette.locator('[data-palette-scope]').textContent()) ?? '').trim(),
+      `${M.name}${PICKER_EXPECTED.place}${Z.name}`,
+      'Search in',
+    )
+    await palette.locator('[data-palette-archived]').click()
+    await palette
+      .getByRole('combobox', { name: 'Search tasks and projects' })
+      .fill(`${run.tag} archived`)
+    const results = () =>
+      palette
+        .locator('[cmdk-item]')
+        .evaluateAll((els) => els.map((el) => el.getAttribute('data-value')))
+    expect(
+      await until(async () => {
+        const busy = await palette.locator('[cmdk-list]').getAttribute('aria-busy')
+        const rows = await results()
+        return busy === null && rows.length === 1 && rows[0] === `issue-${two.key}`
+      }),
+      `Search in Zulu did not find exactly ${two.key}`,
+    )
+    await palette.press('Escape')
+    return `chose Alpha and Zulu from projectNav.children, found Zulu with its project by search, opened ${three.key} over Settings, and found only ${two.key} in Search narrowed to Zulu`
   })
 }
 
@@ -4478,6 +4636,7 @@ async function archiveChecks() {
         expect(!mcpRows.some((t) => t.id === id), 'MCP lists an archived task')
     })
     await archivedTasksPageCheck(archivedTasks[2])
+    await projectPickerCheck(archivedTasks)
     await paletteSearchCheck(archivedTasks[2], run.parent)
     await taskLinkCheck(archivedTasks[2], run.parent)
   } else
@@ -4486,6 +4645,7 @@ async function archiveChecks() {
       'archived-lists/mcp',
       'task-lists/active-only',
       'ui/archived-tasks-page',
+      PICKER_STEP,
       'ui/search-archived',
       TASK_LINK_STEP,
     ])

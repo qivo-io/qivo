@@ -478,6 +478,64 @@ describe('the benchmark server', () => {
     expect((await page('')).answer.error).toContain('only organization admins')
   }, 60_000)
 
+  it("answers the project picker's navigation reads from the workspace, with the states the page asks for", async () => {
+    /** What `name` answers with `args` on a workspace with page parameters
+        `params`. */
+    const nav = async (params, name, args = {}) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'nav', name, args })
+      const answer = posted.find((m) => m.to === 'nav')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const page = await nav('programs=30', 'projectNav:page')
+    expect(page.answer.state).toBe('ok')
+    expect(page.answer.rows).toHaveLength(25)
+    expect(page.answer.next).not.toBeNull()
+    expect(page.answer.rows.every((row) => row.favorite === false)).toBe(true)
+    // the hidden program, without a grant, never lists
+    expect(page.answer.rows.map((row) => row.name)).not.toContain('Hidden program')
+    const first = page.snap.projects.find((p) => p.name === 'Testbed program')
+    const kids = await nav('programs=30', 'projectNav:children', { project_id: first.id })
+    expect(kids.answer.rows).toHaveLength(10)
+    expect(kids.answer.rows.every((row) => row.parent_id === first.id)).toBe(true)
+    const found = await nav('programs=30', 'projectNav:search', { search: 'project 3' })
+    expect(found.answer.rows.length).toBeGreaterThan(0)
+    expect(found.answer.rows.every((row) => row.parent !== null)).toBe(true)
+    expect((await nav('', 'projectNav:resolve', { project_id: first.id })).answer).toMatchObject({
+      state: 'ok',
+      project: { id: first.id, parent: null, favorite: false },
+    })
+    // a Viewer reads the same lists
+    expect((await nav('role=viewer', 'projectNav:page')).answer.rows).toHaveLength(1)
+    // the forced states
+    expect((await nav('projectnav=not-ready', 'projectNav:page')).answer).toEqual({
+      state: 'not_ready',
+    })
+    expect(
+      (await nav('projectnav=unchecked', 'projectNav:search', { search: 'x' })).answer,
+    ).toMatchObject({ state: 'unavailable', reason: 'access_unchecked' })
+    const stopped = await nav('programs=6&projectnav=stopped', 'projectNav:page')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(2)
+    expect((await nav('programs=45&projectnav=small', 'projectNav:page')).answer.rows).toHaveLength(
+      5,
+    )
+    expect((await nav('projectnav=error', 'projectNav:page')).answer.error).toContain('fails')
+    const starred = await nav('programs=4&projectnav=favorites', 'projectNav:page')
+    expect(starred.answer.rows.map((row) => [row.name, row.favorite])).toEqual([
+      ['Testbed program', true],
+      ['Testbed program 2', true],
+      ['Testbed program 3', false],
+      ['Testbed program 4', false],
+    ])
+    // the server's refusals
+    expect((await nav('', 'projectNav:search', { search: '  ' })).answer.error).toContain(
+      'browse with projectNav.page',
+    )
+  }, 60_000)
+
   it("answers the removal window's reads from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args(snap)` on a workspace with page
         parameters `params`. */

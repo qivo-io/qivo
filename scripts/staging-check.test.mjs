@@ -26,6 +26,8 @@ import {
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_OVERDUE_DAYS,
+  PICKER_EXPECTED,
+  PICKER_STEP,
   pace,
   parseArgs,
   RATE_BUDGET,
@@ -130,6 +132,17 @@ describe('staging check REST contract', () => {
     for (const text of Object.values(RELATION_EXPECTED)) expect(picker).toContain(text)
     for (const mark of ['data-picker-row', 'data-picker-all', 'data-picker-current'])
       expect(picker).toContain(mark)
+  })
+  it("chooses projects in Archived tasks and Search through the picker's own marks", () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    const picker = read('../src/components/ProjectPicker.tsx')
+    const page = read('../src/panels/settings/ArchivedTasks.tsx')
+    const pick = read('../src/lib/projectPick.ts')
+    expect(PICKER_STEP).toBe('ui/project-picker')
+    for (const mark of ['data-project-picker-search', 'data-project-pick', PICKER_EXPECTED.expand])
+      expect(picker).toContain(mark)
+    for (const mark of [PICKER_EXPECTED.open, PICKER_EXPECTED.chip]) expect(page).toContain(mark)
+    expect(pick).toContain(`\`\${p.parent.name}${PICKER_EXPECTED.place}\${p.name}\``)
   })
   it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {
     const table = readFileSync(

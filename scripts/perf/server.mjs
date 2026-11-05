@@ -62,6 +62,18 @@
 //                        health-over-budget, health-cap (at most 20 rows,
 //                        so the cap note shows) and health-error (its read
 //                        fails); several joined by commas
+//   projectnav           a state the project picker's navigation reads
+//                        (projectNav.page, children, search and resolve)
+//                        answer whatever the workspace says, for
+//                        screenshots of states a seeded backend cannot
+//                        reach: not-ready (every list not ready),
+//                        unchecked (every read the access_unchecked
+//                        refusal), stopped (an open batch stops after two
+//                        projects looked at), small (batches of five, so
+//                        programs=45 reaches the eight batches a list
+//                        gathers at most), error (every read fails) and
+//                        favorites (the first two programs starred);
+//                        several joined by commas
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -146,12 +158,17 @@
 // access or read budget. So are Settings › Labels' batches
 // (labels:settingsPage), through the stand-in the jsdom tests use
 // (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
-// reads no read budget. So are the removal window's reads
-// (accessRemovals:preview and reassignChoices), through
-// src/store/removalStandIn.setup.ts, which takes the removed people's open
-// tasks in the projects the change reaches as the lost holdings and every
-// person who can hold work as the choices, and answers a chosen person's
-// holder_eligible by that rule, without the server's rules.
+// reads no read budget. So are the project picker's navigation reads
+// (projectNav:page, children, search and resolve), through
+// src/store/projectNavStandIn.setup.ts, which judges the signed-in person
+// by ordinary access, reads no budget and has no favorites unless
+// projectnav=favorites asks. Archived tasks' own read (issues:archivedPage)
+// has no stand-in, so its page fails once projects are chosen here. So are
+// the removal window's reads (accessRemovals:preview and reassignChoices),
+// through src/store/removalStandIn.setup.ts, which takes the removed
+// people's open tasks in the projects the change reaches as the lost
+// holdings and every person who can hold work as the choices, and answers a
+// chosen person's holder_eligible by that rule, without the server's rules.
 // The task window's read of a task resolves its ref
 // as the server does (convex/lib/taskWindow.ts taskByRef): a uuid in any
 // case, or a number bare or as QN-12 in the organization asked only.
@@ -164,6 +181,7 @@ import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
+import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 
@@ -226,6 +244,21 @@ const forcedLabels = (() => {
     else if (state === 'small') force.batch = 5
     else if (state === 'error') force.fail = true
     else if (state === 'uncounted') force.uncounted = true
+  }
+  return force
+})()
+/* The navigation reads' forced states (the `projectnav` parameter), as the
+   stand-in's `force` takes them; `favorites` names its programs once they
+   exist (projectNavForce). */
+const forcedProjectNav = (() => {
+  const force = {}
+  for (const state of (parameters.get('projectnav') ?? '').split(',').filter(Boolean)) {
+    if (state === 'not-ready') force.notReady = true
+    else if (state === 'unchecked') force.unchecked = NAV_UNCHECKED
+    else if (state === 'stopped') force.stop = 2
+    else if (state === 'small') force.batch = 5
+    else if (state === 'error') force.fail = true
+    else if (state === 'favorites') force.favorites = true
   }
   return force
 })()
@@ -1020,8 +1053,17 @@ function searchPage({ text, include_archived, scope, cursor }) {
     coverage: { complete: true },
   }
 }
+/** The navigation reads' `force`, with the first two programs as the
+    favorites projectnav=favorites asks for. */
+const projectNavForce = () =>
+  forcedProjectNav.favorites
+    ? { ...forcedProjectNav, favorites: programs.slice(0, 2).map((p) => p.meta.id) }
+    : { ...forcedProjectNav, favorites: [] }
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
+  // the project picker's reads (src/store/projectNavStandIn.setup.ts)
+  if (name.startsWith('projectNav:'))
+    return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
   // the relation pickers' read, before the task window's other reads
   if (name === 'taskWindow:relationCandidates')
     return relationPickerStandIn(
