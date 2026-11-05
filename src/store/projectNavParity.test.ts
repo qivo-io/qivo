@@ -1,27 +1,34 @@
-/* The project navigation reads (convex/projectNav.ts page, children and
- * resolve) against the app's own rules. Each case boots the real store from
- * the caller's real workspace, as boardParity.test.ts does, and compares
- * the projects the page lists over every batch, as a set, with
+/* The project navigation reads (convex/projectNav.ts page, children,
+ * resolve and search) against the app's own rules. Each case boots the real
+ * store from the caller's real workspace, as boardParity.test.ts does, and
+ * compares the projects the page lists over every batch, as a set, with
  * P.visibleProjects(), each top-level project's sub-projects with the live
- * children P.canSee keeps, and resolve with P.canSee, for Northstar's Leo
- * and Ben with a few stars, and for every access shape of a user, a guest
- * and a Viewer. Every answer is also held to the rule worked out without
- * reach rows (convex/tests/projectNav.setup.ts), favorites included. The
- * store still applies the admin rule, which gives an organization admin
- * every project, while the reads judge everyone by ordinary access
- * (coordinator, 4 November 2026), so Nora and the fixture's admin are held
- * to that rule, and the projects the store shows them beyond it are
- * asserted. */
+ * children P.canSee keeps, resolve with P.canSee, and the search's rows
+ * over every batch for a few searches, as a set, with those projects and
+ * children whose name key holds every word of the search, each sub-project
+ * with its parent, for Northstar's Leo and Ben with a few stars, and for
+ * every access shape of a user, a guest and a Viewer. The store side
+ * matches through the server's nameKey, which folds accents and leaves the
+ * organization's name out, where the directory today matches the project's
+ * and its organization's names as one lowercased text. Every answer is also
+ * held to the rule worked out without reach rows
+ * (convex/tests/projectNav.setup.ts), favorites included. The store still
+ * applies the admin rule, which gives an organization admin every project,
+ * while the reads judge everyone by ordinary access (coordinator, 4
+ * November 2026), so Nora and the fixture's admin are held to that rule,
+ * and the projects the store shows them beyond it are asserted. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
+import { allWordsMatcher } from '../../convex/lib/search'
 import {
   type NavBatch,
   type NavRefusal,
   navChildrenOf,
   navPageOf,
   navResolveOf,
+  navSearchOf,
 } from '../../convex/model/projectNavReads'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import {
@@ -37,7 +44,12 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
-import { expectedChildren, expectedPage, navSees } from '../../convex/tests/projectNav.setup'
+import {
+  expectedChildren,
+  expectedPage,
+  expectedSearch,
+  navSees,
+} from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Snapshot } from './plannerFixture.setup'
 
@@ -108,13 +120,21 @@ async function rowsOf<R>(read: (after?: string) => Promise<NavBatch<R> | NavRefu
 }
 
 /**
- * Compares the three reads for `profile` with the store booted from their
+ * Compares the four reads for `profile` with the store booted from their
  * workspace and with the rule worked out without reach rows, over every
- * project of their organization. For an admin the store's sets may hold
- * more than the reads; answers how many projects the store shows the
- * profile that the reads leave out, which is none for anyone else.
+ * project of their organization, the search for each of `terms`. For an
+ * admin the store's sets may hold more than the reads; answers how many
+ * projects the store shows the profile that the page leaves out
+ * (`beyond`), and how many rows the store would match that the searches
+ * leave out (`searchBeyond`), both none for anyone else.
  */
-async function compare(t: T, profile: Doc<'profiles'>, label: string, admin = false) {
+async function compare(
+  t: T,
+  profile: Doc<'profiles'>,
+  label: string,
+  terms: readonly string[],
+  admin = false,
+) {
   const P = await storeOf(t, profile)
   const seats = new Map([[profile.org_id, profile]])
   const listed = await rowsOf((after) => t.run((ctx) => navPageOf(ctx, seats, { after })))
@@ -154,7 +174,38 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, admin = fa
       : P.projects.filter((c) => c.parent === p.id && P.canSee(c.id)).map((c) => c.id)
     expect(sorted(got.map((c) => c.id)), `${label}: children of ${p.key}`).toEqual(sorted(kept))
   }
-  return beyond.length
+  const login = profile.auth_user_id ?? 'auth_nobody'
+  let searchBeyond = 0
+  for (const term of terms) {
+    const rows = await rowsOf((after) =>
+      t.run((ctx) => navSearchOf(ctx, login, seats, { search: term, after })),
+    )
+    expect(rows, `${label}: search ${term} by the rule`).toEqual(
+      await expectedSearch(t, [profile], term),
+    )
+    // the store's projects and their children whose own name matches,
+    // each named with its parent
+    const matches = allWordsMatcher(nameKey(term))
+    const named = (p: { name: string }) => matches(nameKey(p.name))
+    const shown = P.visibleProjects()
+    const store = sorted([
+      ...shown.filter(named).map((p) => `${p.id} in none`),
+      ...shown.flatMap((p) =>
+        P.projects
+          .filter((c) => c.parent === p.id && P.canSee(c.id) && named(c))
+          .map((c) => `${c.id} in ${p.id}`),
+      ),
+    ])
+    const found = sorted(rows.map((r) => `${r.id} in ${r.parent?.id ?? 'none'}`))
+    // the search never finds a project the store does not show
+    expect(
+      found.filter((r) => !store.includes(r)),
+      `${label}: search ${term}`,
+    ).toEqual([])
+    if (!admin) expect(found, `${label}: search ${term}`).toEqual(store)
+    searchBeyond += store.filter((r) => !found.includes(r)).length
+  }
+  return { beyond: beyond.length, searchBeyond }
 }
 
 /** A favorites row of `seat` on `p` with its copies, as a star writes it. */
@@ -169,6 +220,15 @@ const star = (t: T, seat: Doc<'profiles'>, p: Pick<Doc<'projects'>, 'id' | 'name
       created_at: NOW,
     }),
   )
+
+/* Searches over Northstar's project names: most of them, a top-level
+ * project with a sub-project of a name alike, and two words of one
+ * sub-project's name. */
+const NORTHSTAR_TERMS = ['e', 'launch', 'customer pilot']
+
+/* Searches over withOrg's project names: every one, three, and one
+ * sub-project's. */
+const SHAPE_TERMS = ['r', 'w', 'board']
 
 describe('Northstar', () => {
   it('lists, expands and resolves what the store shows Leo and Ben, and Nora by ordinary access', async () => {
@@ -188,8 +248,8 @@ describe('Northstar', () => {
     const leos = (await storeOf(t, leo)).visibleProjects()
     for (const p of leos.slice(0, 2)) await star(t, leo, p)
     for (const p of leos.slice(-1)) await star(t, ben, p)
-    expect(await compare(t, leo, 'Leo')).toBe(0)
-    expect(await compare(t, ben, 'Ben')).toBe(0)
+    expect(await compare(t, leo, 'Leo', NORTHSTAR_TERMS)).toEqual({ beyond: 0, searchBeyond: 0 })
+    expect(await compare(t, ben, 'Ben', NORTHSTAR_TERMS)).toEqual({ beyond: 0, searchBeyond: 0 })
     expect(leos.length).toBeGreaterThan(2)
     const leoPage = await expectedPage(t, [leo])
     expect(sorted(leoPage.filter((r) => r.favorite).map((r) => r.id))).toEqual(
@@ -197,7 +257,12 @@ describe('Northstar', () => {
     )
     // the store gives Nora every project and the reads only her ordinary
     // ones, which in Northstar reach every top-level project the store shows
-    expect(await compare(t, nora, 'Nora', true)).toBe(0)
+    // and so do her ordinary sub-projects, so the search finds every match
+    // the store would
+    expect(await compare(t, nora, 'Nora', NORTHSTAR_TERMS, true)).toEqual({
+      beyond: 0,
+      searchBeyond: 0,
+    })
   })
 })
 
@@ -207,7 +272,7 @@ describe('Northstar', () => {
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
   role: 'user' | 'guest' | 'viewer' | 'admin',
-): Promise<{ beyond: number; shown: number }> {
+): Promise<{ beyond: number; searchBeyond: number; shown: number }> {
   const t = newT()
   const f: OrgFixture = await withOrg(t)
   const subject =
@@ -220,9 +285,9 @@ async function compareShape(
   await withReach(t)
   await star(t, subject, f.meta)
   const label = `${role}, ${shape?.[0] ?? 'admin'}`
-  const beyond = await compare(t, subject, label, role === 'admin')
+  const { beyond, searchBeyond } = await compare(t, subject, label, SHAPE_TERMS, role === 'admin')
   const shown = (await expectedPage(t, [subject])).length
-  return { beyond, shown }
+  return { beyond, searchBeyond, shown }
 }
 
 describe('access shapes', () => {
@@ -235,7 +300,8 @@ describe('access shapes', () => {
     })
 
   it('shows an admin without grants none of the projects the store shows them', async () => {
-    // the store's admin rule shows TBED and Skunkworks; ordinary access, none
-    expect(await compareShape(null, 'admin')).toEqual({ beyond: 2, shown: 0 })
+    // the store's admin rule shows TBED and Skunkworks, and TBED's two
+    // sub-projects, which the searches match 7 times; ordinary access, none
+    expect(await compareShape(null, 'admin')).toEqual({ beyond: 2, searchBeyond: 7, shown: 0 })
   })
 })
