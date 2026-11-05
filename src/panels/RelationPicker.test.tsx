@@ -123,6 +123,7 @@ type Options = {
   task?: typeof TASK
   current?: (RelatedTaskVM & { type?: string })[]
   note?: string | null
+  locked?: boolean
   toggle?: (...args: unknown[]) => Promise<boolean> | boolean
   onCreate?: (title: string) => void
 }
@@ -140,7 +141,7 @@ async function show(o: Options = {}) {
           anchor={{ x: 100, y: 100 }}
           onDone={vi.fn()}
           placeholder="Add subtasks: ID or title…"
-          current={{ rows: o.current ?? [], note: o.note ?? null }}
+          current={{ rows: o.current ?? [], note: o.note ?? null, locked: o.locked }}
           seenOf={(c) =>
             c.current
               ? { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } }
@@ -370,6 +371,66 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(reads[2].args).toMatchObject({ kind: 'link', search: 'rare', cursor: 'all-1' })
     await reads[2].answer(batch([row(70, { title: 'A rare part' })]))
     expect(rowIds()).toEqual(['task-70'])
+  })
+
+  it('claims no end and creates nothing on Enter while the current relations are not whole', async () => {
+    await load()
+    await show({ note: 'Loading the current subtasks…' })
+    await reads[0].answer(batch([]))
+    expect(text()).not.toContain('No eligible tasks.')
+    await typeInto('mount the board')
+    await rest()
+    await reads[1].answer(batch([]))
+    // the note says why, in place of a claim that nothing matches
+    expect(text()).toContain('Loading the current subtasks…')
+    expect(text()).not.toContain('No matching tasks.')
+    expect(picker()?.dataset.pickerEnd).toBeUndefined()
+    await enter()
+    expect(created).not.toHaveBeenCalled()
+    // the same at the family's end of Linked tasks
+    await hide()
+    await load()
+    await show({ kind: 'link', note: 'Some current linked tasks could not be loaded.' })
+    await typeInto('wire')
+    await rest()
+    await reads[1].answer(batch([], null, { all_projects: 'all-1' }))
+    expect(text()).not.toContain('No matching tasks in this project.')
+    await enter()
+    expect(created).not.toHaveBeenCalled()
+    // a typed task ID still picks the task the server found by its number
+    await typeInto('QN-45')
+    await rest()
+    await reads[2].answer(batch([row(45, { exact: true })], 'more'))
+    await enter()
+    expect(picks.mock.calls[0]?.[0]).toMatchObject({ uuid: 'task-45' })
+    // once whole, the list ends
+    await show({ kind: 'link', note: null })
+    expect(picker()?.dataset.pickerEnd).toBeUndefined()
+    await typeInto('wire')
+    await rest()
+    await reads[3].answer(batch([]))
+    expect(picker()?.dataset.pickerEnd).toBe('')
+    expect(text()).toContain('No matching tasks.')
+  })
+
+  it('shows the current rows checked and takes no press while their removal waits', async () => {
+    await load()
+    await show({
+      kind: 'link',
+      current: [{ ...relation(45, 'Mount the board'), type: 'blocks' }],
+      note: 'Some current linked tasks could not be loaded.',
+      locked: true,
+    })
+    await reads[0].answer(batch([row(46)]))
+    expect(rowIds()).toEqual(['task-45', 'task-46'])
+    const locked = rowOf('task-45') as HTMLButtonElement | null
+    expect(locked?.getAttribute('aria-pressed')).toBe('true')
+    expect(locked?.disabled).toBe(true)
+    await click(locked)
+    expect(picks).not.toHaveBeenCalled()
+    // a candidate still takes its pick
+    await click(rowOf('task-46'))
+    expect(picks.mock.calls[0]?.[0]).toMatchObject({ uuid: 'task-46' })
   })
 
   it('reads the list again from its start once the task moves to another project', async () => {

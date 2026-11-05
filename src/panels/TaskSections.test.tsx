@@ -625,6 +625,7 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
 
   it('keeps a link’s × waiting while the links list failed, as its kind comes from that list', async () => {
     await load()
+    const reads = holdRelations()
     await openTask()
     await answerAll()
     const remove = () =>
@@ -636,6 +637,19 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     await fail('taskWindow:links')
     expect(remove()?.disabled).toBe(true)
     expect(await hintOf(remove())).toBe('Available once Qivo can check this task for changes')
+    // the picker keeps the link it delivered, checked, without a press
+    await act(async () =>
+      document.querySelector<HTMLElement>('button[aria-label="Link task"]')?.click(),
+    )
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    await reads.at(-1)?.answer(pickerBatch([]))
+    const kept = document.querySelector<HTMLButtonElement>('[data-picker-row="other"]')
+    expect(kept?.dataset.pickerCurrent).toBe('')
+    expect(kept?.getAttribute('aria-pressed')).toBe('true')
+    expect(kept?.disabled).toBe(true)
+    expect(document.querySelector('[data-relation-picker]')?.textContent).toContain(
+      'Some current linked tasks could not be loaded.',
+    )
   })
 
   it('keeps a subtask’s × waiting while the Subtasks list failed, as its expected parent comes from that list', async () => {

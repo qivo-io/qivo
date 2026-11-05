@@ -12,26 +12,30 @@
      (lib/pagedList.ts, read once). An older text's answer, and any answer
      after the picker closed, is dropped, and one read runs at a time.
      Rows clear on a new text, and "Loading tasks…" shows until its answer.
-   - A list never says it found nothing or ended before the server said so.
-     A batch the server stopped says that Qivo checked part of the tasks
-     and Load more goes on. The Linked tasks picker ends at the task's own
-     project family, and Search all your projects goes on into the
-     organization's other projects, which the person chooses.
+   - A list never says it found nothing or ended before the server said so
+     and the window's current relations of its kind are whole, since the
+     server leaves those out of its batches. A batch the server stopped
+     says that Qivo checked part of the tasks and Load more goes on. The
+     Linked tasks picker ends at the task's own project family, and Search
+     all your projects goes on into the organization's other projects,
+     which the person chooses.
    - At most PICKER_MOST rows a list (8 batches), then "Search to find more
      tasks.", which is this picker's own choice.
-   - The window's own current parent, subtasks and links show first, from
-     the window's lists, checked, matched in the browser by the rule the
-     server matches with (lib/search.ts matchesAllWords), since the server
-     leaves them out of its batches. A task shows once.
+   - The window's own current relations of the picker's kind show first,
+     from the window's lists, checked, matched in the browser by the rule
+     the server matches with (lib/search.ts matchesAllWords). While the
+     window's own removal of them waits (`locked`), they show without
+     taking a press. A task shows once.
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
      press, also across a new text.
-   - Enter picks or creates only when the rows answer the typed text and
-     the list has ended. One row on screen picks it, none creates. A text
-     that is exactly one task ID picks the row the server found by its
-     number (`exact`), whatever the list's end. An Enter pressed while the
-     answer for the typed text is on its way acts once it arrives.
+   - Enter picks or creates only when the rows answer the typed text, the
+     window's current relations are whole and the list has ended. One row
+     on screen picks it, none creates. A text that is exactly one task ID
+     picks the row the server found by its number (`exact`), whatever the
+     list's end. An Enter pressed while the answer for the typed text is
+     on its way acts once it arrives.
 
    Every write takes the task as the window shows it (held, or from the
    window's own answer), and a candidate as the server's row showed it,
@@ -79,8 +83,14 @@ export function PickerRefusal({ limit }: { limit: Limit }) {
 export type CurrentRelation = RelatedTaskVM & { type?: string }
 
 /** The window's current relations of the picker's kind, which show first,
-    and a note while the list they come from is not whole. */
-export type CurrentRelations = { rows: readonly CurrentRelation[]; note: string | null }
+    a note while the list they come from is not whole, and `locked` while
+    the window's own removal of them waits, so they show without taking a
+    press. */
+export type CurrentRelations = {
+  rows: readonly CurrentRelation[]
+  note: string | null
+  locked?: boolean
+}
 
 /** One row of the picker: a current relation from the window, or a task
     of the server's batch. */
@@ -90,6 +100,7 @@ type Choice = {
   title: string
   current?: CurrentRelation
   candidate?: RelationCandidate
+  locked?: boolean
 }
 
 /** What the person now sees of a row whose relation a pick changed: on or
@@ -235,7 +246,7 @@ export function RelationPicker({
     const key = issueKey(row.num)
     if (shownIds.has(row.uuid) || !matches(key, row.title)) continue
     shownIds.add(row.uuid)
-    choices.push({ uuid: row.uuid, key, title: row.title, current: row })
+    choices.push({ uuid: row.uuid, key, title: row.title, current: row, locked: !!current.locked })
   }
   // the server's rows only for the text they answer, so a new text's rows
   // start empty until its answer arrives
@@ -258,7 +269,11 @@ export function RelationPicker({
   // to go on into the organization's other projects
   const allNext =
     end === 'more' && last?.state === 'ok' && last.next === null && last.all_projects !== null
-  const ended = answered && list.phase === 'ready' && !list.next
+  // whether the window's current relations are whole, which the server
+  // leaves out of its batches, so until then no list ends or says it found
+  // nothing
+  const whole = current.note === null
+  const ended = answered && whole && list.phase === 'ready' && !list.next
   const state = search.tooLong
     ? 'ready'
     : !answered
@@ -282,7 +297,7 @@ export function RelationPicker({
 
   const pick = (choice: Choice) => {
     const before = seenNow(choice)
-    if (before.busy) return
+    if (before.busy || choice.locked) return
     const on = !before.on
     setSeen((m) => new Map(m).set(choice.uuid, { ...before, on, busy: true }))
     const settle = (ok: boolean) => {
@@ -385,10 +400,16 @@ export function RelationPicker({
                 data-picker-row={choice.uuid}
                 {...(choice.current ? { 'data-picker-current': '' } : {})}
                 {...(now.busy ? { 'data-picker-busy': '' } : {})}
+                disabled={choice.locked}
                 aria-busy={now.busy || undefined}
                 aria-pressed={now.on}
                 onClick={() => pick(choice)}
-                className={cn(rowClass, now.on && 'font-semibold', now.busy && 'opacity-60')}
+                className={cn(
+                  rowClass,
+                  now.on && 'font-semibold',
+                  (now.busy || choice.locked) && 'opacity-60',
+                  choice.locked && 'cursor-default',
+                )}
                 variant="unstyled"
               >
                 <IssueKey id={choice.key} />
@@ -442,7 +463,7 @@ export function RelationPicker({
                   Qivo checked part of the tasks. Load more continues.
                 </p>
               )}
-              {allNext && !list.stopped && empty && query !== '' && (
+              {allNext && whole && !list.stopped && empty && query !== '' && (
                 <p className={noteClass}>No matching tasks in this project.</p>
               )}
               <Button
@@ -461,7 +482,9 @@ export function RelationPicker({
               </Button>
             </div>
           ) : end === 'none' || end === 'end' ? (
-            empty ? (
+            // while the current relations are not whole, their note above
+            // says why the list claims nothing
+            empty && whole ? (
               <p className={noteClass}>{query ? 'No matching tasks.' : 'No eligible tasks.'}</p>
             ) : null
           ) : null}

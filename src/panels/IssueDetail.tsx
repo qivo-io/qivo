@@ -2534,8 +2534,8 @@ function IssueDetail({
   // or reads again.
   const waits = (section: SectionVM<unknown>) =>
     section.state === 'failed' || section.state === 'retrying'
-  const canUnlink = (row: RelatedTaskVM) =>
-    current && !waits(linked) && (canRelate || rowEditor(row))
+  const linkEditor = (row: RelatedTaskVM) => canRelate || rowEditor(row)
+  const canUnlink = (row: RelatedTaskVM) => current && !waits(linked) && linkEditor(row)
   const canDetach = (row: RelatedTaskVM) => current && !waits(subtasks) && rowEditor(row)
   // the removals on their way of rows the workspace does not hold, which
   // stay listed until their answer drops them
@@ -2552,7 +2552,9 @@ function IssueDetail({
     )
   }
   // The pickers show the window's own current relations first, checked,
-  // and say so while the list they come from is not whole.
+  // those the person could take off, and say so while the list they come
+  // from is not whole. While a removal waits (canDetach, canUnlink) they
+  // show without taking a press.
   const notWhole = (section: SectionVM<unknown>, what: string) =>
     section.state === 'loading'
       ? `Loading the current ${what}…`
@@ -2561,12 +2563,14 @@ function IssueDetail({
         : `Some current ${what} could not be loaded.`
   const currentParent: CurrentRelations = { rows: parentRow ? [parentRow] : [], note: null }
   const currentSubtasks: CurrentRelations = {
-    rows: subtasks.rows.filter(canDetach),
+    rows: subtasks.rows.filter(rowEditor),
     note: notWhole(subtasks, 'subtasks'),
+    locked: !current || waits(subtasks),
   }
   const currentLinks: CurrentRelations = {
-    rows: linked.rows.filter(canUnlink).map((row): CurrentRelation => ({ ...row })),
+    rows: linked.rows.filter(linkEditor).map((row): CurrentRelation => ({ ...row })),
     note: notWhole(linked, 'linked tasks'),
+    locked: !current || waits(linked),
   }
 
   // the discussion spine: this issue's comments and activity interleaved in

@@ -133,19 +133,22 @@ server and show 25 tasks at a time, with **Load more** for the next 25.
 The search covers every task you could choose, also tasks that have not
 loaded into the workspace yet, and finds a task when every word you type
 occurs in its ID or title. The task's current parent, subtasks and links
-show first, checked, so you can take them off. The pickers list the task's
-own sub-project first, then the other sub-projects of its project, each in
-the order its tasks were created. If the task moves to another project
-meanwhile, the picker lists them again from the start. **Linked tasks**
-stops at the end of the task's own project, and
-**Search all your projects** goes on into your other
+show first, checked, so you can take them off. While the window is still
+loading them, or could not load them all, the picker says so, and while
+their list could not load, they stay checked and cannot be taken off
+there. The pickers list the task's own sub-project first, then the other
+sub-projects of its project, each in the order its tasks were created. If
+the task moves to another project meanwhile, the picker lists them again
+from the start. **Linked tasks** stops at the end of the task's own
+project, and **Search all your projects** goes on into your other
 projects. A typed task ID, such as QN-12, finds that task first, anywhere
 you could link it. In a large organization a picker can say **Qivo checked
 part of the tasks. Load more continues.**, and **Load more** goes on from
 there. After 200 tasks a picker asks you to search to find more.
-**No matching tasks.** appears only once the whole list has loaded, beside
-the row that creates a task. Enter picks the only task shown, or creates a
-task when none matches, once the whole list has loaded; a typed task ID
+**No matching tasks.** appears only once the whole list and the task's
+current relations have loaded, beside the row that creates a task. Enter
+picks the only task shown, or creates a task when none matches, once the
+whole list and the task's current relations have loaded. A typed task ID
 picks its task at once.
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
