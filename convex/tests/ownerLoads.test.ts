@@ -954,15 +954,17 @@ describe('which tasks count', () => {
       expect(projects).toEqual(swap ? [f.sub2.id, f.sub.id] : [f.sub.id, f.sub2.id])
       expect(paused).toEqual([pausedLow, pausedHigh])
     }
-    // by weeks before the task id
+    // by weeks before the task id: longer takes the lowest id, so an order
+    // that dropped the end week would put it ahead of first
     const f = await setup()
     const later = await task(f, {
-      id: low,
+      id: pausedHigh,
       assignee_id: f.user.id,
       paused: true,
       ...plan(1, '2026-09-21', '2026-09-21'),
     })
     const longer = await task(f, {
+      id: low,
       assignee_id: f.user.id,
       paused: true,
       ...plan(1, '2026-09-07', '2026-09-28'),
