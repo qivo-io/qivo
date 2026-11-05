@@ -146,6 +146,7 @@ import type * as lib_polar from "../lib/polar.js";
 import type * as lib_projectCreators from "../lib/projectCreators.js";
 import type * as lib_projectGrants from "../lib/projectGrants.js";
 import type * as lib_projectKeys from "../lib/projectKeys.js";
+import type * as lib_relationPicker from "../lib/relationPicker.js";
 import type * as lib_requestBody from "../lib/requestBody.js";
 import type * as lib_review from "../lib/review.js";
 import type * as lib_roadmap from "../lib/roadmap.js";
@@ -418,6 +419,7 @@ declare const fullApi: ApiFromModules<{
   "lib/projectCreators": typeof lib_projectCreators;
   "lib/projectGrants": typeof lib_projectGrants;
   "lib/projectKeys": typeof lib_projectKeys;
+  "lib/relationPicker": typeof lib_relationPicker;
   "lib/requestBody": typeof lib_requestBody;
   "lib/review": typeof lib_review;
   "lib/roadmap": typeof lib_roadmap;

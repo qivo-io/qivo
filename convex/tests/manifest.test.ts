@@ -700,6 +700,7 @@ snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fiel
 snapshot:threadHistory query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:attachments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:links query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+taskWindow:relationCandidates query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"parent"},{"type":"literal","value":"subtask"},{"type":"literal","value":"link"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:task query public {"type":"object","value":{"ref":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tasks:board query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"stale_before":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"focus":{"fieldType":{"type":"boolean"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
 tasks:roadmap query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"window":{"fieldType":{"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"planned_task":{"fieldType":{"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
@@ -1183,9 +1184,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     threadHistory: 'orgQuery',
   },
   // The task window's own reads: any member reads the opened task, its
-  // links and its attachment list under ordinary access, and a task they
-  // may not open answers unavailable.
-  taskWindow: { task: 'orgQuery', links: 'orgQuery', attachments: 'orgQuery' },
+  // links, its attachment list and its relation pickers' batches under
+  // ordinary access, and a task they may not open answers unavailable.
+  taskWindow: {
+    task: 'orgQuery',
+    links: 'orgQuery',
+    attachments: 'orgQuery',
+    relationCandidates: 'orgQuery',
+  },
   // The Board's and the Roadmap's selection with its filters applied, and
   // the Roadmap's dependency inputs. Any signed-in login reads a project
   // selection with its seat in that organization, or My view across its
