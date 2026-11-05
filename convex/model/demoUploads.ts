@@ -9,10 +9,11 @@
  * more, and a demo above the budget admits nothing until enough is freed or
  * it ends. */
 
+import { internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { storageIdInUse } from '../files'
-import { isDemoDeployment, requireActiveDemo } from '../lib/demo'
+import { demoForAuth, isDemoDeployment, requireActiveDemo } from '../lib/demo'
 import { forbidden, rule } from '../lib/functions'
 import { DEMO_FILE_BYTES, DEMO_STORAGE_BYTES, LIMITS, MIB } from '../lib/limits'
 import { uploadSize } from './attachments'
@@ -227,6 +228,60 @@ export async function reserveDemoPreview(
     kind: 'preview',
     bytes: Math.min(DEMO_PREVIEW_BYTES, free),
   })
+}
+
+/** How many demo backgrounds without a preview one sweep checks for room
+ * (retrySkippedPreview). Tests lower it. */
+export const PREVIEW_RETRY = { checks: 4 }
+
+/**
+ * Schedules the preview of one demo background that the demo's storage left
+ * without one (schema.ts custom_backgrounds.preview_skipped), once its demo
+ * has DEMO_PREVIEW_BYTES free, so the preview's own reservation gets all it
+ * may use. The minute sweep (demoUploads.ts sweep) calls it at `now`. It
+ * checks the PREVIEW_RETRY.checks backgrounds skipped longest ago. One whose
+ * demo still lacks room counts as skipped at `now`, so the next sweep checks
+ * others first and none waits behind a demo that stays full. One that is no
+ * longer its login's background, or whose demo ended, loses its mark. So
+ * does the one scheduled, and the preview's run marks it again if the room
+ * is gone by then (backgroundPreviews.ts beginDemoWork). Answers whether it
+ * scheduled one. Reads, for each background it checks, what
+ * reserveDemoPreview reads and the login's appearance row.
+ */
+export async function retrySkippedPreview(ctx: MutationCtx, now: number): Promise<boolean> {
+  const skipped = await ctx.db
+    .query('custom_backgrounds')
+    .withIndex('by_preview_skipped', (q) => q.gt('preview_skipped', 0))
+    .take(PREVIEW_RETRY.checks)
+  for (const image of skipped) {
+    const receipt = await demoForAuth(ctx, image.auth_user_id)
+    const settings = await ctx.db
+      .query('account_appearance')
+      .withIndex('by_auth_user', (q) => q.eq('auth_user_id', image.auth_user_id))
+      .first()
+    if (
+      receipt === null ||
+      receipt.status !== 'ready' ||
+      receipt.expires_at <= now ||
+      settings?.custom_image_id !== image.id
+    ) {
+      await ctx.db.patch(image._id, { preview_skipped: undefined })
+      continue
+    }
+    const { reserved, count } = await demoLedger(ctx, receipt.id)
+    if (count >= DEMO_UPLOAD_ROWS || DEMO_STORAGE_BYTES - reserved < DEMO_PREVIEW_BYTES) {
+      await ctx.db.patch(image._id, { preview_skipped: now })
+      continue
+    }
+    await ctx.db.patch(image._id, { preview_skipped: undefined })
+    await ctx.scheduler.runAfter(0, internal.backgroundPreviewProcessor.generate, {
+      kind: 'custom',
+      id: image.id,
+      storage_id: image.storage_id,
+    })
+    return true
+  }
+  return false
 }
 
 /** The receivers' refusal of a body longer than reservation `row`: the

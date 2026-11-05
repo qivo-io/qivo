@@ -18,6 +18,7 @@ import {
   demoReceipt,
   demoUploadFor,
   retainDemoUpload,
+  retrySkippedPreview,
 } from './model/demoUploads'
 import { eraseFile } from './model/fileHolds'
 
@@ -142,6 +143,9 @@ export const sweep = internalMutation({
       if (ticket.storage_id) await eraseFile(ctx, ticket.storage_id)
       await ctx.db.delete(ticket._id)
     }
+    // a background the demo's storage left without a preview gets one once
+    // there is room, one a run
+    await retrySkippedPreview(ctx, now)
     // Storage writes and metadata commits cross an action boundary. A crash
     // there leaves no id in the ledger (model/demoUploads.ts checkStoredFiles).
     const { checked, full } = await checkStoredFiles(ctx, progress)

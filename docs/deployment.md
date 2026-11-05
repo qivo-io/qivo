@@ -1001,7 +1001,9 @@ monthly usage run that spans the deploy fails the organization whose Deleted
 items it was reading, which its audit row counts in `failed` until the month
 runs again. The release adds `attachment_uploads.up_to`, the index
 `attachment_uploads.by_storage`, `demo_uploads.declared` and
-`custom_backgrounds.preview_skipped`, the last two written only on the demo.
+`custom_backgrounds.preview_skipped` with its index `by_preview_skipped`,
+the last two fields written only on the demo, where the minute sweep makes
+a skipped preview once 1 MiB is free.
 An older backend fails to deploy while a ticket row holds `up_to`, which goes
 when it attaches or within an hour of its expiry, or while a demo row holds
 `declared` or a demo background holds `preview_skipped`, which go with their

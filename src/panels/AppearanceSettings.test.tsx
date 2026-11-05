@@ -74,10 +74,10 @@ const deliver = (value: AppearancePreferences) => act(async () => store.deliver?
 const previewText = () => container.querySelector('.aspect-video')?.textContent ?? ''
 
 describe('Settings › Appearance', () => {
-  it("says the demo's full storage left no room for a preview, and that the background shows", async () => {
+  it("says the demo's full storage left no room for a preview yet, and that the background shows", async () => {
     await deliver(custom({ preview_skipped: true }))
     expect(previewText()).toBe(
-      "No preview, because the demo's file storage is full. Your background still shows.",
+      "No preview yet, because the demo's file storage is full. Qivo makes one once 1 MiB is free, and your background still shows.",
     )
     // a preview still on its way says so
     await deliver(custom({ preview_skipped: false }))

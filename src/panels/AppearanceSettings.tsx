@@ -80,9 +80,10 @@ function errorText(error: unknown): string {
 }
 
 /** What Settings says in place of a preview the demo's full storage left no
-    room for (convex/schema.ts custom_backgrounds.preview_skipped). */
+    room for, which the demo makes once 1 MiB is free
+    (convex/schema.ts custom_backgrounds.preview_skipped). */
 const PREVIEW_SKIPPED =
-  "No preview, because the demo's file storage is full. Your background still shows."
+  "No preview yet, because the demo's file storage is full. Qivo makes one once 1 MiB is free, and your background still shows."
 
 async function inspectFile(file: File) {
   // the demo's smaller limit first, so a large pick names the one that applies

@@ -62,7 +62,10 @@ export const generate = internalAction({
       // a preview larger than the demo's reservation is not stored, and a
       // retry would make the same one; the finally releases the reservation
       if (demoWork && preview.byteLength > demoWork.bytes) {
-        await ctx.runMutation(internal.backgroundPreviews.skipDemoPreview, args)
+        await ctx.runMutation(internal.backgroundPreviews.skipDemoPreview, {
+          ...args,
+          bytes: demoWork.bytes,
+        })
         return 'skipped'
       }
       previewId = await ctx.storage.store(new Blob([preview], { type: 'image/webp' }) as never)

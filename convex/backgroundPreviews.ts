@@ -14,6 +14,7 @@ import {
 import { isDemoDeployment } from './lib/demo'
 import {
   beginDemoUpload,
+  DEMO_PREVIEW_BYTES,
   demoCanRead,
   reserveDemoPreview,
   retainDemoUpload,
@@ -184,7 +185,8 @@ export const beginDemoWork = internalMutation({
       targetId: image.id,
     })
     if (ticket === null) {
-      if (!image.preview_skipped) await ctx.db.patch(image._id, { preview_skipped: true })
+      if (image.preview_skipped === undefined)
+        await ctx.db.patch(image._id, { preview_skipped: Date.now() })
       return null
     }
     await beginDemoUpload(ctx, ticket.id, image.auth_user_id, true)
@@ -193,17 +195,19 @@ export const beginDemoWork = internalMutation({
 })
 
 /* Records on a demo's custom background that its preview did not fit in
- * the bytes beginDemoWork reserved, while the background is still the
- * current one, so Settings says there is none (schema.ts
- * custom_backgrounds.preview_skipped). generate calls it instead of storing
- * the preview, and does not retry. */
+ * the `bytes` beginDemoWork reserved, while the background is still the
+ * current one, so Settings says there is none and the demo's sweep tries
+ * again once there is room (schema.ts custom_backgrounds.preview_skipped).
+ * generate calls it instead of storing the preview, and does not retry. A
+ * preview larger than a full DEMO_PREVIEW_BYTES reservation never fits, so
+ * it is not marked, as with an image whose preview cannot be made. */
 export const skipDemoPreview = internalMutation({
-  args: backgroundPreviewArgs,
-  handler: async (ctx, args): Promise<null> => {
-    if (!isDemoDeployment() || args.kind !== 'custom') return null
+  args: { ...backgroundPreviewArgs, bytes: v.number() },
+  handler: async (ctx, { bytes, ...args }): Promise<null> => {
+    if (!isDemoDeployment() || args.kind !== 'custom' || bytes >= DEMO_PREVIEW_BYTES) return null
     const image = await currentSource(ctx, args)
-    if (image && 'auth_user_id' in image && !image.preview_skipped)
-      await ctx.db.patch(image._id, { preview_skipped: true })
+    if (image && 'auth_user_id' in image && image.preview_skipped === undefined)
+      await ctx.db.patch(image._id, { preview_skipped: Date.now() })
     return null
   },
 })

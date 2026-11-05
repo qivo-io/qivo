@@ -155,7 +155,7 @@ describe('background preview action orchestration', () => {
         'backgroundPreviews:skipDemoPreview',
         'demoUploads:abandon',
       ])
-      expect(ctx.runMutation.mock.calls[1][1]).toEqual({ ...args, kind: 'custom' })
+      expect(ctx.runMutation.mock.calls[1][1]).toEqual({ ...args, kind: 'custom', bytes: 10 })
       expect(ctx.runMutation.mock.calls[2][1]).toEqual({
         id: 'reservation',
         minter: 'login',

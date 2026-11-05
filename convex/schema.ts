@@ -675,12 +675,15 @@ export default defineSchema({
     storage_id: v.id('_storage'),
     preview_storage_id: v.optional(v.id('_storage')),
     preview_version: v.optional(v.number()),
-    // true when the private demo's storage left no room for the preview
-    // (backgroundPreviews.ts beginDemoWork and skipDemoPreview), so
-    // Settings says why there is none and the Canvas shows the full image,
-    // as whenever a preview is missing. Only the demo writes it, and a
-    // later stored preview clears it.
-    preview_skipped: v.optional(v.literal(true)),
+    // When the private demo's storage last left no room for the preview,
+    // epoch milliseconds (backgroundPreviews.ts beginDemoWork and
+    // skipDemoPreview), so Settings says why there is none and the Canvas
+    // shows the full image, as whenever a preview is missing. The demo's
+    // minute sweep schedules the preview once 1 MiB is free, checking the
+    // backgrounds skipped longest ago first (model/demoUploads.ts
+    // retrySkippedPreview). Only the demo writes it, and a later stored
+    // preview clears it.
+    preview_skipped: v.optional(v.number()),
     name: v.string(),
     mime: v.string(),
     width: v.number(),
@@ -692,7 +695,9 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_auth_user', ['auth_user_id'])
     .index('by_storage', ['storage_id'])
-    .index('by_preview_storage', ['preview_storage_id']),
+    .index('by_preview_storage', ['preview_storage_id'])
+    // the demo backgrounds waiting for room for a preview, longest first
+    .index('by_preview_skipped', ['preview_skipped']),
 
   // The HTTP upload endpoint stores the request's bytes itself. A ticket
   // never lets a caller hand in an arbitrary existing Convex storage id.

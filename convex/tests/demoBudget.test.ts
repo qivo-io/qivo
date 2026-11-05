@@ -18,6 +18,7 @@ import {
   DEMO_BODY_TOO_LONG,
   DEMO_FILE_TOO_LARGE,
   DEMO_FILES_FULL,
+  DEMO_PREVIEW_BYTES,
   DEMO_STORAGE_BYTES,
   DEMO_UPLOAD_ROWS,
   demoStorageFull,
@@ -583,14 +584,63 @@ describe("a demo background's preview", () => {
     await post(d.t, ticket.upload_url, jpegOf(1 * MiB), 'image/jpeg')
     const [current] = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
     // a job for the background the person replaced marks nothing
-    await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, old)
+    await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, { ...old, bytes: 512 * KiB })
     expect(await skipped(d)).toBe(false)
+    const job = { kind: 'custom' as const, id: current.id, storage_id: current.storage_id }
+    // nor does a preview larger than a full reservation, which never fits
     await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, {
-      kind: 'custom',
-      id: current.id,
-      storage_id: current.storage_id,
+      ...job,
+      bytes: DEMO_PREVIEW_BYTES,
     })
+    expect(await skipped(d)).toBe(false)
+    await d.t.mutation(internal.backgroundPreviews.skipDemoPreview, { ...job, bytes: 512 * KiB })
     expect(await skipped(d)).toBe(true)
+  })
+
+  it('is scheduled again by the minute sweep once 1 MiB is free, and then arrives', async () => {
+    const d = await setup()
+    const job = await background(d, 3 * MiB)
+    await reserve(d, 2 * MiB)
+    expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)).toBeNull()
+    expect(await skipped(d)).toBe(true)
+    const generates = () =>
+      d.t.run(async (ctx) =>
+        (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+          (f) => f.name.includes('backgroundPreviewProcessor') && f.state.kind === 'pending',
+        ),
+      )
+    const mark = () =>
+      d.t.run(async (ctx) => (await ctx.db.query('custom_backgrounds').first())?.preview_skipped)
+    // the upload's own job, which the suite's fake timers keep waiting
+    const before = (await generates()).length
+    // while the demo is full the sweep schedules nothing and counts the
+    // background as skipped now, so others are checked first next time
+    vi.setSystemTime(Date.now() + 60_000)
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    expect(await generates()).toHaveLength(before)
+    expect(await mark()).toBe(Date.now())
+    // the reservation expires, so the next sweep frees it and schedules one
+    vi.setSystemTime(Date.now() + 10 * 60_000)
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    const after = await generates()
+    expect(after).toHaveLength(before + 1)
+    expect(after.at(-1)?.args[0]).toEqual(job)
+    expect(await skipped(d)).toBe(false)
+    // the preview's run reserves the full 1 MiB and stores it
+    const work = await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)
+    expect(work?.bytes).toBe(DEMO_PREVIEW_BYTES)
+    await d.t.mutation(internal.backgroundPreviews.attach, {
+      ...job,
+      preview_storage_id: await webp(d.t),
+      preview_version: BACKGROUND_PREVIEW_VERSION,
+      demo_ticket_id: work!.id,
+    })
+    expect(await d.caller.query(api.appearance.get, {})).toMatchObject({
+      custom_image: { preview_ready: true, preview_skipped: false },
+    })
+    // and a sweep with nothing skipped schedules nothing more
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    expect(await generates()).toHaveLength(before + 1)
   })
 })
 

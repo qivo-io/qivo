@@ -46,8 +46,8 @@ export type AppearanceSettings = {
     uploaded_at: string
     preview_ready: boolean
     preview_version: number | null
-    // the demo's storage left no room for a preview
-    // (schema.ts custom_backgrounds.preview_skipped)
+    // the demo's storage left no room for a preview, which the demo makes
+    // once room is free (schema.ts custom_backgrounds.preview_skipped)
     preview_skipped: boolean
   }
 }
@@ -78,7 +78,7 @@ export async function appearanceSettings(
             uploaded_at: image.uploaded_at,
             preview_ready: previewVersion !== null,
             preview_version: previewVersion,
-            preview_skipped: image.preview_skipped === true,
+            preview_skipped: image.preview_skipped !== undefined,
           }
         : null,
   }
