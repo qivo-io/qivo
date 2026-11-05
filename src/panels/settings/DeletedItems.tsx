@@ -71,7 +71,8 @@ import '../../styles/deleted-items.css'
 type Role = 'admin' | 'lead' | 'user'
 
 const SUBTITLES: Record<Role, string> = {
-  admin: 'Tasks and projects deleted in your organization.',
+  admin:
+    'Tasks and projects deleted in your organization. Their files count toward its storage until they are deleted for good.',
   lead: 'Tasks and projects you deleted, and those deleted in projects you lead.',
   user: 'Tasks and projects you deleted.',
 }
@@ -1435,7 +1436,8 @@ function PurgeWindow({
           {row.kind === 'task' ? `${row.key} ${row.title}` : row.title}
         </b>
         {rest}
-        {earlier} This cannot be undone.
+        {earlier} This cannot be undone. Its files then stop counting toward your organization’s
+        storage.
       </p>
     </ModalShell>
   )
