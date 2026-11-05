@@ -196,10 +196,16 @@ describe('the project settings stand-in', () => {
   })
 
   it("refuses another list's cursor and a search past its limit as the server does", async () => {
-    const { t, org, nora, project, ws } = await northstar()
+    // 30 grants, more than one batch of 25, so both answer a real cursor
+    const { t, org, nora, project, ws } = await grown(40, 30)
     const base = { org_id: org.id, project_id: project.id }
     const first = await both(t, nora, ws, 'projectSettings:users', base)
-    const [s, o] = [first.server[0] as Answer, first.stand[0] as Answer]
+    const cursor = (answer: unknown) => {
+      const next = (answer as Answer).next
+      if (typeof next !== 'string') throw new Error('no cursor to a second batch')
+      return next
+    }
+    const after = { server: cursor(first.server[0]), stand: cursor(first.stand[0]) }
     const code = async (read: () => unknown) => {
       try {
         await read()
@@ -208,40 +214,28 @@ describe('the project settings stand-in', () => {
         return (error as { data?: { code?: string } }).data?.code ?? 'error'
       }
     }
-    // a users cursor in the teams list, and under another search
-    for (const args of [
-      { name: 'projectSettings:teams' as const, after: { server: s.next, stand: o.next } },
-      {
-        name: 'projectSettings:users' as const,
-        search: 'berg',
-        after: { server: s.next, stand: o.next },
-      },
-    ]) {
-      const extra = 'search' in args ? { search: args.search } : {}
-      expect(
-        await code(() =>
-          as(t, nora).query(makeFunctionReference<'query'>(args.name), {
-            ...base,
-            ...extra,
-            after: args.after.server ?? '',
-          }),
-        ),
-      ).toBe('bad_request')
-      expect(
-        await code(() =>
-          projectSettingsStandIn(ws, args.name, { ...base, ...extra, after: args.after.stand }),
-        ),
-      ).toBe('bad_request')
+    const server = (name: ProjectSettingsRead, args: Args) =>
+      code(() => as(t, nora).query(makeFunctionReference<'query'>(name), args))
+    const stand = (name: ProjectSettingsRead, args: Args) =>
+      code(() => projectSettingsStandIn(ws, name, args))
+    // each cursor leads on in its own list and search
+    expect(await server('projectSettings:users', { ...base, after: after.server })).toBeNull()
+    expect(await stand('projectSettings:users', { ...base, after: after.stand })).toBeNull()
+    // and is refused in the teams list, and under another search
+    for (const [name, extra] of [
+      ['projectSettings:teams', {}],
+      ['projectSettings:users', { search: 'berg' }],
+    ] as const) {
+      expect(await server(name, { ...base, ...extra, after: after.server }), name).toBe(
+        'bad_request',
+      )
+      expect(await stand(name, { ...base, ...extra, after: after.stand }), name).toBe(
+        'bad_request',
+      )
     }
     const long = 'x'.repeat(201)
-    expect(
-      await code(() => as(t, nora).query(api.projectSettings.users, { ...base, search: long })),
-    ).toBe('rule')
-    expect(
-      await code(() =>
-        projectSettingsStandIn(ws, 'projectSettings:users', { ...base, search: long }),
-      ),
-    ).toBe('rule')
+    expect(await server('projectSettings:users', { ...base, search: long })).toBe('rule')
+    expect(await stand('projectSettings:users', { ...base, search: long })).toBe('rule')
   })
 })
 
