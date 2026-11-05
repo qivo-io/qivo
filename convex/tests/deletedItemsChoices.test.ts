@@ -588,18 +588,30 @@ describe("the page's someone", () => {
     const byLou = await deleted(lou, f.sub.id)
     const byGuest = await deleted(f.guest, f.sub.id)
     const byUser = await deleted(f.user, f.sub.id)
+    // an item stored with no deleter at all, as the schema allows
+    const byNobody = await deleted(f.user, f.sub.id)
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('deleted_items')
+        .filter((q) => q.eq(q.field('id'), byNobody))
+        .unique()
+      if (row === null) throw new Error('no item')
+      await ctx.db.patch(row._id, { deleted_by: undefined })
+    })
     // Kim is removed, and a new seat takes Lou's id
     await removeProfile(t, kim.id)
     await patch(t, 'profiles', lou.id, { created_at: new Date(Date.now()).toISOString() })
     const scope = { org_id: f.org.id, all: true as const }
     const ids = async (who: Profile, args: Partial<FunctionArgs<typeof api.deletedItems.page>>) =>
       (await walk(t, who, { scope, kind: 'task', ...args })).ids
-    expect(await ids(f.admin, { someone: true })).toEqual([byLou, byKimAway, byKim])
-    expect(await ids(f.admin, {})).toEqual([byUser, byGuest, byLou, byKimAway, byKim])
+    expect(await ids(f.admin, { someone: true })).toEqual([byNobody, byLou, byKimAway, byKim])
+    expect(await ids(f.admin, {})).toEqual([byNobody, byUser, byGuest, byLou, byKimAway, byKim])
+    expect(await ids(f.admin, { deleted_by: f.user.id })).toEqual([byUser])
     // the user leads the platform, not Elsewhere
-    expect(await ids(f.user, { someone: true })).toEqual([byLou, byKim])
+    expect(await ids(f.user, { someone: true })).toEqual([byNobody, byLou, byKim])
     // with a search, an assignee or a project scope too
     expect((await walk(t, f.admin, { scope, someone: true, search: 'Planted' })).ids).toEqual([
+      byNobody,
       byLou,
       byKimAway,
       byKim,
