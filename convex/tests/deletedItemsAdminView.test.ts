@@ -858,6 +858,30 @@ describe('under a stand-in for the admin access split', () => {
     expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
   })
 
+  it('gives Delete now and its summary a task item under a broken tree, as an admin is let in with no level read', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await deleteTask(t, f.guest, task.id)
+    const item = await itemFor(t, task.id)
+    // the sub-project's parent dangles, so a level read on it throws
+    await patch(t, 'projects', f.sub.id, { parent_id: uuid() })
+    standInForTheSplit()
+    const broken = (await t.run((ctx) => byId(ctx, 'projects', f.sub.id))) as Doc<'projects'>
+    await expectRefusal(
+      t.run((ctx) => access.projectLevel(ctx, f.admin, broken)),
+      'not_found',
+      /project not found/,
+    )
+    expect(await as(t, f.admin).query(api.deletedItems.purgeSummary, { id: item.id })).toEqual({
+      along: 0,
+      exact: true,
+    })
+    expect(await purge(t, f.admin, [item.id])).toEqual({ purged: [item.id], refused: [] })
+    await runSteps(t)
+    expect(await t.run((ctx) => byId(ctx, 'deleted_items', item.id))).toBeNull()
+  })
+
   it("names a deleted project's milestones in the week-start check only where the admin's view reads the project", async () => {
     const setWeekStart = (t: T, f: OrgFixture) =>
       as(t, f.admin).mutation(api.orgs.update, { org_id: f.org.id, patch: { week_start: 0 } })
