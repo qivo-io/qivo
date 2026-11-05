@@ -1129,6 +1129,9 @@ describe('the REST upload', () => {
     const { ticket, upload_url } = JSON.parse(res.text) as { ticket: string; upload_url: string }
     const stored = await upload(fx.t, upload_url, 3)
     const path = `/v1/tasks/QN-${issue.num}/attachments/${ticket}`
+    // Two confirms sent at once end the same way, since the second conflicts
+    // on the ticket and Convex runs it again after the first committed.
+    // convex-test runs one transaction at a time, so this sequence is that.
     const first = await rest(fx, 'POST', path, { storage_id: stored })
     const again = await rest(fx, 'POST', path, { storage_id: stored })
     expect([first.status, again.status]).toEqual([201, 201])
@@ -1140,21 +1143,6 @@ describe('the REST upload', () => {
       (await activityFor(fx.t, fx.org.id)).filter((row) => row.verb === 'attached a file to'),
     ).toHaveLength(1)
     expect(await fx.t.run((ctx) => storageTotalsOf(ctx, fx.org.id))).toEqual({ bytes: 3, files: 1 })
-  })
-
-  it('answers two confirms of one ticket sent at once with the same attachment', async () => {
-    const fx = await setup()
-    const issue = await task(fx)
-    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.txt', size: 2 })
-    const stored = await upload(fx.t, upload_url, 2)
-    const outs = await Promise.all([
-      confirm(fx, issue.id, ticket, { storage_id: stored }),
-      confirm(fx, issue.id, ticket, { storage_id: stored }),
-    ])
-    const ids = outs.map((out) => ('attachment' in out ? out.attachment.id : null))
-    expect(ids[0]).not.toBeNull()
-    expect(ids[1]).toBe(ids[0])
-    expect(await attachmentRows(fx.t)).toHaveLength(1)
   })
 
   it('refuses a confirm sent again in every other case as before', async () => {
