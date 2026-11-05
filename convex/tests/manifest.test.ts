@@ -1112,9 +1112,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     setDisplayName: 'authedMutation',
     setMessageRetention: 'authedMutation',
   },
-  // The removal window's preview of the three removals below
-  // (projects.removeAccess, teams.removeMember, teams.deleteDeep): a read
-  // that runs the writes' own checks, read once, never subscribed.
+  // The removal window's reads of the three removals below
+  // (projects.removeAccess, teams.removeMember, teams.deleteDeep), the
+  // preview and the Reassign picker's people. Each runs the writes' own
+  // checks and is read once, never subscribed.
   accessRemovals: { preview: 'orgQuery', reassignChoices: 'orgQuery' },
   // Removing a person's or team's access stays open to org admins during a
   // billing pause; giving or changing access does not. A restore schedules

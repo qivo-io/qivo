@@ -81,7 +81,7 @@ export const preview = orgQuery({
  * Reassign is refused, `not_ready` until the organization's people hold
  * their name keys, or `ready` with the rows, `next` and `stopped`
  * (lib/namedPages.ts ListBatch). A cursor opens only for the same
- * organization, removal and search. A one-shot read like the preview: the
+ * organization, removal and search. A one-shot read like the preview. The
  * app reads a batch when the picker opens, a search settles or Load more
  * is pressed, and never subscribes.
  */

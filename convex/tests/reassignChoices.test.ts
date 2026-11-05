@@ -4,7 +4,7 @@
  * keep.permitted, reassign.permitted and PREVIEW.items) against the write
  * they stand for. For each scenario the picker is listed to its end, and the
  * write then hands the held tasks to every seat of the organization in
- * turn: it must go through exactly for the seats listed, and the preview's
+ * turn. It must go through exactly for the seats listed, and the preview's
  * holder_eligible must say the same. Each handover runs in a transaction
  * that throws at its end, which convex-test rolls back, so it changes
  * nothing for the next. The reads at the design size close the file, one

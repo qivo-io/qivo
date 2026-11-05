@@ -154,7 +154,7 @@ export type ProjectRef = { id: string; name: string; key: string; parent_id: str
  * (updateIssueCore), so where the caller loses Edit the write refuses with
  * the caller's sentence first. Those checks read the new holder's access as
  * it is before the removal, so the preview reads it with the removed rows
- * left out instead (takerRule): asked with `reassign_to`, it answers
+ * left out instead (takerRule). Asked with `reassign_to`, it answers
  * `reassign.holder_eligible`, whether that person could take every task
  * once the access is gone, false while Reassign itself is refused. The
  * Reassign picker lists the people that rule lets take them
@@ -667,7 +667,7 @@ async function takerRule(
   const levels = new Map<string, (profile: Doc<'profiles'>) => AccessLevel | null>()
   for (const id of new Set([...edit.keys(), ...sight])) {
     const project = edit.get(id) ?? projects.get(id)
-    // a task above whose project is gone: the chain check lets nobody in
+    // the chain check lets nobody in for a task above whose project is gone
     levels.set(
       id,
       project === undefined
