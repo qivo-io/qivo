@@ -787,6 +787,41 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     ])
   })
 
+  it('keeps a link that only its Edit on the task takes off listed, checked and locked, while the read of a task shown from its answer fails', async () => {
+    await load()
+    const held = holdRelations()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    // a link to a task in Manuals, which Mira only views, so only her Edit
+    // on this task takes it off
+    const manual = task(PICKED_2, 45, { title: 'Proof the manual', project_id: 'manuals' })
+    await answer('taskWindow:links', {
+      state: 'ok',
+      links: [
+        { id: 'link-ro', source_id: FAR, target_id: PICKED_2, type: 'relates', created_at: AT },
+      ],
+      tasks: [short(manual)],
+      complete: true,
+    })
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    await held.at(-1)?.answer(pickerBatch([]))
+    const rowOf = () => document.querySelector<HTMLButtonElement>(`[data-picker-row="${PICKED_2}"]`)
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(false)
+    // the window's read fails, so Qivo cannot check the task for changes
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    expect(document.querySelector<HTMLElement>('[data-task-stale]')?.dataset.taskStale).toBe(
+      'failed',
+    )
+    // the link stays current and checked, without a press
+    expect(rowOf()?.dataset.pickerCurrent).toBe('')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    expect(rowOf()?.disabled).toBe(true)
+  })
+
   it('offers a Viewer of a task shown from its answer only Link task, to a task they can edit', async () => {
     await load()
     holdRelations()

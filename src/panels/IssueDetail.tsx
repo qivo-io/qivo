@@ -2537,6 +2537,10 @@ function IssueDetail({
   const linkEditor = (row: RelatedTaskVM) => canRelate || rowEditor(row)
   const canUnlink = (row: RelatedTaskVM) => current && !waits(linked) && linkEditor(row)
   const canDetach = (row: RelatedTaskVM) => current && !waits(subtasks) && rowEditor(row)
+  // the links the person could take off in any state of the window's read,
+  // so a read that fails or runs again locks them in the picker rather
+  // than lists them as taken off
+  const linkLister = (row: RelatedTaskVM) => canLabel || answerEditorOn || rowEditor(row)
   // the removals on their way of rows the workspace does not hold, which
   // stay listed until their answer drops them
   const [removing, setRemoving] = useStateID<ReadonlySet<string>>(new Set())
@@ -2575,7 +2579,7 @@ function IssueDetail({
     locked: !current || waits(subtasks),
   }
   const currentLinks: CurrentRelations = {
-    rows: linked.rows.filter(linkEditor).map((row): CurrentRelation => ({ ...row })),
+    rows: linked.rows.filter(linkLister).map((row): CurrentRelation => ({ ...row })),
     note: notWhole(linked, 'linked tasks'),
     locked: !current || waits(linked),
   }
