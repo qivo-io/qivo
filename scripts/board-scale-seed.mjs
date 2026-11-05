@@ -93,16 +93,20 @@
  * its task through issues:create, then uploads its file through the app's
  * own path, files:uploadUrl, a POST of the bytes to that URL on the local
  * backend and files:attach, so the stored-byte totals count it as an
- * attach does. Each file has its own size, from about 1 KB to 98 KB, so
- * the list's order shows. The first sub-project's name has an accent
- * ("Café pilot photos") and the second's a word no other name has
- * ("Zephyrine bench archive"), for checking the list's search; the rest
- * are named after what their files hold, with a number. Every id comes
- * from its number, and a sub-project, task or file the backend holds
- * anywhere, archived or in Deleted items included, counts as made, so a
- * second run adds only what is missing and never makes again what a check
- * archived or deleted. Pass `--tasks 0` to add none of the Board's tasks.
- * It runs after --relations and before --labels.
+ * attach does. N goes up to 78, the places Northstar's three top-level
+ * projects have left beside their 12 sub-projects. A run whose new
+ * sub-projects do not fit in the places left refuses before it seeds
+ * anything and says how many are left. Each file has its own size, from
+ * about 1 KB to 98 KB, so the list's order shows. The first
+ * sub-project's name has an accent ("Café pilot photos") and the second's
+ * a word no other name has ("Zephyrine bench archive"), for checking the
+ * list's search; the rest are named after what their files hold, with a
+ * number. Every id comes from its number, and a sub-project, task or file
+ * the backend holds anywhere, archived or in Deleted items included,
+ * counts as made, so a second run adds only what is missing and never
+ * makes again what a check archived or deleted. Pass `--tasks 0` to add
+ * none of the Board's tasks. It runs after --relations and before
+ * --labels.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
@@ -235,13 +239,15 @@ const LABEL_TOPICS = [
   'Power budget',
   'Release notes',
 ]
-/* The most sub-projects --files makes, eight batches of Storage by project,
-   far past the first. */
-const MOST_FILES = 200
 /* The most live sub-projects --files puts under one project, the design
    size's figure for one project (docs/limits-plan.md in the private
    companion). */
 const SUBS_PER_PROJECT = 30
+/* The most sub-projects --files makes, what Northstar holds. Its three
+   live top-level projects hold 12 sub-projects, which leaves 78 places at
+   SUBS_PER_PROJECT under one, three batches of Storage by project and
+   part of a fourth. */
+const MOST_FILES = 78
 /* What the --files sub-projects' files hold, in turn. */
 const FILE_TOPICS = [
   'Test logs',
@@ -363,9 +369,18 @@ export const seededFileBytes = (n) => 1000 * (1 + ((n * 37) % 97)) + n
  * issues:create calls of the tasks missing; and `files`, the uploads to
  * attach, with the attachment's id, task, name, MIME type and size.
  * `present` holds the project, task and attachment ids the backend holds
- * anywhere. Refuses when the top-level projects have no room left.
+ * anywhere. Refuses, with the places left, when the sub-projects missing
+ * do not fit under the top-level projects.
  */
 export function planFiles({ org, count, tops, present }) {
+  const missing = Array.from({ length: count }, (_, n) => fileSeedId('project', n)).filter(
+    (id) => !present.projects.has(id),
+  ).length
+  const left = tops.reduce((sum, top) => sum + Math.max(0, SUBS_PER_PROJECT - top.subs), 0)
+  if (missing > left)
+    throw new DemoCliError(
+      `--files ${count} needs ${missing} new sub-projects, but Northstar's live top-level projects have room for ${left}, at most ${SUBS_PER_PROJECT} under one.`,
+    )
   const room = new Map(tops.map((top) => [top.id, top.subs]))
   const plan = { projects: [], tasks: [], files: [] }
   for (let n = 0; n < count; n++) {
@@ -374,7 +389,8 @@ export function planFiles({ org, count, tops, present }) {
     const file = fileSeedId('file', n)
     const name = seededFileProject(n)
     if (!present.projects.has(project)) {
-      // the first of the fewest, so ties go in Northstar's order
+      // the first of the fewest, so ties go in Northstar's order; the check
+      // above leaves one with room for every sub-project missing
       let parent = null
       for (const top of tops)
         if (
@@ -382,10 +398,6 @@ export function planFiles({ org, count, tops, present }) {
           (parent === null || room.get(top.id) < room.get(parent))
         )
           parent = top.id
-      if (parent === null)
-        throw new DemoCliError(
-          `--files has no room left: every live top-level project of Northstar holds ${SUBS_PER_PROJECT} live sub-projects.`,
-        )
       room.set(parent, room.get(parent) + 1)
       plan.projects.push({
         id: project,
@@ -949,6 +961,9 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const joined = (name) =>
     [...snapshot[name], ...(snapshot.more?.[name] ?? []).flat()].filter((row) => row.org_id === org)
   const issues = joined('issues')
+  // --files plans before anything is seeded, so a count that does not fit
+  // refuses with nothing made
+  const files = stored === null ? null : planFileSeed(options.files, { org, joined, stored })
   // the sub-projects that hold tasks, each with the owners its tasks have
   const owners = new Map()
   for (const project of joined('projects'))
@@ -1064,8 +1079,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       target,
       log,
     })
-  if (stored !== null)
-    await seedFiles(options.files, { client, org, joined, issues, stored, target, log })
+  if (files !== null) await seedFiles(files, { client, org, target, log })
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
@@ -1137,12 +1151,11 @@ async function storedIdsOf(client, org) {
   return ids
 }
 
-/** Makes the --files sub-projects, tasks and files still missing as Nora
-    (planFiles), uploading each file through files:uploadUrl, a POST to the
-    local backend and files:attach, as the app does. `issues` are the
-    active tasks of the workspace, and `stored` the ids the backend holds
-    anywhere (storedIdsOf). */
-async function seedFiles(count, { client, org, joined, issues, stored, target, log }) {
+/** The --files work for the first `count` file sub-projects (planFiles),
+    under Northstar's live top-level projects as the workspace (`joined`)
+    holds them, given `stored`, the ids the backend holds anywhere
+    (storedIdsOf). The workspace's active tasks count as made too. */
+function planFileSeed(count, { org, joined, stored }) {
   const projects = joined('projects')
   const tops = projects
     .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
@@ -1151,8 +1164,14 @@ async function seedFiles(count, { client, org, joined, issues, stored, target, l
       id: top.id,
       subs: projects.filter((p) => p.parent_id === top.id && !p.archived_at).length,
     }))
-  for (const task of issues) stored.tasks.add(task.id)
-  const plan = planFiles({ org, count, tops, present: stored })
+  for (const task of joined('issues')) stored.tasks.add(task.id)
+  return planFiles({ org, count, tops, present: stored })
+}
+
+/** Makes the --files sub-projects, tasks and files of `plan` (planFiles)
+    as Nora, uploading each file through files:uploadUrl, a POST to the
+    local backend and files:attach, as the app does. */
+async function seedFiles(plan, { client, org, target, log }) {
   log(
     `${plan.projects.length} sub-projects, ${plan.tasks.length} tasks and ${plan.files.length} files to add for --files.`,
   )

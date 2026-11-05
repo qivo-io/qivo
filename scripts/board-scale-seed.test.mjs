@@ -1,5 +1,6 @@
 import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { MARKETING_DEMO } from '../convex/internal/marketingDemoData'
 import { LIMITS } from '../convex/lib/limits'
 import {
   fileSeedId,
@@ -1283,12 +1284,17 @@ describe('board-scale-seed --files', () => {
     return out
   }
 
-  it('takes a file count from 0 to 200', () => {
+  it('takes a file count from 0 to the places Northstar has left, 30 under one project', () => {
+    const tops = MARKETING_DEMO.projects.filter((p) => !p.parent).length
+    const subs = MARKETING_DEMO.projects.filter((p) => p.parent).length
+    const most = tops * 30 - subs
+    expect(most).toBe(78)
     expect(parseSeedArgs(local).files).toBe(0)
     expect(parseSeedArgs([...local, '--tasks', '0', '--files', '60']).files).toBe(60)
-    for (const files of ['-1', '2.5', '201', 'many'])
+    expect(parseSeedArgs([...local, '--files', String(most)]).files).toBe(most)
+    for (const files of ['-1', '2.5', String(most + 1), 'many'])
       expect(() => parseSeedArgs([...local, '--files', files])).toThrow(
-        '--files takes a whole number from 0 to 200.',
+        `--files takes a whole number from 0 to ${most}.`,
       )
   })
 
@@ -1297,10 +1303,19 @@ describe('board-scale-seed --files', () => {
     expect(plan.projects).toHaveLength(60)
     // the fewest first, ties in Northstar's order, so all end at 24
     expect(perParent(plan.projects)).toEqual({ luma: 20, cloud: 21, pilot: 19 })
-    // 26 more under Luma would pass the 30 one project may hold
+    // 27 more under Luma would pass the 30 one project may hold
     expect(() =>
       planFiles({ org: 'org', count: 27, tops: [{ id: 'luma', subs: 4 }], present: none }),
-    ).toThrow(/no room left/)
+    ).toThrow(
+      "--files 27 needs 27 new sub-projects, but Northstar's live top-level projects have room for 26, at most 30 under one.",
+    )
+    // Northstar as seeded holds 78, and one more refuses
+    expect(planFiles({ org: 'org', count: 78, tops: summed, present: none }).projects).toHaveLength(
+      78,
+    )
+    expect(() => planFiles({ org: 'org', count: 79, tops: summed, present: none })).toThrow(
+      /needs 79 new sub-projects, but .* have room for 78,/,
+    )
     expect(
       perParent(
         planFiles({ org: 'org', count: 26, tops: [{ id: 'luma', subs: 4 }], present: none })
@@ -1340,7 +1355,28 @@ describe('board-scale-seed --files', () => {
     expect(plan.files.map((f) => f.id)).toEqual([fileSeedId('file', 1), fileSeedId('file', 2)])
     expect(() =>
       planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present: none }),
-    ).toThrow(/no room left/)
+    ).toThrow(/needs 3 new sub-projects, but .* have room for 1,/)
+    // the sub-projects made already take no place, so the one missing fits
+    expect(
+      planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present }).projects,
+    ).toHaveLength(1)
+  })
+
+  it('refuses a count whose sub-projects do not fit before it seeds anything', async () => {
+    fake.projects = tops()
+    fake.issues = []
+    fake.calls = []
+    try {
+      // Luma has 2 places left and Cloud 27, so 30 new sub-projects do not fit
+      await expect(
+        runBoardScaleSeed([...local, '--tasks', '5', '--files', '30'], { env, log: () => {} }),
+      ).rejects.toThrow(
+        "--files 30 needs 30 new sub-projects, but Northstar's live top-level projects have room for 29, at most 30 under one.",
+      )
+    } finally {
+      fake.projects = null
+    }
+    expect(fake.calls).toEqual([])
   })
 
   it('makes the sub-projects, then the tasks, then uploads and attaches each file as Nora, and counts a deleted or archived one as made', async () => {
