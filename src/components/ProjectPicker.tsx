@@ -16,7 +16,9 @@
      org_id when the login holds several seats, and shows the other
      organizations' rows without a press; All projects of an organization
      leaves every row open. A top-level row's arrow lists its sub-projects
-     (projectNav.children), one row at a time.
+     (projectNav.children), one row at a time. A new text collapses it,
+     and a pick that only narrows the search to its organization keeps
+     it.
    - Each list reads through the shared paged list (lib/pagedList.ts) with
      live batches, which stop while the tab or the desktop window is
      hidden. A new text, organization or expanded row starts its list at
@@ -305,7 +307,7 @@ export function ProjectPickerPanel({
     id: (row) => row.id,
     most: PROJECT_PICKER_MOST.list,
   })
-  // the one top-level row whose sub-projects show; a new list collapses it
+  // the one top-level row whose sub-projects show; a new text collapses it
   const [expanded, setExpanded] = useState<NavProject | null>(null)
   const kidsKey = expanded ? JSON.stringify(['children', expanded.id]) : null
   const kids = usePagedList<NavChildren, NavChildRow>({
@@ -319,11 +321,20 @@ export function ProjectPickerPanel({
     id: (row) => row.id,
     most: PROJECT_PICKER_MOST.children,
   })
-  const shownKey = useRef(mainKey)
+  // A pick that only narrows the search to the expanded project's
+  // organization, or a change that widens it to every organization again,
+  // keeps the row open while its list starts again, so a sub-project
+  // picked under it stays in view. Any other new list collapses it.
+  const shownKey = useRef({ key: mainKey, text: browsing ? null : term })
   useEffect(() => {
-    if (shownKey.current === mainKey) return
-    shownKey.current = mainKey
-    setExpanded(null)
+    const was = shownKey.current
+    if (was.key === mainKey) return
+    const text = browsing ? null : term
+    shownKey.current = { key: mainKey, text }
+    const sameSearch = text !== null && text === was.text
+    setExpanded((now) =>
+      now && sameSearch && (searchOrg === null || searchOrg === now.org_id) ? now : null,
+    )
   }, [mainKey])
 
   // the lists the paged lists opened, which they open after the render
@@ -363,6 +374,13 @@ export function ProjectPickerPanel({
         label: orgs.length > 1 ? `All projects in ${o.name}` : 'All projects',
       })
   const mainShown = mainAnswered && mainEnd !== 'too_long'
+  // an expanded row the shown list no longer holds, as after a narrowed
+  // search started again without it in its first batch, collapses, so no
+  // sub-projects are read under a row off the list
+  const lost = mainShown && expanded !== null && !main.rows.some((row) => row.id === expanded.id)
+  useEffect(() => {
+    if (lost) setExpanded(null)
+  }, [lost])
   const kidRows: Entry[] =
     kidsAnswered && expanded
       ? kids.rows.map((row) => ({

@@ -532,6 +532,57 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(subs.some((s) => s.args.org_id === '')).toBe(false)
   })
 
+  it('keeps the expanded project open when a pick narrows the search to its organization', async () => {
+    const next = base(true)
+    const luma = top(next, 'Luma Sensor')
+    const el = sub(next, luma, 'Electronics')
+    const fw = sub(next, luma, 'Firmware')
+    const kit = top(next, 'Luma partner kit', { org: PARTNER })
+    await load(next)
+    await panel(ARCHIVE_RULES)
+    await type('luma')
+    expect(rowIds()).toEqual([kit, luma])
+    await click(find(`[data-project-expand="${luma}"]`))
+    await click(find(`[data-project-pick="${fw}"]`))
+    // the search now reads Luma's organization alone, and Luma stays open
+    // on the same read of its sub-projects
+    expect(asked('search').at(-1)?.args).toEqual({ search: 'luma', org_id: ORG })
+    expect(find(`[data-project-expand="${luma}"]`).getAttribute('aria-expanded')).toBe('true')
+    expect(rowIds()).toEqual([luma, el, fw])
+    expect(asked('children')).toHaveLength(1)
+    expect(asked('children')[0].open).toBe(true)
+    // taking the pick off widens the search again, still open
+    await click(find(`[data-project-pick="${fw}"]`))
+    expect(asked('search').at(-1)?.args).toEqual({ search: 'luma' })
+    expect(rowIds()).toEqual([kit, luma, el, fw])
+    // a new text collapses it
+    await type('lum')
+    expect(rowIds()).toEqual([kit, luma])
+    expect(open().filter((s) => s.name === 'projectNav:children')).toEqual([])
+  })
+
+  it('collapses an expanded project that the narrowed search no longer lists, and drops its read', async () => {
+    const next = base(true)
+    for (let n = 1; n <= 5; n++) top(next, `Luma ${n}`)
+    const luma = top(next, 'Luma Sensor')
+    const fw = sub(next, luma, 'Firmware')
+    top(next, 'Luma partner kit', { org: PARTNER })
+    await load(next)
+    force.batch = 5
+    await panel(ARCHIVE_RULES)
+    await type('luma')
+    await more()
+    await click(find(`[data-project-expand="${luma}"]`))
+    await click(find(`[data-project-pick="${fw}"]`))
+    // the narrowed search's first batch ends before Luma Sensor
+    expect(asked('search').at(-1)?.args).toEqual({ search: 'luma', org_id: ORG })
+    expect(rowIds()).toHaveLength(5)
+    expect(rowIds()).not.toContain(luma)
+    expect(open().filter((s) => s.name === 'projectNav:children')).toEqual([])
+    await more()
+    expect(find(`[data-project-expand="${luma}"]`).getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('says why a list is held, with no count or empty line, and keeps the fixed rows', async () => {
     const next = base()
     top(next, 'Luma Sensor')
