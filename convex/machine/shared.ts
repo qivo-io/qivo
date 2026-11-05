@@ -12,8 +12,9 @@
 import { v } from 'convex/values'
 import type { ProfileKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
-import { limitedWhole } from '../lib/limitRules'
+import { limitedText, limitedWhole } from '../lib/limitRules'
 import { cutText, DEFAULT_PAGE_SIZE, LIMITS, type Limit, MIB } from '../lib/limits'
+import { offsetRefusal } from '../lib/listCursor'
 import { readLimitedBody } from '../lib/requestBody'
 import { plainText } from '../model/activity'
 import { REST_AUTH_401, REST_PERSON_AUTH_401 } from './auth'
@@ -157,9 +158,9 @@ const numberOf = (raw: string | number): number =>
   typeof raw === 'number' ? raw : raw.trim() === '' ? Number.NaN : Number(raw)
 
 /** A list's `limit`, the rows of one page, from a REST query parameter or an
- * MCP argument, checked against `range`, the list's registry entry
- * (LIMITS.listTasks, listInbox, listComments or listWorkload), and refused
- * with its sentence on both surfaces. Absent is DEFAULT_PAGE_SIZE. */
+ * MCP argument, checked against `range`, the list's registry entry (such as
+ * LIMITS.listTasks, listWorkload or listUsers), and refused with its
+ * sentence on both surfaces. Absent is DEFAULT_PAGE_SIZE. */
 export function pageLimit(range: Limit, raw: string | number | undefined): number {
   return raw === undefined ? DEFAULT_PAGE_SIZE : limitedWhole(range, numberOf(raw))
 }
@@ -180,22 +181,34 @@ export function pageOffset(raw: string | number | undefined): number {
  * 0, from a REST query parameter or an MCP argument. Absent is 0, and so is
  * any text that reads as 0, such as `00`; anything else, text that is no
  * number included, is an offset sent. The task lists refuse such an offset
- * in lib/core.ts taskListRequest, and REST GET /v1/workload and MCP
- * get_workload in machine/records.ts, with lib/listCursor.ts
- * offsetRefusal; REST GET /v1/inbox and MCP list_inbox
- * (t3/limits-machine-inbox) are to do the same once they page with a
- * cursor. */
+ * in lib/core.ts taskListRequest, REST GET /v1/workload and MCP
+ * get_workload in machine/records.ts, and the lists in name order in
+ * namedPaging, with lib/listCursor.ts offsetRefusal; REST GET /v1/inbox and
+ * MCP list_inbox (t3/limits-machine-inbox) are to do the same once they
+ * page with a cursor. */
 export const offsetSent = (raw: string | number | undefined): boolean =>
   raw !== undefined && numberOf(raw) !== 0
 
-/** The refusal of a REST or MCP list in name order while its
- * organization's name keys are not all written (model/nameKeys.ts
- * nameKeysReady), so a page is never answered from rows without a key.
- * Every organization holds them from its creation or since
- * internal/nameKeysBackfill keyed it, so it is a fail-closed branch that no
- * ordinary call meets. */
-export const NAMES_NOT_READY =
-  "this list cannot be read until this organization's names are ready; try again in a few minutes"
+/** The paging of a REST or MCP list in name order that pages with
+ * lib/listCursor.ts namedListPage, such as REST GET /v1/users and MCP
+ * list_users, checked in the order both surfaces document: `limit` against
+ * `range`, the list's registry entry (DEFAULT_PAGE_SIZE when absent), then
+ * any `offset` but 0, refused with offsetRefusal(noun), then the search,
+ * trimmed and refused past LIMITS.search with its sentence. An absent
+ * cursor or search is null or blank. REST passes an empty `cursor` or
+ * `search` as absent; MCP passes them as sent, so its empty cursor is
+ * refused when the page opens it. Every later REST and MCP list in name
+ * order checks its paging here. */
+export function namedPaging(
+  range: Limit,
+  noun: string,
+  a: { limit?: string | number; offset?: string | number; cursor?: string; search?: string },
+): { limit: number; cursor: string | null; search: string } {
+  const limit = pageLimit(range, a.limit)
+  if (offsetSent(a.offset)) throw badRequest(offsetRefusal(noun))
+  const search = limitedText(LIMITS.search, a.search ?? '')
+  return { limit, cursor: a.cursor ?? null, search }
+}
 
 /** A REST request body that may be left out, such as a DELETE's. An empty
  * body reads as {}, and any other body as needJson reads it. */

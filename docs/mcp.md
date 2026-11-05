@@ -652,6 +652,10 @@ the range.
 | Comments per list page | 1 to 50 comments | limit must be a whole number of comments from 1 to 50. |
 | People per workload page | 1 to 200 people | limit must be a whole number of people from 1 to 200. |
 | Workload weeks | 1 to 52 weeks | weeks must be a whole number from 1 to 52. |
+| Users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
+| Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
+| Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |

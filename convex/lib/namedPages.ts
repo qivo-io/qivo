@@ -7,8 +7,10 @@
  * Projects with its search and sub-projects and the archived sub-projects
  * of an archived project (model/projectSettingsLists.ts), Deleted items'
  * people for Deleted by and the assignee filter
- * (model/deletedItemsChoices.ts peopleBatch), and later the people and
- * team lists of Settings and the REST and MCP lists. A list is
+ * (model/deletedItemsChoices.ts peopleBatch), the REST and MCP lists of
+ * people, labels, teams and a team's members (lib/listCursor.ts
+ * namedListPage), and later the people and team lists of Settings and the
+ * other REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -625,9 +627,10 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * `limit` stops there as if the read budget stopped it, and the app splits
  * it, as model/labels.ts labelBatch does. The project settings lists and
  * pickers (model/projectSettings.ts), the project navigation lists
- * (model/projectNavReads.ts) and the Settings project lists
- * (model/projectSettingsLists.ts) answer through it. `o.order` is the direction
- * `stream` reads in, ascending by default (readBatch). */
+ * (model/projectNavReads.ts), the Settings project lists
+ * (model/projectSettingsLists.ts) and the REST and MCP lists in name order
+ * (lib/listCursor.ts namedListPage) answer through it. `o.order` is the
+ * direction `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
   ask: BatchAsk,

@@ -21,8 +21,8 @@
  *
  * The indexes of keyed rows that name-ordered readers walk are defined here
  * once (lib/namedPages.ts NamedIndex): an organization's people, all of them
- * or one role, its teams, and a project's user grants and team shares, each
- * ordered by its name key and then one id. */
+ * or one role, its teams, a team's members, and a project's user grants and
+ * team shares, each ordered by its name key and then one id. */
 
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize } from 'convex/values'
@@ -224,6 +224,13 @@ export async function nameKeysReady(ctx: QueryCtx, orgId: string): Promise<boole
 /** The tie of an index that orders equal name keys by one id. */
 export type IdTie = readonly [string]
 
+/** The tie of `at` as one id, or null for any other shape, so a cursor
+ * that does not hold one is refused (lib/listCursor.ts namedListPage). */
+export const idTieOf = ({ tie }: NamedAt): IdTie | null => {
+  const [id] = tie
+  return tie.length === 1 && typeof id === 'string' ? [id] : null
+}
+
 /* The position of a row of a name index tied by `id`. Readers refuse until
  * the organization is keyed (nameKeysReady), so a row without a key here
  * passed that check and is refused rather than placed first. */
@@ -289,6 +296,32 @@ export function teamIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'teams'>
       () => teams().withIndex('by_org_name', (q) => q.eq('org_id', orgId).gt('name_key', key)),
     ],
     at: (team) => keyedAt(team.name_key, team.id, 'team'),
+  }
+}
+
+/** The memberships of team `teamId` in the order of their copies of the
+ * person's name key (team_members.by_team_name): copied key, then profile
+ * id. A copy can trail a rename for a moment, which places its row by the
+ * earlier name. It holds only memberships with a copy: one without sorts
+ * first, and is a membership a removed person left before the backfill
+ * keyed the organization, which a reader checks apart (model/teams.ts
+ * memberPage), as projectGrantIndex's readers check grants. */
+export function teamMemberIndex(
+  ctx: QueryCtx,
+  teamId: string,
+): NamedIndex<Doc<'team_members'>, IdTie> {
+  const members = () => ctx.db.query('team_members')
+  return {
+    all: () =>
+      members().withIndex('by_team_name', (q) => q.eq('team_id', teamId).gte('name_key', '')),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        members().withIndex('by_team_name', (q) =>
+          q.eq('team_id', teamId).eq('name_key', key).gt('profile_id', id),
+        ),
+      () => members().withIndex('by_team_name', (q) => q.eq('team_id', teamId).gt('name_key', key)),
+    ],
+    at: (membership) => keyedAt(membership.name_key, membership.profile_id, 'membership'),
   }
 }
 

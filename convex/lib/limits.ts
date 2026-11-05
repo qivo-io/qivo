@@ -655,6 +655,18 @@ export const LIMITS = {
     refusal: 'weeks must be a whole number from 1 to 52.',
     on: MACHINE,
   },
+  listUsers: whole('Users per list page', 1, 200, 'users', 'limit', MACHINE, 'machine'),
+  listLabels: whole('Labels per list page', 1, 200, 'labels', 'limit', MACHINE, 'machine'),
+  listTeams: whole('Teams per list page', 1, 200, 'teams', 'limit', MACHINE, 'machine'),
+  listTeamMembers: whole(
+    'Team members per list page',
+    1,
+    200,
+    'members',
+    'limit',
+    MACHINE,
+    'machine',
+  ),
   inboxTasks: {
     label: 'Tasks per inbox change',
     group: 'machine',
