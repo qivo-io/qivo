@@ -485,7 +485,9 @@ function namedNow(open: string) {
     workspace and remembered (`named`), one that left while its window
     showed it by what `named` kept, and any other from the store's live
     sources (taskFacts): the reference itself, its read's answer and the
-    window's own read. Undefined when nothing names it. */
+    window's own read. Undefined when nothing names it, as for a reference
+    by number alone whose organization has left the store, which `~` would
+    read in the home organization (unnamedRef). */
 function taskNamed(open: string): { org: string | null; ref: string } | undefined {
   const it = refParts(open) ? undefined : P.issueById[open]
   if (it) {
@@ -510,8 +512,14 @@ function taskNamed(open: string): { org: string | null; ref: string } | undefine
   if (org && num !== undefined && orgSegment(org) !== ORG_NONE)
     return { org, ref: `${ISSUE_PREFIX}-${num}` }
   if (uuid) return { org: org ?? facts.from ?? null, ref: uuid }
-  return org && num !== undefined ? { org, ref: `${ISSUE_PREFIX}-${num}` } : undefined
+  return undefined
 }
+
+/** Whether `open` is a reference no address can name (taskNamed). An
+    address leaves its task out rather than write the reference itself, so
+    a reload or Back opens no task, never another one. */
+const unnamedRef = (open: string | null | undefined): boolean =>
+  !!open && !!refParts(open) && !taskNamed(open)
 
 /* The organization and number each project settings page was last named
    by. A project that leaves while its page shows (its Archive or delete
@@ -623,8 +631,10 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   return `${APP_PREFIX}/${orgSegment(org)}${rest}`
 }
 
-/** The path this state is addressed by. Always `/app/<org>/…`. */
-export function buildPath(s: UiState): string {
+/** The path this state is addressed by. Always `/app/<org>/…`. A
+    reference no address can name leaves the task out (unnamedRef). */
+export function buildPath(state: UiState): string {
+  const s = unnamedRef(state.openIssue) ? { ...state, openIssue: null } : state
   const at = (orgId: string | null | undefined, rest: string) =>
     `${APP_PREFIX}/${orgSegment(orgId)}${rest}`
 
@@ -702,6 +712,8 @@ export function buildPath(s: UiState): string {
 export function issueLink(handle: string): string {
   const open = String(handle)
   const it = taskNamed(open)
+  // a reference no address can name gives no task to link to
+  if (!it && refParts(open)) return `${APP_PREFIX}/${ORG_NONE}`
   const ref = it ? it.ref : open
   return `${APP_PREFIX}/${orgSegment(it?.org)}/tasks/${encodeURIComponent(ref.toLowerCase())}`
 }

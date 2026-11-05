@@ -622,6 +622,34 @@ describe('buildPath', () => {
     ).toBe(false)
   })
 
+  it("leaves out a task opened by number once its organization left, never naming the home organization's task of that number", () => {
+    // a link to Acme's QN-5 whose read has not named its uuid
+    const acme5 = taskRef({ org: ACME, num: 5 })
+    const sync = { scope: 'all', step: 'team' }
+    expect(buildPath({ view: 'kanban', openIssue: acme5 })).toBe('/app/acme/board/tasks/qn-5')
+    // the person loses their seat in Acme
+    store.orgs = store.orgs.filter((o) => o.id !== ACME)
+    const paths = [
+      buildPath({ inboxOpen: true, openIssue: acme5 }),
+      buildPath({ scope: 'all', view: 'kanban', openIssue: acme5 }),
+      buildPath({ scope: 'p-home-7', view: 'kanban', openIssue: acme5 }),
+      buildPath({ sync, openIssue: acme5 }),
+      issueLink(acme5),
+    ]
+    expect(paths).toEqual([
+      '/app/~/inbox',
+      '/app/~/board/all',
+      '/app/home/board/p/7',
+      '/app/home/sync/all',
+      '/app/~',
+    ])
+    // so a reload or a Back opens no task, not the home QN-5
+    for (const path of paths) expect(sameTask(parsePath(path)?.issue, 'QN-5'), path).toBe(false)
+    // a uuid still names it
+    const named = taskRef({ org: ACME, num: 5, uuid: 'uuid-acme-5' })
+    expect(buildPath({ view: 'kanban', openIssue: named })).toBe('/app/~/board/tasks/uuid-acme-5')
+  })
+
   it('full-screen pages still outrank the scope', () => {
     expect(buildPath({ scope: 'all', view: 'kanban', inboxOpen: true })).toBe('/app/~/inbox')
     expect(buildPath({ scope: 'all', view: 'kanban', settingsPage: 'account' })).toBe(
