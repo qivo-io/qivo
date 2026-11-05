@@ -1271,9 +1271,10 @@ their threads again from the start.
 
 Each label has a `label_counts` row with the number of active tasks that
 carry it, and each team a `team_counts` row with its members, as the team
-lists show them. No reader uses the label counts yet; the REST and MCP team
-answers show each team's row as `member_count`, null for a team without a
-finished row, from the release that pages the people, label and team lists.
+lists show them. Settings › Labels shows each label's row as its active
+tasks, and the REST and MCP team answers show each team's row as
+`member_count`, null for a team without a finished row, from the release
+that pages the people, label and team lists.
 Every write that changes either keeps the rows, and labels and teams created
 since the release that added them start with one. A label or team stored
 before has no row until the one-time `internal/labelCountsBackfill` and
