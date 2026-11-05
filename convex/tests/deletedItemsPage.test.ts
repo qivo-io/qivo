@@ -13,7 +13,7 @@ import type { Doc } from '../_generated/dataModel'
 import { byId } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
-import { TRASH_BUDGET } from '../model/deletedItems'
+import { sightOf, TRASH_BUDGET } from '../model/deletedItems'
 import type { DeletedRow } from '../model/deletedItemsList'
 import { DELETED_PAGE, type DeletedPage } from '../model/deletedItemsPage'
 import {
@@ -182,17 +182,16 @@ const plantItems = (t: T, f: OrgFixture, count: number, from = START) =>
 
 /** Expects the page to give each of `people` exactly the items the list
  * gives them, each once, with the same rows: All projects of each
- * organization they hold a seat in, paged to the end. */
+ * organization they hold a seat in, paged to the end, and each project
+ * they see there as a scope of its own (expectScopedAsListed). */
 async function expectAsListed(t: T, people: Doc<'profiles'>[]) {
   const seats = await t.run((ctx) => ctx.db.query('profiles').collect())
   for (const who of people) {
     const listed = (await list(t, who)).items
-    const orgs = seats
-      .filter((s) => s.auth_user_id === who.auth_user_id && s.active)
-      .map((s) => s.org_id)
+    const mine = seats.filter((s) => s.auth_user_id === who.auth_user_id && s.active)
     const ids: string[] = []
     const rows: DeletedRow[] = []
-    for (const org_id of orgs) {
+    for (const { org_id } of mine) {
       const walked = await walk(t, who, { scope: { org_id, all: true } })
       ids.push(...walked.ids)
       rows.push(...walked.items)
@@ -204,6 +203,43 @@ async function expectAsListed(t: T, people: Doc<'profiles'>[]) {
         rows.find((r) => r.id === row.id),
         who.name,
       ).toEqual(row)
+    for (const seat of mine) await expectScopedAsListed(t, seat, listed)
+  }
+}
+
+/** Expects the page of each project `seat` sees, as the only project of a
+ * scope, to give each once the items of `listed` (the list's rows for its
+ * login) that scope holds: a project item under it, and a task item with a
+ * project in it, or in a sub-project of it the seat sees, among the
+ * projects its row shows. An admin's row shows every project of the item,
+ * and an admin's scope also holds it through its root's top-level
+ * project. */
+async function expectScopedAsListed(t: T, seat: Doc<'profiles'>, listed: DeletedRow[]) {
+  const stored = await t.run((ctx) => ctx.db.query('deleted_items').collect())
+  const docs = new Map(stored.map((d) => [d.id, d]))
+  const seen = await t.run(async (ctx) => {
+    const sight = await sightOf(ctx, seat)
+    return [...sight.projects.values()].filter((p) => sight.levels.levelOf(p) !== null)
+  })
+  for (const project of seen) {
+    const held = new Set([project.id])
+    if (project.type === 'meta')
+      for (const p of seen) if (p.parent_id === project.id) held.add(p.id)
+    const expected = listed.filter((row) => {
+      const doc = docs.get(row.id)
+      if (doc === undefined || row.org_id !== seat.org_id) return false
+      if (row.kind === 'project')
+        return project.type === 'meta' && doc.parent_project_id === project.id
+      const ids = row.projects.map((p) => p.id)
+      if (seat.org_role === 'admin') ids.push(doc.project_id, doc.parent_project_id ?? '')
+      return ids.some((id) => held.has(id))
+    })
+    const walked = await walk(t, seat, {
+      scope: { org_id: seat.org_id, project_ids: [project.id] },
+    })
+    const label = `${seat.name} in ${project.name}`
+    expect(walked.ids.length, label).toBe(new Set(walked.ids).size)
+    expect([...walked.ids].sort(), label).toEqual(expected.map((r) => r.id).sort())
   }
 }
 
@@ -303,6 +339,34 @@ describe('who sees what', () => {
     later()
     await deleteTask(t, f.user, theirs.id)
     later()
+    // a family each way between Firmware, which Sam leads, and Bench, where
+    // Sam is a member, under Testbed platform, which Sam does not lead: a
+    // scope of Bench holds both through the range of Firmware (ledSiblings)
+    const bench = await plantProject(t, {
+      org_id,
+      type: 'project',
+      parent_id: f.meta.id,
+      name: 'Bench',
+    })
+    await grant(t, bench.id, sam.id, 'user')
+    const benchRoot = await plantIssue(t, { org_id, project_id: bench.id, title: 'Bench root' })
+    const fwSub = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      parent_id: benchRoot.id,
+      title: 'Firmware subtask',
+    })
+    await deleteTask(t, f.user, benchRoot.id, { subtask_ids: [fwSub.id] })
+    later()
+    const fwRoot = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Firmware root' })
+    const benchSub = await plantIssue(t, {
+      org_id,
+      project_id: bench.id,
+      parent_id: fwRoot.id,
+      title: 'Bench subtask',
+    })
+    await deleteTask(t, f.user, fwRoot.id, { subtask_ids: [benchSub.id] })
+    later()
     // a project item a lead's stored rows name, with a sub-project lead and a member
     const trial = await tree(t, f, 'Field trial', lena, [
       { name: 'Site', lead: sam },
@@ -359,6 +423,11 @@ describe('who sees what', () => {
     const omars = await walk(t, omar, { scope: { org_id, all: true } })
     expect(omars.items).toEqual([expect.objectContaining({ redacted: true })])
     expect(JSON.stringify(omars)).not.toContain('Contoso')
+    // Sam's scope of Bench holds both families
+    const sams = await walk(t, sam, { scope: { org_id, project_ids: [bench.id] } })
+    expect([...sams.ids].sort()).toEqual(
+      [(await itemFor(t, benchRoot.id)).id, (await itemFor(t, fwRoot.id)).id].sort(),
+    )
   })
 
   it("keeps the list's answer for view-only deleters, lost access, deleted projects, stuck and moving items", async () => {
@@ -1083,9 +1152,14 @@ describe('stops', () => {
       next_cursor: null,
       too_wide: true,
     })
-    // the project entries need only Sam's own deletes, and one sub-project fits
+    // the project entries need only Sam's own deletes
     expect((await page(t, sam, { scope: all, kind: 'project' })).too_wide).toBeUndefined()
-    const one = await page(t, sam, { scope: { org_id, project_ids: [f.sub.id] } })
+    // a scope of Firmware also reads Board rev, which Sam leads beside it,
+    // as a task item there can have a subtask in Firmware (ledSiblings)
+    const firmware = { scope: { org_id, project_ids: [f.sub.id] } }
+    expect(await page(t, sam, firmware)).toMatchObject({ entries: [], too_wide: true })
+    Object.assign(DELETED_PAGE, { sources: 3 })
+    const one = await page(t, sam, firmware)
     expect(one.entries.map((e) => e.item_id)).toEqual([items[1]])
     expect(one.too_wide).toBeUndefined()
   })

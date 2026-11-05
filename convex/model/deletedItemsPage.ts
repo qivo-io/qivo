@@ -25,7 +25,9 @@
  * items of a kind, one person's, or those under the scope's projects. Anyone
  * else reads their own deletes, the project items whose stored rows name
  * them as lead, and the items under each project they lead (live or
- * archived) in the scope, with the task items that have a subtask there. The
+ * archived) in the scope, with the task items that have a subtask there.
+ * With some projects they also read the sub-projects they lead beside one
+ * in the scope (ledSiblings), whose task items can have a task in it. The
  * ordered ranges are read newest first from the cursor and merged; the
  * stored-lead and cross-project ranges have no order, so they are read whole
  * and sorted. Every item is judged by viewOf for the seat in its
@@ -108,7 +110,8 @@ type Profile = Doc<'profiles'>
  * they lead, and that the range of no top-level project in the scope
  * covers. That is each such top-level project, and each sub-project whose
  * top-level project they do not lead or the scope leaves out, live and
- * archived alike. The assignee scan reads both kinds in each of these
+ * archived alike, with each sub-project they lead beside one in the scope
+ * (ledSiblings). The assignee scan reads both kinds in each of these
  * ranges, so it counts each once, as the browse does. The bound is the
  * design size's sum for one person (coordinator, 2026-11-05): the 200 live
  * and 500 archived sub-projects one person may read, each led one by one,
@@ -458,6 +461,35 @@ function deletedAsAsked(seat: Seat, a: Asked, item: Item): boolean {
 const leads = (seat: Seat, p: Doc<'projects'> | undefined): boolean =>
   p !== undefined && seat.sight.levels.levelOf(p) === 'lead'
 
+/**
+ * The sub-projects outside `scope` that `seat`'s person leads beside a
+ * sub-project in it, under a top-level project they do not lead, for anyone
+ * but an admin. A task item's tasks can sit in both (model/issues.ts
+ * sameTopLevel), and the person sees the item through the one they lead, so
+ * the ranges of those name items the scope holds that the ranges of the
+ * scope's own projects do not (taskPlan, searchPlan). Empty with All
+ * projects, which holds them all.
+ */
+function ledSiblings(seat: Seat, scope: Scoped): Set<string> {
+  const out = new Set<string>()
+  if (scope.all || seat.admin) return out
+  const { projects } = seat.sight
+  const parents = new Set<string>()
+  for (const id of scope.ids) {
+    const parent = projects.get(id)?.parent_id
+    if (parent !== undefined && !leads(seat, projects.get(parent))) parents.add(parent)
+  }
+  for (const p of projects.values())
+    if (
+      p.parent_id !== undefined &&
+      parents.has(p.parent_id) &&
+      !scope.ids.has(p.id) &&
+      leads(seat, p)
+    )
+      out.add(p.id)
+  return out
+}
+
 /* -------------------------------------------------------------- the run */
 
 /** One call's state: its budgets, what it found and how it stopped. */
@@ -690,7 +722,8 @@ function projectPlan(run: Run, seat: Seat, scope: Scoped | null): Plan | 'too_wi
  * rather than a range for each part, so each source counts once toward
  * DELETED_PAGE.sources, and the plan also reads the project items whose
  * stored rows name the person as lead and keeps the project items the
- * scope holds. */
+ * scope holds. Anyone but an admin also reads the sub-projects they lead
+ * beside one in the scope (ledSiblings), whose items the scope may hold. */
 function taskPlan(run: Run, seat: Seat, scope: Scoped, projects = false): Plan | 'too_wide' {
   const { a } = run
   const org = seat.me.org_id
@@ -721,8 +754,9 @@ function taskPlan(run: Run, seat: Seat, scope: Scoped, projects = false): Plan |
   const ordered = [deleterRange(org, seat.me.id, kind)]
   const cross: string[] = []
   const inScope = (p: Doc<'projects'>) => scope.all || scope.ids.has(p.id)
+  const siblings = ledSiblings(seat, scope)
   for (const p of seat.sight.projects.values()) {
-    if (!inScope(p)) continue
+    if (!inScope(p) && !siblings.has(p.id)) continue
     if (p.type === 'meta') {
       if (leads(seat, p)) ordered.push(parentRange(org, p.id, kind))
       continue
@@ -1167,10 +1201,10 @@ const WHOLE: SearchPlan = { queries: [{}], crossItems: [] }
  * that deleter's tasks (deleted_by); some projects, a query for each
  * top-level project (item_parent_id) and each other project
  * (item_project_id) the scope names. Anyone else's are their own deletes
- * (deleted_by), each project they lead in the scope as the browse reads it,
- * and each project item their stored rows name as lead that no other query
- * covers (item_id). Each query finds every task of the items of its
- * source, wherever the task sits. The cross-project items the browse finds
+ * (deleted_by), each project they lead in the scope or beside it
+ * (ledSiblings) as the browse reads it, and each project item their stored
+ * rows name as lead that no other query covers (item_id). Each query finds
+ * every task of the items of its source, wherever the task sits. The cross-project items the browse finds
  * through subtasks, whose roots no query holds, are read whole instead
  * (crossItems), as an item holds at most LIMITS.subtasks.max + 1 tasks.
  * Past DELETED_PAGE.adminSources for an admin, or DELETED_PAGE.searches
@@ -1199,8 +1233,9 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
     if (parents.size + projects.size + cross.length > DELETED_PAGE.adminSources) return WHOLE
   } else {
     const inScope = (p: Doc<'projects'>) => scope.all || scope.ids.has(p.id)
+    const siblings = ledSiblings(seat, scope)
     for (const p of seat.sight.projects.values()) {
-      if (!inScope(p)) continue
+      if (!inScope(p) && !siblings.has(p.id)) continue
       if (p.type === 'meta') {
         if (leads(seat, p)) parents.add(p.id)
         continue
