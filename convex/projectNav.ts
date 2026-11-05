@@ -2,9 +2,9 @@
  * selection.
  *
  * - page: one batch of the top-level projects the caller sees for
- *   navigation across every active seat of their login, each seat's
- *   favorites first and then the rest, each group in name order, 25 a batch
- *   with sealed `after` and `through` cursors.
+ *   navigation across every active seat of their login, the favorites of
+ *   every seat first and then the rest of every seat, each group in name
+ *   order, 25 a batch with sealed `after` and `through` cursors.
  * - children: one batch of a top-level project's live sub-projects the
  *   caller sees, 25 a batch, the same way.
  * - resolve: whether one project, named by id or by its organization and
@@ -43,12 +43,13 @@ import {
 const vNavCursors = { after: v.optional(v.string()), through: v.optional(v.string()) }
 
 /** One batch of the top-level projects the caller sees for navigation
- * across every active seat (model/projectNavReads.ts navPageOf), each
- * seat's favorites by the reader rule first, then the rest, each group in
- * name key order with the project id breaking ties, rows of several
- * organizations in one order. Rows are `{ id, org_id, name, num, favorite
- * }`. `not_ready` while an organization's reach rows or name keys are not
- * complete; `unavailable` with access_unchecked where a check stopped. */
+ * across every active seat (model/projectNavReads.ts navPageOf), the
+ * favorites of every seat by the reader rule first, then the rest of every
+ * seat, each group in name key order with the project id breaking ties,
+ * rows of several organizations in one order. Rows are `{ id, org_id,
+ * name, num, favorite }`. `not_ready` while an organization's reach rows
+ * or name keys are not complete; `unavailable` with access_unchecked where
+ * a check stopped. */
 export const page = authedQuery({
   args: vNavCursors,
   handler: (ctx, a): Promise<NavPage> => navPageOf(ctx, ctx.myProfiles, a),

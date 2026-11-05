@@ -1,11 +1,11 @@
 /* The reads of project navigation (projectNav.ts): a person's top-level
- * projects across every seat of their login, each seat's favorites first
- * and then the rest (navPageOf, projectNav.page); one top-level project's
- * live sub-projects (navChildrenOf, projectNav.children); and one project
- * resolved for navigation, by id or by its organization and number
- * (navResolveOf, projectNav.resolve). They read the rows the writers in
- * model/projectNav.ts (reach rows) and model/projectFavorites.ts
- * (favorites) keep, and no task.
+ * projects across every seat of their login, the favorites of every seat
+ * first and then the rest of every seat (navPageOf, projectNav.page); one
+ * top-level project's live sub-projects (navChildrenOf,
+ * projectNav.children); and one project resolved for navigation, by id or
+ * by its organization and number (navResolveOf, projectNav.resolve). They
+ * read the rows the writers in model/projectNav.ts (reach rows) and
+ * model/projectFavorites.ts (favorites) keep, and no task.
  *
  * Who sees what. Every candidate is judged by ordinary access, lib/access.ts
  * accessOf of ordinaryOf(seat), so an organization admin's lists hold only
@@ -651,9 +651,10 @@ const isReach = (row: PageRow): row is Doc<'project_reach'> => 'grantee_kind' in
 /**
  * projectNav.page for the login whose active seats are `myProfiles` (by
  * organization): one batch of the top-level projects the person sees for
- * navigation across every seat, each seat's favorites first and then the
- * rest, each group in name key order with the project id breaking ties,
- * the seats' rows blended in that one order and told apart by `org_id`.
+ * navigation across every seat, the favorites of every seat first and then
+ * the rest of every seat, each group in name key order with the project id
+ * breaking ties, the seats' rows blended in that one order and told apart
+ * by `org_id`.
  *
  * It answers `not_ready` when any seat's organization lacks its reach rows
  * or name keys (navReady), and the access_unchecked refusal whole when any
