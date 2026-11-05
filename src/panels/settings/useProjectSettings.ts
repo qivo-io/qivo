@@ -63,7 +63,7 @@ export function useProjectSettings(projectId: string | null): ProjectSettingsRea
     kept.current = { ...kept.current, failed: true }
   const held = kept.current !== null && kept.current.id === projectId ? kept.current : null
   const answer = held ? held.answer : null
-  const read = { afterFailure: failed || (held !== null && held.failed), retry: view.retry }
+  const read = { afterFailure: failed || held?.failed === true, retry: view.retry }
   if (value?.state === 'ok') return { ...read, state: 'ok', answer: value, archived: null }
   if (value?.state === 'unavailable')
     return { ...read, state: 'unavailable', answer, archived: null }
