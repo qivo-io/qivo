@@ -687,7 +687,7 @@ and `matches` and the `search_title` index stay. Once an app reads the page
 they stay through that app's release, and a later release may remove them
 and adds them to the Instant Rollback list above.
 
-The Inbox's pages, `inbox.page`, first ship in the release after v0.1.120.
+The Inbox's pages, `inbox.page`, first ship in the release after v0.1.122.
 No app, REST or MCP caller reads them yet, so that release sets no rollback
 floor and needs no step, and returning the backend to a commit before it is
 safe while no app reads the pages. The release whose app lists the Inbox
