@@ -12,13 +12,12 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { BUILD } from '../internal/inboxItemsBackfill'
 import { OWN_READS } from '../lib/access'
-import { byId, newWindowKey } from '../lib/db'
+import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
-import { insertTask } from '../model/descriptions'
 import { itemEdits, REKEY } from '../model/inboxItems'
 import { readInboxItem, readInboxSummary, SUMMARY } from '../model/inboxReads'
-import { ITEM_UNREAD_CAP, itemMessages, markMessagesRead, postMessage } from '../model/messages'
+import { ITEM_UNREAD_CAP, itemMessages, markMessagesRead } from '../model/messages'
 import {
   as,
   copyTaskTexts,
@@ -36,7 +35,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { at, drift, post } from './inboxItems.setup'
+import { archiveRaw, at, drift, grant, plantItems, plantLegacy, post } from './inboxItems.setup'
 import { plantNorthstar } from './northstar.setup'
 import { DAY, deleteTask, installTrashTimers, runSteps, START } from './trash.setup'
 
@@ -100,74 +99,6 @@ const pairRows = (t: T, recipient_id: string, issue_id: string) =>
       .collect(),
   )
 
-/* Gives `who` a grant on project `projectId` and answers a function that
- * takes it away again. */
-async function grant(t: T, who: Doc<'profiles'>, projectId: string) {
-  const _id = await t.run((ctx) =>
-    ctx.db.insert('project_access', { project_id: projectId, profile_id: who.id, level: 'user' }),
-  )
-  return () => t.run((ctx) => ctx.db.delete(_id))
-}
-
-let planted = 50_000
-
-/** `n` new tasks in project `projectId` with fields `task`, each with one
- * message to `to` from the fixture's admin, `chunk` tasks a transaction.
- * Answers the tasks in the order planted. */
-async function plantItems(
-  t: T,
-  f: Pick<OrgFixture, 'org' | 'admin'>,
-  to: Doc<'profiles'>,
-  n: number,
-  projectId: string,
-  task: Partial<Doc<'issues'>> = {},
-  chunk = 50,
-): Promise<Doc<'issues'>[]> {
-  const out: Doc<'issues'>[] = []
-  for (let from = 0; from < n; from += chunk) {
-    const made = await t.run(async (ctx) => {
-      const rows: Doc<'issues'>[] = []
-      for (let i = from; i < Math.min(n, from + chunk); i++) {
-        // with its description row and the used_ids row of its id, as every
-        // writer stores a task
-        const _id = await insertTask(
-          ctx.db,
-          {
-            id: uuid(),
-            org_id: f.org.id,
-            project_id: projectId,
-            num: planted++,
-            title: `Item ${i}`,
-            description: '',
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            window_key: newWindowKey(),
-            ...task,
-          },
-          'restore',
-        )
-        const issue = (await ctx.db.get(_id)) as Doc<'issues'>
-        await postMessage(ctx, {
-          org_id: f.org.id,
-          recipient_id: to.id,
-          issue_id: issue.id,
-          kind: 'change',
-          body: `Update ${i}`,
-          actor_id: f.admin.id,
-          now: at(i),
-        })
-        rows.push(issue)
-      }
-      return rows
-    })
-    out.push(...made)
-  }
-  return out
-}
-
 /* Runs internal/inboxItemsBackfill until it answers done. */
 async function backfillAll(t: T) {
   for (let cursor: string | null = null, n = 0; ; n++) {
@@ -180,40 +111,6 @@ async function backfillAll(t: T) {
     cursor = got.cursor
   }
 }
-
-/* Stores `n` messages of `kind` for `to` about `task` raw, as releases
- * before the item cap and the items stored them, so `to` has no build
- * state. Each is about 1 KB, a long change line. */
-async function plantLegacy(
-  t: T,
-  f: OrgFixture,
-  to: Doc<'profiles'>,
-  task: Doc<'issues'>,
-  n: number,
-  kind: (i: number) => 'change' | 'comment',
-) {
-  for (let from = 0; from < n; from += 500)
-    await t.run(async (ctx) => {
-      for (let i = from; i < Math.min(n, from + 500); i++)
-        await ctx.db.insert('messages', {
-          id: uuid(),
-          org_id: f.org.id,
-          recipient_id: to.id,
-          issue_id: task.id,
-          issue_title: task.title,
-          kind: kind(i),
-          detail: `Legacy update ${i}: ${'a long change line '.repeat(50)}`,
-          created_at: at(i),
-        })
-    })
-}
-
-/* Archives the tasks without the archive's read steps, as a task archived
- * before its step ran is, so their messages stay unread. */
-const archiveRaw = (t: T, tasks: readonly Doc<'issues'>[]) =>
-  t.run(async (ctx) => {
-    for (const task of tasks) await ctx.db.patch(task._id, { archived_at: NOW })
-  })
 
 describe('the unread summary', () => {
   it('counts what the workspace inbox part shows, for every person of Northstar', async () => {

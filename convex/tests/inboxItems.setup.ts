@@ -1,16 +1,21 @@
-/* Shared by the inbox items suites (inboxItems.test.ts, inboxReads.test.ts):
- * posting a message through the single insert path, and the check that
- * every stored inbox_items row equals what its messages make (drift).
+/* Shared by the inbox items suites (inboxItems.test.ts, inboxReads.test.ts,
+ * inboxPage.test.ts): posting a message through the single insert path,
+ * the check that every stored inbox_items row equals what its messages make
+ * (drift), planting tasks with an item each (plantItems), messages from
+ * before the items (plantLegacy), grants, archives without the archive's
+ * read steps, and what one read costs (measure).
  *
  * Named *.setup.ts, as two dots in the basename is the Convex CLI's skip
  * rule (see helpers.setup.ts). */
 
 import type { Doc } from '../_generated/dataModel'
-import { byId } from '../lib/db'
+import type { QueryCtx } from '../_generated/server'
+import { byId, newWindowKey } from '../lib/db'
 import type { MessageKind } from '../lib/enums'
+import { insertTask } from '../model/descriptions'
 import { covers, type ItemFields, itemOf } from '../model/inboxItems'
 import { postMessage } from '../model/messages'
-import { NOW, type OrgFixture, type T } from './helpers.setup'
+import { NOW, type OrgFixture, type T, uuid } from './helpers.setup'
 
 const MINUTE = 60_000
 
@@ -62,12 +67,19 @@ export const drift = (t: T): Promise<string[]> =>
   })
 
 /** Posts one message through postMessage, the single insert path, at
- * minute `minute`, and answers its row, or null when postMessage stored
- * none (a recipient who cannot see the task). */
+ * minute `minute`, with detail `body` ("Update minute" by default), and
+ * answers its row, or null when postMessage stored none (a recipient who
+ * cannot see the task). */
 export async function post(
   t: T,
   f: Pick<OrgFixture, 'org' | 'admin'>,
-  a: { to: Doc<'profiles'>; task: Doc<'issues'>; minute: number; kind?: MessageKind },
+  a: {
+    to: Doc<'profiles'>
+    task: Doc<'issues'>
+    minute: number
+    kind?: MessageKind
+    body?: string
+  },
 ): Promise<Doc<'messages'> | null> {
   return await t.run(async (ctx) => {
     const posted = await postMessage(ctx, {
@@ -75,7 +87,7 @@ export async function post(
       recipient_id: a.to.id,
       issue_id: a.task.id,
       kind: a.kind ?? 'change',
-      body: `Update ${a.minute}`,
+      body: a.body ?? `Update ${a.minute}`,
       actor_id: f.admin.id,
       now: at(a.minute),
     })
@@ -89,3 +101,119 @@ export async function post(
     return rows.reduce((newest, r) => (r._creationTime > newest._creationTime ? r : newest))
   })
 }
+
+/** Gives `who` a grant on project `projectId` and answers a function that
+ * takes it away again. */
+export async function grant(t: T, who: Doc<'profiles'>, projectId: string) {
+  const _id = await t.run((ctx) =>
+    ctx.db.insert('project_access', { project_id: projectId, profile_id: who.id, level: 'user' }),
+  )
+  return () => t.run((ctx) => ctx.db.delete(_id))
+}
+
+let planted = 50_000
+
+/** `n` new tasks in project `projectId` with fields `task`, each with one
+ * message to `to` from the fixture's admin, `chunk` tasks a transaction.
+ * Answers the tasks in the order planted. */
+export async function plantItems(
+  t: T,
+  f: Pick<OrgFixture, 'org' | 'admin'>,
+  to: Doc<'profiles'>,
+  n: number,
+  projectId: string,
+  task: Partial<Doc<'issues'>> = {},
+  chunk = 50,
+): Promise<Doc<'issues'>[]> {
+  const out: Doc<'issues'>[] = []
+  for (let from = 0; from < n; from += chunk) {
+    const made = await t.run(async (ctx) => {
+      const rows: Doc<'issues'>[] = []
+      for (let i = from; i < Math.min(n, from + chunk); i++) {
+        // with its description row and the used_ids row of its id, as every
+        // writer stores a task
+        const _id = await insertTask(
+          ctx.db,
+          {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: projectId,
+            num: planted++,
+            title: `Item ${i}`,
+            description: '',
+            status: 'todo',
+            priority: 'medium',
+            paused: false,
+            created_at: NOW,
+            updated_at: NOW,
+            window_key: newWindowKey(),
+            ...task,
+          },
+          'restore',
+        )
+        const issue = (await ctx.db.get(_id)) as Doc<'issues'>
+        await postMessage(ctx, {
+          org_id: f.org.id,
+          recipient_id: to.id,
+          issue_id: issue.id,
+          kind: 'change',
+          body: `Update ${i}`,
+          actor_id: f.admin.id,
+          now: at(i),
+        })
+        rows.push(issue)
+      }
+      return rows
+    })
+    out.push(...made)
+  }
+  return out
+}
+
+/** Stores `n` messages of `kind` for `to` about `task` raw, as releases
+ * before the item cap and the items stored them, so `to` has no build
+ * state. Each is about 1 KB, a long change line. */
+export async function plantLegacy(
+  t: T,
+  f: OrgFixture,
+  to: Doc<'profiles'>,
+  task: Doc<'issues'>,
+  n: number,
+  kind: (i: number) => 'change' | 'comment',
+) {
+  for (let from = 0; from < n; from += 500)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + 500); i++)
+        await ctx.db.insert('messages', {
+          id: uuid(),
+          org_id: f.org.id,
+          recipient_id: to.id,
+          issue_id: task.id,
+          issue_title: task.title,
+          kind: kind(i),
+          detail: `Legacy update ${i}: ${'a long change line '.repeat(50)}`,
+          created_at: at(i),
+        })
+    })
+}
+
+/** Archives the tasks without the archive's read steps, as a task archived
+ * before its step ran is, so their messages stay unread. */
+export const archiveRaw = (t: T, tasks: readonly Doc<'issues'>[]) =>
+  t.run(async (ctx) => {
+    for (const task of tasks) await ctx.db.patch(task._id, { archived_at: NOW })
+  })
+
+/** `read` run in one transaction, with what the transaction read in all,
+ * as Convex counts it. */
+export const measure = <A>(t: T, read: (ctx: QueryCtx) => Promise<A>) =>
+  t.run(async (ctx) => {
+    const answer = await read(ctx)
+    const m = await ctx.meta.getTransactionMetrics()
+    return {
+      answer,
+      ranges: m.databaseQueries.used,
+      documents: m.documentsRead.used,
+      bytes: m.bytesRead.used,
+    }
+  })
