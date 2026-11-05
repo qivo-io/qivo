@@ -16,9 +16,9 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    stays the same window when the task arrives, or the home organization
    changes. The pane edits, moves and takes images for a task it shows
    from its answer, names an archived one by its key, and offers Open
-   task in board only for a task the workspace holds. Back or Forward to such a task (App pendingTask) shows
-   the pane that says it loads, on a phone too, and Escape closes a
-   pop-out, then the pane. A related task the workspace does not hold,
+   task in board only for a task the workspace holds. Back or Forward to
+   such a task (App pendingTask) shows the pane that says it loads, on a
+   phone too, and Escape closes a pop-out, then the pane. A related task the workspace does not hold,
    opened from the pop-out, keeps both windows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))

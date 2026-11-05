@@ -2012,12 +2012,7 @@ function IssueDetail({
   // the task as this render shows it, with its key and title from the
   // window's own answer once that names them, as for an archived task an
   // Inbox row opened by its uuid alone, whose reference names no number
-  const shownNow = windowTaskOf(
-    issueId,
-    held,
-    named?.uuid ? named : undefined,
-    shownTask.current,
-  )
+  const shownNow = windowTaskOf(issueId, held, named?.uuid ? named : undefined, shownTask.current)
   // whether the window's read of the task has said nothing yet, or runs
   // again after a failure
   const unanswered = !detail || detail.state === 'loading' || detail.state === 'retrying'

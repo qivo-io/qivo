@@ -1143,7 +1143,7 @@ describe('Team sync addresses', () => {
     expect(sameTask(parsePath(named)?.issue, acme5)).toBe(true)
   })
 
-  it("names a task of another organization that left while its organization stays by its uuid, never its number under the home slug", () => {
+  it('names a task of another organization that left while its organization stays by its uuid, never its number under the home slug', () => {
     const sync = { scope: 'all', step: 'team' }
     const open = 'uuid-acme-5'
     expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')

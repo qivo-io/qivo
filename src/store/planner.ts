@@ -10362,7 +10362,10 @@ export const PLANNER = {
   retryTask: () => {
     const read = refRead
     const walked = !!read && refWalkEnded(read)
-    if (read && (walked || (read.state === 'failed' && read.args && sectionFailure.task === 'none'))) {
+    if (
+      read &&
+      (walked || (read.state === 'failed' && read.args && sectionFailure.task === 'none'))
+    ) {
       if (walked) read.tried.clear()
       read.rechecking = false
       read.state = 'retrying'
