@@ -33,9 +33,11 @@
  * Within each project the batch reads its active tasks by creation (issues
  * by_project_archived), one project after another, so a batch ends at one
  * position. That is a project's place in the order above with the creation
- * time and ids of the last tasks the batch looked at. The cursor seals the
- * position with the reader, the opened task, the picker and the search
- * (lib/archiveCursorSeal.ts), so it opens for nothing else. A place names
+ * time and ids of the last tasks the batch looked at, and what those tasks
+ * weighed, since a read that goes on from that time reads them again (see
+ * scanScope). The cursor seals the position with the reader, the opened
+ * task, the picker and the search (lib/archiveCursorSeal.ts), so it opens
+ * for nothing else. A place names
  * another sub-project or another top-level project by fields that never
  * change, so a project that leaves the scope between batches costs no row,
  * and no row comes twice while the data stays the same. The places of the
@@ -173,13 +175,14 @@ import { taskFields } from './workspaceParts'
  * batch after it looked at that many tasks. `reads` is a batch's own
  * budget, which the reader counts from the batch's start (see the header).
  * It counts the scope's task rows at their size, each step keeping room for
- * its rows at lib/viewReads.ts ROW_BYTES, and every read that can touch
- * rows the reader may not see at its worst case. `whole` caps what the
- * request reads in all, the reads before the batch included, below Convex's
- * 16 MiB, 4,096 ranges and 32,000 documents, with room for what one access
- * question can read past its last look (lib/access.ts OWN_READS). A request
- * that cannot hold `reads` after the reads before the batch answers
- * `over_budget`.
+ * the rows it has not read before at lib/viewReads.ts ROW_BYTES and for the
+ * rows it reads again at what they weighed when read, and every read that
+ * can touch rows the reader may not see at its worst case. `whole` caps
+ * what the request reads in all, the reads before the batch included,
+ * below Convex's 16 MiB, 4,096 ranges and 32,000 documents, with room for
+ * what one access question can read past its last look (lib/access.ts
+ * OWN_READS). A request that cannot hold `reads` after the reads before
+ * the batch answers `over_budget`.
  *
  * Measured on 5 November 2026 in convex/tests/relationPickerScale.test.ts
  * under convex-test's transaction limits, at the design size with ordinary
@@ -440,8 +443,10 @@ const OTHERS: Place = [3]
 
 /** Where a batch stands, just after the tasks of the project at `place`
  * created at `time` with these `ids` and every one created before them, or
- * at the start of that place's project when `time` is null. */
-type Position = { place: Place; time: number | null; ids: string[] }
+ * at the start of that place's project when `time` is null. `bytes` is what
+ * the tasks of `ids` weighed when a batch last read them, which a read that
+ * goes on from `time` reads again. */
+type Position = { place: Place; time: number | null; ids: string[]; bytes: number }
 
 /** What a cursor carries, where the next batch starts, whether the
  * first batch answered a typed task ID's task as its `exact` row, which
@@ -453,13 +458,16 @@ type Cursor = { at: Position; typedTaken: boolean; home: { project: string; top:
 
 /* The version a cursor carries outside and inside its sealed text. Every
  * sealed cursor shares one key (lib/archiveCursorSeal.ts), so the version
- * inside keeps a body sealed for another list from opening here. */
-const CURSOR_PREFIX = 'rp2~'
-const CURSOR_VERSION = 'relation-picker-2'
+ * inside keeps a body sealed for another list from opening here. Version 3
+ * added the position's bytes, so a cursor of version 2 is refused. */
+const CURSOR_PREFIX = 'rp3~'
+const CURSOR_VERSION = 'relation-picker-3'
 
-/* The longest cursor text that may open, far above what a position and a
- * 200-character search write, so only junk is refused unopened. */
-const CURSOR_MAX = 64 << 10
+/* The longest cursor text that may open. A 200-character search and a
+ * position whose ids name 1,000 tasks created at one time, the active tasks
+ * of a project at the design size, seal to about 80 KiB, so only junk is
+ * refused unopened. */
+const CURSOR_MAX = 128 << 10
 
 /** The refusal of a cursor that is not the `next` or `all_projects` of an
  * earlier batch of the same picker, task and search for the same person,
@@ -481,6 +489,7 @@ const cursorOf = async (key: string, c: Cursor): Promise<string> =>
       c.at.place,
       c.at.time,
       c.at.ids,
+      c.at.bytes,
       c.typedTaken,
       c.home.project,
       c.home.top,
@@ -500,8 +509,8 @@ async function cursorFrom(text: string, key: string): Promise<Cursor> {
   } catch {
     throw refuse()
   }
-  if (!Array.isArray(body) || body.length !== 8) throw refuse()
-  const [version, from, place, time, ids, typedTaken, project, top] = body as unknown[]
+  if (!Array.isArray(body) || body.length !== 9) throw refuse()
+  const [version, from, place, time, ids, bytes, typedTaken, project, top] = body as unknown[]
   if (version !== CURSOR_VERSION || from !== key) throw refuse()
   const field = (x: unknown) =>
     typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))
@@ -511,10 +520,12 @@ async function cursorFrom(text: string, key: string): Promise<Cursor> {
   const at = typeof time === 'number' && Number.isFinite(time) ? time : null
   if (time !== null && at === null) throw refuse()
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw refuse()
+  const weighed = typeof bytes === 'number' && Number.isFinite(bytes) && bytes >= 0 ? bytes : null
+  if (weighed === null) throw refuse()
   if (typedTaken !== true && typedTaken !== false) throw refuse()
   if (typeof project !== 'string' || typeof top !== 'string') throw refuse()
   return {
-    at: { place: place as Place, time: at, ids: ids as string[] },
+    at: { place: place as Place, time: at, ids: ids as string[], bytes: weighed },
     typedTaken,
     home: { project, top },
   }
@@ -990,7 +1001,7 @@ async function batchOf(
   measured?.(count.used)
   const next = scan.end ? null : await cursorOf(key, { at: scan.at, typedTaken, home: stands })
   const familyEnd = kind === 'link' && !others && next === null
-  const allAt: Position = { place: OTHERS, time: null, ids: [] }
+  const allAt: Position = { place: OTHERS, time: null, ids: [], bytes: 0 }
   return {
     state: 'ok',
     rows,
@@ -1019,7 +1030,19 @@ async function batchOf(
  * of the projects after it, which the count still holds. A range goes on
  * from the creation time of the last task looked at and reads the tasks at
  * that instant again, skipped by id, since Convex does not make creation
- * times unique.
+ * times unique, as one transaction's inserts can share one.
+ *
+ * The tasks read again keep room at what they weighed when a batch last
+ * read them (Position bytes), as the reader is shown them, and only the
+ * tasks never read keep room at ROW. So a group of tasks created at one
+ * time goes past any cursor within the budgets, more than RELATION_PICKER
+ * reads holds at ROW each included, and a step that reads a group again
+ * asks for at least as many new tasks as it reads again, so a group takes
+ * few steps. Only a group that weighs more than a batch's budget with room
+ * for one more task, which only text far past ordinary sizes reaches,
+ * stops every batch at it. A task of the group that left the range since
+ * lets one more new task into that range, and one that grew since counts
+ * at its size once read, as every read of the scope does.
  */
 async function scanScope(
   ctx: QueryCtx,
@@ -1033,7 +1056,7 @@ async function scanScope(
   const queue = from === null ? scope : scope.filter((p) => comparePlaces(p.place, from.place) >= 0)
   // where the batch stands, after the tasks of `at`'s project at its
   // instant, or at the start of its project
-  let at: Position = from ?? { place: queue[0]?.place ?? [0], time: null, ids: [] }
+  let at: Position = from ?? { place: queue[0]?.place ?? [0], time: null, ids: [], bytes: 0 }
   const rows: RelationCandidate[] = []
   if (want <= 0) return { rows, at, end: false, stopped: false }
   let looked = 0
@@ -1044,26 +1067,28 @@ async function scanScope(
     // the first project goes on from `at` when `at` is inside it
     const resume = comparePlaces(first.place, at.place) === 0 && at.time !== null ? at : null
     const again = resume?.ids.length ?? 0
+    // the tasks the first project reads again, at what they weighed, which
+    // the reader is shown (see the docstring)
+    const reread: Reads = { bytes: resume?.bytes ?? 0, documents: again, ranges: 0 }
     const left = RELATION_PICKER.scan - looked
     if (left <= 0) return { rows, at, end: false, stopped: true }
     // as many projects as the count holds STEP.share rows each for, and at
     // least a row each, beside their ranges and the rows the first reads
     // again
-    const share = Math.floor(
-      Math.max(0, count.room(ROW, plus(RANGE, times(ROW, again)))) / STEP.share,
-    )
+    const share = Math.floor(Math.max(0, count.room(ROW, plus(RANGE, reread))) / STEP.share)
     let k = Math.max(1, Math.min(width, queue.length - pi, share))
+    // a step that reads a group again asks for at least as many new tasks
+    const most = Math.max(STEP.rows, again)
     let per = 0
     for (; k > 0; k = k > 1 ? 1 : 0) {
-      const n = count.room(ROW, plus(times(RANGE, k), times(ROW, again)))
-      per = Math.min(STEP.rows, left, Math.floor(Math.max(0, n) / k))
+      const n = count.room(ROW, plus(times(RANGE, k), reread))
+      per = Math.min(most, left, Math.floor(Math.max(0, n) / k))
       if (per >= 1) break
     }
     if (k === 0) return { rows, at, end: false, stopped: true }
     const step = queue.slice(pi, pi + k)
     const asks = step.map((_, i) => per + (i === 0 ? again : 0))
-    const asked = asks.reduce((n, m) => n + m, 0)
-    await guard.take(plus(times(RANGE, k), times(ROW, asked)))
+    await guard.take(plus(plus(times(RANGE, k), times(ROW, per * k)), reread))
     const got = await Promise.all(
       step.map((p, i) =>
         projectTasks(ctx, p.project.id, i === 0 && resume !== null ? resume.time : null).take(
@@ -1076,14 +1101,23 @@ async function scanScope(
         tasks,
         tasks.reduce((n, t) => n + sizeOf(t), 0),
       )
-    guard.giveBack(ROW, asked - got.reduce((n, tasks) => n + tasks.length, 0))
+    // the tasks of the first project the step read again, by id at the
+    // instant `at` names
+    const named = new Set(resume?.ids)
+    const repeated = (task: Doc<'issues'>) =>
+      resume !== null && task._creationTime === resume.time && named.has(task.id)
+    const readAgain = (got[0] ?? []).filter(repeated)
+    // the room of the new tasks the ranges did not hold; the room of the
+    // tasks read again stays taken
+    const fresh = got.reduce((n, tasks) => n + tasks.length, 0) - readAgain.length
+    guard.giveBack(ROW, Math.max(0, per * k - fresh))
+    // what the tasks read again weigh now, for the next step and cursor
+    if (resume !== null) at = { ...at, bytes: readAgain.reduce((n, t) => n + sizeOf(t), 0) }
     let ended = true
     for (const [i, p] of step.entries()) {
       const tasks = got[i] as Doc<'issues'>[]
-      const skip = i === 0 && resume !== null ? resume : null
       for (const [j, task] of tasks.entries()) {
-        if (skip !== null && task._creationTime === skip.time && skip.ids.includes(task.id))
-          continue
+        if (i === 0 && repeated(task)) continue
         if (looked >= RELATION_PICKER.scan) return { rows, at, end: false, stopped: true }
         const verdict = await decide(task, p)
         if (verdict === 'stop') return { rows, at, end: false, stopped: true }
@@ -1109,7 +1143,7 @@ async function scanScope(
       // every task of this project is looked at, so the batch stands at
       // the start of the next
       const following = queue[pi + i + 1]
-      if (following !== undefined) at = { place: following.place, time: null, ids: [] }
+      if (following !== undefined) at = { place: following.place, time: null, ids: [], bytes: 0 }
     }
     if (ended) pi += step.length
     width = ended ? Math.min(STEP.projects, width * 2) : 1
@@ -1122,10 +1156,13 @@ const sizeOf = (task: Doc<'issues'>): number =>
   getDocumentSize(task as Parameters<typeof getDocumentSize>[0])
 
 /* The position just after `task`, the next task looked at in the project
- * at `place`, from position `p`. */
+ * at `place`, from position `p`, with what the tasks it names weigh. */
 function after(p: Position, place: Place, task: Doc<'issues'>): Position {
   const same = comparePlaces(p.place, place) === 0 && p.time === task._creationTime
-  return { place, time: task._creationTime, ids: same ? [...p.ids, task.id] : [task.id] }
+  const size = sizeOf(task)
+  return same
+    ? { place, time: task._creationTime, ids: [...p.ids, task.id], bytes: p.bytes + size }
+    : { place, time: task._creationTime, ids: [task.id], bytes: size }
 }
 
 /**

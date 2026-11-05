@@ -6,10 +6,12 @@
  * order and its continuation, the budgets, and what hidden data may not
  * move. The reads at the design size are in relationPickerScale.test.ts. */
 
+import { getDocumentSize } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS, projectLevel } from '../lib/access'
+import { sealCursorText } from '../lib/archiveCursorSeal'
 import { byId } from '../lib/db'
 import { type AccessLevel, LEVEL_RANK } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
@@ -20,7 +22,7 @@ import {
   type RelationKind,
 } from '../lib/relationPicker'
 import { issueKey } from '../lib/taskRefs'
-import { PROJECT_ASK, PROJECT_READ } from '../lib/viewReads'
+import { PROJECT_ASK, PROJECT_READ, ROW_BYTES } from '../lib/viewReads'
 import { NO_WRITE_ACCESS } from '../model/issues'
 import { SHAPES } from './accessShapes.setup'
 import { plantTasks } from './board.setup'
@@ -35,6 +37,7 @@ import {
   plantLogin,
   plantProject,
   plantSeat,
+  shareCreationTime,
   type T,
   uuid,
   withOrg,
@@ -173,8 +176,19 @@ describe('arguments', () => {
           cursor: `${cursor.slice(0, -1)}${cursor.endsWith('0') ? '1' : '0'}`,
         }),
       ],
-      ['junk', pick(t, f.user, open.id, 'link', { search: 'board', cursor: 'rp2~zz' })],
+      ['junk', pick(t, f.user, open.id, 'link', { search: 'board', cursor: 'rp3~zz' })],
       ['no prefix', pick(t, f.user, open.id, 'link', { search: 'board', cursor: cursor.slice(4) })],
+      // a cursor version 2 wrote for this picker, task, search and person,
+      // without the bytes of its position
+      [
+        'an older version',
+        (async () => {
+          const key = JSON.stringify([f.org.id, f.user.id, open.id, 'link', 'board'])
+          const body = ['relation-picker-2', key, [1], null, [], false, f.sub.id, f.meta.id]
+          const old = `rp2~${await sealCursorText(JSON.stringify(body))}`
+          return await pick(t, f.user, open.id, 'link', { search: 'board', cursor: old })
+        })(),
+      ],
     ]
     for (const [why, call] of refused)
       await expectRefusal(call, 'bad_request', new RegExp(RELATION_CURSOR_REFUSAL)).catch((e) => {
@@ -928,6 +942,80 @@ describe('order and continuation', () => {
       })
     // the list read again from its start reaches every task, PCB's first
     expect(await allIds(t, f.user, open.id, 'link')).toEqual([...inPcb, ...inFw].map((x) => x.id))
+  })
+})
+
+describe('tasks created at one time', () => {
+  /** Every batch of `who`'s Linked tasks picker for `issueId` from its
+   * first, at most `most` of them, as a person presses Load more. */
+  const presses = async (
+    t: T,
+    who: Doc<'profiles'>,
+    issueId: string,
+    search: string,
+    most: number,
+  ): Promise<{ batch: Batch; cursor?: string }[]> => {
+    const out: { batch: Batch; cursor?: string }[] = []
+    let cursor: string | undefined
+    for (let n = 0; n < most; n++) {
+      const batch = okOf(await pick(t, who, issueId, 'link', { search, cursor }))
+      out.push({ batch, cursor })
+      if (batch.next === null) break
+      cursor = batch.next
+    }
+    return out
+  }
+
+  it('goes past more of them than a batch holds room for at ROW_BYTES each, every one once, and to the tasks after them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    // one transaction's inserts, at one creation time, far more than the
+    // 128 tasks a batch's 8 MiB holds at ROW_BYTES each, then a later task
+    const group = await plantTasks(t, f.sub, 300, () => ({}), 300)
+    const needle = await task(t, f, f.sub, { title: 'Needle' })
+    shareCreationTime(
+      group.map((x) => x._id),
+      group[0]?._creationTime as number,
+    )
+    expect(RELATION_PICKER.reads.bytes / ROW_BYTES).toBeLessThan(group.length)
+    // a rare word reads them and the task after them in a few batches
+    const rare = await presses(t, f.user, open.id, 'needle', 6)
+    expect(idsOf(rare.map((p) => p.batch))).toEqual([needle.id])
+    expect(rare.at(-1)?.batch).toMatchObject({ next: null, stopped: false })
+    // every one of them once, 25 a batch, in their order, then the needle
+    const all = await presses(t, f.user, open.id, '', 20)
+    expect(all.at(-1)?.batch.next).toBeNull()
+    expect(idsOf(all.map((p) => p.batch))).toEqual([...group, needle].map((x) => x.id))
+  })
+
+  it('stops at them, never as an ended list, once they weigh more than a lowered batch budget holds beside one more task', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    const group = await plantTasks(t, f.sub, 60, () => ({}), 60)
+    const needle = await task(t, f, f.sub, { title: 'Needle' })
+    shareCreationTime(
+      group.map((x) => x._id),
+      group[0]?._creationTime as number,
+    )
+    // room for one task at ROW_BYTES beside 20 of the group, as they weigh
+    const weight = group.reduce((n, x) => n + getDocumentSize(x), 0) / group.length
+    RELATION_PICKER.reads.bytes = ROW_BYTES + Math.ceil(20 * weight)
+    const list = await presses(t, f.user, open.id, 'needle', 40)
+    // no batch ends the list or offers the needle, and the last batches
+    // stand still with the cursor they were given
+    expect(list.every((p) => p.batch.next !== null && p.batch.rows.length === 0)).toBe(true)
+    expect(list).toHaveLength(40)
+    const [before, last] = list.slice(-2)
+    expect(last?.batch).toMatchObject({ rows: [], stopped: true, next: last?.cursor })
+    expect(before?.batch.next).toBe(before?.cursor)
+    // with the default budget the same cursor goes on to the needle
+    Object.assign(RELATION_PICKER, structuredClone(DEFAULT_PICKER))
+    const on = okOf(
+      await pick(t, f.user, open.id, 'link', { search: 'needle', cursor: last?.cursor }),
+    )
+    expect(on.rows.map((r) => r.id)).toEqual([needle.id])
   })
 })
 

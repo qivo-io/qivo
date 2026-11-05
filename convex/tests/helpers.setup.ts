@@ -200,6 +200,52 @@ export function chargeFilteredReads(): void {
   })
 }
 
+/* ------------------------------------------------- shared creation times
+ * The backend can give the documents one transaction inserts one creation
+ * time, as the readers that skip the rows they read at a time by id
+ * expect (lib/viewReads.ts inSteps, lib/relationPicker.ts scanScope).
+ * convex-test 0.0.58 gives each insert a later time than the last. */
+
+/**
+ * Makes every read report creation time `at` for the documents with these
+ * `_id`s, until the current test finishes, as if one transaction inserted
+ * them at one time. convex-test still orders them and decides index
+ * ranges by its own times, so `at` must be the own time of the first of
+ * them, and no other document of their ranges may come between them, as
+ * for documents planted in one t.run. It covers streamed reads (collect,
+ * take, first, unique, iteration), not db.get or paginate.
+ */
+export function shareCreationTime(ids: readonly string[], at: number): void {
+  const global = globalThis as unknown as { Convex: Syscalls | undefined }
+  const real = global.Convex
+  // convex-test installs the syscalls with its first instance
+  if (real === undefined) throw new Error('call shareCreationTime after newT')
+  const tied = new Set<Json>(ids)
+  global.Convex = {
+    get syscall() {
+      return real.syscall
+    },
+    get asyncSyscall() {
+      const call = real.asyncSyscall
+      return async (op: string, json: string) => {
+        const out = await call(op, json)
+        if (op !== '1.0/queryStreamNext') return out
+        const read = JSON.parse(out) as { value: Json; done: boolean }
+        const doc = read.value
+        if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || !tied.has(doc._id))
+          return out
+        return JSON.stringify({ ...read, value: { ...doc, _creationTime: at } })
+      }
+    },
+    get jsSyscall() {
+      return real.jsSyscall
+    },
+  }
+  onTestFinished(() => {
+    global.Convex = real
+  })
+}
+
 /** A filter expression's value for document `doc`, both in Convex's JSON
  * encoding; undefined stands for a missing field. */
 function evaluate(expr: Json, doc: Json): Json | undefined {
