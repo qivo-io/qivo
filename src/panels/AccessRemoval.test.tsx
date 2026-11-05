@@ -694,6 +694,19 @@ describe('the Reassign picker', () => {
     expect(pickerNames()).toEqual(['Unassigned', 'Ada Berg'])
   })
 
+  it('says why a Load more lists nobody, rather than a failure that Try again repeats', async () => {
+    choices = async (args) =>
+      args.after === undefined
+        ? batch(['Ada Berg'], 'one')
+        : { state: 'refused', message: 'no write access to this project' }
+    await open()
+    await click(pickerButton())
+    await click(find('[data-reassign-more]'))
+    expect(find('[data-reassign-held]').textContent).toBe('No write access to this project.')
+    expect(pickerText()).not.toContain("Couldn't load people.")
+    expect(pickerNames()).toEqual(['Unassigned', 'Ada Berg'])
+  })
+
   it('asks for a search past 500 people', async () => {
     let n = 0
     choices = async () =>

@@ -1369,7 +1369,8 @@ function ReassignPicker({
    Load more. It reads its batches on demand through the shared paged list
    (lib/pagedList.ts), never live, and drops them when it closes. A batch
    the read budget stopped, that failed or that holds no row never reads as
-   the end of the list. */
+   the end of the list, and one the server answered without rows, the
+   first or a Load more, says why. */
 function ReassignChoiceList({
   change,
   to,
@@ -1389,8 +1390,9 @@ function ReassignChoiceList({
     most: TAKERS_MOST,
   })
   const end = listEnd(list, query !== '')
-  // the answer of a first read that holds no rows says why
-  const held = list.answers[0]
+  // the answer of a read that holds no rows says why: the first read's, or
+  // a Load more's, after which Try again would only ask the same
+  const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
   const heldLine =
     held === undefined
       ? "People can't be listed yet."
@@ -1441,8 +1443,8 @@ function ReassignChoiceList({
           <p role="status" className="px-2 py-1 text-sm text-text-2">
             Loading people…
           </p>
-        ) : end === 'held' ? (
-          <p data-reassign-held="" className="px-2 py-1 text-sm text-text-2">
+        ) : end === 'held' || (end === 'failed' && list.failure !== null) ? (
+          <p role="status" data-reassign-held="" className="px-2 py-1 text-sm text-text-2">
             {heldLine}
           </p>
         ) : end === 'failed' ? (
