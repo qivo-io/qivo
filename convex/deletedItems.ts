@@ -2,7 +2,8 @@
  * background work. model/deletedItems.ts holds the rules: how deleting
  * moves a task or a project into the trash, who sees and restores what, the
  * step machine, restoring and purging. model/deletedItemsList.ts projects
- * the rows, and model/deletedItemsPage.ts reads the page.
+ * the rows, model/deletedItemsPage.ts reads the page, and
+ * model/deletedItemsChoices.ts what the page shows beside its entries.
  *
  * page answers the Settings page one page of 25 entries at a time, project
  * entries first, with its filters and search applied on the server; no app
@@ -10,11 +11,19 @@
  * until it moves to page. All four read every active seat of the login
  * (authedQuery), as Archived projects does, and show each item only as the
  * seat in its own organization may see it (model/deletedItems.ts viewOf);
- * page reads one organization's seat when its scope names one. restore and
- * purge act in one organization and load each id through myItem, the same
- * rule: an unknown id, another organization's item and one hidden from the
- * caller all answer not_found, before any state or permission reason. They
- * answer per item and never throw for one item's problem.
+ * page reads one organization's seat when its scope names one. An
+ * organization admin keeps every item that is not purging and reads its
+ * tasks as their role reads them, every task until the admin access split
+ * and after it only the tasks their ordinary access reaches, with a hidden
+ * row for a task item whose root they cannot read. roles answers each
+ * seat's role, people the people of one organization a batch at a time for
+ * Deleted by and the assignee filter, and purgeSummary what Delete now
+ * deletes with a project item, so the page needs no roster or loaded list
+ * beside its entries. No app calls them yet either. restore and purge act
+ * in one organization and load each id through myItem, the same rule: an
+ * unknown id, another organization's item and one hidden from the caller
+ * all answer not_found, before any state or permission reason. They answer
+ * per item and never throw for one item's problem.
  *
  * step runs one bounded step of an item's job, whatever its phase (moving,
  * restoring or purging), and schedules the next. recover (every minute,
@@ -52,6 +61,14 @@ import {
   restoreItems,
   runStep,
 } from './model/deletedItems'
+import {
+  type DeletedPeople,
+  type DeletedRole,
+  type PurgeSummary,
+  peopleBatch,
+  purgeSummaryOf,
+  rolesFor,
+} from './model/deletedItemsChoices'
 import { listFor, matchesFor, rowFor } from './model/deletedItemsList'
 import { type DeletedPage, pageFor } from './model/deletedItemsPage'
 
@@ -78,10 +95,13 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
  * scope names one organization and some of its projects (1 to 50 ids, a
  * top-level project standing for its sub-projects) or all of them, and
  * lists that scope's project entries and then its task entries. `kind`,
- * `deleted_by` (a profile id) with `via` ('app', a credential table or
- * `table:id`), `search` (every word matches, the last also as a prefix,
- * accents exact; a task reference finds its task) and `assignee` (a
- * profile id, needs a scope) apply before the page is cut. Pass
+ * `deleted_by` (a profile id) with `via` ('app', a credential table, which
+ * matches every delete through that kind of credential, or `table:id`,
+ * which matches only where the caller may know the credential),
+ * `someone` (the deletes of people no longer in the organization, without
+ * `deleted_by` or `via`), `search` (every word matches, the last also as a
+ * prefix, accents exact; a task reference finds its task) and `assignee`
+ * (a profile id, needs a scope) apply before the page is cut. Pass
  * `next_cursor` back as `cursor` with the same arguments until it is null;
  * a page may hold fewer entries, even none, while it is not. `too_wide`
  * asks a caller who is no organization admin for a narrower scope,
@@ -101,11 +121,53 @@ export const page = authedQuery({
     search: v.optional(v.string()),
     deleted_by: v.optional(v.string()),
     via: v.optional(v.string()),
+    someone: v.optional(v.literal(true)),
     assignee: v.optional(v.string()),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
   },
   handler: async (ctx, a): Promise<DeletedPage> => await pageFor(ctx, ctx.myProfiles, a),
+})
+
+/* ------------------------------------------------------------------ roles
+ * Each active seat of the login with its organization, its role in
+ * Deleted items and whether Delete now applies there
+ * (model/deletedItemsChoices.ts rolesFor). `admin` sees every delete,
+ * `lead` its own and those in projects it leads, live, archived or in
+ * Deleted items, and `user` its own. Seats come in no particular order; the
+ * client orders them and words the subtitle. */
+export const roles = authedQuery({
+  args: {},
+  handler: async (ctx): Promise<DeletedRole[]> => await rolesFor(ctx, ctx.myProfiles.values()),
+})
+
+/* ----------------------------------------------------------------- people
+ * One batch of at most 25 of an organization's people and agents in name
+ * order, for the Deleted by choices and the assignee filter
+ * (model/deletedItemsChoices.ts peopleBatch), for any active seat of the
+ * login there. `search` keeps those whose name holds every word of it,
+ * ignoring case and accents, and `cursor` is an earlier batch's `next` for
+ * the same organization and search. An organization without the caller's
+ * seat answers an empty last batch; `not_ready` waits for the name keys,
+ * and `stopped` says the read budget ended the batch early. Refuses a
+ * search longer than LIMITS.search and a cursor of another organization or
+ * search. */
+export const people = authedQuery({
+  args: { org_id: v.string(), search: v.optional(v.string()), cursor: v.optional(v.string()) },
+  handler: async (ctx, a): Promise<DeletedPeople> => await peopleBatch(ctx, ctx.myProfiles, a),
+})
+
+/* ----------------------------------------------------------- purgeSummary
+ * How many items Delete now deletes with one item, for an organization
+ * admin's seat of the login (model/deletedItemsChoices.ts purgeSummaryOf),
+ * counted through the ranges its purge reads, exactly or, past a read
+ * bound, at least (`exact: false`). A task item deletes nothing with it.
+ * Null for an unknown, another organization's, purging, moving or restoring
+ * item and for any seat but an admin's alike. */
+export const purgeSummary = authedQuery({
+  args: { id: v.string() },
+  handler: async (ctx, { id }): Promise<PurgeSummary | null> =>
+    await purgeSummaryOf(ctx, ctx.myProfiles, id),
 })
 
 /* ------------------------------------------------------------------- list
@@ -137,7 +199,8 @@ export const item = authedQuery({
  * when more may match. Each comes back with its item, whose kind
  * `item_kind` names, so a capped list still finds older items, and a
  * subtask of a task item with its root's key and title unless the match is
- * redacted. */
+ * redacted, and with the key alone where the item is hidden from an admin
+ * after the admin access split. */
 export const matches = authedQuery({
   args: { text: v.string() },
   handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),

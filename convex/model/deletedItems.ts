@@ -49,10 +49,16 @@
  *
  * Who sees and restores what (design 5.3, 6.1). viewOf decides what one
  * seat sees of an item, restoreBlock why that seat cannot restore it, and
- * myItem fences every public load with viewOf. A task item is judged over
- * the live projects it goes back to, a project item over its stored rows
- * (storedLevels), each with the seat in the item's organization. A Memo
- * keeps the reads they repeat; a list read seeds one per seat (sightOf).
+ * myItem fences every public load with seesItem, viewOf's answer without
+ * a level read for an organization admin. A task item is judged over the
+ * live projects it goes back to, a project item over its stored rows
+ * (storedLevels), each with the seat in the item's organization. An
+ * organization admin keeps every item that is not purging, with its
+ * metadata and Delete now, and reads its tasks as their role reads them
+ * (roleReadsEveryTask), every task until the admin access split and after
+ * it only those their ordinary access reaches, so no title, hit or count
+ * comes from a project they cannot read. A Memo keeps the reads they
+ * repeat; a list read seeds one per seat (sightOf).
  *
  * The step machine. Each step spends one budget, TRASH_BUDGET scaled by the
  * job's budget_scale: rows moved, their bytes, task rows moved and index
@@ -1382,22 +1388,38 @@ const PURGEABLE = ['ready', 'stuck'] as const
 
 /* Purging a project item also purges what could never come back without
  * it: the task items whose project was in it, and the sub-project items
- * whose parent was. Items still moving or restoring are left to their own
- * expiry. Each read asks an index for one kind in one purgeable state
- * (by_org_project_kind_state, by_org_parent_kind_state), so it reads only
- * items it purges, however many items in other states name the project,
- * and the step's budget counts every item it reads. */
+ * whose parent was (dependentRanges). Items still moving or restoring are
+ * left to their own expiry. Each read asks an index for one kind in one
+ * purgeable state, so it reads only items it purges, however many items in
+ * other states name the project, and the step's budget counts every item
+ * it reads. */
 async function purgeDependents(run: Run): Promise<boolean> {
-  const { org_id } = run.item
-  for (const id of itemProjectIds(run.item))
-    for (const state of PURGEABLE) {
-      const reads = [
-        run.ctx.db
+  for (const read of dependentRanges(run.ctx, run.item))
+    if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent))))
+      return false
+  return true
+}
+
+/** The ranges that hold what a purge of project item `item` purges with
+ * it now, in the order purgeDependents drains them. For each of its
+ * projects and each purgeable state they hold the task items whose project
+ * it is (by_org_project_kind_state) and then the sub-project items whose
+ * parent it is (by_org_parent_kind_state). A sub-project item found there
+ * purges its own in turn, in its own purge. Delete now's summary counts
+ * through the same ranges (model/deletedItemsChoices.ts), so the two never
+ * disagree. A range reads only once it is iterated. */
+export function dependentRanges(ctx: QueryCtx, item: Item): AsyncIterable<Item>[] {
+  const { org_id } = item
+  const ranges: AsyncIterable<Item>[] = []
+  for (const id of itemProjectIds(item))
+    for (const state of PURGEABLE)
+      ranges.push(
+        ctx.db
           .query('deleted_items')
           .withIndex('by_org_project_kind_state', (q) =>
             q.eq('org_id', org_id).eq('project_id', id).eq('kind', 'task').eq('state', state),
           ),
-        run.ctx.db
+        ctx.db
           .query('deleted_items')
           .withIndex('by_org_parent_kind_state', (q) =>
             q
@@ -1406,12 +1428,8 @@ async function purgeDependents(run: Run): Promise<boolean> {
               .eq('kind', 'project')
               .eq('state', state),
           ),
-      ]
-      for (const read of reads)
-        if (!(await drain(run.budget, read, (dependent) => startPurge(run.ctx, dependent))))
-          return false
-    }
-  return true
+      )
+  return ranges
 }
 
 /* Rows the item still holds in the live tables. A project item that got
@@ -1983,8 +2001,9 @@ async function taskItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBloc
  * suffices. A person whose level on the root is only for navigation to a
  * sub-project they lead or can access reads not_lead, as the root has a
  * lead of its own. A sub-project item needs its parent live and not
- * archived. An admin needs no stored row read, so a list of many project
- * items stays cheap for them. */
+ * archived. An admin needs no stored row read here, though after the admin
+ * access split their view of a project item reads the stored rows as
+ * anyone else's does (viewOf). */
 async function projectItemBlock(s: Scope, me: Doc<'profiles'>): Promise<RestoreBlock | null> {
   const parentId = s.item.parent_project_id
   const parent = parentId === undefined ? null : await namedProject(s, parentId, 'meta')
@@ -2030,20 +2049,50 @@ export async function restoreBlock(
 
 /** What one person sees of an item (design 6.1). */
 export type ItemView = {
-  /** The entries of the item's projects whose tasks the person may see. */
+  /** The entries of the item's projects the row shows and counts, every
+   * entry for an organization admin, who acts on the whole item, and for
+   * anyone else those whose tasks they may see. */
   projects: Item['projects']
+  /** The entries whose tasks the person may read, which every task a row,
+   * hit or count shows comes from. They are `projects` for anyone but an
+   * organization admin whose role does not read every task (after the
+   * admin access split, roleReadsEveryTask), and for such an admin the
+   * entries their ordinary access reaches (adminView). */
+  readable: Item['projects']
   /** A task item whose root's project the person cannot see. It is listed
    * only through a task they can see, without the root, its path or the
-   * reason, and cannot be restored by them. */
+   * reason, and cannot be restored by them. Never an admin's. */
   redacted: boolean
+  /** An admin's task item whose root's project they cannot read, which
+   * only the admin access split brings. Its row keeps the item's key,
+   * path, counts, deleter and state, for Delete now, and shows no title,
+   * status or reason (model/deletedItemsList.ts rowOf). */
+  hidden: boolean
+}
+
+/** Whether `me`'s role alone gives a level on every project of their
+ * organization, as an organization admin's does until the admin access
+ * split removes levelsFrom's admin branch (lib/access.ts). Asked of
+ * levelsFrom itself, with no grant on a top-level project without a lead,
+ * so the split turns it false with no change here. It reads nothing. Only
+ * levelsFrom's branch is asked. A split that removed levelUnder's alone
+ * would leave this true and every Deleted items read whole for an admin,
+ * and one that removed levelsFrom's alone would let liveLevel's
+ * projectLevel give an admin every restore, so the split removes both, and
+ * the cases of tests/deletedItemsAdminView.test.ts fail if it does not. */
+export function roleReadsEveryTask(me: Doc<'profiles'>): boolean {
+  const probe = { id: '', org_id: me.org_id, type: 'meta' as const }
+  return levelsFrom(me, [probe], [], []).levelOf(probe) !== null
 }
 
 /**
  * What `me` sees of `item`, or null when it is hidden from them (design
  * 6.1). `me` is their seat in the item's organization, never another one.
- * Organization admins see every item that is not purging. Nobody else sees
- * a stuck item, or one whose project (a task item) or parent (a sub-project
- * item) is no longer live: those wait for an admin.
+ * Organization admins see every item that is not purging, stuck ones and
+ * those whose project or parent is no longer live included, and read its
+ * tasks as their role reads them (adminView). Nobody else sees a stuck
+ * item, or one whose project (a task item) or parent (a sub-project item)
+ * is no longer live: those wait for an admin.
  *
  * A task item shows to the person who deleted it and to the lead of one of
  * its projects or of that project's top-level project, while they can see
@@ -2063,10 +2112,45 @@ export async function viewOf(
   item: Item,
 ): Promise<ItemView | null> {
   if (item.org_id !== me.org_id || item.state === 'purging') return null
-  if (me.org_role === 'admin') return { projects: item.projects, redacted: false }
-  if (item.state === 'stuck') return null
   const s = { ctx, item, memo }
+  if (me.org_role === 'admin') return await adminView(s, me)
+  if (item.state === 'stuck') return null
   return item.kind === 'task' ? await taskItemView(s, me) : await projectItemView(s, me)
+}
+
+/* An organization admin's view holds every entry of the item, read as their
+ * role reads it. While the role reads every task (roleReadsEveryTask) it
+ * reads all of it, with no read. Otherwise a task item's entry is readable
+ * when its project is live by the reference predicate and the admin has a
+ * level on it (liveLevel), so one whose project is in Deleted items, gone
+ * or outside a valid tree is not, as no one else sees such an entry, and
+ * the item is hidden when that leaves out its root's project. A project
+ * item's entry is readable when its stored rows give the admin a level on
+ * it (storedLevels), as anyone else's view is judged, and the item is never
+ * hidden, since its name, key, path and delete reason are project
+ * management data the admin keeps. A root the admin reaches only for
+ * navigation to one of its sub-projects counts there, as it does in anyone
+ * else's view (projectItemView), so tasks stored on the top-level project
+ * itself show to them, unlike the navigation-free `accessible` of
+ * lib/access.ts; the admin access split's review keeps or changes that for
+ * everyone. */
+async function adminView(s: Scope, me: Doc<'profiles'>): Promise<ItemView> {
+  const { item } = s
+  const whole = { projects: item.projects, readable: item.projects, redacted: false, hidden: false }
+  if (roleReadsEveryTask(me)) return whole
+  if (item.kind === 'project') {
+    const levels = await storedLevels(s, me)
+    const readable = item.projects.filter(
+      (p) => levels.levelOf({ id: p.id, org_id: item.org_id }) !== null,
+    )
+    return { ...whole, readable }
+  }
+  const readable: Item['projects'] = []
+  for (const entry of item.projects) {
+    const project = await namedProject(s, entry.id, 'project')
+    if (project !== null && (await liveLevel(s, me, project)) !== null) readable.push(entry)
+  }
+  return { ...whole, readable, hidden: !readable.some((p) => p.id === item.project_id) }
 }
 
 async function taskItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView | null> {
@@ -2083,7 +2167,8 @@ async function taskItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView | n
   }
   if (projects.length === 0) return null
   if (!leads && !namesProfile(s.item, s.item.deleted_by, me)) return null
-  return { projects, redacted: !projects.some((p) => p.id === root.id) }
+  const redacted = !projects.some((p) => p.id === root.id)
+  return { projects, readable: projects, redacted, hidden: false }
 }
 
 /** Whether `me` leads the top-level project above live project `project`. */
@@ -2104,13 +2189,30 @@ async function projectItemView(s: Scope, me: Doc<'profiles'>): Promise<ItemView 
     h.projects.some((p) => levelOf(p) === 'lead')
   const deleted = namesProfile(s.item, s.item.deleted_by, me) && levelOf(h.root) !== null
   if (!leads && !deleted) return null
-  return { projects: s.item.projects.filter((p) => levelOf(p) !== null), redacted: false }
+  const projects = s.item.projects.filter((p) => levelOf(p) !== null)
+  return { projects, readable: projects, redacted: false, hidden: false }
 }
 
-/** The item `id` when `me` can see it (viewOf), else null. An unknown id,
- * another organization's item and one hidden from `me` answer alike, so no
- * answer tells them apart (design 6.2); public callers turn null into
- * not_found('item not found'). */
+/** Whether `me` sees `item` at all, as viewOf answers, without reading a
+ * level for an organization admin, who sees every item of their
+ * organization that is not purging. Restore, Delete now and Delete now's
+ * summary load through it (myItem), so an admin's purge reads no level and
+ * never fails on an item under a broken project tree. */
+export async function seesItem(
+  ctx: QueryCtx,
+  memo: Memo,
+  me: Doc<'profiles'>,
+  item: Item,
+): Promise<boolean> {
+  if (item.org_id !== me.org_id || item.state === 'purging') return false
+  if (me.org_role === 'admin') return true
+  return (await viewOf(ctx, memo, me, item)) !== null
+}
+
+/** The item `id` when `me` can see it (seesItem), else null. An unknown
+ * id, another organization's item and one hidden from `me` answer alike,
+ * so no answer tells them apart (design 6.2); public callers turn null
+ * into not_found('item not found'). */
 export async function myItem(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -2118,7 +2220,7 @@ export async function myItem(
   memo = newMemo(),
 ): Promise<Item | null> {
   const item = await byId(ctx, 'deleted_items', id)
-  return item !== null && (await viewOf(ctx, memo, me, item)) !== null ? item : null
+  return item !== null && (await seesItem(ctx, memo, me, item)) ? item : null
 }
 
 /** One person's sight of their organization for a list read, read once for

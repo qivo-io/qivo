@@ -17,8 +17,10 @@
  * subtask together, and a project item's only with its whole project. A
  * match of a task item's subtask names the item's root, as its row does. It
  * judges each item as the list does and shows only tasks in the projects
- * the seat's view of the item holds, so the match of a redacted task item
- * never names its root.
+ * the seat may read in its view of the item (ItemView readable), so the
+ * match of a redacted task item never names its root, and that of a hidden
+ * one, an admin's after the admin access split, names its key without its
+ * title.
  *
  * A seat reads only the index ranges that can hold what it sees. An admin
  * reads the organization's items newest first. Anyone else reads their own
@@ -64,6 +66,7 @@ import {
   namesProfile,
   orgReadOnly,
   restoreBlock,
+  roleReadsEveryTask,
   type Sight,
   sameReference,
   sightOf,
@@ -107,9 +110,11 @@ type Item = Doc<'deleted_items'>
  * documents (LEGACY_READ), which the rows and bytes of the call bound
  * rather than its ranges. So 1,536 ranges
  * build about 500 such rows for a person in one team, and about 48 for one
- * in 30 teams, and more when finding spent less. A mutable object, so
- * tests can lower it; replace `call` and `find` whole rather than change
- * their fields.
+ * in 30 teams, and more when finding spent less. Once the admin access
+ * split lands an admin's rows of project items read those stored rows too
+ * (model/deletedItems.ts viewOf), so an admin's list of many project items
+ * says `capped` sooner. A mutable object, so tests can lower it; replace
+ * `call` and `find` whole rather than change their fields.
  */
 export const LIST = {
   cap: 2000,
@@ -167,7 +172,10 @@ export type Deleter = {
 /** One Deleted items row, projected for its viewer. `key` is a task item's
  * task key or a project item's project key. `counts`, `projects` and `path`
  * show only what the viewer may see; a redacted row shows one task the
- * viewer can see instead of the root. `blocked` explains a ready row that
+ * viewer can see instead of the root. An organization admin's row shows the
+ * whole item, and a hidden one, a task item whose root's project the admin
+ * cannot read once the admin access split lands, its key with an empty
+ * title and no status or reason. `blocked` explains a ready row that
  * cannot be restored by the viewer; rows in other states say so by `state`. */
 export type DeletedRow = {
   id: string
@@ -186,6 +194,9 @@ export type DeletedRow = {
   reason?: string
   state: Exclude<Item['state'], 'purging'>
   redacted?: true
+  /** an admin's task item whose root they cannot read, with an empty
+   * `title` and no `status` or `reason` (model/deletedItems.ts ItemView) */
+  hidden?: true
   can_restore: boolean
   blocked?: BlockDetail
   can_purge: boolean
@@ -198,7 +209,9 @@ export type DeletedRow = {
  * redacted task item as on its row. `root_key` and `root_title` name a task
  * item's root when the task found is one of its subtasks, as the item's row
  * would, so the page can say that the root and its other subtasks come back
- * too. A redacted match has neither, since its row never names the root. */
+ * too. A redacted match has neither, since its row never names the root,
+ * and a hidden item's match has `root_key` without `root_title`, as its row
+ * shows the key without the title. */
 export type DeletedMatch = {
   item_id: string
   item_kind: Item['kind']
@@ -400,10 +413,14 @@ async function candidatesOf(
 
 /**
  * `item` as `sight`'s person sees it, or null when it is hidden from them.
- * With `out`, the caller's check of its read budget, a redacted task item's
- * row checks it after each of the item's tasks it reads to find the one it
- * shows, and answers 'unread' when the budget ran out first, as each task's
- * row holds its searchable text, so the row is not built.
+ * An organization admin's row is the whole item, and once the admin access
+ * split lands a task item whose root's project they cannot read is a
+ * hidden row, with its key, path, counts and deleter and no title, status
+ * or reason (model/deletedItems.ts ItemView). With `out`, the caller's
+ * check of its read budget, a redacted task item's row checks it after
+ * each of the item's tasks it reads to find the one it shows, and answers
+ * 'unread' when the budget ran out first, as each task's row holds its
+ * searchable text, so the row is not built.
  */
 export async function rowOf(
   ctx: QueryCtx,
@@ -466,6 +483,15 @@ export async function rowOf(
       path: [],
       archived: shown.archived,
       redacted: true,
+    }
+  if (view.hidden)
+    return {
+      ...base,
+      key: issueKey(item.num),
+      title: '',
+      path: pathOf(sight, item),
+      archived: item.archived,
+      hidden: true,
     }
   return {
     ...base,
@@ -554,8 +580,10 @@ const namesCredential = (me: Doc<'profiles'>, item: Item): boolean =>
 /** How `item` was deleted, as `me` may know it: 'app', the table of the
  * credential of a REST or MCP delete, or `table:id` where `me` may know
  * which credential (namesCredential). The deleter line's `who` ends with
- * it, and the page's `via` filter matches it, so an id `me` may not know
- * matches nothing, as an unknown one does. */
+ * it, and the page's `via` filter matches it, or its table for a bare
+ * table, which every viewer may know (model/deletedItemsPage.ts
+ * deletedAsAsked), so an id `me` may not know matches nothing, as an
+ * unknown one does. */
 export function howOf(me: Doc<'profiles'>, item: Item): string {
   const { via } = item
   if (via === undefined) return 'app'
@@ -588,10 +616,11 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * (deleted_tasks search_title), at most MATCHES.max, for every seat in
  * `seats`: the roots and subtasks of task items and the tasks inside
  * project items. Only tasks of items the seat sees (viewOf), in projects
- * their view of the item holds, count, and each match says what the row of
- * its item would: a redacted task item's match has no path and cannot be
- * restored by the seat, as its row (rowOf), and a subtask of any other task
- * item names the item's root. Every read of the call spends
+ * their view of the item lets them read (ItemView readable), count, and
+ * each match says what the row of its item would: a redacted task item's
+ * match has no path and cannot be restored by the seat, as its row
+ * (rowOf), and a subtask of any other task item names the item's root, a
+ * hidden one by its key alone. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
  * and each item it judges. It reads the hits one at a time and judges each
  * as it comes, checking the budget before the next, so it reads at most
@@ -601,11 +630,12 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * seats see more matches than MATCHES.max, so the page can ask for a
  * longer text instead of hiding the rest: the search finds one visible
  * match past the cap. It is decided by visible matches alone, but for a
- * login whose every seat is an organization admin's, who sees every task
- * that is not being purged, a budget stop says it too. For anyone else the
- * scan's MATCHES.scan results and the budget also count tasks the seat
- * cannot see, so a stop at either is not reported, or `capped` would tell
- * that hidden deleted tasks match the text. A search past LIMITS.search is
+ * login whose every seat's role reads every task (model/deletedItems.ts
+ * roleReadsEveryTask, an organization admin's until the admin access
+ * split), a budget stop says it too. For anyone else the scan's
+ * MATCHES.scan results and the budget also count tasks the seat cannot
+ * read, so a stop at either is not reported, or `capped` would tell that
+ * hidden deleted tasks match the text. A search past LIMITS.search is
  * refused.
  */
 export async function matchesFor(
@@ -657,8 +687,9 @@ export async function matchesFor(
         items.set(task.item_id, read)
       }
       const visible = await read
-      // a task in a project hidden from the seat, a redacted item's root too
-      const project = visible?.view.projects.find((p) => p.id === task.project_id)
+      // a task in a project the seat may not read, a redacted or hidden
+      // item's root too
+      const project = visible?.view.readable.find((p) => p.id === task.project_id)
       if (visible === null || project === undefined) return false
       const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
@@ -671,8 +702,10 @@ export async function matchesFor(
         blocked = view.redacted
           ? { reason: block }
           : await blockDetail(reader, sight.memo, item, block)
-      // the row of a task item names its root, unless it is redacted
+      // the row of a task item names its root, unless it is redacted, and
+      // a hidden row by its key alone
       const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id
+      const root = view.hidden ? {} : { root_title: item.name }
       out.push({
         item_id: item.id,
         item_kind: item.kind,
@@ -680,7 +713,7 @@ export async function matchesFor(
         org_name: orgName,
         key: issueKey(task.num),
         title: task.title,
-        ...(subtask ? { root_key: issueKey(item.num), root_title: item.name } : {}),
+        ...(subtask ? { root_key: issueKey(item.num), ...root } : {}),
         archived: task.archived,
         path: view.redacted ? [] : hitPath(sight, item, project),
         deleted_at: item.deleted_at,
@@ -707,8 +740,8 @@ export async function matchesFor(
       }
     }
   }
-  // a login that sees every task may be told that the budget stopped it
-  if (stopped && logins.every((me) => me.org_role === 'admin')) capped = true
+  // a login that reads every task may be told that the budget stopped it
+  if (stopped && logins.every((me) => roleReadsEveryTask(me))) capped = true
   return { matches: out, capped }
 }
 

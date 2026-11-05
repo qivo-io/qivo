@@ -197,6 +197,7 @@ import type * as model_cascade from "../model/cascade.js";
 import type * as model_commentLimits from "../model/commentLimits.js";
 import type * as model_comments from "../model/comments.js";
 import type * as model_deletedItems from "../model/deletedItems.js";
+import type * as model_deletedItemsChoices from "../model/deletedItemsChoices.js";
 import type * as model_deletedItemsList from "../model/deletedItemsList.js";
 import type * as model_deletedItemsPage from "../model/deletedItemsPage.js";
 import type * as model_demoMetrics from "../model/demoMetrics.js";
@@ -472,6 +473,7 @@ declare const fullApi: ApiFromModules<{
   "model/commentLimits": typeof model_commentLimits;
   "model/comments": typeof model_comments;
   "model/deletedItems": typeof model_deletedItems;
+  "model/deletedItemsChoices": typeof model_deletedItemsChoices;
   "model/deletedItemsList": typeof model_deletedItemsList;
   "model/deletedItemsPage": typeof model_deletedItemsPage;
   "model/demoMetrics": typeof model_demoMetrics;

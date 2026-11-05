@@ -411,11 +411,15 @@ export async function assertWeekStartFits(
   }
   const named: string[] = []
   const memo = newMemo()
+  // a deleted project's milestones by name only where its item's view reads
+  // that project, which after the admin access split an admin's need not
+  const readsRoot = async (item: Doc<'deleted_items'>) =>
+    (await viewOf(ctx, memo, me, item))?.readable.some((p) => p.id === item.target_id) === true
   for (const clash of clashes.slice(0, NAMED_CLASHES)) {
     const sees =
       clash.live !== null
         ? await canSeeProject(ctx, me, clash.live)
-        : clash.item !== null && (await viewOf(ctx, memo, me, clash.item)) !== null
+        : clash.item !== null && (await readsRoot(clash.item))
     const where =
       clash.live === null ? ', in Deleted items' : clash.live.archived_at ? ', archived' : ''
     const days = clash.milestones.map((m) =>
