@@ -9,7 +9,7 @@ import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* A boot on a task's address, on App and the real store: the live parts
-   read the task the address names with their first stage (AuthGate passes
+   read the task the address names with their first parts (AuthGate passes
    the address, store/liveParts.ts `address`), so the window shows it from
    that answer while the workspace still loads its tasks, without waiting
    for every task, and the window's reference takes the read over with no
@@ -99,7 +99,7 @@ function waitFor<T>(find: () => T | null | undefined, what: string) {
 }
 
 /** Boots on `address` as AuthGate does, the task it names read with the
-    first stage, on a large workspace whose last task window, holding QN-2,
+    first parts, on a large workspace whose last task window, holding QN-2,
     is still to arrive. `shape` changes the workspace first, `board` forces
     the Board's answer and `before` runs once the store holds the workspace,
     before App renders. Answers the store and a way to let the last window
@@ -210,10 +210,10 @@ const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]')
 const note = () => document.querySelector('[data-task-gone] [role="status"]')?.textContent
 
 describe('a boot on a task address', { timeout: 30_000 }, () => {
-  it('reads the task with the first stage, shows it from that answer while tasks load, and turns editable in place once the workspace holds it', async () => {
+  it('reads the task with the first parts, shows it from that answer while tasks load, and turns editable in place once the workspace holds it', async () => {
     const { store, snap, arrive } = await bootAt('/app/testbed/board/all/tasks/qn-2')
     const org = snap.orgs[0].id
-    // the read the boot subscribed with its first stage
+    // the read the boot subscribed with its first parts
     expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
     await waitFor(() => note() === 'Loading QN-2…', 'the loading frame')
     expect(dialog()?.querySelector('[data-task-loading]')).not.toBeNull()
@@ -315,7 +315,7 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
 
   it('stops the read of an address the router reads as no task, which opens no window', async () => {
     const { snap } = await bootAt('/app/testbed/projects/tasks/qn-2')
-    // the boot read it with its first stage, as the address names a task
+    // the boot read it with its first parts, as the address names a task
     expect(reads.map((read) => read.args)).toEqual([{ org_id: snap.orgs[0].id, ref: 'QN-2' }])
     // App shows the Projects page, with no task window to take the read
     expect(dialog()).toBeNull()

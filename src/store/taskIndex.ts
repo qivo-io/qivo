@@ -809,7 +809,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
 
     /** Gives each task in `uuids` a new view model with the same data, so
         the views that compare tasks by identity paint it again: one whose
-        delay shows only once a large workspace has loaded (store/planner.ts
+        delay shows only once every task is held (store/planner.ts
         delayOf). */
     renew(uuids: Iterable<string>) {
       let renewed = false

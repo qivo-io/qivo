@@ -20,7 +20,7 @@
    there. Without a search the list shows the newest archived tasks first.
    Each row comes with its place, its owner's name and whether this person
    may restore it, so the page reads no task, person or level from the
-   snapshot and opens while a large workspace still loads. A row's key and
+   snapshot and opens at once, before every task is held. A row's key and
    title open its task read-only in the task window over the page
    (onOpenTask, by the reference P.openTask gives), with Restore for someone
    who can edit its project; the page keeps its choice, search and page
@@ -29,7 +29,9 @@
    its tasks again, so tasks the server restored with it, such as archived
    parents, leave too, and the page fills from the next ones. A row whose
    task the snapshot holds as active, as when someone else restored it,
-   leaves as soon as the snapshot shows it. */
+   leaves as soon as the snapshot shows it, which it does only once it
+   holds every task for a page that needs them; before that such a row
+   stays until the page reads again. */
 
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
@@ -464,8 +466,8 @@ export function ArchivedTasksPage({
   const start = list.starts[list.starts.length - 1]
   const later = list.starts.length > 1
   const ready = list.phase === 'ready'
-  // a task the snapshot holds is active, whoever restored it, even while a
-  // large workspace still loads
+  // a task the snapshot holds is active, whoever restored it, also before
+  // it holds every task
   const visible = list.rows.filter((row) => !P.isLiveTask(row.uuid))
   const rowsShown = visible.length
   // how far a search has read, this page included

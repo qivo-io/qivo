@@ -1963,8 +1963,7 @@ function IssueDetail({
     setCopiedReason(copied)
   }, [goneUuid])
   // a task that leaves the workspace while the window goes on showing it
-  // from its answer, as during a staged load, closes the pickers and the
-  // Move window it had open. The title typed for it stays, to save through
+  // from its answer closes the pickers and the Move window it had open. The title typed for it stays, to save through
   // the answer, when the answer gives its editor Edit; otherwise it goes,
   // as for a task that leaves the board
   const heldNow = useRefID({ taskKey, uuid: held?.uuid })
@@ -2292,8 +2291,9 @@ function IssueDetail({
   // This task's own Subtasks, Linked tasks and Attachments (P.sectionsFor).
   // The store follows the task a window shows from that window's effects,
   // after the render that first shows it, so a task opened in place first
-  // finds another task's sections in the store; it shows its own lists from
-  // a complete workspace, and loading lines while the workspace loads.
+  // finds another task's sections in the store; it shows its own lists
+  // from the workspace once it holds every task, and loading lines before
+  // then until its own lists answer.
   const sections = it ? P.sectionsFor(it.uuid) : null
   const subtasks = sections?.subtasks ?? { ...LOADING_SECTION, hidden: false }
   const linked = sections?.links ?? LOADING_SECTION

@@ -1156,7 +1156,7 @@ function App() {
     scope?: string
     preferred: string | null
   } | null>(bootHold)
-  /* The boot reads the task its address names with its first stage
+  /* The boot reads the task its address names with the first parts
      (AuthGate, store/liveParts.ts `address`), and the window that opens it
      takes that read over. An address the router reads as no task, such as
      a mistyped one, opens no window, so the read stops once App shows. */

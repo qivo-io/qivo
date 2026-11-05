@@ -355,7 +355,7 @@ const comparedUnheld = { rows: 0, groups: 0, flagged: 0 }
     except where the owner's load is unavailable: once with the workspace
     holding every other task, and once with every row of the answer, its
     groups and parents too, judged as a task the workspace does not hold, as
-    during a staged load, so the answer's own rows stand in for their
+    before every task is held, so the answer's own rows stand in for their
     spans. */
 async function expectDelays(
   t: T,

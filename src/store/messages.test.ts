@@ -1635,7 +1635,7 @@ describe('snooze through the client store', () => {
     // a restore of the subtask from Archived tasks, still on its way
     void P.unarchiveIssue(child, 'Restored subtask', undefined, org.id)
     // one delivery brings it with the parent the server restored with it,
-    // and another task, as the delivery that ends a large workspace's load does
+    // and another task, as the delivery that ends a load of every task does
     snap.issues = [
       ...snap.issues,
       task(parent, 11, 'Restored parent'),

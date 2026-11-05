@@ -295,7 +295,7 @@ describe('a login with no seat', () => {
   })
 })
 
-/* The boot reads the task its address names with its first stage
+/* The boot reads the task its address names with the first parts
    (store/liveParts.ts `address`), so the gate passes that task to the
    store, and none for an address that names no organization. */
 describe('the boot on a task address', () => {

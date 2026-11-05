@@ -9,8 +9,9 @@ import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
-/* An Inbox item whose task is still to arrive while a large workspace loads
-   in stages (store/liveParts.ts): picking it reads its messages at once
+/* An Inbox item whose task the workspace does not hold, while every task
+   loads (store/liveParts.ts) or in a session that never asked for them:
+   picking it reads its messages at once
    and opens its task in the pane from the server, by a reference with the
    message's organization (lib/taskReference.ts), and the pane's window
    stays the same window when the task arrives, or the home organization
@@ -103,7 +104,7 @@ async function loadingInbox(
     has_hidden_subtasks: false,
     has_hidden_parent: false,
   })
-  // a task in the first stage's windows, which have loaded, with its own item
+  // a task in the first task window, which answers, with its own item
   snap.issues.push({
     id: '00000000-a',
     org_id: snap.orgs[0].id,

@@ -16,7 +16,7 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    read-only window. Mira leads Work, where the family task
    "Calibrate the sensor" (QN-27) lives, and only views Manuals. The far
    tasks (QN-40 on) are on the server but not in the workspace: in a task
-   window still to arrive while it loads in stages (`loading`), else not in
+   window still to arrive while every task loads (`loading`), else not in
    it at all. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -54,11 +54,10 @@ const READ_ONLY = 'Read-only project access'
 const STALE_SAVE =
   "Couldn't save yet. Saving is available once Qivo can check this task for changes."
 
-/* The family task, in the first task window, which a staged load brings
-   first. */
+/* The family task, in the first task window. */
 const FAM = '01000000-0000-4000-8000-000000000027'
 /* Far tasks: ids in the last of 64 task windows, which starts at fc000000,
-   so a staged load holds them back. */
+   which a test holds back so every task is still on its way. */
 const FAR = 'fd000000-0000-4000-8000-000000000040'
 const FAR_RO = 'fd000000-0000-4000-8000-000000000041'
 const FAR_KID = 'fd000000-0000-4000-8000-000000000042'

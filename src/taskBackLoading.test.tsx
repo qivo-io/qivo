@@ -10,8 +10,8 @@ import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 
-/* Back or Forward to a task's address while a large workspace still loads
-   its tasks in stages (store/liveParts.ts), on App and the real store: the
+/* Back or Forward to a task's address while every task loads
+   (store/liveParts.ts), on App and the real store: the
    task window opens the task the workspace does not hold by a reference
    (lib/taskReference.ts), which the store reads from the server, the
    address keeps naming it, and the task opens once its answer or the
@@ -422,7 +422,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await back(address)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
-    // deleted meanwhile, which the staged load shows only with the last tasks
+    // deleted meanwhile, which the load shows only with every task
     await change((snap) => {
       snap.projects = snap.projects.filter((project) => project.num !== 1)
     })
@@ -527,7 +527,7 @@ describe("Back to another organization's task still to arrive", { timeout: 30_00
 })
 
 describe('Back to a task during the first load', { timeout: 30_000 }, () => {
-  it('holds its address when the load began in stages, then opens the task', async () => {
+  it('holds its address while every task loads, then opens the task', async () => {
     const { store } = await bootLoading(true, (slug) => `/app/${slug}/inbox/tasks/qn-2`)
     const address = `/app/${store.P.org.slug}/inbox/tasks/qn-2`
     expect(location.pathname).toBe(address)

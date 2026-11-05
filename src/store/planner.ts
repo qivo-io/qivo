@@ -10397,9 +10397,9 @@ export const PLANNER = {
     }
   },
   /** Whether the snapshot holds task `uuid` as an active task, such as an
-      archived one that someone restored. A task it holds is active even
-      while a large workspace still loads; one it lacks then may still be
-      on its way. */
+      archived one that someone restored. A task it holds is active also
+      before it holds every task; one it lacks then may be active all the
+      same, as it holds no task until something asks for every one. */
   isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
   /** Links two tasks the workspace holds, `type` as seen from task `srcId`.
       Resolves whether the server accepted it; false for a link it sent
@@ -14222,8 +14222,9 @@ export async function initStore(
     unconfirmedReport = text
     emit('health')
   })
-  // A large workspace's first part and the views' first render are two
-  // long tasks; a paint between them keeps each frame shorter.
+  // While a load of every task is on its way, the first parts and the
+  // views' first render are two long tasks; a paint between them keeps
+  // each frame shorter.
   if (stillLoading !== null) await afterPaint()
   if (!stillCurrent()) return null
   return { profileId: CURRENT_USER, homeOrg: HOME_ORG }

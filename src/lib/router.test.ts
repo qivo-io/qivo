@@ -1271,7 +1271,7 @@ describe('phone page navigation', () => {
   })
 })
 
-describe('addressedTask, the task a boot reads with its first stage', () => {
+describe('addressedTask, the task a boot reads with the first parts', () => {
   it('names the slug and the ref taskWindow.task reads, from a path or a legacy hash', () => {
     const qn7 = { slug: 'northstar', ref: 'QN-7' }
     expect(addressedTask('/app/northstar/board/tasks/QN-7', '')).toEqual(qn7)

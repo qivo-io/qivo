@@ -403,7 +403,7 @@ export function taskSegmentOf(pathname: string, hash: string): string | undefine
 
 /** The task the address names under an organization's slug, with the ref
     taskWindow.task reads (`QN-12`, or a lowercase uuid), which a boot reads
-    with its first stage (store/liveParts.ts `address`). The slug is the
+    with the first parts (store/liveParts.ts `address`). The slug is the
     path's org segment, else a legacy hash's `#/o/<slug>/`. Undefined for
     an address that names no task, names it under `~` or a legacy hash
     without a slug, which reads a number in the home organization only once
