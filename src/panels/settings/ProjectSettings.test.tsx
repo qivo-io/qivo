@@ -920,6 +920,20 @@ describe('changing access', () => {
     expect(rows('user')).toContain('Mira Holm')
   })
 
+  it("turns an open Lead picker's choices off once the page's read fails, and sends nothing", async () => {
+    await open()
+    await click(find('[data-project-lead-picker]'))
+    expect(find<HTMLButtonElement>('[data-lead-choice="leo"]').disabled).toBe(false)
+    server.force = { fail: ['get'] }
+    await rerun()
+    expect(pageState()).toBe('failed')
+    const leo = find<HTMLButtonElement>('[data-lead-choice="leo"]')
+    expect(leo.disabled).toBe(true)
+    await click(leo)
+    expect(sent('projects:update')).toEqual([])
+    expect(leadName()).toBe('Mira Holm')
+  })
+
   it('looks the address up at the press and sends the level it found as expected', async () => {
     await open()
     const email = find<HTMLInputElement>('[data-invite-email]')

@@ -1066,7 +1066,9 @@ export type LeadPickerFor = { org_id: string; project_id: string }
  * write accepts (projectSettings.leadCandidates), read once a batch while
  * it is open, with a search and Load more. `lead` is the person the
  * button names, `busy` that a pick is on its way, and `onPick` hears the
- * person picked.
+ * person picked. While `disabled` or `busy`, an open list keeps reading
+ * but its choices are off, so a pick made as the page's writes turn off
+ * sends nothing.
  */
 export function LeadPicker({
   on,
@@ -1082,6 +1084,7 @@ export function LeadPicker({
   onPick: (person: { id: string; name: string }) => void
 }) {
   const label = lead?.name ?? 'No lead'
+  const off = disabled || busy
   return (
     <Popover
       width={280}
@@ -1096,7 +1099,7 @@ export function LeadPicker({
           data-on={open ? '' : undefined}
           aria-label={`Lead: ${label}`}
           aria-busy={busy || undefined}
-          disabled={disabled || busy}
+          disabled={off}
           onClick={toggle}
           className="h-control w-full max-w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1"
         >
@@ -1109,20 +1112,30 @@ export function LeadPicker({
       )}
     >
       {(close) => (
-        <LeadChoiceList on={on} lead={lead} onPick={(person) => close(() => onPick(person))} />
+        <LeadChoiceList
+          on={on}
+          lead={lead}
+          off={off}
+          onPick={(person) => {
+            if (!off) close(() => onPick(person))
+          }}
+        />
       )}
     </Popover>
   )
 }
 
-/* The open lead picker: a search and the server's people with Load more. */
+/* The open lead picker: a search and the server's people with Load more,
+   whose choices are off while `off`. */
 function LeadChoiceList({
   on,
   lead,
+  off,
   onPick,
 }: {
   on: LeadPickerFor
   lead: { id: string } | null
+  off: boolean
   onPick: (person: { id: string; name: string }) => void
 }) {
   const [text, setText] = useState('')
@@ -1148,6 +1161,7 @@ function LeadChoiceList({
           <MenuItem
             key={person.id}
             active={lead?.id === person.id}
+            disabled={off}
             onClick={() => onPick({ id: person.id, name: person.name })}
             data-lead-choice={person.id}
           >
