@@ -220,6 +220,15 @@ async function boardMounted(page) {
   )
 }
 
+/* Tasks load on demand: the workspace holds none until something that
+   needs every task asks for them. A step that reads the whole list
+   (PLANNER.issues or issueById) asks first and waits until the page's
+   store holds every task. */
+async function everyTask(page) {
+  await page.evaluate(() => window.PLANNER.askTasks('script'))
+  await page.waitForFunction(() => window.PLANNER.tasksHeld(), null, { timeout: 60000 })
+}
+
 async function storedBackground({ clear = false } = {}) {
   const db = await new Promise((resolve, reject) => {
     const request = indexedDB.open('qivo-background-image', 1)
@@ -759,6 +768,7 @@ try {
   // of a longer word, so the query is the start of a word that at least
   // three task titles or project names hold: "firm" finds the Firmware
   // project and its firmware tasks.
+  await everyTask(pageA)
   const paletteQuery = await pageA.evaluate(() => {
     const words = (text) => text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
     const texts = [
@@ -870,6 +880,7 @@ try {
   await openPalette()
   // Opening a task marks its messages read. Pick an existing task with no
   // unread messages, so this regression does not alter the demo notification state.
+  await everyTask(pageA)
   const enterTarget = await palette.locator('[cmdk-item]').evaluateAll((items) => {
     for (const [index, item] of items.entries()) {
       const value = item.getAttribute('data-value') || ''
@@ -2392,6 +2403,7 @@ try {
   )
 
   // the store row: exact server-recorded size must equal the bytes we sent
+  await everyTask(pageA)
   const att = await pageA.evaluate((k) => {
     const it = window.PLANNER.issues.find((i) => i.key === k)
     const a = it?.attachments?.[0]
@@ -2489,6 +2501,7 @@ try {
   // attachment to Deleted items (the final cleanup deletes it for good); B
   // watches it leave WITHOUT reload — the delete is fire-and-forget on the
   // client, so B's removal doubles as the ordering proof
+  await everyTask(pageA)
   smokeTaskId = await pageA.evaluate(
     (k) => window.PLANNER.issues.find((i) => i.key === k)?.id ?? null,
     key,

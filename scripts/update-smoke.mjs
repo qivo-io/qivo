@@ -236,7 +236,7 @@ async function verifyLazyLoading() {
   const task = await card.getAttribute('data-card')
   const identity = await page.evaluate((id) => {
     const planner = window.PLANNER
-    return { profile: planner.CURRENT_USER, ref: planner.issueById[id].key.toLowerCase() }
+    return { profile: planner.CURRENT_USER, ref: planner.anyTask(id).key.toLowerCase() }
   }, task)
   await card.click()
   await page.locator('[data-task-scrim]').waitFor()
