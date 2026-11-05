@@ -18,7 +18,7 @@ import { BillingUsage } from './BillingUsage'
 
 /** The organization's Billing page. `setPage` opens another settings page,
  * such as the export before cancelling, and `onViewCredentials` opens API
- * access on one account and period of the usage report. */
+ * access on one account and period of the usage. */
 export function BillingSettings({
   setPage,
   onViewCredentials,
@@ -106,14 +106,16 @@ function LiveBillingSettings({
     }
   }, [orgId, refresh])
 
-  // API usage changes with every machine call. Read it on demand, rather than
-  // keeping an expensive reactive subscription to the hot counter table.
+  // API usage changes with every machine call. Read it once on opening and
+  // on each Refresh (billing.currentUsage), rather than keeping an expensive
+  // reactive subscription to the hot counter table. Storage by project reads
+  // its own batches the same way (BillingStorage).
   useEffect(() => {
     let active = true
     setRefreshing(true)
     setUsageError('')
     convex
-      .action(api.billing.usageReport, { org_id: orgId })
+      .query(api.billing.currentUsage, { org_id: orgId })
       .then((result) => {
         if (active) {
           setUsage(result)
@@ -239,8 +241,10 @@ function LiveBillingSettings({
         <BillingUsage
           usage={usage}
           currency={summary.plan?.currency}
+          status={summary.status}
           measuredAt={measuredAt}
           orgId={orgId}
+          refresh={refresh}
           onViewCredentials={onViewCredentials}
         />
       )}
