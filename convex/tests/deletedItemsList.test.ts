@@ -18,6 +18,7 @@ import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { LIST, listFor, MATCHES, matchesFor } from '../model/deletedItemsList'
+import { estimateDocumentBytes } from '../model/demoMetrics'
 import { REMOVAL_COUNT } from '../model/projects'
 import {
   as,
@@ -1439,6 +1440,50 @@ describe('searching for deleted tasks', () => {
     expect(few.matches).toEqual(all.matches.slice(0, few.matches.length))
     // a stop at the budget is not reported, since hidden tasks spend it too
     expect(few.capped).toBe(false)
+  })
+
+  it('reads its hits one at a time, so a budget their search text spends answers what it read, and says so to an admin', async () => {
+    const description =
+      'Check the fixture alignment first. Record the readings in the lab notebook.'
+    // 30 hits of `who`'s own deletes, each hit's row with its task's search
+    // text, as storeTask writes it. Answers the bytes of those rows.
+    const plantWithText = async (t: T, who: Doc<'profiles'>) => {
+      await plantLedProjects(t, who, 30, 'Survey the north gate')
+      return await t.run(async (ctx) => {
+        let bytes = 0
+        for (const row of await ctx.db.query('deleted_tasks').collect())
+          if (row.org_id === who.org_id && row.search_text === undefined) {
+            await ctx.db.patch(row._id, { search_text: `${row.title}\n${description}` })
+            const stored = await ctx.db.get(row._id)
+            bytes += estimateDocumentBytes(stored)
+          }
+        return bytes
+      })
+    }
+    const t = newT()
+    const f = await withOrg(t)
+    const bytes = await plantWithText(t, f.admin)
+    const all = await search(t, f.admin, 'survey')
+    expect(all).toMatchObject({ capped: false })
+    expect(all.matches).toHaveLength(30)
+    // a budget the hits' rows alone fill: read whole before any was judged,
+    // they would spend it and the search would answer nothing
+    LIST.call = { ...DEFAULT_LIST.call, bytes }
+    const admin = await search(t, f.admin, 'survey')
+    expect(admin.matches.length).toBeGreaterThan(0)
+    expect(admin.matches.length).toBeLessThan(30)
+    expect(admin.matches).toEqual(all.matches.slice(0, admin.matches.length))
+    // an admin sees every task the search reads, so the stop is said
+    expect(admin.capped).toBe(true)
+    // anyone else's stop is not, since hidden tasks spend the budget too
+    const u = newT()
+    const g = await withOrg(u)
+    const lena = await person(u, g.org.id, 'Lena')
+    LIST.call = { ...DEFAULT_LIST.call, bytes: await plantWithText(u, lena) }
+    const hers = await search(u, lena, 'survey')
+    expect(hers.matches.length).toBeGreaterThan(0)
+    expect(hers.matches.length).toBeLessThan(30)
+    expect(hers.capped).toBe(false)
   })
 
   it('leaves capped false when hidden matches lie past the visible ones at the cap', async () => {

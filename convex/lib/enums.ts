@@ -221,6 +221,7 @@ export const TRASH_PHASES = [
   'restore_tasks',
   'restore_access',
   'restore_reveal',
+  'restore_clear',
   'restore_grants',
   'restore_attach',
   'restore_detach',

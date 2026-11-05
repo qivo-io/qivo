@@ -1,9 +1,14 @@
 /* Deleted items as people read them (design 6.2): the Settings list and the
- * search for deleted tasks by key or title. Both read every active seat of
- * the login, because Deleted items spans organizations as Archived projects
- * does, and judge each item with the seat in its own organization, never
- * the home one. Rows are projections for that seat (model/deletedItems.ts
- * viewOf), never stored documents.
+ * search for deleted tasks by key or title, which the app reads today, and
+ * the row of one item, which every reader shares. The page of 25 entries
+ * that replaces the list and the search lives in model/deletedItemsPage.ts
+ * and builds its rows here (rowOf, deleterOf, hitPath) with this budget's
+ * metering (spending), so a later release can delete listFor, matchesFor,
+ * LIST and MATCHES without touching the page. The list and the search read
+ * every active seat of the login, because Deleted items spans
+ * organizations as Archived projects does, and judge each item with the
+ * seat in its own organization, never the home one. Rows are projections
+ * for that seat (model/deletedItems.ts viewOf), never stored documents.
  *
  * The search finds any stored task, a task item's root or subtask or a task
  * inside a deleted project, so it reaches the older items a capped list
@@ -82,8 +87,9 @@ type Item = Doc<'deleted_items'>
  * last check, which comes before each seat, range, document and row: the
  * sight of the seat it opened last, the reads of the row it built last (a
  * project item's stored projects, grants and shares, or a redacted task
- * item's tasks, no more than one delete moved in its own transaction), and
- * the reads authedQuery makes for the login before the call.
+ * item's tasks up to one past the budget, where the row stops unbuilt and
+ * the list says `capped`, since each holds its task's searchable text),
+ * and the reads authedQuery makes for the login before the call.
  *
  * `find` is the share of `call` the reads that find items may spend: 6 MiB,
  * 12,000 documents and 1,024 ranges. Finding reads mostly bytes and
@@ -112,14 +118,15 @@ export const LIST = {
 }
 
 /** What one call has left of a LIST budget. */
-type Reads = { bytes: number; rows: number; ranges: number }
+export type Reads = { bytes: number; rows: number; ranges: number }
 
 /** Whether `reads` has nothing left to open a range or read a document. */
-const spent = (reads: Reads): boolean => reads.bytes <= 0 || reads.rows <= 0 || reads.ranges <= 0
+export const spent = (reads: Reads): boolean =>
+  reads.bytes <= 0 || reads.rows <= 0 || reads.ranges <= 0
 
 /** `ctx` whose every read spends each of `budgets`: a range per query read
  * or read by id, and a row and its estimated bytes per document read. */
-const spending = (ctx: QueryCtx, ...budgets: Reads[]): QueryCtx =>
+export const spending = (ctx: QueryCtx, ...budgets: Reads[]): QueryCtx =>
   meterDb(ctx, {
     range: () => {
       for (const b of budgets) b.ranges -= 1
@@ -266,7 +273,11 @@ async function seatList(
       capped = true
       break
     }
-    const row = await rowOf(reader, sight, orgName, item)
+    const row = await rowOf(reader, sight, orgName, item, () => spent(call))
+    if (row === 'unread') {
+      capped = true
+      break
+    }
     if (row !== null) rows.push(row)
   }
   return { items: rows.slice(0, LIST.cap), capped: capped || rows.length > LIST.cap }
@@ -387,18 +398,39 @@ async function candidatesOf(
   return { items: [...found.values()], truncated }
 }
 
-/** `item` as `sight`'s person sees it, or null when it is hidden from them. */
-async function rowOf(
+/**
+ * `item` as `sight`'s person sees it, or null when it is hidden from them.
+ * With `out`, the caller's check of its read budget, a redacted task item's
+ * row checks it after each of the item's tasks it reads to find the one it
+ * shows, and answers 'unread' when the budget ran out first, as each task's
+ * row holds its searchable text, so the row is not built.
+ */
+export async function rowOf(
   ctx: QueryCtx,
   sight: Sight,
   orgName: string,
   item: Item,
-): Promise<DeletedRow | null> {
+): Promise<DeletedRow | null>
+export async function rowOf(
+  ctx: QueryCtx,
+  sight: Sight,
+  orgName: string,
+  item: Item,
+  out: () => boolean,
+): Promise<DeletedRow | null | 'unread'>
+export async function rowOf(
+  ctx: QueryCtx,
+  sight: Sight,
+  orgName: string,
+  item: Item,
+  out?: () => boolean,
+): Promise<DeletedRow | null | 'unread'> {
   const { me, memo } = sight
   const view = await viewOf(ctx, memo, me, item)
   // viewOf never shows a purging item; the check narrows the state
   if (view === null || item.state === 'purging') return null
-  const shown = view.redacted ? await shownTask(ctx, item, view) : null
+  const shown = view.redacted ? await shownTask(ctx, item, view, out) : null
+  if (shown === 'unread') return shown
   if (view.redacted && shown === null) return null
   const ready = item.state === 'ready'
   const block = view.redacted ? 'no_access' : await restoreBlock(ctx, me, item, memo)
@@ -470,11 +502,15 @@ export async function rowFor(
 /** The task a redacted row shows: one of its tasks in a project the viewer
  * can see. It checks the item's tasks itself rather than filter the range,
  * so a metered ctx (seatList) counts every task it passes over, as Convex
- * does. */
-async function shownTask(ctx: QueryCtx, item: Item, view: ItemView) {
+ * does, and answers 'unread' once `out` says the reads ran out before it
+ * found one. */
+async function shownTask(ctx: QueryCtx, item: Item, view: ItemView, out?: () => boolean) {
   const seen = new Set(view.projects.map((p) => p.id))
   const tasks = ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', item.id))
-  for await (const task of tasks) if (seen.has(task.project_id)) return task
+  for await (const task of tasks) {
+    if (seen.has(task.project_id)) return task
+    if (out?.() === true) return 'unread'
+  }
   return null
 }
 
@@ -506,23 +542,41 @@ function pathOf(sight: Sight, item: Item): string[] {
   return [live(item.parent_project_id, 0) ?? '', live(item.project_id, 1) ?? '']
 }
 
+/** Whether `me` may know which credential deleted `item` (design 1.6): an
+ * agent key's to everyone, a personal token's or connected app's to
+ * organization admins and to its owner, the deleter. */
+const namesCredential = (me: Doc<'profiles'>, item: Item): boolean =>
+  item.via !== undefined &&
+  (item.via.table === 'agent_keys' ||
+    me.org_role === 'admin' ||
+    namesProfile(item, item.deleted_by, me))
+
+/** How `item` was deleted, as `me` may know it: 'app', the table of the
+ * credential of a REST or MCP delete, or `table:id` where `me` may know
+ * which credential (namesCredential). The deleter line's `who` ends with
+ * it, and the page's `via` filter matches it, so an id `me` may not know
+ * matches nothing, as an unknown one does. */
+export function howOf(me: Doc<'profiles'>, item: Item): string {
+  const { via } = item
+  if (via === undefined) return 'app'
+  return namesCredential(me, item) ? `${via.table}:${via.id}` : via.table
+}
+
 /** The deleter line's parts for `sight`'s person (design 1.6, 6.2). */
-function deleterOf(sight: Sight, item: Item): Deleter {
+export function deleterOf(sight: Sight, item: Item): Deleter {
   const { me } = sight
   const id = item.deleted_by
   const profile = id === undefined ? undefined : sight.profiles.get(id)
   const known = sameReference(profile, item)
-  const you = namesProfile(item, id, me)
   const { via } = item
-  const named = via !== undefined && (via.table === 'agent_keys' || me.org_role === 'admin' || you)
-  const how = via === undefined ? 'app' : named ? `${via.table}:${via.id}` : via.table
+  const named = namesCredential(me, item)
   return {
-    you,
+    you: namesProfile(item, id, me),
     profile_id: known ? id : undefined,
     name: known ? profile.name : undefined,
     kind: via?.table ?? 'app',
-    credential_name: named ? via.name : undefined,
-    who: `${known ? id : ''}|${how}`,
+    credential_name: named ? via?.name : undefined,
+    who: `${known ? id : ''}|${howOf(me, item)}`,
   }
 }
 
@@ -539,14 +593,20 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * restored by the seat, as its row (rowOf), and a subtask of any other task
  * item names the item's root. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
- * and each item it judges. Once it is spent, the search answers the
- * matches it found so far. `capped` says that the seats see more matches
- * than MATCHES.max, so the page can ask for a longer text instead of hiding
- * the rest: the search finds one visible match past the cap. It is decided
- * by visible matches alone. The scan's MATCHES.scan results and the budget
- * also count tasks the seat cannot see, so a stop at either is not
- * reported, or `capped` would tell that hidden deleted tasks match the
- * text. A search past LIMITS.search is refused.
+ * and each item it judges. It reads the hits one at a time and judges each
+ * as it comes, checking the budget before the next, so it reads at most
+ * one hit past it, which matters since a hit's row holds its task's
+ * searchable text (deleted_tasks.search_text). Once the budget is spent,
+ * the search answers the matches it found so far. `capped` says that the
+ * seats see more matches than MATCHES.max, so the page can ask for a
+ * longer text instead of hiding the rest: the search finds one visible
+ * match past the cap. It is decided by visible matches alone, but for a
+ * login whose every seat is an organization admin's, who sees every task
+ * that is not being purged, a budget stop says it too. For anyone else the
+ * scan's MATCHES.scan results and the budget also count tasks the seat
+ * cannot see, so a stop at either is not reported, or `capped` would tell
+ * that hidden deleted tasks match the text. A search past LIMITS.search is
+ * refused.
  */
 export async function matchesFor(
   ctx: QueryCtx,
@@ -556,33 +616,41 @@ export async function matchesFor(
   const query = limitedText(LIMITS.search, text)
   if (query === '') return { matches: [], capped: false }
   const ref = TASK_REF.exec(query)
+  const logins = [...seats]
   const out: DeletedMatch[] = []
   let capped = false
+  // the budget ran out before the search read every hit it reads
+  let stopped = false
   const call: Reads = { ...LIST.call }
   const reader = spending(ctx, call)
-  search: for (const me of seats) {
-    if (spent(call)) break
+  search: for (const me of logins) {
+    if (spent(call)) {
+      stopped = true
+      break
+    }
     const org = me.org_id
     const hits = reader.db.query('deleted_tasks')
-    const byNum =
-      ref === null
-        ? []
-        : await hits
-            .withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1])))
-            .take(MATCHES.scan)
-    const byTitle = await hits
-      .withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org))
-      .take(MATCHES.scan)
-    const found = [...byNum, ...byTitle]
-    if (found.length === 0) continue
-    const sight = await sightOf(reader, me)
-    const orgName = (await byId(reader, 'organizations', org))?.name ?? ''
+    const sources: AsyncIterable<Doc<'deleted_tasks'>>[] = [
+      hits.withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org)),
+    ]
+    if (ref !== null)
+      sources.unshift(
+        hits.withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1]))),
+      )
+    // read with the seat's first hit
+    let seat: { sight: Sight; orgName: string } | undefined
     const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
     const seen = new Set<string>()
-    for (const task of found) {
-      if (spent(call)) break search
-      if (seen.has(task.task_id)) continue
+    // adds the match of `task` when the seat sees it; true once a visible
+    // match past the cap was found, which says there are more
+    const judge = async (task: Doc<'deleted_tasks'>): Promise<boolean> => {
+      if (seen.has(task.task_id)) return false
       seen.add(task.task_id)
+      seat ??= {
+        sight: await sightOf(reader, me),
+        orgName: (await byId(reader, 'organizations', org))?.name ?? '',
+      }
+      const { sight, orgName } = seat
       let read = items.get(task.item_id)
       if (read === undefined) {
         read = visibleItem(reader, sight, task.item_id)
@@ -591,15 +659,11 @@ export async function matchesFor(
       const visible = await read
       // a task in a project hidden from the seat, a redacted item's root too
       const project = visible?.view.projects.find((p) => p.id === task.project_id)
-      if (visible === null || project === undefined) continue
+      if (visible === null || project === undefined) return false
       const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
-      if (item.state === 'purging') continue
-      // a visible match past the cap: say there are more, and stop
-      if (out.length === MATCHES.max) {
-        capped = true
-        break search
-      }
+      if (item.state === 'purging') return false
+      if (out.length === MATCHES.max) return true
       const ready = item.state === 'ready'
       const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
       let blocked: BlockDetail | undefined
@@ -626,8 +690,25 @@ export async function matchesFor(
         can_restore: ready && block === null,
         blocked,
       })
+      return false
+    }
+    for (const source of sources) {
+      let read = 0
+      for await (const task of source) {
+        if (await judge(task)) {
+          capped = true
+          break search
+        }
+        if (++read === MATCHES.scan) break
+        if (spent(call)) {
+          stopped = true
+          break search
+        }
+      }
     }
   }
+  // a login that sees every task may be told that the budget stopped it
+  if (stopped && logins.every((me) => me.org_role === 'admin')) capped = true
   return { matches: out, capped }
 }
 
@@ -644,7 +725,7 @@ async function visibleItem(ctx: QueryCtx, sight: Sight, id: string) {
  * the task's project. A task item's task in the root's project: the
  * item's path; in another project, that project after its top-level
  * project, with the names they carry now. */
-function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
+export function hitPath(sight: Sight, item: Item, project: Item['projects'][number]): string[] {
   if (item.kind === 'project')
     return [
       project.id === item.target_id ? (pathOf(sight, item)[0] ?? '') : item.name,

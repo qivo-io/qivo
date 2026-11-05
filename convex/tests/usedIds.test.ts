@@ -691,7 +691,8 @@ describe('internal/usedIdsBackfill', () => {
           .unique()
         if (row !== null) await ctx.db.delete(row._id)
       }
-      // and a light row of an organization deleted meanwhile
+      // and the deleted_tasks row of an organization deleted meanwhile, in
+      // the older shape without the Deleted items page's search fields
       await ctx.db.insert('deleted_tasks', {
         org_id: uuid(),
         item_id: uuid(),

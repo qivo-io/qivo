@@ -2,13 +2,17 @@
  * background work. model/deletedItems.ts holds the rules: how deleting
  * moves a task or a project into the trash, who sees and restores what, the
  * step machine, restoring and purging. model/deletedItemsList.ts projects
- * the rows.
+ * the rows, and model/deletedItemsPage.ts reads the page.
  *
- * list and matches read every active seat of the login (authedQuery), as
- * Archived projects does, and show each item only as the seat in its own
- * organization may see it (model/deletedItems.ts viewOf). restore and purge
- * act in one organization and load each id through myItem, the same rule:
- * an unknown id, another organization's item and one hidden from the
+ * page answers the Settings page one page of 25 entries at a time, project
+ * entries first, with its filters and search applied on the server; no app
+ * calls it yet. list, item and matches stay for the app, which reads them
+ * until it moves to page. All four read every active seat of the login
+ * (authedQuery), as Archived projects does, and show each item only as the
+ * seat in its own organization may see it (model/deletedItems.ts viewOf);
+ * page reads one organization's seat when its scope names one. restore and
+ * purge act in one organization and load each id through myItem, the same
+ * rule: an unknown id, another organization's item and one hidden from the
  * caller all answer not_found, before any state or permission reason. They
  * answer per item and never throw for one item's problem.
  *
@@ -34,6 +38,7 @@ import { type ObjectType, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { internalMutation, type QueryCtx } from './_generated/server'
 import { refuseProduction } from './lib/deployment'
+import { vDeletedItemKind } from './lib/enums'
 import { adminMutation, authedQuery, orgMutation, rule } from './lib/functions'
 import { LIMITS } from './lib/limits'
 import {
@@ -48,6 +53,7 @@ import {
   runStep,
 } from './model/deletedItems'
 import { listFor, matchesFor, rowFor } from './model/deletedItemsList'
+import { type DeletedPage, pageFor } from './model/deletedItemsPage'
 
 /* The items `ids` names that `me` can see, once each, and the other ids,
  * which answer not_found whether they are unknown, in another organization
@@ -63,8 +69,48 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
   return { items, missing }
 }
 
+/* ------------------------------------------------------------------- page
+ * One page of Deleted items (model/deletedItemsPage.ts): at most `limit`
+ * entries (a whole number from 1 to 25, 25 when absent), project entries
+ * first and then task entries, each newest first, with `items`, the row of
+ * each item an entry names, once. Without `scope` it reads every seat's
+ * project entries, and answers `scope_needed` unless `kind` is project; a
+ * scope names one organization and some of its projects (1 to 50 ids, a
+ * top-level project standing for its sub-projects) or all of them, and
+ * lists that scope's project entries and then its task entries. `kind`,
+ * `deleted_by` (a profile id) with `via` ('app', a credential table or
+ * `table:id`), `search` (every word matches, the last also as a prefix,
+ * accents exact; a task reference finds its task) and `assignee` (a
+ * profile id, needs a scope) apply before the page is cut. Pass
+ * `next_cursor` back as `cursor` with the same arguments until it is null;
+ * a page may hold fewer entries, even none, while it is not. `too_wide`
+ * asks a caller who is no organization admin for a narrower scope,
+ * `missing` says that entries before the last one may be missing, and
+ * `legacy` that tasks deleted before this release are found by key and
+ * title only. An organization without the caller's seat, and a scope that
+ * names nothing the caller sees, answer an empty last page alike. */
+export const page = authedQuery({
+  args: {
+    scope: v.optional(
+      v.union(
+        v.object({ org_id: v.string(), project_ids: v.array(v.string()) }),
+        v.object({ org_id: v.string(), all: v.literal(true) }),
+      ),
+    ),
+    kind: v.optional(vDeletedItemKind),
+    search: v.optional(v.string()),
+    deleted_by: v.optional(v.string()),
+    via: v.optional(v.string()),
+    assignee: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, a): Promise<DeletedPage> => await pageFor(ctx, ctx.myProfiles, a),
+})
+
 /* ------------------------------------------------------------------- list
- * The Deleted items page: the rows every seat of the login sees, newest
+ * The Deleted items page as the app reads it today, until it moves to
+ * page: the rows every seat of the login sees, newest
  * first, at most 2,000 per organization, fewer once the call spent its read
  * budget (model/deletedItemsList.ts LIST); `capped` when more may exist.
  * `deleted_by` lists one person's deletes only, a profile id. */
@@ -84,7 +130,8 @@ export const item = authedQuery({
 })
 
 /* ---------------------------------------------------------------- matches
- * Deleted tasks the caller sees whose task key or title matches `text`, the
+ * The app's search until it moves to page. Deleted tasks the caller sees
+ * whose task key or title matches `text`, the
  * roots and subtasks of task items and the tasks inside deleted projects,
  * at most 50, fewer once the call spent the same read budget, and `capped`
  * when more may match. Each comes back with its item, whose kind

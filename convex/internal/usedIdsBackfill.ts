@@ -9,7 +9,7 @@
  *
  * It reads six sources: the live tasks and projects (`issues`,
  * `projects`), their Deleted items copies (`stored_issues`,
- * `stored_projects`, deleted_rows), each stored task's light row
+ * `stored_projects`, deleted_rows), each stored task's row
  * (`deleted_tasks`) and the projects each project item names
  * (`project_items`, deleted_items). The last two can name an id after its
  * stored copy is gone. A split of a task item that stopped partway can

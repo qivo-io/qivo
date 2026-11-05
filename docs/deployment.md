@@ -664,6 +664,29 @@ later backend, because that app works a removal out from its loaded tasks
 and the backend keeps every earlier argument and field. The release adds no
 step.
 
+From the release that first ships `deletedItems.page`, every task moved to
+Deleted items stores its search text, its assignee and copies of its item's
+deletion time, deleter, project and parent on its `deleted_tasks` row, and
+the page's search and assignee filter read them. No app calls the page yet.
+Code from before that release lists `deleted_tasks` without these fields, so
+it does not accept a row that holds them, and once any row does, a backend
+from before the release fails to deploy, as the description copies below do
+for `issue_descriptions` (see Recovery and compatibility). A restore of a
+task item also saves its job at the new phase `restore_clear` while steps
+delete those rows of the tasks it brought back, which that code does not
+accept either. That holds from
+the first delete after the deploy for as long as Deleted items keeps such a
+row, so from that release on never return the backend to a commit before it;
+roll forward instead. Returning the app alone to an earlier release is safe,
+because no app calls the page. Rows stored before the release keep none of
+the fields and need no step. The page finds their tasks by key, and by title
+as far as the older `search_title` index reaches, and says so (`legacy`)
+until they leave Deleted items. Convex builds the page's new indexes of
+`deleted_items` and `deleted_tasks` at deploy. `deletedItems.list`, `item`
+and `matches` and the `search_title` index stay. Once an app reads the page
+they stay through that app's release, and a later release may remove them
+and adds them to the Instant Rollback list above.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

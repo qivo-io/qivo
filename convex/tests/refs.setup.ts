@@ -308,7 +308,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // the live tables: the root, its project and parent, a stored row's owner
   // and own id, a stored project's lead, a stored task and its project.
   // Restore and the list check each again (model/deletedItems.ts
-  // sameReference). The bytes are a _storage id like issue_attachments'.
+  // sameReference). A stored task also names its assignee, which the page
+  // checks against its item's deletion (sameReference), and copies its
+  // item's project and parent, which only filter the page's search, whose
+  // candidates the page judges by their item (model/deletedItemsPage.ts).
+  // The bytes are a _storage id like issue_attachments'.
   'deleted_items.target_id',
   'deleted_items.project_id',
   'deleted_items.parent_project_id',
@@ -319,6 +323,9 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'deleted_tasks.task_id',
   'deleted_tasks.project_id',
   'deleted_tasks.cross_project_id',
+  'deleted_tasks.assignee_id',
+  'deleted_tasks.item_project_id',
+  'deleted_tasks.item_parent_id',
   'deleted_item_jobs.scheduled_id',
   // a task a restore wrote back without its parent, and that parent, which
   // the attach after the reveal reads again (model/deletedItems.ts

@@ -138,7 +138,13 @@ import { recheckParent, recheckProject, waitsForChildren } from './archiveRechec
 import { beginCount, type CommentWrite, deleteCommentRows, tallyComments } from './commentLimits'
 import { estimateDocumentBytes } from './demoMetrics'
 import { scheduleImageReap } from './descriptionImages'
-import { dropDescription, insertTask, patchTaskRow, withDescription } from './descriptions'
+import {
+  deletedSearchText,
+  dropDescription,
+  insertTask,
+  patchTaskRow,
+  withDescription,
+} from './descriptions'
 import { releaseFile } from './fileHolds'
 import { taskItems } from './inboxItems'
 import { assertCanEdit, clearParentRemaining, detachChild, sameTopLevel } from './issues'
@@ -208,7 +214,15 @@ const RECOVER_BATCH = 32
 /* The most stalled jobs one recovery looks at, oldest progress first (the
  * profileRemovals.ts recover pattern). */
 const RECOVER_SCAN = 512
-// deleted_tasks rows are small, so a cursor walk reads them in pages.
+/* A cursor walk reads deleted_tasks rows in pages of this many
+ * (eachStoredTask). Each row holds its task's searchable text
+ * (search_text), the readable text of its description among it, so a page
+ * reads up to 64 descriptions: a few hundred bytes a task at ordinary
+ * text, and at the description cap in a three-byte script about 3.8 MB.
+ * The walk charges each page to the step's bytes, so a step of large
+ * tasks stops sooner, reads no page once the budget is spent, and so
+ * reads at most one page past it. A restore call that holds several items
+ * shares one budget, so it too reads at most one page past it in all. */
 const TASK_PAGE = 64
 
 const stepRef = makeFunctionReference<'mutation', { item_id: string }, null>('deletedItems:step')
@@ -803,10 +817,22 @@ async function storedAlready(run: Run, live: LiveRow, ownerId: string): Promise<
   return stored.some((row) => row.owner_id === ownerId)
 }
 
+/** What a deleted_tasks row copies of its item, for the Deleted items
+ * page's sources (schema.ts). None of these fields of an item changes while
+ * it is in Deleted items. */
+const itemCopies = (item: Item) => ({
+  deleted_at: item.deleted_at,
+  deleted_by: item.deleted_by,
+  item_project_id: item.project_id,
+  item_parent_id: item.parent_project_id,
+})
+
 /** Stores a task row with its deleted_tasks row, and counts it. `task`
  * carries its description (model/descriptions.ts withDescription), which
- * the stored copy keeps. Answers whether it stored the task, which a row
- * too large to store is not (storeRow). */
+ * the stored copy keeps and the row's search text reads
+ * (deletedSearchText), with the task's assignee and the copies of its item
+ * the Deleted items page filters on (itemCopies). Answers whether it stored
+ * the task, which a row too large to store is not (storeRow). */
 async function storeTask(
   ctx: MutationCtx,
   item: Item,
@@ -828,6 +854,9 @@ async function storeTask(
     archived,
     cross_project_id:
       item.kind === 'task' && task.project_id !== item.project_id ? task.project_id : undefined,
+    search_text: deletedSearchText(task),
+    assignee_id: task.assignee_id,
+    ...itemCopies(item),
   })
   tally.tasks += 1
   if (archived) tally.archived_tasks += 1
@@ -1141,7 +1170,8 @@ async function clearReach(run: Run, projectId: string): Promise<boolean> {
  * names the last task fully done. When all are done the cursor stays at
  * the end, so the phase does not walk them again. A task the cursor skips
  * on a tie of _creationTime is found by the finish check, which walks the
- * range again from its start. */
+ * range again from its start. It reads a page only while the budget
+ * lasts (TASK_PAGE). */
 async function eachStoredTask(
   run: Run,
   clear: (task: Doc<'deleted_tasks'>) => Promise<boolean>,
@@ -1149,10 +1179,12 @@ async function eachStoredTask(
   const cursor = run.state.cursor ?? { index: 0, after: 0 }
   run.state.cursor = cursor
   for (;;) {
+    if (spent(run.budget)) return false
     const tasks = await run.ctx.db
       .query('deleted_tasks')
       .withIndex('by_item', (q) => q.eq('item_id', run.item.id).gt('_creationTime', cursor.after))
       .take(TASK_PAGE)
+    for (const task of tasks) chargeRead(run.budget, task)
     for (const task of tasks) {
       if (spent(run.budget) || !(await clear(task))) return false
       cursor.after = task._creationTime
@@ -2286,11 +2318,17 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   }
   const { _id, _creationTime, ...light } = task
   // a new row, so that a restore of `into` past its cursor still meets it;
-  // in the project item that holds its project it is no cross-project task
+  // in the project item that holds its project it is no cross-project task.
+  // It keeps its search text and assignee and copies `into`, so the
+  // Deleted items page finds it with the item that holds it now, and a row
+  // stored before the page's release stays one, without the copies. The
+  // page then judges its assignee against `into`'s deletion, as every
+  // other reference the split moves.
   await uncountedWriter(run.ctx.db).insert('deleted_tasks', {
     ...light,
     item_id: into.id,
     cross_project_id: undefined,
+    ...(task.deleted_at === undefined ? {} : itemCopies(into)),
   })
   await countInto(run.ctx, into, task)
   return true
@@ -2680,8 +2718,9 @@ function inThisItem(run: Run, taskId: string): Promise<boolean> {
  * model/issues.ts doneStampUpdate), no archive mark, updated_at now, and a
  * window key when it was stored without one (firstTaskKey).
  * Deletes the stored row and, outside the reveal, the task's deleted_tasks
- * row (the reveal deletes the item's remaining ones together), and counts
- * the task out of the tally. Returns the id of the task as written. */
+ * row (after a task item's reveal steps delete its rows, restore_clear),
+ * and counts the task out of the tally. Returns the id of the task as
+ * written. */
 async function writeTask(
   run: Run,
   t: StoredTask,
@@ -2719,7 +2758,11 @@ async function writeTask(
       .query('deleted_tasks')
       .withIndex('by_task', (q) => q.eq('task_id', doc.id))
       .collect()
-    for (const row of light) if (row.item_id === run.item.id) await run.ctx.db.delete(row._id)
+    // each holds its task's search text (schema.ts), so its bytes count
+    for (const row of light) {
+      chargeRead(run.budget, row)
+      if (row.item_id === run.item.id) await run.ctx.db.delete(row._id)
+    }
   }
   tallyTask(tallyOf(run), { project_id: doc.project_id, archived: !active }, -1)
   if (!active) run.txn.archived.push(doc.id)
@@ -2736,16 +2779,23 @@ async function writeTask(
  * whose project left since restore_split back there. A failed check (design
  * 5.3, asked again for the restorer) sends it back to moving. Otherwise it
  * writes back a task item's tasks, or a project item's own rows, then the
- * links left, deletes the item's deleted_tasks rows, and narrates. A task
- * item is then gone (null). A project item goes on to restore_grants,
- * which deletes its stored grants (restoreGrants), and then restore_attach (attachParents), which deletes
+ * links left, and narrates. A task item goes on to restore_clear, which
+ * deletes its deleted_tasks rows in steps and then the item
+ * (clearTaskRows). A project item has none left, as restore_tasks deletes
+ * each with its task and the check above sends one that came later back
+ * there; it goes on to restore_grants, which deletes its stored grants
+ * (restoreGrants), and then restore_attach (attachParents), which deletes
  * the item once no task waits for its parent.
  *
  * So a project item's reveal reads none of its tasks, however many it has.
  * A task item holds no more tasks than its delete handled in one
  * transaction, and the reveal checks each of their uuids and decides each
  * parent outside it once (outsideParent), reading nothing back after a
- * write. */
+ * write. It reads none of the item's deleted_tasks rows, which hold each
+ * task's searchable text, so it reads about what a reveal read before they
+ * held it, which a timing on a local backend on 5 November 2026 measured
+ * at 11.96 MiB for a task with LIMITS.subtasks.max subtasks whose
+ * descriptions are at the cap in a three-byte script. */
 async function reveal(run: Run): Promise<JobState | null> {
   for (const table of RESTORED_ROWS) {
     const late = await run.ctx.db
@@ -2789,17 +2839,25 @@ async function reveal(run: Run): Promise<JobState | null> {
       q.eq('item_id', run.item.id).eq('table', 'issue_links'),
     )
   for await (const row of links) await placeLink(run, row)
-  const left = await run.ctx.db
-    .query('deleted_tasks')
-    .withIndex('by_item', (q) => q.eq('item_id', run.item.id))
-    .collect()
-  for (const row of left) await run.ctx.db.delete(row._id)
   await announce(run, written, restorer)
-  if (run.item.kind === 'project')
-    return { ...run.state, phase: 'restore_grants', cursor: undefined }
-  await run.ctx.db.delete(run.item._id)
-  return null
+  const next = run.item.kind === 'project' ? 'restore_grants' : 'restore_clear'
+  return { ...run.state, phase: next, cursor: undefined }
 }
+
+/** After a task item's reveal (restore_clear), deletes the item's
+ * deleted_tasks rows within the step's budget, true once none is left.
+ * Its tasks are live by then, and the item stays restoring until this
+ * ends, so a reader of Deleted items finds them as a restoring item's.
+ * Each row holds its task's searchable text, about 60 KB at the
+ * description cap in a three-byte script, and Convex reads a row again to
+ * delete it, so the reveal's transaction could not also take the rows of
+ * a large family; each step takes its budget's worth, at least one. */
+const clearTaskRows = (run: Run): Promise<boolean> =>
+  drain(
+    run.budget,
+    run.ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', run.item.id)),
+    (row) => run.ctx.db.delete(row._id),
+  )
 
 /* A project item's grants and team grants, written back before its reveal
  * (restore_access), so that the reveal shows the projects to everyone who
@@ -3751,7 +3809,12 @@ export async function restoreItems(
 const PHASES: Record<
   Exclude<
     TrashPhase,
-    'move_finish' | 'purge_finish' | 'restore_reveal' | 'restore_attach' | 'restore_detach'
+    | 'move_finish'
+    | 'purge_finish'
+    | 'restore_reveal'
+    | 'restore_clear'
+    | 'restore_attach'
+    | 'restore_detach'
   >,
   { run: (run: Run) => Promise<boolean>; next: (item: Item) => TrashPhase }
 > = {
@@ -3828,8 +3891,9 @@ async function revealFits(run: Run): Promise<boolean> {
  * it. Otherwise returns where the next step starts. The reveal runs in one
  * transaction whatever its size, so it runs where the budget left holds it
  * and the attach after it (revealFits), else at the start of a step of its
- * own. A project item's attach runs on with what the reveal left of the
- * budget, and in steps after it when that is not enough. */
+ * own. A project item's attach, and a task item's deletion of its
+ * deleted_tasks rows (restore_clear), run on with what the reveal left of
+ * the budget, and in steps after it when that is not enough. */
 async function work(
   ctx: MutationCtx,
   budget: Budget,
@@ -3887,6 +3951,11 @@ async function work(
       if (next === null || next.phase === 'restore_reveal') return next
       run.state = next
       continue
+    }
+    if (phase === 'restore_clear') {
+      if (!(await clearTaskRows(run))) return run.state
+      await ctx.db.delete(item._id)
+      return null
     }
     if (phase === 'restore_attach' || phase === 'restore_detach') {
       if (!(await attachParents(run, phase === 'restore_attach'))) return run.state
@@ -3970,12 +4039,14 @@ export async function runStep(ctx: MutationCtx, itemId: string): Promise<void> {
  * fails that often before its reveal goes back to moving, as a failed
  * reveal does (sendBack): the move takes back what it wrote, and the item
  * is ready again for whoever could restore it, rather than stuck. After the
- * reveal its projects are live, so neither applies. An attach that fails
- * that often goes on as restore_detach, which leaves the tasks still
- * waiting without their parent and deletes the item. restore_detach only
- * deletes the item's own small rows, and restore_grants deletes the small
+ * reveal its projects and tasks are live, so neither applies. An attach
+ * that fails that often goes on as restore_detach, which leaves the tasks
+ * still waiting without their parent and deletes the item. restore_detach
+ * only deletes the item's own small rows, restore_grants deletes the small
  * stored grant rows (writing back the missing ones only for a job the
- * release before left), so each is retried until it finishes.
+ * release before left), and restore_clear deletes a task item's
+ * deleted_tasks rows, at least one a step, so each is retried until it
+ * finishes.
  * A job of an organization whose deletion has begun stays as it is: its
  * steps stand down (runStep), and the deletion deletes the job with its
  * item (model/orgDeletion.ts). */
@@ -4006,6 +4077,7 @@ export async function recoverJobs(ctx: MutationCtx): Promise<void> {
     const exhausted =
       job.phase !== 'restore_detach' &&
       job.phase !== 'restore_grants' &&
+      job.phase !== 'restore_clear' &&
       job.budget_scale <= RETRY.floor &&
       job.attempts >= halvings + RETRY.atFloor
     if (exhausted && job.phase === 'restore_attach') {
