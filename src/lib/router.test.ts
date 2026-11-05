@@ -1116,6 +1116,48 @@ describe('Team sync addresses', () => {
     )
   })
 
+  it("never names another organization's task by its number under the home slug, also before a read names its uuid", () => {
+    const sync = { scope: 'all', step: PERSON }
+    // a link to Acme's QN-5 whose read has not named its uuid yet
+    const acme5 = taskRef({ org: ACME, num: 5 })
+    const path = buildPath({ sync, openIssue: acme5 })
+    expect(path).toBe(`/app/home/sync/all/people/${PERSON}`)
+    // so a reload or a copy of it opens no task, not the home QN-5
+    expect(parsePath(path)?.issue).toBeUndefined()
+    // under Acme's own project the slug is Acme's, which reads its number
+    expect(buildPath({ sync: { scope: 'project:p-acme-1', step: 'team' }, openIssue: acme5 })).toBe(
+      '/app/acme/sync/p/1/tasks/qn-5',
+    )
+    // a home task opened by its number keeps its key
+    expect(buildPath({ sync, openIssue: taskRef({ org: HOME, num: 40 }) })).toBe(
+      `/app/home/sync/all/people/${PERSON}/tasks/qn-40`,
+    )
+    // once the read names the uuid, the address names the task by it
+    store.reference = {
+      ref: acme5,
+      state: 'resolved',
+      task: { uuid: FAR, org: ACME, num: 5, project: 'p-acme-1' },
+    }
+    const named = buildPath({ sync, openIssue: acme5 })
+    expect(named).toBe(`/app/home/sync/all/people/${PERSON}/tasks/${FAR}`)
+    expect(sameTask(parsePath(named)?.issue, acme5)).toBe(true)
+  })
+
+  it("names a task of another organization that left while its organization stays by its uuid, never its number under the home slug", () => {
+    const sync = { scope: 'all', step: 'team' }
+    const open = 'uuid-acme-5'
+    expect(buildPath({ sync, openIssue: open })).toBe('/app/home/sync/all/tasks/uuid-acme-5')
+    // someone archives it, or it moves where this person cannot open it,
+    // while the person keeps their seat in Acme
+    store.issues = store.issues.filter((i) => i.id !== open)
+    delete store.issueById[open]
+    const path = buildPath({ sync, openIssue: open })
+    expect(path).toBe('/app/home/sync/all/tasks/uuid-acme-5')
+    expect(parsePath(path)?.issue).not.toBe('QN-5')
+    // the other forms name it under Acme's slug, which reads Acme's number
+    expect(buildPath({ view: 'kanban', openIssue: open })).toBe('/app/acme/board/tasks/qn-5')
+  })
+
   it('round-trips every emitted form', () => {
     for (const s of [
       { sync: { scope: 'all', step: 'team' } },

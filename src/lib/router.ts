@@ -481,14 +481,15 @@ function namedNow(open: string) {
 /** How an address names the task `open` names, a handle or a reference:
     its organization and the ref under it, the task's key, or its uuid
     where the organization cannot be named, since `~` would read the key in
-    the home organization. A task the workspace holds is named by the
-    workspace and remembered (`named`), one that left while its window
-    showed it by what `named` kept, and any other from the store's live
-    sources (taskFacts): the reference itself, its read's answer and the
-    window's own read. Undefined when nothing names it, as for a reference
-    by number alone whose organization has left the store, which `~` would
-    read in the home organization (unnamedRef). */
-function taskNamed(open: string): { org: string | null; ref: string } | undefined {
+    the home organization, with the task's uuid once known, which names it
+    under another organization's slug (syncPath). A task the workspace
+    holds is named by the workspace and remembered (`named`), one that left
+    while its window showed it by what `named` kept, and any other from the
+    store's live sources (taskFacts): the reference itself, its read's
+    answer and the window's own read. Undefined when nothing names it, as
+    for a reference by number alone whose organization has left the store,
+    which `~` would read in the home organization (unnamedRef). */
+function taskNamed(open: string): NamedRef | undefined {
   const it = refParts(open) ? undefined : P.issueById[open]
   if (it) {
     named.delete(open)
@@ -496,24 +497,28 @@ function taskNamed(open: string): { org: string | null; ref: string } | undefine
     const num = Number(it.key.slice(ISSUE_PREFIX.length + 1))
     named.set(open, { org: it.org, key: it.key, uuid: it.uuid, num, seg: orgSegment(it.org) })
     if (named.size > NAMED_MAX) named.delete(named.keys().next().value ?? open)
-    return { org: it.org, ref: it.key }
+    return { org: it.org, ref: it.key, uuid: it.uuid }
   }
   const was = refParts(open) ? undefined : namedNow(open)
   if (was) {
     const seg = orgSegment(was.org)
-    if (seg === ORG_NONE) return { org: was.org, ref: was.uuid }
+    if (seg === ORG_NONE) return { org: was.org, ref: was.uuid, uuid: was.uuid }
     // its organization's address may change after the task left
     was.seg = seg
-    return { org: was.org, ref: was.key }
+    return { org: was.org, ref: was.key, uuid: was.uuid }
   }
   const facts = taskFacts(open)
   if (!facts) return undefined
   const { org, num, uuid } = facts
   if (org && num !== undefined && orgSegment(org) !== ORG_NONE)
-    return { org, ref: `${ISSUE_PREFIX}-${num}` }
-  if (uuid) return { org: org ?? facts.from ?? null, ref: uuid }
+    return { org, ref: `${ISSUE_PREFIX}-${num}`, uuid }
+  if (uuid) return { org: org ?? facts.from ?? null, ref: uuid, uuid }
   return undefined
 }
+
+/** How taskNamed names a task: the organization whose slug the address
+    writes `ref` under, and the task's uuid when the store knows it. */
+type NamedRef = { org: string | null; ref: string; uuid?: string }
 
 /** Whether `open` is a reference no address can name (taskNamed). An
     address leaves its task out rather than write the reference itself, so
@@ -607,7 +612,10 @@ export function syncPlaceOf(
 
 /* The Team sync address for an open page (see the grammar above). The org
    segment pins how a task number reads, so a task of another organization
-   is named by its uuid. */
+   is named by its uuid, and one whose uuid the store does not know yet,
+   as a task opened by its number whose read has not answered, is left out
+   of the address rather than named by its number under this slug, which
+   would read another task. */
 function syncPath(sync: { scope: string; step: string }, openIssue?: string | null): string {
   let org: string | null | undefined = P.homeOrg
   let rest = '/sync/all'
@@ -623,10 +631,9 @@ function syncPath(sync: { scope: string; step: string }, openIssue?: string | nu
   else if (sync.step && sync.step !== 'team') rest += `/people/${encodeURIComponent(sync.step)}`
   if (openIssue) {
     const it = taskNamed(String(openIssue))
-    const uuid = taskFacts(openIssue)?.uuid
     // another organization's task by its uuid, as the slug pins the number
-    const ref = it ? (it.org === org || !uuid ? it.ref : uuid) : String(openIssue)
-    rest += `/tasks/${encodeURIComponent(ref.toLowerCase())}`
+    const ref = !it ? String(openIssue) : it.org === org ? it.ref : it.uuid
+    if (ref) rest += `/tasks/${encodeURIComponent(ref.toLowerCase())}`
   }
   return `${APP_PREFIX}/${orgSegment(org)}${rest}`
 }
