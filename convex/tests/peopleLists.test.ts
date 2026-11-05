@@ -1081,6 +1081,34 @@ describe('the rows and who reads them', () => {
     expect(await fx.t.run(async (ctx) => (await teamJson(ctx, fx.team)).members)).toEqual(rows)
   })
 
+  it('answers another organization’s team as missing on both member lists, and keeps its teams and labels off the caller’s pages', async () => {
+    const fx = await setup()
+    const [foreign] = await plantTeams(fx.t, fx.otherOrg.id, ['Foreign crew'])
+    await plantMembers(fx.t, foreign, [fx.otherAdmin])
+    await plantLabels(fx.t, fx.otherOrg.id, ['Foreign label'])
+    const [own] = await plantTeams(fx.t, fx.org.id, ['Assembly'])
+    await plantLabels(fx.t, fx.org.id, ['Red'])
+    for (const ref of [foreign.id, foreign.id.toUpperCase()])
+      await refused(
+        fx.t.query(internal.machine.teams.restListTeamMembers, { ...reader(fx.admin), ref }),
+        'not_found',
+        'team not found',
+      )
+    const key = await agentKeyOf(fx.t, fx.agent)
+    expect(await mcpTool(fx.t, key, 'list_team_members', { team_id: foreign.id })).toEqual({
+      isError: true,
+      text: `team "${foreign.id}" not found in your organization`,
+    })
+    // the caller's team and label pages, one row a page to the end, hold the
+    // caller's rows and none of the other organization's
+    const teams = (await restPages(teamsList(fx), fx.admin, { limit: '1' })).rows
+    expect(teams.map((r) => r.id)).toContain(own.id)
+    expect(teams.some((r) => r.id === foreign.id)).toBe(false)
+    const labels = (await mcpPages(labelsList(fx), fx.admin, { limit: 1 })).rows
+    expect(labels.map((r) => r.name)).toContain('Red')
+    expect(labels.some((r) => r.name === 'Foreign label')).toBe(false)
+  })
+
   it('answers leader false for a leader row an agent or a Viewer holds', async () => {
     const fx = await setup()
     await plantMembers(fx.t, fx.team, [fx.agent, fx.viewer], { is_leader: true })
