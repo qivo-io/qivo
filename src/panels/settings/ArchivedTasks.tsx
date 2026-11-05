@@ -1,16 +1,30 @@
 /* Settings › Projects › Archived tasks. Archived tasks are not part of the
-   working snapshot. Nothing is read until this page opens and a scope is
-   chosen: a project, a top-level project with its sub-projects, or, only
-   when chosen, All projects of one organization. Then one page of 25 tasks
-   at a time (P.fetchArchivedPage, server issues.archivedPage), which
-   Previous and Next replace, so the page holds one page of rows however far
-   it goes. Search is the main way to find a task. It asks the server, which
-   looks through the scope's archived tasks a read budget at a time, so a
-   page can stop early, even with no matches, and Search older tasks goes on
-   from there. Without a search the list shows the newest archived tasks
-   first. Each row comes with its place, its owner's name and whether this
-   person may restore it, so the page reads no task, person or level from
-   the snapshot and opens while a large workspace still loads. Restoring goes
+   working snapshot. Nothing is read until this page opens and projects are
+   chosen in the shared project picker (components/ProjectPicker.tsx), which
+   lists the person's projects from the server's navigation reads, never
+   from the workspace: up to PICK_MOST projects and sub-projects of one
+   organization, a top-level project standing for its sub-projects, or,
+   only when chosen, All projects of one organization. The page opens on
+   the project it was opened for once the server resolves it for this
+   person (P.resolveProject), and otherwise on no choice, saying it
+   couldn't open on that project, as for an admin who reaches it only as
+   an admin, whose lists hold the projects they take part in. Then one
+   page of 25 tasks at a time (P.fetchArchivedPage, server
+   issues.archivedPage), which Previous and Next replace, so the page
+   holds one page of rows however far it goes. A chosen project that is
+   later archived, deleted or hidden stays chosen and answers as any
+   project the person cannot see.
+   Search is the main way to find a task. It asks the server, which looks
+   through the scope's archived tasks a read budget at a time, so a page can
+   stop early, even with no matches, and Search older tasks goes on from
+   there. Without a search the list shows the newest archived tasks first.
+   Each row comes with its place, its owner's name and whether this person
+   may restore it, so the page reads no task, person or level from the
+   snapshot and opens while a large workspace still loads. A row's key and
+   title open its task read-only in the task window over the page
+   (onOpenTask, by the reference P.openTask gives), with Restore for someone
+   who can edit its project; the page keeps its choice, search and page
+   while it shows, and reads its page again once it closes. Restoring goes
    through P.unarchiveIssue. The row leaves at once and the page asks for
    its tasks again, so tasks the server restored with it, such as archived
    parents, leave too, and the page fills from the next ones. A row whose
@@ -20,14 +34,22 @@
 import { Fragment, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
-import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { LIMITS } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
+import { ProjectPicker } from '../../components/ProjectPicker'
 import { Icon, StatusDot } from '../../components/qivo'
 import { archivedAtLabel, deletedAtFull, monthLabel } from '../../lib/deletedTime'
 import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { restoreFocus } from '../../lib/focusVisibility'
+import {
+  archivedScopeOf,
+  PICK_MOST,
+  type PickRules,
+  type ProjectPick,
+  placeName,
+  unpick,
+} from '../../lib/projectPick'
 import { useMobile } from '../../lib/useMobile'
 import { type ArchivedListRowVM, type ArchivedScope, P } from '../../store/planner'
 import '../../styles/archived-tasks.css'
@@ -93,42 +115,70 @@ const count = (n: number) => n.toLocaleString('en-US')
 /** "1 archived task", "1,000 archived tasks". */
 const tasks = (n: number) => `${count(n)} archived task${n === 1 ? '' : 's'}`
 
-/** The chooser's value for All projects of organization `org`. */
-const allOf = (org: string) => `all:${org}`
+/** How the page picks projects: up to PICK_MOST of one organization, or
+    All projects of one (lib/projectPick.ts). */
+const PICK_RULES: PickRules = { many: true, most: PICK_MOST, oneOrg: true, all: 'org' }
 
-/** The scope the chooser's value `choice` names, or null for none. */
-function scopeOf(choice: string): ArchivedScope | null {
-  if (choice.startsWith('all:')) return { org: choice.slice(4), all: true }
-  const project = choice ? P.project(choice) : undefined
-  return project ? { org: project.org, projectIds: [project.id] } : null
-}
+/** How many chosen projects show as chips before "Show all". */
+const CHIPS_SHOWN = 6
 
-/** The Archived tasks page, opened on `initialProject` when it is a project
-    the person can see, else on no scope until they choose one. */
-export function ArchivedTasksPage({ initialProject }: { initialProject?: string | null }) {
+/** The Archived tasks page, opened on `initialProject` once the server
+    resolves it as a project the person can open, else on no choice, which
+    says so until they choose. A row's open button calls `onOpenTask` with
+    the task's reference; `taskOpen` says the task window shows over the
+    page, which reads its page again once that window closes. */
+export function ArchivedTasksPage({
+  initialProject,
+  onOpenTask,
+  taskOpen = false,
+}: {
+  initialProject?: string | null
+  onOpenTask?: (task: string) => void
+  taskOpen?: boolean
+}) {
   const mobile = useMobile()
-  // every visible project (navigation is flat since 0078) with its visible
-  // sub-projects; seeing the archive needs only visibility, and the server
-  // says per row whether this person may restore it
-  const groups = P.visibleProjects().map((meta) => ({
-    meta,
-    subs: (meta.children || [])
-      .map((id: string) => P.project(id))
-      .filter((sp) => !!sp && P.canSee(sp.id)),
-  }))
-  // the organizations of those projects, each offered as All projects
-  const orgs = [...new Set(groups.map((g) => g.meta.org))]
-  const known = (id: string | null | undefined) =>
-    !!id && groups.some((g) => g.meta.id === id || g.subs.some((sp) => sp?.id === id))
-  const [choice, setChoice] = useState(known(initialProject) ? (initialProject as string) : '')
-  // a project that left the chooser, as when it is archived or access to it
-  // ends, leaves no rows under another entry: the page starts again with no
-  // scope, and so does All projects of an organization no longer offered
-  const offered = choice.startsWith('all:') ? orgs.includes(choice.slice(4)) : known(choice)
-  const gone = choice !== '' && !offered
+  // the chosen projects, or All projects of one organization, null until
+  // the person chooses; and whether the project the page opened for still
+  // waits for the server, while nothing is read
+  const [pick, setPick] = useState<ProjectPick | null>(null)
+  const [resolving, setResolving] = useState(!!initialProject)
+  // whether the project the page opened for did not resolve, which the
+  // page says until the person chooses
+  const [missed, setMissed] = useState(false)
+  // whether the person chose in the picker, which the resolved project
+  // never replaces
+  const chose = useRef(false)
+  /* The person's choice in the picker, which reads at once, also while
+     the project the page opened on still resolves. */
+  const choose = (next: ProjectPick | null) => {
+    chose.current = true
+    setResolving(false)
+    setMissed(false)
+    setPick(next)
+  }
   useEffect(() => {
-    if (gone) setChoice('')
-  }, [gone])
+    if (!initialProject) return
+    let live = true
+    void P.resolveProject(initialProject).then((answer) => {
+      if (!live) return
+      // a project the person cannot open, a check the server could not
+      // finish and a failed read all leave no choice, and a choice the
+      // person made meanwhile stands
+      if (!chose.current) {
+        if (answer?.state === 'ok') {
+          const { id, org_id, name, num, parent } = answer.project
+          setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
+        } else setMissed(true)
+      }
+      setResolving(false)
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+  const scope: ArchivedScope | null = (pick && archivedScopeOf(pick)) ?? null
+  const scopeKey = JSON.stringify(scope)
+  const [allChips, setAllChips] = useState(false)
   const [search, setSearch] = useState('')
   // the search the list answers, which is the trimmed text once typing
   // rests, and empty at once when the box is cleared
@@ -172,6 +222,9 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
   // the rows that followed a restored row, then those before it nearest
   // first, for focus once the page is read again without it
   const followRef = useRef<string[]>([])
+  // the rows around the row whose task the window shows, as followRef
+  // keeps them, for focus once the page is read again without it
+  const openedRef = useRef<string[] | null>(null)
   useEffect(() => {
     const focus = focusNext.current
     const then = afterCommit.current
@@ -193,7 +246,6 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
      changes before any later answer can look at it. */
   useLayoutEffect(() => {
     const seq = ++seqRef.current
-    const scope = scopeOf(choice)
     genRef.current = seq
     owedRef.current = null
     setList({ ...START, gen: seq, scope, query })
@@ -216,7 +268,7 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
             : { ...current, phase: 'failedFirst' },
       )
     })
-  }, [choice, query, attempt])
+  }, [scopeKey, query, attempt])
 
   /* The element inside the page that `selector` names, or null. */
   const pageElement = (selector: string) =>
@@ -376,6 +428,37 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     })
   }
 
+  /* Opens `row`'s task in the window over the page. The rows around it are
+     kept for focus, in case the read once the window closes no longer
+     lists it, as a restore keeps them. */
+  const open = (row: ArchivedListRowVM) => {
+    const shown = [...(pageRef.current?.querySelectorAll<HTMLElement>('[data-archive-row]') ?? [])]
+    const at = shown.findIndex((el) => el.dataset.archiveRow === row.uuid)
+    const around = at < 0 ? [] : [...shown.slice(at + 1), ...shown.slice(0, at).reverse()]
+    openedRef.current = around.flatMap((el) => el.dataset.archiveRow ?? [])
+    onOpenTask?.(P.openTask(row.uuid, row.org, row.num))
+  }
+  /* Once the window closes, the page reads its page again, so a task the
+     window restored leaves, as after a restore, and a read on its way, a
+     Next or Previous, owes it until it lands. Focus stays on the row's open
+     button, which the window gives it back, while the row is listed, else
+     goes to the rows around it. */
+  const wasOpen = useRef(taskOpen)
+  useEffect(() => {
+    const was = wasOpen.current
+    wasOpen.current = taskOpen
+    if (!was || taskOpen) return
+    const opened = openedRef.current
+    openedRef.current = null
+    const current = listRef.current
+    if (!current.scope || current.gen !== genRef.current) return
+    followRef.current = opened ?? []
+    const moving = current.moving
+    if (current.phase !== 'ready' || (moving && !moving.failed && moving.to !== 'again'))
+      owedRef.current = current.gen
+    else go('again')
+  }, [taskOpen])
+
   const searching = list.query !== ''
   const ended = list.nextCursor === null
   const start = list.starts[list.starts.length - 1]
@@ -398,9 +481,20 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     else countText = `${searching ? 'Matches' : 'Archived tasks'} ${count(from)} to ${count(to)}`
   }
 
-  const projectName = list.scope && !('all' in list.scope) ? P.project(choice)?.name : undefined
+  // the one project chosen, for the notes that name it
+  const picked = pick?.kind === 'projects' ? pick.projects : []
+  const projectName = picked.length === 1 ? picked[0]?.name : undefined
+  const several = picked.length > 1
   let body: ReactNode = null
-  if (!list.scope) body = <ListNote>Choose a project to see its archived tasks.</ListNote>
+  if (resolving) body = <ListNote>Loading archived tasks…</ListNote>
+  else if (!list.scope)
+    body = (
+      <ListNote>
+        {missed
+          ? "Couldn't open this page on that project. The project list shows the projects you take part in."
+          : 'Choose a project to see its archived tasks.'}
+      </ListNote>
+    )
   else if (tooLong) body = <ListNote>{limitSentence(LIMITS.search)}</ListNote>
   else if (list.phase === 'first')
     body = (
@@ -415,7 +509,9 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
       <ListNote>
         {'all' in list.scope
           ? 'You see too many projects to list their archived tasks together. Choose a project.'
-          : 'This project has too many sub-projects to list their archived tasks together. Choose one of its sub-projects.'}
+          : several
+            ? "Qivo can't list the archived tasks of these projects together. Choose fewer projects."
+            : 'This project has too many sub-projects to list their archived tasks together. Choose one of its sub-projects.'}
       </ListNote>
     )
   else if (rowsShown === 0 && ended) {
@@ -424,9 +520,10 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
     else if (searching) note = `No archived tasks match “${list.query}”.`
     else if ('all' in list.scope) {
       const org = list.scope.org
-      const name = orgs.length > 1 ? P.orgs.find((o) => o.id === org)?.name : undefined
+      const name = P.orgs.length > 1 ? P.orgs.find((o) => o.id === org)?.name : undefined
       note = `No archived tasks in any project you can see${name ? ` in ${name}` : ''}.`
-    } else note = `No archived tasks in ${projectName ? `“${projectName}”` : 'this project'}.`
+    } else if (several) note = 'No archived tasks in the projects you chose.'
+    else note = `No archived tasks in ${projectName ? `“${projectName}”` : 'this project'}.`
     body = <ListNote>{note}</ListNote>
   }
 
@@ -531,14 +628,22 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
               <StatusDot status={row.status} size={16} />
             )}
           </span>
-          <div className="archived-row-title flex min-w-0 items-baseline gap-2">
-            <span className="shrink-0 font-mono text-xs text-text-2">{row.key}</span>
-            <HoverTooltip content={row.title}>
+          <HoverTooltip content={row.title}>
+            <Button
+              type="button"
+              variant="unstyled"
+              noTooltip
+              data-archive-open={row.uuid}
+              aria-label={`Open ${row.key}`}
+              onClick={() => open(row)}
+              className="archived-row-title flex min-w-0 cursor-pointer items-baseline gap-2 rounded-sm border-0 bg-transparent p-0 text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              <span className="shrink-0 font-mono text-xs text-text-2">{row.key}</span>
               <span className="archived-row-name min-w-0 text-base font-medium leading-[1.4] text-text-1">
                 {row.title}
               </span>
-            </HoverTooltip>
-          </div>
+            </Button>
+          </HoverTooltip>
           <div className="archived-row-meta mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-text-2">
             {row.place && <span>{row.place}</span>}
             {row.ownerName && <span>{row.ownerName}</span>}
@@ -620,44 +725,57 @@ export function ArchivedTasksPage({ initialProject }: { initialProject?: string 
               </Button>
             )}
           </div>
-          <NativeSelect
-            data-archive-project
-            aria-label="Project"
-            value={choice}
-            onChange={(e) => setChoice(e.target.value)}
-            className="archived-project h-control cursor-pointer bg-surface-1 font-sans text-sm"
-          >
-            <option value="" disabled hidden>
-              Choose a project…
-            </option>
-            {/* All projects of each organization, first and never chosen
-                by itself */}
-            {orgs.map((org) => (
-              <option key={allOf(org)} value={allOf(org)}>
-                {orgs.length === 1
-                  ? 'All projects'
-                  : `All projects in ${P.orgs.find((o) => o.id === org)?.name ?? 'another organization'}`}
-              </option>
-            ))}
-            {groups.map((g) => (
-              <optgroup key={g.meta.id} label={P.projectLabel(g.meta)}>
-                <option value={g.meta.id}>{P.projectLabel(g.meta)}, whole project</option>
-                {g.subs.map(
-                  (sp) =>
-                    sp && (
-                      // option padding is not portable (phones and Firefox
-                      // draw their own list), so NBSPs indent sub-projects
-                      // one step under their "whole project" row
-                      <option key={sp.id} value={sp.id}>
-                        {'    '}
-                        {P.projectLabel(sp)}
-                      </option>
-                    ),
-                )}
-              </optgroup>
-            ))}
-          </NativeSelect>
+          <ProjectPicker
+            trigger={{ 'data-archive-project': '' }}
+            name="Projects"
+            none="Choose projects…"
+            busyLabel={resolving ? 'Loading…' : null}
+            pick={pick}
+            rules={PICK_RULES}
+            label="Search projects"
+            oneOrgNote="Archived tasks lists one organization at a time."
+            onPick={choose}
+            className="h-control w-full max-w-none"
+          />
         </div>
+        {picked.length > 0 && (
+          <div
+            data-archive-picks
+            className="archived-picks mt-2 flex flex-wrap items-center gap-1.5"
+          >
+            {(allChips ? picked : picked.slice(0, CHIPS_SHOWN)).map((p) => (
+              <span
+                key={p.id}
+                className="flex h-control-sm max-w-full min-w-0 items-center gap-1 rounded-pill border border-border bg-surface-1 pl-2.5 text-sm text-text-1"
+              >
+                <span className="min-w-0 truncate">{placeName(p)}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  data-archive-pick={p.id}
+                  aria-label={`Remove ${placeName(p)}`}
+                  className="size-6 shrink-0 rounded-pill"
+                  onClick={() => setPick((now) => unpick(now, p.id))}
+                >
+                  <Icon name="close" size={12} />
+                </Button>
+              </span>
+            ))}
+            {picked.length > CHIPS_SHOWN && (
+              <Button
+                type="button"
+                variant="quiet"
+                size="sm"
+                data-archive-picks-more
+                aria-expanded={allChips}
+                onClick={() => setAllChips((shown) => !shown)}
+              >
+                {allChips ? 'Show fewer' : `Show all ${picked.length}`}
+              </Button>
+            )}
+          </div>
+        )}
         {countText && (
           <div
             role="status"

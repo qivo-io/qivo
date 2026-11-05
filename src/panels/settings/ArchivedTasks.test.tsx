@@ -1,21 +1,32 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { act } from 'react'
+import { act, useEffect, useReducer } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { taskRef } from '../../lib/taskReference'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import {
+  answerProjectNav,
+  isProjectNavRead,
+  queryProjectNav,
+} from '../../store/projectNavStandIn.setup'
 
 /* Settings › Archived tasks on the real store, with the network mocked. The
-   fixture's person is an organization admin who sees the top-level project
-   Luma Sensor with its sub-projects Firmware and Electronics, and, with
-   `partner`, holds a guest seat in Partner Co with its project Partner
-   portal. Each issues.archivedPage call waits until the test answers it,
-   so a test can answer calls out of order, and so does each restore.
-   `whenAsked` runs inside each archivedPage call, as the page makes it.
-   `publish` delivers a changed snapshot. The clock reads 15:00 local time
-   on 16 Oct 2026. */
+   fixture's person is an organization admin who leads the top-level
+   project Luma Sensor with its sub-projects Firmware and Electronics, and,
+   with `partner`, holds a guest seat in Partner Co with its project
+   Partner portal. The project picker reads the navigation reads from
+   their stand-in (store/projectNavStandIn.setup.ts) over the workspace,
+   and so does projectNav.resolve, which the project the page opens on
+   goes through, unless `resolveAnswer` gives its answer. Each
+   issues.archivedPage call waits until the test answers it, so a test can
+   answer calls out of order, and so does each restore. `whenAsked` runs
+   inside each archivedPage call, as the page makes it. `publish` delivers
+   a changed snapshot. `setTaskOpen` says whether the task window shows
+   over the page, as App does. The clock reads 15:00 local time on 16 Oct
+   2026. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -69,6 +80,11 @@ let calls: Call[]
 let restores: Restore[]
 let whenAsked: ((args: Args) => void) | null
 let publish: (snapshot: Snapshot) => void
+let resolveAnswer: (() => Promise<unknown>) | null
+let opened: ReturnType<typeof vi.fn<(task: string) => void>>
+let store: typeof import('../../store/planner')
+let setTaskOpen: (open: boolean) => Promise<void>
+let ORBIT: string
 
 /** Lets pending promises, effects and renders run. */
 const settle = async () => {
@@ -109,6 +125,8 @@ function fixture(partner: boolean): Snapshot {
   const next = plannerFixture()
   const org = next.orgs[0].id
   const base = next.projects[0]
+  // the person leads Luma Sensor, so the navigation reads, which judge an
+  // admin by ordinary access, list it and its sub-projects
   const meta = {
     ...base,
     id: crypto.randomUUID(),
@@ -116,6 +134,7 @@ function fixture(partner: boolean): Snapshot {
     key: 'LUMA',
     name: 'Luma Sensor',
     num: 2,
+    lead_id: next.profiles[0].id,
   }
   const sub = (key: string, name: string, num: number) => ({
     ...base,
@@ -144,6 +163,7 @@ function fixture(partner: boolean): Snapshot {
       org_id: PARTNER,
       key: 'PART',
       name: 'Partner portal',
+      lead_id: undefined,
     })
     next.access.push({ project_id: PORTAL, profile_id: seat, level: 'user' })
   }
@@ -151,26 +171,40 @@ function fixture(partner: boolean): Snapshot {
 }
 
 /** Renders the page on a fresh store, on a phone or not, opened on Luma
-    Sensor or on no scope, with or without the Partner Co seat. */
-async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partner = false } = {}) {
+    Sensor or on no scope, with or without the Partner Co seat, and with
+    `shape` changing the fixture first. */
+async function open({
+  phone = false,
+  initial = 'meta' as 'meta' | 'none',
+  partner = false,
+  shape = (_snap: Snapshot) => {},
+} = {}) {
   vi.resetModules()
   snap = fixture(partner)
   calls = []
   restores = []
   whenAsked = null
+  resolveAnswer = null
+  opened = vi.fn<(task: string) => void>()
+  shape(snap)
   vi.stubGlobal(
     'matchMedia',
     vi.fn(() => ({ matches: phone, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
-  network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
+    if (name === 'workspace:whole') {
       publish = next
       next(structuredClone(snap))
     }
     return () => {}
   })
   network.query.mockImplementation((ref, args) => {
-    if (getFunctionName(ref) !== 'issues:archivedPage') return Promise.resolve(null)
+    const name = getFunctionName(ref)
+    if (name === 'projectNav:resolve')
+      return resolveAnswer ? resolveAnswer() : queryProjectNav(snap, name, args)
+    if (name !== 'issues:archivedPage') return Promise.resolve(null)
     return new Promise((resolve, reject) => {
       calls.push({
         args,
@@ -218,13 +252,31 @@ async function open({ phone = false, initial = 'meta' as 'meta' | 'none', partne
       }),
     )
   })
-  const store = await import('../../store/planner')
+  store = await import('../../store/planner')
   await store.initStore()
   const page = await import('./ArchivedTasks')
   const version = await import('../../store/usePlannerVersion')
+  // whether the task window shows over the page, which Live re-renders on
+  const shown = { taskOpen: false, rerender: () => {} }
+  setTaskOpen = async (next) => {
+    shown.taskOpen = next
+    await act(async () => shown.rerender())
+    await settle()
+  }
   function Live() {
     version.usePlannerVersion()
-    return <page.ArchivedTasksPage initialProject={initial === 'meta' ? META : null} />
+    const [, rerender] = useReducer((n: number) => n + 1, 0)
+    useEffect(() => {
+      shown.rerender = rerender
+    })
+    const taskOpen = shown.taskOpen
+    return (
+      <page.ArchivedTasksPage
+        initialProject={initial === 'meta' ? META : null}
+        onOpenTask={opened}
+        taskOpen={taskOpen}
+      />
+    )
   }
   await act(async () =>
     root.render(
@@ -319,15 +371,61 @@ async function type(value: string) {
   }
   await settle()
 }
-/** Chooses `value` in the scope select: a project id or All projects. */
-async function choose(value: string) {
-  const select = find<HTMLSelectElement>('[data-archive-project]')
-  await act(async () => {
-    select.value = value
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+/** Opens the project picker. */
+const openPicker = () => click(find('[data-archive-project]'))
+/** Closes the project picker, as Escape in its empty field does. */
+async function closePicker() {
+  const field = find('[data-project-picker-search]')
+  await act(async () =>
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+  )
   await settle()
 }
+/** Shows Luma Sensor's sub-projects in the open picker, unless they show. */
+async function expandLuma() {
+  if (!has(`[data-project-children="${META}"]`))
+    await click(find(`[data-project-expand="${META}"]`))
+}
+/** Makes `value` the page's only choice in the picker: `all:<org>` for
+    All projects of an organization, or a project id. A project's choice
+    takes the projects chosen before off first, which reads nothing. */
+async function choose(value: string) {
+  await openPicker()
+  if (value.startsWith('all:')) await click(find(`[data-project-pick-all="${value.slice(4)}"]`))
+  else {
+    await expandLuma()
+    for (const row of document.querySelectorAll<HTMLElement>(
+      '[data-project-pick][aria-checked="true"]:not(:disabled)',
+    ))
+      if (row.dataset.projectPick !== value) await click(row)
+    if (find(`[data-project-pick="${value}"]`).getAttribute('aria-checked') !== 'true')
+      await click(find(`[data-project-pick="${value}"]`))
+  }
+  await closePicker()
+}
+/** Adds project `id` to the page's choice in the picker. */
+async function add(id: string) {
+  await openPicker()
+  await expandLuma()
+  await click(find(`[data-project-pick="${id}"]`))
+  await closePicker()
+}
+/** Adds Orbit Camera to `next`, a second top-level project the person
+    leads. */
+const orbit = (next: Snapshot) => {
+  ORBIT = crypto.randomUUID()
+  next.projects.push({ ...next.projects[0], id: ORBIT, key: 'ORB', num: 9, name: 'Orbit Camera' })
+}
+/** What the picker's trigger says. */
+const trigger = () => text('[data-archive-project]')
+/** The chosen projects' chips. */
+const chips = () =>
+  [...document.querySelectorAll<HTMLElement>('[data-archive-pick]')].map(
+    (el) => el.dataset.archivePick,
+  )
+/** What the page says when the project it opened on did not resolve. */
+const MISSED =
+  "Couldn't open this page on that project. The project list shows the projects you take part in."
 /** The newest issues.archivedPage call. */
 const last = () => calls[calls.length - 1]
 /** The scope argument of the project `id` of Testbed Labs. */
@@ -342,6 +440,8 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
   it('opens on its project with the search focused, 25 a page, Next and Previous replacing them', async () => {
     await open()
     expect(calls.map((c) => c.args)).toEqual([{ scope: project(META), limit: 25 }])
+    // a screen reader hears the trigger's label with the pick
+    expect(find('[data-archive-project]').getAttribute('aria-label')).toBe('Projects, Luma Sensor')
     expect(document.activeElement).toBe(find('[data-archive-search]'))
     // search comes first in the filters
     expect(
@@ -579,14 +679,22 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
   it('offers All projects for each organization, never on its own, and asks for all', async () => {
     await open({ initial: 'none', partner: true })
     expect(calls).toEqual([])
-    const options = [...find<HTMLSelectElement>('[data-archive-project]').options]
-    expect(options.map((o) => o.textContent?.trim()).slice(0, 3)).toEqual([
-      'Choose a project…',
-      'All projects in Testbed Labs',
-      'All projects in Partner Co',
+    expect(trigger()).toBe('Choose projects…')
+    await openPicker()
+    expect(
+      [...document.querySelectorAll<HTMLElement>('[data-project-pick-all]')].map((el) => [
+        el.dataset.projectPickAll,
+        el.textContent,
+      ]),
+    ).toEqual([
+      [ORG, 'All projects in Testbed Labs'],
+      [PARTNER, 'All projects in Partner Co'],
     ])
-    expect(find<HTMLSelectElement>('[data-archive-project]').value).toBe('')
+    await closePicker()
+    expect(calls).toEqual([])
     await choose(`all:${PARTNER}`)
+    expect(trigger()).toBe('All projects in Partner Co')
+    expect(chips()).toEqual([])
     expect(calls.map((c) => c.args)).toEqual([{ scope: { org_id: PARTNER, all: true }, limit: 25 }])
     await last().answer([], null, 0)
     // with two organizations the note names the one it read
@@ -595,8 +703,11 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     )
     // one organization names it All projects, and a project opens on itself
     await open()
-    expect(text('[data-archive-project] option:nth-child(2)')).toBe('All projects')
-    expect(find<HTMLSelectElement>('[data-archive-project]').value).toBe(META)
+    expect(trigger()).toBe('Luma Sensor')
+    expect(chips()).toEqual([META])
+    await openPicker()
+    expect(text('[data-project-pick-all]')).toBe('All projects')
+    await closePicker()
     await choose(`all:${ORG}`)
     expect(last().args).toEqual({ scope: { org_id: ORG, all: true }, limit: 25 })
     await last().answer([], null, 0)
@@ -706,10 +817,13 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     whenAsked = (args) => {
       if (args.scope.project_ids?.[0] === FW) restores[0].answerNow()
     }
+    // Luma Sensor comes off first, which reads nothing
+    await openPicker()
+    await expandLuma()
+    await click(find(`[data-project-pick="${META}"]`))
+    expect(calls.length).toBe(asked)
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false)
-    const select = find<HTMLSelectElement>('[data-archive-project]')
-    select.value = FW
-    select.dispatchEvent(new Event('change', { bubbles: true }))
+    find(`[data-project-pick="${FW}"]`).click()
     await new Promise((done) => setTimeout(done, 50))
     vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
     whenAsked = null
@@ -793,17 +907,223 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(document.activeElement).toBe(find('[data-archive-row="archived-4"]'))
   })
 
-  it('starts again with no scope when the chosen project leaves the chooser', async () => {
+  it('keeps a chosen project that leaves the person’s sight, which the server answers', async () => {
     await open()
     await last().answer([task(1)])
+    const asked = calls.length
     // Luma Sensor is archived, so the snapshot no longer holds it or its sub-projects
     snap.projects = snap.projects.filter((p) => p.id !== META && p.parent_id !== META)
     snap.delivered_at = new Date(Date.parse(snap.delivered_at) + 1000).toISOString()
     await act(async () => publish(structuredClone(snap)))
     await settle()
-    expect(find<HTMLSelectElement>('[data-archive-project]').value).toBe('')
-    expect(rowIds()).toEqual([])
-    expect(text('[data-archived-tasks]')).toContain('Choose a project to see its archived tasks.')
+    // nothing tells the page; the choice stays, with the name it was chosen
+    // by, and a search asks the server, which answers it as any project the
+    // person cannot see
+    expect(trigger()).toBe('Luma Sensor')
+    expect(calls.length).toBe(asked)
+    await type('drift')
+    expect(last().args).toEqual({ scope: project(META), search: 'drift', limit: 25 })
+    await last().answer([], null, 0)
+    expect(text('[data-archived-tasks]')).toContain('No archived tasks match “drift”.')
+  })
+
+  it('reads several chosen projects in the order chosen, and starts again when one comes off', async () => {
+    await open({ initial: 'none', shape: orbit })
+    await add(FW)
+    expect(last().args).toEqual({ scope: project(FW), limit: 25 })
+    await last().answer([task(1)])
+    await add(EL)
+    expect(last().args).toEqual({ scope: { org_id: ORG, project_ids: [FW, EL] }, limit: 25 })
+    expect(trigger()).toBe('Luma Sensor › Firmware and 1 more')
+    expect(chips()).toEqual([FW, EL])
+    await last().answer([task(2), task(1)], '3~p2')
+    await click(button('Next'))
+    await last().answer([task(3)])
+    // a chip's remove button takes its project off, from the first page
+    await click(find(`[data-archive-pick="${FW}"]`))
+    expect(last().args).toEqual({ scope: project(EL), limit: 25 })
+    await last().answer([], null, 0)
+    expect(text('[data-archived-tasks]')).toContain('No archived tasks in “Electronics”.')
+    expect(has('[data-archive-previous]')).toBe(false)
+    // the whole project over its chosen sub-project, one id that stands for both
+    await add(META)
+    expect(last().args).toEqual({ scope: project(META), limit: 25 })
+    expect(chips()).toEqual([META])
+    await last().answer([], null, 0)
+    // two projects with no archived task, and two too wide to list together
+    await add(ORBIT)
+    expect(last().args.scope.project_ids).toEqual([META, ORBIT])
+    await last().answer([], null, 0)
+    expect(text('[data-archived-tasks]')).toContain('No archived tasks in the projects you chose.')
+    await type('x')
+    await last().tooWide()
+    expect(text('[data-archived-tasks]')).toContain(
+      "Qivo can't list the archived tasks of these projects together. Choose fewer projects.",
+    )
+  })
+
+  it('opens a row’s task over the page, then reads its page again and gives focus back', async () => {
+    await open()
+    await last().answer([task(1), task(2), task(3)])
+    const openButton = find('[data-archive-open="archived-2"]')
+    expect(openButton.getAttribute('aria-label')).toBe('Open QN-2')
+    expect(openButton.textContent).toBe('QN-2Task 2')
+    openButton.focus()
+    await click(openButton)
+    // an archived task is never in the workspace, so it opens by reference
+    expect(opened).toHaveBeenCalledWith(taskRef({ org: ORG, num: 2, uuid: 'archived-2' }))
+    const asked = calls.length
+    await setTaskOpen(true)
+    expect(calls.length).toBe(asked)
+    // the window restored the task, took focus with it and closed
+    openButton.blur()
+    await setTaskOpen(false)
+    expect(last().args).toEqual({ scope: project(META), limit: 25 })
+    await last().answer([task(1), task(3)])
+    expect(rowIds()).toEqual(['archived-1', 'archived-3'])
+    expect(document.activeElement).toBe(find('[data-archive-row="archived-3"]'))
+    // a window that closes while Next runs owes its read until Next lands
+    await click(find('[data-archive-open="archived-1"]'))
+    await setTaskOpen(true)
+    await type('task')
+    await last().answer([task(1)], '3~s2')
+    await click(button('Search older tasks'))
+    const next = last()
+    await setTaskOpen(false)
+    expect(calls.at(-1)).toBe(next)
+    await next.answer([task(9)])
+    expect(last().args).toEqual({ scope: project(META), search: 'task', cursor: '3~s2', limit: 25 })
+  })
+
+  it('opens on no choice and reads nothing where its project does not resolve', async () => {
+    for (const answer of [
+      async () => ({ state: 'unavailable' }),
+      async () => ({
+        state: 'unavailable',
+        reason: 'access_unchecked',
+        message: 'Qivo could not finish checking which projects you can see.',
+      }),
+      async () => {
+        throw new Error('the read failed')
+      },
+    ]) {
+      let release = () => {}
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      await open({
+        shape: () => {
+          resolveAnswer = async () => {
+            await held
+            return answer()
+          }
+        },
+      })
+      // nothing reads while the project resolves, and the trigger carries
+      // the mark the staging check waits on
+      expect(trigger()).toBe('Loading…')
+      expect(has('[data-archive-project][data-project-picker-busy]')).toBe(true)
+      expect(text('[data-archived-tasks]')).toContain('Loading archived tasks…')
+      await act(async () => release())
+      await settle()
+      expect(calls).toEqual([])
+      expect(trigger()).toBe('Choose projects…')
+      expect(has('[data-project-picker-busy]')).toBe(false)
+      expect(text('[data-archived-tasks]')).toContain(MISSED)
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
+  it('says an admin’s project it could not open on, and lets them choose in the picker', async () => {
+    // the admin reaches Luma Sensor only as an admin, without a lead
+    await open({ shape: (next) => Object.assign(next.projects[0], { lead_id: undefined }) })
+    expect(calls).toEqual([])
+    expect(trigger()).toBe('Choose projects…')
+    expect(text('[data-archived-tasks]')).toContain(MISSED)
+    expect(text('[data-archived-tasks]')).not.toContain('Choose a project to see')
+    // the picker lists the projects they take part in, none here, and its
+    // All projects still reads
+    await openPicker()
+    expect(has(`[data-project-pick="${META}"]`)).toBe(false)
+    await click(find(`[data-project-pick-all="${ORG}"]`))
+    await closePicker()
+    expect(calls.map((c) => c.args)).toEqual([{ scope: { org_id: ORG, all: true }, limit: 25 }])
+    expect(text('[data-archived-tasks]')).not.toContain(MISSED)
+  })
+
+  it('keeps a choice made while the project it opened on still resolves', async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await open({
+      shape: () => {
+        resolveAnswer = async () => {
+          await held
+          return queryProjectNav(snap, 'projectNav:resolve', { project_id: META })
+        }
+      },
+    })
+    expect(trigger()).toBe('Loading…')
+    expect(calls).toEqual([])
+    // the person's choice shows and reads at once, without waiting for the
+    // server
+    await add(FW)
+    expect(trigger()).toBe('Luma Sensor › Firmware')
+    expect(calls.map((c) => c.args)).toEqual([{ scope: project(FW), limit: 25 }])
+    await last().answer([task(1)])
+    expect(rowIds()).toEqual(['archived-1'])
+    expect(text('[data-archived-tasks]')).not.toContain('Loading archived tasks…')
+    await act(async () => release())
+    await settle()
+    // the resolved project replaces nothing and reads nothing
+    expect(trigger()).toBe('Luma Sensor › Firmware')
+    expect(chips()).toEqual([FW])
+    expect(calls).toHaveLength(1)
+    expect(rowIds()).toEqual(['archived-1'])
+  })
+
+  it('reads none of the workspace’s projects', async () => {
+    await open({ initial: 'none', partner: true })
+    const spies = [vi.spyOn(store.P, 'visibleProjects'), vi.spyOn(store.P, 'canSee')]
+    await add(FW)
+    await last().answer([task(1)])
+    await choose(`all:${PARTNER}`)
+    await last().answer([task(2)])
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('refuses a 51st project of one organization', async () => {
+    const ids: string[] = []
+    await open({
+      initial: 'none',
+      shape: (next) => {
+        for (let n = 0; n < 51; n++) {
+          const id = crypto.randomUUID()
+          ids.push(id)
+          next.projects.push({
+            ...next.projects[0],
+            id,
+            key: `R${n}`,
+            num: 100 + n,
+            name: `Research programme ${String(n).padStart(3, '0')}`,
+          })
+        }
+      },
+    })
+    await openPicker()
+    await click(find('[data-project-picker-more]'))
+    await click(find('[data-project-picker-more]'))
+    for (const id of ids.slice(0, 50)) await click(find(`[data-project-pick="${id}"]`))
+    expect(find<HTMLButtonElement>(`[data-project-pick="${ids[50]}"]`).disabled).toBe(true)
+    expect(text('[data-project-picker-note="most"]')).toBe('You can choose up to 50 projects.')
+    await closePicker()
+    expect(last().args.scope.project_ids).toEqual(ids.slice(0, 50))
+    // six chips show, and the rest behind Show all
+    expect(chips()).toHaveLength(6)
+    await click(find('[data-archive-picks-more]'))
+    expect(chips()).toHaveLength(50)
   })
 
   it('keeps the other move beside a failed one, and gives Retry of a failed read a place for focus', async () => {

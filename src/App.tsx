@@ -50,7 +50,7 @@ import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { autoAllNoted, noteAutoAll, seesNoProject } from './lib/noProjects'
 import { parseSyncScope } from './lib/teamSync'
-import { useMobile } from './lib/useMobile'
+import { useMobile, useMobileBackLayer } from './lib/useMobile'
 import { OUT_OF_USE } from './lib/viewHidden'
 import './styles/mobile.css'
 import { announce } from './lib/announce'
@@ -1074,11 +1074,18 @@ function App() {
   const [unsent] = useState(() => ({ task: createUnsentScope(), page: createUnsentScope() }))
   // a refused Back or Forward (lib/popRefusal), for the popstate handler
   const [refusal] = useState(() => createPopRefusal(closeOrAsk))
+  /** `scopes` with the task window over Settings › Archived tasks when a
+      move from `from` to `to` leaves that page, which closes the window. */
+  const withSettingsTask = (from: UiState, to: UiState, scopes: UnsentScope[]) =>
+    settingsTaskRef.current !== null && to.settingsPage !== from.settingsPage
+      ? [...scopes, unsent.task]
+      : scopes
   /** Runs `go`, a user's move to the place `next` patches in, once the
       windows it closes hold no unsent text, or after the person chose
       Discard. Raw setters remain for moves the person did not ask for. */
   const move = (next: UiState, go: () => void) => {
-    closeOrAsk(closedBy(hereRef.current, { ...hereRef.current, ...next }, unsent), () => {
+    const to = { ...hereRef.current, ...next }
+    closeOrAsk(withSettingsTask(hereRef.current, to, closedBy(hereRef.current, to, unsent)), () => {
       // a scope the user moves to is theirs, App's own All projects too
       // (autoAll), which the save effect would not see stay the same
       if (next.scope !== undefined && autoAll.current) {
@@ -1162,6 +1169,28 @@ function App() {
   useEffect(() => {
     if (settingsPage !== ARCHIVED_TASKS_PAGE) setArchiveProject(null)
   }, [settingsPage])
+  /* The task an Archived tasks row opened, by its handle or a reference
+     (lib/taskReference.ts), which the task window shows over Settings. It
+     is App's own, apart from openIssue, so the address stays the page's,
+     and the address sync and the moves of a task named by a reference never
+     see it. It goes when Settings closes or shows another page, and follows
+     its task's handle as the floating window does. */
+  const [settingsTask, setSettingsTask] = useState<string | null>(null)
+  const settingsTaskRef = useRef(settingsTask)
+  settingsTaskRef.current = settingsTask
+  useEffect(() => {
+    if (settingsPage !== ARCHIVED_TASKS_PAGE) setSettingsTask(null)
+  }, [settingsPage])
+  useEffect(
+    () => P.watchHandles((moved) => setSettingsTask((cur) => (cur && moved.get(cur)) || cur)),
+    [],
+  )
+  /* Closes that window once it holds no unsent text, or after Discard. On a
+     phone the window holds a Back step of its own, which a close by Escape
+     or by its own Back button takes with it. */
+  const closeSettingsTask = useMobileBackLayer(!!settingsTask, () =>
+    closeOrAsk([unsent.task], () => setSettingsTask(null)),
+  )
   const [paletteOpen, setPaletteOpen] = useState(false)
   // the project Search opens on, as the Board's pointer to it sets it
   const [paletteIn, setPaletteIn] = useState<string | null>(null)
@@ -1379,7 +1408,7 @@ function App() {
          returns to the entry it left, so nothing moves, and asks there
          (lib/popRefusal). When it has no entry to return to, the address it
          left is pushed on top instead. */
-      const closing = closedBy(was, next, unsent)
+      const closing = withSettingsTask(was, next, closedBy(was, next, unsent))
       if (closing.some((held) => held.held().length)) {
         if (!refusal.refuse(event, closing)) {
           event.stopImmediatePropagation()
@@ -2080,9 +2109,11 @@ function App() {
      (KeptView). */
   const settingsView = settingsPage
     ? (() => {
-        // null from either sentinel scope, on purpose. Archived tasks shows ONE
-        // project at a time, so it opens on its own picker rather than being
-        // pre-scoped to an arbitrary one (P.project() is undefined for both)
+        // the scope's top-level project, which Archived tasks opens on once
+        // the server resolves it for this person; null from either sentinel
+        // scope, on purpose, so All projects or My view opens it on no
+        // choice rather than on an arbitrary project or on All projects
+        // (P.project() is undefined for both)
         const p = P.project(scope)
         const scopeMeta = p ? (p.type === 'meta' ? p.id : (p.parent ?? null)) : null
         /** Leaves Settings for the page that opened it. */
@@ -2123,6 +2154,12 @@ function App() {
                     openNewProject({ parent }, focusAfterClose)
                   }
                   archivedTasksProject={archiveProject || scopeMeta}
+                  onOpenArchivedTask={(task) =>
+                    closeOrAsk([settingsTaskRef.current !== null && unsent.task], () =>
+                      setSettingsTask(task),
+                    )
+                  }
+                  taskOpen={!!settingsTask}
                   onOpenArchivedTasks={(projectId) =>
                     move({ settingsPage: ARCHIVED_TASKS_PAGE }, () => {
                       setArchiveProject(projectId)
@@ -2294,9 +2331,52 @@ function App() {
     return layout
   }
 
+  /* Leaves Settings for the workspace, closing the task window over it,
+     before Show on board or Plan on roadmap act as from the floating
+     window. The callers check first that the action will act, so one that
+     would only say why, or do nothing, leaves the window and Settings as
+     they are. */
+  const leaveSettingsFor = (act: () => void) =>
+    closeOrAsk([unsent.task, unsent.page], () => {
+      settingsReturn.current = NO_RETURN
+      setSettingsTask(null)
+      setSettingsPage(null)
+      act()
+    })
+
   return (
     <>
       {settingsView}
+      {/* The task window an Archived tasks row opened, over Settings. It
+         stays out of the workspace shell, which Settings hides. */}
+      {settingsPage === ARCHIVED_TASKS_PAGE && settingsTask && (
+        <DeferredOverlay onClose={closeSettingsTask}>
+          <UnsentScopeContext.Provider value={unsent.task}>
+            <IssueDetail
+              issueId={settingsTask}
+              onClose={closeSettingsTask}
+              onOpen={(id) => closeOrAsk([unsent.task], () => setSettingsTask(id))}
+              onPlanOnRoadmap={(id) => {
+                // planOnRoadmap's own checks: a Backlog task only gets its
+                // toast, over Settings, and a task or project the store
+                // lacks gets nothing
+                const it = P.taskShown(id)
+                const acts =
+                  it && P.metaOf(it.project) && (P.isGroup(it) || it.status !== 'backlog')
+                if (acts) leaveSettingsFor(() => planOnRoadmap(id))
+                else planOnRoadmap(id)
+              }}
+              unread={undefined}
+              onPopOut={undefined}
+              onShowOnBoard={(projectId, issueKey, keepOpen) =>
+                P.project(projectId)
+                  ? leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
+                  : undefined
+              }
+            />
+          </UnsentScopeContext.Provider>
+        </DeferredOverlay>
+      )}
       {/* While Settings shows, the workspace stays, hidden, holding the
          kept pages in place, so their elements keep their layout. */}
       <WorkspaceShell

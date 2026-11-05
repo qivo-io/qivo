@@ -29,7 +29,9 @@
  * partial list as complete. resolve judges only the project it is asked
  * about and answers before those rows and keys are complete. Where a check
  * a bound stopped, each read answers the access_unchecked refusal, never a
- * loss of access. No app calls them or stars yet. */
+ * loss of access. The app's shared project picker
+ * (src/components/ProjectPicker.tsx), for Search in and Archived tasks,
+ * calls page, children, search and resolve; nothing in the app stars yet. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgMutation } from './lib/functions'

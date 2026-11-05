@@ -31,6 +31,8 @@ function SettingsScreen({
   onNewSubProject,
   archivedTasksProject = null,
   onOpenArchivedTasks,
+  onOpenArchivedTask,
+  taskOpen = false,
   onProjectGone,
 }: {
   page: string
@@ -47,6 +49,13 @@ function SettingsScreen({
   archivedTasksProject?: string | null
   /** opens Archived tasks on one project, from a project row's menu */
   onOpenArchivedTasks: (projectId: string) => void
+  /** opens a task of Archived tasks, by its handle or reference, in the
+      task window over the page, which keeps its choice, search and page */
+  onOpenArchivedTask?: (task: string) => void
+  /** whether that task window shows over the page; Escape then closes the
+      window, not Settings, and Archived tasks reads its page again once it
+      closes */
+  taskOpen?: boolean
   onProjectGone?: (parent: string | null) => void
 }) {
   const narrow = useMobile()
@@ -57,11 +66,12 @@ function SettingsScreen({
 
   useEffectS(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) onExit()
+      // the task window over the page takes its own Escape
+      if (e.key === 'Escape' && !e.defaultPrevented && !taskOpen) onExit()
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onExit])
+  }, [onExit, taskOpen])
 
   // The phone menu is an entry point, not a new desktop settings page.
   useEffectS(() => {
@@ -190,7 +200,13 @@ function SettingsScreen({
     )
   else if (page === 'projects-archived') content = <ArchivedProjectsPage />
   else if (page === 'projects-archived-tasks')
-    content = <ArchivedTasksPage initialProject={archivedTasksProject} />
+    content = (
+      <ArchivedTasksPage
+        initialProject={archivedTasksProject}
+        onOpenTask={onOpenArchivedTask}
+        taskOpen={taskOpen}
+      />
+    )
   else if (page === 'projects-deleted') content = <DeletedItemsPage />
   else if (page === 'org-general') content = <OrgGeneralPage setPage={setPage} />
   else if (page === 'org-billing')

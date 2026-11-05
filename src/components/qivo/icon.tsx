@@ -65,6 +65,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Star,
   Tag,
   Target,
   Trash2,
@@ -149,6 +150,7 @@ const LUCIDE_ICONS: Record<string, LucideIcon> = {
   eyeOff: EyeOff,
   cog: Settings,
   at: AtSign,
+  star: Star,
 }
 function Icon({
   name,

@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerLabelPages } from './store/labelPagesStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 
 /* Back or Forward to a task's address while a large workspace still loads
    its tasks in stages (store/liveParts.ts), on App and the real store: the
@@ -204,6 +205,7 @@ async function bootLoading(
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (name === 'labels:settingsPage') answerLabelPages(server, args, next, fail)
+    else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -685,8 +687,13 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
     expect(count.textContent).toBe('1 active task')
   })
 
-  it('opens Archived tasks at once, with every project in its chooser', async () => {
-    const { org } = await bootLoading(true, undefined, secondProject)
+  it('opens Archived tasks at once, with the projects the person leads in its picker', async () => {
+    const { org } = await bootLoading(true, undefined, (snap) => {
+      secondProject(snap)
+      // the navigation reads judge the admin by ordinary access, so the
+      // person leads both projects to see them listed
+      for (const project of snap.projects) project.lead_id = snap.profiles[0].id
+    })
     network.query.mockImplementation(async (ref) =>
       getFunctionName(ref) === 'issues:archivedPage'
         ? { rows: [], next_cursor: null, scanned: 0 }
@@ -696,12 +703,15 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
     const page = '[data-settings-page="projects-archived-tasks"]'
     await waitFor(() => document.querySelector(`${page} [data-archived-tasks]`), 'Archived tasks')
     expect(document.querySelector(`${page} [data-tasks-loading-view]`)).toBeNull()
-    const options = [...document.querySelectorAll(`${page} [data-archive-project] option`)]
-    expect(options.map((o) => o.textContent).sort()).toEqual([
+    await act(async () =>
+      document.querySelector<HTMLElement>(`${page} [data-archive-project]`)?.click(),
+    )
+    await waitFor(() => document.querySelector('[data-project-pick]'), 'the picker rows')
+    const rows = [...document.querySelectorAll('[data-project-pick], [data-project-pick-all]')]
+    expect(rows.map((row) => row.textContent)).toEqual([
       'All projects',
-      'Choose a project…',
-      'Second project, whole project',
-      'Task creation fixture, whole project',
+      'Second project',
+      'Task creation fixture',
     ])
   })
 })

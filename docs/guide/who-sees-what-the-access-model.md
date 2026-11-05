@@ -94,7 +94,9 @@ than 128 teams that together hold more than 1,000 team shares. The
 workspace then does not open. Qivo says it could not finish checking which
 projects you can see and asks you to contact support, instead of leaving
 projects or their tasks out. **Archived tasks** shows **Couldn't load the
-archive.** with **Retry**. A task's activity under **All** can show
+archive.** with **Retry**. The project lists of **Search in** and **Archived
+tasks** show the same note in place of your projects, and keep their **All
+projects** rows. A task's activity under **All** can show
 **Couldn't load activity.** with **Retry** for the same reason, instead of
 leaving changes out.
 

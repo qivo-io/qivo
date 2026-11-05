@@ -353,15 +353,26 @@ which also becomes a comment, but do not require one
 ([Automation and AI](./automation-ai-the-rest-api-and-the-mcp-server.md)).
 
 Open **Archived tasks** from a project or sub-project's **…** menu, or from
-**Settings → Projects → Archived tasks**. The page lists one project with its
-sub-projects, or one sub-project. To see every project of an organization,
-choose **All projects** in the project list; the page never starts there.
-It lists the projects you can see that are not archived. A sub-project
-archived on its own, and an archived project, show their tasks again once
-they are restored. The page shows 25 tasks at a time, newest archived
-first, and **Next** and **Previous** move between pages. The line above the
-list says which tasks the page shows, such as **Archived tasks 26 to 50**,
-and the last page says these are the oldest.
+**Settings → Projects → Archived tasks**. The page opens on that project, or
+from Settings on the project you were viewing, and otherwise with nothing
+chosen, and reads nothing until you choose. Its project list works like
+**Search in**
+([Search palette](./finding-your-way-around.md#search-palette)). Choose up to
+50 projects and sub-projects of one organization at once, each shown under
+the filters with a button that takes it off, or **All projects** of one
+organization, which the page never starts on. A project includes its
+sub-projects. The page lists one organization at a time, so another
+organization's projects wait until you clear your choice. It lists the
+projects you can see that are not archived. An organization admin's list
+holds the projects they lead or hold a grant or team share on, and **All
+projects** still reads the organization's whole archive for them. Opened on a
+project they reach only as an admin, the page says it couldn't open on that
+project and starts with nothing chosen. A sub-project archived on its own,
+and an archived project, show their tasks again once they are restored. The
+page shows 25 tasks at a time, newest archived first, and **Next** and
+**Previous** move between pages. The line above the list says which tasks
+the page shows, such as **Archived tasks 26 to 50**, and the last page says
+these are the oldest.
 
 The search, on desktop and phones, looks through every archived task of
 that choice by task ID, title, description, status, priority, assignee and
@@ -371,11 +382,18 @@ the end, the page says how many archived tasks it has searched, and
 **Search older tasks** continues from there. Only a search that has read
 every archived task says that nothing matches. A page reads only the
 projects you can see. When you can see very many projects, **All projects**
-asks you to choose a project instead, and a project with very many
-sub-projects you can see asks you to choose one of them. An organization
+asks you to choose a project instead, a project with very many sub-projects
+you can see asks you to choose one of them, and several projects that Qivo
+cannot list together ask you to choose fewer. An organization
 admin's page then reads the organization's whole archive, and a step can
 stop before it finds one of the tasks, so the page shows no tasks and still
 offers **Next**.
+
+Select a task's ID or title to open it read-only over the page, with its
+description and comments, and **Restore** for someone who can edit its
+project. Closing it returns to the page as you left it, with your choice,
+search and page, and the page reads its tasks again, so a task you restored
+in the window leaves the list.
 
 **Restore** returns a task to its Board and restores archived parents when
 needed. The task leaves the list at once, and the page asks for its tasks
@@ -390,9 +408,10 @@ While the parent's project is being moved to Deleted items, Qivo refuses
 the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks appear only in **Archived
-tasks** and in Search with **Include archived tasks** on. A shared link to an
-archived task opens it read-only under the note that it was archived, with
-**Restore** for someone who can edit its project. When its project is
+tasks** and in Search with **Include archived tasks** on, and open from
+either as a shared link to an archived task does, read-only under the note
+that it was archived, with **Restore** for someone who can edit its
+project. When its project is
 archived too, the note says to restore the project first, then the task
 from Archived tasks.
 

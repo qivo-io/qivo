@@ -4,12 +4,13 @@
    time and Restore centred on the right. Month dividers name the month of
    the rows under them.
 
-   The search comes first in the filters and takes the most room. A narrow
-   page stacks the filters, search on top, and gives each row three lines:
-   the key and title, the place and owner, then the time with Restore. Phones
-   get it by their width (760px or less, as useMobile), and any page narrower
-   than 600px gets it by a container query. The two blocks below must say the
-   same thing. */
+   The search comes first in the filters and takes the most room, then the
+   project picker's trigger, and the chosen projects as chips under them. A
+   narrow page stacks the filters, search on top, and gives each row three
+   lines: the key and title, the place and owner, then the time with
+   Restore. Phones get it by their width (760px or less, as useMobile), and
+   any page narrower than 600px gets it by a container query. The two blocks
+   below must say the same thing. */
 
 [data-archived-tasks] {
   container: archived-tasks / inline-size;
@@ -20,7 +21,9 @@
   min-width: 0;
   max-width: 440px;
 }
-.archived-project {
+/* the project picker's trigger sits in the popover's wrapper, which is the
+   filters' flex item; :where keeps the narrow blocks below in charge */
+.archived-filters > :where([data-popover-wrap]) {
   flex: 0 1 260px;
   min-width: 0;
 }
