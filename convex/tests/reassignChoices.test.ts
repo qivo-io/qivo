@@ -1379,9 +1379,10 @@ describe("the Reassign picker inside Convex's limits", () => {
           name_key: p.name_key,
         })
     })
-    // 26 open tasks a sub-project, 780 in the project, inside its 800
+    // 3 open tasks a sub-project, 90 in the project, its everyday figure.
+    // Pia holds one in each and Keeper the other two
     for (const sub of atlas.subs)
-      await openTasks(t, f, sub, 26, (i) => (i === 0 ? pia.id : keeper.id))
+      await openTasks(t, f, sub, 3, (i) => (i === 0 ? pia.id : keeper.id))
     const change = { kind: 'user_grant', project_id: atlas.meta.id, user_id: pia.id } as const
     const first = await read(
       'a grant on a project of 30 and 40 archived sub-projects',

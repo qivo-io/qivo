@@ -772,8 +772,9 @@ function changeScope(change: RemovalChange): string[] {
  *   193 documents, 54 KB;
  * - 800 open and 200 Done tasks in one project, one person holding 100:
  *   35 ranges, 1,036 documents, 474 KB;
- * - a project of 30 live and 40 archived sub-projects, a task in each live
- *   one: 143 ranges, 973 documents, 431 KB;
+ * - a project of 30 live and 40 archived sub-projects, the person holding
+ *   one of the 3 open tasks in each live one: 143 ranges, 283 documents,
+ *   112 KB;
  * - an organization of 2,000 projects, live and archived: 28 ranges, 2,083
  *   documents, 769 KB.
  * The app reads it once a batch and never subscribes, as it reads the
