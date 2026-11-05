@@ -263,6 +263,46 @@ describe('access', () => {
     expect(await allIds(t, me, open.id, 'parent')).toEqual(usual)
   })
 
+  it("answers a typed task ID whose project's check a bound stops as a hidden one, and ends the list", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a user grant on TBED, which needs no team share, and a team that
+    // shares Skunkworks
+    const me = await seat(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.meta.id,
+        profile_id: me.id,
+        level: 'user',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.hidden.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const open = await task(t, f, f.sub, { num: 1 })
+    const far = await task(t, f, f.hidden, { num: 940_001 })
+    const search = issueKey(far.num)
+    expect(okOf(await pick(t, me, open.id, 'link', { search })).rows).toEqual([
+      expect.objectContaining({ id: far.id, exact: true }),
+    ])
+    Object.assign(OWN_READS, UNCHECKED)
+    expect(await pick(t, me, open.id, 'link', { search })).toEqual({
+      state: 'ok',
+      rows: [],
+      next: null,
+      all_projects: expect.any(String),
+      stopped: false,
+      blocked: null,
+    })
+  })
+
   it('refuses Parent and Subtasks to a reader without Edit on the task, whose Linked tasks lists only the projects they edit', async () => {
     const t = newT()
     const f = await withOrg(t)
