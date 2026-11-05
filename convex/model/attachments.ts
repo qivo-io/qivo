@@ -261,8 +261,9 @@ export async function removeAttachmentCore(
  * still holds. */
 export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 
-/** How many of a caller's expired tickets one new upload deletes, keeping
- * that write bounded; files.ts reapUploadTickets deletes the rest. */
+/** How many of a caller's expired tickets that hold no file one new upload
+ * deletes, keeping that write bounded; files.ts reapUploadTickets takes the
+ * rest with their files. */
 const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /** A new upload ticket and its upload URL. */
@@ -278,8 +279,11 @@ type OpenedUpload = { ticket: Doc<'attachment_uploads'>; uploadUrl: string }
  * declared one, the ticket is `up_to` the organization's limit. `name` and
  * `content_type` are what a REST or MCP confirm attaches the file as; the
  * app's attach names the file itself. `nowMs` is the request's clock.
- * Reads at most LIMITS.uploadsInProgress live tickets and deletes up to
- * EXPIRED_TICKETS_PER_UPLOAD of the caller's expired ones on the way.
+ * Reads at most LIMITS.uploadsInProgress live tickets and up to
+ * EXPIRED_TICKETS_PER_UPLOAD of the caller's expired ones, and deletes
+ * those that hold no file. An expired ticket that holds a file stays for
+ * files.ts reapUploadTickets, which erases the file with it, since nothing
+ * else finds such a file before the weekly orphan sweep.
  */
 export async function openUploadTicket(
   ctx: MutationCtx,
@@ -305,7 +309,8 @@ export async function openUploadTicket(
     .query('attachment_uploads')
     .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).lte('expires_at', a.nowMs))
     .take(EXPIRED_TICKETS_PER_UPLOAD)
-  for (const old of expired) await ctx.db.delete(old._id)
+  // a ticket's file goes with the ticket in reapUploadTickets, never here
+  for (const old of expired) if (old.storage_id === undefined) await ctx.db.delete(old._id)
   const id = newUuid()
   // the URL's token lapses at the ticket's expiry, rounded down to a second
   const exp = Math.floor((a.nowMs + UPLOAD_TICKET_TTL_MS) / 1000)

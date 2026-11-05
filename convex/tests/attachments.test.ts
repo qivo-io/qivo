@@ -530,6 +530,40 @@ describe('expired upload tickets', () => {
     expect(left.map((row) => row.storage_id)).toEqual([live])
   })
 
+  it('leaves an expired ticket that holds a file to the cleanup when its person starts another upload', async () => {
+    const { t, fx, issue } = await setup()
+    await quietWatch(t)
+    const sent = await storeBlob(t, 8)
+    const expiresAt = Date.now() - 1
+    const holding = await plantTicket(t, { profile: fx.user, issue, storageId: sent, expiresAt })
+    const empty = await t.run(async (ctx) => {
+      // a ticket whose POST never stored a file
+      const rowId = await ctx.db.insert('attachment_uploads', {
+        id: uuid(),
+        org_id: fx.org.id,
+        profile_id: fx.user.id,
+        issue_id: issue.id,
+        name: 'never.bin',
+        size_bytes: 8,
+        expires_at: expiresAt,
+      })
+      return (await ctx.db.get(rowId))!
+    })
+    await as(t, fx.user).mutation(api.files.uploadUrl, {
+      org_id: fx.org.id,
+      issue_id: issue.id,
+      size: 8,
+      name: 'spec.pdf',
+    })
+    // the start deletes only the ticket that holds nothing
+    const ids = (await ticketRows(t)).map((row) => row.id)
+    expect(ids).toContain(holding.id)
+    expect(ids).not.toContain(empty.id)
+    await run(t)
+    expect(await fileState(t, sent)).toBe('gone')
+    expect((await ticketRows(t)).map((row) => row.id)).not.toContain(holding.id)
+  })
+
   it('holds the files after a restore it has not noticed, and pages through the rest', async () => {
     const { t, fx, issue } = await setup()
     UPLOAD_TICKET_PAGE.size = 1
