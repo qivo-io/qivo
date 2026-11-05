@@ -2446,8 +2446,10 @@ be the `storageId` the upload URL answered, and any other value answers
 If the organization lowered its per-file limit after the upload
 started and the file now exceeds it, Qivo deletes the file, answers `400` and
 spends the ticket.
-Bytes uploaded but never confirmed are deleted within an hour after their
-ticket expires.
+Bytes uploaded but never confirmed are usually deleted within an hour after
+their ticket expires. After a restore of Qivo's database they are kept for up
+to 7 days first, in case a later restore needs them, and the rare file that
+a failed upload could not clean up waits for Qivo's weekly storage sweep.
 Attaching writes an `attached a file to` activity row with the file name and
 the provenance.
 
@@ -3017,8 +3019,9 @@ authenticated request.
   the user that started it, the task, the declared name, type and size, its
   expiry, the `POST` to its upload URL that holds the URL and when it began,
   and the one file that URL stored, which the confirm must name. Confirming
-  deletes it, and within an hour of an upload's expiry Qivo deletes it with
-  the file it holds unless something else uses that file.
+  deletes it, and usually within an hour of an upload's expiry Qivo deletes
+  it with the file it holds unless something else uses that file. After a
+  restore of the database the file is kept for up to 7 days first.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through

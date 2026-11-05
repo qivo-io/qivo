@@ -2338,7 +2338,10 @@ URL; send it there, or start a new upload` before the upload URL has stored
 one. If the organization lowered its per-file
 limit after the upload started and the file now exceeds it, Qivo deletes the
 file, refuses the confirm and spends the ticket. Bytes uploaded but never
-confirmed are deleted within an hour after their ticket expires.
+confirmed are usually deleted within an hour after their ticket expires.
+After a restore of Qivo's database they are kept for up to 7 days first, in
+case a later restore needs them, and the rare file that a failed upload
+could not clean up waits for Qivo's weekly storage sweep.
 
 Uploading needs a client that can send an HTTP request with the file, such
 as a coding agent with a shell. Chat assistants that cannot make HTTP
