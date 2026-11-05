@@ -658,6 +658,25 @@ describe("the Reassign picker's gate", () => {
       { state: 'refused', message: ACCESS_NEEDS_A_PERSON },
     )
   })
+
+  it('refuses someone not signed in, a seat of another organization and a switched-off seat', async () => {
+    const b = await holding(1)
+    await expectRefusal(
+      b.t.query(api.accessRemovals.reassignChoices, { org_id: b.f.org.id, change: b.change }),
+      'forbidden',
+      /not signed in/,
+    )
+    await expectRefusal(
+      as(b.t, b.f.otherAdmin).query(api.accessRemovals.reassignChoices, {
+        org_id: b.f.org.id,
+        change: b.change,
+      }),
+      'forbidden',
+      /no profile in this organization/,
+    )
+    await b.t.run((ctx) => ctx.db.patch(b.f.user._id, { active: false }))
+    await expectRefusal(choices(b.t, b.f.user, b.change), 'forbidden', /no profile/)
+  })
 })
 
 describe("the Reassign picker's states", () => {
