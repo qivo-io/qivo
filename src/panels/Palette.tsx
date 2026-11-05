@@ -172,6 +172,9 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   // waits for the server to resolve it, while nothing is searched
   const [pick, setPick] = useState<ProjectPick>(EVERY)
   const [resolving, setResolving] = useState(searchIn !== null)
+  // whether the person picked under Search in, which the resolved project
+  // never replaces
+  const chose = useRef(false)
   const [shown, setShown] = useState<Shown | null>(null)
   const [running, setRunning] = useState<Running | null>(null)
   const [failed, setFailed] = useState<Failed | null>(null)
@@ -207,13 +210,14 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
   // the project Search opened for, as the server resolves it for this
   // person: a project they can open is the pick, and anything else, a
   // project they cannot open, a check the server could not finish or a
-  // failed read, leaves All projects
+  // failed read, leaves All projects. A pick the person made meanwhile
+  // stands.
   useEffect(() => {
     if (searchIn === null) return
     let live = true
     void P.resolveProject(searchIn).then((answer) => {
       if (!live) return
-      if (answer?.state === 'ok') {
+      if (answer?.state === 'ok' && !chose.current) {
         const { id, org_id, name, num, parent } = answer.project
         setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
       }
@@ -496,9 +500,12 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
             pick={pick}
             rules={SCOPE_RULES}
             label="Search projects to search in"
-            // a pick asks at once, with the text as typed
+            // a pick asks at once, with the text as typed, also while the
+            // project Search opened for still resolves
             onPick={(next) => {
               if (next === null) return
+              chose.current = true
+              setResolving(false)
               setPick(next)
               setSettled(text)
             }}

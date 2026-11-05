@@ -139,14 +139,25 @@ export function ArchivedTasksPage({
   // waits for the server, while nothing is read
   const [pick, setPick] = useState<ProjectPick | null>(null)
   const [resolving, setResolving] = useState(!!initialProject)
+  // whether the person chose in the picker, which the resolved project
+  // never replaces
+  const chose = useRef(false)
+  /* The person's choice in the picker, which reads at once, also while
+     the project the page opened on still resolves. */
+  const choose = (next: ProjectPick | null) => {
+    chose.current = true
+    setResolving(false)
+    setPick(next)
+  }
   useEffect(() => {
     if (!initialProject) return
     let live = true
     void P.resolveProject(initialProject).then((answer) => {
       if (!live) return
       // a project the person cannot open, a check the server could not
-      // finish and a failed read all leave no choice
-      if (answer?.state === 'ok') {
+      // finish and a failed read all leave no choice, and a choice the
+      // person made meanwhile stands
+      if (answer?.state === 'ok' && !chose.current) {
         const { id, org_id, name, num, parent } = answer.project
         setPick({ kind: 'projects', org_id, projects: [{ id, org_id, name, num, parent }] })
       }
@@ -706,7 +717,7 @@ export function ArchivedTasksPage({
             rules={PICK_RULES}
             label="Search projects"
             oneOrgNote="Archived tasks lists one organization at a time."
-            onPick={setPick}
+            onPick={choose}
             className="h-control w-full max-w-none"
           />
         </div>

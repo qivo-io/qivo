@@ -1027,6 +1027,38 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     }
   })
 
+  it('keeps a choice made while the project it opened on still resolves', async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await open({
+      shape: () => {
+        resolveAnswer = async () => {
+          await held
+          return queryProjectNav(snap, 'projectNav:resolve', { project_id: META })
+        }
+      },
+    })
+    expect(trigger()).toBe('Loading…')
+    expect(calls).toEqual([])
+    // the person's choice shows and reads at once, without waiting for the
+    // server
+    await add(FW)
+    expect(trigger()).toBe('Luma Sensor › Firmware')
+    expect(calls.map((c) => c.args)).toEqual([{ scope: project(FW), limit: 25 }])
+    await last().answer([task(1)])
+    expect(rowIds()).toEqual(['archived-1'])
+    expect(text('[data-archived-tasks]')).not.toContain('Loading archived tasks…')
+    await act(async () => release())
+    await settle()
+    // the resolved project replaces nothing and reads nothing
+    expect(trigger()).toBe('Luma Sensor › Firmware')
+    expect(chips()).toEqual([FW])
+    expect(calls).toHaveLength(1)
+    expect(rowIds()).toEqual(['archived-1'])
+  })
+
   it('reads none of the workspace’s projects', async () => {
     await open({ initial: 'none', partner: true })
     const spies = [vi.spyOn(store.P, 'visibleProjects'), vi.spyOn(store.P, 'canSee')]

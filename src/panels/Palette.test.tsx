@@ -431,6 +431,32 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(last().args).toEqual({ text: 'firm', include_archived: false })
   })
 
+  it('keeps a pick made while the project it opened for still resolves', async () => {
+    let release = () => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await open({
+      searchIn: () => {
+        resolving.hold ??= held
+        return FW
+      },
+    })
+    await type('firm')
+    expect(calls).toHaveLength(0)
+    // the person's pick asks at once, without waiting for the server
+    await choose('')
+    expect(calls.map((c) => c.args)).toEqual([{ text: 'firm', include_archived: false }])
+    expect(scopeLabel()).toBe('All projects')
+    await last().answer([task(14)])
+    await act(async () => release())
+    await settle()
+    // the resolved project replaces nothing and asks nothing
+    expect(scopeLabel()).toBe('All projects')
+    expect(calls).toHaveLength(1)
+    expect(values()).toEqual(['issue-QN-14'])
+  })
+
   it('starts on All projects where the project it opened for does not resolve', async () => {
     for (const answer of [
       async () => ({ state: 'unavailable' }),
