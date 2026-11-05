@@ -16,7 +16,6 @@ import {
   SYNC_SITTING_MS,
   syncSince,
 } from '../lib/teamSync'
-import { orgProjectView } from '../lib/visibility'
 import { LAST_COMMENTS, latestComments } from '../teamSync'
 import {
   activityFor,
@@ -35,6 +34,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 
 /* Local wall-clock instants: previousWorkingDayStart reads local midnight,
  * so the fixtures are built in local time too. September 2026: Mon 28. */

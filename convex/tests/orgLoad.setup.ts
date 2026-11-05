@@ -20,8 +20,8 @@ import { byId } from '../lib/db'
 import { layerOf, liveIn, type ProjectLive } from '../lib/liveTasks'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
 import { roundTenths } from '../lib/numbers'
-import { type OrgProjectView, orgProjectView } from '../lib/visibility'
 import { canonicalLoad, committedByWeek, type LoadSpan, weekGrid } from '../lib/workload'
+import { type OrgProjectView, orgProjectView } from './orgProjectView.setup'
 
 /**
  * Which tasks are groups by the subtasks among `rows` (lib/liveTasks.ts

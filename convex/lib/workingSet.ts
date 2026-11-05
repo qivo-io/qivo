@@ -49,7 +49,8 @@ export function inWorkingSet(
 /**
  * The working set within an organization's active tasks, which holds those
  * in a project the member can see that is not archived. `projects` is the
- * member's view of the organization's projects (lib/visibility.ts). Every
+ * member's view of the organization's projects by id, with whether they can
+ * see each, such as the access suites' (tests/orgProjectView.setup.ts). Every
  * task of the working set is in an active project, so its subtasks that make
  * it a group are the active tasks in active projects (lib/liveTasks.ts
  * countsAsSubtask), which is what `activeTasks` must hold for
