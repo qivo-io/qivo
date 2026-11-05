@@ -14,7 +14,8 @@
  * the text, name, list and request size limits, unknown arguments, comment
  * paging, cursor paging of the active and archived task lists, of the
  * workload's people (machine/workload-pages) and of the user, label, team
- * and member lists with their name search (machine/people-lists), task
+ * and member lists with their name search, with a label of its own that it
+ * deletes in the app again (machine/people-lists), task
  * progress, last comment
  * times, delay and project completion, which it waits to read whole again
  * after an archive or a restore regroups its counts, and the live group
@@ -2051,7 +2052,8 @@ async function workloadPageChecks() {
  *  a member_count equal to the members its pages list one a page on both
  *  surfaces, and they leave it again, so later steps find it as before. A
  *  label the step makes is found by a search without its accent, and the
- *  sweep deletes it. An offset, a limit out of range, a cursor of another
+ *  step deletes it again in the app, the only place a label is deleted, so
+ *  the run leaves nothing to its sweep. An offset, a limit out of range, a cursor of another
  *  search and a users cursor sent to the teams list are refused, and a
  *  users cursor of REST continues on MCP. */
 async function peopleListChecks() {
@@ -2123,6 +2125,23 @@ async function peopleListChecks() {
       ids(await mcpRows(w, 'list_labels', 'labels', { search: `${run.tag} ETIQUETTE` })),
       [label.id],
       'the label list_labels finds without its accent',
+    )
+    await app.waitForFunction(
+      (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
+      label.id,
+      { timeout: 30_000 },
+    )
+    expect(
+      await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
+      'the app could not delete the label',
+    )
+    expect(
+      await until(async () =>
+        (await restRows(w, '/labels', 'labels', { search: run.tag })).every(
+          (l) => l.id !== label.id,
+        ),
+      ),
+      'GET /v1/labels still lists the deleted label',
     )
     // the refusals, and a REST cursor that MCP continues
     await restRefusal(w, 'GET', '/users?offset=1', undefined, 400, PEOPLE_REFUSALS.offset)
