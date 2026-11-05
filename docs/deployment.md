@@ -729,10 +729,11 @@ takes them past those bounds, where they showed a delay before. Every
 other owner's delay stays as it was. In a staff call the paused reads also
 spend the call's room, so an owner can come back `not_read` sooner and the
 cache asks for it again in a call of its own. `planning.assigneeLoad`, the
-REST and MCP workload pages and delays and the Overview read no paused
-work and answer as before. The release whose Roadmap view reads the fields
-makes this release the backend's floor for that app, and its own paragraph
-here says so. There is no schema change and no backfill.
+REST and MCP workload pages and delays and the Overview ask nothing about
+paused tasks' projects or subtasks, and read and answer as before. The
+release whose Roadmap view reads the fields makes this release the
+backend's floor for that app, and its own paragraph here says so. There is
+no schema change and no backfill.
 
 ## Node.js version
 
