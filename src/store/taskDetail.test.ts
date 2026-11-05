@@ -640,25 +640,19 @@ describe('a task the workspace does not hold, in the store', () => {
       expect(one('snapshot:threadHistory').args).toEqual({ org_id: org, issue_id: 'far-1' })
     })
 
-    it('moves the handles of tasks it does not hold when the home organization changes', async () => {
+    it('moves the handle of the task a window shows from its answer when the home organization changes, and no reference', async () => {
       const { P } = store
+      const { taskRef } = await import('../lib/taskReference')
       // the partner organization holds its own QN-40
       snap.issues.push(task('guest-40', 40, { org_id: GUEST, project_id: GUEST_PROJECT }))
       publishWhole(snap)
       expect(P.handleOf('guest-40')).toBe('guest-40')
-      // a window shows the home organization's QN-40 from its answer, and
-      // Search opened its archived QN-41
+      // a window shows the home organization's QN-40 from its answer, opened
+      // by a reference, which names its organization by id
+      const ref = taskRef({ org, num: 40, uuid: 'far-1' })
+      P.watchTaskRef(ref)
       P.watchComments('far-1', org)
       one('taskWindow:task').deliver(okAnswer('far-1', 40))
-      const { noteOpenedTask } = await import('../lib/openedTasks')
-      noteOpenedTask({
-        uuid: 'far-2',
-        num: 41,
-        key: 'QN-41',
-        title: 'Archived far task',
-        project: snap.projects[0].id,
-        org,
-      })
       const moves: Record<string, string>[] = []
       P.watchHandles((moved) => moves.push(Object.fromEntries(moved)))
       // the home seat becomes a guest one, and the partner seat the home
@@ -672,9 +666,11 @@ describe('a task the workspace does not hold, in the store', () => {
       publishWhole(snap)
       expect(P.homeOrg).toBe(GUEST)
       // one move of every handle at once: the partner's task takes QN-40,
-      // and the tasks the workspace does not hold keep theirs by uuid
+      // and the task the window shows from its answer keeps its own by
+      // uuid; the reference does not move
       expect(moves).toHaveLength(1)
-      expect(moves[0]).toMatchObject({ 'guest-40': 'QN-40', 'QN-40': 'far-1', 'QN-41': 'far-2' })
+      expect(moves[0]).toMatchObject({ 'guest-40': 'QN-40', 'QN-40': 'far-1' })
+      expect(Object.keys(moves[0])).not.toContain(ref)
       expect(P.handleNow('far-1', org, 40)).toBe('far-1')
       // the window's read goes on for the same task
       expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: 'far-1' })

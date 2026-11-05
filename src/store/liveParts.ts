@@ -34,8 +34,9 @@
    partial transition holds no write for certain, since the window a write
    changed may not have arrived. A workspace of
    fewer parts subscribes them at once and is never partial, and so do the
-   organizations added once the workspace was complete and a boot that
-   waits for the whole workspace (createLiveParts `whole`). A part that
+   organizations added once the workspace was complete and a re-init that
+   waits for the whole workspace (createLiveParts `whole`, as a new
+   organization's boot does). A part that
    fails ends the stage: no other window subscribes while it holds the
    workspace.
 
@@ -66,11 +67,24 @@
    and, while a window shows All, its history, and while a window shows the
    task's details, its subtasks, links and attachments
    (convex/taskWindow.ts), the task with its subtasks also while a window
-   shows a task the workspace does not hold from it. A transition that
-   brings the workspace and the sides repaints once. Each side is its own: its failure never holds the
-   workspace or another side. */
+   shows a task the workspace does not hold from it, and the read of a
+   task a window names by a reference before it knows the task's uuid and
+   organization (store/planner.ts P.watchTaskRef). A boot on a task's
+   address subscribes that read itself, in the pass that subscribes the
+   first stage, once the root part names the organization the address's
+   slug names (createLiveParts `address`), so the task's answer comes with
+   the first stage. A transition that brings the workspace and the sides
+   repaints once. Each side is its own. Its failure never holds the
+   workspace or another side.
 
-import type { FunctionReference } from 'convex/server'
+   Watching one query with the same arguments twice shares one Convex
+   subscription and one token (lib/liveQueries.ts), and a watch that joins
+   one hears no transition for an answer that arrived already. So a side
+   whose query and arguments another side watches takes that side's
+   subscription over (watchSide), with its answer, rather than watching
+   again. */
+
+import { type FunctionReference, getFunctionName } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import {
@@ -113,8 +127,18 @@ export const STAGES = { most: 32, first: 16, batch: Number.POSITIVE_INFINITY }
     and its attachments (convex/taskWindow.ts task, links and
     attachments). The task side also runs while a window shows a task the
     workspace does not hold, from that answer (store/planner.ts
-    P.taskDetail). */
-export const SIDE_NAMES = ['thread', 'history', 'task', 'links', 'attachments'] as const
+    P.taskDetail). `reference` reads a task a window names by a reference
+    (lib/taskReference.ts) by its number, or by its uuid in one
+    organization after another, until an answer names its uuid and
+    organization (store/planner.ts P.watchTaskRef). */
+export const SIDE_NAMES = [
+  'thread',
+  'history',
+  'task',
+  'links',
+  'attachments',
+  'reference',
+] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 
 /** What one transition brought a side query: its answer or its failure. */
@@ -207,15 +231,29 @@ const isAnswer = (value: unknown): value is Answer =>
     (convex/workspace.ts root). */
 export const ROOT_ARGS = { seatless: 'all' } as const
 
+/** The task a boot's address names under an organization's slug
+    (lib/router.ts addressedTask), with its ref as taskWindow.task reads it,
+    `QN-12` or a lowercase uuid. */
+export type AddressedTask = { slug: string; ref: string }
+
+/* Whether side slot `slot` watches query `ref` with `args`. */
+const sameQuery = (slot: Slot, ref: FunctionReference<'query'>, args: Record<string, Value>) =>
+  getFunctionName(slot.ref) === getFunctionName(ref) &&
+  JSON.stringify(slot.args) === JSON.stringify(args)
+
 /** Creates a registry over `live` that reports to `report`. `online` says
     whether the stall check may fail the workspace, false while the socket
     is down or saves pause offline. With `whole`, the caller shows only a
-    complete workspace, so nothing loads in stages. */
+    complete workspace, so nothing loads in stages. With `address`, the
+    registry subscribes the `reference` side to the task the boot's address
+    names, taskWindow.task in the organization its slug names, once the
+    root part names that organization, and before the first stage's task
+    windows. A slug the root part does not name subscribes nothing. */
 export function createLiveParts(
   live: LiveQueries,
   report: (news: PartsReport) => void,
   online: () => boolean,
-  opts?: { whole?: boolean },
+  opts?: { whole?: boolean; address?: AddressedTask },
 ) {
   let stopped = false
   let connection: number | null = null
@@ -232,6 +270,8 @@ export function createLiveParts(
   // nothing loads in stages any more
   let staged = false
   let completed = false
+  // whether the root part's first answer was read for the boot's address
+  let addressed = !opts?.address
 
   const watch = (ref: FunctionReference<'query'>, args: Record<string, Value>): Slot => {
     const { token, stop } = live.watch(ref, args)
@@ -257,6 +297,12 @@ export function createLiveParts(
     let moved = false
     const answer = root?.fresh && root.error === undefined ? (root.value as RootAnswer) : undefined
     if (answer === undefined) return false
+    if (!addressed && opts?.address) {
+      addressed = true
+      const { slug, ref } = opts.address
+      const org = rootOrgs(answer).find((row) => row.slug === slug.toLowerCase())
+      if (org) watchSide('reference', api.taskWindow.task, { org_id: org.id, ref })
+    }
     const wanted = new Set(rootOrgs(answer).map((org) => org.id))
     for (const [id, org] of orgs) {
       if (wanted.has(id)) continue
@@ -547,6 +593,36 @@ export function createLiveParts(
     }, STALL.ms)
   }
 
+  /** Watches `ref` with `args` as side `name`, replacing that side's
+      subscription. A fresh subscription runs the query again, so its
+      answer is never one held from before. Another side that watches the
+      same query with the same arguments holds the one subscription Convex
+      keeps for both, so side `name` takes it over instead, and the news it
+      answers is that subscription's current answer, when one arrived on
+      the newest connection, else undefined. */
+  function watchSide(
+    name: SideName,
+    ref: FunctionReference<'query'>,
+    args: Record<string, Value>,
+  ): SideNews | undefined {
+    const before = sides.get(name)
+    for (const [other, slot] of sides) {
+      if (other === name || !sameQuery(slot, ref, args)) continue
+      if (before) drop(before)
+      sides.delete(other)
+      slot.side = name
+      sides.set(name, slot)
+      if (!slot.fresh) return undefined
+      if (slot.error !== undefined) return { error: slot.error }
+      return slot.value === undefined ? undefined : { value: slot.value }
+    }
+    if (before) drop(before)
+    const slot = watch(ref, args)
+    slot.side = name
+    sides.set(name, slot)
+    return undefined
+  }
+
   const stopTransitions = live.onTransition((transition) => {
     if (stopped) return
     lastAt = Math.max(lastAt, transition.at)
@@ -610,16 +686,10 @@ export function createLiveParts(
       if (failed.length > 0) settle()
       return failed.length > 0
     },
-    /** Watches `ref` with `args` as the side query `name`, replacing only
-        that side's subscription. A fresh subscription runs the query again,
-        so its answer is never one held from before. */
-    watchSide(name: SideName, ref: FunctionReference<'query'>, args: Record<string, Value>) {
-      const before = sides.get(name)
-      if (before) drop(before)
-      const slot = watch(ref, args)
-      slot.side = name
-      sides.set(name, slot)
-    },
+    watchSide,
+    /** The arguments side `name` watches with, or undefined while it does
+        not run. */
+    sideArgs: (name: SideName): Record<string, Value> | undefined => sides.get(name)?.args,
     /** Stops the side query `name`, and keeps the others. */
     stopSide(name: SideName) {
       const slot = sides.get(name)

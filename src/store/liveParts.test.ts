@@ -451,6 +451,39 @@ describe('the live parts registry', () => {
     for (const at of [0, 1, 2, 3]) expect(s.watched.has(key(at))).toBe(false)
   })
 
+  it('hands a side query that another side watches with the same arguments over, with its answer', async () => {
+    const { s, parts, reports } = await started()
+    const args = { org_id: ORG, ref: 't' }
+    const key = s.keyOf('taskWindow:task', args)
+    parts.watchSide('reference', TASK, args)
+    s.set('taskWindow:task', args, { value: { state: 'ok' } })
+    s.send([key])
+    expect(reports.at(-1)?.sides).toEqual({ reference: { value: { state: 'ok' } } })
+    s.log.length = 0
+    // Convex keeps one subscription for both: the task side takes it over,
+    // with the answer that arrived, and watches nothing again
+    expect(parts.watchSide('task', TASK, args)).toEqual({ value: { state: 'ok' } })
+    expect(s.log).toEqual([])
+    expect(parts.sideArgs('reference')).toBeUndefined()
+    expect(parts.sideArgs('task')).toEqual(args)
+    // and hears that subscription's next answer as its own
+    s.set('taskWindow:task', args, { value: { state: 'unavailable' } })
+    s.send([key])
+    expect(reports.at(-1)?.sides).toEqual({ task: { value: { state: 'unavailable' } } })
+    // an answer from before a reconnect is not handed over as current
+    parts.watchSide('reference', TASK, { org_id: ORG, ref: 'u' })
+    const other = s.keyOf('taskWindow:task', { org_id: ORG, ref: 'u' })
+    s.set('taskWindow:task', { org_id: ORG, ref: 'u' }, { value: { state: 'ok' } })
+    s.send([other])
+    s.reconnect()
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
+    expect(parts.watchSide('task', TASK, { org_id: ORG, ref: 'u' })).toBeUndefined()
+    // a side with other arguments watches anew
+    expect(parts.watchSide('task', TASK, { org_id: ORG, ref: 'v' })).toBeUndefined()
+    expect(s.watched.has(s.keyOf('taskWindow:task', { org_id: ORG, ref: 'v' }))).toBe(true)
+    expect(s.watched.has(other)).toBe(false)
+  })
+
   it('fails a workspace that stays incomplete with no part answering while online, and waits while offline', async () => {
     vi.useFakeTimers()
     STALL.ms = 1000
@@ -710,6 +743,56 @@ describe('a staged load', () => {
     s.send()
     expect(reports.map((r) => r.workspace.state)).not.toContain('partial')
     expect(reports.at(-1)?.workspace.state).toBe('complete')
+  })
+
+  it("reads the boot address's task in the pass that subscribes the first stage, never for a slug the root does not name", () => {
+    const s = scripted()
+    serveBig(s)
+    s.set('workspace:root', ROOT_ARGS, {
+      value: { ...BIG, orgs: [{ ...BIG.orgs[0], slug: 'northstar' }] },
+    })
+    const reports: PartsReport[] = []
+    const parts = createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+      { address: { slug: 'NorthStar', ref: 'QN-12' } },
+    )
+    const args = { org_id: ORG, ref: 'QN-12' }
+    const key = s.keyOf('taskWindow:task', args)
+    // nothing before the root answered
+    expect(s.watched.has(key)).toBe(false)
+    s.send([s.keyOf('workspace:root', ROOT_ARGS)])
+    // with the first stage, ahead of its task windows
+    const order = s.log.filter((l) => l.startsWith('watch ')).map((l) => l.split('{')[0])
+    expect(order.indexOf('watch taskWindow:task')).toBeLessThan(
+      order.indexOf('watch workspace:tasks'),
+    )
+    expect(parts.sideArgs('reference')).toEqual(args)
+    expect(watchedWindows(s)).toHaveLength(STAGES.first)
+    // its answer comes with the first stage's partial workspace
+    s.set('taskWindow:task', args, { value: { state: 'ok', task: { id: 't12' } } })
+    s.send()
+    expect(reports.at(-1)).toMatchObject({
+      workspace: { state: 'partial' },
+      sides: { reference: { value: { state: 'ok' } } },
+    })
+    // its failure holds neither the workspace nor the next stage
+    s.set('taskWindow:task', args, { error: new Error('task failed') })
+    s.send()
+    expect(reports.at(-1)?.workspace.state).not.toBe('failed')
+    expect(watchedWindows(s)).toHaveLength(64)
+    // a slug the root does not name reads nothing
+    const t = scripted()
+    serveBig(t)
+    createLiveParts(
+      t.live,
+      () => {},
+      () => true,
+      { address: { slug: 'globex', ref: 'QN-12' } },
+    )
+    t.send()
+    expect([...t.watched.keys()].some((k) => k.startsWith('taskWindow:'))).toBe(false)
   })
 
   it('watches no later window once a part of the stage failed', () => {

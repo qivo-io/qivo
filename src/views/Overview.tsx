@@ -1108,12 +1108,10 @@ const WAITING: ListView = {
 function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions }) {
   const mobile = useMobile()
   const { paneRef } = useOverviewPanelClipping(!mobile)
-  // App makes its actions again every render; the rows keep one identity
-  const openIssue = useLatest((id: string) => {
-    // a task only the answer brings opens from the window's own read
-    P.noteViewTask(id)
-    actions.openIssue(id)
-  })
+  // App makes its actions again every render; the rows keep one identity.
+  // A task only the answer brings opens by a reference the window reads
+  // from the server (P.openTarget)
+  const openIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   /* Which column the health table is sorted on. It opens on the worst first:
      "which of these is in trouble" is the question the section exists to
      answer, and a table that opens alphabetically makes you click to ask it.

@@ -553,12 +553,9 @@ function MobileTaskBoard({
   const listRef = useRef<HTMLDivElement>(null)
   const followFocus = useFollowTaskFocus(listRef)
   // App makes its actions again every render; the rows keep one identity
-  // a row of a task only the Board's answer brings opens from the window's
-  // own read (P.noteViewTask)
-  const openIssue = useLatest((id: string) => {
-    P.noteViewTask(id)
-    actions.openIssue(id)
-  })
+  // a row of a task only the Board's answer brings opens by a reference the
+  // window reads from the server (P.openTarget)
+  const openIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const shown = groups.filter((group) => group.tasks.length)
 
   /* A list of more than SYNC_LIMIT tasks mounts the rows of its first

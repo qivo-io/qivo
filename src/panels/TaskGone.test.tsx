@@ -968,7 +968,7 @@ const FOUND = {
 }
 
 /* Opens the window on QN-27 as Search opens a result the workspace does not
-   hold, noted as Palette.tsx openTaskResult notes it, as `role` with
+   hold, by the reference Palette.tsx openTaskResult opens it by, as `role` with
    `level` on its project when the role is not admin. The server holds it
    archived, active (`active`), or not at all, and answers the window's read
    when the test calls the function this answers. With `loading`, the
@@ -1047,19 +1047,14 @@ async function openFound({
   // the server's reads see the task where the server holds it
   snap = server
   expect(store.P.stillLoading() !== null).toBe(loading)
-  const { noteOpenedTask } = await import('../lib/openedTasks')
-  noteOpenedTask({
-    ...FOUND,
-    num: 27,
-    project: workspace.projects[0].id,
-    org: workspace.orgs[0].id,
-  })
+  const { taskRef } = await import('../lib/taskReference')
+  const ref = taskRef({ org: workspace.orgs[0].id, num: 27, uuid: FOUND.uuid })
   const { IssueDetail } = await import('./IssueDetail')
   onClose = vi.fn<() => void>()
   await act(async () =>
     root.render(
       <TooltipProvider>
-        <IssueDetail issueId={FOUND.key} onClose={onClose} onOpen={vi.fn()} />
+        <IssueDetail issueId={ref} onClose={onClose} onOpen={vi.fn()} />
       </TooltipProvider>,
     ),
   )
@@ -1073,11 +1068,12 @@ describe('the task window on a task Search found that the workspace does not hol
 }, () => {
   it('shows an archived result read-only with its title, place and date, and restores it into the window', async () => {
     const { answer, row } = await openFound()
-    // while the read is asked, the window does not say the task left
+    // while the read is asked, the window does not say the task left, and
+    // shows only what its reference names, no title the server did not send
     expect(note()?.textContent).toBe('Loading QN-27…')
     expect(dialog()?.textContent).not.toContain('no longer on the board')
     expect(details()?.textContent).toContain('QN-27')
-    expect(details()?.textContent).toContain('Run the soak test')
+    expect(details()?.textContent).not.toContain('Run the soak test')
     await answer()
     expect(note()?.textContent).toBe(
       'QN-27 was archived. Restore it to bring it back to the board.',
@@ -1164,11 +1160,11 @@ describe('the task window on a task Search found that the workspace does not hol
     expect(row.title).toBe('Run the soak test')
   })
 
-  it('says an archived result the archive no longer holds is no longer here', async () => {
+  it("says a result the server answers unavailable can't be opened, the same for every reason", async () => {
     const { answer } = await openFound({ inArchive: false })
     await answer()
     expect(note()?.textContent).toBe(
-      'QN-27 is no longer here. It was deleted, or you can no longer open it.',
+      "QN-27 can't be opened. It may not exist, or you may not have access to it.",
     )
     expect(button('Restore')).toBeUndefined()
     await click(button('Close'))
@@ -1177,7 +1173,9 @@ describe('the task window on a task Search found that the workspace does not hol
 
   it('opens an archived and an active result at once while tasks still load', async () => {
     const archived = await openFound({ loading: true })
-    expect(document.querySelector('[data-task-loading]')).toBeNull()
+    // its own loading line, not the wait for a task still to arrive
+    expect(note()?.textContent).toBe('Loading QN-27…')
+    expect(dialog()?.textContent).not.toContain('Loading this task')
     await archived.answer()
     expect(note()?.textContent).toBe(
       'QN-27 was archived. Restore it to bring it back to the board.',
@@ -1188,7 +1186,7 @@ describe('the task window on a task Search found that the workspace does not hol
     const active = await openFound({ loading: true, active: true })
     // an active result may be among the tasks still to arrive: it shows
     // from its own read meanwhile
-    expect(document.querySelector('[data-task-loading]')).toBeNull()
+    expect(note()?.textContent).toBe('Loading QN-27…')
     await active.answer()
     expect(dialog()?.dataset.taskSource).toBe('answer')
     expect(document.querySelector('[data-task-gone]')).toBeNull()

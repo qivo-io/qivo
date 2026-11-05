@@ -229,11 +229,6 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
-  .inbox-layout[data-inbox-mobile-detail] > .inbox-detail-frame--note {
-    flex-direction: column;
-    padding: var(--float-safe-top) 16px env(safe-area-inset-bottom);
-    background: var(--background);
-  }
   /* Over a photo the full-screen task supplies its own window glass. Keep
      its Inbox wrapper clear so it can sample the same photograph as other
      task windows. */
@@ -241,17 +236,5 @@ html[data-appearance] .inbox-detail-frame [data-issue-layout="embedded"] {
     .inbox-layout[data-inbox-mobile-detail]
     > .inbox-detail-frame {
     background: transparent;
-  }
-  html[data-appearance][data-background-state="ready"]
-    .inbox-layout[data-inbox-mobile-detail]
-    > .inbox-detail-frame--note {
-    background: var(--workspace-panel);
-    -webkit-backdrop-filter: var(--workspace-panel-blur);
-    backdrop-filter: var(--workspace-panel-blur);
-  }
-  .inbox-mobile-back {
-    align-self: flex-start;
-    min-height: 44px;
-    margin-top: 8px;
   }
 }

@@ -245,19 +245,12 @@ const arrive = () =>
     publish(snap)
   })
 
-/* Notes task `row` as Search or a task window notes one it opens
-   (lib/openedTasks.ts), and answers its handle. */
+/* The reference Search or a related row opens task `row` by when the
+   workspace does not hold it (lib/taskReference.ts), with its
+   organization, number and uuid. */
 async function noteTask(row: Task) {
-  const { noteOpenedTask } = await import('../lib/openedTasks')
-  noteOpenedTask({
-    uuid: row.id,
-    num: row.num,
-    key: `QN-${row.num}`,
-    title: row.title,
-    project: row.project_id,
-    org: row.org_id,
-  })
-  return P.handleNow(row.id, row.org_id, row.num)
+  const { taskRef } = await import('../lib/taskReference')
+  return taskRef({ org: row.org_id, num: row.num, uuid: row.id })
 }
 
 /* Opens the window on handle `first`, which follows the tasks it opens
@@ -425,15 +418,15 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     await load()
     const handle = await noteTask(far())
     await openWindow(handle)
-    // noted and never shown, before the read answers
+    // opened by its reference and never shown, before the read answers:
+    // its key, and no title the server did not send
     expect(note()?.textContent).toBe('Loading QN-40…')
-    expect(document.querySelector('[data-task-gone-task]')?.textContent).toContain(
-      'Tune the antenna',
-    )
+    expect(document.querySelector('[data-task-gone-task]')?.textContent).toBe('QN-40')
+    expect(document.querySelector('[data-task-gone]')?.hasAttribute('data-task-loading')).toBe(true)
     expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAR })
     // a failed read, with Retry, which reads it again
     await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
-    expect(note()?.textContent).toBe("Couldn't open QN-40. Couldn't check the archive.")
+    expect(note()?.textContent).toBe("Couldn't open QN-40.")
     await click(buttonNamed('Retry'))
     expect(note()?.textContent).toBe('Loading QN-40…')
     expect(reads()).toHaveLength(2)
@@ -868,18 +861,63 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     )
     const row = document.querySelector('[data-section="subtasks"] [data-related-task="QN-42"]')
     await click(row?.querySelector('button'))
-    expect(onOpen).toHaveBeenCalledWith('QN-42')
+    // by a reference that names its organization, number and uuid
+    const ref = await noteTask(kidRow)
+    expect(onOpen).toHaveBeenCalledWith(ref)
     // the window reads it, in its organization
     expect(one('taskWindow:task').args).toEqual({ org_id: snap.orgs[0].id, ref: FAR_KID })
     const { buildPath, issueLink } = await import('../lib/router')
-    expect(buildPath({ view: 'kanban', openIssue: 'QN-42' })).toBe('/app/testbed/board/tasks/qn-42')
-    expect(issueLink('QN-42')).toBe('/app/testbed/tasks/qn-42')
+    expect(buildPath({ view: 'kanban', openIssue: ref })).toBe('/app/testbed/board/tasks/qn-42')
+    expect(issueLink(ref)).toBe('/app/testbed/tasks/qn-42')
     await answer('taskWindow:task', okAnswer(kidRow, { parent: short(snap.issues[0], true) }))
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Wind the coil')
     // its Parent row is the held family task
     expect(document.querySelector('[data-related-task="QN-27"]')?.textContent).toContain(
       'Calibrate the sensor',
     )
+  })
+
+  it('keeps All, the Details tab and a title typed when the reference it opened by turns into its handle', async () => {
+    viewport(true)
+    await load(true)
+    const ref = await noteTask(far())
+    await openWindow(ref)
+    await answer('taskWindow:task', okAnswer(far()))
+    // All under Activity reads the history, and the Details tab the lists
+    await click(buttonNamed('All'))
+    expect(open('snapshot:threadHistory')).toHaveLength(1)
+    await click(buttonNamed('Details'))
+    expect(open('taskWindow:links')).toHaveLength(1)
+    await click(document.querySelector('[data-task-title]'))
+    const title = document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Tune the antenna twice')
+    // the workspace brings the task, and the reference turns into its handle
+    await arrive()
+    expect(shownHandle).toBe('QN-40')
+    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    // the same window, as it was
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')?.value).toBe(
+      'Tune the antenna twice',
+    )
+    expect(open('snapshot:threadHistory')).toHaveLength(1)
+    expect(open('taskWindow:links')).toHaveLength(1)
+    expect(window.showToast).not.toHaveBeenCalledWith('Unsaved title discarded')
+  })
+
+  it('keeps the remaining hours typed when the reference it opened by turns into its handle', async () => {
+    await load(true)
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    const remaining = document.querySelector<HTMLInputElement>('[data-remaining-input]')
+    if (!remaining) throw new Error('missing the Remaining field')
+    await act(async () => remaining.focus())
+    await typeInto(remaining, '12')
+    await arrive()
+    expect(shownHandle).toBe('QN-40')
+    expect(dialog()?.dataset.taskSource).toBe('workspace')
+    expect(document.querySelector<HTMLInputElement>('[data-remaining-input]')?.value).toBe('12')
+    expect(document.activeElement).toBe(document.querySelector('[data-remaining-input]'))
   })
 
   it('keeps the read and the view when a phone switches from Details back to Activity', async () => {
@@ -1270,8 +1308,9 @@ describe('the task window when the home organization changes', { timeout: 30_000
     it(`keeps showing ${state === 'ok' ? 'a task from its answer' : 'an archived task'}, and its address names it, when the new home holds its number`, async () => {
       await load(false, withBeta)
       expect(P.homeOrg).toBe(snap.orgs[0].id)
-      await openWindow(await noteTask(far()))
-      expect(shownHandle).toBe('QN-40')
+      const ref = await noteTask(far())
+      await openWindow(ref)
+      expect(shownHandle).toBe(ref)
       await answer('taskWindow:task', state === 'ok' ? okAnswer(far()) : archivedAnswer(far()))
       const { buildPath, issueLink } = await import('../lib/router')
       const address = () => buildPath({ view: 'kanban', openIssue: shownHandle })
@@ -1283,8 +1322,9 @@ describe('the task window when the home organization changes', { timeout: 30_000
       await act(async () => publish(next))
       expect(P.homeOrg).toBe(BETA)
       expect(P.issueById['QN-40']?.title).toBe('Beta task 40')
-      // the window follows the task to its new handle and goes on showing it
-      expect(shownHandle).toBe(FAR)
+      // the reference names its organization by id, so it does not move,
+      // and the window goes on showing the task
+      expect(shownHandle).toBe(ref)
       expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
       expect(dialog()?.dataset.taskSource).toBe('answer')
       expect(dialog()?.hasAttribute('data-task-archived')).toBe(state === 'archived')
@@ -1327,16 +1367,32 @@ describe('the task window when the home organization changes', { timeout: 30_000
 })
 
 describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () => {
-  it('says the delay is unknown while tasks load, and the verdict once they have', async () => {
+  it("judges from the owner's load from the server while tasks load, and the workspace's verdict once they have", async () => {
     await load(true)
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far()))
+    // the window asks for the owner's other work, as a Board card does,
+    // and shows no mark while it is on its way
+    expect(one('planning:ownerLoads').args).toEqual({
+      org_id: snap.orgs[0].id,
+      owner_ids: ['mira'],
+    })
+    expect(delayChip()).toBeNull()
+    // Delay unknown only where that work cannot be read
+    await answer('planning:ownerLoads', {
+      hidden: 'counted',
+      owners: [{ owner_id: 'mira', state: 'unavailable' }],
+    })
     expect(delayChip()?.dataset.delayChip).toBe('unknown')
     expect(delayChip()?.textContent).toBe('Delay unknown')
-    expect(await hintOf(delayChip())).toBe(
-      "The projection needs the owner's other work, which has not loaded yet.",
-    )
+    expect(await hintOf(delayChip())).toBe("Qivo could not read the owner's other work.")
+    // 400 hours do not fit in two weeks of Mira's time
+    await answer('planning:ownerLoads', {
+      hidden: 'counted',
+      owners: [{ owner_id: 'mira', state: 'ok', spans: [] }],
+    })
+    expect(delayChip()?.dataset.delayChip).toBe('late')
     await arrive()
     // 400 hours do not fit in two weeks of Mira's time
     expect(delayChip()?.dataset.delayChip).toBe('late')
@@ -1395,13 +1451,13 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
     expect(delayChip()?.dataset.delayChip).toBe('late')
   })
 
-  it('says Overdue for a passed due date, and nothing for a Done task or one without a due date or plan', async () => {
+  it('says Delayed for a passed due date, as for a task the workspace holds, and nothing for a Done task or one without a due date or plan', async () => {
     await load()
     const handle = await noteTask(far())
     await openWindow(handle)
     await answer('taskWindow:task', okAnswer(far({ due_date: day(-2) })))
-    expect(delayChip()).toBeNull()
-    expect(dueText()).toContain('Overdue')
+    expect(delayChip()?.dataset.delayChip).toBe('late')
+    expect(await hintOf(delayChip())).toBe('Delayed, the due date has passed')
     await answer('taskWindow:task', okAnswer(far({ status: 'done' })))
     expect(delayChip()).toBeNull()
     expect(dueText()).not.toContain('Overdue')

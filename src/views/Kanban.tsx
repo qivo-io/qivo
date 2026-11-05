@@ -618,12 +618,9 @@ function KanbanBoard({
   // the filter row as the Board applies it
   const filters = view.filters
   // App makes its actions again every render; the cards keep one identity
-  // a card of a task only the Board's answer brings opens from the window's
-  // own read (P.noteViewTask)
-  const onOpenIssue = useLatest((id: string) => {
-    P.noteViewTask(id)
-    actions.openIssue(id)
-  })
+  // a card of a task only the Board's answer brings opens by a reference
+  // the window reads from the server (P.openTarget)
+  const onOpenIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const [dragId, setDragId] = useStateK<string | null>(null)
   useUpdateBlocker(!!dragId)
   // The cell the drag is over. Cells read it themselves, so a dragover

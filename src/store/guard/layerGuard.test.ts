@@ -194,7 +194,9 @@ describe('the writes from the task window’s own answer', () => {
      lists; one row looked up by its uuid or handle is allowed. The paints
      they give the workspace (labelRowsPaint, followRowsPaint,
      moveRowsPaint) skip until the workspace holds the task, and walk then
-     what the held path walks. */
+     what the held path walks. So do the reads of a task a window opens by
+     a reference (planner.ts refRead), which resolve a number or a uuid on
+     the server, and the window's delay of such a task (P.windowDelay). */
   const ANSWER_PATH = [
     'answerTaskOf',
     'updateAnswerTask',
@@ -211,6 +213,22 @@ describe('the writes from the task window’s own answer', () => {
     'shownHandleOf',
     'editsFromAnswer',
     'answerSaveWaits',
+    'refSeats',
+    'nextRefArgs',
+    'runRefRead',
+    'takeRefNews',
+    'referenceNews',
+    'syncRefRead',
+    'refHandle',
+    'refMoves',
+    'watchTaskRef',
+    'openTask',
+    'openTarget',
+    'unheldWatched',
+    'unheldTask',
+    'windowDelay',
+    'windowDelayIssue',
+    'syncWindowLoad',
   ]
   /* The whole-list walks of the workspace's tasks and of their rows. */
   const WALKS = [

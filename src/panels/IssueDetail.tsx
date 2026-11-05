@@ -62,7 +62,6 @@ import {
   useUnsaved,
   useUnsentScope,
 } from '../lib/leaveGuard'
-import { noteOpenedTask, openedTask } from '../lib/openedTasks'
 import {
   parentBlock,
   parentCandidatesFor,
@@ -70,11 +69,12 @@ import {
   subtaskCandidatesFor,
 } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
-import { buildPath, issueLink } from '../lib/router'
+import { buildPath, issueLink, sameTask } from '../lib/router'
 import { matchesAllWords, moreMatches } from '../lib/search'
 import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
+import { type RefParts, refParts } from '../lib/taskReference'
 import { groupTotals, workspaceTotals } from '../lib/taskSections'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useBottomSnap } from '../lib/useBottomSnap'
@@ -95,6 +95,7 @@ import {
   type SectionName,
   type SectionVM,
   type TaskDetailVM,
+  type TaskRefVM,
   type TaskSectionsVM,
 } from '../store/planner'
 import {
@@ -104,6 +105,7 @@ import {
   WAITS_FOR_CHECK,
   WAITS_FOR_TASKS,
 } from './Modals'
+import { useTaskKey } from './taskKey'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
 // after the workspace's first paint (App.tsx); viewers render the plain
@@ -144,9 +146,9 @@ const READ_ONLY = 'Read-only project access'
    (RelatedTaskVM): the workspace's view of a task it holds, else the
    section answer's short row, so a task still to arrive in a large
    workspace is listed rather than left out. Opening it passes its handle
-   on. A task the workspace does not hold is noted first in the opened-task
-   registry (lib/openedTasks.ts), so the window knows its organization and
-   shows it from its own read, and the address names it. */
+   on, or for a task the workspace does not hold, a reference with its
+   organization, number and uuid (lib/taskReference.ts), so the window
+   shows it from its own read and the address names it. */
 function MiniIssueRow({
   task,
   onOpen,
@@ -171,18 +173,7 @@ function MiniIssueRow({
       <Button
         type="button"
         variant="unstyled"
-        onClick={() => {
-          if (!task.held)
-            noteOpenedTask({
-              uuid: task.uuid,
-              num: task.num,
-              key: `${P.ISSUE_PREFIX}-${task.num}`,
-              title: task.title,
-              project: task.project,
-              org: task.org,
-            })
-          onOpen(task.handle)
-        }}
+        onClick={() => onOpen(task.held ? task.handle : P.openTask(task.uuid, task.org, task.num))}
         className="flex min-w-0 flex-1 self-stretch items-center gap-2 rounded-md p-2 text-left text-text-1 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
       >
         <span className="[display:flex] [flex-direction:column] [gap:2px] [flex:1] [min-width:0]">
@@ -1210,16 +1201,20 @@ function LoadFailure({
 }
 
 /** What the window keeps of the task it shows, for once the task is gone:
-    its uuid, organization, key, title and project. A task Search or a task
-    window opened that this window has not shown (lib/openedTasks.ts) is
-    `opened`. */
-type ShownTask = Pick<IssueVM, 'uuid' | 'org' | 'key' | 'title' | 'project'> & {
+    its uuid, organization, key, title and project. A task opened by a
+    reference (lib/taskReference.ts) that this window has not shown is
+    `opened`, with what the reference and its read name: no uuid before a
+    read names it, and no key for a uuid alone. */
+type ShownTask = Pick<IssueVM, 'uuid' | 'org' | 'title' | 'project'> & {
+  key: string | null
   opened?: true
 }
 
 /** What became of a task the window shows no active task for, from its own
-    read (P.taskDetail): archived, with its row; null when it is no longer
-    here; 'failed' when the read failed; undefined while it is asked. */
+    read (P.taskDetail) or its reference's (P.reference): archived, with its
+    row; null when it is no longer here, or for a task opened by a
+    reference, when the server says it cannot be opened; 'failed' when the
+    read failed; undefined while it is asked. */
 type GoneAnswer =
   | { project: string; title: string; org: string; archivedAt: number }
   | null
@@ -1228,13 +1223,17 @@ type GoneAnswer =
 
 /* The window's note on a task it shows no active task for, because it
    left the board while the window was open (someone archived or deleted
-   it, or it moved where this person cannot open it), or because Search or
-   a task window opened a task the workspace does not hold, from the
+   it, or it moved where this person cannot open it), or because a task
+   the workspace does not hold opened by a reference (lib/taskReference.ts),
+   from a link, Back or Forward, Search, a list or a related row, from the
    window's own read of the task (`found`). It says the task was archived,
    with Restore for someone who can edit its project (`canRestore`), or
-   that it is no longer here, or that it could not be checked, with Retry,
-   or, while the read is asked, that the task left or is loading. A
-   restored task comes back into the window. A reason typed in the task's
+   that its project is archived too (`projectArchived`), or for a task the
+   window showed that it is no longer here, or for one it never showed
+   that it can't be opened, the same for every reason, or that it could not
+   be checked or opened, with Retry, or, while the read is asked, that the
+   task left or is loading. A restored task comes back into the window. A
+   reason typed in the task's
    Archive or delete window went unused, so the note says so and shows it
    to copy. Focus goes to the note when it was in the task's content, which
    went with the task, and never to a button, which the next key typed for
@@ -1249,6 +1248,7 @@ function TaskGone({
   task,
   found,
   canRestore,
+  projectArchived = false,
   onRetry,
   inWindow = false,
   showPlace = false,
@@ -1260,6 +1260,9 @@ function TaskGone({
   task: ShownTask
   found: GoneAnswer
   canRestore: boolean
+  /** an archived task whose project is archived too, which Archived tasks
+      lists only once the project is restored */
+  projectArchived?: boolean
   onRetry: () => void
   inWindow?: boolean
   /** above an archived task in a window without its details column, as
@@ -1310,25 +1313,33 @@ function TaskGone({
     onRetry()
   }
   const opened = !!task.opened
+  // a task opened by its uuid alone has no key to name until its read does
+  const key = task.key ?? 'This task'
   const text =
     found === undefined
       ? opened
-        ? `Loading ${task.key}…`
-        : `${task.key} is no longer on the board.`
+        ? `Loading ${task.key ?? 'this task'}…`
+        : `${key} is no longer on the board.`
       : found === 'failed'
         ? opened
-          ? `Couldn't open ${task.key}. Couldn't check the archive.`
-          : `${task.key} is no longer on the board. Couldn't check the archive.`
+          ? `Couldn't open ${task.key ?? 'this task'}.`
+          : `${key} is no longer on the board. Couldn't check the archive.`
         : found
-          ? canRestore
-            ? `${task.key} was archived. Restore it to bring it back to the board.`
-            : `${task.key} was archived. Someone who can edit its project can restore it from Archived tasks.`
-          : `${task.key} is no longer here. It was deleted, or you can no longer open it.`
+          ? projectArchived
+            ? `${key} was archived, and its project is archived too. Restore the project first, then the task from Archived tasks.`
+            : canRestore
+              ? `${key} was archived. Restore it to bring it back to the board.`
+              : `${key} was archived. Someone who can edit its project can restore it from Archived tasks.`
+          : opened
+            ? `${key} can't be opened. It may not exist, or you may not have access to it.`
+            : `${key} is no longer here. It was deleted, or you can no longer open it.`
   // the note says the reason went unused, and points a screen reader at it
   const reasonId = useIdID()
   return (
     <div
       data-task-gone
+      // a task opened by a reference whose read has not answered yet
+      data-task-loading={opened && found === undefined ? '' : undefined}
       className={cn(
         'flex min-h-0 flex-wrap items-center gap-3 text-sm text-text-2',
         inWindow ? 'shrink-0 px-5 pt-1 pb-3' : 'overflow-y-auto p-6',
@@ -1339,10 +1350,11 @@ function TaskGone({
           <ArchivedPlace project={row.project} archivedAt={row.archivedAt} />
         </div>
       )}
-      {opened && !inWindow && (
+      {opened && !inWindow && task.key && (
         <div data-task-gone-task className="flex min-w-0 basis-full flex-col gap-1">
           <div className="flex min-w-0 items-baseline gap-2">
             <IssueKey id={task.key} />
+            {/* only a title the server sent */}
             <span className="min-w-0 truncate text-base font-medium text-text-1">{task.title}</span>
           </div>
           {row && <ArchivedPlace project={row.project} archivedAt={row.archivedAt} />}
@@ -1455,19 +1467,18 @@ function ArchivedPlace({ project, archivedAt }: { project: string; archivedAt: n
   )
 }
 
-/** The task a window on handle `issueId` is about, by uuid and
-    organization: the workspace's task (`held`), else the task the window
-    showed last on this handle (`shown`), which holds what was noted of a
-    task it has not shown yet, else what Search or a task window noted of
-    the task the handle names (`noted`, lib/openedTasks.ts), or null. The
-    window watches it (P.watchComments) and shows it from its own read
-    while the workspace does not hold it (P.taskDetail).
-    t3/limits-direct-links resolves an address or a notification target
-    through the server here instead, with its organization pinned. */
+/** The task a window on `issueId`, a handle or a reference
+    (lib/taskReference.ts), is about, by uuid and organization: the
+    workspace's task (`held`), else the task the window showed last when
+    `issueId` names it too (`shown`, as a reference and the handle it moved
+    to do), else what the reference names once its uuid and organization
+    are known (`named`), or null. The window watches it (P.watchComments)
+    and shows it from its own read while the workspace does not hold it
+    (P.taskDetail). */
 function windowTaskOf(
   issueId: string | null,
   held: IssueVM | undefined,
-  noted: ShownTask | undefined,
+  named: ShownTask | undefined,
   shown: { at: string; task: ShownTask } | null,
 ): ShownTask | null {
   if (!issueId) return null
@@ -1475,8 +1486,41 @@ function windowTaskOf(
     const { uuid, org, key, title, project } = held
     return { uuid, org, key, title, project }
   }
-  if (shown?.at === issueId) return shown.task
-  return noted ?? null
+  if (shown && (shown.at === issueId || sameTask(shown.at, issueId))) return shown.task
+  return named ?? null
+}
+
+/** The workspace's task that reference `ref` names once the workspace
+    holds it, before the reference moves to its handle (P.watchHandles),
+    by its uuid, or its number in its organization: never by reading the
+    reference as a handle. */
+function heldByRef(ref: RefParts | undefined, read: TaskRefVM | null): IssueVM | undefined {
+  if (!ref) return undefined
+  const uuid = ref.uuid ?? read?.task?.uuid
+  const handle = uuid
+    ? P.handleOf(uuid)
+    : ref.org && ref.num !== undefined
+      ? P.issueRefIn(ref.org, `${P.ISSUE_PREFIX}-${ref.num}`)
+      : null
+  return handle ? P.issueById[handle] : undefined
+}
+
+/** What the window names a task opened by reference `ref` by while it
+    shows nothing of it: its uuid and organization once known, from the
+    reference or its read (`read`), its key and the title and project the
+    read's answer sent. Without a uuid, an empty one, which nothing
+    watches. */
+function refShownTask(ref: RefParts, read: TaskRefVM | null): ShownTask {
+  const task = read?.task
+  const num = task?.num ?? ref.num ?? null
+  return {
+    uuid: task?.uuid ?? (ref.org ? (ref.uuid ?? '') : ''),
+    org: task?.org ?? ref.org ?? '',
+    key: num === null ? null : `${P.ISSUE_PREFIX}-${num}`,
+    title: task?.title ?? '',
+    project: task?.project ?? '',
+    opened: true,
+  }
 }
 
 /* The first row of the thread in `feed`, focusable until it loses focus, so
@@ -1728,25 +1772,29 @@ function IssueDetail({
   // restore brings the task back, when it waits in the next Archive or
   // delete window, whose own field then holds it.
   const [copiedReason, setCopiedReason] = useStateID<string | null>(null)
+  // the task the window is about, as one number that stays while a
+  // reference turns into its handle (useTaskKey), which the window's own
+  // state below keys on
+  const taskKey = useTaskKey(issueId)
   // the task this window shows now, for work that finishes after a switch;
   // updated once a render commits, never during one
-  const shownIssue = useRefID(issueId)
+  const shownIssue = useRefID(taskKey)
   // the last task it showed, which closing (issueId null) keeps, for focus
   const lastShown = useRefID(issueId)
   // the task this window archives or deletes itself, which closes it
-  const leaving = useRefID<string | null>(null)
+  const leaving = useRefID<number | null>(null)
   useLayoutEffectID(() => {
-    shownIssue.current = issueId
+    shownIssue.current = taskKey
     if (issueId) lastShown.current = issueId
-    if (leaving.current !== issueId) leaving.current = null
-  }, [issueId])
+    if (leaving.current !== taskKey) leaving.current = null
+  }, [issueId, taskKey])
   // a render once this window's own archive or delete of the task ends
   // without closing it: `leaving` is a ref, and the task may have left the
   // board meanwhile, which then shows TaskGone
   const [, setLeaveEnded] = useStateID(0)
   /** Ends this window's own archive or delete of `opened`, which left the
       window open, unless the window moved to another task meanwhile. */
-  const stopLeaving = (opened: string | null) => {
+  const stopLeaving = (opened: number | null) => {
     if (leaving.current !== opened) return
     leaving.current = null
     setLeaveEnded((n) => n + 1)
@@ -1755,9 +1803,9 @@ function IssueDetail({
   // Another task opens under Comments from its first render, not only once
   // resetWindow's effect has run, so a window on All never asks for the
   // history of a task it will not show under All (P.showHistory).
-  const [filterTask, setFilterTask] = useStateID(issueId)
-  if (filterTask !== issueId) {
-    setFilterTask(issueId)
+  const [filterTask, setFilterTask] = useStateID(taskKey)
+  if (filterTask !== taskKey) {
+    setFilterTask(taskKey)
     setActFilter('comments')
   }
   // the description discloses only in the embedded pane; the floating window
@@ -1848,7 +1896,7 @@ function IssueDetail({
     if (contentRef.current) contentRef.current.scrollTop = 0
     if (descWrapRef.current) descWrapRef.current.scrollTop = 0
   }
-  useEffectID(resetWindow, [issueId])
+  useEffectID(resetWindow, [taskKey])
   useEffectID(() => {
     const h = (e) => {
       if (e.key !== 'Escape') return
@@ -1875,23 +1923,39 @@ function IssueDetail({
     return () => window.removeEventListener('keydown', h)
   }, [onClose, embedded])
 
-  // the workspace's view of the task the handle names
-  const held = issueId ? P.issueById[issueId] : undefined
-  // what Search or a task window noted of a task it opened that this
-  // handle names now (lib/openedTasks.ts), the handle derived as the
-  // router derives it
-  const noted =
-    !held && issueId
-      ? openedTask(issueId, (task) => P.handleNow(task.uuid, task.org, task.num))
-      : undefined
-  // what the window last showed of this task, kept for once it is gone, or
-  // what was noted of it when the window has shown nothing of it
+  // the reference the window names a task the workspace does not hold by
+  // (lib/taskReference.ts), and where its read stands (P.reference)
+  const ref = refParts(issueId)
+  const refRead = ref && P.reference?.ref === issueId ? P.reference : null
+  // the workspace's view of the task the handle names, or the reference
+  // names once the workspace holds it
+  const held = !issueId ? undefined : ref ? heldByRef(ref, refRead) : P.issueById[issueId]
+  // what the reference names of its task once its uuid and organization are
+  // known, from the reference itself or its read's answer, or for a handle
+  // the workspace does not hold, the watched task it opens now, as for the
+  // pop-out over the Inbox pane on a task that left (P.unheldTask)
+  const named = held
+    ? undefined
+    : ref
+      ? refShownTask(ref, refRead)
+      : issueId
+        ? (P.unheldTask(issueId) ?? undefined)
+        : undefined
+  // what the window last showed of this task, kept for once it is gone
   const shownTask = useRefID<{ at: string; task: ShownTask } | null>(null)
-  const identity = windowTaskOf(
-    issueId,
-    held,
-    noted && { ...noted, opened: true },
-    shownTask.current,
+  const identity = windowTaskOf(issueId, held, named?.uuid ? named : undefined, shownTask.current)
+  // the window registers its reference, which the store reads until it
+  // names the task and moves to its handle once the workspace holds it
+  // (P.watchTaskRef); the pop-out over the Inbox pane leaves it to the pane
+  const watchRef = ref ? issueId : null
+  useEffectID(() => {
+    if (!holdThread) P.watchTaskRef(watchRef)
+  }, [watchRef, holdThread])
+  useEffectID(
+    () => () => {
+      if (!holdThread) P.watchTaskRef(null)
+    },
+    [holdThread],
   )
   // the task as the window shows it from its own read while the workspace
   // does not hold it (P.taskDetail)
@@ -1902,13 +1966,19 @@ function IssueDetail({
   // archive or delete is on its way: that closes the window, and the answer
   // must not show the task under its dialog
   const answerView =
-    leaving.current !== issueId &&
+    leaving.current !== taskKey &&
     detail?.view &&
     !detail.textless &&
     (detail.answered === 'ok' || detail.answered === 'archived')
       ? detail.view
       : null
   const it = held ?? answerView
+  // the uuid of the task the window shows now, for work that finishes after
+  // a switch; updated once a render commits
+  const shownUuid = useRefID<string | null>(null)
+  useLayoutEffectID(() => {
+    shownUuid.current = it?.uuid ?? null
+  })
   // a task shown from its answer, which its editor changes from that answer
   // (answerEdits), and of those an archived one, read-only with its note
   // above it and no comments either
@@ -1919,21 +1989,6 @@ function IssueDetail({
   const stale = fromAnswer && (detail?.state === 'failed' || detail?.state === 'retrying')
   // the window shows an active task: the workspace's, or one from its answer
   const active = !!held || (fromAnswer && !archived)
-  // a task the window shows that the workspace does not hold, from its
-  // answer or as what became of it, is noted (lib/openedTasks.ts), so
-  // another window on its handle finds it too, as the Inbox pane's pop-out
-  // or the window a crumb opens over the Board, and a change of the home
-  // organization moves its handle (P.watchHandles). Its number is its
-  // answer's, else that of its display key (QN-n).
-  const unheld = held ? null : (answerView ?? identity)
-  const unheldNum = unheld
-    ? (detail?.num ?? Number(unheld.key.slice(P.ISSUE_PREFIX.length + 1)))
-    : null
-  useEffectID(() => {
-    if (!unheld || unheldNum === null || !Number.isInteger(unheldNum)) return
-    const { uuid, key, title, project, org } = unheld
-    noteOpenedTask({ uuid, num: unheldNum, key, title, project, org })
-  }, [unheld?.uuid, unheldNum, unheld?.title, unheld?.project])
   // the task the window showed follows its handle as it moves, as App's
   // address does, so the window goes on showing the same task
   useEffectID(
@@ -1948,22 +2003,29 @@ function IssueDetail({
   if (it && issueId) {
     const { uuid, org, key, title, project } = it
     shownTask.current = { at: issueId, task: { uuid, org, key, title, project } }
-  } else if (shownTask.current?.at !== issueId)
-    shownTask.current = issueId && noted ? { at: issueId, task: { ...noted, opened: true } } : null
+  } else if (shownTask.current && !sameTask(shownTask.current.at, issueId)) shownTask.current = null
   // whether the window's read of the task has said nothing yet, or runs
   // again after a failure
   const unanswered = !detail || detail.state === 'loading' || detail.state === 'retrying'
-  // a task opened by its address while tasks still load may be one still
-  // to arrive: the window opens and says so (App pendingTask), and so does
-  // a task it showed before whose read has not answered yet. A task Search
-  // or a task window noted shows its own loading line instead (TaskGone).
+  // a handle the window cannot name while tasks still load may be a task
+  // still to arrive, and so may a task it showed before whose read has not
+  // answered yet: the window says it loads. A task opened by a reference
+  // and never shown shows its own loading line instead (TaskGone). A
+  // complete workspace without the handle's task opens nothing, and says
+  // nothing of it.
   const waiting =
-    !it && !!issueId && P.stillLoading() !== null && (!identity || (!identity.opened && unanswered))
+    !it &&
+    !!issueId &&
+    P.stillLoading() !== null &&
+    (identity ? !identity.opened && unanswered : !ref)
   // the window shows no active task for the task it is about, other than by
   // this window's own archive or delete while that is on its way: the
   // window says what became of it (TaskGone), also once its own call was
-  // refused (stopLeaving), and above an archived task it shows read-only
-  const gone = !active && !waiting && issueId && leaving.current !== issueId ? identity : null
+  // refused (stopLeaving), and above an archived task it shows read-only.
+  // A reference whose read has not named its task yet says where that
+  // read stands, with what the reference names.
+  const gone =
+    !active && !waiting && issueId && leaving.current !== taskKey ? (identity ?? named) : null
   // what the window's read says became of it, for TaskGone: the archived
   // window's own answer, also while a read after it failed, else what the
   // read says now
@@ -1976,8 +2038,13 @@ function IssueDetail({
           archivedAt: detail.archivedAt,
         }
       : undefined
-  const goneAnswer: GoneAnswer =
-    archived && archivedRow
+  // what the reference's read says of a task it has not named yet, which
+  // only the server's word makes unavailable
+  const refAnswer: GoneAnswer =
+    refRead?.state === 'failed' ? 'failed' : refRead?.state === 'unavailable' ? null : undefined
+  const goneAnswer: GoneAnswer = !identity
+    ? refAnswer
+    : archived && archivedRow
       ? archivedRow
       : detail?.state === 'failed'
         ? 'failed'
@@ -1986,6 +2053,14 @@ function IssueDetail({
           : detail?.state === 'archived'
             ? archivedRow
             : undefined
+  // an archived task whose project is archived too, which Archived tasks
+  // lists only once the project is restored, and which no one restores
+  // from the window
+  const projectArchived =
+    !!goneAnswer &&
+    typeof goneAnswer === 'object' &&
+    !P.project(goneAnswer.project) &&
+    P.archivedProjects.some((project) => project.id === goneAnswer.project)
   // the caller's level on a task shown from its answer, which decides the
   // controls offered there, together with the workspace's (canComment);
   // an archived answer of an older backend holds none, and the workspace's
@@ -2035,11 +2110,11 @@ function IssueDetail({
   // Move window it had open. The title typed for it stays, to save through
   // the answer, when the answer gives its editor Edit; otherwise it goes,
   // as for a task that leaves the board
-  const heldNow = useRefID({ issueId, uuid: held?.uuid })
+  const heldNow = useRefID({ taskKey, uuid: held?.uuid })
   useEffectID(() => {
     const was = heldNow.current
-    heldNow.current = { issueId, uuid: held?.uuid }
-    if (was.issueId !== issueId || !was.uuid || held || gone) return
+    heldNow.current = { taskKey, uuid: held?.uuid }
+    if (was.taskKey !== taskKey || !was.uuid || held || gone) return
     setLabelAnchor(null)
     setSubAnchor(null)
     setParentAnchor(null)
@@ -2191,7 +2266,7 @@ function IssueDetail({
   useBottomSnap(
     actScrollRef,
     issueId
-      ? String(issueId) +
+      ? String(taskKey) +
           ':' +
           (P.commentsLoaded ? '1' : '0') +
           ':' +
@@ -2395,7 +2470,9 @@ function IssueDetail({
   // someone both the answer and the workspace give Edit on its project,
   // while the window's read of it is current (P.editsFromAnswer): each
   // write sends the values the window showed as its expected values, which
-  // the server checks. Its relations wait (WAITS_FOR_TASK).
+  // the server checks. A task shown from the read of the reference it was
+  // opened by takes none until the window's own read answered. Its
+  // relations wait (WAITS_FOR_TASK).
   const answerEdits = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
   const canEdit = canLabel || answerEdits
   // Comments on a task shown from its answer need edit access by both the
@@ -3124,9 +3201,8 @@ function IssueDetail({
                     {
                       seen: { title: titleSeen },
                       keepDraft: (shown) => {
-                        const here = shownIssue.current && P.taskShown(shownIssue.current)
                         if (!mountedRef.current || titleSession.current !== session) return false
-                        if (here?.uuid !== task) return false
+                        if (shownUuid.current !== task) return false
                         // the field takes focus when it opens, so only while
                         // nothing else holds it
                         const at = document.activeElement
@@ -3350,10 +3426,11 @@ function IssueDetail({
         >
           {gone && !it && (
             <TaskGone
-              key={gone.uuid}
+              key={taskKey}
               task={gone}
               found={goneAnswer}
               canRestore={canRestore}
+              projectArchived={projectArchived}
               onRetry={P.retryTask}
               // the open Archive or delete window's reason, in the render
               // where the task goes, before the effect above keeps it
@@ -3525,12 +3602,13 @@ function IssueDetail({
                   read-only. Its own Close stays, as on every such note. */}
               {gone && archived && (
                 <TaskGone
-                  key={gone.uuid}
+                  key={taskKey}
                   inWindow
                   showPlace={embedded && !mobile}
                   task={gone}
                   found={goneAnswer}
                   canRestore={canRestore}
+                  projectArchived={projectArchived}
                   onRetry={P.retryTask}
                   unusedReason={fateOpen ? fateReason.current.trim() || null : unusedReason}
                   onCopied={setCopiedReason}
@@ -3883,16 +3961,16 @@ function IssueDetail({
                           const overdue = !archived && !!it.due && it.due < P.TODAY_ISO && !done
                           // with delay tracking (0064) the chip carries the projected
                           // status — "Delayed" covers overdue; without it, the plain
-                          // overdue chip stays as before. Where the window cannot
-                          // judge from the owners' loads, while tasks still load or
-                          // for a task shown from its answer, a verdict that needs
-                          // them is unknown (P.delayBeforeLoads)
+                          // overdue chip stays as before. Where the workspace cannot
+                          // judge it, while tasks still load or for a task shown from
+                          // its answer, the owner's load comes from the server, as for
+                          // a Board card (P.windowDelay)
                           const verdict =
                             archived || !P.tracksDelay(it)
                               ? null
                               : held && P.stillLoading() === null
                                 ? P.delayOf(it)
-                                : P.delayBeforeLoads(it)
+                                : P.windowDelay(it)
                           const unknown = verdict === DELAY_UNKNOWN
                           const delay = unknown ? null : verdict
                           const late = delay ? delay.status === 'late' : overdue
@@ -3928,7 +4006,7 @@ function IssueDetail({
                                     // a task's its owner's other work
                                     P.isGroup(it)
                                       ? "Its subtasks' dates decide it, and they have not all loaded yet."
-                                      : "The projection needs the owner's other work, which has not loaded yet."
+                                      : "Qivo could not read the owner's other work."
                                   }
                                 >
                                   <span
@@ -4524,9 +4602,9 @@ function IssueDetail({
           with the choices the person made. A refusal renders the window
           again (stopLeaving), which shows TaskGone if the task is still
           gone. */}
-      {issueId && fateOpen && (held || answerEditorOn || leaving.current === issueId) && (
+      {issueId && fateOpen && (held || answerEditorOn || leaving.current === taskKey) && (
         <ArchiveOrDeleteTaskModal
-          issueId={issueId}
+          issueId={it?.id ?? issueId}
           task={it ?? undefined}
           initialReason={unusedReason ?? ''}
           onReasonChange={(reason) => {
@@ -4543,7 +4621,7 @@ function IssueDetail({
             // the window shows, and so can be used, only with the task
             if (!it) return false
             const shown = it.key
-            const opened = issueId
+            const opened = taskKey
             leaving.current = opened
             // the window waits for the server, so a refusal leaves it open
             const archived = await P.archiveIssue(it.id, reason, keepSubtasks)
@@ -4588,7 +4666,7 @@ function IssueDetail({
           onDelete={async (subtasks, reason) => {
             if (!it) return false
             const shown = it.key
-            const opened = issueId
+            const opened = taskKey
             leaving.current = opened
             const deleted = await P.deleteIssue(it.id, subtasks, true, reason)
             if (!deleted) {

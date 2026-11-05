@@ -1,6 +1,14 @@
 /* App shell: sidebar hierarchy, top bar, view switching, command palette,
    toasts, modals, theme. */
-import { type ReactNode, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { Button } from '@/components/ui/button'
 import { DropdownChevron } from '@/components/ui/select'
@@ -68,8 +76,6 @@ import { type RevealRequest, withoutTaken } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
-  heldRef,
-  holdTask,
   namesProjectPage,
   ORG_NONE,
   orgSegmentOf,
@@ -77,12 +83,14 @@ import {
   parsePath,
   pathMatchesState,
   type Route,
+  sameTask,
   scopeForIssueOn,
+  scopeTaskOf,
   syncPlaceOf,
-  taskSegmentOf,
   type UiState,
   viewBehindTask,
 } from './lib/router'
+import { isTaskRef } from './lib/taskReference'
 import { type Toast, toastLook, withToast } from './lib/toasts'
 import {
   loadInbox,
@@ -841,18 +849,6 @@ function App() {
   // into the first visible project instead
   const liveScope = (s) => !!s && (P.isWideScope(s) || !!P.project(s))
   const uiScope = liveScope(ui0.scope) ? ui0.scope : null
-  /* A task still to arrive that the boot address names. A task address
-     makes the first load wait for every task (AuthGate), but Back or
-     Forward during that load can reach one after the load began in stages.
-     The boot then holds it as onPop does (pendingTask), where it would
-     otherwise rewrite the address to the page's own. */
-  const [held0] = useState(() => {
-    const ref =
-      !r0?.issue && P.stillLoading() !== null
-        ? taskSegmentOf(location.pathname, location.hash)
-        : undefined
-    return ref === undefined ? undefined : holdTask(ref)
-  })
   // prefs saved before the merge may still say "split"/"resources" — both
   // collapsed into the roadmap (which now always docks the resource strip)
   const uiView0 = ui0.view === 'split' || ui0.view === 'resources' ? 'roadmap' : ui0.view
@@ -863,11 +859,14 @@ function App() {
   // On the Board, which has no All projects selection, a saved All projects
   // gives way to the issue's sub-project too (scopeForIssueOn). A task over
   // Team sync is the exception: the page names its own scope, and the one
-  // underneath stays the saved one.
+  // underneath stays the saved one. A task the workspace does not hold
+  // keeps the saved scope until its answer names its project (pendingTask).
   const r0Scope =
     r0 && !r0.sync
       ? r0.scope ||
-        (r0.issue ? scopeForIssueOn(viewBehindTask(r0, uiView), r0.issue, uiScope) : undefined)
+        (r0.issue
+          ? scopeForIssueOn(viewBehindTask(r0, uiView), scopeTaskOf(r0.issue), uiScope)
+          : undefined)
       : undefined
   // project ids are DB uuids (not the prototype's fixed slugs): default the
   // scope to the first visible project org-wide (navigation is flat since 0078),
@@ -896,18 +895,19 @@ function App() {
     // scope/settings routes without a view mean overview
     r0?.view
       ? r0.view
-      : r0?.issue || held0 || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
+      : r0?.issue || r0?.sync || (mobile && (r0?.settings || r0?.projects || r0?.inbox))
         ? uiView
         : r0
           ? 'overview'
           : uiView,
   )
-  const [openIssue, setOpenIssue] = useState(r0?.issue || held0 || null)
+  const [openIssue, setOpenIssue] = useState(r0?.issue || null)
   // A new task's handle is a preview that moves when another person's create
   // takes its number while the write waits, and a change of the home
   // organization moves the handles of the old and the new home organization's
-  // tasks. The open window follows its task, with every move of one repaint
-  // applied at once.
+  // tasks. A reference (lib/taskReference.ts) moves to its task's handle once
+  // the workspace holds the task. The open window follows its task, with
+  // every move of one repaint applied at once.
   useEffect(
     () => P.watchHandles((moved) => setOpenIssue((cur) => (cur && moved.get(cur)) || cur)),
     [],
@@ -1118,25 +1118,22 @@ function App() {
   // spare over the session's first entry (lib/pageHistory)
   const [settled, setSettled] = useState(0)
   useEffect(() => onHistorySettled(() => setSettled((n) => n + 1)), [])
-  /* The address Back or Forward reached while tasks still load, when it
-     names a task still to arrive (lib/router taskSegmentOf). The window
-     holds its reference apart from task handles (`ref`, lib/router
-     holdTask) and says the task is loading. The address stays until the
-     task arrives; a page moved meanwhile (`page`) names itself without
-     the task until then. The task opens once the address's own
-     organization answers it, in the scope Back or Forward would have
-     chosen for it (`scope`, `preferred`) unless the page moved, or the
-     window closes once every task has loaded without it. The boot holds
-     its own address's task the same way (held0), with the boot's scope
-     rule. */
+  /* The address the boot, Back or Forward reached, when it names a task the
+     workspace does not hold, by a reference (`ref`, lib/taskReference.ts)
+     that the task window reads from the server. The address stays as it
+     was while the page does (`page`), until the answer names the task's
+     project. The scope then moves to the one Back or Forward would have
+     chosen for the task (`scope`, `preferred`), in place, unless the page
+     moved meanwhile. An unavailable or failed answer moves nothing, and
+     the window and the address stay until the window closes. */
   const [bootHold] = useState(() =>
-    held0
+    r0?.issue && !scopeTaskOf(r0.issue)
       ? {
           pathname: location.pathname,
           hash: location.hash,
-          ref: held0,
+          ref: r0.issue,
           page: pageKey({ scope, view, settingsPage, inboxOpen, projectsOpen, sync }),
-          scope: r0?.scope,
+          scope: r0.scope,
           preferred: uiScope,
         }
       : null,
@@ -1162,6 +1159,13 @@ function App() {
   const [paletteIn, setPaletteIn] = useState<string | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const rev = usePlannerVersion()
+  // The read of a task App holds by a reference (lib/taskReference.ts)
+  // answers on the comments channel: App follows it while it holds one, so
+  // the address names what the answer taught and the page moves to the
+  // task's project (pendingTask). Null otherwise, which renders nothing.
+  const refRev = useSyncExternalStore(P.updates.comments.subscribe, () =>
+    isTaskRef(openIssue) ? P.updates.comments.getSnapshot() : null,
+  )
   // Views over every task wait while a large workspace still loads them
   const tasksLoading = P.stillLoading() !== null
   useTasksLoadingNews()
@@ -1238,23 +1242,17 @@ function App() {
     // Back or Forward, or steps off a spare (lib/pageHistory), and a write
     // now would move the entry it goes to (it looks again once landed)
     if (historyBusy()) return
-    // a task Back or Forward reached keeps its address until it arrives,
-    // while the page and the address are still the ones it reached: its
-    // held reference names no task an address can be built for. A page
-    // moved meanwhile gets its own address, without the task (pendingTask)
-    const held = heldRef(openIssue) !== undefined
+    // a task the boot, Back or Forward reached by its address keeps that
+    // address until its answer names its project, while the page and the
+    // address are still the ones it reached (pendingTask)
     const pending = pendingTask.current
-    const state = {
-      scope,
-      view,
-      openIssue: held ? null : openIssue,
-      settingsPage,
-      inboxOpen,
-      projectsOpen,
-      sync,
-    }
-    const onHeld = held && location.pathname === pending?.pathname && location.hash === pending.hash
-    if (onHeld && pending.page === pageKey(state)) return
+    const state = { scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync }
+    const onPending =
+      !!pending &&
+      sameTask(openIssue, pending.ref) &&
+      location.pathname === pending.pathname &&
+      location.hash === pending.hash
+    if (onPending && pending.page === pageKey(state)) return
     const p = buildPath(state)
     // the hash term is what finally clears a translated legacy link: the path
     // is already canonical by then, so nothing else would ever rewrite it
@@ -1262,39 +1260,35 @@ function App() {
       replaceNextHistory.current = false
       return
     }
-    // a move from the held task's address earns an entry where it would
-    // with the task open, as once the task arrives (lib/router)
-    const inPlace = pathMatchesState(location.pathname, onHeld ? { ...state, openIssue } : state)
+    const inPlace = pathMatchesState(location.pathname, state)
     if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
     else pushPage({ qivoPrevious: location.pathname }, p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, settled])
-  // the task a held Back or Forward named, once it arrived or every task did
+  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, refRev, settled])
+  // the task the boot, Back or Forward named by a reference, once its
+  // answer names its project: its scope, unless the page moved meanwhile
   useEffect(() => {
     const pending = pendingTask.current
     if (!pending) return
-    if (openIssue !== pending.ref) {
+    if (!sameTask(openIssue, pending.ref)) {
       pendingTask.current = null
       return
     }
-    const route = parsePath(pending.pathname) || parseHash(pending.hash) || {}
-    const issue = route.issue
-    if (!issue && P.stillLoading() !== null) return
+    // only the project of an ok or archived answer moves the scope
+    const task = scopeTaskOf(openIssue)
+    if (!task) return
     pendingTask.current = null
     const here = { scope, view, settingsPage, inboxOpen, projectsOpen, sync }
-    const unmoved = pending.page === pageKey(here)
-    // the entry names the held task, or the page's own address once the page
-    // moved meanwhile: either way the task takes it over in place
-    replaceNextHistory.current = true
+    if (pending.page !== pageKey(here) || sync) return
     // the scope Back or Forward gives a task address (onPop)
-    if (issue && unmoved && !sync) {
-      const sc = liveScope(pending.scope)
-        ? pending.scope
-        : scopeForIssueOn(viewBehindTask(route, view), issue, pending.preferred)
-      if (liveScope(sc)) setScope(sc)
-    }
-    setOpenIssue(issue || null)
-  }, [openIssue, rev, scope, view, settingsPage, inboxOpen, projectsOpen, sync])
+    const route = parsePath(pending.pathname) || parseHash(pending.hash) || {}
+    const sc = liveScope(pending.scope)
+      ? pending.scope
+      : scopeForIssueOn(viewBehindTask(route, view), task, pending.preferred)
+    // the entry names the task, which takes it over in place
+    replaceNextHistory.current = true
+    if (liveScope(sc) && sc !== scope) setScope(sc)
+  }, [openIssue, rev, refRev, scope, view, settingsPage, inboxOpen, projectsOpen, sync])
   /* Remember what each address opened, so the gate can tell a MOVED address
      from one this login has simply never followed. Deliberately after the
      url-sync effect above and skipped entirely while the gate is up: accepting
@@ -1329,20 +1323,18 @@ function App() {
          sidebar, which the window's scrim covers), but the rule belongs with
          the router's own absent-scope-means-project-form reading.
          A Team sync address names its own scope, so the one underneath stays
-         put, task or not. */
-      // a task still to arrive while tasks load (pendingTask)
-      const ref =
-        !r.issue && P.stillLoading() !== null
-          ? taskSegmentOf(location.pathname, location.hash)
-          : undefined
-      const held = ref === undefined ? undefined : holdTask(ref)
+         put, task or not. A task the workspace does not hold keeps the
+         scope until its answer names its project (pendingTask). */
       const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
+      const task = r.issue ? scopeTaskOf(r.issue) : undefined
+      // a task named by a reference whose project is not known yet
+      const resolving = !!r.issue && !task
       const sc = r.sync
         ? undefined
         : liveScope(r.scope)
           ? r.scope
-          : r.issue
-            ? scopeForIssueOn(viewBehindTask(r, was.view), r.issue, preferred)
+          : task
+            ? scopeForIssueOn(viewBehindTask(r, was.view), task, preferred)
             : undefined
       const next = {
         scope: liveScope(sc) ? sc : was.scope,
@@ -1351,10 +1343,10 @@ function App() {
         // reset it either
         view: r.view
           ? r.view
-          : !(r.issue || held) && !r.inbox && !r.settings && !r.projects && !r.sync
+          : !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
             ? 'overview'
             : was.view,
-        openIssue: r.issue || held || null,
+        openIssue: r.issue || null,
         // a project page held while its project left (Settings) keeps its
         // own address, which parses to no project now: a Back within it,
         // as from its Archive or delete window, stays on the page
@@ -1387,12 +1379,13 @@ function App() {
          marker unheard (lib/pageHistory holdLayers). */
       if (holdLayers(event)) return
       refusal.accepted()
-      /* An address that is not the page's own, such as one to a task or
-         project that is gone, gives way to the page's in place, as on a
-         boot: the url-sync effect would leave it when the page stays the
-         same. A task still to arrive keeps its address (held). */
+      /* An address that is not the page's own, such as one to a project
+         that is gone, gives way to the page's in place, as on a boot: the
+         url-sync effect would leave it when the page stays the same. A task
+         named by a reference keeps its address until its answer names its
+         project (pendingTask). */
       const own = buildPath(next)
-      if (!held && (location.pathname !== own || location.hash))
+      if (!resolving && (location.pathname !== own || location.hash))
         history.replaceState(history.state, '', own)
       /* A return belongs to the visit that opened its page. A pop that stays
          on the page keeps it (Back through Settings' pages, a phone layer, a
@@ -1400,16 +1393,17 @@ function App() {
          Exit or Done cannot restore a page from another visit. */
       if (!r.settings) settingsReturn.current = NO_RETURN
       if (!r.sync) syncReturn.current = NO_RETURN
-      pendingTask.current = held
-        ? {
-            pathname: location.pathname,
-            hash: location.hash,
-            ref: held,
-            page: pageKey(next),
-            scope: r.scope,
-            preferred,
-          }
-        : null
+      pendingTask.current =
+        resolving && r.issue
+          ? {
+              pathname: location.pathname,
+              hash: location.hash,
+              ref: r.issue,
+              page: pageKey(next),
+              scope: r.scope,
+              preferred,
+            }
+          : null
       setScope(next.scope)
       setView(next.view)
       setOpenIssue(next.openIssue)

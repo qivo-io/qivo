@@ -168,13 +168,16 @@ async function boot(address: string, phone: boolean, second = false) {
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (name === 'taskWindow:task') {
       // the server's answer, a moment later, as from Convex: an archived
-      // task with its text, or the task the workspace holds
+      // task with its text, or the task the workspace holds, by its uuid or
+      // its key in the organization asked (convex/lib/taskWindow.ts taskByRef)
       reads++
       let closed = false
+      const named = (task: { id: string; org_id: string; num: number }) =>
+        task.id === args.ref || (task.org_id === args.org_id && `QN-${task.num}` === args.ref)
       setTimeout(() => {
         if (closed) return
-        const row = archive.find((task) => task.id === args.ref)
-        const live = server.issues.find((task) => task.id === args.ref)
+        const row = archive.find(named)
+        const live = server.issues.find(named)
         next(
           row
             ? {
@@ -718,8 +721,9 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
     await settle()
     expect(location.pathname).toBe(task)
     await archivedNote()
-    // the window reads the task again
-    expect(asked()).toBe(2)
+    // the window reads the task again, by the number its address names in
+    // its organization, then by its uuid
+    expect(asked()).toBe(3)
   })
 
   it('opens again on Forward after the home organization changed, not the new home task of its number', async () => {
@@ -773,6 +777,6 @@ describe('an archived task Search opened', { timeout: 30_000 }, () => {
     await settle()
     expect(location.pathname).toBe(task)
     await archivedNote()
-    expect(asked()).toBe(2)
+    expect(asked()).toBe(3)
   })
 })

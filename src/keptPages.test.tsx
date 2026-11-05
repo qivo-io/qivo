@@ -388,13 +388,14 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       )
       await act(async () => row.click())
     }
+    // the pane opens its task from the server, which has not answered here
     await pick('gone')
-    expect(inbox.textContent).toContain('archived or unavailable')
+    expect(inbox.textContent).toContain('Loading this task…')
     await go(`/app/${org}/board/all`)
     await shownPage('kanban')
     await go(`/app/${org}/inbox`)
     expect(await shownPage('inbox')).toBe(inbox)
-    expect(inbox.textContent).not.toContain('archived or unavailable')
+    expect(inbox.textContent).not.toContain('Loading this task')
 
     // the item read as it opened is not new when its task opens again
     await pick('t1')

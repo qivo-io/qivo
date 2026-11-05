@@ -106,7 +106,6 @@ import {
   DELAY_NEUTRAL,
   DELAY_UNKNOWN,
   type DelayInfo,
-  delayBeforeLoads,
 } from '../lib/delay'
 import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
 import { attachmentTooLarge, DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
@@ -121,11 +120,11 @@ import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
-import { noteOpenedTask, openedTaskList } from '../lib/openedTasks'
 import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
+import { type RefParts, refParts, taskRef } from '../lib/taskReference'
 import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '../lib/taskSections'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
@@ -142,6 +141,7 @@ import {
 } from './fieldNotice'
 import { createLayers, type Layer, type Over, type Paint, paints, type View } from './layers'
 import {
+  type AddressedTask,
   createLiveParts,
   type LiveParts,
   type PartsReport,
@@ -182,7 +182,14 @@ import {
 } from './inboxBulk'
 import type { Row } from './rows'
 import { createPlannerUpdates, type StoreVersion } from './updates'
-import { needsLoad, type ViewDelayCtx, viewDelay } from './viewDelay'
+import {
+  delayIssueOfTask,
+  issueNeedsLoad,
+  judgeDelay,
+  needsLoad,
+  type ViewDelayCtx,
+  viewDelay,
+} from './viewDelay'
 import {
   type ActivityVM,
   type ArchivedIssueVM,
@@ -417,6 +424,18 @@ let watchedComments: string | null = null
    does not hold takes its thread, history and task answer through it
    (watchedOrgOf), also after a re-init of the parts. */
 let watchedOrg: string | null = null
+/* The watched task as the workspace last held it, its uuid, organization,
+   number, title and project, so a window goes on naming it once it left
+   the workspace before its own read answered (P.unheldTask) and a change
+   of the home organization moves its handle (withUnheldMoves). Forgotten
+   when another task is watched. */
+let watchedHeld: {
+  uuid: string
+  org: string
+  num: number
+  title: string
+  project: string
+} | null = null
 /* The task and organization of the thread the parts watch, or null. */
 let threadWatched: { task: string; org: string } | null = null
 let commentsWatchEpoch = 0
@@ -579,8 +598,8 @@ export type RelatedTaskVM = {
       the workspace does not hold, the handle it will get (taskIndex.ts
       setHandle's rule) */
   handle: string
-  /** its organization and number, which the opened-task registry notes
-      for a task the workspace does not hold (lib/openedTasks.ts) */
+  /** its organization and number, which a reference to a task the
+      workspace does not hold names (lib/taskReference.ts) */
   org: string
   num: number
   title: string
@@ -1065,6 +1084,7 @@ function watchedGone(): boolean {
    repaint. Answers whether an answer changed. */
 function syncSections(): boolean {
   syncThread()
+  syncRefRead()
   const t = watchedComments
   const wanted = sidesWanted()
   const org = t && !watchedCreating() ? watchedOrgOf() : undefined
@@ -1080,7 +1100,7 @@ function syncSections(): boolean {
         changed = true
       }
       sectionsWatched[side] = target
-      watchSection(side)
+      if (watchSection(side)) changed = true
       continue
     }
     if (now) {
@@ -1114,16 +1134,26 @@ function syncSections(): boolean {
 
 /* Subscribes section side `side` afresh for the task and organization it
    watches (sectionsWatched), so its answer is never one held from an
-   earlier subscription. */
-function watchSection(side: SectionSide) {
+   earlier subscription. The reference read of the same task by its uuid
+   in the same organization (refRead) holds the one subscription Convex
+   keeps for both, so the task side takes it over, and its current answer
+   is the task side's first delivery (receiveSection). Answers whether it
+   took one. */
+function watchSection(side: SectionSide): boolean {
   const watched = sectionsWatched[side]
-  if (!parts || !watched) return
+  if (!parts || !watched) return false
   const { task, org } = watched
-  if (side === 'task') {
-    // a fresh subscription has delivered nothing that holds a write yet
-    detailFresh = false
-    parts.watchSide(side, api.taskWindow.task, { org_id: org, ref: task })
-  } else parts.watchSide(side, api.taskWindow[side], { org_id: org, issue_id: task })
+  if (side !== 'task') {
+    parts.watchSide(side, api.taskWindow[side], { org_id: org, issue_id: task })
+    return false
+  }
+  // a fresh subscription has delivered nothing that holds a write yet
+  detailFresh = false
+  const news = parts.watchSide(side, api.taskWindow.task, { org_id: org, ref: task })
+  if (refRead?.args?.org_id === org && refRead.args.ref === task) refRead.args = null
+  if (!news) return false
+  receiveSection(side, news)
+  return true
 }
 
 /* Stops every section side query. */
@@ -1148,35 +1178,50 @@ function retrySide(side: SectionSide) {
   if (!sectionsWatched[side] || sectionFailure[side] !== 'failed') return
   sectionFailure[side] = 'retrying'
   repaint({ sections: true })
-  watchSection(side)
+  if (watchSection(side)) owe('sections')
 }
 
 /* The news of section side `side` in one transition, as the history's
    (historyNews): a failed query keeps the answer delivered before it and
    shows as the section's 'failed' state until the next delivery. The
    taskWindow queries answer a task the caller may not list with a state
-   (unavailable, archived) rather than an error, so every error is a
-   failure, also orgQuery's refusal of a caller without a seat, which the
-   snapshot notice explains. A delivery is the section's new anchor. It
-   paints with the rest of its transition and, while a painted write
-   waits, when that write answers (owe), as the thread's does. */
+   (unavailable, archived) rather than an error, so an error is a failure,
+   but for the task side's orgQuery refusal of a caller without a seat in
+   the organization, or of one whose organization is being deleted
+   (seatRefused), which reads as unavailable. That makes a window that
+   shows the task from its answer let it go as for a deleted task, with
+   the drafts typed for it, and it is no delivery of the task
+   (taskDelivered). Every other error, a lost sign-in included, stays a
+   failure. A delivery is the section's new anchor. It paints with the
+   rest of its transition and, while a painted write waits, when that
+   write answers (owe), as the thread's does. */
 function sectionNews(side: SectionSide) {
   return (news: SideNews) => {
-    const watched = sectionsWatched[side]
-    if (!watched || watchedComments !== watched.task || sectionAnswers.issue !== watched.task)
-      return
-    if ('error' in news) {
-      console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
-      sectionFailure[side] = 'failed'
-      // a failure holds no write, and the answer before it stays
-      if (side === 'task') detailFresh = false
-    } else {
-      sectionFailure[side] = 'none'
-      sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
-      if (side === 'task') taskDelivered(watched.task)
-    }
-    owe('sections')
+    if (receiveSection(side, news)) owe('sections')
   }
+}
+
+/* Takes section side `side`'s news `news` (sectionNews) without painting
+   it. Answers whether it was the watched task's. */
+function receiveSection(side: SectionSide, news: SideNews): boolean {
+  const watched = sectionsWatched[side]
+  if (!watched || watchedComments !== watched.task || sectionAnswers.issue !== watched.task)
+    return false
+  if ('error' in news && side === 'task' && seatRefused(news.error)) {
+    sectionFailure[side] = 'none'
+    sectionAnswers = { ...sectionAnswers, task: { state: 'unavailable' } }
+    detailFresh = false
+  } else if ('error' in news) {
+    console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
+    sectionFailure[side] = 'failed'
+    // a failure holds no write, and the answer before it stays
+    if (side === 'task') detailFresh = false
+  } else {
+    sectionFailure[side] = 'none'
+    sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
+    if (side === 'task') taskDelivered(watched.task)
+  }
+  return true
 }
 
 /* Records a live good delivery of task `task`'s own answer, the anchor
@@ -1227,6 +1272,231 @@ function paintedAnswer(): TaskOk | null {
   return detailRows.task
 }
 
+/* ---- A task a window names by a reference (lib/taskReference.ts) ----
+   A window over a task the workspace does not hold names it by a
+   reference, which it registers (P.watchTaskRef), one at a time, as one
+   task is watched. A reference with a uuid and an organization names the
+   task already, so the window watches it at once (P.watchComments) and
+   reads it through the task side. One that lacks either, as an address
+   does, is read here first, through the `reference` side of the live
+   parts (taskWindow.task), until an answer names its uuid and
+   organization. A number is read only in the organization the reference
+   names. A uuid without one is read in the organization the address named
+   it under, then in the home organization, then in the login's other
+   seats, one at a time, the next only after `unavailable`, so it is
+   unavailable only once every seat said so (refSeats). The window watches
+   the task by uuid once the read names it, and until its own read
+   answers, the reference read's answer serves P.detail (taskDetailNow),
+   without going into the section answers, so no write takes it
+   (answerTaskOf) and no delivery counts it (taskDelivered). The
+   reference read stops once the task side has answered, and a task side
+   with the same arguments takes its subscription over
+   (liveParts.ts watchSide). The store moves the reference to the task's
+   handle in the repaint in which the workspace first holds the task
+   (refMoves, P.watchHandles). */
+
+/** Where the read of a reference stands. `task` is what the reference
+    and its answers name of the task, its uuid and organization once known
+    and its number, title, project and owner once an answer named them. A
+    reference that names its uuid and organization is `resolved` at once,
+    and the window's own read says the rest (P.taskDetail). */
+export type TaskRefVM = {
+  ref: string
+  state: 'loading' | 'resolved' | 'unavailable' | 'failed' | 'retrying'
+  task: {
+    uuid: string
+    org: string
+    num: number | null
+    title: string | null
+    project: string | null
+    owner: string | null
+  } | null
+}
+
+/* An archived task's answer. */
+type TaskArchived = Extract<TaskAnswer, { state: 'archived' }>
+
+/* The registered reference and its read. `tried` holds the organizations
+   a uuid without one answered unavailable in, `args` the arguments of the
+   read now (null while none runs), `answer` its last ok or archived
+   answer, kept through a failure, and `moved` the handle the reference
+   moved to once the workspace held its task. */
+type RefRead = {
+  ref: string
+  parts: RefParts
+  tried: Set<string>
+  args: { org_id: string; ref: string } | null
+  answer: TaskOk | TaskArchived | null
+  state: TaskRefVM['state']
+  task: TaskRefVM['task']
+  moved: string | null
+}
+let refRead: RefRead | null = null
+/* The reference side's last news and the arguments it answered, also
+   before a window registers the reference, as for the boot's read of its
+   address (store/liveParts.ts `address`), which the window then takes
+   over. */
+let refLast: { args: string; news: SideNews } | null = null
+
+/* The key a reference read's arguments compare by. */
+const refKey = (args: { org_id?: unknown; ref?: unknown }) =>
+  JSON.stringify({ org_id: args.org_id, ref: args.ref })
+
+/* The organizations a uuid without one is read in, in order: the one its
+   address names it under, the home organization, then the login's other
+   seats by id. Only seats the root part lists, which loadMemberships reads
+   whole on the server, so the last `unavailable` is every seat's. */
+function refSeats(parts: RefParts): string[] {
+  const seats = [...myProfiles.keys()].sort()
+  const order = [parts.from, HOME_ORG, ...seats]
+  return [...new Set(order.filter((org): org is string => !!org && myProfiles.has(org)))]
+}
+
+/* The read reference `read` needs next. That is its number in its
+   organization, or its uuid in the next seat it was not read in yet when
+   it names no organization. Null when it names both its uuid and
+   organization, which the window reads itself, or when no seat is left. */
+function nextRefArgs(read: RefRead): RefRead['args'] {
+  const { parts } = read
+  if (parts.uuid && parts.org) return null
+  if (parts.num !== undefined)
+    return parts.org ? { org_id: parts.org, ref: `${ISSUE_PREFIX}-${parts.num}` } : null
+  if (!parts.uuid) return null
+  // a uuid found in one organization is read there only
+  if (read.task) return { org_id: read.task.org, ref: parts.uuid }
+  const seat = refSeats(parts).find((org) => !read.tried.has(org))
+  return seat ? { org_id: seat, ref: parts.uuid } : null
+}
+
+/* Whether error `e` is orgQuery's refusal of a caller without a seat in
+   the organization, or of one whose organization is being deleted
+   (convex/lib/functions.ts loadMember), the two exact texts seatGoneText
+   matches. A window reads that as unavailable. Every other error, a lost
+   sign-in included, is a failure. */
+function seatRefused(e: unknown): boolean {
+  const d = errData(e)
+  return (
+    d.code === 'forbidden' && (d.message === 'no profile in this organization' || orgDeleting(d))
+  )
+}
+
+/* Makes the reference read run with the arguments `read` needs now, or
+   stop when it needs none. A read that runs already with those arguments,
+   as the boot's of its address, goes on, and its last answer counts. */
+function runRefRead(read: RefRead) {
+  const args = nextRefArgs(read)
+  read.args = args
+  const running = parts?.sideArgs('reference')
+  if (!args) {
+    if (running) parts?.stopSide('reference')
+    return
+  }
+  const key = refKey(args)
+  if (running && refKey(running) === key) {
+    if (refLast?.args === key) takeRefNews(read, refLast.news)
+    return
+  }
+  if (!read.task && read.state !== 'retrying') read.state = 'loading'
+  // a fresh subscription has said nothing yet
+  refLast = null
+  parts?.watchSide('reference', api.taskWindow.task, args)
+}
+
+/* Takes the reference read's news `news` into `read`. A failure keeps
+   what the answer before it said. */
+function takeRefNews(read: RefRead, news: SideNews) {
+  if ('error' in news && !seatRefused(news.error)) {
+    console.error('[qivo] the read of a task by its reference failed:', news.error)
+    read.state = 'failed'
+    return
+  }
+  const answer = 'error' in news ? null : (news.value as TaskAnswer)
+  if (answer && answer.state !== 'unavailable') {
+    read.answer = answer
+    read.state = 'resolved'
+    const group = answer.state === 'ok' ? !!answer.task.has_subtasks : answer.task.is_group
+    const row = answer.task
+    read.task = {
+      uuid: row.id,
+      org: row.org_id,
+      num: row.num,
+      title: row.title,
+      project: row.project_id,
+      owner: taskOwnerId(row, group) ?? null,
+    }
+    return
+  }
+  // unavailable, or no seat there: a uuid without an organization is read
+  // in the next seat, until none is left, when no read runs (syncRefRead
+  // walks on to a seat that joins later)
+  read.answer = null
+  read.state = 'unavailable'
+  if (!read.task && !read.parts.org && read.args) {
+    read.tried.add(read.args.org_id)
+    if (nextRefArgs(read)) read.state = 'loading'
+    runRefRead(read)
+  }
+}
+
+/* The reference side's news in one transition. */
+function referenceNews(news: SideNews) {
+  const args = parts?.sideArgs('reference')
+  if (!args) return
+  refLast = { args: refKey(args), news }
+  const read = refRead
+  if (!read?.args || refKey(read.args) !== refLast.args) return
+  takeRefNews(read, news)
+  owe('sections')
+}
+
+/* Keeps the reference read in step as the sections build. It runs again
+   on a fresh registry (stopParts), a uuid walks on to a seat that joined
+   since it said unavailable, and the read stops once the window's own
+   read of the task has answered. */
+function syncRefRead() {
+  const read = refRead
+  if (!read || !parts) return
+  const t = read.task?.uuid
+  if (t && watchedComments === t && sectionAnswers.issue === t && sectionAnswers.task !== null) {
+    if (read.args && parts.sideArgs('reference')) parts.stopSide('reference')
+    read.args = null
+    return
+  }
+  if (read.state === 'unavailable' && !read.task && read.parts.uuid && !read.parts.org) {
+    if (nextRefArgs(read)) runRefRead(read)
+    return
+  }
+  if (read.args && !parts.sideArgs('reference')) runRefRead(read)
+}
+
+/* The handle of the registered reference's task once the workspace holds
+   it, else undefined. */
+function refHandle(read: RefRead): string | undefined {
+  const uuid = read.task?.uuid ?? read.parts.uuid
+  if (uuid) return uuidToKey.get(uuid)
+  if (read.parts.org && read.parts.num !== undefined)
+    return PLANNER.issueRefIn(read.parts.org, `${ISSUE_PREFIX}-${read.parts.num}`) ?? undefined
+  return undefined
+}
+
+/* `moved`, the handles a rebuild moved, with the registered reference
+   moved to its task's handle in the rebuild in which the workspace first
+   holds the task, once. */
+function refMoves(moved: ReadonlyMap<string, string>): ReadonlyMap<string, string> {
+  const read = refRead
+  if (!read || read.moved) return moved
+  const handle = refHandle(read)
+  if (!handle) return moved
+  read.moved = handle
+  return new Map(moved).set(read.ref, handle)
+}
+
+/* The registered reference's state for the window (P.reference). */
+function refStateNow(): TaskRefVM | null {
+  const read = refRead
+  return read && { ref: read.ref, state: read.state, task: read.task }
+}
+
 /* What each side query's news goes to. */
 const SIDE_NEWS: Record<SideName, (news: SideNews) => void> = {
   thread: threadNews,
@@ -1234,6 +1504,7 @@ const SIDE_NEWS: Record<SideName, (news: SideNews) => void> = {
   task: sectionNews('task'),
   links: sectionNews('links'),
   attachments: sectionNews('attachments'),
+  reference: referenceNews,
 }
 
 /* The state of section side `side`, whose answer is `answer`. */
@@ -1568,7 +1839,10 @@ function shownAnswer(answer: SectionAnswers['task']): SectionAnswers['task'] {
 /* The watched task as the window shows it from its own read
    (store/taskDetail.ts), with the person's own writes on it painted
    (paintedAnswer), or null unless the workspace does not hold it and its
-   organization is known. */
+   organization is known. Until the task side's first answer, the
+   reference read's answer of the same task serves it (refRead), with that
+   read's state, and stays out of the section answers, so no write takes
+   it (answerTaskOf). */
 function taskDetailNow(): TaskDetailVM | null {
   const t = watchedComments
   const org = watchedOrgOf()
@@ -1577,11 +1851,16 @@ function taskDetailNow(): TaskDetailVM | null {
   const answer = answers ? shownAnswer(answers.task) : undefined
   const links = answers?.links
   const files = answers?.attachments
+  const byRef =
+    !answer && refRead?.answer?.task.id === t && refRead.answer.task.org_id === org ? refRead : null
+  // the task side's failure, else the reference read's, while it serves
+  const refFailure = byRef?.state === 'failed' || byRef?.state === 'retrying' ? byRef.state : 'none'
+  const sideFailure = answers ? sectionFailure.task : 'none'
   return shapeTaskDetail({
     task: t,
     org,
-    answer: answer === CREATING ? null : (answer ?? null),
-    failure: answers ? sectionFailure.task : 'none',
+    answer: byRef ? byRef.answer : answer === CREATING ? null : (answer ?? null),
+    failure: byRef && sideFailure === 'none' ? refFailure : sideFailure,
     links: links && links !== CREATING && links.state === 'ok' ? links : null,
     attachments: files && files !== CREATING && files.state === 'ok' ? files : null,
     handleNow: PLANNER.handleNow,
@@ -1595,13 +1874,26 @@ function taskDetailNow(): TaskDetailVM | null {
    after making the section sides run as the windows want them
    (syncSections). Answers whether either changed. */
 function rebuildSections(): boolean {
+  const t = watchedComments
+  const row = t ? rows.issues.get(t) : undefined
+  const handle = t ? uuidToKey.get(t) : undefined
+  const it = handle === undefined ? undefined : PLANNER.issueById[handle]
+  if (t && row && it)
+    watchedHeld = { uuid: t, org: it.org, num: row.num, title: it.title, project: it.project }
   syncSections()
   const before = PLANNER.sections
   const detailBefore = PLANNER.detail
+  const refBefore = PLANNER.reference
   PLANNER.sections = keep(before, sectionsNow())
   PLANNER.detail = keep(detailBefore, taskDetailNow())
+  PLANNER.reference = keep(refBefore, refStateNow())
   drawnAnswer = PLANNER.detail ? paintedAnswer() : null
-  return PLANNER.sections !== before || PLANNER.detail !== detailBefore
+  syncWindowLoad()
+  return (
+    PLANNER.sections !== before ||
+    PLANNER.detail !== detailBefore ||
+    PLANNER.reference !== refBefore
+  )
 }
 
 /* Task `it`'s subtasks, links and attachment count as the cap checks
@@ -2059,6 +2351,7 @@ function shownWorkspace() {
       P.historyEarlier,
       P.sections,
       P.detail,
+      P.reference,
       P.messages,
       P.messageGroups,
       P.unreadMessages,
@@ -2296,8 +2589,10 @@ function repaint(parts: {
     // a delivery that brings nothing new to the screen, such as a batch's
     // echo of rows a bulk inbox action painted already, renders nothing;
     // rebuild built the sections again too, which the comparison covers
-    if (!lastShown || !sameShown(lastShown)) emit()
-    else {
+    if (!lastShown || !sameShown(lastShown)) {
+      emit()
+      windowLoadNews = false
+    } else {
       if (thread) emit('comments')
       if (models || view || viewReadsChanged) emit('views')
     }
@@ -2319,6 +2614,11 @@ function repaint(parts: {
       if (reshapeViews() || viewReadsChanged) emit('views')
       viewReadsChanged = false
     }
+  }
+  // an owner load the window's delay reads shows with the comments
+  if (windowLoadNews) {
+    windowLoadNews = false
+    emit('comments')
   }
 }
 
@@ -2832,6 +3132,75 @@ let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
    are its own registration's, which the judging after it reads anyway. */
 let reshaping = false
 
+/** Task `it` as the window's delay verdict reads it (P.windowDelay), with
+    a group's facts: from P.taskDetail for a task the window shows from its
+    own read, else from the workspace's tasks, by the rules the task index
+    judges with (store/taskIndex.ts judge). */
+function windowDelayIssue(it: IssueVM) {
+  const detail = PLANNER.taskDetail(it.uuid)
+  const group = isIssueGroup(it)
+  const span = !detail && group ? groupSpan(it, PLANNER.issueById) : null
+  const issue = delayIssueOfTask(
+    it,
+    {
+      isGroup: group,
+      isDone: detail ? detail.done : isIssueDone(it, PLANNER.issueById),
+      partial: detail ? detail.partial : !!span?.partial,
+    },
+    viewDelayCtx.capacity,
+  )
+  const facts = {
+    datesKnown: detail ? detail.datesKnown : true,
+    loading: !detail && stillLoading !== null,
+  }
+  return { issue, facts }
+}
+
+/* The owner-load cache's view key of the task window. */
+const WINDOW_LOADS = 'window'
+/* The owner the window's delay registered with the owner-load cache, as
+   `org\0owner`, or null. */
+let windowLoad: string | null = null
+/* Whether an owner load the window reads changed since the comments last
+   showed (the cache's `changed` repaints only the views). */
+let windowLoadNews = false
+/* Whether syncWindowLoad registers now, so the cache's news is its own. */
+let windowLoadSyncing = false
+
+/** Registers the watched task's owner with the owner-load cache under the
+    window's own key (WINDOW_LOADS, one owner, one card) while a window
+    shows the task's details, the task's project shows delays, the
+    workspace cannot judge the task (a task the window shows from its own
+    read, or a held one while tasks still load) and its verdict reads the
+    owner's load (issueNeedsLoad), and releases it otherwise. The desktop
+    Inbox pane shows no details and registers nothing. A guest's or
+    Viewer's calls are counted per view key, so the window's one owner
+    never meets the cap. The cache follows the hidden-tab gate. */
+function syncWindowLoad() {
+  const t = watchedComments
+  const handle = t ? uuidToKey.get(t) : undefined
+  const held = handle === undefined ? undefined : PLANNER.issueById[handle]
+  const detail = t ? PLANNER.taskDetail(t) : null
+  const shown = held ?? (detail?.answered === 'ok' ? (detail.view ?? undefined) : undefined)
+  const judged = !!shown && (!held || stillLoading !== null)
+  const need =
+    judged && sectionOwners.size > 0 && shown && PLANNER.tracksDelay(shown)
+      ? windowDelayIssue(shown).issue
+      : null
+  const key = need?.owner && issueNeedsLoad(need) ? `${shown?.org}\u0000${need.owner}` : null
+  if (key === windowLoad) return
+  windowLoad = key
+  windowLoadSyncing = true
+  try {
+    if (key && shown && need?.owner)
+      ownerLoads.register(WINDOW_LOADS, [{ org: shown.org, owner: need.owner, cards: 1 }])
+    else ownerLoads.release(WINDOW_LOADS)
+  } finally {
+    windowLoadSyncing = false
+  }
+  windowLoadNews = true
+}
+
 /** Registers with the owner-load cache the owners whose loads the cards of
     the views that show delays need, judges those cards' delays and shapes
     the models of the tasks only the views hold. Answers whether any model
@@ -2914,7 +3283,9 @@ const ownerLoads = createOwnerLoadCache({
     return me?.org_role === 'admin' || me?.org_role === 'user'
   },
   changed: () => {
-    if (reshaping) return
+    // the window's chip reads the cache too, and shows with the comments
+    if (windowLoad) windowLoadNews = true
+    if (reshaping || windowLoadSyncing) return
     viewReadsChanged = true
     owe('view')
   },
@@ -5102,6 +5473,7 @@ function rebuild(now = new Date(), full = false) {
   }
   if (HOME_ORG !== lastHome) lastMoves = withUnheldMoves(lastMoves, lastHome)
   lastHome = HOME_ORG
+  lastMoves = refMoves(lastMoves)
   // the delays a staged load held back (delayOf) show now: the tasks that
   // show one paint again
   if (rebuiltLoading && stillLoading === null) {
@@ -5242,29 +5614,32 @@ let lastIdentity = ''
 /* The home organization the handles were last given under. */
 let lastHome = ''
 
-/** `moved`, the handles the task index moved, with those a change of the
-    home organization from `homeBefore` moved for tasks the index does not
-    hold: the tasks the app opened (lib/openedTasks.ts), which a window
-    notes when it shows one, and the one a window shows from its own read
-    (P.taskDetail). The index reports only its own tasks (store/taskIndex.ts
-    full), and a window on one of these must go on following it by its uuid
-    and organization (P.watchHandles), never take the task of the new home
-    organization that now has its old handle. */
+/** `moved`, the handles the task index moved, with the one a change of the
+    home organization from `homeBefore` moved for the task a window shows
+    from its own read (P.taskDetail), which the index does not hold. The
+    index reports only its own tasks (store/taskIndex.ts full), and a
+    window on that task must go on following it by its uuid and
+    organization (P.watchHandles), never take the task of the new home
+    organization that now has its old handle. A reference names its
+    organization by id (lib/taskReference.ts), so none moves. */
 function withUnheldMoves(moved: ReadonlyMap<string, string>, homeBefore: string) {
+  const shown = unheldWatched()
+  if (!shown || uuidToKey.has(shown.uuid)) return moved
+  const key = `${ISSUE_PREFIX}-${shown.num}`
+  const from = handleUnder(homeBefore, shown.uuid, shown.org, key)
+  const to = handleUnder(HOME_ORG, shown.uuid, shown.org, key)
+  return from === to || moved.has(from) ? moved : new Map(moved).set(from, to)
+}
+
+/* The watched task the workspace does not hold, by its uuid, organization
+   and number: from the window's own read (P.detail), else as the
+   workspace last held it (watchedHeld), or null. */
+function unheldWatched(): { uuid: string; org: string; num: number } | null {
+  const t = watchedComments
+  if (!t || rows.issues.has(t)) return null
   const detail = PLANNER.detail
-  const known = [
-    ...openedTaskList(),
-    ...(detail?.num != null ? [{ uuid: detail.task, org: detail.org, num: detail.num }] : []),
-  ]
-  const next = new Map(moved)
-  for (const { uuid, org, num } of known) {
-    if (uuidToKey.has(uuid)) continue
-    const key = `${ISSUE_PREFIX}-${num}`
-    const from = handleUnder(homeBefore, uuid, org, key)
-    const to = handleUnder(HOME_ORG, uuid, org, key)
-    if (from !== to && !next.has(from)) next.set(from, to)
-  }
-  return next
+  if (detail?.task === t && detail.num != null) return { uuid: t, org: detail.org, num: detail.num }
+  return watchedHeld?.uuid === t ? watchedHeld : null
 }
 
 /** The rows and facts the task index shapes the tasks from. */
@@ -6196,8 +6571,9 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     side (P.taskDetail state ok, neither failed nor running again), in its
     known organization; else null, and a write on it answers false without
     sending. The answer must be the task side's own, so a window that shows
-    the task from another read's answer, as t3/limits-direct-links adds,
-    edits nothing until the task side answered. It is the answer the window
+    the task from the read of its reference (refRead, which taskDetailNow
+    serves until the task side answers) edits nothing until the task side
+    answered. It is the answer the window
     draws, not a newer delivery the window has yet to draw, so the write
     never sends another member's change as what the person saw. */
 function answerTaskOf(id: string): AnswerTask | null {
@@ -7254,6 +7630,9 @@ export const PLANNER = {
   // the watched task as a window shows it from its own read while the
   // workspace does not hold it, else null (P.taskDetail)
   detail: null as TaskDetailVM | null,
+  // the reference a window registered for a task the workspace does not
+  // hold, and where its read stands (P.watchTaskRef), else null
+  reference: null as TaskRefVM | null,
   // Team sync (watchTeamSync): issue UUID → ms of its latest comment, or
   // null when it has none, for the open, visible tasks the last answer
   // covered; a task with no entry is not known yet
@@ -8229,41 +8608,22 @@ export const PLANNER = {
     }
     return (stillLoading === null && it && delayMap.get(it.uuid)) || null
   },
-  /** The task window's delay verdict for `it` where it cannot judge one
-      from the owners' loads: while tasks still load, or for a task it
-      shows from its own read (lib/delay.ts delayBeforeLoads). A task shown
-      from its answer takes its group facts from P.taskDetail, a held one
-      from the workspace's tasks, by the rules the task index judges with
-      (store/taskIndex.ts judge). DELAY_UNKNOWN where the verdict needs the
-      owner's other work, or a group's subtasks not all there. Only a held
-      group can have subtasks still to load: those an answer leaves out
-      are hidden from the person, which no load changes. */
-  delayBeforeLoads: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
-    const detail = PLANNER.taskDetail(it.uuid)
-    const group = isIssueGroup(it)
-    const span = !detail && group ? groupSpan(it, PLANNER.issueById) : null
-    const owner = it.owner ? PLANNER.user(it.owner) : undefined
-    return delayBeforeLoads(
-      {
-        uuid: it.uuid,
-        status: it.status,
-        isGroup: group,
-        isDone: detail ? detail.done : isIssueDone(it, PLANNER.issueById),
-        partial: detail ? detail.partial : !!span?.partial,
-        owner: it.owner ?? null,
-        start: it.start,
-        end: it.end,
-        dueWeek: it.due ? isoToWeek(it.due) : null,
-        duePast: !!it.due && it.due < TODAY_ISO,
-        remaining: it.remaining,
-        remainingSet: it.remainingSet,
-        capacity: (owner && plannableHoursOf(owner)) || DEFAULT_PLANNABLE_HOURS,
-      },
-      {
-        datesKnown: detail ? detail.datesKnown : true,
-        loading: !detail && stillLoading !== null,
-      },
-    )
+  /** The task window's delay verdict for `it` where the workspace cannot
+      judge it: for a task the window shows from its own read, and while
+      tasks still load. It reads the owner's load from the owner-load cache
+      (store/ownerLoadCache.ts), which the store asks for while a window
+      shows the task's details (syncWindowLoad), by the Board's rules
+      (store/viewDelay.ts judgeDelay), so a window over a Board card shows
+      the card's verdict. Null while that load's first answer is on its
+      way, DELAY_UNKNOWN where it came back unavailable, failed or past the
+      cap, or where a group's subtasks are not all there. A task shown from
+      its answer takes its group facts from P.taskDetail, a held one from
+      the workspace's tasks. Only a held group can have subtasks still to
+      load: those an answer leaves out are hidden from the person, which
+      no load changes. */
+  windowDelay: (it: IssueVM): DelayInfo | typeof DELAY_UNKNOWN | null => {
+    const { issue, facts } = windowDelayIssue(it)
+    return judgeDelay(issue, it.org, viewDelayCtx, facts)
   },
   tracksDelay: (x: IssueVM | string): boolean => {
     const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
@@ -8388,6 +8748,27 @@ export const PLANNER = {
     return view && (view.id === id || view.uuid === id) && !rows.issues.has(view.uuid)
       ? view
       : undefined
+  },
+  /** The watched task the workspace does not hold, as a window names it,
+      when handle `id` is the one it opens by now (P.handleNow): its uuid,
+      organization, key, title and project, from the window's own read,
+      else as the workspace last held it, as for a task that left before
+      its read answered. Null for any other handle. A second window on the
+      same task, as the Inbox pane's pop-out, names it so. */
+  unheldTask: (
+    id: string,
+  ): { uuid: string; org: string; key: string; title: string; project: string } | null => {
+    const shown = unheldWatched()
+    if (!shown || PLANNER.handleNow(shown.uuid, shown.org, shown.num) !== id) return null
+    const view = PLANNER.detail?.task === shown.uuid ? PLANNER.detail.view : null
+    const was = watchedHeld?.uuid === shown.uuid ? watchedHeld : null
+    return {
+      uuid: shown.uuid,
+      org: shown.org,
+      key: `${ISSUE_PREFIX}-${shown.num}`,
+      title: view?.title ?? was?.title ?? '',
+      project: view?.project ?? was?.project ?? '',
+    }
   },
   /** Whether the window can save a change to task `id` from its own answer
       now (answerTaskOf): the workspace does not hold it, and the window
@@ -8567,23 +8948,22 @@ export const PLANNER = {
       unknown (views/kanbanCards.tsx DelayBanner), as the card's height and
       its hierarchy line read it. */
   delayBanner: (x: IssueVM | string): boolean => !!PLANNER.delayColor(x) || PLANNER.delayUnknown(x),
-  /** Notes task `id` in the opened-task registry when only a view's answer
-      brings it, so the task window opens it from its own read
-      (lib/openedTasks.ts), as Search does. */
-  noteViewTask: (id: string) => {
-    if (PLANNER.issueById[id]) return
+  /** What opening task handle `id` passes on (lib/taskReference.ts): the
+      handle when the workspace holds the task, else a reference with the
+      organization, number and uuid of the view row that brings it, as a
+      Board card's, a phone row's or an Overview row's, else `id`. */
+  openTarget: (id: string): string => {
+    if (PLANNER.issueById[id]) return id
     const it = viewRows.byHandle(id)
     const row = it && viewRows.peek(it.uuid)
-    if (!it || !row) return
-    noteOpenedTask({
-      uuid: it.uuid,
-      num: row.num,
-      key: it.key,
-      title: it.title,
-      project: it.project,
-      org: it.org,
-    })
+    return it && row ? taskRef({ org: it.org, num: row.num, uuid: it.uuid }) : id
   },
+  /** What opening task `uuid`, number `num` of organization `org` passes
+      on: its handle when the workspace holds it, else a reference that
+      names all three (lib/taskReference.ts), as Search and the related
+      rows open a task. */
+  openTask: (uuid: string, org: string, num: number | null): string =>
+    uuidToKey.get(uuid) ?? taskRef({ org, num, uuid }),
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
       now: the store's when it holds the task, else the home organization's
       key or another organization's uuid (handleFor). Read when the task
@@ -9781,6 +10161,7 @@ export const PLANNER = {
       watchedComments = null
     }
     ++commentsWatchEpoch
+    if (watchedHeld?.uuid !== issueUuid) watchedHeld = null
     watchedComments = issueUuid
     const row = issueUuid ? serverTask(issueUuid) : undefined
     watchedOrg = orgId ?? row?.org_id ?? null
@@ -9876,8 +10257,61 @@ export const PLANNER = {
       (P.taskDetail): a fresh subscription of the task answer, with
       'retrying' until the server answers, whether or not the sections
       show. A failure keeps the answer delivered before it. Does nothing
-      unless the read failed. */
-  retryTask: () => retrySide('task'),
+      unless the read failed. While the reference read serves the task, a
+      failure of that read runs it again instead. */
+  retryTask: () => {
+    const read = refRead
+    if (read?.state === 'failed' && read.args && sectionFailure.task === 'none') {
+      read.state = 'retrying'
+      // a fresh subscription runs the failed query again
+      parts?.stopSide('reference')
+      runRefRead(read)
+      repaint({ sections: true })
+      return
+    }
+    retrySide('task')
+  },
+
+  /** Registers the reference `ref` a window opens a task by
+      (lib/taskReference.ts), or none. It reads a reference that does not
+      name both the task's uuid and organization until an answer does
+      (P.reference), and moves the reference to the task's handle in the
+      repaint in which the workspace first holds the task
+      (P.watchHandles). One reference at a time, as one task is watched;
+      the Inbox pane's pop-out leaves it to the pane. */
+  watchTaskRef: (ref: string | null) => {
+    const named = refParts(ref)
+    if ((refRead?.ref ?? null) === (named ? ref : null)) return
+    const known = named?.uuid && named.org ? { uuid: named.uuid, org: named.org } : null
+    refRead =
+      ref && named
+        ? {
+            ref,
+            parts: named,
+            tried: new Set(),
+            args: null,
+            answer: null,
+            state: known ? 'resolved' : 'loading',
+            task: known && {
+              ...known,
+              num: named.num ?? null,
+              title: null,
+              project: null,
+              owner: null,
+            },
+            moved: null,
+          }
+        : null
+    if (refRead) runRefRead(refRead)
+    else parts?.stopSide('reference')
+    repaint({ sections: true })
+    // a task the workspace holds already moves to its handle at once
+    const handle = refRead && refHandle(refRead)
+    if (refRead && handle) {
+      refRead.moved = handle
+      moveHandles(new Map([[refRead.ref, handle]]))
+    }
+  },
 
   /** Retry for the history, as retryComments is for the comments: a fresh
       subscription, with 'retrying' until the server answers it. Does
@@ -12297,6 +12731,8 @@ function startParts(
     reject: (err: unknown) => void
     /** whether the boot waits for the complete workspace, not a partial one */
     whole?: boolean
+    /** the task the boot's address names, read with the first stage */
+    address?: AddressedTask
   },
 ): LiveParts {
   let settled = !first
@@ -12353,7 +12789,7 @@ function startParts(
     },
     online,
     // a workspace once complete shows only a complete one again
-    { whole: first ? first.whole : stillLoading === null },
+    first ? { whole: first.whole, address: first.address } : { whole: stillLoading === null },
   )
 }
 
@@ -12459,6 +12895,8 @@ function stopParts() {
   threadCurrent = false
   detailFresh = false
   bootSideNews.clear()
+  // the reference read runs again on the next registry (syncRefRead)
+  refLast = null
 }
 
 /** Destroy demo memory before rendering the expired/session-loss screen.
@@ -12676,8 +13114,12 @@ export async function initStore(
   onAuthenticated?: (accountId: string) => void,
   knownSession?: Awaited<ReturnType<typeof authClient.getSession>>,
   /** `whole` waits for the complete workspace even when a large one could
-      show part of it first, for an address that names a task */
-  opts?: { whole?: boolean },
+      show part of it first, as a new organization's boot does (P.createOrg).
+      `address` is the task the boot's address names under an organization's
+      slug (lib/router.ts addressedTask), which the live parts read with
+      their first stage, so the window shows it with the first paint
+      (store/liveParts.ts). */
+  opts?: { whole?: boolean; address?: AddressedTask },
 ): Promise<{ profileId: string; homeOrg: string } | null> {
   stopDayWatch?.()
   stopDayWatch = null
@@ -12728,7 +13170,12 @@ export async function initStore(
   let bootParts: LiveParts | null = null
   const first = await new Promise<Snapshot | null>((resolve, reject) => {
     if (DEMO_MODE) cancelDemoBoot = () => resolve(null)
-    parts = bootParts = startParts(stillCurrent, { resolve, reject, whole: opts?.whole })
+    parts = bootParts = startParts(stillCurrent, {
+      resolve,
+      reject,
+      whole: opts?.whole,
+      address: opts?.address,
+    })
   }).catch((err: unknown) => {
     // a failed boot keeps no subscription (see startParts)
     if (parts === bootParts) stopParts()

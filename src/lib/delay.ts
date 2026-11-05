@@ -51,14 +51,15 @@ export const DELAY_MARK: Record<Exclude<DelayStatus, 'ok'>, { glyph: string; col
   late: { glyph: 'warning', color: 'var(--pressure-over)' },
 }
 
-/** What the task window says of a delay it cannot judge from the owners'
-    loads, while tasks still load or for a task it shows from its own read
-    (delayBeforeLoads): the delay is not known. */
+/** What a card or the task window says of a delay it cannot judge, as
+    where the owner's load came back unavailable, failed or past the cap
+    (store/viewDelay.ts judgeDelay) or a group's subtasks are not all
+    there (delayBeforeLoads): the delay is not known. */
 export const DELAY_UNKNOWN = 'unknown'
 
-/** The task window's delay verdict for task `it` where the owners' loads
-    are not there to judge it: while tasks still load, or for a task the
-    window shows from its own read. A verdict that needs no owner's other
+/** The delay verdict for task `it` where the owners' loads are not there
+    to judge it, which store/viewDelay.ts judgeDelay takes where the
+    owner's load is not read, and gives a group's verdict by. A verdict that needs no owner's other
     work, as for a task without an owner, hours or capacity, one with no
     hours left, one an agent owns, or a group, is judged exactly
     (convex/lib/delay.ts delayWithProjection), so it is the verdict of

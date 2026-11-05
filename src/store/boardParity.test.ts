@@ -17,7 +17,9 @@
  * workspace and the store's canSee, the models shaped from the answer's
  * rows, and the delays the owner-load cache's rules (store/viewDelay.ts)
  * give the answer's cards, and every row of it judged as a task the
- * workspace does not hold, with the workspace's own; one case makes an
+ * workspace does not hold, with the workspace's own, and the task window's
+ * verdict of the same task shown from its own read (store/planner.ts
+ * P.windowDelay), which goes through the same judge; one case makes an
  * owner's tasks compete for a week's hours, so a span counted twice or
  * missing changes a verdict. */
 
@@ -363,7 +365,7 @@ async function expectDelays(
 ) {
   if (answer.state !== 'ok' || !P.__probe) return
   const probe = P.__probe
-  const { needsLoad, ownerLoadOf, viewDelay } = P.__views
+  const { delayIssueOfTask, judgeDelay, needsLoad, ownerLoadOf, viewDelay } = P.__views
   const capacity = (id: string) => {
     const person = P.user(id)
     return (person && plannableHoursOf(person)) || DEFAULT_PLANNABLE_HOURS
@@ -433,6 +435,18 @@ async function expectDelays(
       if (judged !== null && judged !== DELAY_UNKNOWN && judged.fin !== null)
         expect(judged.fin, `${label}: ${it.key} projected week${how}`).toBe(expected?.fin)
       if (judge !== unheld) continue
+      // the task window over the card, which shows the task from its own
+      // read, judges it from its view model through the same judge
+      const group = P.isGroup(it)
+      const shown = delayIssueOfTask(
+        it,
+        { isGroup: group, isDone: P.isDone(it), partial: !!groupSpan(it, P.issueById)?.partial },
+        capacity,
+      )
+      expect(
+        judgeDelay(shown, it.org, judge),
+        `${label}: ${it.key} the window's delay${how}`,
+      ).toEqual(judged)
       comparedUnheld.rows++
       if (row.has_subtasks) comparedUnheld.groups++
       if (expected && expected.status !== 'ok') comparedUnheld.flagged++

@@ -385,6 +385,9 @@ export const shapeMessage = (
     actor: m.actor_id,
     detail: m.detail,
     issueUuid: m.issue_id, // …which IS the inbox item this belongs to (0109)
+    // the task's organization, which a row whose task the workspace does
+    // not hold opens it in (lib/taskReference.ts)
+    issueOrg: m.org_id,
     issueKey: uuidToKey.get(m.issue_id) || null, // handle; null = archived/unloaded
     issueLabel: uuidToDisplayKey.get(m.issue_id) || null, // the readable "QN-n"
     issueTitle: iss?.title || m.issue_title,

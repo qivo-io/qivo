@@ -1,7 +1,11 @@
-/* The delay of a task only a view's answer brings (store/viewRows.ts),
-   judged from its row and its owner's load from the owner-load cache
+/* The delay of a task the workspace cannot judge, a task only a view's
+   answer brings (store/viewRows.ts) and a task the task window shows from
+   its own read or while tasks still load (store/planner.ts P.windowDelay),
+   judged from the task and its owner's load from the owner-load cache
    (store/ownerLoadCache.ts), by the rules the task index judges the
-   workspace's tasks with (store/taskIndex.ts judge).
+   workspace's tasks with (store/taskIndex.ts judge). Both go through one
+   judge (judgeDelay), so a window over a Board card shows the card's
+   verdict.
 
    The owner's load is the cache's spans, with the span of every task this
    person's rows hold, in the workspace or in a view, taken from those rows
@@ -10,7 +14,11 @@
    or owner edit moves a delay at once, the server's span of the same task
    is never counted again, before or after the server's answer, and a task
    given to another owner leaves the first owner's load. Spans without a
-   task, other people's work the person is not shown, stay. */
+   task, other people's work the person is not shown, stay. The judged
+   task's own spans never count, whichever list holds them, since the
+   projection leaves them out by uuid (convex/lib/workload.ts), so a task
+   the window shows from its answer, painted with the person's pending
+   edits (store/taskDetail.ts), needs no span of its own here. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
@@ -21,6 +29,7 @@ import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import { DELAY_UNKNOWN, type DelayInfo, type DelayIssue, delayBeforeLoads } from '../lib/delay'
 import type { LoadSpan } from '../lib/workload'
 import type { OwnerLoad } from './ownerLoadCache'
+import type { IssueVM } from './viewModels'
 
 /** What judging a view's task reads from the store. */
 export type ViewDelayCtx = {
@@ -76,14 +85,37 @@ export function delayIssueOfRow(row: ViewRow, capacity: (id: string) => number):
   }
 }
 
+/** Task view model `it` as the delay rules read it, the task window's
+    task (store/planner.ts P.windowDelay), with a group's Done and whether
+    its span leaves out subtasks from `group`, and its owner's plannable
+    hours from `capacity`. */
+export function delayIssueOfTask(
+  it: IssueVM,
+  group: { isGroup: boolean; isDone: boolean; partial: boolean },
+  capacity: (id: string) => number,
+): DelayIssue {
+  return {
+    uuid: it.uuid,
+    status: it.status,
+    isGroup: group.isGroup,
+    isDone: group.isDone,
+    partial: group.partial,
+    owner: it.owner ?? null,
+    start: it.start,
+    end: it.end,
+    dueWeek: it.due ? isoToWeek(it.due) : null,
+    duePast: !!it.due && it.due < TODAY_ISO,
+    remaining: it.remaining,
+    remainingSet: it.remainingSet,
+    capacity: it.owner ? capacity(it.owner) : 0,
+  }
+}
+
 /** Whether task `row`'s verdict reads its owner's load: a leaf with an
     owner, hours left and a finite capacity, with something to be judged
     against (lib/delay.ts delayBeforeLoads). */
 export function needsLoad(row: ViewRow, capacity: (id: string) => number): boolean {
-  const issue = delayIssueOfRow(row, capacity)
-  return (
-    !!issue.owner && delayBeforeLoads(issue, { datesKnown: true, loading: false }) === DELAY_UNKNOWN
-  )
+  return issueNeedsLoad(delayIssueOfRow(row, capacity))
 }
 
 /** The spans the views' rows file (convex/lib/loadRows.ts loadRowFor), by
@@ -141,35 +173,57 @@ export function viewLoadOf(
   return canonicalLoad(spans)
 }
 
-/** The delay of task `row`, which only a view holds: judged exactly where
-    the verdict needs no one's other work, else against its owner's load.
-    Null while that load's first answer is on its way, as before any
-    answer nothing is known and a mark would flash on every open;
-    DELAY_UNKNOWN where the load is unavailable, failed or past the cap, so
-    it never reads as on track. */
-export function viewDelay(
-  row: ViewRow,
+/** What a group's verdict knows besides the task: whether its dates are
+    known, and whether subtasks may still arrive (lib/delay.ts
+    delayBeforeLoads). A view's row knows both. */
+export type DelayFacts = { datesKnown: boolean; loading: boolean }
+const ROW_FACTS: DelayFacts = { datesKnown: true, loading: false }
+
+/** The delay of task `issue` of organization `org`, which the workspace
+    cannot judge: exact where the verdict needs no one's other work, as for
+    a group, whose dates decide it (`facts`), else against its owner's load.
+    Late for a passed due date. Null while that load's first answer is on
+    its way, as before any answer nothing is known and a mark would flash
+    on every open; DELAY_UNKNOWN where the load is unavailable, failed or
+    past the cap, so it never reads as on track. */
+export function judgeDelay(
+  issue: DelayIssue,
+  org: string,
   ctx: ViewDelayCtx,
+  facts: DelayFacts = ROW_FACTS,
 ): DelayInfo | typeof DELAY_UNKNOWN | null {
-  const issue = delayIssueOfRow(row, ctx.capacity)
-  const load = issue.owner ? ctx.load(row.org_id, issue.owner) : null
+  // a group's projection reads no one's load, only its subtasks' dates
+  if (issue.isGroup) return delayBeforeLoads(issue, facts)
+  const load = issue.owner ? ctx.load(org, issue.owner) : null
   // with the owner's load the verdict is exact, the projected week too
   if (issue.owner && load?.state === 'ok') {
-    const key = `${row.org_id}\u0000${issue.owner}`
+    const key = `${org}\u0000${issue.owner}`
     let project = ctx.memo?.get(key)
     if (!project) {
-      const spans = viewLoadOf(row.org_id, issue.owner, load, ctx)
+      const spans = viewLoadOf(org, issue.owner, load, ctx)
       project = delayProjector(() => spans, TODAY_WEEK)
       ctx.memo?.set(key, project)
     }
     return project(issue)
   }
-  const exact = delayBeforeLoads(issue, { datesKnown: true, loading: false })
+  const exact = delayBeforeLoads(issue, facts)
   // a passed due date is late whatever the load (convex/lib/delay.ts), with
   // no projected week to name
-  if (exact === null && issue.duePast && !issue.isDone && !issue.isGroup)
-    return { status: 'late', fin: null }
+  if (exact === null && issue.duePast && !issue.isDone) return { status: 'late', fin: null }
   if (exact !== DELAY_UNKNOWN) return exact
   if (load === null || load.state === 'waiting') return null
   return DELAY_UNKNOWN
 }
+
+/** The delay of task `row`, which only a view holds (judgeDelay). */
+export const viewDelay = (
+  row: ViewRow,
+  ctx: ViewDelayCtx,
+): DelayInfo | typeof DELAY_UNKNOWN | null =>
+  judgeDelay(delayIssueOfRow(row, ctx.capacity), row.org_id, ctx)
+
+/** Whether task `issue`'s verdict reads its owner's load (judgeDelay): a
+    leaf with an owner, hours left and a finite capacity, with something to
+    be judged against. */
+export const issueNeedsLoad = (issue: DelayIssue): boolean =>
+  !issue.isGroup && !!issue.owner && delayBeforeLoads(issue, ROW_FACTS) === DELAY_UNKNOWN

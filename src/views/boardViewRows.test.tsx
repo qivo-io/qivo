@@ -15,7 +15,6 @@ const booted = async () => ({
   ...(await import('./board/cardEstimate')),
   ...(await import('../components/AssigneeAvatar')),
   ...(await import('../components/ui/tooltip')),
-  ...(await import('../lib/openedTasks')),
 })
 
 /* A Board card of a task only the Board's answer brings, whose task the
@@ -483,12 +482,21 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(busy()).toBe(false)
   })
 
-  it("opens in the task window from the window's own read", async () => {
+  it('opens in the task window by a reference to its organization, number and uuid, and a held card by its handle', async () => {
     const board = await farBoard()
-    const handle = board.P.viewTask('board:desktop', 'far')?.id ?? ''
-    const { openedTask } = await booted()
-    expect(openedTask(handle, (t) => board.P.handleNow(t.uuid, t.org, t.num))).toBeUndefined()
+    const opened: (string | null)[] = []
+    await board.render(root, (task) => {
+      opened.push(task)
+      return null
+    })
+    const { refParts } = await import('../lib/taskReference')
     await act(async () => board.card('far')?.click())
-    expect(openedTask(handle, (t) => board.P.handleNow(t.uuid, t.org, t.num))?.uuid).toBe('far')
+    expect(refParts(opened.at(-1))).toEqual({
+      org: board.snapshot.orgs[0].id,
+      num: 50,
+      uuid: 'far',
+    })
+    await act(async () => board.card('a')?.click())
+    expect(opened.at(-1)).toBe(board.P.handleOf('a'))
   })
 })
