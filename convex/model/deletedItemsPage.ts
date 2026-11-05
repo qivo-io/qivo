@@ -57,10 +57,14 @@
  * orders them, and is the entries after its cursor.
  *
  * Stops. A browse or scan that spends its budget ends the page with
- * next_cursor at the last item it looked at, also with no entries.
+ * next_cursor at the last item it looked at, also with no entries. A page
+ * whose rows run out of their own budget ends before the first entry whose
+ * row it could not build, and past it with `reads` when that is its first
+ * entry (answerOf).
  * `missing` says that entries sorting before the page's last one may be
  * missing: `reads` when the budget cut an unordered range or the opening of
- * a seat's sources, and for an admin's search also the gathering; `matches`
+ * a seat's sources, or the page went past an entry whose row its budget
+ * could not build, and for an admin's search also the gathering; `matches`
  * when an admin's search source read its whole allowance. A search page of
  * anyone else always says `matches`, never computed from a stop, since
  * their search sources hold tasks hidden from them (owner, 2026-10-28, as
@@ -131,11 +135,16 @@ type Profile = Doc<'profiles'>
  * before any of them reads.
  *
  * Convex stops a query at 16 MiB, 32,000 documents or 4,096 ranges. `call`
- * covers every read of the call and takes five eighths of each: 10 MiB,
- * 20,000 documents and 2,560 ranges. The other three eighths hold what
- * runs past its last check: the sight of the seat it opened last, the rows
- * of the page's entries (answerOf), and the reads authedQuery makes for
- * the login.
+ * covers every read of the call but the rows of the page's entries and
+ * takes five eighths of each: 10 MiB, 20,000 documents and 2,560 ranges.
+ * `build` covers those rows (answerOf) and takes two eighths more: 4 MiB,
+ * 8,000 documents and 1,024 ranges. Its check comes before each row and
+ * after each task a redacted row passes over to find the one it shows,
+ * whose rows hold their searchable text, so the page ends before the first
+ * entry whose row it ran out of reads for (answerOf). The last eighth
+ * holds what runs past the last checks: the sight of the seat the call
+ * opened last, a document past each budget, and the reads authedQuery
+ * makes for the login.
  * `find` is the share of `call` the ranges that find items may spend:
  * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges are the page's own
  * bound, set by the widest browse inside the design size: a member who
@@ -155,12 +164,15 @@ type Profile = Doc<'profiles'>
  * as a page that starts with it, and every page gathers the same
  * candidates. Every search result counts as an index range, as Convex
  * fetches each by id. A mutable object, so tests can lower it; replace
- * `call`, `find` and `gather` whole rather than change their fields.
+ * `call`, `build`, `find` and `gather` whole rather than change their
+ * fields.
  *
  * Measured on 5 November 2026 in convex-test at the design size with
  * ordinary text, one figure raised a case
  * (tests/deletedItemsPageReads.test.ts), as the page counts its reads,
- * each search result a range. Every case answered whole. A project item of
+ * `call` and `build` together, each search result a range. Every case
+ * answered whole. The rows of each page's entries (`build`) read one range
+ * and no document, as judging the items had read what the rows show. A project item of
  * 30 live and 40 archived sub-projects with 800 open tasks: an admin's
  * search for a word every task holds reads its 256 results and 269 ranges,
  * 271 documents and 0.20 MiB in all, since no older row shares its
@@ -190,6 +202,7 @@ export const DELETED_PAGE = {
   candidates: 256,
   results: 512,
   call: { bytes: 10 * 1024 * 1024, rows: 20_000, ranges: 2_560 },
+  build: { bytes: 4 * 1024 * 1024, rows: 8_000, ranges: 1_024 },
   find: { bytes: 6 * 1024 * 1024, rows: 12_000, ranges: 1_600 },
   gather: { bytes: 4 * 1024 * 1024, rows: 8_000, ranges: 1_536 },
 }
@@ -498,15 +511,17 @@ type Run = {
   ctx: QueryCtx
   a: Asked
   call: Reads
+  build: Reads
   find: Reads
   gather: Reads
   /** what the call must leave in `call` while project entries are read
    * before a task search, which then has `gather` */
   floor: Reads | null
   seats: Map<string, Seat>
-  entries: Pending[]
+  entries: Placed[]
   next: Place | null
-  /** an unordered range, a seat's opening or an admin's gathering was cut */
+  /** an unordered range, a seat's opening or an admin's gathering was cut,
+   * or the page went past an entry whose row it could not build */
   reads: boolean
   /** an admin's search source read its whole allowance, or the search is
    * anyone else's */
@@ -518,6 +533,9 @@ type Run = {
  * tasks found in the item that may name it (a task item's matches, a
  * project item's one task). */
 type Pending = { seat: Seat; item: Item; view: ItemView; at: At; tasks: Task[] }
+
+/** An entry of the page, with the part it is in. */
+type Placed = Pending & { part: Part }
 
 /** Whether the run's reads must stop before the next item or range. */
 const stopped = (run: Run): boolean =>
@@ -975,7 +993,7 @@ async function readPart(
  * may follow. */
 function take(run: Run, part: Part, pending: Pending[]): boolean {
   for (const p of pending) {
-    run.entries.push(p)
+    run.entries.push({ ...p, part })
     if (room(run) === 0) {
       run.next = { part, at: p.at }
       return true
@@ -1443,7 +1461,7 @@ async function gatherTasks(
     .filter((p) => from === null || before(from, p.at))
     .sort((x, y) => order(x.at, y.at))
   for (const [i, p] of found.entries()) {
-    run.entries.push(p)
+    run.entries.push({ ...p, part: 1 })
     if (room(run) === 0) {
       if (i < found.length - 1) run.next = { part: 1, at: p.at }
       return
@@ -1513,6 +1531,7 @@ export async function pageFor(
     ctx,
     a,
     call: { ...DELETED_PAGE.call },
+    build: { ...DELETED_PAGE.build },
     find: { ...DELETED_PAGE.find },
     gather: { ...DELETED_PAGE.gather },
     floor: null,
@@ -1533,7 +1552,7 @@ export async function pageFor(
     return await answerOf(run, key, head)
   } finally {
     if (spend !== undefined)
-      for (const part of ['call', 'find', 'gather'] as const)
+      for (const part of ['call', 'build', 'find', 'gather'] as const)
         spend[part] = {
           bytes: DELETED_PAGE[part].bytes - run[part].bytes,
           rows: DELETED_PAGE[part].rows - run[part].rows,
@@ -1545,7 +1564,7 @@ export async function pageFor(
 /** What one page spent of each budget (pageFor), in the units it counts:
  * a range per query read, read by id and search result, and a row and its
  * estimated bytes per document. */
-export type PageSpend = Partial<Record<'call' | 'find' | 'gather', Reads>>
+export type PageSpend = Partial<Record<'call' | 'build' | 'find' | 'gather', Reads>>
 
 /** The page without a scope: every seat's project entries, and the tasks
  * a task reference names in every seat. */
@@ -1654,7 +1673,13 @@ async function scoped(
 const notThisPath = () => badRequest('cursor must be the next_cursor of an earlier page')
 
 /** The page `run` gathered: its entries with their hits, each item's row
- * once, and the cursor and notes. */
+ * once, and the cursor and notes. The rows spend `build`, checked before
+ * each row and inside a redacted row's search for the task it shows
+ * (deletedItemsList.ts rowOf). Once it runs out the page ends before the
+ * entry whose row it could not build, with next_cursor at the entry
+ * before. When that is the page's first entry, whose row alone needs more
+ * than `build`, the page goes past it with `reads`, rather than answer the
+ * same page again on every call. */
 async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Promise<DeletedPage> {
   if (head.too_wide === true)
     return {
@@ -1662,13 +1687,23 @@ async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Prom
       too_wide: true,
       ...(head.scope_needed === true ? { scope_needed: true as const } : {}),
     }
-  const reader = spending(run.ctx, run.call)
+  const reader = spending(run.ctx, run.build)
+  const out = () => spent(run.build)
   const rows = new Map<string, DeletedRow | null>()
   const entries: DeletedEntry[] = []
-  for (const p of run.entries) {
+  for (const [i, p] of run.entries.entries()) {
     let row = rows.get(p.item.id)
     if (row === undefined) {
-      row = await rowOf(reader, p.seat.sight, p.seat.orgName, p.item)
+      const built = out()
+        ? 'unread'
+        : await rowOf(reader, p.seat.sight, p.seat.orgName, p.item, out)
+      if (built === 'unread') {
+        const last = i === 0 ? p : run.entries[i - 1]
+        run.next = { part: last.part, at: last.at }
+        if (i === 0) run.reads = true
+        break
+      }
+      row = built
       rows.set(p.item.id, row)
     }
     if (row === null) continue

@@ -87,8 +87,9 @@ type Item = Doc<'deleted_items'>
  * last check, which comes before each seat, range, document and row: the
  * sight of the seat it opened last, the reads of the row it built last (a
  * project item's stored projects, grants and shares, or a redacted task
- * item's tasks, no more than one delete moved in its own transaction), and
- * the reads authedQuery makes for the login before the call.
+ * item's tasks up to one past the budget, where the row stops unbuilt and
+ * the list says `capped`, since each holds its task's searchable text),
+ * and the reads authedQuery makes for the login before the call.
  *
  * `find` is the share of `call` the reads that find items may spend: 6 MiB,
  * 12,000 documents and 1,024 ranges. Finding reads mostly bytes and
@@ -272,7 +273,11 @@ async function seatList(
       capped = true
       break
     }
-    const row = await rowOf(reader, sight, orgName, item)
+    const row = await rowOf(reader, sight, orgName, item, () => spent(call))
+    if (row === 'unread') {
+      capped = true
+      break
+    }
     if (row !== null) rows.push(row)
   }
   return { items: rows.slice(0, LIST.cap), capped: capped || rows.length > LIST.cap }
@@ -393,18 +398,39 @@ async function candidatesOf(
   return { items: [...found.values()], truncated }
 }
 
-/** `item` as `sight`'s person sees it, or null when it is hidden from them. */
+/**
+ * `item` as `sight`'s person sees it, or null when it is hidden from them.
+ * With `out`, the caller's check of its read budget, a redacted task item's
+ * row checks it after each of the item's tasks it reads to find the one it
+ * shows, and answers 'unread' when the budget ran out first, as each task's
+ * row holds its searchable text, so the row is not built.
+ */
 export async function rowOf(
   ctx: QueryCtx,
   sight: Sight,
   orgName: string,
   item: Item,
-): Promise<DeletedRow | null> {
+): Promise<DeletedRow | null>
+export async function rowOf(
+  ctx: QueryCtx,
+  sight: Sight,
+  orgName: string,
+  item: Item,
+  out: () => boolean,
+): Promise<DeletedRow | null | 'unread'>
+export async function rowOf(
+  ctx: QueryCtx,
+  sight: Sight,
+  orgName: string,
+  item: Item,
+  out?: () => boolean,
+): Promise<DeletedRow | null | 'unread'> {
   const { me, memo } = sight
   const view = await viewOf(ctx, memo, me, item)
   // viewOf never shows a purging item; the check narrows the state
   if (view === null || item.state === 'purging') return null
-  const shown = view.redacted ? await shownTask(ctx, item, view) : null
+  const shown = view.redacted ? await shownTask(ctx, item, view, out) : null
+  if (shown === 'unread') return shown
   if (view.redacted && shown === null) return null
   const ready = item.state === 'ready'
   const block = view.redacted ? 'no_access' : await restoreBlock(ctx, me, item, memo)
@@ -476,11 +502,15 @@ export async function rowFor(
 /** The task a redacted row shows: one of its tasks in a project the viewer
  * can see. It checks the item's tasks itself rather than filter the range,
  * so a metered ctx (seatList) counts every task it passes over, as Convex
- * does. */
-async function shownTask(ctx: QueryCtx, item: Item, view: ItemView) {
+ * does, and answers 'unread' once `out` says the reads ran out before it
+ * found one. */
+async function shownTask(ctx: QueryCtx, item: Item, view: ItemView, out?: () => boolean) {
   const seen = new Set(view.projects.map((p) => p.id))
   const tasks = ctx.db.query('deleted_tasks').withIndex('by_item', (q) => q.eq('item_id', item.id))
-  for await (const task of tasks) if (seen.has(task.project_id)) return task
+  for await (const task of tasks) {
+    if (seen.has(task.project_id)) return task
+    if (out?.() === true) return 'unread'
+  }
   return null
 }
 

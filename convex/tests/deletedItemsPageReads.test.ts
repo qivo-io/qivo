@@ -252,13 +252,13 @@ async function readPage(t: T, me: Profile, args: PageArgs) {
 type Figures = Awaited<ReturnType<typeof readPage>>['figures']
 
 /** Prints `figures` and checks them inside Convex's limits and the page's
- * `call` and `gather`. */
+ * `call`, `build` and `gather`. */
 function record(what: string, figures: Figures): void {
   console.log(`deleted page figures, ${what}:`, JSON.stringify(figures))
   expect(figures.ranges).toBeLessThan(4096)
   expect(figures.documents).toBeLessThan(32_000)
   expect(figures.mib).toBeLessThan(16)
-  for (const part of ['call', 'gather'] as const) {
+  for (const part of ['call', 'build', 'gather'] as const) {
     const spent = figures.page[part]
     expect(spent?.ranges ?? 0, part).toBeLessThan(DELETED_PAGE[part].ranges)
     expect(spent?.rows ?? 0, part).toBeLessThan(DELETED_PAGE[part].rows)

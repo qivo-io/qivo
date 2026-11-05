@@ -15,7 +15,8 @@ import type { OrgRole } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
 import { sightOf, TRASH_BUDGET } from '../model/deletedItems'
 import type { DeletedRow } from '../model/deletedItemsList'
-import { DELETED_PAGE, type DeletedPage } from '../model/deletedItemsPage'
+import { DELETED_PAGE, type DeletedPage, type PageSpend, pageFor } from '../model/deletedItemsPage'
+import { estimateDocumentBytes } from '../model/demoMetrics'
 import {
   as,
   expectRefusal,
@@ -35,6 +36,7 @@ installTrashTimers()
 const DEFAULT_PAGE = {
   ...DELETED_PAGE,
   call: { ...DELETED_PAGE.call },
+  build: { ...DELETED_PAGE.build },
   find: { ...DELETED_PAGE.find },
   gather: { ...DELETED_PAGE.gather },
 }
@@ -1043,6 +1045,103 @@ describe('stops', () => {
       next_cursor: null,
       missing: 'reads',
     })
+  })
+
+  it("ends a page before the first entry whose redacted row runs out of the rows' budget, and goes past one that alone needs more", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const omar = await person(t, org_id, 'Omar')
+    const ops = await tree(t, f, 'Operations', omar, [{ name: 'Infra' }])
+    const infra = ops.subs[0]
+    const secret = await plantProject(t, { org_id, type: 'project', parent_id: f.hidden.id })
+    // three task items rooted in a project Omar cannot see, each with ten
+    // subtasks there before the one in Infra, which his redacted row shows
+    const items: string[] = []
+    for (let i = 0; i < 3; i++)
+      items.unshift(
+        await t.run(async (ctx) => {
+          const deleted_at = iso(START + i * 1000)
+          const item = plantedItem(f, secret, {
+            parent_project_id: f.hidden.id,
+            deleted_at,
+            deleted_by: f.user.id,
+            projects: [secret, infra].map((p) => ({
+              id: p.id,
+              name: p.name,
+              key: p.key,
+              type: p.type,
+              tasks: p.id === infra.id ? 1 : 11,
+              archived_tasks: 0,
+            })),
+            counts: { tasks: 12, archived_tasks: 0, subtasks: 11, sub_projects: 0 },
+          })
+          await ctx.db.insert('deleted_items', item)
+          for (let n = 0; n < 12; n++) {
+            const project = n === 11 ? infra : secret
+            const title = `Rotate the data room keys, step ${n}`
+            await ctx.db.insert('deleted_tasks', {
+              org_id,
+              item_id: item.id,
+              task_id: n === 0 ? item.target_id : uuid(),
+              num: 100 * (i + 1) + n,
+              title,
+              project_id: project.id,
+              archived: false,
+              ...(project.id === secret.id ? {} : { cross_project_id: project.id }),
+              search_text: `${title}\nCheck who holds each key before the audit.`,
+              deleted_at,
+              deleted_by: f.user.id,
+              item_project_id: secret.id,
+              item_parent_id: f.hidden.id,
+            })
+          }
+          return item.id
+        }),
+      )
+    // the bytes of one item's rows, which its redacted row reads to find
+    // the task in Infra
+    const scan = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query('deleted_tasks')
+        .withIndex('by_item', (q) => q.eq('item_id', items[0]))
+        .collect()
+      return rows.reduce((n, row) => n + estimateDocumentBytes(row), 0)
+    })
+    const args = { scope: { org_id, all: true as const } }
+    const read = (cursor?: string) =>
+      as(t, omar).query(async (ctx) => {
+        const spend: PageSpend = {}
+        const answer = await pageFor(
+          ctx,
+          new Map([[org_id, omar]]),
+          cursor === undefined ? args : { ...args, cursor },
+          spend,
+        )
+        return { answer, spend }
+      })
+    const whole = await read()
+    expect(whole.answer.entries.map((e) => e.item_id)).toEqual(items)
+    expect(whole.answer.items.every((row) => row.redacted === true)).toBe(true)
+    // the rows may read one item's rows and a half: the page ends before
+    // the second entry, and the walk gives each item once
+    DELETED_PAGE.build = { ...DEFAULT_PAGE.build, bytes: scan * 1.5 }
+    const first = await read()
+    expect(first.answer.entries.map((e) => e.item_id)).toEqual(items.slice(0, 1))
+    expect(first.answer.items.map((row) => row.id)).toEqual(items.slice(0, 1))
+    expect(first.answer.next_cursor).not.toBeNull()
+    expect(first.answer.missing).toBeUndefined()
+    expect(first.spend.build?.bytes ?? 0).toBeLessThan(DELETED_PAGE.build.bytes + scan / 6)
+    const walked = await walk(t, omar, args)
+    expect(walked.ids).toEqual(items)
+    expect(walked.pages.every((p) => p.missing === undefined)).toBe(true)
+    // a row that alone needs more: each page goes past its entry and says so
+    DELETED_PAGE.build = { ...DEFAULT_PAGE.build, bytes: scan / 2 }
+    const past = await read()
+    expect(past.answer).toMatchObject({ entries: [], items: [], missing: 'reads' })
+    const after = await read(past.answer.next_cursor ?? '')
+    expect(after.answer).toMatchObject({ entries: [], missing: 'reads' })
+    expect(after.answer.next_cursor).not.toBeNull()
   })
 
   it('ends a page that went on inside a project item after its tasks when its sources then do not open, without saying reads', async () => {
