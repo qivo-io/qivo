@@ -486,7 +486,7 @@ describe('the arguments', () => {
 describe('the cursor', () => {
   it('continues on the other surface and opens only for its organization, caller, project and window', async () => {
     const fx = await setup()
-    const [first, second, third] = await nameOrder(fx.t, fx.org.id)
+    const [first, second, third, fourth] = await nameOrder(fx.t, fx.org.id)
     const q = { limit: '1', from_week: WEEK, weeks: '2' }
     const one = await restPage(fx, fx.admin, q)
     expect(one.people.map((p) => p.id)).toEqual([first?.id])
@@ -495,11 +495,13 @@ describe('the cursor', () => {
     // MCP takes REST's cursor, and the limit may change between pages
     const two = await mcpPage(fx, fx.admin, { limit: 2, from_week: WEEK, weeks: 2, cursor })
     expect(two.people.map((p) => p.id)).toEqual([second?.id, third?.id])
+    // and REST takes MCP's
+    expect(typeof two.next_cursor).toBe('string')
     expect(
       (await restPage(fx, fx.admin, { ...q, cursor: two.next_cursor ?? '' })).people.map(
         (p) => p.id,
       ),
-    ).toHaveLength(1)
+    ).toEqual([fourth?.id])
     // another day of the same week is the same window, and so is today's
     // week with from_week left out
     expect(
