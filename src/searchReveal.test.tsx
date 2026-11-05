@@ -9,7 +9,7 @@ import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* A task picked in Search while the Board shows, on App and the real store
-   in a session that never asked for every task: the task window opens
+   in a session that never asked for every task. The task window opens
    over the Board, and the Board rings the task's card, which only its
    answer brings, as the workspace holds no task. */
 

@@ -804,14 +804,14 @@ describe('tasks on demand', () => {
     expect(stalled?.state === 'partial' && String(stalled.tasksFailed)).toContain(
       'did not arrive in time',
     )
-    // a window answers: loading again, with no failure
+    // a window answers, and the load goes on with no failure
     const first = { org_id: ORG, ...WINDOWS[0] }
     s.set('workspace:tasks', first, { value: tasksPart(['t0']) })
     s.send([s.keyOf('workspace:tasks', first)])
     const loading = last()
     expect(loading).toMatchObject({ state: 'partial', loaded: 1 / 64 })
     expect(loading?.state === 'partial' && loading.tasksFailed).toBeUndefined()
-    // silent again for STALL.ms: stopped again
+    // after STALL.ms of silence the load stops again
     await vi.advanceTimersByTimeAsync(999)
     const quiet = last()
     expect(quiet?.state).toBe('partial')
