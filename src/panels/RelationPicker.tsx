@@ -25,7 +25,10 @@
      from the window's lists, checked, matched in the browser by the rule
      the server matches with (lib/search.ts matchesAllWords). While the
      window's own removal of them waits (`locked`), they show without
-     taking a press. A task shows once.
+     taking a press. In Subtasks and Linked tasks a row that showed as
+     current stays listed for the picker's life with its last data,
+     unchecked once it leaves the window's list, so a relation taken off
+     can be chosen again. A task shows once.
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
@@ -79,8 +82,10 @@ export function PickerRefusal({ limit }: { limit: Limit }) {
 
 /** A task of the window's own lists of the picker's relation: the Parent
     row, a Subtasks row the person can change, or a Linked tasks row with
-    its relation as seen from the window's task. */
-export type CurrentRelation = RelatedTaskVM & { type?: string }
+    its relation as seen from the window's task. A Subtasks row the
+    workspace does not hold carries `row`, its short row as a picker's row
+    without a parent, which a press that makes it a subtask again sends. */
+export type CurrentRelation = RelatedTaskVM & { type?: string; row?: RelationCandidate }
 
 /** The window's current relations of the picker's kind, which show first,
     a note while the list they come from is not whole, and `locked` while
@@ -92,8 +97,10 @@ export type CurrentRelations = {
   locked?: boolean
 }
 
-/** One row of the picker: a current relation from the window, or a task
-    of the server's batch. */
+/** One row of the picker: a current relation from the window, a task of
+    the server's batch, or a row that showed as current and has left the
+    window's list since (its `candidate` the row it was shown with, if
+    any). */
 type Choice = {
   uuid: string
   key: string
@@ -237,9 +244,18 @@ export function RelationPicker({
     opened.current = listKey
   })
   // the rows of this text: the window's current relations first, then the
+  // rows that showed as current and left the window's list since, then the
   // server's batches, each task once
   const answered =
     !search.tooLong && query === typed && opened.current === listKey && list.phase !== 'first'
+  // every row that showed as current, with its last data, for the
+  // picker's life, so one taken off stays listed and can be pressed again;
+  // a picker that closes after one pick (Parent) keeps none
+  const wasCurrent = useRef(new Map<string, CurrentRelation>())
+  if (!single) for (const row of current.rows) wasCurrent.current.set(row.uuid, row)
+  // the server's rows only for the text they answer, so a new text's rows
+  // start empty until its answer arrives
+  const served = answered ? list.rows : []
   const shownIds = new Set<string>()
   const choices: Choice[] = []
   for (const row of current.rows) {
@@ -248,14 +264,25 @@ export function RelationPicker({
     shownIds.add(row.uuid)
     choices.push({ uuid: row.uuid, key, title: row.title, current: row, locked: !!current.locked })
   }
-  // the server's rows only for the text they answer, so a new text's rows
-  // start empty until its answer arrives
-  if (answered)
-    for (const row of list.rows) {
-      if (shownIds.has(row.id)) continue
-      shownIds.add(row.id)
-      choices.push({ uuid: row.id, key: issueKey(row.num), title: row.title, candidate: row })
-    }
+  for (const row of wasCurrent.current.values()) {
+    const key = issueKey(row.num)
+    if (shownIds.has(row.uuid) || !matches(key, row.title)) continue
+    shownIds.add(row.uuid)
+    // the server's row of it where a batch of this text holds it, else
+    // the row it showed with
+    const fresh = served.find((r) => r.id === row.uuid)
+    choices.push({
+      uuid: row.uuid,
+      key: fresh ? issueKey(fresh.num) : key,
+      title: fresh?.title ?? row.title,
+      candidate: fresh ?? row.row,
+    })
+  }
+  for (const row of served) {
+    if (shownIds.has(row.id)) continue
+    shownIds.add(row.id)
+    choices.push({ uuid: row.id, key: issueKey(row.num), title: row.title, candidate: row })
+  }
   const seenNow = (choice: Choice): Seen => seen.get(choice.uuid) ?? seenOf(choice)
 
   // what the list says, from its first answer that lists nothing, a later

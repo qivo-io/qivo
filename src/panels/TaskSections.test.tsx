@@ -667,6 +667,38 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(await hintOf(remove())).toBe('Available once Qivo can check this task for changes')
   })
 
+  it('makes a subtask the picker took off a subtask again, from the row the window showed', async () => {
+    await load()
+    const reads = holdRelations()
+    await openTask()
+    const far = short(task('far', 39, { title: 'Tune the filter', parent_id: 'fam' }))
+    await answer('taskWindow:task', taskAnswer([far]))
+    await act(async () =>
+      document.querySelector<HTMLElement>('button[aria-label="Add subtask"]')?.click(),
+    )
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+    await reads.at(-1)?.answer(pickerBatch([]))
+    const rowOf = () => document.querySelector<HTMLButtonElement>('[data-picker-row="far"]')
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+    await act(async () => rowOf()?.click())
+    expect(sentArgs('issues:update').at(-1)).toMatchObject({
+      id: 'far',
+      patch: { parent_id: null },
+      expected: { parent_id: 'fam', has_hidden_parent: false },
+    })
+    // the window's list drops it at once, and the picker keeps it, unchecked
+    expect(titlesOf('subtasks')).toEqual([])
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('false')
+    await act(async () => rowOf()?.click())
+    expect(sentArgs('issues:update').at(-1)).toMatchObject({
+      id: 'far',
+      patch: { parent_id: 'fam' },
+      expected: { parent_id: null, has_hidden_parent: false },
+    })
+    expect(titlesOf('subtasks')).toEqual(['Tune the filter'])
+    expect(rowOf()?.getAttribute('aria-pressed')).toBe('true')
+  })
+
   it('keeps Read-only project access on a held row the person cannot edit', async () => {
     await load()
     await openTask()

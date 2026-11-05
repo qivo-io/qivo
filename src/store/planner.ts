@@ -10436,6 +10436,20 @@ export const PLANNER = {
     return parent ? relatedTask(parent.id, parent) : null
   },
 
+  /** Subtask `uuid` of the watched task as the window's own answer lists
+      it, painted, as a Subtasks picker's row without a parent
+      (convex/lib/relationPicker.ts RelationCandidate), so a picker that
+      took it off can make it a subtask again (P.setSubtaskParent needs the
+      row for a task the workspace does not hold). Null for a task the
+      answer does not list. Reads the answer's own list, never the
+      workspace's tasks. */
+  subtaskPickRow: (uuid: string): RelationCandidate | null => {
+    const short = paintedAnswer()?.subtasks.rows.find((row) => row.id === uuid)
+    if (!short) return null
+    const { has_subtasks: _group, ...fields } = short
+    return fields
+  },
+
   /** Whether the person may edit some live sub-project of organization
       `org`, for Link task on a task they only view: a link needs Edit on
       either task (convex/model/issues.ts linkAccess), and the Linked tasks

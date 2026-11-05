@@ -238,6 +238,7 @@ describe('the writes from the task window’s own answer', () => {
     'unlinkTasks',
     'relationCandidates',
     'shownParent',
+    'subtaskPickRow',
     'editsSomeProject',
     'createParent',
     'createLinked',

@@ -133,7 +133,8 @@ server and show 25 tasks at a time, with **Load more** for the next 25.
 The search covers every task you could choose, also tasks that have not
 loaded into the workspace yet, and finds a task when every word you type
 occurs in its ID or title. The task's current parent, subtasks and links
-show first, checked, so you can take them off. While the window is still
+show first, checked, so you can take them off, and one you take off stays
+listed, unchecked, so you can choose it again. While the window is still
 loading them, or could not load them all, the picker says so, and while
 their list could not load, they stay checked and cannot be taken off
 there. The pickers list the task's own sub-project first, then the other

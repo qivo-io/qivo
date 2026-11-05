@@ -2554,7 +2554,9 @@ function IssueDetail({
   // The pickers show the window's own current relations first, checked,
   // those the person could take off, and say so while the list they come
   // from is not whole. While a removal waits (canDetach, canUnlink) they
-  // show without taking a press.
+  // show without taking a press. A subtask the workspace does not hold
+  // carries its row from the window's answer, so the picker can make it a
+  // subtask again once it took it off.
   const notWhole = (section: SectionVM<unknown>, what: string) =>
     section.state === 'loading'
       ? `Loading the current ${what}…`
@@ -2563,7 +2565,12 @@ function IssueDetail({
         : `Some current ${what} could not be loaded.`
   const currentParent: CurrentRelations = { rows: parentRow ? [parentRow] : [], note: null }
   const currentSubtasks: CurrentRelations = {
-    rows: subtasks.rows.filter(rowEditor),
+    rows: subtasks.rows.filter(rowEditor).map(
+      (row): CurrentRelation => ({
+        ...row,
+        row: row.held ? undefined : (P.subtaskPickRow(row.uuid) ?? undefined),
+      }),
+    ),
     note: notWhole(subtasks, 'subtasks'),
     locked: !current || waits(subtasks),
   }
@@ -4502,8 +4509,11 @@ function IssueDetail({
           current={currentParent}
           seenOf={(c) => ({ on: !!c.current, busy: false })}
           toggle={(choice, on) =>
-            on && choice.candidate
-              ? P.updateIssue(it.id, { parent: choice.uuid }, { parentRow: choice.candidate })
+            // a new parent needs the row the server offered; only the
+            // current parent's row takes it off
+            on
+              ? !!choice.candidate &&
+                P.updateIssue(it.id, { parent: choice.uuid }, { parentRow: choice.candidate })
               : P.updateIssue(it.id, { parent: null })
           }
           createLabel="Create new parent task:"

@@ -121,7 +121,7 @@ async function load() {
 type Options = {
   kind?: RelationKind
   task?: typeof TASK
-  current?: (RelatedTaskVM & { type?: string })[]
+  current?: (RelatedTaskVM & { type?: string; row?: RelationCandidate })[]
   note?: string | null
   locked?: boolean
   toggle?: (...args: unknown[]) => Promise<boolean> | boolean
@@ -145,7 +145,11 @@ async function show(o: Options = {}) {
           seenOf={(c) =>
             c.current
               ? { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } }
-              : { on: false, busy: false, parent: { id: null, hidden: false } }
+              : {
+                  on: false,
+                  busy: false,
+                  parent: { id: c.candidate?.parent_id ?? null, hidden: false },
+                }
           }
           toggle={(...args) => picks(...args)}
           createLabel="Create new subtask:"
@@ -431,6 +435,37 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     // a candidate still takes its pick
     await click(rowOf('task-46'))
     expect(picks.mock.calls[0]?.[0]).toMatchObject({ uuid: 'task-46' })
+  })
+
+  it('keeps a current row the person took off, unchecked, so it can be chosen again', async () => {
+    await load()
+    const kid = { ...relation(45, 'Mount the board'), row: row(45, { title: 'Mount the board' }) }
+    await show({ current: [kid] })
+    await reads[0].answer(batch([]))
+    await typeInto('mount')
+    await rest()
+    await reads[1].answer(batch([]))
+    expect(rowIds()).toEqual(['task-45'])
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[0]?.slice(1)).toEqual([
+      false,
+      { on: true, busy: false, parent: { id: TASK.uuid, hidden: false } },
+    ])
+    // the window's list drops it at once, as its paint does
+    await show({ current: [] })
+    expect(rowIds()).toEqual(['task-45'])
+    expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('false')
+    expect(rowOf('task-45')?.dataset.pickerCurrent).toBeUndefined()
+    // a row is on screen, so no claim that nothing matches
+    expect(text()).not.toContain('No matching tasks.')
+    // pressed again, it goes back with the row it showed and no parent
+    await click(rowOf('task-45'))
+    expect(picks.mock.calls[1]?.[0]).toMatchObject({ uuid: 'task-45', candidate: kid.row })
+    expect(picks.mock.calls[1]?.slice(1)).toEqual([
+      true,
+      { on: false, busy: false, parent: { id: null, hidden: false }, link: null },
+    ])
+    expect(rowOf('task-45')?.getAttribute('aria-pressed')).toBe('true')
   })
 
   it('reads the list again from its start once the task moves to another project', async () => {
