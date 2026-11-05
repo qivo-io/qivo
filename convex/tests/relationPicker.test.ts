@@ -917,6 +917,50 @@ describe('what hidden data moves', () => {
     )
   })
 
+  it('stops alike whether Subtasks candidates share a hidden parent or have their own, in the family or outside it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const sibling = await plantHiddenSibling(t, f, f.guest)
+    const open = await task(t, f, f.sub)
+    const candidates = await plantTasks(t, f.sub, 8, (i) => ({ title: `Board ${i}` }))
+    // parents the guest cannot see, in the family's hidden sibling and in
+    // Skunkworks, another top-level project, where only data from before
+    // the rule that a subtask stays in its parent's top-level project has
+    // them
+    const inSibling = await plantTasks(t, sibling, candidates.length)
+    const inSkunkworks = await plantTasks(t, f.hidden, candidates.length)
+    const runs: [string, (i: number) => Doc<'issues'>][] = [
+      ['one parent in the family', () => inSibling[0] as Doc<'issues'>],
+      ['a parent each in the family', (i) => inSibling[i] as Doc<'issues'>],
+      ['one parent outside the family', () => inSkunkworks[0] as Doc<'issues'>],
+      ['a parent each outside the family', (i) => inSkunkworks[i] as Doc<'issues'>],
+    ]
+    // room for the scan's ranges and one candidate's checks a batch, so the
+    // batch count decides every stop
+    RELATION_PICKER.reads.ranges = 15
+    const shapes: [string, unknown][] = []
+    for (const [name, parentOf] of runs) {
+      await t.run(async (ctx) => {
+        for (const [i, c] of candidates.entries())
+          await ctx.db.patch(c._id, { parent_id: parentOf(i).id })
+      })
+      const list = await batches(t, f.guest, open.id, 'subtask', { search: 'board' })
+      expect(idsOf(list), name).toEqual(candidates.map((c) => c.id))
+      shapes.push([
+        name,
+        list.map((b) => [
+          b.rows.map((r) => [r.id, r.parent_id ?? null, r.has_hidden_parent]),
+          b.stopped,
+          b.next === null,
+        ]),
+      ])
+    }
+    const [, first] = shapes[0] as [string, unknown[]]
+    // the count binds, so the runs compare where batches stop
+    expect(first.length).toBeGreaterThan(1)
+    for (const [name, shape] of shapes.slice(1)) expect(shape, name).toEqual(first)
+  })
+
   it('reads a typed number alike whether it names a hidden, an archived, a foreign or no task', async () => {
     const t = newT()
     const f = await withOrg(t)

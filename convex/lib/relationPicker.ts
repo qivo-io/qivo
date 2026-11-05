@@ -80,19 +80,27 @@
  *   batch's own count (RELATION_PICKER.reads), which never looks at what a
  *   read returned. These are a parent candidate's active subtasks
  *   (LIMITS.subtasks.max rows of TASK_ROW_MAX_BYTES), a subtask candidate's
- *   first subtask (one row), a subtask candidate's parent by id (one row),
- *   one access question for a parent outside the family (PROJECT_ASK and
- *   PROJECT_READ), which only data stored before the rule that a subtask
- *   stays in its parent's top-level project holds, and a typed task ID's
- *   lookup with one access question, whatever it finds.
+ *   first subtask (one row), a subtask candidate's parent, which costs one
+ *   read by id and one access question (PROJECT_ASK and PROJECT_READ)
+ *   whatever it finds, also where an earlier candidate read the same
+ *   parent or the parent sits in the family and no question is asked, and
+ *   a typed task ID's lookup with one access question, whatever it finds.
+ *   Only a parent the batch's scan read before costs nothing, as the reader
+ *   is shown it. The question is asked only for a parent outside the
+ *   family, which only data stored before the rule that a subtask stays in
+ *   its parent's top-level project holds.
  *
  * So where a batch stops follows only the tasks the reader is shown and
  * their own facts. How many subtasks a candidate has that the reader cannot
- * see, how many hidden or archived sub-projects the family has and what any
- * hidden title holds move no answer. Excluding a candidate for its hidden
- * or archived subtasks tells no more than the write's refusal of that pick
- * does. A subtask row names its parent only when the reader is shown it
- * (lib/workingSet.ts parentLink), and else says it has a hidden one.
+ * see, which hidden parent a subtask candidate has and where it sits, how
+ * many hidden or archived sub-projects the family has and what any hidden
+ * title holds move no stop. A candidate's subtasks the reader cannot see
+ * remove it only where the write would refuse its pick for them, a Parent
+ * candidate they make full and a Subtasks candidate that has any, so
+ * excluding a candidate for its hidden or archived subtasks tells no more
+ * than the write's refusal of that pick does. A subtask row names its
+ * parent only when the reader is shown it (lib/workingSet.ts parentLink),
+ * and else says it has a hidden one.
  *
  * RELATION_PICKER names the budgets and the reads measured at the design
  * size. */
@@ -312,6 +320,10 @@ const ASK: Reads = plus(PROJECT_ASK, PROJECT_READ)
 /** A typed task ID's lookup, the task by its number at its fixed size and
  * one access question, whatever the number names. */
 const TYPED: Reads = plus(HIDDEN_BY_ID, ASK)
+
+/** A subtask candidate's parent, read by id at its fixed size, and one
+ * access question about its project, whatever the parent is. */
+const PARENT: Reads = plus(HIDDEN_BY_ID, ASK)
 
 /** One project row of the family's listing, at its fixed size. */
 const PROJECT_ROW: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 0 }
@@ -805,10 +817,13 @@ async function batchOf(
     const id = task.parent_id
     if (id === undefined) return { has_hidden_parent: false }
     if (read.has(id)) return parentLink(task, () => true)
+    // the parent by id and one access question, taken whatever the parent
+    // is and wherever it sits, also when an earlier candidate read it, so
+    // a hidden parent moves no stop; the guard takes only the real reads
+    if (!count.fits(PARENT)) return 'stop'
+    count.take(PARENT)
     const known = pairs.get(id)
     if (known !== undefined) return known
-    if (!count.fits(HIDDEN_BY_ID)) return 'stop'
-    count.take(HIDDEN_BY_ID)
     await guard.take(HIDDEN_BY_ID)
     const parent = await byId(ctx, 'issues', id)
     if (parent !== null) guard.charge(parent, TASK_ROW_MAX_BYTES)
@@ -820,8 +835,6 @@ async function batchOf(
         // a parent outside the family, only in data stored before the
         // rule that a subtask stays in its parent's top-level project;
         // viewAccess takes the question's room from the guard itself
-        if (!count.fits(ASK)) return 'stop'
-        count.take(ASK)
         shown = (await seat.holds([parent]))[0] === true
       }
     }
