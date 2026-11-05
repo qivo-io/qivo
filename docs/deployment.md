@@ -782,6 +782,37 @@ app already sends (`issues.update`, `issues.create`, `issues.createParent`,
 expected values that read showed. There is no schema change, no backfill
 and no release step.
 
+From the release after v0.1.127, `teamSync.agenda` answers one Team sync
+meeting for one scope, a project, a team or All projects, with every task
+the page shows, the people it walks and their week's hours, within Team
+sync's ceiling of 1,000 tasks. No app calls it yet, so that release sets
+no rollback floor and needs no step, and returning the backend to a commit
+before it stays safe until the Team sync view reads the agenda. The release
+whose app does makes this release the backend's floor for that app, and its
+own paragraph here says so. The same release moves `teamSync.lastComments`
+off its read of every project of the organization. It asks the caller's
+access only about the projects its owners' tasks name, counts a task in a
+project the caller cannot see at a fixed size, so its text no longer moves
+`complete`, and answers `complete: false` past 200 such projects or where a
+bound of the caller's own access reads stops a check, which the app already
+answers by asking for fewer people at a time. Its arguments and the rows it
+answers otherwise stay as before. The Overview's delay verdicts moved to a
+module the agenda shares, with every Overview answer unchanged. The clock
+check the Overview's queries and the agenda share now also refuses, as a
+bad request, a clock whose last week does not begin at a local midnight of
+its `week`, which no app sends. The same release's app begins every week of
+its grid at the first instant of the week's first day. In a zone whose
+daylight-saving change skips a midnight, such as Santiago, Havana, Beirut,
+the Azores or Cairo, the grid began every week an hour late on that day,
+and, where the organization's weeks begin on that weekday, through the week
+that begins on it and again 11 weeks later, when the grid's anchor fell on
+it. So there the Overview placed a change made in the first hour of a week
+in the week before, and the Roadmap's due mark could say a plan ends after a
+due date on the first day of its last planned week. `lib/visibility.ts`
+`orgProjectView`, which read every project of the organization and
+lastComments was the last to call, is gone; the tests keep it as an oracle.
+There is no schema change and no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

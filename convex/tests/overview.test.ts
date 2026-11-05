@@ -505,9 +505,10 @@ describe('lists', () => {
       'bad_request',
       /cursor/,
     )
-    // an At-risk position is bound to the client's day and weeks too: more
-    // than a batch overdue on a Thursday, whose week may be said to start on
-    // any of the days before it
+    // an At-risk position is bound to the client's day and weeks too. More
+    // than a batch is overdue on a Thursday, and each clock below moves its
+    // day, its week, its week starts or its week end and stays well formed
+    // (lib/viewLoads.ts clockOf), so the cursor's binding is what refuses it
     for (let i = 0; i < 11; i++)
       await plantIssue(t, {
         org_id: f.org.id,
@@ -523,9 +524,16 @@ describe('lists', () => {
     const cursor = risky.next
     expect(await attention({ cursor })).toMatchObject({ state: 'ok' })
     const shifted = WEEKS.week_starts.map((s, i) => (i >= 20 ? s - 3_600_000 : s))
+    // a later week keeps its clock well formed, its starts and end a day
+    // later too, so the cursor's binding is what refuses it
+    const laterWeek = {
+      week: shift(DAY, 1),
+      week_starts: WEEKS.week_starts.map((s) => s + 86_400_000),
+      week_end: WEEKS.week_end + 86_400_000,
+    }
     for (const over of [
       { day: shift(DAY, 4) },
-      { week: shift(DAY, 1) },
+      laterWeek,
       { week_starts: shifted },
       { week_end: WEEKS.week_end + 3_600_000 },
     ])

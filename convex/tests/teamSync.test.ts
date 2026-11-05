@@ -1,9 +1,11 @@
 /* Team sync: the sitting rule (lib/teamSync.ts), the per-person stamp in
- * sync_stamps (model/syncStamps.ts), and the page's latest-comment read. */
+ * sync_stamps (model/syncStamps.ts), and the page's latest-comment read,
+ * which asks only about the projects its owners' tasks name. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { OWN_READS } from '../lib/access'
 import {
   firstSittingDay,
   firstSittingSince,
@@ -14,7 +16,7 @@ import {
   SYNC_SITTING_MS,
   syncSince,
 } from '../lib/teamSync'
-import { LAST_COMMENTS } from '../teamSync'
+import { LAST_COMMENTS, latestComments } from '../teamSync'
 import {
   activityFor,
   as,
@@ -25,12 +27,14 @@ import {
   plantCopiedIssue,
   plantIssue,
   plantProject,
+  plantSeat,
   type T,
   tick,
   uuid,
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 
 /* Local wall-clock instants: previousWorkingDayStart reads local midnight,
  * so the fixtures are built in local time too. September 2026: Mon 28. */
@@ -38,7 +42,8 @@ const local = (day: number, hour = 0, minute = 0, month = 8) =>
   new Date(2026, month, day, hour, minute).getTime()
 const HOUR = 60 * 60 * 1000
 const iso = (ms: number) => new Date(ms).toISOString()
-const DEFAULT_LAST_COMMENTS = { ...LAST_COMMENTS }
+const DEFAULT_LAST_COMMENTS = structuredClone(LAST_COMMENTS)
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 
 describe('previousWorkingDayStart', () => {
   it('reads the latest working day before today, at local midnight (Monday week start)', () => {
@@ -320,7 +325,8 @@ describe('teamSync.stamp', () => {
 
 describe('teamSync.lastComments', () => {
   afterEach(() => {
-    Object.assign(LAST_COMMENTS, DEFAULT_LAST_COMMENTS)
+    Object.assign(LAST_COMMENTS, structuredClone(DEFAULT_LAST_COMMENTS))
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   })
 
   const comment = (
@@ -534,8 +540,10 @@ describe('teamSync.lastComments', () => {
       })
     }
     const shown = await plantIssue(t, { ...base, status: 'todo' })
+    // the hidden tasks count at their fixed size for the viewer, so their
+    // text moves nothing and the scan reaches the shown task
     const viewer = await lastComments(t, f.viewer, f.org.id, [f.user.id])
-    expect(viewer).toEqual({ rows: [], complete: false })
+    expect(viewer).toEqual({ rows: [{ issue_id: shown.id, at: null }], complete: true })
     // the hidden project's lead keeps the tasks the budget let it read
     const lead = await lastComments(t, f.user, f.org.id, [f.user.id])
     expect(lead.complete).toBe(false)
@@ -579,6 +587,253 @@ describe('teamSync.lastComments', () => {
     expect(answer.complete).toBe(false)
     expect(answer.rows.length).toBeGreaterThan(100)
     expect(answer.rows.every((r) => r.at === NOW)).toBe(true)
+  })
+
+  /* What latestComments read for `caller` and `owners`, beside its
+   * answer, in one transaction. */
+  const measured = (t: T, caller: Doc<'profiles'>, owners: string[]) =>
+    t.run(async (ctx) => {
+      const answer = await latestComments(ctx, caller, owners)
+      const m = await ctx.meta.getTransactionMetrics()
+      return { answer, ranges: m.databaseQueries.used, documents: m.documentsRead.used }
+    })
+
+  /* How many live top-level projects and live sub-projects the fixture's
+   * organization holds, its own included. */
+  const projectsOf = (o: { t: T; f: OrgFixture }) =>
+    o.t.run(async (ctx) => {
+      const all = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', o.f.org.id))
+        .collect()
+      const live = all.filter((p) => p.archived_at === undefined)
+      return {
+        tops: live.filter((p) => p.parent_id === undefined).length,
+        subs: live.filter((p) => p.parent_id !== undefined).length,
+      }
+    })
+
+  /* An organization whose user holds open tasks in FW and PCB, with
+   * `extra` more top-level projects the tasks do not name, each with a
+   * sub-project, led by the admin. */
+  async function namedOrg(extra: number) {
+    const t = newT()
+    const f = await withOrg(t)
+    const base = { org_id: f.org.id, assignee_id: f.user.id }
+    for (let n = 0; n < 6; n++)
+      await plantIssue(t, { ...base, project_id: n % 2 ? f.sub.id : f.sub2.id, num: 100 + n })
+    for (let n = 0; n < extra; n++) {
+      const top = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
+      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id })
+    }
+    return { t, f }
+  }
+
+  it("reads only the projects its owners' tasks name, however many the organization holds", async () => {
+    const small = await namedOrg(0)
+    // with the fixture's TBED and SKNK, 200 live top-level projects, the
+    // design size, and 200 live sub-projects
+    const large = await namedOrg(198)
+    expect(await projectsOf(large)).toEqual({ tops: 200, subs: 200 })
+    const a = await measured(small.t, small.f.viewer, [small.f.user.id])
+    const b = await measured(large.t, large.f.viewer, [large.f.user.id])
+    expect(a.answer.complete).toBe(true)
+    expect(a.answer.rows).toHaveLength(6)
+    expect(b.answer.rows).toHaveLength(6)
+    expect([b.ranges, b.documents]).toEqual([a.ranges, a.documents])
+    // this must fail for a read of every project, as the project view was
+    const view = (o: typeof small) =>
+      o.t.run(async (ctx) => {
+        await orgProjectView(ctx, o.f.viewer)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      })
+    expect(await view(large)).toBeGreaterThan((await view(small)) + 300)
+  })
+
+  it('answers the same whatever the size of tasks in projects the caller cannot see', async () => {
+    LAST_COMMENTS.taskBytes = 50_000
+    const answers: unknown[] = []
+    for (const copied of [false, true]) {
+      const t = newT()
+      const f = await withOrg(t)
+      const hiddenSub = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.hidden.id,
+      })
+      const base = { org_id: f.org.id, assignee_id: f.user.id, status: 'todo' as const }
+      for (let n = 0; n < 3; n++) {
+        const hidden = { ...base, project_id: hiddenSub.id, num: 100 + n }
+        if (copied) await plantCopiedIssue(t, { ...hidden, description: 'x'.repeat(20_000) })
+        else await plantIssue(t, hidden)
+      }
+      await plantIssue(t, { ...base, project_id: f.sub.id, num: 200 })
+      const got = await lastComments(t, f.viewer, f.org.id, [f.user.id])
+      answers.push({ rows: got.rows.length, complete: got.complete })
+    }
+    expect(answers[1]).toEqual(answers[0])
+    expect(answers[0]).toEqual({ rows: 1, complete: true })
+  })
+
+  it('cuts the answer short past LAST_COMMENTS.projects, the tasks of projects past it without a row', async () => {
+    const { t, f } = await namedOrg(0)
+    LAST_COMMENTS.projects = 1
+    const cut = await lastComments(t, f.viewer, f.org.id, [f.user.id])
+    expect(cut.complete).toBe(false)
+    const projects = await t.run(async (ctx) => {
+      const out = new Set<string>()
+      for (const row of cut.rows) {
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', row.issue_id))
+          .unique()
+        if (task !== null) out.add(task.project_id)
+      }
+      return [...out]
+    })
+    expect(projects).toHaveLength(1)
+    expect(cut.rows.length).toBeGreaterThan(0)
+    LAST_COMMENTS.projects = 2
+    expect(await lastComments(t, f.viewer, f.org.id, [f.user.id])).toMatchObject({
+      complete: true,
+    })
+  })
+
+  it("cuts the answer short where a bound of the caller's own access reads stops a check, never a row for its project", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const me = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `auth_${uuid()}`,
+      accepted_at: NOW,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: me.id,
+        level: 'user',
+      })
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id, assignee_id: f.user.id })
+    expect((await lastComments(t, me, f.org.id, [f.user.id])).rows).toHaveLength(1)
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0, navRows: 0 })
+    expect(await lastComments(t, me, f.org.id, [f.user.id])).toEqual({ rows: [], complete: false })
+  })
+
+  it('cuts the answer short where the guard stops a step, the owners decided before it keeping their rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the first owner's tasks in one status of one sub-project, the
+    // second's in another sub-project, which needs its own access question
+    const first: Doc<'issues'>[] = []
+    for (let n = 0; n < 3; n++)
+      first.push(
+        await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          assignee_id: f.user.id,
+          status: 'todo',
+          num: 100 + n,
+        }),
+      )
+    for (let n = 0; n < 3; n++)
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub2.id,
+        assignee_id: f.admin.id,
+        status: 'todo',
+        num: 200 + n,
+      })
+    const within = (ranges: number) => {
+      LAST_COMMENTS.reads.ranges = ranges
+      return lastComments(t, f.viewer, f.org.id, [f.user.id, f.admin.id])
+    }
+    expect((await within(DEFAULT_LAST_COMMENTS.reads.ranges)).rows).toHaveLength(6)
+    expect(await within(0)).toEqual({ rows: [], complete: false })
+    // the fewest ranges at which the answer holds a row, just past the
+    // first owner's step and project questions
+    let low = 0
+    let high = DEFAULT_LAST_COMMENTS.reads.ranges
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2)
+      if ((await within(mid)).rows.length > 0) high = mid
+      else low = mid
+    }
+    const cut = await within(high)
+    expect(cut.complete).toBe(false)
+    expect(cut.rows.map((r) => r.issue_id).sort()).toEqual(first.map((i) => i.id).sort())
+  })
+
+  it('reads 50 owners whose 1,000 open tasks span 200 sub-projects, with open tasks in archived ones, under real limits', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const owners: Doc<'profiles'>[] = []
+    for (let n = 0; n < 50; n++)
+      owners.push(await plantSeat(t, { org_id: f.org.id, name: `Owner ${n}`, accepted_at: NOW }))
+    // 99 top-level projects of 2 sub-projects led by the user, with the
+    // fixture's FW and PCB the 200 live sub-projects the user reads, and 20
+    // archived sub-projects, each owner's 20 open tasks spread over them
+    const subs: Doc<'projects'>[] = [f.sub, f.sub2]
+    for (let n = 0; n < 99; n++) {
+      const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
+      for (let k = 0; k < 2; k++)
+        subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id }))
+    }
+    const archived: Doc<'projects'>[] = []
+    for (let n = 0; n < 20; n++)
+      archived.push(
+        await plantProject(t, {
+          org_id: f.org.id,
+          type: 'project',
+          parent_id: f.meta.id,
+          archived_at: NOW,
+        }),
+      )
+    await t.run(async (ctx) => {
+      for (const [o, owner] of owners.entries())
+        for (let n = 0; n < 22; n++) {
+          const project = n < 20 ? subs[(o * 20 + n) % subs.length] : archived[(o + n) % 20]
+          await ctx.db.insert('issues', {
+            id: uuid(),
+            org_id: f.org.id,
+            project_id: project.id,
+            num: 20_000 + o * 100 + n,
+            title:
+              'Replace the fan controller on the bench rig and log the readings for the review',
+            status: (['todo', 'progress', 'review'] as const)[n % 3],
+            priority: 'medium',
+            paused: false,
+            assignee_id: owner.id,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+        }
+    })
+    expect(await projectsOf({ t, f })).toEqual({ tops: 101, subs: 200 })
+    const ids = owners.map((o) => o.id)
+    const got = await measured(t, f.user, ids)
+    console.log(
+      'lastComments figures, 50 owners over 200 sub-projects:',
+      JSON.stringify({
+        ranges: got.ranges,
+        documents: got.documents,
+        rows: got.answer.rows.length,
+        complete: got.answer.complete,
+      }),
+    )
+    expect(got.answer).toMatchObject({ complete: true })
+    expect(got.answer.rows).toHaveLength(1000)
   })
 
   it(`refuses more than ${SYNC_OWNERS_MAX} people at a time`, async () => {

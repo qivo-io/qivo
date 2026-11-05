@@ -162,6 +162,14 @@ export const BOARD_TASKS = 1000
  * no LIMITS entry yet. */
 export const ROADMAP_TASKS = 1000
 
+/** The most tasks one Team sync agenda holds (teamSync.ts agenda), across
+ * the whole meeting: its rows, the Backlog tasks Needs an owner lists and
+ * the Done tasks a walker's Done since can show, each counted once however
+ * many of the meeting's pages show it. Shown parents and blockers outside
+ * the agenda count toward the agenda's read budgets, not here. The Team
+ * sync view names it once it reads the server; no LIMITS entry yet. */
+export const TEAM_SYNC_TASKS = 1000
+
 /** The rows one batch of an app list holds before Load more, such as the
  * labels of Settings > Labels and of the task label picker (labels.ts), a
  * project's access lists (projectSettings.ts), and a person's projects, a

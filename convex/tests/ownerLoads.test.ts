@@ -30,7 +30,6 @@ import type { OrgLoadRow } from '../lib/loadRows'
 import { UNAVAILABLE_DELAY } from '../lib/machineDelay'
 import { byLoadRow, OWNER_LOADS } from '../lib/ownerLoads'
 import { taskOwnerId } from '../lib/review'
-import { orgProjectView } from '../lib/visibility'
 import type { Workspace } from '../lib/workspaceJoin'
 import { restWorkload } from '../machine/records'
 import { getIssue } from '../machine/rest'
@@ -65,6 +64,7 @@ import {
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { groupTest, liveTasksOf, orgLoadRows } from './orgLoad.setup'
+import { orgProjectView } from './orgProjectView.setup'
 import { withReach } from './projectReach.setup'
 
 const DEFAULT_LOADS = structuredClone(OWNER_LOADS)

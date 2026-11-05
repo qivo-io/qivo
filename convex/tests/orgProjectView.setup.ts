@@ -1,12 +1,15 @@
-// Preload projects and applicable grants once per organization. Per-row
-// visibility becomes a set lookup; corrupt roots remain invisible. Team
-// sync's latest comments (teamSync.ts lastComments) is its last caller; a
-// member's task history asks lib/access.ts accessOf about the projects its
-// rows name instead (lib/activityVisibility.ts).
+/* The project view a member's reads built at once before they asked about
+ * the projects their rows name, every project of the organization and the
+ * member's grants and team shares, read together, with each project's
+ * visibility a set lookup. Team sync's latest comments (teamSync.ts
+ * lastComments) was its last caller. The access suites keep it as the
+ * oracle they compare the per-project reads with (lib/access.ts accessOf),
+ * over the same batched rules (levelsFrom). Named *.setup.ts: two dots in
+ * the basename is the Convex CLI's skip rule (see helpers.setup.ts). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
-import { accessRowsOf, levelsFrom, orgProjects } from './access'
+import { accessRowsOf, levelsFrom, orgProjects } from '../lib/access'
 
 export type OrgProjectView = {
   /* every project of the org, archived included */
@@ -21,11 +24,7 @@ export type OrgProjectView = {
 
 /** What `me` sees of every project of the organization, read at once:
  * every project (lib/access.ts orgProjects) and every grant and team share
- * of theirs (accessRowsOf), a read at the design size's sum of 13 index
- * ranges, 3,710 documents and 1.15 MiB as convex-test counts them for the
- * catalogue of 2,000 projects, accepted as accessRowsOf's docstring says.
- * Past the design size Convex's own read limit refuses the call with a
- * generic server error, which widens nothing. */
+ * of theirs (accessRowsOf). */
 export async function orgProjectView(ctx: QueryCtx, me: Doc<'profiles'>): Promise<OrgProjectView> {
   // the projects and the caller's grants and shares, read at once
   const [projects, { grants, shares }] = await Promise.all([

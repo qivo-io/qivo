@@ -1,8 +1,10 @@
 /* One owner's load as a caller may see it, read through that owner's own
  * open tasks and never the organization's. planning.ownerLoads and
  * planning.assigneeLoad (convex/planning.ts), the REST and MCP workload
- * pages (planning.ts workloadPage, through weeklyHours) and the single-task
- * delay (lib/machineDelay.ts taskForecaster) read it.
+ * pages (planning.ts workloadPage, through weeklyHours), the single-task
+ * delay (lib/machineDelay.ts taskForecaster), and the Overview's and Team
+ * sync's agenda's verdicts (lib/viewLoads.ts verdicts, the agenda's week
+ * hours through weeklyHours) read it.
  *
  * For one owner it reads the owner's profile, their open tasks (five index
  * ranges: the tasks assigned to them in each status but Done, and the ones
@@ -526,9 +528,10 @@ export type WeeklyHours = { hours: number[]; hidden_hours: number[] }
  * (lib/workload.ts committedByWeek, in canonicalLoad's order, so the sums
  * are the app's), and only the asked weeks are added up, however far a
  * plan runs. A row of a project `me` cannot see counts in both arrays. The
- * REST and MCP workload pages (planning.ts workloadPage) call it, and a
- * server read that needs weekly figures can call it over its own reader
- * and budget.
+ * REST and MCP workload pages (planning.ts workloadPage) call it, and so
+ * does Team sync's agenda (lib/teamSyncAgenda.ts) for each walker's hours
+ * in the client's current week, over the tasks its verdicts' reader
+ * answered within the agenda's own budget.
  */
 export function weeklyHours(
   me: Doc<'profiles'>,

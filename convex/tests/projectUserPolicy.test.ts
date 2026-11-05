@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import { canManageProjectUsers, canSeeProject, hasProjectLevel } from '../lib/access'
-import { orgProjectView } from '../lib/visibility'
 import { as, expectRefusal, newT, plantSeat, uuid, withOrg } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 
 async function fixture() {
   const t = newT()

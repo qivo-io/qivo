@@ -705,6 +705,7 @@ taskWindow:task query public {"type":"object","value":{"ref":{"fieldType":{"type
 tasks:board query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"stale_before":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"focus":{"fieldType":{"type":"boolean"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false}}}
 tasks:roadmap query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"filters":{"fieldType":{"type":"object","value":{"mine":{"fieldType":{"type":"boolean"},"optional":false},"owners":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"priority":{"fieldType":{"type":"union","value":[{"type":"union","value":[{"type":"literal","value":"urgent"},{"type":"literal","value":"high"},{"type":"literal","value":"medium"},{"type":"literal","value":"low"}]},{"type":"null"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"window":{"fieldType":{"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"planned_task":{"fieldType":{"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true}}}
 tasks:roadmapDependencies query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false}}}
+teamSync:agenda query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"team"},"optional":false},"team_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"all"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"week_starts":{"fieldType":{"type":"array","value":{"type":"number"}},"optional":false},"week_end":{"fieldType":{"type":"number"},"optional":false}}}
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1198,9 +1199,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // seats, under ordinary access, and a selection it does not hold answers
   // unavailable.
   tasks: { board: 'authedQuery', roadmap: 'authedQuery', roadmapDependencies: 'authedQuery' },
-  // Team sync: staff stamp the person a change was made on (often not
-  // themselves); any member reads the latest comment per visible open task.
-  teamSync: { lastComments: 'orgQuery', stamp: 'orgMutation' },
+  // Team sync: any signed-in login but a guest reads one meeting's agenda
+  // with its seat in that organization, under ordinary access, and a scope
+  // it cannot honour answers unavailable; staff stamp the person a change
+  // was made on (often not themselves); any member reads the latest comment
+  // per visible open task.
+  teamSync: { agenda: 'authedQuery', lastComments: 'orgQuery', stamp: 'orgMutation' },
   // Removing a member stays open to org admins during a billing pause;
   // adding one does not.
   teams: {
@@ -1237,7 +1241,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 225
+const PUBLIC_COUNT = 226
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

@@ -23,7 +23,6 @@ import {
   SIGHT_READ,
 } from '../lib/access'
 import { ACCESS_LEVELS, type AccessLevel, type OrgRole } from '../lib/enums'
-import { orgProjectView } from '../lib/visibility'
 import {
   expectRefusal,
   newT,
@@ -33,6 +32,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 
 let t: T
 let f: OrgFixture

@@ -41,7 +41,6 @@ import { byId } from '../lib/db'
 import { type DelayJson, UNAVAILABLE_DELAY, utcToday } from '../lib/machineDelay'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { taskOwnerId } from '../lib/review'
-import { orgProjectView } from '../lib/visibility'
 import { weekGrid } from '../lib/workload'
 import {
   appLoadRows,
@@ -59,6 +58,7 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { orgLoadRows } from './orgLoad.setup'
+import { orgProjectView } from './orgProjectView.setup'
 import { mcpPage } from './taskPages.setup'
 
 /* A Wednesday at noon UTC, the same day in every likely time zone. */

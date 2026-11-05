@@ -49,7 +49,6 @@ import { byId } from './db'
 import { ISSUE_STATUSES, type IssuePriority } from './enums'
 import { badRequest } from './functions'
 import { LIMITS, MIB, ROADMAP_TASKS, TASK_ROW_MAX_BYTES } from './limits'
-import { dayArg, dayNumber, type Figure } from './overview'
 import { isRoadmapTaskVisible } from './roadmapVisibility'
 import {
   byNumber,
@@ -62,6 +61,7 @@ import {
   type RowRule,
   STEP,
 } from './viewFilters'
+import { dayArg, dayNumber, type Figure } from './viewLoads'
 import {
   BY_ID,
   type GroupFacts,

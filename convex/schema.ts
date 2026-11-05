@@ -281,7 +281,9 @@ const issuesTable = defineTable({
   // keys (lib/workspaceParts.ts)
   .index('by_org_archived_window', ['org_id', 'archived_at', 'window_key'])
   // The nightly archive reads only a live project's Done tasks past the
-  // threshold.
+  // threshold. The views read a sub-project's active tasks by status
+  // through it too (lib/viewReads.ts selectionTasks), and Team sync's
+  // agenda its Done tasks since an instant (doneSinceRange).
   .index('by_project_archived_status_done', ['project_id', 'archived_at', 'status', 'done_at'])
   // The nightly archive finds the active Done tasks whose done_at passed the
   // threshold since its last finished run, across every organization

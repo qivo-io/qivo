@@ -6,7 +6,7 @@
  * still decide. The per-project walk is kept here as the reference, and the
  * grant shapes are in accessShapes.setup.ts. The last cases read, under
  * convex-test's transaction limits, the reads accepted at the design size's
- * sum: accessRowsOf, projectLevelsForOrg, orgProjectView, Deleted items'
+ * sum: accessRowsOf, projectLevelsForOrg, Deleted items'
  * sightOf and the REST and MCP project lists over the catalogue of 2,000
  * projects for a person's 700 grants and 5 teams of 200 shares beside 1,000
  * people, and projectLevel's navigation walk over the 70 sub-projects of
@@ -40,7 +40,6 @@ import { byId, newWindowKey } from '../lib/db'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { MIB } from '../lib/limits'
 import { named } from '../lib/nameKey'
-import { orgProjectView } from '../lib/visibility'
 import { listProjects as mcpListProjects } from '../machine/mcp'
 import { listProjects as restListProjects } from '../machine/rest'
 import { meterDb, sightOf } from '../model/deletedItems'
@@ -1159,12 +1158,6 @@ describe('the access reads at the design size', () => {
       return sample.map((p) => ({ level: levelOf(p), navigationOnly: navigationOnly(p.id) }))
     })
     roomy('projectLevelsForOrg', batched.reads)
-    const view = await measured(t, async (ctx) => {
-      const v = await orgProjectView(ctx, member)
-      expect(v.projects).toHaveLength(2000)
-      return sample.map((p) => ({ visible: v.visible(p.id), accessible: v.accessible(p.id) }))
-    })
-    roomy('orgProjectView', view.reads)
     const single: { level: string | null; own: string | null }[] = []
     for (const p of sample)
       single.push(
@@ -1204,9 +1197,6 @@ describe('the access reads at the design size', () => {
     expect(batched.answer.map((b) => b.level)).toEqual(single.map((s) => s.level))
     expect(batched.answer.map((b) => b.navigationOnly)).toEqual(
       single.map((s) => s.level !== null && s.own === null),
-    )
-    expect(view.answer).toEqual(
-      single.map((s) => ({ visible: s.level !== null, accessible: s.own !== null })),
     )
     // Deleted items' sight of a seat, which also reads every profile and team
     const sight = await measured(t, async (ctx) => {

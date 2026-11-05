@@ -1,18 +1,19 @@
 /* The reads the app's view queries share: the Board's (lib/board.ts), the
- * Overview's (lib/overview.ts), the Roadmap's (lib/roadmap.ts), and Team
- * sync's to come. They hold no rule of one view, only what a view reads and
- * how it stays within its budget. The filter row's read, which the Board
+ * Overview's (lib/overview.ts), the Roadmap's (lib/roadmap.ts) and Team
+ * sync's agenda (lib/teamSyncAgenda.ts). They hold no rule of one view,
+ * only what a view reads and how it stays within its budget. The filter row's read, which the Board
  * and the Roadmap apply on top of these, is lib/viewFilters.ts filterRead.
  *
  * - viewBudget, the guard every read goes through, over the request's
- *   totals as Convex counts them, the caller's access rows included;
+ *   totals as Convex counts them, the caller's access rows included, and
+ *   byIdSteps, many reads by id in steps within it;
  * - viewAccess, the caller's access in one organization (lib/access.ts
  *   accessOf), asked within that guard;
- * - projectSelection, a top-level project with its visible live
- *   sub-projects, or one sub-project;
+ * - projectSelection and selectionOf, a top-level project with its visible
+ *   live sub-projects, or one sub-project;
  * - selectionTasks and ownTasks, the active tasks of the selected
  *   sub-projects, or those one person owns by the Reviewer rule, read in
- *   steps;
+ *   steps, and doneSinceRange, a sub-project's Done tasks since an instant;
  * - groupCheck and groupFacts, which tasks are groups and what a group
  *   shows of its subtasks, and firstSubtaskCheck, which tasks are groups
  *   from each one's first subtask alone;
@@ -261,7 +262,7 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     /** The request's totals the reads keep under, with the fixed charges
      * folded in and the held room left out as they stand when a check reads
      * them, for the readers that step by them (model/descriptions.ts
-     * descriptionsOf and projectTextReader, lib/overview.ts loadRoom). */
+     * descriptionsOf and projectTextReader, lib/viewLoads.ts loadRoom). */
     ceiling: {
       get ranges() {
         return reads.ranges - held.ranges
@@ -284,6 +285,32 @@ export async function settled<R>(promises: readonly Promise<R>[]): Promise<R[]> 
   for (const one of all) {
     if (one.status === 'rejected') throw one.reason
     out.push(one.value)
+  }
+  return out
+}
+
+/** How many reads one step of byIdSteps makes at once. */
+const BY_ID_STEP = 64
+
+/**
+ * `read` of each of `items`, each a document read by id or the first row of
+ * one range, a step of at most BY_ID_STEP at a time. Each step takes room
+ * for its reads at BY_ID before it starts and ends before the next one
+ * takes any, so a long list never needs the room of every read at once and
+ * the guard's next look counts what the step read; near the budget's end a
+ * step reads fewer, and it throws OverBudget only where not one more fits.
+ * Answers in the order of `items`.
+ */
+export async function byIdSteps<I, R>(
+  guard: ViewBudget,
+  items: readonly I[],
+  read: (item: I) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = []
+  for (let at = 0; at < items.length; ) {
+    const n = await guard.upTo(BY_ID, Math.min(BY_ID_STEP, items.length - at))
+    out.push(...(await settled(items.slice(at, at + n).map(read))))
+    at += n
   }
   return out
 }
@@ -410,6 +437,18 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
     live,
     /** Whether the reader can see each project (Access.visible). */
     visible,
+    /** Whether the reader can see each project for a reason other than
+     * navigation to one of its sub-projects (Access.accessible), asked
+     * within the guard as `visible` asks, so a project asked about before
+     * takes no more room. */
+    accessible: (ids: readonly string[]): Promise<boolean[]> =>
+      inRounds(ids, asked, PROJECT_ASK, async (id) => {
+        const answer = await access.accessible(id)
+        rows.add(id)
+        await chargeOnce(id)
+        await chargeOnce((await access.project(id))?.parent_id)
+        return answer
+      }),
     /** The reader's level on each project (Access.level), null where they
      * cannot see it, asked within the guard as `visible` asks. For a
      * sub-project these are the same reads, so a project asked about before
@@ -574,7 +613,11 @@ export type Selection = {
  * follows archived_at, as P.projects and Access.live do. It reads the
  * project by id and, for a meta, its sub-projects in steps, each row a read
  * returns charged at PROJECT_ROW_MAX_BYTES, as the reader may not see them,
- * before it asks the reader's access about the meta and each of them.
+ * one it answers null for as another organization's or an archived one
+ * included, before it asks the reader's access about the meta and each of
+ * them. The read by id is charged each time, so a project the view read
+ * before, as a team's share of a meta and of one of its sub-projects reads
+ * the sub-project twice, counts at the fixed size both times.
  */
 export async function projectSelection(
   ctx: QueryCtx,
@@ -584,9 +627,30 @@ export async function projectSelection(
 ): Promise<Selection | null> {
   await guard.take(BY_ID)
   const project = await byId(ctx, 'projects', projectId)
-  if (project === null || project.org_id !== seat.me.org_id || project.archived_at !== undefined)
-    return null
-  seat.seen(project)
+  if (project === null) return null
+  guard.charge(project, PROJECT_ROW_MAX_BYTES)
+  return await selectionOf(ctx, guard, seat, project, true)
+}
+
+/**
+ * projectSelection for `project`, a project row the view read itself, such
+ * as one a range of the organization's top-level projects returned
+ * (lib/teamSyncAgenda.ts All projects), which it keeps (ViewAccess seen)
+ * rather than reading again by id. It charges the row once a view unless
+ * the caller charged this read itself (`chargedByView`). The same rules
+ * and reads follow.
+ */
+export async function selectionOf(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  seat: ViewAccess,
+  project: Doc<'projects'>,
+  chargedByView = false,
+): Promise<Selection | null> {
+  // charged before the checks, so another organization's or an archived
+  // project's name and description move no answer either
+  seat.seen(project, chargedByView)
+  if (project.org_id !== seat.me.org_id || project.archived_at !== undefined) return null
   if (project.parent_id !== undefined)
     return (await seat.visible([project.id]))[0] ? { project, subProjects: [project] } : null
   if (!inMetaTree(project, project)) return null
@@ -701,6 +765,29 @@ function afterInStatus(
     ...(status < highest ? [statusSpan(ctx, id, { above: status, highest })] : []),
   ]
 }
+
+/** The Done tasks of project `id` that reached Done at or after the ISO
+ * instant `from` (by_project_archived_status_done, which orders them by
+ * done_at, then creation time), active ones only, read in steps as a status
+ * span goes on (afterInStatus). Team sync's agenda reads a sub-project's
+ * recent Done tasks through it (lib/teamSyncAgenda.ts). */
+export const doneSinceRange = (
+  ctx: QueryCtx,
+  id: string,
+  from: string,
+): StepRange<Doc<'issues'>> => ({
+  open: () =>
+    ctx.db
+      .query('issues')
+      .withIndex('by_project_archived_status_done', (q) =>
+        q
+          .eq('project_id', id)
+          .eq('archived_at', undefined)
+          .eq('status', 'done')
+          .gte('done_at', from),
+      ),
+  after: (last, rows) => afterInStatus(ctx, id, last, rows, 'done'),
+})
 
 /** The statuses a Focus view shows, none of them Done. */
 export const FOCUS_STATUSES = ['todo', 'progress', 'review'] as const

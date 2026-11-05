@@ -10,7 +10,6 @@ import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { childIndexOf } from '../lib/core'
-import { orgProjectView } from '../lib/visibility'
 import {
   aboutShownTasks,
   groupRemainingHours,
@@ -41,6 +40,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 
 const GATE = /^no write access to this project$/
 

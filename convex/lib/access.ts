@@ -1152,7 +1152,7 @@ export async function canSeeProject(
 }
 
 /* Access for a reason other than read-only navigation, the per-profile
- * counterpart of OrgProjectView.accessible. On a parent it means organization
+ * counterpart of accessOf's accessible. On a parent it means organization
  * admin, its lead, or an individual or team grant on the parent itself. On a
  * sub-project it equals canSeeProject. The project user list answers it for
  * every profile at once through projectLevelsForProfiles. */
@@ -1284,8 +1284,8 @@ export type OrgProjectLevels = {
 /** Every project of organization `orgId`, archived ones included, oldest
  * first. At the design size that is the catalogue's 2,000 projects and
  * sub-projects, a read at the design size's sum that projectLevelsForOrg
- * and lib/visibility.ts orgProjectView make beside accessRowsOf (whose
- * docstring has the figures and why it stays). */
+ * makes beside accessRowsOf (whose docstring has the figures and why it
+ * stays). */
 export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects'>[]> =>
   ctx.db
     .query('projects')
@@ -1328,8 +1328,8 @@ export async function projectLevelsForOrg(
  * each by a grant, in 5 teams that each share 50 live and 150 archived of
  * them, it reads 12 index ranges, 1,710 documents and 0.28 MiB as
  * convex-test counts them; with the catalogue of 2,000 projects
- * (projectLevelsForOrg, lib/visibility.ts orgProjectView) 13 ranges, 3,710
- * documents and 1.15 MiB, and with Deleted items' sight of a seat beside
+ * (projectLevelsForOrg) 13 ranges, 3,710 documents and 1.15 MiB, and with
+ * Deleted items' sight of a seat beside
  * 1,000 people (model/deletedItems.ts sightOf) 15 ranges, 4,716 documents
  * and 1.46 MiB (tests/accessFlags.test.ts, "the access reads at the design
  * size"). It stays as it is. Inside the design size it fits Convex's limits
@@ -1339,9 +1339,8 @@ export async function projectLevelsForOrg(
  * beside levelsFrom for sizes the design size says not to build for (agent
  * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
  * readers are REST and MCP access flags and lists (lib/core.ts accessFlags
- * and orgReach, through projectLevelsForOrg), Team sync's latest comments
- * (lib/visibility.ts orgProjectView) and Deleted items (model/deletedItems.ts
- * sightOf, pendingAccess and seenBy). Callers that ask for many people at
+ * and orgReach, through projectLevelsForOrg) and Deleted items
+ * (model/deletedItems.ts sightOf, pendingAccess and seenBy). Callers that ask for many people at
  * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
  * Deleted items' steps with SIGHT_READ and the step budget. */
 export async function accessRowsOf(

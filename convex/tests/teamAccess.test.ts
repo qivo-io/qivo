@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import { canSeeProject, canWriteOrgLabels, hasProjectLevel } from '../lib/access'
 import { byId } from '../lib/db'
-import { orgProjectView } from '../lib/visibility'
 import {
   as,
   expectRefusal,
@@ -13,6 +12,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { orgProjectView } from './orgProjectView.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 async function fixture() {
