@@ -24,9 +24,15 @@
  *   guests/viewers get only visible-or-own rows — other people's hidden work
  *   does not arrive at all, not even anonymously.
  *
- * ownerLoads and the workload pages ONLY add `remaining_hours > 0`;
- * assigneeLoad has NO remaining filter, so unestimated/zero-remaining
- * scheduled rows are included. */
+ * ownerLoads and the workload pages ONLY add `remaining_hours > 0` to their
+ * load rows; assigneeLoad has NO remaining filter, so unestimated/zero-
+ * remaining scheduled rows are included.
+ *
+ * Beside the fence, ownerLoads alone also answers each owner's paused
+ * tasks in live projects the caller can see, whatever their remaining
+ * hours, groups left out, as a list of their own for the paused weeks of
+ * Team utilization. A paused task in a project the caller cannot see
+ * reaches no one, staff included. */
 
 import { ConvexError, v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
@@ -140,20 +146,41 @@ export const assigneeLoad = authedQuery({
   },
 })
 
-/** One span of an owner's load on the wire: a load row (lib/loadRows.ts
- * OrgLoadRow) without its owner. `issue_id` is the task's id when the
- * caller can see its project, else null. */
-export type OwnerLoadSpan = Omit<OrgLoadRow, 'owner_id'>
+/** One span of an owner's load on the wire, a load row (lib/loadRows.ts
+ * OrgLoadRow) without its owner, with its task's project. `issue_id` and
+ * `project_id` are the task's and its own project's where the caller can
+ * see that project, else both null. */
+export type OwnerLoadSpan = Omit<OrgLoadRow, 'owner_id'> & { project_id: string | null }
+
+/** One paused task of an owner on the wire, a scheduled task the owner owns
+ * (lib/review.ts taskOwnerId) that is not Done, not a group and not
+ * archived, in a live project the caller can see, whatever its remaining
+ * hours. It carries no hours, as a paused task adds none. */
+export type OwnerPausedSpan = {
+  issue_id: string
+  project_id: string
+  start_week: string
+  end_week: string
+}
 
 /** One owner of planning.ownerLoads' answer: `ok` with every span of their
- * load, `unavailable` when it did not fit the reader's bounds or a check of
- * the caller's access stopped, `not_read` when the call had no room left
- * for it, or did not read it because the caller is a guest or Viewer and
- * it is not the first, so asking again with fewer owners reads it. */
+ * load and their paused tasks the caller can see, `unavailable` when it did
+ * not fit the reader's bounds or a check of the caller's access stopped,
+ * `not_read` when the call had no room left for it, or did not read it
+ * because the caller is a guest or Viewer and it is not the first, so
+ * asking again with fewer owners reads it. */
 export type OwnerLoadJson =
-  | { owner_id: string; state: 'ok'; spans: OwnerLoadSpan[] }
+  | { owner_id: string; state: 'ok'; spans: OwnerLoadSpan[]; paused: OwnerPausedSpan[] }
   | { owner_id: string; state: 'unavailable' }
   | { owner_id: string; state: 'not_read' }
+
+/* Paused spans in one total order, by weeks, then the task id. */
+function byPausedSpan(a: OwnerPausedSpan, b: OwnerPausedSpan): number {
+  const keys = (r: OwnerPausedSpan) => [r.start_week, r.end_week, r.issue_id]
+  const [x, y] = [keys(a), keys(b)]
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1
+  return 0
+}
 
 /** planning.ownerLoads' answer. */
 export type OwnerLoadsJson = {
@@ -172,11 +199,20 @@ export type OwnerLoadsJson = {
  * lowercase, each once, in the order given) as the caller may see it, for
  * delays and availability without the workspace's load rows. Each owner's
  * spans are their load rows (the fence above, remaining hours above zero)
- * in one total order (lib/ownerLoads.ts byLoadRow), read by the owner
- * reader within its bounds. An owner of another organization or an unknown
- * id answers `ok` with no spans. An owner whose spans would take the answer
- * past OWNER_LOADS.spans answers `not_read`, unless it is the first, and so
- * does every owner after a `not_read` one.
+ * in one total order (lib/ownerLoads.ts byLoadRow, which never reads the
+ * project), each with its task's own project where it names the task.
+ * Each owner's `paused` list holds their paused tasks in live projects the
+ * caller can see (OwnerPausedSpan), by weeks and then task id. That list
+ * follows the caller's sight alone, for every role. Staff get no paused
+ * task of a project they cannot see, with or without its id, and a guest
+ * or Viewer not even their own. Both are read by the owner reader within
+ * its bounds, which count the paused tasks' projects, access questions and
+ * subtask checks with the load's, so an owner whose paused work passes a
+ * bound is unavailable as a whole. An owner of another organization or an
+ * unknown id answers `ok` with no spans and no paused tasks. An owner whose
+ * spans and paused spans would take the answer past OWNER_LOADS.spans
+ * answers `not_read`, unless it is the first, and so does every owner after
+ * a `not_read` one.
  *
  * A guest or organization Viewer gets one owner a call, the first, and
  * every later owner answers `not_read`. One room serves every owner of a
@@ -184,17 +220,27 @@ export type OwnerLoadsJson = {
  * which of them the caller can see, so where `not_read` started would
  * tell such a caller how much hidden work the owners before it hold.
  * Asking again for the `not_read` owners reads the next one. Staff keep
- * every owner the room holds: they already receive each person's hidden
- * work as busy time without a task id (lib/loadRows.ts loadShown).
+ * every owner the room holds. They receive each person's hidden busy time
+ * without a task id (lib/loadRows.ts loadShown), but the room also spends
+ * on what they never receive, every open row's document, hidden Backlog,
+ * unscheduled and paused ones included, and the access questions about
+ * live projects only hidden paused tasks name. So where `not_read` starts
+ * in a staff call, and whether an owner passes `projects`, can follow how
+ * much hidden open work the owners hold and how many projects hold their
+ * hidden paused work, and nothing else of it.
  *
  * It reads each owner's profile and five open-task ranges, the project row
- * of each project their scheduled tasks name, the caller's access to the
- * live ones (their own grants, memberships and team shares among it) and a
- * subtask range for each task left. So a change to those reruns it, and no
+ * of each project their scheduled tasks that can carry load or are paused
+ * name, the caller's access to the live ones (their own grants,
+ * memberships and team shares among it) and a subtask range for each task
+ * left, paused ones in projects the caller can see included. So a change
+ * to those reruns it, such as a subtask added to a paused task, and no
  * other change in the organization does. The app's owner-load cache
- * (src/store/ownerLoadCache.ts) reads it for the delays of Board cards the
- * workspace does not hold yet; the other views and the task window read it
- * once they stop reading the workspace's load rows.
+ * (src/store/ownerLoadCache.ts) reads its spans for the delays of Board
+ * cards the workspace does not hold yet and of the task window's task,
+ * and keeps no paused list; the Roadmap view will read both lists for
+ * Team utilization, and the other views read it once they stop reading
+ * the workspace's load rows.
  */
 export const ownerLoads = orgQuery({
   args: { owner_ids: v.array(v.string()) },
@@ -205,7 +251,7 @@ export const ownerLoads = orgQuery({
     }
     const staff = isOrgStaff(ctx.me)
     const access = accessOf(ctx, ctx.me)
-    const reader = ownerLoadReader(ctx, { me: ctx.me, access, room: callRoom })
+    const reader = ownerLoadReader(ctx, { me: ctx.me, access, room: callRoom, paused: true })
     const owners: OwnerLoadJson[] = []
     let spans = 0
     let ended = false
@@ -219,13 +265,32 @@ export const ownerLoads = orgQuery({
       } else if (load.state === 'unavailable') {
         owners.push({ owner_id, state: 'unavailable' })
       } else {
-        const rows = loadRowsOf(ctx.me, load.tasks).map(({ owner_id: _, ...span }) => span)
-        if (owners.length > 0 && spans + rows.length > OWNER_LOADS.spans) {
+        // a row names its task only where the caller can see its project
+        const projectOf = new Map(load.tasks.map(({ task }) => [task.id, task.project_id]))
+        const rows = loadRowsOf(ctx.me, load.tasks).map(
+          ({ owner_id: _, ...row }): OwnerLoadSpan => ({
+            ...row,
+            project_id: row.issue_id === null ? null : (projectOf.get(row.issue_id) ?? null),
+          }),
+        )
+        const paused = load.paused
+          .map(
+            ({ task }): OwnerPausedSpan => ({
+              issue_id: task.id,
+              project_id: task.project_id,
+              // the reader answers scheduled tasks only
+              start_week: task.start_week ?? '',
+              end_week: task.end_week ?? '',
+            }),
+          )
+          .sort(byPausedSpan)
+        const size = rows.length + paused.length
+        if (owners.length > 0 && spans + size > OWNER_LOADS.spans) {
           ended = true
           owners.push({ owner_id, state: 'not_read' })
         } else {
-          spans += rows.length
-          owners.push({ owner_id, state: 'ok', spans: rows })
+          spans += size
+          owners.push({ owner_id, state: 'ok', spans: rows, paused })
         }
       }
     }

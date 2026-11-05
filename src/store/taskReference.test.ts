@@ -567,12 +567,14 @@ describe("the window's delay", () => {
         spans: [
           {
             issue_id: null,
+            project_id: null,
             start_week: weekToISO(TODAY_WEEK),
             end_week: weekToISO(TODAY_WEEK + 4),
             remaining: 400,
             remaining_set_at: null,
           },
         ],
+        paused: [],
       },
     ],
   }
@@ -607,7 +609,9 @@ describe("the window's delay", () => {
     await turn()
     expect(P.windowDelay(view)).toMatchObject({ status: 'late' })
     // with nothing else to do it is on track
-    load.deliver(loadOf({ hidden: 'counted', owners: [{ owner_id: '', state: 'ok', spans: [] }] }))
+    load.deliver(
+      loadOf({ hidden: 'counted', owners: [{ owner_id: '', state: 'ok', spans: [], paused: [] }] }),
+    )
     await turn()
     expect(P.windowDelay(view)).toMatchObject({ status: 'ok' })
     load.deliver(loadOf({ hidden: 'counted', owners: [{ owner_id: '', state: 'unavailable' }] }))

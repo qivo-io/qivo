@@ -84,8 +84,9 @@ function setup(staff = true) {
 const needs = (n: number, cards = (i: number) => i + 1) =>
   Array.from({ length: n }, (_, i) => ({ org: 'org', owner: `p${i}`, cards: cards(i) }))
 
-const span = (issue: string | null, hours = 4) => ({
+const span = (issue: string | null, hours = 4, project: string | null = issue && 'fw') => ({
   issue_id: issue,
+  project_id: project,
   start_week: '2026-09-07',
   end_week: '2026-09-14',
   remaining: hours,
@@ -127,7 +128,12 @@ describe('the owner-load cache', () => {
         call.token,
         {
           hidden: 'counted',
-          owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
+          owners: call.owners.map((owner_id) => ({
+            owner_id,
+            state: 'ok' as const,
+            spans: [],
+            paused: [],
+          })),
         },
       ]),
     )
@@ -139,7 +145,12 @@ describe('the owner-load cache', () => {
         call.token,
         {
           hidden: 'counted',
-          owners: call.owners.map((owner_id) => ({ owner_id, state: 'ok' as const, spans: [] })),
+          owners: call.owners.map((owner_id) => ({
+            owner_id,
+            state: 'ok' as const,
+            spans: [],
+            paused: [],
+          })),
         },
       ]),
     )
@@ -169,9 +180,14 @@ describe('the owner-load cache', () => {
       hidden: 'counted',
       owners: [
         // the server answers ids in lowercase, in the order asked
-        { owner_id: 'p0', state: 'ok', spans: [span('task-1'), span(null, 2)] },
+        {
+          owner_id: 'p0',
+          state: 'ok',
+          spans: [span('task-1'), span(null, 2)],
+          paused: [],
+        },
         { owner_id: 'p1', state: 'unavailable' },
-        { owner_id: 'p2', state: 'ok', spans: [] },
+        { owner_id: 'p2', state: 'ok', spans: [], paused: [] },
       ],
     })
     expect(s.cache.loadOf('org', 'p0')).toEqual({
@@ -205,7 +221,7 @@ describe('the owner-load cache', () => {
     if (!call) throw new Error('no call')
     s.answer(call.token, {
       hidden: 'counted',
-      owners: [{ owner_id: 'p0', state: 'ok', spans: [span('task-1')] }],
+      owners: [{ owner_id: 'p0', state: 'ok', spans: [span('task-1')], paused: [] }],
     })
     const startOf = (load: ReturnType<typeof s.cache.loadOf>) =>
       load.state === 'ok' ? load.spans[0]?.start : undefined
@@ -234,7 +250,7 @@ describe('the owner-load cache', () => {
     s.answer(call.token, {
       hidden: 'counted',
       owners: [
-        { owner_id: 'p0', state: 'ok', spans: [] },
+        { owner_id: 'p0', state: 'ok', spans: [], paused: [] },
         { owner_id: 'p1', state: 'not_read' },
         { owner_id: 'p2', state: 'not_read' },
       ],
@@ -257,8 +273,8 @@ describe('the owner-load cache', () => {
     s.answer(call.token, {
       hidden: 'counted',
       owners: [
-        { owner_id: 'p0', state: 'ok', spans: [span('a')] },
-        { owner_id: 'p1', state: 'ok', spans: [] },
+        { owner_id: 'p0', state: 'ok', spans: [span('a')], paused: [] },
+        { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
       ],
     })
     s.show(false)

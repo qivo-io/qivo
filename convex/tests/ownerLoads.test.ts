@@ -3,15 +3,20 @@
  *
  *   1. Each owner's spans are the organization-wide load rows of that owner
  *      (orgLoad.setup.ts orgLoadRows over the live tasks) and the app's rows
- *      from the workspace, for random organizations, readers and owners,
- *      and on Northstar.
+ *      from the workspace, each with its task's project where it names the
+ *      task, and each owner's paused list is their paused leaves in live
+ *      projects the reader can see by the same two sources, for random
+ *      organizations, readers and owners, and on Northstar.
  *   2. Guests and Viewers get another person's visible work and none of
- *      their hidden work (lib/loadRows.ts loadShown, the owner's option A);
- *      hidden rows below the bounds change nothing in their answer, and
- *      past the bounds the answer is unavailable and nothing more.
+ *      their hidden work (lib/loadRows.ts loadShown, the owner's option A),
+ *      and no one gets a paused task of a project they cannot see; hidden
+ *      rows below the bounds change nothing in their answer, and past the
+ *      bounds the answer is unavailable and nothing more.
  *   3. Past a bound an owner is unavailable, or not_read after the first
- *      owner of a call, never fewer spans and never a Convex error, and the
- *      reads follow the owner's open work, not the organization. */
+ *      owner of a call, never fewer spans and never a Convex error, with
+ *      paused work counted in the same bounds; the reads follow the owner's
+ *      open work, not the organization, and the readers that do not ask for
+ *      paused work read and answer as they did before it. */
 
 import fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -26,6 +31,8 @@ import { UNAVAILABLE_DELAY } from '../lib/machineDelay'
 import { byLoadRow, OWNER_LOADS } from '../lib/ownerLoads'
 import { taskOwnerId } from '../lib/review'
 import { orgProjectView } from '../lib/visibility'
+import type { Workspace } from '../lib/workspaceJoin'
+import { restWorkload } from '../machine/records'
 import { getIssue } from '../machine/rest'
 import {
   type AssigneeLoadRow,
@@ -33,10 +40,13 @@ import {
   LOAD_UNAVAILABLE,
   type OwnerLoadSpan,
   type OwnerLoadsJson,
+  type OwnerPausedSpan,
   ownerLoads,
+  type WorkloadJson,
 } from '../planning'
 import {
   appLoadRows,
+  appPausedRows,
   as,
   expectRefusal,
   NOW,
@@ -161,26 +171,51 @@ const tracksDelay = (fx: Fx) =>
 const loads = (t: T, fx: Pick<Fx, 'org'>, caller: Doc<'profiles'>, ownerIds: string[]) =>
   as(t, caller).query(api.planning.ownerLoads, { org_id: fx.org.id, owner_ids: ownerIds })
 
-/** One owner's spans in planning.ownerLoads for `caller`, which must be
- * `ok`. */
-async function spansOf(fx: Fx, caller: Doc<'profiles'>, ownerId: string) {
+/** One owner of planning.ownerLoads for `caller`, which must be `ok`. */
+async function okOf(fx: Fx, caller: Doc<'profiles'>, ownerId: string) {
   const answer = await loads(fx.t, fx, caller, [ownerId])
   const one = answer.owners[0]
   if (one?.state !== 'ok') throw new Error(`${ownerId} is ${one?.state} for ${caller.name}`)
-  return one.spans
+  return one
 }
+
+/** One owner's spans in planning.ownerLoads for `caller`, which must be
+ * `ok`. */
+const spansOf = async (fx: Fx, caller: Doc<'profiles'>, ownerId: string) =>
+  (await okOf(fx, caller, ownerId)).spans
+
+/** The task ids of one owner's paused list for `caller`, sorted. */
+const pausedIds = async (fx: Fx, caller: Doc<'profiles'>, ownerId: string) =>
+  (await okOf(fx, caller, ownerId)).paused.map((p) => p.issue_id).sort()
 
 /* A public query's handler run inside `ctx`, so a test can read the
  * transaction's metrics after it. */
 const handlerOf = <Args, Out>(fn: unknown) =>
   (fn as { _handler: (ctx: QueryCtx, args: Args) => Promise<Out> })._handler
 
-/* A load row without its owner, as a span. */
-const spanOf = ({ owner_id: _, ...span }: OrgLoadRow): OwnerLoadSpan => span
+/* A load row without its owner, as a span, with the project of its task
+ * by `projectOf` where it names one. */
+const spanOf =
+  (projectOf: ReadonlyMap<string, string>) =>
+  ({ owner_id: _, ...row }: OrgLoadRow): OwnerLoadSpan => ({
+    ...row,
+    project_id: row.issue_id === null ? null : (projectOf.get(row.issue_id) ?? 'missing'),
+  })
+
+/* Paused spans in the wire's order, by weeks, then the task id. */
+function byPaused(a: OwnerPausedSpan, b: OwnerPausedSpan): number {
+  for (const key of ['start_week', 'end_week', 'issue_id'] as const)
+    if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1
+  return 0
+}
 
 /** The organization-wide rows of `ownerId` for `reader`, as the REST and
- * MCP lists build them, as spans in the wire's order. */
-const orgSpans = (fx: Fx, reader: Doc<'profiles'>, ownerId: string) =>
+ * MCP lists build them, as spans in the wire's order, and their paused
+ * tasks among the same live tasks, those scheduled, not Done, paused, not
+ * a group (groupTest), owned by them (taskOwnerId) in the reader's
+ * organization and in a live project the reader can see, in the wire's
+ * order. */
+const orgOwner = (fx: Pick<Fx, 't'>, reader: Doc<'profiles'>, ownerId: string) =>
   fx.t.run(async (ctx) => {
     const me = (await byId(ctx, 'profiles', reader.id)) as Doc<'profiles'>
     const view = await orgProjectView(ctx, me)
@@ -189,21 +224,62 @@ const orgSpans = (fx: Fx, reader: Doc<'profiles'>, ownerId: string) =>
       .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
       .collect()
     const live = await liveTasksOf(ctx, view.projects)
-    return orgLoadRows(me, view, new Set(roster.map((p) => p.id)), live)
+    const projectOf = new Map(live.map((i) => [i.id, i.project_id]))
+    const spans = orgLoadRows(me, view, new Set(roster.map((p) => p.id)), live)
       .filter((row) => row.owner_id === ownerId)
-      .map(spanOf)
+      .map(spanOf(projectOf))
       .sort(byLoadRow)
+    const projectLive = liveIn(view.byUuid)
+    const isGroup = groupTest(live, projectLive)
+    const inOrg = roster.some((p) => p.id === ownerId)
+    const paused = live
+      .filter(
+        (i) =>
+          inOrg &&
+          i.paused &&
+          i.status !== 'done' &&
+          i.start_week !== undefined &&
+          i.end_week !== undefined &&
+          taskOwnerId(i) === ownerId &&
+          projectLive(i.project_id) &&
+          view.visible(i.project_id) &&
+          !isGroup(i),
+      )
+      .map(
+        (i): OwnerPausedSpan => ({
+          issue_id: i.id,
+          project_id: i.project_id,
+          start_week: i.start_week ?? '',
+          end_week: i.end_week ?? '',
+        }),
+      )
+      .sort(byPaused)
+    return { spans, paused }
   })
 
-/** The app's rows of `ownerId` for `reader`, from their workspace
- * (helpers.setup.ts appLoadRows), as spans in the wire's order. */
-async function appSpans(t: T, reader: Doc<'profiles'>, ownerId: string) {
+/** The app's rows of `ownerId` for workspace `snap` (helpers.setup.ts
+ * appLoadRows), as spans in the wire's order, each with its task's project
+ * from the workspace, and the paused tasks the app marks for them
+ * (appPausedRows), in the wire's order. */
+function appOwnerOf(snap: Workspace, ownerId: string) {
+  const projectOf = new Map(snap.issues.map((task) => [task.id, task.project_id]))
+  const spans = appLoadRows(snap)
+    .filter((row) => row.owner_id === ownerId)
+    .map(spanOf(projectOf))
+    .sort(byLoadRow)
+  const paused = appPausedRows(snap)
+    .filter((row) => row.owner_id === ownerId)
+    .map(({ owner_id: _, ...row }): OwnerPausedSpan => row)
+    .sort(byPaused)
+  return { spans, paused }
+}
+
+/** The app's spans and paused tasks of `ownerId` for `reader`, from their
+ * workspace (appOwnerOf). */
+async function appOwner(t: T, reader: Doc<'profiles'>, ownerId: string) {
   const snap = await workspaceOf(as(t, reader))
   if (snap === null) throw new Error(`${reader.name} has no workspace`)
-  return appLoadRows(snap)
-    .filter((row) => row.owner_id === ownerId)
-    .map(spanOf)
-    .sort(byLoadRow)
+  return appOwnerOf(snap, ownerId)
 }
 
 /* A row of assigneeLoad as the comparisons sort it, its fields in name
@@ -288,10 +364,12 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
             s.parent === null || planted.length === 0
               ? undefined
               : planted[s.parent % planted.length]
+          // a status write clears a pause, so a paused Backlog or Done task
+          // is legacy data, planted here directly
           const over: Partial<Doc<'issues'>> = {
             project_id: where[s.project].id,
             status: s.status,
-            paused: s.paused && s.status !== 'done' && s.status !== 'backlog',
+            paused: s.paused,
           }
           if (s.owner !== null) over.assignee_id = who[s.owner].id
           if (s.reviewer !== null) over.reviewer_id = who[s.reviewer].id
@@ -338,10 +416,12 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
             const label = `${owner.name} for ${reader.name}`
             expect(one?.owner_id, label).toBe(owner.id)
             if (one?.state !== 'ok') throw new Error(`${label} is ${one?.state}`)
-            expect(one.spans, label).toEqual(await orgSpans(fx, reader, owner.id))
-            expect(one.spans, `${label}, as the app derives it`).toEqual(
-              await appSpans(fx.t, reader, owner.id),
-            )
+            const org = await orgOwner(fx, reader, owner.id)
+            const app = await appOwner(fx.t, reader, owner.id)
+            expect(one.spans, label).toEqual(org.spans)
+            expect(one.spans, `${label}, as the app derives it`).toEqual(app.spans)
+            expect(one.paused, `${label}, paused`).toEqual(org.paused)
+            expect(one.paused, `${label}, paused as the app derives it`).toEqual(app.paused)
             expect(await assigneeRows(fx.t, reader, owner.id), `${label}, assigneeLoad`).toEqual(
               await assigneeOracle(fx, reader, owner.id),
             )
@@ -352,7 +432,7 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
     )
   })
 
-  it('agrees with the app on Northstar for Nora and Leo, for every person', async () => {
+  it('agrees with the app on Northstar for Nora and Leo, for every person, paused tasks included', async () => {
     const t = newT()
     const { org, profiles } = await plantNorthstar(t)
     await withReach(t)
@@ -368,18 +448,19 @@ describe('an owner’s spans are the organization’s rows of that owner', () =>
       const snap = await workspaceOf(as(t, reader))
       if (snap === null) throw new Error(`${key} has no workspace`)
       let spans = 0
+      let paused = 0
       for (const [i, owner] of profiles.entries()) {
         const one = answer.owners[i]
         if (one?.state !== 'ok') throw new Error(`${owner.name} is ${one?.state} for ${key}`)
-        const app = appLoadRows(snap)
-          .filter((row) => row.owner_id === owner.id)
-          .map(spanOf)
-          .sort(byLoadRow)
-        expect(one.spans, `${owner.name} for ${key}`).toEqual(app)
+        const app = appOwnerOf(snap, owner.id)
+        expect(one.spans, `${owner.name} for ${key}`).toEqual(app.spans)
+        expect(one.paused, `${owner.name}'s paused tasks for ${key}`).toEqual(app.paused)
         spans += one.spans.length
+        paused += one.paused.length
       }
-      // the dataset plans real work
+      // the dataset plans real work, and pauses two tasks
       expect(spans).toBeGreaterThan(10)
+      expect(paused).toBe(2)
     }
   }, 60_000)
 })
@@ -394,8 +475,13 @@ describe('who receives which spans', () => {
     await task(fx, { project_id: fx.away.id, assignee_id: fx.user.id, ...plan(5) })
     // in the sibling the guest and the viewer cannot see, and user2 can
     const sibling = await task(fx, { project_id: fx.sib.id, assignee_id: fx.user.id, ...plan(7) })
-    const span = (issue_id: string | null, remaining: number): OwnerLoadSpan => ({
+    const span = (
+      issue_id: string | null,
+      remaining: number,
+      project_id: string | null,
+    ): OwnerLoadSpan => ({
       issue_id,
+      project_id,
       start_week: '2026-09-07',
       end_week: '2026-09-14',
       remaining,
@@ -408,7 +494,12 @@ describe('who receives which spans', () => {
         {
           owner_id: fx.user.id,
           state: 'ok',
-          spans: [span(shown.id, 3), span(null, 5), span(sibling.id, 7)].sort(byLoadRow),
+          spans: [
+            span(shown.id, 3, fx.sub.id),
+            span(null, 5, null),
+            span(sibling.id, 7, fx.sib.id),
+          ].sort(byLoadRow),
+          paused: [],
         },
       ],
     })
@@ -416,9 +507,75 @@ describe('who receives which spans', () => {
       // the visible span with its id, and nothing of the hidden ones
       expect(await loads(fx.t, fx, reader, [fx.user.id]), reader.name).toEqual({
         hidden: 'own_only',
-        owners: [{ owner_id: fx.user.id, state: 'ok', spans: [span(shown.id, 3)] }],
+        owners: [
+          { owner_id: fx.user.id, state: 'ok', spans: [span(shown.id, 3, fx.sub.id)], paused: [] },
+        ],
       })
     }
+  })
+
+  it('gives every role the paused tasks of projects it can see and none of the others, its own included', async () => {
+    const fx = await setup()
+    const paused = (project: Doc<'projects'>, owner: Doc<'profiles'>) =>
+      task(fx, { project_id: project.id, assignee_id: owner.id, paused: true, ...plan(3) })
+    const inSub = await paused(fx.sub, fx.user)
+    const inSib = await paused(fx.sib, fx.user)
+    const inAway = await paused(fx.away, fx.user)
+    // each with its task, project and weeks
+    expect((await okOf(fx, fx.admin, fx.user.id)).paused).toEqual(
+      [inSub, inSib, inAway]
+        .map((p) => ({
+          issue_id: p.id,
+          project_id: p.project_id,
+          start_week: '2026-09-07',
+          end_week: '2026-09-14',
+        }))
+        .sort(byPaused),
+    )
+    // user2 cannot see SKNK, the guest and the viewer neither it nor the
+    // sibling, so no paused task of theirs, with or without its id
+    expect(await pausedIds(fx, fx.user2, fx.user.id)).toEqual([inSub.id, inSib.id].sort())
+    for (const reader of [fx.guest, fx.viewer]) {
+      expect(await pausedIds(fx, reader, fx.user.id), reader.name).toEqual([inSub.id])
+      const ownHidden = await paused(fx.sib, reader)
+      const ownShown = await paused(fx.sub, reader)
+      expect(await pausedIds(fx, reader, reader.id), reader.name).toEqual([ownShown.id])
+      expect(await pausedIds(fx, fx.admin, reader.id)).toEqual([ownHidden.id, ownShown.id].sort())
+    }
+    // a paused task adds no span for anyone
+    for (const reader of [fx.admin, fx.user2, fx.guest, fx.viewer])
+      expect(await spansOf(fx, reader, fx.user.id), reader.name).toEqual([])
+  })
+
+  it('names a span’s project exactly where it names its task', async () => {
+    const fx = await setup()
+    const people = [fx.user, fx.guest, fx.viewer]
+    for (const [i, owner] of people.entries()) {
+      for (const project of [fx.sub, fx.sub2, fx.sib, fx.away])
+        await task(fx, { project_id: project.id, assignee_id: owner.id, ...plan(i + 1) })
+      // a legacy row stored under a top-level project
+      await task(fx, { project_id: fx.hidden.id, assignee_id: owner.id, ...plan(i + 2) })
+    }
+    const tasks = await fx.t.run((ctx) => ctx.db.query('issues').collect())
+    const projectOf = new Map(tasks.map((i) => [i.id, i.project_id]))
+    let named = 0
+    let hidden = 0
+    for (const reader of [fx.admin, fx.user2, fx.guest, fx.viewer])
+      for (const owner of people) {
+        for (const span of await spansOf(fx, reader, owner.id)) {
+          if (span.issue_id === null) {
+            hidden++
+            expect(span.project_id, `${reader.name} on ${owner.name}`).toBeNull()
+          } else {
+            named++
+            expect(span.project_id, `${reader.name} on ${owner.name}`).toBe(
+              projectOf.get(span.issue_id),
+            )
+          }
+        }
+      }
+    expect(named).toBeGreaterThan(0)
+    expect(hidden).toBeGreaterThan(0)
   })
 
   it('gives a guest or Viewer their own hidden spans without a task id', async () => {
@@ -428,6 +585,8 @@ describe('who receives which spans', () => {
       const own = await task(fx, { assignee_id: reader.id, ...plan(2) })
       const spans = await spansOf(fx, reader, reader.id)
       expect(spans.map((s) => s.issue_id).sort()).toEqual([null, own.id].sort())
+      // the hidden one names no project either
+      expect(spans.map((s) => s.project_id).sort()).toEqual([null, fx.sub.id].sort())
       // the admin sees both by id
       expect((await spansOf(fx, fx.admin, reader.id)).every((s) => s.issue_id !== null)).toBe(true)
     }
@@ -520,7 +679,9 @@ describe('who receives which spans', () => {
     // organizations
     const strip = (x: typeof few) => ({
       ...x,
-      loads: x.loads.map(({ owner_id: _, ...o }) => o),
+      loads: x.loads.map(({ owner_id: _, ...o }) =>
+        o.state === 'ok' ? { ...o, spans: o.spans.map(({ project_id: _p, ...span }) => span) } : o,
+      ),
       assignee: x.assignee.map(({ project_id: _, ...row }) => row),
     })
     expect(strip(many)).toEqual(strip(few))
@@ -567,6 +728,108 @@ describe('who receives which spans', () => {
       expect(single.delay).toEqual(UNAVAILABLE_DELAY)
     }
   })
+
+  it('answers every role the same about a person in a call of one whatever their hidden paused work below the bounds', async () => {
+    const fx = await setup()
+    await tracksDelay(fx)
+    const shown = await task(fx, { assignee_id: fx.user.id, ...plan(3) })
+    await task(fx, { assignee_id: fx.user.id, paused: true, ...plan(2, '2026-09-14') })
+    const answers = async (readers: Doc<'profiles'>[]) => {
+      const out = []
+      for (const reader of readers)
+        out.push({
+          loads: await loads(fx.t, fx, reader, [fx.user.id]),
+          delay: (
+            await fx.t.query(internal.machine.rest.getIssue, {
+              callerId: reader.id,
+              access: 'read',
+              today: TODAY,
+              ref: shown.id,
+            })
+          ).delay,
+        })
+      return out
+    }
+    // SKNK is hidden from user2, the guest and the viewer, the sibling from
+    // the guest and the viewer
+    const all = [fx.user2, fx.guest, fx.viewer]
+    const before = await answers(all)
+    expect(before.map((a) => a.loads.owners[0]?.state)).toEqual(['ok', 'ok', 'ok'])
+    // paused work in SKNK's sub-project and in two more that only paused
+    // tasks name, one of them In Review with the user as reviewer
+    const away2 = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.hidden.id,
+    })
+    const away3 = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.hidden.id,
+    })
+    for (const project of [fx.away, away2])
+      await plantMany(fx.t, fx.org.id, 5, {
+        project_id: project.id,
+        assignee_id: fx.user.id,
+        paused: true,
+        ...plan(4),
+      })
+    await task(fx, {
+      project_id: away3.id,
+      assignee_id: fx.admin.id,
+      reviewer_id: fx.user.id,
+      status: 'review',
+      paused: true,
+      ...plan(1),
+    })
+    expect(await answers(all)).toEqual(before)
+    // and in the sibling, which user2 can see
+    await plantMany(fx.t, fx.org.id, 5, {
+      project_id: fx.sib.id,
+      assignee_id: fx.user.id,
+      paused: true,
+      ...plan(4),
+    })
+    expect(await answers([fx.guest, fx.viewer])).toEqual(before.slice(1))
+    const user2 = await okOf(fx, fx.user2, fx.user.id)
+    expect(user2.paused).toHaveLength(6)
+  })
+
+  it('answers a guest or Viewer unavailable, and nothing more, when hidden paused work passes a bound', async () => {
+    const fx = await setup()
+    await task(fx, { assignee_id: fx.user.id, ...plan(3) })
+    await task(fx, { assignee_id: fx.user.id, paused: true, ...plan(2) })
+    // paused work only in projects they cannot see: the sibling and SKNK's
+    // sub-project
+    for (const project of [fx.sib, fx.away])
+      await task(fx, { project_id: project.id, assignee_id: fx.user.id, paused: true, ...plan(1) })
+    // FW, the sibling and the sub-project of SKNK: three live projects
+    Object.assign(OWNER_LOADS, { projects: 3 })
+    for (const reader of [fx.guest, fx.viewer]) {
+      const one = await okOf(fx, reader, fx.user.id)
+      expect(one.spans.map((s) => s.project_id)).toEqual([fx.sub.id])
+      expect(one.paused.map((s) => s.project_id)).toEqual([fx.sub.id])
+    }
+    Object.assign(OWNER_LOADS, { projects: 2 })
+    for (const reader of [fx.guest, fx.viewer]) {
+      expect(await loads(fx.t, fx, reader, [fx.user.id, fx.guest.id]), reader.name).toEqual({
+        hidden: 'own_only',
+        owners: [
+          { owner_id: fx.user.id, state: 'unavailable' },
+          { owner_id: fx.guest.id, state: 'not_read' },
+        ],
+      })
+    }
+    // the same state a hidden task that can carry load reaches
+    await fx.t.run(async (ctx) => {
+      for (const row of await ctx.db.query('issues').collect())
+        if (row.project_id !== fx.sub.id) await ctx.db.patch(row._id, { paused: false })
+    })
+    for (const reader of [fx.guest, fx.viewer])
+      expect((await loads(fx.t, fx, reader, [fx.user.id])).owners).toEqual([
+        { owner_id: fx.user.id, state: 'unavailable' },
+      ])
+  })
 })
 
 describe('which tasks count', () => {
@@ -605,14 +868,129 @@ describe('which tasks count', () => {
     const spans = await spansOf(fx, fx.admin, fx.user.id)
     expect(spans[0]?.issue_id).toBe(shelved.id)
   })
+
+  it('answers paused leaves of live projects, whatever their hours or status but Done, and follows the review hand-off', async () => {
+    const fx = await setup()
+    const mine = { assignee_id: fx.user.id, paused: true, ...plan(3) }
+    const leaf = await task(fx, mine)
+    // a group's stored pause is dormant. A subtask in a live sub-project
+    // makes one, and one only in the archived sub-project does not
+    const group = await task(fx, mine)
+    await task(fx, { project_id: fx.sub2.id, parent_id: group.id })
+    const shelved = await task(fx, mine)
+    await task(fx, { project_id: fx.shelf.id, parent_id: shelved.id })
+    // no hours, zero hours and Backlog, a legacy pause a status write would
+    // have cleared, stay in
+    const weeks = { start_week: '2026-09-07', end_week: '2026-09-14' }
+    const unestimated = await task(fx, { assignee_id: fx.user.id, paused: true, ...weeks })
+    const zero = await task(fx, { ...mine, remaining_hours: 0 })
+    const backlog = await task(fx, { ...mine, status: 'backlog' })
+    // left out are an unscheduled one, a Done one, an archived one, one in
+    // the archived sub-project, one whose project row is gone and one of
+    // another organization
+    await task(fx, { assignee_id: fx.user.id, paused: true, remaining_hours: 3 })
+    await task(fx, { ...mine, status: 'done', done_at: NOW })
+    await task(fx, { ...mine, archived_at: NOW })
+    await task(fx, { ...mine, project_id: fx.shelf.id })
+    await task(fx, { ...mine, project_id: uuid() })
+    await plantIssue(fx.t, { ...mine, org_id: fx.otherOrg.id, project_id: fx.otherProject.id })
+    // In Review: the reviewer's with one, the assignee's without
+    const reviewed = await task(fx, { ...mine, status: 'review', reviewer_id: fx.admin.id })
+    const unreviewed = await task(fx, { ...mine, status: 'review' })
+    expect(await pausedIds(fx, fx.admin, fx.user.id)).toEqual(
+      [leaf.id, shelved.id, unestimated.id, zero.id, backlog.id, unreviewed.id].sort(),
+    )
+    expect(await pausedIds(fx, fx.admin, fx.admin.id)).toEqual([reviewed.id])
+    // none of them is load
+    expect(await spansOf(fx, fx.admin, fx.user.id)).toEqual([])
+    // the group check drops a paused task once it gains a live subtask, and
+    // keeps it once that subtask is archived
+    const kid = await task(fx, { parent_id: leaf.id })
+    expect(await pausedIds(fx, fx.admin, fx.user.id)).not.toContain(leaf.id)
+    await fx.t.run((ctx) => ctx.db.patch(kid._id, { archived_at: NOW }))
+    expect(await pausedIds(fx, fx.admin, fx.user.id)).toContain(leaf.id)
+    // back to the assignee once it leaves Review, and no paused task once
+    // it is unpaused
+    await fx.t.run((ctx) => ctx.db.patch(reviewed._id, { status: 'progress' }))
+    expect(await pausedIds(fx, fx.admin, fx.admin.id)).toEqual([])
+    expect(await pausedIds(fx, fx.admin, fx.user.id)).toContain(reviewed.id)
+    await fx.t.run((ctx) => ctx.db.patch(reviewed._id, { paused: false }))
+    expect(await pausedIds(fx, fx.admin, fx.user.id)).not.toContain(reviewed.id)
+    expect((await spansOf(fx, fx.admin, fx.user.id)).map((s) => s.issue_id)).toEqual([reviewed.id])
+  })
+
+  it('orders spans by byLoadRow whatever their projects, and paused spans by weeks, then task id', async () => {
+    const [low, high, pausedLow, pausedHigh] = [uuid(), uuid(), uuid(), uuid()].sort()
+    // two load tasks equal on every key but their ids and projects, and two
+    // paused ones with equal weeks, each created high first, so creation
+    // order and id order differ
+    const answer = async (swap: boolean) => {
+      const f = await setup()
+      const [lowIn, highIn] = swap ? [f.sub2, f.sub] : [f.sub, f.sub2]
+      for (const [id, pausedId, p] of [
+        [high, pausedHigh, highIn],
+        [low, pausedLow, lowIn],
+      ] as const) {
+        await task(f, { id, project_id: p.id, assignee_id: f.user.id, ...plan(3) })
+        await task(f, {
+          id: pausedId,
+          project_id: p.id,
+          assignee_id: f.user.id,
+          paused: true,
+          ...plan(1, '2026-09-14', '2026-09-21'),
+        })
+      }
+      const one = await okOf(f, f.admin, f.user.id)
+      return {
+        ids: one.spans.map((s) => s.issue_id),
+        projects: one.spans.map((s) => s.project_id),
+        paused: one.paused.map((p) => p.issue_id),
+        f,
+      }
+    }
+    for (const swap of [false, true]) {
+      const { ids, projects, paused, f } = await answer(swap)
+      expect(ids).toEqual([low, high])
+      expect(projects).toEqual(swap ? [f.sub2.id, f.sub.id] : [f.sub.id, f.sub2.id])
+      expect(paused).toEqual([pausedLow, pausedHigh])
+    }
+    // by weeks before the task id
+    const f = await setup()
+    const later = await task(f, {
+      id: low,
+      assignee_id: f.user.id,
+      paused: true,
+      ...plan(1, '2026-09-21', '2026-09-21'),
+    })
+    const longer = await task(f, {
+      assignee_id: f.user.id,
+      paused: true,
+      ...plan(1, '2026-09-07', '2026-09-28'),
+    })
+    const first = await task(f, {
+      id: high,
+      assignee_id: f.user.id,
+      paused: true,
+      ...plan(1, '2026-09-07', '2026-09-14'),
+    })
+    expect((await okOf(f, f.admin, f.user.id)).paused.map((p) => p.issue_id)).toEqual([
+      first.id,
+      longer.id,
+      later.id,
+    ])
+  })
 })
 
 describe('the owners of a call', () => {
   it('answers an unknown owner and one of another organization with no spans', async () => {
     const fx = await setup()
     await task(fx, { assignee_id: fx.user.id, ...plan(3) })
+    await task(fx, { assignee_id: fx.user.id, paused: true, ...plan(3) })
     const answer = await loads(fx.t, fx, fx.admin, [uuid(), fx.otherAdmin.id])
-    expect(answer.owners.map((o) => o.state === 'ok' && o.spans)).toEqual([[], []])
+    expect(answer.owners.map((o) => o.state === 'ok' && [o.spans, o.paused])).toEqual([
+      [[], []],
+      [[], []],
+    ])
   })
 
   it('counts an inactive person’s and an agent’s work', async () => {
@@ -682,6 +1060,22 @@ describe('the owners of a call', () => {
       guest: await states(fx.guest, asked),
       viewer: await states(fx.viewer, asked),
     }).toEqual(before)
+    // and so does their paused work
+    for (const owner of [fx.user, fx.admin, fx.user2])
+      await plantMany(fx.t, fx.org.id, 3, {
+        project_id: fx.sub.id,
+        assignee_id: owner.id,
+        paused: true,
+        ...plan(1),
+      })
+    expect({
+      guest: await states(fx.guest, asked),
+      viewer: await states(fx.viewer, asked),
+    }).toEqual(before)
+    expect((await loads(fx.t, fx, fx.guest, asked)).owners[0]).toMatchObject({
+      state: 'ok',
+      paused: expect.arrayContaining([expect.objectContaining({ project_id: fx.sub.id })]),
+    })
     // asking again for the not_read owners reads the next one
     expect(await states(fx.guest, asked.slice(1))).toEqual(['ok', 'not_read'])
     expect(await states(fx.viewer, asked.slice(2))).toEqual(['ok'])
@@ -741,31 +1135,48 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
     expect(await measure()).toEqual(before)
   })
 
-  it('checks at most OWNER_LOADS.checks tasks for subtasks', async () => {
+  it('checks at most OWNER_LOADS.checks tasks for subtasks, the load and the visible paused ones together', async () => {
     const fx = await setup()
     await plantMany(fx.t, fx.org.id, 6, {
       project_id: fx.sub.id,
       assignee_id: fx.user.id,
       ...plan(1),
     })
-    // not scheduled, no hours or paused: never checked
+    // not scheduled or no hours: never checked by ownerLoads
     await plantMany(fx.t, fx.org.id, 3, { project_id: fx.sub.id, assignee_id: fx.user.id })
     await plantMany(fx.t, fx.org.id, 2, {
       project_id: fx.sub.id,
       assignee_id: fx.user.id,
       ...plan(0),
     })
+    // paused: checked by ownerLoads alone, and only where the caller can
+    // see the project, which user2 cannot for SKNK's sub-project
     await plantMany(fx.t, fx.org.id, 2, {
       project_id: fx.sub.id,
       assignee_id: fx.user.id,
       paused: true,
       ...plan(1),
     })
-    Object.assign(OWNER_LOADS, { checks: 6 })
-    expect(await spansOf(fx, fx.admin, fx.user.id)).toHaveLength(6)
-    Object.assign(OWNER_LOADS, { checks: 5 })
-    expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
-    // assigneeLoad keeps the unestimated ones, so it checks those too
+    await plantMany(fx.t, fx.org.id, 3, {
+      project_id: fx.away.id,
+      assignee_id: fx.user.id,
+      paused: true,
+      ...plan(1),
+    })
+    const state = async (caller: Doc<'profiles'>) =>
+      (await loads(fx.t, fx, caller, [fx.user.id])).owners[0]?.state
+    // the load fits alone, and not with the visible paused ones
+    Object.assign(OWNER_LOADS, { checks: 7 })
+    expect(await state(fx.user2)).toBe('unavailable')
+    Object.assign(OWNER_LOADS, { checks: 8 })
+    const one = await okOf(fx, fx.user2, fx.user.id)
+    expect([one.spans.length, one.paused.length]).toEqual([6, 2])
+    // the admin sees SKNK, so checks its paused tasks too
+    expect(await state(fx.admin)).toBe('unavailable')
+    Object.assign(OWNER_LOADS, { checks: 11 })
+    expect((await okOf(fx, fx.admin, fx.user.id)).paused).toHaveLength(5)
+    // assigneeLoad keeps the unestimated ones, so it checks those too, and
+    // never the paused ones
     Object.assign(OWNER_LOADS, { checks: 8 })
     expect(
       await as(fx.t, fx.admin).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),
@@ -792,6 +1203,24 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
     expect(await spansOf(fx, fx.admin, fx.user.id)).toHaveLength(4)
     Object.assign(OWNER_LOADS, { projects: 3 })
     expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
+    // a live project only a paused task names counts too, in ownerLoads
+    // alone, and a paused task of the archived sub-project needs no question
+    const fifth = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+    })
+    for (const p of [fifth, fx.shelf])
+      await task(fx, { project_id: p.id, assignee_id: fx.user.id, paused: true, ...plan(1) })
+    Object.assign(OWNER_LOADS, { projects: 4 })
+    expect((await loads(fx.t, fx, fx.admin, [fx.user.id])).owners[0]?.state).toBe('unavailable')
+    expect(
+      await as(fx.t, fx.admin).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),
+    ).toHaveLength(4)
+    Object.assign(OWNER_LOADS, { projects: 5 })
+    const one = await okOf(fx, fx.admin, fx.user.id)
+    expect(one.spans).toHaveLength(4)
+    expect(one.paused.map((p) => p.project_id)).toEqual([fifth.id])
   })
 
   it('answers the owners after the room ran out not_read, which fit when asked alone', async () => {
@@ -860,6 +1289,69 @@ describe('past a bound an owner is unavailable, never fewer spans', () => {
     ])
     const again = await loads(fx.t, fx, fx.admin, [fx.guest.id, fx.viewer.id])
     expect(again.owners.map((o) => (o.state === 'ok' ? o.spans.length : o.state))).toEqual([2, 0])
+    // paused spans count beside the load's
+    for (const owner of [fx.viewer, fx.user])
+      await plantMany(fx.t, fx.org.id, 2, {
+        project_id: fx.sub.id,
+        assignee_id: owner.id,
+        paused: true,
+        ...plan(1),
+      })
+    const size = (o: OwnerLoadsJson['owners'][number]) =>
+      o.state === 'ok' ? o.spans.length + o.paused.length : o.state
+    const counted = async (ids: string[]) => (await loads(fx.t, fx, fx.admin, ids)).owners.map(size)
+    expect(await counted([fx.guest.id, fx.viewer.id])).toEqual([2, 'not_read'])
+    expect(await counted([fx.viewer.id, fx.guest.id])).toEqual([2, 'not_read'])
+    // the first owner excepted, whose paused spans pass it too
+    expect(await counted([fx.user.id, fx.guest.id])).toEqual([6, 'not_read'])
+  })
+
+  it('spends the room on the questions about the projects only paused tasks name', async () => {
+    const fx = await setup()
+    await plantMany(fx.t, fx.org.id, 3, {
+      project_id: fx.sub.id,
+      assignee_id: fx.user.id,
+      ...plan(1),
+    })
+    await task(fx, { project_id: fx.sub2.id, assignee_id: fx.guest.id, ...plan(1) })
+    const states = async (ids: string[]) =>
+      (await loads(fx.t, fx, fx.user2, ids)).owners.map((o) => o.state)
+    // the least rooms the user fits in alone and after the guest
+    const least = async (ids: string[]) => {
+      let documents = 0
+      do {
+        documents += 4
+        Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, documents } })
+      } while ((await states(ids)).some((s) => s !== 'ok'))
+      return documents
+    }
+    const alone = await least([fx.user.id])
+    const after = await least([fx.guest.id, fx.user.id])
+    // the user's paused work in three sub-projects of SKNK, which user2
+    // cannot see, so three more questions and no check
+    for (let i = 0; i < 3; i++) {
+      const p = await plantProject(fx.t, {
+        org_id: fx.org.id,
+        type: 'project',
+        parent_id: fx.hidden.id,
+      })
+      await task(fx, { project_id: p.id, assignee_id: fx.user.id, paused: true, ...plan(1) })
+    }
+    Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, documents: after } })
+    expect(await states([fx.guest.id, fx.user.id])).toEqual(['ok', 'not_read'])
+    // assigneeLoad asks nothing about them, and reads only their rows, so
+    // the user fits there alone
+    expect(
+      await as(fx.t, fx.user2).query(api.planning.assigneeLoad, { assignee_id: fx.user.id }),
+    ).toHaveLength(3)
+    Object.assign(OWNER_LOADS, { call: { ...DEFAULT_LOADS.call, documents: alone } })
+    expect((await loads(fx.t, fx, fx.user2, [fx.user.id])).owners).toEqual([
+      { owner_id: fx.user.id, state: 'unavailable' },
+    ])
+    // and with room for them the paused list holds none of SKNK's
+    Object.assign(OWNER_LOADS, { call: DEFAULT_LOADS.call })
+    expect(await states([fx.guest.id, fx.user.id])).toEqual(['ok', 'ok'])
+    expect(await pausedIds(fx, fx.user2, fx.user.id)).toEqual([])
   })
 
   it('stops at the read’s room on task rows that still hold their text, never failing on a Convex limit', async () => {
@@ -906,6 +1398,23 @@ describe('an access check a bound stops', () => {
       'rule',
       /could not finish checking which projects you can see/,
     )
+  })
+
+  it('makes the owner unavailable when the check of a project only a paused task names stops', async () => {
+    const fx = await setup()
+    await task(fx, { assignee_id: fx.guest.id, ...plan(3) })
+    // a paused task stored under SKNK itself, which the guest asks about
+    // for navigation, past the parent's sub-projects it may read
+    await task(fx, { project_id: fx.hidden.id, assignee_id: fx.guest.id, paused: true, ...plan(2) })
+    expect(await pausedIds(fx, fx.guest, fx.guest.id)).toEqual([])
+    Object.assign(OWN_READS, { subProjects: 0 })
+    expect((await loads(fx.t, fx, fx.guest, [fx.guest.id])).owners).toEqual([
+      { owner_id: fx.guest.id, state: 'unavailable' },
+    ])
+    // assigneeLoad never asks about it
+    expect(
+      await as(fx.t, fx.guest).query(api.planning.assigneeLoad, { assignee_id: fx.guest.id }),
+    ).toHaveLength(1)
   })
 
   it('answers an owner whose check spent the instance’s room not_read after the first owner', async () => {
@@ -1061,137 +1570,244 @@ describe('the reads follow the owner’s open work, not the organization', () =>
   })
 })
 
+describe('the readers that do not ask for paused work', () => {
+  it('read and answer as before whatever paused work the owner holds in projects no other task of theirs names', async () => {
+    const fx = await setup()
+    await tracksDelay(fx)
+    const single = await task(fx, { assignee_id: fx.user.id, ...plan(6) })
+    await task(fx, { assignee_id: fx.user.id, ...plan(3, '2026-09-14', '2026-09-21') })
+    const measure = async (caller: Doc<'profiles'>) => {
+      const run = <Out>(read: (ctx: QueryCtx) => Promise<Out>) =>
+        as(fx.t, caller).query((ctx) => readsOf(ctx, () => read(ctx)))
+      return {
+        loads: await run((ctx) =>
+          handlerOf<{ org_id: string; owner_ids: string[] }, OwnerLoadsJson>(ownerLoads)(ctx, {
+            org_id: fx.org.id,
+            owner_ids: [fx.user.id],
+          }),
+        ),
+        assignee: await run((ctx) =>
+          handlerOf<{ assignee_id: string }, AssigneeLoadRow[]>(assigneeLoad)(ctx, {
+            assignee_id: fx.user.id,
+          }),
+        ),
+        page: await run((ctx) =>
+          handlerOf<Record<string, string>, WorkloadJson>(restWorkload)(ctx, {
+            callerId: caller.id,
+            access: 'read',
+            today: TODAY,
+            from_week: '2026-09-07',
+            weeks: '4',
+            person: fx.user.id,
+          }),
+        ),
+        single: await run((ctx) =>
+          handlerOf<
+            { callerId: string; access: 'read'; today: string; ref: string },
+            { delay: unknown }
+          >(getIssue)(ctx, { callerId: caller.id, access: 'read', today: TODAY, ref: single.id }),
+        ),
+      }
+    }
+    const callers = [fx.admin, fx.user2, fx.guest]
+    const before = []
+    for (const caller of callers) before.push(await measure(caller))
+    // paused work in three sub-projects of TBED that no other task of the
+    // user names, hidden from the guest
+    for (let i = 0; i < 3; i++) {
+      const p = await plantProject(fx.t, {
+        org_id: fx.org.id,
+        type: 'project',
+        parent_id: fx.meta.id,
+      })
+      await task(fx, { project_id: p.id, assignee_id: fx.user.id, paused: true, ...plan(2) })
+    }
+    for (const [i, caller] of callers.entries()) {
+      const was = before[i]
+      if (was === undefined) throw new Error('no reads before')
+      const now = await measure(caller)
+      for (const key of ['assignee', 'page', 'single'] as const) {
+        const label = `${caller.name}, ${key}`
+        expect(now[key].out, label).toEqual(was[key].out)
+        // the paused rows add documents only
+        expect(now[key].ranges, label).toBe(was[key].ranges)
+        expect(now[key].documents, label).toBe(was[key].documents + 3)
+      }
+      // the reader with the paused option reads more ranges, and answers
+      // the spans as before
+      expect(now.loads.ranges, caller.name).toBeGreaterThan(was.loads.ranges)
+      const [one, old] = [now.loads.out.owners[0], was.loads.out.owners[0]]
+      if (one?.state !== 'ok' || old?.state !== 'ok') throw new Error('not ok')
+      expect(one.spans).toEqual(old.spans)
+      expect(one.paused).toHaveLength(caller === fx.guest ? 0 : 3)
+      const page = now.page.out.people[0]
+      expect(page?.status === 'ok' && page.hours.some((h) => h > 0)).toBe(true)
+      expect(now.single.out.delay).not.toEqual(UNAVAILABLE_DELAY)
+    }
+  })
+})
+
 /* An ordinary title of about 80 characters. */
 const titleOf = (n: number) =>
   `Check the supplier quotes against the budget and update the plan, step ${n}`
 
+/* The design size's 200 sub-projects, 3 under each of 67 top-level
+ * projects (2 under the last), and a staff caller in 3 teams, each sharing
+ * a third of the top-level projects, so the caller reads every sub-project
+ * through its project's share; and planning.ownerLoads for that caller
+ * with its reads. */
+async function designOrg(t: T) {
+  const fx = await setup(t)
+  const tops: Doc<'projects'>[] = []
+  for (let i = 0; i < 67; i++)
+    tops.push(await plantProject(t, { org_id: fx.org.id, name: `Programme ${i}` }))
+  const subs: Doc<'projects'>[] = []
+  for (let i = 0; i < 200; i++)
+    subs.push(
+      await plantProject(t, {
+        org_id: fx.org.id,
+        type: 'project',
+        parent_id: (tops[Math.floor(i / 3)] as Doc<'projects'>).id,
+        name: `Workstream ${i}`,
+        track_delay: true,
+      }),
+    )
+  const caller = await plantSeat(t, {
+    org_id: fx.org.id,
+    name: 'Caller',
+    auth_user_id: `auth_${uuid()}`,
+    email: 'caller@testbed.test',
+    accepted_at: NOW,
+  })
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 3; i++) {
+      const team = uuid()
+      await ctx.db.insert('teams', {
+        id: team,
+        org_id: fx.org.id,
+        name: `Delivery team ${i}`,
+        track_delay_default: false,
+        created_at: NOW,
+      })
+      await ctx.db.insert('team_members', {
+        team_id: team,
+        profile_id: caller.id,
+        is_leader: false,
+      })
+      for (const [k, top] of tops.entries())
+        if (k % 3 === i)
+          await ctx.db.insert('project_team_access', {
+            project_id: top.id,
+            team_id: team,
+            level: 'user',
+          })
+    }
+  })
+  const call = (ids: string[]) =>
+    as(t, caller).query((ctx) =>
+      readsOf(ctx, () =>
+        handlerOf<{ org_id: string; owner_ids: string[] }, OwnerLoadsJson>(ownerLoads)(ctx, {
+          org_id: fx.org.id,
+          owner_ids: ids,
+        }),
+      ),
+    )
+  return { fx, subs, caller, call }
+}
+
+/* One task row in `project_id`, assigned to `owner` where given, with an
+ * ordinary title. */
+const designTask = (
+  orgId: string,
+  project_id: string,
+  owner: string | null,
+  over: Partial<Doc<'issues'>> = {},
+) => ({
+  id: uuid(),
+  org_id: orgId,
+  project_id,
+  num: bulkNum++,
+  title: titleOf(bulkNum),
+  status: 'todo' as const,
+  priority: 'medium' as const,
+  ...(owner === null ? {} : { assignee_id: owner }),
+  paused: false,
+  created_at: NOW,
+  updated_at: NOW,
+  ...over,
+})
+
+/* The busy owner's 2,000 open tasks over the 200 sub-projects, 500 of them
+ * planned with hours, 50 of those with a subtask, the rest in Backlog or
+ * unplanned, and with `pausedEvery` one in that many of the 450 planned
+ * leaves paused. Answers a planned leaf's id. */
+const plantBusy = (
+  t: T,
+  orgId: string,
+  subs: readonly Doc<'projects'>[],
+  busy: string,
+  pausedEvery?: number,
+) =>
+  t.run(async (ctx) => {
+    let leaf = ''
+    let leaves = 0
+    for (let i = 0; i < 2000; i++) {
+      const sub = subs[i % 200] as Doc<'projects'>
+      const planned = i < 500
+      const group = planned && i % 10 === 0
+      const paused = planned && !group && pausedEvery !== undefined && leaves++ % pausedEvery === 0
+      const id = uuid()
+      await ctx.db.insert(
+        'issues',
+        designTask(orgId, sub.id, busy, {
+          id,
+          status: planned ? 'progress' : i % 2 === 0 ? 'backlog' : 'todo',
+          paused,
+          ...(planned ? plan(4) : {}),
+        }),
+      )
+      if (i === 1) leaf = id
+      // an unassigned subtask
+      if (group) await ctx.db.insert('issues', designTask(orgId, sub.id, null, { parent_id: id }))
+    }
+    return leaf
+  })
+
+/* The JSON bytes of `rows`, one by one, and their mean. */
+const meanBytes = (rows: readonly unknown[]) =>
+  rows.length === 0
+    ? 0
+    : Math.round(rows.reduce((n: number, row) => n + JSON.stringify(row).length, 0) / rows.length)
+
+/* A read's counts for the log. */
+const countsOf = (read: { ranges: number; documents: number; bytes: number }) =>
+  `${read.ranges} ranges, ${read.documents} documents, ${(read.bytes / 1e6).toFixed(2)} MB`
+
 describe('at the design size', () => {
   it('reads an owner of 2,000 open tasks over the 200 sub-projects a person can read, and 49 more', async () => {
     const t = newT()
-    const fx = await setup(t)
-    // 200 sub-projects, 3 under each of 67 top-level projects (2 under the
-    // last), and a staff caller in 3 teams, each sharing a third of the
-    // top-level projects, so the caller reads every sub-project through
-    // its project's share
-    const tops: Doc<'projects'>[] = []
-    for (let i = 0; i < 67; i++)
-      tops.push(await plantProject(t, { org_id: fx.org.id, name: `Programme ${i}` }))
-    const subs: Doc<'projects'>[] = []
-    for (let i = 0; i < 200; i++)
-      subs.push(
-        await plantProject(t, {
-          org_id: fx.org.id,
-          type: 'project',
-          parent_id: (tops[Math.floor(i / 3)] as Doc<'projects'>).id,
-          name: `Workstream ${i}`,
-          track_delay: true,
-        }),
-      )
-    const caller = await plantSeat(t, {
-      org_id: fx.org.id,
-      name: 'Caller',
-      auth_user_id: `auth_${uuid()}`,
-      email: 'caller@testbed.test',
-      accepted_at: NOW,
-    })
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 3; i++) {
-        const team = uuid()
-        await ctx.db.insert('teams', {
-          id: team,
-          org_id: fx.org.id,
-          name: `Delivery team ${i}`,
-          track_delay_default: false,
-          created_at: NOW,
-        })
-        await ctx.db.insert('team_members', {
-          team_id: team,
-          profile_id: caller.id,
-          is_leader: false,
-        })
-        for (const [k, top] of tops.entries())
-          if (k % 3 === i)
-            await ctx.db.insert('project_team_access', {
-              project_id: top.id,
-              team_id: team,
-              level: 'user',
-            })
-      }
-    })
+    const { fx, subs, caller, call } = await designOrg(t)
     const busy = await plantSeat(t, { org_id: fx.org.id, name: 'Busy' })
     const others: Doc<'profiles'>[] = []
     for (let i = 0; i < 49; i++)
       others.push(await plantSeat(t, { org_id: fx.org.id, name: `Other ${i}` }))
-    // 2,000 open tasks over the 200 sub-projects, 500 of them planned with
-    // hours, 50 of those with a subtask, the rest in Backlog or unplanned
-    const leafId = await t.run(async (ctx) => {
-      let leaf = ''
-      for (let i = 0; i < 2000; i++) {
-        const sub = subs[i % 200] as Doc<'projects'>
-        const planned = i < 500
-        const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: fx.org.id,
-          project_id: sub.id,
-          num: bulkNum++,
-          title: titleOf(bulkNum),
-          status: planned ? 'progress' : i % 2 === 0 ? 'backlog' : 'todo',
-          priority: 'medium',
-          assignee_id: busy.id,
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-          ...(planned ? plan(4) : {}),
-        })
-        if (i === 1) leaf = id
-        if (planned && i % 10 === 0)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: fx.org.id,
-            project_id: sub.id,
-            parent_id: id,
-            num: bulkNum++,
-            title: titleOf(bulkNum),
-            status: 'todo',
-            priority: 'medium',
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-          })
-      }
+    const leafId = await plantBusy(t, fx.org.id, subs, busy.id)
+    await t.run(async (ctx) => {
       for (const [k, other] of others.entries())
         for (let i = 0; i < 40; i++)
-          await ctx.db.insert('issues', {
-            id: uuid(),
-            org_id: fx.org.id,
-            project_id: (subs[(k * 40 + i) % 200] as Doc<'projects'>).id,
-            num: bulkNum++,
-            title: titleOf(bulkNum),
-            status: 'todo',
-            priority: 'medium',
-            assignee_id: other.id,
-            paused: false,
-            created_at: NOW,
-            updated_at: NOW,
-            ...plan(2),
-          })
-      return leaf
+          await ctx.db.insert(
+            'issues',
+            designTask(fx.org.id, (subs[(k * 40 + i) % 200] as Doc<'projects'>).id, other.id, {
+              ...plan(2),
+            }),
+          )
     })
-    const call = (ids: string[]) =>
-      as(t, caller).query((ctx) =>
-        readsOf(ctx, () =>
-          handlerOf<{ org_id: string; owner_ids: string[] }, OwnerLoadsJson>(ownerLoads)(ctx, {
-            org_id: fx.org.id,
-            owner_ids: ids,
-          }),
-        ),
-      )
     const alone = await call([busy.id])
     const one = alone.out.owners[0]
     if (one?.state !== 'ok') throw new Error(`the busy owner is ${one?.state}`)
-    // the 500 planned, less the 50 groups
+    // the 500 planned, less the 50 groups, and no paused work
     expect(one.spans).toHaveLength(450)
+    expect(one.paused).toEqual([])
     // with 49 more owners every owner is ok or not_read, and asking the
     // not_read ones again reads them all
     let ids = [busy.id, ...others.map((p) => p.id)]
@@ -1227,6 +1843,13 @@ describe('at the design size', () => {
         }).then((out) => out.delay),
       ),
     )
+    console.log(
+      'owner loads at the design size, without paused work:',
+      `alone ${countsOf(alone)};`,
+      `the 50 owners in ${calls.length} calls, ${calls.map(countsOf).join('; ')};`,
+      `assigneeLoad ${countsOf(assignee)}; the single read ${countsOf(single)};`,
+      `a load span ${meanBytes(one.spans)} bytes of JSON`,
+    )
     // one more open task
     await plantMany(t, fx.org.id, 1, { project_id: subs[0]?.id ?? '', assignee_id: busy.id })
     expect((await call([busy.id])).out.owners[0]?.state).toBe('unavailable')
@@ -1243,5 +1866,89 @@ describe('at the design size', () => {
     expect(calls.length).toBeGreaterThan(1)
     expect(assignee.out).toBe(450)
     expect(single.out).toEqual({ status: 'behind', projected_end_week: '2026-09-21' })
+  })
+
+  it('reads an owner with everyday load and a paused task in each of the 200 sub-projects a person can read', async () => {
+    const t = newT()
+    const { fx, subs, caller, call } = await designOrg(t)
+    const owner = await plantSeat(t, { org_id: fx.org.id, name: 'Owner' })
+    // the everyday load, 30 scheduled tasks in 3 sub-projects, and the one
+    // figure raised, paused work that alone names every sub-project the
+    // caller can read
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 30; i++)
+        await ctx.db.insert(
+          'issues',
+          designTask(fx.org.id, (subs[i % 3] as Doc<'projects'>).id, owner.id, {
+            status: 'progress',
+            ...plan(4),
+          }),
+        )
+      for (const sub of subs)
+        await ctx.db.insert(
+          'issues',
+          designTask(fx.org.id, sub.id, owner.id, { paused: true, ...plan(2) }),
+        )
+    })
+    const read = await call([owner.id])
+    const one = read.out.owners[0]
+    if (one?.state !== 'ok') throw new Error(`the owner is ${one?.state}`)
+    expect(one.spans).toHaveLength(30)
+    expect(one.paused).toHaveLength(200)
+    expect(new Set(one.paused.map((p) => p.project_id)).size).toBe(200)
+    const assignee = await as(t, caller).query((ctx) =>
+      readsOf(ctx, () =>
+        handlerOf<{ assignee_id: string }, AssigneeLoadRow[]>(assigneeLoad)(ctx, {
+          assignee_id: owner.id,
+        }).then((rows) => rows.length),
+      ),
+    )
+    console.log(
+      'owner loads at the design size, a paused task in each of 200 sub-projects:',
+      `${countsOf(read)}; assigneeLoad ${countsOf(assignee)};`,
+      `a load span ${meanBytes(one.spans)} and a paused span ${meanBytes(one.paused)} bytes of JSON,`,
+      `the answer ${JSON.stringify(read.out).length} bytes`,
+    )
+    for (const r of [read, assignee]) {
+      expect(r.ranges).toBeLessThan(4096)
+      expect(r.documents).toBeLessThan(32_000)
+      expect(r.bytes).toBeLessThan(16 * 1024 * 1024)
+    }
+    expect(assignee.out).toBe(30)
+    // one live project fewer than paused work names
+    Object.assign(OWNER_LOADS, { projects: 199 })
+    expect((await call([owner.id])).out.owners).toEqual([
+      { owner_id: owner.id, state: 'unavailable' },
+    ])
+    // the readers that do not ask for paused work never meet it
+    expect(
+      await as(t, caller).query(api.planning.assigneeLoad, { assignee_id: owner.id }),
+    ).toHaveLength(30)
+  })
+
+  it('reads the busy owner at the reader’s limit with one in twelve of its planned leaves paused', async () => {
+    const t = newT()
+    const { fx, subs, call } = await designOrg(t)
+    const busy = await plantSeat(t, { org_id: fx.org.id, name: 'Busy' })
+    await plantBusy(t, fx.org.id, subs, busy.id, 12)
+    const read = await call([busy.id])
+    const one = read.out.owners[0]
+    if (one?.state !== 'ok') throw new Error(`the busy owner is ${one?.state}`)
+    // the 450 planned leaves, 38 of them paused, and the 50 groups make
+    // the 500 checks
+    expect([one.spans.length, one.paused.length]).toEqual([412, 38])
+    console.log(
+      'owner loads at the design size, the busy owner with one in twelve leaves paused:',
+      `${countsOf(read)};`,
+      `a load span ${meanBytes(one.spans)} and a paused span ${meanBytes(one.paused)} bytes of JSON,`,
+      `the answer ${JSON.stringify(read.out).length} bytes`,
+    )
+    expect(read.ranges).toBeLessThan(4096)
+    expect(read.documents).toBeLessThan(32_000)
+    expect(read.bytes).toBeLessThan(16 * 1024 * 1024)
+    Object.assign(OWNER_LOADS, { checks: 499 })
+    expect((await call([busy.id])).out.owners).toEqual([
+      { owner_id: busy.id, state: 'unavailable' },
+    ])
   })
 })
