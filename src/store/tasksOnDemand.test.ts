@@ -346,6 +346,8 @@ describe('tasks on demand', () => {
     store.__layerProbe?.plantTasks([
       { ...task(snapshot, '0a000000-due', 7), due_date: '2020-01-06' },
       group,
+      // its subtask of 4 hours, which a sum over the held tasks would count
+      child,
       // a subtask whose parent the workspace does not hold
       { ...child, id: '0b000000-orphan', num: 8, parent_id: '0f000000-absent' },
     ])
