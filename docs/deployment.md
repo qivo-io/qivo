@@ -184,7 +184,15 @@ workload pages, that step and the restore's `counting` fail. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
-To Do so that they show with **Focus** on or off. It then makes a
+To Do so that they show with **Focus** on or off. It then opens the window
+of one fixture task and, from the deployment's batches
+(`taskWindow.relationCandidates`), finds the other one in **Link task** by
+its ID, a search with no match that says so at the end of the project and
+again once **Search all your projects** ended, a task it makes in its second
+project only after **Search all your projects**, and the subtask it made
+as a current subtask in **Add subtask**, and writes nothing
+(`ui/relation-pickers`). Against a backend from before the relation
+pickers' release that step fails. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
@@ -758,14 +766,21 @@ its `org_ready` stamps, and it skips the favorites a rollback past the
 favorites release leaves, by the reader rule the favorites paragraph below
 describes, as the navigation reads do.
 
-The task window's relation picker read, `taskWindow.relationCandidates`,
-first ships in the release after v0.1.123. No app calls it yet, so the read
-sets no rollback floor of its own and adds nothing to the floors above
-until the task window's Parent, Subtasks and Linked tasks pickers switch to
-it. The release that switches them makes the release that shipped the read
-the backend's floor for that app, and its own paragraph here says so. The
-app is to read it once a batch and never subscribe to it. There is no
-schema change, no backfill and no release step.
+The task window's Parent, Subtasks and Linked tasks pickers read the tasks
+they offer from `taskWindow.relationCandidates`, once a batch and never
+subscribed, which the release after v0.1.123 first ships together with the
+app that reads it. An app from that release, against a backend before it,
+says in every relation picker that it couldn't load tasks, also in a tab
+that was open when the backend went back, until the backend rolls forward.
+From that release on, never return the backend to a commit before it; roll
+forward instead. Returning the app alone to an earlier release is safe
+against a later backend, because that app filters the workspace's tasks in
+the browser. The same release lets the window change the parent, subtasks
+and links of a task it shows from its own read, through the mutations the
+app already sends (`issues.update`, `issues.create`, `issues.createParent`,
+`issues.createLinked`, `issues.addLink` and `issues.removeLink`), with the
+expected values that read showed. There is no schema change, no backfill
+and no release step.
 
 ## Node.js version
 
