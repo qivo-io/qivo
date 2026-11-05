@@ -739,11 +739,11 @@ From the release after v0.1.125, a member's task history in the task
 window, over REST and over MCP checks each project its rows name instead of
 reading every project of the organization, and REST and MCP creates count a
 new top-level project's place from the organization's top-level projects.
-The answers do not change, so that release sets no rollback floor and needs
-no step, and returning the backend or the app to an earlier commit stays
-safe. A person whose access Qivo cannot finish checking within its fixed
-limits now gets that refusal on a task's history too, as on the workspace.
-There is no schema change and no backfill.
+Inside Qivo's fixed access limits the answers do not change, so that release
+sets no rollback floor and needs no step, and returning the backend or the
+app to an earlier commit stays safe. A person whose access Qivo cannot
+finish checking within those limits now gets that refusal on a task's
+history too, as on the workspace. There is no schema change and no backfill.
 
 ## Node.js version
 
