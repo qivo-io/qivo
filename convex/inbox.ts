@@ -36,9 +36,13 @@
  *   item row, the task, its project and the caller's levels on it (no item
  *   where a bound stopped that check, as the task window then answers
  *   `unavailable`), the newest message by _creationTime, the oldest unread message, and for an
- *   item with an unread message and a change its read messages, one
- *   normally (model/inboxReads.ts unreadChange). It reruns when any of
- *   those change.
+ *   item with an unread message and a change or a mention its read
+ *   messages, one normally (model/inboxReads.ts unreadChange), and the
+ *   unread ones up to the first mention in the description only when no
+ *   change is unread and a mention is. `unread_change` says whether an
+ *   unread message tells of a change, a change or a mention in the
+ *   description, the app's rule (src/lib/spine.ts unreadStart). It reruns
+ *   when any of those change.
  *
  * Both show the working set as the workspace parts do (lib/access.ts
  * accessOf). Nothing here writes. The item actions are in messages.ts. */

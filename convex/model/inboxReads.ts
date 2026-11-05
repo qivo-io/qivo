@@ -20,6 +20,8 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { accessOf, isAccessUnchecked } from '../lib/access'
 import { byId, usedMoreThan } from '../lib/db'
+import { MENTION_DETAILS } from '../lib/messageDetails'
+import type { ReadGuard } from '../lib/namedPages'
 import { itemRow, seatReady } from './inboxItems'
 import { bulkRows } from './messages'
 
@@ -254,27 +256,55 @@ async function shownOrUnchecked(scope: ReturnType<typeof inboxScope>, issueId: s
  * pruneReadMessages), so more means an item kept from before that rule. */
 const READ_PEEK = 8
 
-/* Whether one of the item's unread messages is a change. The item counts
- * its changes read or not (`changes`), so the unread ones are those beyond
- * the read changes, which the prune keeps to at most one: the answer reads
- * the item's read messages, one normally. An item with more than READ_PEEK
- * read messages is walked unread first instead, up to its first change. */
-async function unreadChange(
+/* Whether `message` tells of a change the task window lists only under
+ * All: a change, or a mention in the description, which comes with the
+ * description's edit (src/lib/spine.ts unreadStart). */
+const tellsChange = (message: Pick<Doc<'messages'>, 'kind' | 'detail'>): boolean =>
+  message.kind === 'change' ||
+  (message.kind === 'mention' && message.detail === MENTION_DETAILS.description)
+
+/**
+ * Whether one of the item's unread messages tells of a change, by the app's
+ * rule (src/lib/spine.ts unreadStart): a change, or a mention in the
+ * description. The item counts its changes and mentions read or not, so
+ * the unread ones are those beyond the read ones, which the prune keeps to
+ * at most one: the answer reads the item's read messages, one normally,
+ * and, only when no change is unread and a mention is, walks the unread
+ * messages up to the first mention in the description, at most
+ * ITEM_UNREAD_CAP (model/messages.ts) on an item the cap keeps. An item
+ * with more than READ_PEEK read messages, kept from before that rule, is
+ * walked unread first instead, up to its first such message. `guard`,
+ * when given, counts every range and message read (lib/namedPages.ts
+ * ReadGuard), as a page's walk needs.
+ */
+export async function unreadChange(
   ctx: QueryCtx,
   pair: { recipient_id: string; issue_id: string },
-  row: Pick<Doc<'inbox_items'>, 'changes' | 'unread_count'>,
+  row: Pick<Doc<'inbox_items'>, 'changes' | 'mentions' | 'unread_count'>,
+  guard?: ReadGuard,
 ): Promise<boolean> {
-  if (row.changes === 0 || row.unread_count === 0) return false
+  if (row.unread_count === 0 || (row.changes === 0 && row.mentions === 0)) return false
   const messages = (read: boolean) =>
     ctx.db.query('messages').withIndex('by_recipient_issue_read_order', (q) => {
       const item = q.eq('recipient_id', pair.recipient_id).eq('issue_id', pair.issue_id)
       return read ? item.gt('read_at', undefined) : item.eq('read_at', undefined)
     })
+  // the unread messages, up to the first that tells of a change
+  const walk = async (): Promise<boolean> => {
+    await guard?.range()
+    for await (const message of messages(false)) {
+      await guard?.document(message)
+      if (tellsChange(message)) return true
+    }
+    return false
+  }
+  await guard?.range()
   const read = await messages(true).take(READ_PEEK + 1)
-  if (read.length <= READ_PEEK)
-    return row.changes > read.filter((message) => message.kind === 'change').length
-  for await (const message of messages(false)) if (message.kind === 'change') return true
-  return false
+  for (const message of read) await guard?.document(message)
+  if (read.length > READ_PEEK) return await walk()
+  const readOf = (kind: Doc<'messages'>['kind']) => read.filter((m) => m.kind === kind).length
+  if (row.changes > readOf('change')) return true
+  return row.mentions > readOf('mention') && (await walk())
 }
 
 /**
@@ -284,8 +314,9 @@ async function unreadChange(
  * bound stopped that check, where the task window answers `unavailable`
  * for the same task (shownOrUnchecked), and else
  * holds the item's counts, the oldest unread message's created_at
- * (`first_unread_at`, null when all are read), whether an unread message is
- * a change (`unread_change`), the newest message by (created_at, id) for
+ * (`first_unread_at`, null when all are read), whether an unread message
+ * tells of a change, a change or a mention in the description
+ * (`unread_change`, unreadChange), the newest message by (created_at, id) for
  * the row's second line, the item's snooze, and `through`, the item's
  * newest _creationTime, which readItem and removeItem take so that they
  * leave out what was stored after this answer by more than one mutation's
@@ -297,8 +328,9 @@ async function unreadChange(
  * It reads the item row, the seat's readiness (two ranges), the task with
  * its project and the seat's access rows, the newest message by
  * _creationTime, the oldest unread message, and for an item with an unread
- * message and a change its read messages (unreadChange), one normally, so
- * its cost does not grow with the item.
+ * message and a change or a mention its read messages (unreadChange), one
+ * normally, and the unread ones up to the first mention in the description
+ * only when no change is unread and a mention is, at most the item cap.
  */
 export async function readInboxItem(ctx: QueryCtx, me: Doc<'profiles'>, issueId: string) {
   if (!(await seatReady(ctx, me.id))) return { state: 'building' as const }

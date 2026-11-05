@@ -3,9 +3,10 @@
  * removeItem, snoozeItem). The summary counts exactly the unread,
  * unsnoozed items of the caller's working set across their seats, up to
  * SUMMARY.most, says when a seat is not ready or a budget stopped it, and
- * stays inside Convex's limits. The item read answers one task's item, and
- * the item actions change only the caller's own item, up to the newest
- * message the caller saw. Every case that writes ends with drift() empty. */
+ * stays inside Convex's limits. The item read answers one task's item,
+ * with an unread change by the app's rule, and the item actions change
+ * only the caller's own item, up to the newest message the caller saw.
+ * Every case that writes ends with drift() empty. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -14,6 +15,7 @@ import { BUILD } from '../internal/inboxItemsBackfill'
 import { OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
 import { LIMITS } from '../lib/limits'
+import { MENTION_DETAILS } from '../lib/messageDetails'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { itemEdits, REKEY } from '../model/inboxItems'
 import { readInboxItem, readInboxSummary, SUMMARY } from '../model/inboxReads'
@@ -644,6 +646,85 @@ describe('one task’s item', () => {
     const seen = await read()
     expect(seen.change).toBe(false)
     expect(seen.documents).toBeLessThan(20)
+    expect(await drift(t)).toEqual([])
+  })
+
+  it('counts an unread mention in the description as an unread change, as the app does, and no other mention', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const task = () => plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const changeOf = async (issueId: string) => {
+      const got = await itemFor(t, f, f.guest, issueId)
+      if (got.state !== 'ok' || got.item === null) throw new Error('no item')
+      return got.item.unread_change
+    }
+    // the only unread news a mention in the description, behind a comment
+    const described = await task()
+    await post(t, f, { to: f.guest, task: described, minute: 1, kind: 'comment' })
+    const mention = (await post(t, f, {
+      to: f.guest,
+      task: described,
+      minute: 2,
+      kind: 'mention',
+      body: MENTION_DETAILS.description,
+    }))!
+    expect(await changeOf(described.id)).toBe(true)
+    // read, it is no longer unread news
+    await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [mention.id] })
+    expect(await changeOf(described.id)).toBe(false)
+    // a mention in a comment is not a change, also beside a read one in
+    // the description, which the counts alone cannot tell apart
+    await post(t, f, {
+      to: f.guest,
+      task: described,
+      minute: 3,
+      kind: 'mention',
+      body: MENTION_DETAILS.comment,
+    })
+    expect(await changeOf(described.id)).toBe(false)
+    // at the item cap, with every unread message a mention in a comment,
+    // the walk reads the cap's unread messages and no more
+    const busy = await task()
+    for (let i = 0; i < ITEM_UNREAD_CAP + 3; i++)
+      await post(t, f, {
+        to: f.guest,
+        task: busy,
+        minute: 10 + i,
+        kind: 'mention',
+        body: MENTION_DETAILS.comment,
+      })
+    const read = await t.run(async (ctx) => {
+      const me = (await byId(ctx, 'profiles', f.guest.id))!
+      const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      const answer = await readInboxItem(ctx, me, busy.id)
+      return {
+        answer,
+        documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used - before,
+      }
+    })
+    expect(read.answer).toMatchObject({
+      item: { unread_count: ITEM_UNREAD_CAP, unread_change: false },
+    })
+    expect(read.documents).toBeLessThan(ITEM_UNREAD_CAP + 20)
+    // and the oldest of the cap's unread messages a mention in the description
+    const oldest = await task()
+    await post(t, f, {
+      to: f.guest,
+      task: oldest,
+      minute: 100,
+      kind: 'mention',
+      body: MENTION_DETAILS.description,
+    })
+    for (let i = 1; i < ITEM_UNREAD_CAP; i++)
+      await post(t, f, {
+        to: f.guest,
+        task: oldest,
+        minute: 100 + i,
+        kind: 'mention',
+        body: MENTION_DETAILS.comment,
+      })
+    expect(await changeOf(oldest.id)).toBe(true)
     expect(await drift(t)).toEqual([])
   })
 
