@@ -371,9 +371,13 @@ const STEP = { projects: 16, rows: 64, share: 32 }
  * reader is shown the rows. A read that may touch rows the reader may not
  * see takes its worst case before it starts (take), and a range of the
  * scope's tasks counts its range and its rows at their size once read
- * (rows). The request's own guard (lib/viewReads.ts
- * viewBudget) takes the same reads besides, so Convex's limits hold
- * whatever the rows weigh.
+ * (rows). The request's own guard (lib/viewReads.ts viewBudget) takes the
+ * same reads besides, so Convex's limits hold, except for the tasks a
+ * batch reads again that grew since a batch weighed them (scanScope). Each
+ * of those can pass the room kept for it by less than ROW_BYTES, so a group
+ * whose text grew far past ordinary sizes between two presses can make the
+ * request fail with Convex's own limit. It never answers an incomplete list
+ * as complete.
  */
 function batchCount(cap: Reads) {
   let used = NONE
@@ -786,7 +790,8 @@ type Pair = { parent_id?: string; has_hidden_parent: boolean }
  * - `{ state: 'over_budget' }` where the reads before the batch leave no
  *   room for its whole budget, which only a reader past the design size
  *   meets, or where a batch's reads pass the request's guard, which only
- *   rows stored past the caps can make them do.
+ *   rows stored past the caps, or tasks read again that grew since a batch
+ *   weighed them (scanScope), can make them do.
  *
  * A search past LIMITS.search is refused with that limit's sentence, and a
  * cursor that is not an earlier batch's of the same reader, task, picker
@@ -1039,15 +1044,16 @@ async function batchOf(
  * tasks never read keep room at ROW. So Load more goes past a group of
  * tasks created at one time within the budgets, also one larger than
  * RELATION_PICKER reads holds at ROW each, and a step that reads a group
- * again asks for at least as many new tasks as it reads again, so a group
+ * again may ask for as many new tasks as it reads again, where the room
+ * and RELATION_PICKER.scan hold them, rather than STEP.rows, so a group
  * takes few steps. Only a group that weighs more than a batch's budget
  * with room for one more task stops every batch at it, which takes
  * thousands of tasks of ordinary text, past the design size, or text far
  * past ordinary sizes. A task of the group that left lets one new task
  * into the first step's range at the weight the departed task had, and the
  * position keeps that weight for it until a range reads past the instant
- * and proves it gone. One that grew since counts at its size once read, as
- * every read of the scope does.
+ * and proves it gone. One that grew since counts at its new size only once
+ * read, past the room kept for it (see batchCount).
  */
 async function scanScope(
   ctx: QueryCtx,
@@ -1082,7 +1088,9 @@ async function scanScope(
     // again
     const share = Math.floor(Math.max(0, count.room(ROW, plus(RANGE, reread))) / STEP.share)
     let k = Math.max(1, Math.min(width, queue.length - pi, share))
-    // a step that reads a group again asks for at least as many new tasks
+    // a step that reads a group again may ask for as many new tasks as it
+    // reads again, where the room and RELATION_PICKER.scan hold them,
+    // rather than STEP.rows
     const most = Math.max(STEP.rows, again)
     let per = 0
     for (; k > 0; k = k > 1 ? 1 : 0) {

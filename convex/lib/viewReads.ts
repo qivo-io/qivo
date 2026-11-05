@@ -107,9 +107,12 @@ const rangesOf = (n: number): Reads => ({ bytes: 0, documents: 0, ranges: n })
 /** The real bytes a view's reads stop at, whatever the fixed charges say:
  * Convex's 16 MiB less 2 MiB for what one step can read past its last look,
  * an access question past PROJECT_ASK or a row stored over the caps. Only a
- * row past the caps and a hidden task's copy of its text (which only a
- * rollback writes) can make the real bytes pass a view's budget first, so
- * only those reach this stop. */
+ * row past the caps, a hidden task's copy of its text (which only a
+ * rollback writes) and a task the relation pickers read again that grew
+ * since a batch weighed it (lib/relationPicker.ts scanScope) can make the
+ * real bytes pass a view's budget first, so only those reach this stop.
+ * The last, far past ordinary text, can also pass Convex's own limit
+ * within one step. */
 const REAL_BYTES = 14 * MIB
 
 /** What a guard throws once a read would pass its budget. A view answers it
