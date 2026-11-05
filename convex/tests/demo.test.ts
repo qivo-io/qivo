@@ -530,15 +530,16 @@ describe('demo lifetime and capabilities', () => {
       }),
     ).toBeNull()
     // API access and Billing's usage list and revoke nothing in a demo, even
-    // for its admin
+    // for its admin. Each read starts once the one before it is refused, so
+    // no refusal lands before its handler is attached.
     for (const read of [
-      a.as.query(api.apiAccess.summary, { org_id: a.demo.orgId! }),
-      a.as.query(api.apiAccess.page, { org_id: a.demo.orgId!, kind: 'all', state: 'all' }),
-      a.as.query(api.apiAccess.people, { org_id: a.demo.orgId! }),
-      a.as.query(api.billing.currentUsage, { org_id: a.demo.orgId! }),
-      a.as.query(api.billing.storageProjects, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.apiAccess.summary, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.apiAccess.page, { org_id: a.demo.orgId!, kind: 'all', state: 'all' }),
+      () => a.as.query(api.apiAccess.people, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.currentUsage, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.storageProjects, { org_id: a.demo.orgId! }),
     ])
-      await expectRefusal(read, 'forbidden', /regular workspace/)
+      await expectRefusal(read(), 'forbidden', /regular workspace/)
     await expectRefusal(
       a.as.mutation(api.apiAccess.revoke, {
         org_id: a.demo.orgId!,

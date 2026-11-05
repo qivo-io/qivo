@@ -662,18 +662,27 @@ describe('Billing storage reads, refusals', () => {
   it('refuse a member, a Viewer, a guest, an admin of another organization, a deactivated admin and an organization being deleted', async () => {
     const { t, f } = await counted()
     await withFile(t, f, 10)
-    const reads = (by: Doc<'profiles'>, org = f.org.id) => [
-      as(t, by).query(api.billing.currentUsage, { org_id: org }),
-      as(t, by).query(api.billing.storageProjects, { org_id: org }),
-    ]
+    // each read starts once the one before it is refused, so no refusal
+    // lands before its handler is attached
+    const refusedBoth = async (by: Doc<'profiles'>, message: RegExp) => {
+      await expectRefusal(
+        as(t, by).query(api.billing.currentUsage, { org_id: f.org.id }),
+        'forbidden',
+        message,
+      )
+      await expectRefusal(
+        as(t, by).query(api.billing.storageProjects, { org_id: f.org.id }),
+        'forbidden',
+        message,
+      )
+    }
     // the case that must pass: the admin reads both
     expect(await usageOf(t, f.admin)).toMatchObject({ storage_bytes: 10 })
     expect(ready(await batchOf(t, f.admin)).rows).toHaveLength(1)
-    for (const by of [f.user, f.viewer, f.guest])
-      for (const read of reads(by)) await expectRefusal(read, 'forbidden', /admin only/)
-    for (const read of reads(f.otherAdmin)) await expectRefusal(read, 'forbidden', /no profile/)
+    for (const by of [f.user, f.viewer, f.guest]) await refusedBoth(by, /admin only/)
+    await refusedBoth(f.otherAdmin, /no profile/)
     await t.run((ctx) => ctx.db.patch(f.admin._id, { active: false }))
-    for (const read of reads(f.admin)) await expectRefusal(read, 'forbidden', /no profile/)
+    await refusedBoth(f.admin, /no profile/)
     await t.run((ctx) => ctx.db.patch(f.admin._id, { active: true }))
     await t.run((ctx) =>
       ctx.db.insert('org_removals', {
@@ -685,7 +694,7 @@ describe('Billing storage reads, refusals', () => {
         created_at: NOW,
       }),
     )
-    for (const read of reads(f.admin)) await expectRefusal(read, 'forbidden', /being deleted/)
+    await refusedBoth(f.admin, /being deleted/)
   })
 
   it('refuses a search past LIMITS.search and a cursor that is not one of this list, organization and search, before it reads anything', async () => {
