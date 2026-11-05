@@ -1,18 +1,58 @@
 /* The Overview's figures as the page derived them from the workspace's
- * tasks before it read the server's (convex/overview.ts), kept unchanged
- * as the oracle store/overviewParity.test.ts compares the server's answers
- * with: the page's former summary, its two lists and its health rows with
- * their sparkbars' status distribution, and the health table's order as
- * the server documents it (healthOrder). The store's rules drive the Board,
- * the Roadmap and Team sync too, so a drift between them and the server
- * shows here while the workspace holds every task. The stage that stops
- * loading every task ends or rewrites it. The test imports it after the
- * store it boots, so it reads that store. */
+ * tasks before it read the server's (convex/overview.ts), kept as the
+ * oracle store/overviewParity.test.ts compares the server's answers with:
+ * the page's former summary, its two lists and its health rows with their
+ * sparkbars' status distribution, and the health table's order as the
+ * server documents it (healthOrder). It pins the server's summary, lists
+ * and health table to the store's rules (P.isDone, P.isPaused, P.delayOf),
+ * which the Roadmap, Team sync and the task window still use, over a store
+ * that asked for every task, until the stage that removes the workspace's
+ * load rows. The task sums the page read (progressIn, remainingIn,
+ * progressByGroups) live here since the store stopped offering them. The
+ * test imports it after the store it boots, so it reads that store. */
 
 import { compareValues, type Value } from 'convex/values'
 import { nameKey } from '../../convex/lib/nameKey'
 import type { HealthSort } from '../../convex/lib/overview'
 import { type IssueVM, P, type ScopeInfo } from './planner'
+
+type Only = ((it: IssueVM) => boolean) | null | undefined
+
+/** Completion over the leaf tasks of sub-projects `subIds` that `only`
+ * keeps (My view counts the person's own), from the workspace's tasks. */
+export function progressIn(subIds: string[], only?: Only) {
+  const set = new Set(subIds)
+  const list = P.issues.filter((i) => set.has(i.project) && !P.isGroup(i) && (!only || only(i)))
+  const total = list.length
+  const done = list.filter((i) => i.status === 'done').length
+  return { total, done, pct: total ? Math.round((done / total) * 100) : 0 }
+}
+
+/** The summed remaining hours of the not-done leaf tasks of sub-projects
+ * `subIds` that `only` keeps, own hours only (0066). */
+export function remainingIn(subIds: string[], only?: Only) {
+  const set = new Set(subIds)
+  const sum = P.issues
+    .filter((i) => set.has(i.project) && !P.isGroup(i) && i.status !== 'done' && (!only || only(i)))
+    .reduce((s, i) => s + (i.remaining || 0), 0)
+  return Math.round(sum * 10) / 10
+}
+
+/** progressIn for each of `groups`, lists of sub-projects, in one pass
+ * over the tasks; each result is what progressIn gives for that list. */
+export function progressByGroups(groups: string[][], only?: Only) {
+  const counts = groups.map(() => ({ total: 0, done: 0 }))
+  for (const it of P.issuesInGroups(groups, only))
+    for (const i of it.groups) {
+      counts[i].total++
+      if (it.issue.status === 'done') counts[i].done++
+    }
+  return counts.map(({ total, done }) => ({
+    total,
+    done,
+    pct: total ? Math.round((done / total) * 100) : 0,
+  }))
+}
 
 /** The summary's figures over `scoped`, the scope's tasks
  * (P.scopedIssues(info)): Completion over the leaves, In progress and In
@@ -21,7 +61,7 @@ import { type IssueVM, P, type ScopeInfo } from './planner'
  * overdue ones and, in projects that track delay, those projected late,
  * by due date. */
 export function overviewFigures(info: ScopeInfo, scoped: IssueVM[]) {
-  const prog = P.progressIn(info.subIds, info.only)
+  const prog = progressIn(info.subIds, info.only)
   const inProgress = scoped.filter((i) => !P.isGroup(i) && i.status === 'progress').length
   const inReview = scoped.filter((i) => !P.isGroup(i) && i.status === 'review').length
   const pausedIssues = scoped.filter((i) => P.isPaused(i))
@@ -70,7 +110,7 @@ export function healthRows(info: ScopeInfo, scoped: IssueVM[], mine: boolean) {
   const held: IssueVM[][] = info.groups.map(() => [])
   for (const it of scoped) for (const i of groupOf.get(it.project) ?? []) held[i].push(it)
   const subIdLists = info.groups.map((g) => g.subIds)
-  const progress = P.progressByGroups(subIdLists, info.only)
+  const progress = progressByGroups(subIdLists, info.only)
   const remaining = P.remainingByGroups(subIdLists, info.only)
   return info.groups
     .map((g, gi) => {

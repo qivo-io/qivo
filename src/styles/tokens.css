@@ -1211,6 +1211,21 @@ textarea {
     visibility: hidden;
   }
 }
+/* A progress bar with no share (components/ui/progress.tsx): a segment
+   that moves along it. The reduced-motion rule below stops it at the
+   start. */
+.progress-indeterminate {
+  width: 40%;
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
 /* Description field: solid twin of the attachments drop zone, so the
    always-editable description reads as an input. --mdpad-x is the side
    padding a capped field's scrolling text reaches across (.mdscroll).

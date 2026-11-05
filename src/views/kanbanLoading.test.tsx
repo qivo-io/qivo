@@ -4,16 +4,17 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 
-/* While a large workspace still loads its tasks (store/liveParts.ts), the
-   Board shows every task its answer names, from the answer's rows where the
-   workspace has not brought them yet (store/viewRows.ts), with its counts.
-   Before the answer it shows the tasks that arrived, with no count and no
-   empty state, which would present part of the selection as all of it. */
+/* While every task loads for a page that asked for them (store/liveParts.ts,
+   store/planner.ts P.askTasks), the Board shows every task its answer
+   names, from the answer's rows where the workspace does not hold them
+   (store/viewRows.ts), with its counts, as it does before any ask. A new
+   subtask the workspace holds whose parent only the answer brings keeps
+   the desktop Board loading until the load ends, and never before an ask
+   or after a load that stopped. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
-const double = vi.hoisted(() => ({
-  live: null as null | { holdWindow(from: string | null): void },
-}))
+type Double = ReturnType<typeof import('../store/guard/liveDouble.setup').liveOver>
+const double = vi.hoisted(() => ({ live: null as Double | null }))
 vi.mock('../lib/convex', async () => {
   const { liveOver } = await import('../store/guard/liveDouble.setup')
   double.live ??= liveOver(network)
@@ -57,6 +58,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   double.live?.holdWindow(null)
+  double.live?.failWindow(null)
   await act(async () => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
@@ -64,8 +66,18 @@ afterEach(async () => {
 
 const count = (status: string) =>
   document.querySelector(`[data-status-count="${status}"]`)?.textContent
+const state = () => container.querySelector('[data-board-root]')?.getAttribute('data-board-state')
+const tick = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
 
-describe('the Board while tasks still load', () => {
+/** Asks for every task, as a page that needs them does, with the last task
+    window held, so they are still on their way. */
+async function askHeld(P: { askTasks(reason: 'script'): void; tasksArriving(): boolean }) {
+  await act(async () => P.askTasks('script'))
+  await tick()
+  expect(P.tasksArriving()).toBe(true)
+}
+
+describe('the Board while every task loads', () => {
   it(
     'shows every task its answer names, with its counts, before the workspace brings them',
     async () => {
@@ -77,15 +89,17 @@ describe('the Board while tasks still load', () => {
         )
       })
       await board.render(root)
-      expect(board.P.stillLoading()).not.toBeNull()
+      await askHeld(board.P)
+      // no task is held while the windows arrive; the cards are the rows
+      expect(board.P.handleOf('01000000-a')).toBeNull()
       expect(board.card('01000000-a')).not.toBeNull()
-      // b's task window has not arrived; its card is the answer's row
-      expect(board.P.handleOf('fd000000-b')).toBeNull()
       expect(board.card('fd000000-b')).not.toBeNull()
       expect(count('progress')).toBe('1')
       expect(count('todo')).toBe('1')
-      // the workspace brings it, and the card stays, now the store's own
+      // every task arrives, and the cards stay, now the store's own
       await act(async () => double.live?.holdWindow(null))
+      await tick()
+      expect(board.P.tasksHeld()).toBe(true)
       expect(board.P.handleOf('fd000000-b')).not.toBeNull()
       expect(board.card('fd000000-b')).not.toBeNull()
       expect(count('todo')).toBe('1')
@@ -94,13 +108,14 @@ describe('the Board while tasks still load', () => {
   )
 
   it(
-    'says nothing loads where its answer names a task no window brought yet',
+    'says nothing loads where its answer names a task the workspace does not hold',
     async () => {
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
         snapshot.issues.push(taskRow(snapshot, 'fd000000-b', 'todo', 1))
       })
       await board.render(root)
+      await askHeld(board.P)
       expect(board.card('fd000000-b')).not.toBeNull()
       expect(container.textContent).not.toContain('Loading tasks…')
       expect(container.textContent).not.toContain('No tasks yet')
@@ -109,31 +124,28 @@ describe('the Board while tasks still load', () => {
   )
 
   it(
-    'says it still loads where the answer names no task for a filter yet',
+    'says nothing matches once the answer for a filter names no task, also while every task loads',
     async () => {
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
         snapshot.issues.push(taskRow(snapshot, 'fd000000-b', 'todo', 1))
       })
       await board.render(root)
+      await askHeld(board.P)
       // the server holds no urgent task, so its answer names none
       await board.filter({ priority: 'urgent' })
-      expect(container.querySelector('[data-board-root]')?.getAttribute('data-board-state')).toBe(
-        'ok',
-      )
-      expect(container.textContent).toContain('Loading tasks…')
-      expect(container.textContent).not.toContain('No tasks yet')
-      await act(async () => double.live?.holdWindow(null))
+      expect(state()).toBe('ok')
+      expect(container.textContent).toContain('Nothing matches your filters')
       expect(container.textContent).not.toContain('Loading tasks…')
+      expect(container.textContent).not.toContain('No tasks yet')
     },
     BOARD_TEST_TIMEOUT,
   )
 
   it(
-    'mounts its first screen at once and the rest in slices while the workspace loads',
+    'mounts its first screen at once and the rest in slices',
     async () => {
-      // more cards than the Board mounts at once (SYNC_LIMIT), all in the
-      // first task window but one
+      // more cards than the Board mounts at once (SYNC_LIMIT)
       const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
       const board = await loadBoard(network, (snapshot) => {
         snapshot.orgs[0].next_issue_num = 64 * 200
@@ -142,44 +154,67 @@ describe('the Board while tasks still load', () => {
           taskRow(snapshot, 'fd000000-b', 'progress', 321),
         )
       })
+      board.server.hold = true
       await board.render(root)
+      // the frame holds no card, and the first answer's render mounts the
+      // first screen, not the frame's none
+      expect(container.querySelectorAll('[data-card]').length).toBe(0)
+      await board.answer()
       const cards = () => container.querySelectorAll('[data-card]').length
       const first = cards()
       expect(first).toBeGreaterThan(0)
-      expect(first).toBeLessThan(320)
-      // the answer's cards are all there, so slices do not wait for the
-      // workspace: every card mounts while its last window is held
+      expect(first).toBeLessThan(321)
       await vi.waitFor(() => expect(cards()).toBe(321), { timeout: 10_000 })
-      expect(board.P.stillLoading()).not.toBeNull()
     },
     BOARD_TEST_TIMEOUT,
   )
 
   it(
-    'mounts every card while a loaded subtask keeps the Board loading for its parent',
+    'keeps the desktop Board loading for a new subtask whose parent only the answer brings, only while every task arrives',
     async () => {
-      const ids = Array.from({ length: 320 }, (_, i) => `01${i.toString(16).padStart(6, '0')}-x`)
-      const board = await loadBoard(network, (snapshot) => {
-        snapshot.orgs[0].next_issue_num = 64 * 200
-        snapshot.issues.push(
-          ...ids.map((id, i) => taskRow(snapshot, id, 'progress', i + 1)),
-          // a parent in the last task window, which is held, and its
-          // subtask in the first
-          taskRow(snapshot, 'fd000000-p', 'progress', 321),
-          { ...taskRow(snapshot, '01ffffff-k', 'progress', 322), parent_id: 'fd000000-p' },
-        )
-      })
-      await board.render(root)
-      const state = () =>
-        container.querySelector('[data-board-root]')?.getAttribute('data-board-state')
-      const cards = () => container.querySelectorAll('[data-card]').length
-      expect(board.P.handleOf('01ffffff-k')).not.toBeNull()
-      expect(board.P.handleOf('fd000000-p')).toBeNull()
-      expect(state()).toBe('loading')
-      // the answer's cards are all there: none waits for the workspace
-      await vi.waitFor(() => expect(cards()).toBe(321), { timeout: 10_000 })
-      expect(board.P.stillLoading()).not.toBeNull()
-      expect(state()).toBe('loading')
+      const { STALL } = await import('../store/liveParts')
+      const stall = STALL.ms
+      STALL.ms = 40
+      try {
+        const board = await loadBoard(network, (snapshot) => {
+          snapshot.orgs[0].next_issue_num = 64 * 200
+          // a parent in the last task window, which is held
+          snapshot.issues.push(taskRow(snapshot, 'fd000000-p', 'progress', 1))
+        })
+        // the person's new subtask of it, which the workspace holds, and
+        // the server's row of it, which the Board's answer brings
+        const kid = {
+          ...taskRow(board.snapshot, '01ffffff-k', 'progress', 2),
+          parent_id: 'fd000000-p',
+        }
+        board.snapshot.issues.push(kid)
+        await act(async () => board.probe?.plantTasks([kid]))
+        await board.render(root)
+        await board.answer()
+        // before an ask no Board waits for it, and it stays ok past the bound
+        expect(board.P.handleOf('01ffffff-k')).not.toBeNull()
+        await tick()
+        expect(state()).toBe('ok')
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 80)))
+        expect(state()).toBe('ok')
+        // while every task arrives the Board waits for the parent's heading
+        await askHeld(board.P)
+        await board.answer()
+        expect(state()).toBe('loading')
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 80)))
+        expect(state()).toBe('loading')
+        // a load that stops ends the wait, with no incomplete over it
+        await act(async () => double.live?.failWindow(LAST_WINDOW, new Error('boom')))
+        await act(async () => double.live?.holdWindow(null))
+        await tick()
+        expect(board.P.taskLoad().state).toBe('failed')
+        await board.answer()
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 80)))
+        expect(state()).toBe('ok')
+        expect(container.querySelector('[data-board-incomplete]')).toBeNull()
+      } finally {
+        STALL.ms = stall
+      }
     },
     BOARD_TEST_TIMEOUT,
   )

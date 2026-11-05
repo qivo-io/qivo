@@ -93,6 +93,8 @@ async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = fa
     },
     { phone },
   )
+  // the workspace holds every task it has, which leaves out far
+  await board.ask()
   board.server.edit = (answer) =>
     answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
   await board.render(root)
@@ -329,7 +331,9 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
             parents: [...answer.parents, parent],
           }
         : answer
-    const loading = vi.spyOn(board.P, 'stillLoading').mockReturnValue(0.5)
+    // y is held, and a load of every task is on its way
+    await board.ask()
+    const loading = vi.spyOn(board.P, 'tasksArriving').mockReturnValue(true)
     await board.render(root)
     await board.answer()
     const state = () => document.querySelector<HTMLElement>('[data-board-root]')?.dataset.boardState
@@ -338,8 +342,8 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     // the card shows, and the Board does not say it is complete
     expect(board.card('y')).not.toBeNull()
     expect(state()).toBe('loading')
-    // once the workspace has loaded, it would hold x too
-    loading.mockReturnValue(null)
+    // once every task has loaded, the workspace would hold x too
+    loading.mockReturnValue(false)
     await board.answer()
     expect(state()).toBe('ok')
   })

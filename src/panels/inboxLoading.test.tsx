@@ -511,13 +511,8 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
       '[data-message="00000000-a"] .inbox-message-open',
     )
     await act(async () => open?.click())
-    const popOut = await vi.waitFor(() => {
-      const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
-      if (!button) throw new Error('missing the pop-out button')
-      return button
-    })
-    await act(async () => popOut.click())
-    // the pop-out reads the held task's subtasks, one still to arrive
+    // the pane reads the row's task, which the workspace does not hold while
+    // every task loads, with its subtask, one still to arrive
     const kid = snap.issues.find((it) => it.id === 'fd000000-b')
     const {
       description: _text,
@@ -525,18 +520,24 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
       has_hidden_parent: _p,
       ...short
     } = kid ?? {}
-    const held = snap.issues.find((it) => it.id === '00000000-a')
+    const row = snap.issues.find((it) => it.id === '00000000-a')
+    const answer = {
+      ...answerOf(snap),
+      task: { ...row, has_subtasks: true },
+      subtasks: {
+        rows: [{ ...short, parent_id: '00000000-a', has_subtasks: false, level: 'user' }],
+        complete: true,
+      },
+    }
     await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
-    await act(async () =>
-      windowReads.at(-1)?.next({
-        ...answerOf(snap),
-        task: { ...held, has_subtasks: true },
-        subtasks: {
-          rows: [{ ...short, parent_id: '00000000-a', has_subtasks: false, level: 'user' }],
-          complete: true,
-        },
-      }),
-    )
+    await act(async () => windowReads.at(-1)?.next(answer))
+    const popOut = await vi.waitFor(() => {
+      const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
+      if (!button) throw new Error('missing the pop-out button')
+      return button
+    })
+    await act(async () => popOut.click())
+    await act(async () => windowReads.at(-1)?.next(answer))
     const related = await vi.waitFor(() => {
       const row = document.querySelector<HTMLButtonElement>('[data-related-task] button')
       if (!row) throw new Error('missing the related row')
@@ -594,9 +595,15 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
   })
 
   it('closes the pop-out, then the pane, on Escape, also over a task still to arrive', async () => {
-    const { store, snap, opened, goTo } = await loadingInbox()
-    const task = store.P.issues.find((it) => it.uuid === '00000000-a')
-    await goTo(task?.id ?? null)
+    const { snap, opened, goTo } = await loadingInbox()
+    // the workspace holds no task while every task loads: the pane reads it
+    const { taskRef } = await import('../lib/taskReference')
+    await goTo(taskRef({ org: snap.orgs[0].id, uuid: '00000000-a' }))
+    const row = snap.issues.find((it) => it.id === '00000000-a')
+    await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
+    await act(async () =>
+      windowReads.at(-1)?.next({ ...answerOf(snap), task: { ...row, has_subtasks: false } }),
+    )
     const popOut = await vi.waitFor(() => {
       const button = container.querySelector<HTMLButtonElement>('[data-task-popout]')
       if (!button) throw new Error('missing the pop-out button')
@@ -605,7 +612,6 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     await act(async () => popOut.click())
     expect(document.querySelector('[data-task-scrim]')).not.toBeNull()
     // Back to a task still to arrive, which both windows follow
-    const { taskRef } = await import('../lib/taskReference')
     await goTo(taskRef({ org: snap.orgs[0].id, num: 2 }))
     expect(container.querySelector('[data-task-loading]')).not.toBeNull()
     expect(document.querySelector('[data-task-scrim]')).not.toBeNull()
@@ -626,6 +632,9 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     )
     await act(async () => open?.click())
     expect(opened.at(-1)).toBeTruthy()
+    await act(async () =>
+      windowReads.at(-1)?.next({ ...answerOf(snap), task: { ...row, has_subtasks: false } }),
+    )
     expect(container.querySelector('[data-task-popout]')).not.toBeNull()
     expect(document.querySelector('[data-task-scrim]')).toBeNull()
   })

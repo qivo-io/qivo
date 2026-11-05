@@ -2,7 +2,12 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from '../views/boardFixture.setup'
+import {
+  BOARD_TEST_TIMEOUT,
+  loadBoard,
+  loadBoardWithTasks,
+  taskRow,
+} from '../views/boardFixture.setup'
 
 /* The phone's task list on the real store renders again only the row of
    the task that changed. Each row draws its owner's portrait once, so the
@@ -123,7 +128,7 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     timeout: BOARD_TEST_TIMEOUT * 3,
   }, async () => {
     vi.stubGlobal('innerHeight', 400)
-    const board = await loadBoard(
+    const board = await loadBoardWithTasks(
       network,
       (snap) => {
         for (let n = 0; n < 500; n++)

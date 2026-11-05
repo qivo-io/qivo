@@ -1,7 +1,9 @@
 /* What the Board shows, for the desktop Board (views/Kanban.tsx) and the
    phone's task list (components/MobileWorkspace.tsx MobileTaskList): which
    tasks, in which state, from the server's answer for the selection
-   (convex/tasks.ts board) and the rows it brings.
+   (convex/tasks.ts board) and the rows it brings. The Board never reads the
+   workspace's task lists: the workspace holds no task until something that
+   needs every task asks for them (store/planner.ts P.askTasks).
 
    - The store owns the Board's read (P.watchBoard): each variant registers
      its arguments from an effect, or none while its page or the tab is
@@ -10,7 +12,7 @@
    - The answer decides which tasks a Board shows. Each shows as the
      workspace's view model where the workspace holds the task, else as the
      model the store shaped from the answer's row (store/viewRows.ts), so a
-     card shows before the workspace has received its task. Either is
+     card shows whether or not the workspace holds its task. Either is
      painted with the person's pending writes, so a card follows every edit
      at once and a drag never snaps back.
    - On top of the answer, the app checks each task again against the
@@ -26,16 +28,22 @@
    - An answer counts only for the arguments it was sent with. Until the
      answer for the arguments on screen arrives, the Board shows the rows
      the store kept for those arguments while the read was stopped, marked
-     refreshing, else the store's own result for them (provisionalBoard),
-     marked loading or refreshing, as long as it holds at most BOARD_TASKS
-     cards.
+     refreshing, else its loading frame (`frame`): the columns, and the
+     lanes or side-boards of the selection's groups, with counts "…" and no
+     card. While typing only adds letters or words to the text filter of
+     the answer on screen, with every other argument the same, the Board
+     narrows that answer's cards by its own text check instead,
+     marked refreshing, until the answer for the new text arrives. The
+     client's text holds no description or labels, so it can only drop a
+     card the server keeps, never show one it drops.
    - The answer brings a row for each task it names, so a whole answer
      names no task the Board cannot show. A row source that brings fewer
-     (`missing`) keeps the Board loading, and STALL.ms later says that some
-     tasks have not reached it; it never looks empty or complete meanwhile.
-     While the workspace loads, a subtask it holds whose parent only the
-     answer brings counts as missing on the desktop too: its card shows,
-     but without its parent's heading until the parent loads.
+     (`missing`) keeps the Board loading, and STALL.ms later, while no load
+     of every task is on its way, says that some tasks have not reached it;
+     it never looks empty or complete meanwhile. While every task loads, a
+     new subtask the workspace holds whose parent only the answer brings
+     counts as missing on the desktop too: its card shows, but without its
+     parent's heading until the parent loads.
    - With a text filter, the person's own pending write on a task only the
      answer brings can take away the word the server found it by: its
      title, status, priority or assignee's name, from the Board or the
@@ -47,7 +55,6 @@
 
 import { useEffect, useState } from 'react'
 import type { BoardAnswer } from '../../../convex/lib/board'
-import { BOARD_TASKS } from '../../../convex/lib/limits'
 import type { ViewRow } from '../../../convex/lib/viewReads'
 import { matchesAllWords, taskSearchText } from '../../lib/search'
 import { useViewVisibility } from '../../lib/viewVisibility'
@@ -90,17 +97,23 @@ export type BoardView = {
   counted: boolean
   /** whether the Board waits for an answer (its root's aria-busy) */
   busy: boolean
-  /** whether the tasks are the store's own result, shown until the answer
-      for these arguments arrives (provisionalBoard), among which tasks a
-      staged load still brings land; an answer's tasks are all there */
-  provisional: boolean
+  /** whether the Board shows its loading frame: no answer for these
+      arguments yet, so no card, the columns standing, and the lanes or
+      side-boards of every group of a project's selection (`holds`), none of
+      which a clearable filter drops, and no "Nothing matches" */
+  frame: boolean
+  /** whether a filter the Clear button clears is on: My tasks outside My
+      view, people, priority, Stale or a text filter (trimmed, as the
+      server trims it). The scope's own narrowing and Focus are not. */
+  clearable: boolean
   /** the filter row as the Board applies it on screen */
   filters: IssueFilters
   /** Whether a lane or side-board of the sub-projects `subIds`, headed by
       project `head`, stays on the Board. */
   holds: (head: string, subIds: readonly string[]) => boolean
-  /** Whether the selection holds no task the store has, for the empty
-      states, which an incomplete Board does not take. */
+  /** Whether the answer says the selection holds no task, for the empty
+      states, which an incomplete Board does not take: no clearable filter
+      is on and no row still shows. */
   empty: () => boolean
   /** the answer when it is a state the Board shows a message for */
   answer: BoardAnswer | null
@@ -168,6 +181,35 @@ function stillMatches(
   return true
 }
 
+/** The words of text filter `search`, lowercased, as the server matches
+    them (convex/lib/search.ts allWordsMatcher). */
+const wordsOf = (search: string) => search.toLowerCase().split(/\s+/).filter(Boolean)
+
+/**
+ * Whether the arguments `to` (a key of boardRequest) only narrow the text
+ * filter of the arguments `from`: every other argument the same, and each
+ * word of `from`'s text inside a word of `to`'s, so whatever the server
+ * finds for `to` it finds for `from` too (every word a substring). Typing
+ * that adds letters or words does; a deleted letter or another selection
+ * does not.
+ */
+export function narrowsText(from: string, to: string): boolean {
+  if (from === to) return false
+  type Args = { scope: unknown; filters: { search: string } & Record<string, unknown> }
+  let a: Args
+  let b: Args
+  try {
+    a = JSON.parse(from) as Args
+    b = JSON.parse(to) as Args
+  } catch {
+    return false
+  }
+  const rest = (args: Args) => JSON.stringify([args.scope, { ...args.filters, search: '' }])
+  if (rest(a) !== rest(b)) return false
+  const next = wordsOf(b.filters.search)
+  return wordsOf(a.filters.search).every((word) => next.some((w) => w.includes(word)))
+}
+
 /* A task's number, from the key it renders (QN-n). */
 const numOf = (it: IssueVM) => Number(it.key.slice(it.key.lastIndexOf('-') + 1))
 
@@ -181,27 +223,6 @@ const before = (a: IssueVM, b: IssueVM) =>
 export const BOARD_SLOTS: Record<BoardVariant, string> = {
   desktop: 'board:desktop',
   phone: 'board:phone',
-}
-
-/** The leaves among `tasks`, the cards the desktop Board shows. */
-const cardCount = (tasks: readonly IssueVM[]) => tasks.filter((it) => !P.isGroup(it)).length
-
-/**
- * provisionalBoard: the store's own result for the filter row on screen, as
- * the Board showed it before the server answered Boards, while the answer
- * for these arguments is on its way. The stage that stops loading every
- * task removes this branch with P.scopedIssues.
- */
-function provisionalBoard(info: ScopeInfo, filters: IssueFilters) {
-  const scoped = P.scopedIssues(info)
-  const tasks = scoped.filter((it) => P.passesFilters(it, filters))
-  const projects = new Set(scoped.map((it) => it.project))
-  return {
-    tasks,
-    shows: cardCount(tasks) <= BOARD_TASKS,
-    holds: (_head: string, subIds: readonly string[]) => subIds.some((id) => projects.has(id)),
-    empty: () => scoped.length === 0,
-  }
 }
 
 /** `active` once it held for STALL.ms under the same `key`. */
@@ -265,7 +286,25 @@ export function useBoardView(
   const current = mine && read.current ? read : null
   const kept = mine && !read.current && read.value?.state === 'ok' ? read.value : null
   const answer = current?.value ?? null
-  const shownAnswer = answer?.state === 'ok' ? answer : kept
+  // the answer for a text filter that the text on screen only narrows
+  // (narrowsText): the live one while typing rests before the new text
+  // goes out, and the last one until the new text's answer arrives
+  const narrowed =
+    !mine &&
+    wantKey !== null &&
+    read.key !== null &&
+    read.value?.state === 'ok' &&
+    narrowsText(read.key, wantKey)
+      ? read.value
+      : null
+  const shownAnswer = answer?.state === 'ok' ? answer : (kept ?? narrowed)
+  // a filter the Clear button clears; trimmed, as the server trims the text
+  const clearable =
+    (!info.mine && filters.mine) ||
+    filters.assignees.length > 0 ||
+    !!filters.priority ||
+    filters.stale ||
+    filters.search.trim() !== ''
 
   // an ok answer joined to the tasks it brings, in its order: the tasks it
   // shows, how many it names that no source can show yet, and how many of
@@ -280,13 +319,18 @@ export function useBoardView(
       const handle = P.handleOf(uuid)
       return handle === null ? P.viewTask(slot, uuid) : P.issueById[handle]
     }
+    // the Board's own text check of a narrowed answer, over the fields a
+    // row sends
+    const textOk = (it: IssueVM) =>
+      !narrowed ||
+      matchesAllWords(shownText(it.key, it, P.isGroup(it), it.assignee), filters.search)
     const shown = new Set<string>()
     const tasks: IssueVM[] = []
     let missing = 0
-    // while the workspace loads, a subtask it holds names no parent it does
-    // not hold (store/viewModels.ts), so the desktop Board would file it
-    // without the heading of a parent only the answer brings
-    const loading = variant === 'desktop' && P.stillLoading() !== null
+    // while every task loads, a new subtask the workspace holds names no
+    // parent it does not hold (store/viewModels.ts), so the desktop Board
+    // would file it without the heading of a parent only the answer brings
+    const loading = variant === 'desktop' && P.tasksArriving()
     for (const row of shownAnswer.rows) {
       if (own.has(row.id)) continue
       const it = modelOf(row.id)
@@ -302,7 +346,7 @@ export function useBoardView(
         P.viewTask(slot, row.parent_id)
       )
         missing++
-      if (passes(info, filters, it)) {
+      if (passes(info, filters, it) && textOk(it)) {
         shown.add(it.uuid)
         tasks.push(it)
       }
@@ -316,7 +360,9 @@ export function useBoardView(
     const answered = filters.search ? new Map(shownAnswer.rows.map((row) => [row.id, row])) : null
     for (const uuid of own) {
       const it = P.ownOnScreen(slot, uuid)
-      if (!it || shown.has(uuid) || !passes(info, filters, it)) continue
+      if (!it || shown.has(uuid) || !passes(info, filters, it) || !textOk(it)) continue
+      // the person's new subtask whose parent is still to come, as above
+      if (loading && P.parentLoading(it)) missing++
       // a task only the answer brings, which the local check searched by
       // nothing (passes)
       if (answered && P.handleOf(uuid) === null) {
@@ -331,15 +377,16 @@ export function useBoardView(
     joined = { tasks, missing, unsure }
   }
   const stalled = useStall(
-    joined !== null && joined.missing > 0 && P.stillLoading() === null,
+    joined !== null && joined.missing > 0 && !P.tasksArriving(),
     wantKey ?? '',
   )
 
   const base = {
     filters,
+    clearable,
     counted: false,
     busy: false,
-    provisional: false,
+    frame: false,
     answer: null,
     retry: read.retry,
     holds: () => false,
@@ -352,42 +399,60 @@ export function useBoardView(
     shows: false,
     ...extra,
   })
+  /** The lanes an answer `a` keeps: its held projects and the projects of
+      the cards on screen. */
+  const holdsOf = (a: BoardAnswer & { state: 'ok' }, tasks: readonly IssueVM[]) => {
+    const held = new Set(a.held_projects)
+    const cardProjects = new Set(tasks.map((it) => it.project))
+    return (head: string, subIds: readonly string[]) =>
+      held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id))
+  }
+  /** Whether answer `a` says the selection holds no task: no clearable
+      filter, and no row still shows (a person's own archive or delete takes
+      one away at once). Without a clearable filter its held projects are
+      the projects of its rows, except under Focus, which adds the
+      sub-projects that hold any active task, so a Focus Board also needs
+      none held. */
+  const emptyOf = (a: BoardAnswer & { state: 'ok' }) => () => {
+    if (clearable || (filters.focus && a.held_projects.length > 0)) return false
+    const own = P.ownPaintedTasks()
+    return a.rows.every((row) => own.has(row.id) && !P.ownOnScreen(slot, row.id))
+  }
   if (want.kind === 'choose') return message('choose')
   if (want.kind === 'search_limit') return message('search_limit')
   if (current?.error !== undefined) return message('error')
-  if (answer === null && kept && joined) {
-    // the rows kept for these arguments while the read was stopped, until
-    // the fresh answer arrives
-    const held = new Set(kept.held_projects)
-    const cardProjects = new Set(joined.tasks.map((it) => it.project))
+  if (answer === null && (kept ?? narrowed) && joined) {
+    // the rows kept for these arguments while the read was stopped, or the
+    // live answer narrowed by the text on screen, until the answer for these
+    // arguments arrives
+    const from = (kept ?? narrowed) as BoardAnswer & { state: 'ok' }
     return {
       ...base,
       state: 'refreshing',
       busy: true,
       tasks: joined.tasks,
       shows: true,
-      holds: (head, subIds) =>
-        held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id)),
-      empty: () => kept.rows.length === 0 && P.scopedIssues(info).length === 0,
+      holds: holdsOf(from, joined.tasks),
+      // a narrowed answer says nothing of the new text's matches
+      empty: kept ? emptyOf(kept) : () => false,
     }
   }
   if (answer === null) {
-    const provisional = provisionalBoard(info, filters)
+    // the loading frame: the columns, and in a project's selection a lane
+    // or side-board for every group, whose lanes My view and the lanes by
+    // owner take from the answer, so they show the one unlabeled lane
     return {
       ...base,
       state: read.answered ? 'refreshing' : 'loading',
       busy: true,
-      provisional: true,
-      tasks: provisional.shows ? provisional.tasks : [],
-      shows: provisional.shows,
-      holds: provisional.holds,
-      empty: provisional.empty,
+      frame: true,
+      tasks: [],
+      shows: true,
+      holds: info.mine ? () => false : () => true,
     }
   }
   if (answer.state !== 'ok') return message(answer.state, { answer })
-  const held = new Set(answer.held_projects)
   const tasks = joined?.tasks ?? []
-  const cardProjects = new Set(tasks.map((it) => it.project))
   const missing = (joined?.missing ?? 0) > 0
   // a card the Board cannot tell still matches the text filter stays, and
   // the counts wait for the answer that holds the write
@@ -399,17 +464,7 @@ export function useBoardView(
     busy: (missing && !stalled) || unsure,
     tasks,
     shows: true,
-    holds: (head, subIds) =>
-      held.has(head) || subIds.some((id) => held.has(id) || cardProjects.has(id)),
-    // no row of the answer still shows a task (a person's own archive or
-    // delete takes one away at once), and none of the store's tasks of the
-    // selection, which may be still to come while the workspace loads
-    empty: () => {
-      const own = P.ownPaintedTasks()
-      return (
-        P.scopedIssues(info).length === 0 &&
-        answer.rows.every((row) => own.has(row.id) && !P.ownOnScreen(slot, row.id))
-      )
-    },
+    holds: holdsOf(answer, tasks),
+    empty: emptyOf(answer),
   }
 }

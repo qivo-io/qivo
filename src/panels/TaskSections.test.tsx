@@ -985,89 +985,44 @@ describe('which windows load the sections', { timeout: 20_000 }, () => {
   })
 })
 
-describe('while a large workspace still loads', { timeout: 20_000 }, () => {
-  // 12,800 task numbers make 64 task windows; the last starts at fc000000
-  const LAST_WINDOW = 'fc000000'
+describe('a new task while every task loads', { timeout: 20_000 }, () => {
+  afterEach(async () => {
+    double.live?.holdWindow(null)
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = true
+  })
 
-  /* The family task in the first window and its 100 subtasks in the last,
-     which answers nothing while the workspace loads in stages. */
-  async function staged() {
+  it('lists empty sections at once, and moves, archives or deletes once every task has loaded', async () => {
     const next = fixture()
+    // 12,800 task numbers make 64 task windows; the last, from fc000000,
+    // stays on its way
     next.orgs[0].next_issue_num = 64 * 200
-    next.issues = next.issues.filter(
-      (t) => t.id !== 'kid-1' && t.id !== 'kid-2' && t.id !== 'kid-ro',
-    )
-    const family = next.issues.find((t) => t.id === 'fam')
-    if (!family) throw new Error('missing the family task')
-    Object.assign(family, { id: '01000000-fam', has_subtasks: true })
-    next.links = []
-    next.attachments = []
-    next.messages = []
-    for (let n = 0; n < LIMITS.subtasks.max; n++)
-      next.issues.push(
-        task(`fd${String(n).padStart(6, '0')}-kid`, 100 + n, {
-          title: `Step ${n + 1}`,
-          parent_id: '01000000-fam',
-        }),
-      )
     await load(next, async () => {
-      const { STAGES } = await import('../store/liveParts')
-      STAGES.batch = Number.POSITIVE_INFINITY
-      // the double this store's modules made
-      double.live?.holdWindow(LAST_WINDOW)
+      const { TASKS } = await import('../store/liveParts')
+      TASKS.atBoot = false
     })
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
-    return next
-  }
-
-  it('lists the subtasks still to arrive, removes one at once, keeps the task menu waiting, and stays at the cap', async () => {
-    const next = await staged()
-    expect(P.stillLoading()).not.toBeNull()
-    await openTask('01000000-fam')
-    const kids = next.issues.filter((t) => t.parent_id === '01000000-fam')
-    // the workspace still loads, so the lists wait for their answers
-    for (const name of ['subtasks', 'links', 'attachments']) {
-      expect(stateOf(name)).toBe('loading')
-      expect(section(name).dataset.sectionSource).toBe('answer')
-    }
-    expect(noteOf('subtasks')).toBe('Loading subtasks…')
-    expect(noteOf('links')).toBe('Loading linked tasks…')
-    expect(noteOf('attachments')).toBe('Loading attachments…')
-    expect(progress()).toEqual(['', 'Subtasks are still loading.'])
-    expect(rollup()).toEqual(['loading', 'Loading…'])
-    // a read that fails before its answer has no rows to keep
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    await fail('taskWindow:links')
-    expect(noteOf('links')).toBe("Couldn't load linked tasks.Retry")
-    await act(async () =>
-      section('links').querySelector<HTMLElement>('[data-section-failure] button')?.click(),
-    )
-    expect(noteOf('links')).toBe('Loading linked tasks…')
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
-    // the server's lists, before the workspace holds any subtask
+    double.live?.holdWindow('fc000000')
+    // the create stays on its way, so its paint stays through the load
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    // a create asks for every task before it sends
+    let key: string | null = null
     await act(async () => {
-      one('taskWindow:task').deliver({
-        ...taskAnswer([], true, false, '01000000-fam'),
-        subtasks: { rows: kids.map((kid) => short(kid)), complete: true },
+      const project = next.projects.find((p) => p.type === 'project')
+      key = P.addIssue({ project: project?.id ?? '', title: 'Order the spare sensors' })
+    })
+    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    const uuid = P.issueById[key ?? '']?.uuid ?? ''
+    await openTask(uuid)
+    // the window takes focus a frame after it opens, which would close a
+    // menu opened before
+    await act(async () => {
+      await vi.waitFor(() => {
+        const frame = document.querySelector('[role="dialog"]')
+        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
       })
     })
-    await answer('taskWindow:links', linksAnswer([], []))
-    await answer('taskWindow:attachments', filesAnswer([]))
-    expect(headingOf('subtasks')).toBe(`Subtasks (${LIMITS.subtasks.max})`)
+    // no delivery holds the new task yet, so its lists are its create's own
     for (const name of ['subtasks', 'links', 'attachments']) expect(stateOf(name)).toBe('complete')
-    const first = section('subtasks').querySelector('[data-related-task="QN-100"]')
-    expect(first?.textContent).toContain('Step 1')
-    // its × works before the workspace holds it
-    const remove = first?.querySelector<HTMLButtonElement>('.task-related-remove')
-    expect(remove?.disabled).toBe(false)
-    // the cap counts the whole list, which the workspace holds none of yet
-    const add = document.querySelector<HTMLButtonElement>('[aria-label="Add subtask"]')
-    expect(add?.disabled).toBe(true)
-    expect(await hintOf(add)).toBe(
-      `This task has ${LIMITS.subtasks.max} active subtasks, the most a task can have. Archive or remove one of them first.`,
-    )
-    // moving, archiving and deleting read the task's own whole list
-    // (P.familyOf) while it serves them, and wait for every task without it
     const menu = async () => {
       await act(async () =>
         document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
@@ -1077,63 +1032,15 @@ describe('while a large workspace still loads', { timeout: 20_000 }, () => {
       )
       return { move, fate: document.querySelector<HTMLButtonElement>('[data-task-fate]') }
     }
-    const whole = await menu()
-    expect(whole.move?.disabled).toBe(false)
-    expect(whole.fate?.disabled).toBe(false)
-    await act(async () =>
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
-    )
-    await act(async () => {
-      one('taskWindow:task').deliver({
-        ...taskAnswer([], true, false, '01000000-fam'),
-        subtasks: { rows: kids.slice(0, 10).map((kid) => short(kid)), complete: false },
-      })
-    })
-    const part = await menu()
-    expect(part.move?.disabled).toBe(true)
-    expect(part.fate?.disabled).toBe(true)
-    expect(await hintOf(part.move)).toBe('Available once every task has loaded')
-    expect(await hintOf(part.fate)).toBe('Available once every task has loaded')
-  })
-
-  it('deletes the task with every subtask its own answer lists, also those still to arrive', async () => {
-    const next = await staged()
-    await openTask('01000000-fam')
-    const kids = next.issues.filter((t) => t.parent_id === '01000000-fam')
-    await act(async () => {
-      one('taskWindow:task').deliver({
-        ...taskAnswer([], true, false, '01000000-fam'),
-        subtasks: { rows: kids.map((kid) => short(kid)), complete: true },
-      })
-    })
-    // the window lists them from its answer; the workspace holds none yet
-    expect(kids.filter((kid) => P.handleOf(kid.id) !== null)).toEqual([])
-    // the window takes focus a frame after it opens, which would close a
-    // menu opened before
-    await act(async () => {
-      await vi.waitFor(() => {
-        const frame = document.querySelector('[role="dialog"]')
-        if (!frame?.contains(document.activeElement)) throw new Error('the window has no focus yet')
-      })
-    })
-    await act(async () =>
-      document.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
-    )
-    await act(async () => document.querySelector<HTMLElement>('[data-task-fate]')?.click())
-    await act(async () =>
-      document.querySelector<HTMLElement>('[data-fate-card="delete"] input[type="radio"]')?.click(),
-    )
-    const buttons = document.querySelectorAll<HTMLButtonElement>('[data-modal-shell] button')
-    const press = [...buttons].find((b) => b.textContent === `Delete ${kids.length + 1} tasks`)
-    if (!press) throw new Error('the window offers no delete with the subtasks')
-    await act(async () => press.click())
-    // every subtask the person chose goes with it, none detached
-    const deletes = network.mutation.mock.calls
-      .filter(([ref]) => getFunctionName(ref) === 'issues:deleteDeep')
-      .map(([, args]) => args as { id: string; subtask_ids?: string[] })
-    expect(deletes).toHaveLength(1)
-    expect(deletes[0].id).toBe('01000000-fam')
-    expect([...(deletes[0].subtask_ids ?? [])].sort()).toEqual(kids.map((kid) => kid.id).sort())
-    expect(window.showToast).toHaveBeenCalledWith(`Deleted QN-27 and ${kids.length} subtasks`)
+    const during = await menu()
+    expect(during.move?.disabled).toBe(true)
+    expect(during.fate?.disabled).toBe(true)
+    expect(await hintOf(during.fate)).toBe('Available once every task has loaded')
+    // once every task has loaded, the workspace knows its family: none
+    expect(P.familyOf(P.issueById[key ?? ''])).toBeNull()
+    await act(async () => double.live?.holdWindow(null))
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(P.tasksHeld()).toBe(true)
+    expect(P.familyOf(P.issueById[key ?? ''])).not.toBeNull()
   })
 })

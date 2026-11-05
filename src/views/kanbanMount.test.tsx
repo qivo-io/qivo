@@ -95,11 +95,11 @@ const tasks =
 describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
     const board = await loadBoard(network, tasks(25, 25))
-    // the Board asks for the scope's tasks once per render
+    // the Board walks no task list of the workspace, which holds none
     const scoped = vi.spyOn(board.P, 'scopedIssues')
     await board.render(root)
     expect(cards()).toHaveLength(50)
-    expect(scoped).toHaveBeenCalledTimes(1)
+    expect(scoped).not.toHaveBeenCalled()
     expect(pane()?.hasAttribute('data-board-mount')).toBe(false)
   })
 
@@ -120,36 +120,38 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     expect(pane()?.hasAttribute('aria-busy')).toBe(false)
   })
 
-  it("mounts the rest in slices while the Board's answer is still on its way", async () => {
+  it("shows no card while the Board's answer is on its way, then its first screen at once", async () => {
     const board = await loadBoard(network, tasks(500))
     board.server.hold = true
     await board.render(root)
     expect(state()).toBe('loading')
-    expect(cards().length).toBeLessThanOrEqual(EAGER)
-    // the answer's wait holds no slice back
-    await finish()
-    expect(state()).toBe('loading')
-    expect(cards()).toHaveLength(500)
-    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
+    expect(cards()).toHaveLength(0)
     await board.answer()
     expect(state()).toBe('ok')
+    // the frame's render, with no card, sets no first screen
+    expect(cards().length).toBeGreaterThan(0)
+    expect(cards().length).toBeLessThanOrEqual(EAGER)
+    await finish()
     expect(cards()).toHaveLength(500)
+    expect(pane()?.getAttribute('data-board-mount')).toBe('complete')
   })
 
-  it('mounts the phone rows in slices while its answer is on its way', async () => {
+  it('mounts the phone rows of its first screen once its answer arrives, then the rest', async () => {
     const board = await loadBoard(network, tasks(500), { phone: true })
     board.server.hold = true
     await board.render(root)
     const rows = () => document.querySelectorAll('.mobile-task-row')
+    expect(rows()).toHaveLength(0)
+    await board.answer()
+    expect(rows().length).toBeGreaterThan(0)
     expect(rows().length).toBeLessThan(500)
     await finish()
-    expect(state()).toBe('loading')
+    expect(state()).toBe('ok')
     expect(rows()).toHaveLength(500)
   })
 
   it('lands an answer that adds and drops cards after the slices mounted', async () => {
     const board = await loadBoard(network, tasks(500))
-    board.server.hold = true
     await board.render(root)
     await finish()
     expect(cards()).toHaveLength(500)

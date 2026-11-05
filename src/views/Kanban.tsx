@@ -566,7 +566,9 @@ function ColHeaderRow({
   )
 }
 
-function NoMatchNote({ onClear, waiting }: { onClear: () => void; waiting: boolean }) {
+/** The note over the columns of a Board whose answer matches no task under
+    a filter Clear clears. It shows only once that answer is whole. */
+function NoMatchNote({ onClear }: { onClear: () => void }) {
   return (
     <div
       // an empty state, as taskFocus.ts reads it
@@ -574,9 +576,7 @@ function NoMatchNote({ onClear, waiting }: { onClear: () => void; waiting: boole
       className="board-empty-note animate-in fade-in slide-in-from-bottom-1 [display:flex] [flex-direction:column] [align-items:center] [gap:6px] [padding:26px_16px]"
     >
       <span data-empty-state-title className="[font-size:var(--fs-base)] [color:var(--text-3)]">
-        {waiting
-          ? 'Nothing matches your filters yet. Tasks are still loading.'
-          : 'Nothing matches your filters'}
+        Nothing matches your filters
       </span>
       <Button type="button" onClick={onClear}>
         Clear filters
@@ -709,10 +709,11 @@ function KanbanBoard({
     : P.STATUSES
   /* Two questions the one `anyFilter` flag used to answer at once, and they
      came apart when a SCOPE gained the power to narrow (My view).
-     · `clearable` — is a TOOLBAR filter on? It gates the "nothing matches"
-       note, whose only action is Clear. The scope's own narrowing is not one
-       (Clear can't undo a scope) and neither is Focus, which survives Clear —
-       the same reason deviation #33 kept Focus out of this test.
+     · `clearable` — is a TOOLBAR filter on (useBoardView, which the phone's
+       list shares)? It gates the "nothing matches" note, whose only action
+       is Clear. The scope's own narrowing is not one (Clear can't undo a
+       scope) and neither is Focus, which survives Clear — the same reason
+       deviation #33 kept Focus out of this test.
      · `holdsScoped` — does the SCOPE put anything in this group at all? That
        is what decides whether a group belongs on this board: in My view a
        project I have no task in isn't part of the board, while a project I do
@@ -721,15 +722,11 @@ function KanbanBoard({
        promises. Asking `anyFilter` here instead would hide EVERY group the
        moment Focus emptied them, with no note (it isn't clearable) and, in
        the Boards layout, nothing left to draw. The answer's held_projects
-       says it (useBoardView), with the groups of the cards on screen.
-     The search counts trimmed, as the server trims it, so spaces alone are
-     no filter. */
-  const clearable =
-    (!mine && filters.mine) ||
-    filters.assignees.length > 0 ||
-    filters.priority ||
-    filters.stale ||
-    filters.search.trim()
+       says it (useBoardView), with the groups of the cards on screen, and
+       before an answer the loading frame holds every group of a project's
+       selection, which no clearable filter drops (`dropsEmpty`). */
+  const clearable = view.clearable
+  const dropsEmpty = clearable && !view.frame
   const holdsScoped = (g: { proj: ProjectVM; subIds: string[] }) => view.holds(g.proj.id, g.subIds)
   const byPrio = (a, b) => P.PRIORITIES[a.priority].rank - P.PRIORITIES[b.priority].rank
 
@@ -772,7 +769,7 @@ function KanbanBoard({
     ? info.groups.flatMap((g) => {
         const gset = new Set(g.subIds)
         const list = visible.filter((i) => gset.has(i.project))
-        if (!holdsScoped(g) || (clearable && list.length === 0)) return []
+        if (!holdsScoped(g) || (dropsEmpty && list.length === 0)) return []
         const cells = statuses.map((s) =>
           cellOf(`${g.proj.id}:${s.id}`, list.filter((i) => i.status === s.id).sort(byPrio)),
         )
@@ -807,7 +804,7 @@ function KanbanBoard({
                 items: visible.filter((i) => gset.has(i.project)),
               }
             })
-            .filter((l) => !(clearable && l.items.length === 0))
+            .filter((l) => !(dropsEmpty && l.items.length === 0))
         : [{ key: 'pool', proj: null, items: visible }]
   // all swimlanes filtered away: keep one unlabeled empty lane so the status
   // columns still render their (empty) stacks
@@ -830,8 +827,9 @@ function KanbanBoard({
 
   /* How many cards each cell mounts at once: all of them on a Board of
      SYNC_LIMIT cards or fewer, else the cards that fit in the first screen.
-     The counts come from a scope and layout's first render, so the cards a
-     change brings in later mount in slices. */
+     The counts come from a scope and layout's first render with cards to
+     show, not its loading frame, which has none, so the cards a change
+     brings in later mount in slices. */
   const firstScreen = () => {
     const budget = window.innerHeight + FIRST_SCREEN_EXTRA_PX
     const sizes = rows.map((row) => row.map((cell) => cell.groups.length))
@@ -844,8 +842,13 @@ function KanbanBoard({
     return new Map(rows.flatMap((row, i) => row.map((cell, j) => [cell.key, counts[i][j]])))
   }
   const layoutKey = `${info.id}:${tweaks.metaViz}`
-  const [eager, setEager] = useStateK(() => ({ key: layoutKey, counts: firstScreen() }))
-  if (eager.key !== layoutKey) setEager({ key: layoutKey, counts: firstScreen() })
+  const [eager, setEager] = useStateK(() => ({
+    key: layoutKey,
+    frame: view.frame,
+    counts: firstScreen(),
+  }))
+  if (eager.key !== layoutKey || (eager.frame && !view.frame))
+    setEager({ key: layoutKey, frame: view.frame, counts: firstScreen() })
   const sync = cells.reduce((total, cell) => total + cell.groups.length, 0) <= SYNC_LIMIT
   const initialOf = (key: string) =>
     sync ? Number.POSITIVE_INFINITY : eager.key === layoutKey ? (eager.counts.get(key) ?? 0) : 0
@@ -964,6 +967,9 @@ function KanbanBoard({
     const estimate = (group: CardGroup) => estimates(group, place, cardWidth, layoutKey, cell.key)
     return (
       <DeferredList
+        // the loading frame's empty list is not the list's first render, which
+        // decides how it mounts its cards (DeferredList's plain blocks)
+        key={view.frame ? 'frame' : 'cards'}
         id={cell.key}
         items={cell.groups}
         keyOf={groupKey}
@@ -990,11 +996,6 @@ function KanbanBoard({
         label={pendingLabel}
         listRole
         blockSize={BOARD_BLOCK_SIZE}
-        // tasks still arriving land among the cards (DeferredList hold),
-        // while the store's own result shows during a staged load; the
-        // answer's cards are all there, also while the Board waits for a
-        // model or the answer's next run, and hold no slice back
-        hold={view.provisional && P.stillLoading() !== null}
       />
     )
   }
@@ -1087,10 +1088,8 @@ function KanbanBoard({
   }
   // an incomplete Board is no empty one: its note says tasks are missing
   if (visible.length === 0 && view.state !== 'incomplete' && view.empty()) {
-    // the tasks of this view may be still to come
-    if (view.busy || P.stillLoading() !== null) {
-      return <EmptyState icon="board" title="Loading tasks…" hint="Tasks are still arriving." />
-    }
+    // a kept answer with no rows, while the fresh one is on its way
+    if (view.busy) return <EmptyState icon="board" title="Loading tasks…" />
     // My view empties for a reason of its own — an empty board here doesn't
     // mean nobody has created anything, only that none of it landed on me
     if (mine) {
@@ -1112,11 +1111,11 @@ function KanbanBoard({
   // a filter that matches nothing keeps the status columns standing (empty)
   // with an inline note — a full-screen empty state would hide the board.
   // Gated on the CLEARABLE filters: the note's only action is Clear.
-  // not while tasks the answer names are missing, which may match
-  const noMatches = visible.length === 0 && clearable && view.state !== 'incomplete'
-  // the note waits while the answer, or before it the workspace, still
-  // brings tasks; an answer's rows are all there
-  const waiting = view.busy || (view.state !== 'ok' && P.stillLoading() !== null)
+  // It waits while the Board waits for its answer (busy): before any answer
+  // for these arguments (the loading frame), while it narrows the answer
+  // on screen by the text typed so far, and while tasks the answer names
+  // are missing, which may match. An answer's rows are all there.
+  const noMatches = visible.length === 0 && clearable && view.state !== 'incomplete' && !view.busy
   const gridCols = `repeat(${statuses.length}, minmax(${minColumnWidth}px, 1fr))`
 
   // ---- side-boards layout (each group its own mini board) ----------------
@@ -1140,7 +1139,7 @@ function KanbanBoard({
           {/* every sub-board hides itself when filtered empty, so a zero-match
             filter leaves nothing — say so instead of a blank pane */}
           {view.state === 'incomplete' && <IncompleteNote onRetry={view.retry} />}
-          {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
+          {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
           <div className="[position:relative] [display:flex] [align-items:flex-start] [gap:var(--panel-gap)]">
             {boards.map(({ g, cells: boardCells }) => {
               const proj = g.proj
@@ -1461,7 +1460,7 @@ function KanbanBoard({
                 <LaneFoot />
               </div>
             ))}
-            {noMatches && <NoMatchNote onClear={actions.clearFilters} waiting={waiting} />}
+            {noMatches && <NoMatchNote onClear={actions.clearFilters} />}
           </div>
         </div>
       </div>

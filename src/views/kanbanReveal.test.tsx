@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { REVEAL_MS } from '../lib/reveal'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoardWithTasks, taskRow } from './boardFixture.setup'
 
 /* A jump to the Board (Team sync, the Inbox, the task crumb, search)
    scrolls the task's card into the middle of the Board and rings it for a
@@ -125,7 +125,7 @@ const lanes = (snap: Snapshot) => {
 
 describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   it('scrolls a Team sync jump to task 900 in lane 9 into view and rings its card', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     expect(card(id)).toBeNull()
@@ -146,7 +146,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('keeps the ring while a task window makes the Board inert', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -167,7 +167,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold the ring for another task window opened after the first closed', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -185,7 +185,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('does not hold a ring that starts at once for a task window opened after it', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -202,7 +202,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it("rings the task's new card when a change in its window moved it", async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -227,7 +227,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('rings the row on the phone task list', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan', phone: true })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan', phone: true })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     far = id
@@ -238,7 +238,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('scrolls a near card smoothly and rings only its row in a shared card', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(
         taskRow(snap, 'parent', 'todo', 1),
         { ...taskRow(snap, 'a', 'todo', 2), parent_id: 'parent' },
@@ -255,7 +255,7 @@ describe('a jump to the Board', { timeout: BOARD_TEST_TIMEOUT * 2 }, () => {
   })
 
   it('shows nothing for a task a filter hides', async () => {
-    const board = await loadBoard(network, lanes, { scope: 'plan' })
+    const board = await loadBoardWithTasks(network, lanes, { scope: 'plan' })
     await board.render(root)
     const id = board.P.issues.find((it) => it.uuid === 't900')?.id ?? ''
     await board.search('Task t1')

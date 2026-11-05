@@ -1673,7 +1673,7 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
 
   it('says the delay of a held group is unknown while some of its subtasks load, naming them as the cause', async () => {
     // the family task is a group due in two weeks: one subtask ends within
-    // a week, in the first task window, and one in three weeks, still to come
+    // a week, and one in three weeks, still to come
     await load(true, (next) => {
       const fam = next.issues.find((t) => t.id === FAM)
       Object.assign(fam ?? {}, { due_date: day(14), has_subtasks: true })
@@ -1686,7 +1686,15 @@ describe('the delay of a task the window cannot judge', { timeout: 30_000 }, () 
         task(FAR_KID, 42, { parent_id: FAM, start_week: day(0), end_week: day(21) }),
       )
     })
-    await openWindow('QN-27')
+    // the workspace holds no task while every task loads; the group and its
+    // near subtask held before the rest, as the person's own new tasks are
+    const { __layerProbe } = await import('../store/planner')
+    await act(async () =>
+      __layerProbe?.plantTasks(
+        snap.issues.filter((t) => t.id === FAM || t.id === '01000000-0000-4000-8000-000000000029'),
+      ),
+    )
+    await openWindow(P.handleOf(FAM) ?? '')
     expect(dialog()?.dataset.taskSource).toBe('workspace')
     expect(delayChip()?.dataset.delayChip).toBe('unknown')
     expect(await hintOf(delayChip())).toBe(

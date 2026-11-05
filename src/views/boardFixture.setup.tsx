@@ -69,13 +69,18 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
 /** Boots a fresh store on the fixture with the tasks `prepare` adds, and
     returns it with the Board and a way to deliver a changed snapshot. The
     Board is drawn in the `metaViz` layout, or as the phone's task list,
-    over the project `scope` (by default the fixture's one project). */
+    over the project `scope` (by default the fixture's one project). The
+    store boots without the workspace's tasks, as the app does, unless
+    `tasks` asks for every task at boot; a case that tests the Board over
+    tasks the workspace holds asks (`ask`). */
 export async function loadBoard(
   network: Network,
   prepare: (snapshot: Snapshot) => void,
-  { metaViz = 'swimlanes', phone = false, scope: scopeId = '' } = {},
+  { metaViz = 'swimlanes', phone = false, scope: scopeId = '', tasks = false } = {},
 ) {
   vi.resetModules()
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = tasks
   const snapshot = plannerFixture()
   prepare(snapshot)
   // the fixture's project as a sub-project, which the Board's query answers,
@@ -303,6 +308,8 @@ export async function loadBoard(
   }
   return {
     P,
+    /** The store's test-build probe (store/planner.ts __layerProbe). */
+    probe: store.__layerProbe,
     snapshot,
     /** The Board's row for the task stored as `uuid`; the Board names a
         task by its key, also one only the Board's answer brings
@@ -339,6 +346,15 @@ export async function loadBoard(
     consumed,
     /** Answers the Board's open subscriptions now, as after a hold. */
     answer: () => act(async () => answerBoards()),
+    /** Asks for every task, as a page that needs them does, and waits
+        until the workspace holds them. */
+    ask: () =>
+      act(async () => {
+        P.askTasks('script')
+        for (let i = 0; i < 10 && !P.tasksHeld(); i++)
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        if (!P.tasksHeld()) throw new Error('every task did not load')
+      }),
     render: (root: Root, window?: Window) =>
       act(async () => root.render(<Screen window={window} />)),
     /** Renders `view` for the scope in place of the Board. A test imports
@@ -346,6 +362,15 @@ export async function loadBoard(
     renderView: (root: Root, view: (info: ScopeInfo) => ReactNode) =>
       act(async () => root.render(<View view={view} />)),
   }
+}
+
+/** loadBoard, then an ask for every task (`ask`), for the suites whose
+    cases test the Board over tasks the workspace holds: a task window's
+    edits, drags, reveals, focus and the Roadmap. */
+export async function loadBoardWithTasks(...args: Parameters<typeof loadBoard>) {
+  const board = await loadBoard(...args)
+  await board.ask()
+  return board
 }
 
 /* The data of the drag in progress. As in a browser, every event of one

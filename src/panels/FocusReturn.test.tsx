@@ -3,7 +3,7 @@ import { getFunctionName } from 'convex/server'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { BOARD_TEST_TIMEOUT, cell, loadBoard, taskRow } from '../views/boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, cell, loadBoardWithTasks, taskRow } from '../views/boardFixture.setup'
 
 /* Closing a task window returns focus to the Board card it was opened
    from, also when an edit in the window moved that card to another cell,
@@ -65,7 +65,7 @@ afterEach(async () => {
 const settle = () => act(async () => await new Promise((resolve) => setTimeout(resolve, 50)))
 
 describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  type Board = Awaited<ReturnType<typeof loadBoard>>
+  type Board = Awaited<ReturnType<typeof loadBoardWithTasks>>
   /* Opens A from its card's title, applies `edit` in the window, given a way
      to open another task there, and closes it. The window stays mounted
      with no task, as App keeps it. Returns the title of `uuid`'s card as
@@ -75,7 +75,7 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
     uuid = 'a',
     backlog = 0,
   ) {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(taskRow(snap, 'a', 'todo', 1), taskRow(snap, 'b', 'todo', 2))
       for (let n = 0; n < backlog; n++)
         snap.issues.push(taskRow(snap, `backlog-${n}`, 'backlog', n + 3))
@@ -170,12 +170,12 @@ describe('closing a task window', { timeout: BOARD_TEST_TIMEOUT }, () => {
 })
 
 describe('archiving the task from its window', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  type Board = Awaited<ReturnType<typeof loadBoard>>
+  type Board = Awaited<ReturnType<typeof loadBoardWithTasks>>
   type Status = Parameters<typeof taskRow>[2]
   /** Loads the Board's store with `tasks` (uuid, status and whether it is
       paused), with the server accepting an archive. */
   async function load(tasks: [string, Status, boolean?][]) {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       tasks.forEach(([uuid, status, paused = false], n) => {
         snap.issues.push({ ...taskRow(snap, uuid, status, n + 1), paused })
       })

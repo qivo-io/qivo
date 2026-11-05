@@ -106,6 +106,7 @@ export function liveOver(client: Client): LiveQueries & {
   batch(step: () => void): void
   hold(orgId: string | null): void
   holdWindow(from: string | null): void
+  failWindow(from: string | null, error?: unknown, later?: boolean): void
   reconnect(only?: readonly string[]): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
@@ -142,6 +143,8 @@ export function liveOver(client: Client): LiveQueries & {
   let heldOrg: string | null = null
   // where the task windows start that answer nothing until holdWindow(null)
   let heldWindow: string | null = null
+  // where the task windows start that fail until failWindow(null)
+  let failedWindow: { from: string; error: unknown } | null = null
   const fire = (tokens: Set<string>, when?: string) => {
     if (batching) {
       for (const token of tokens) batching.add(token)
@@ -161,6 +164,17 @@ export function liveOver(client: Client): LiveQueries & {
       if (heldOrg !== null && w.args.org_id === heldOrg) continue
       if (heldWindow !== null && w.name === 'workspace:tasks' && w.args.from === heldWindow)
         continue
+      if (
+        failedWindow !== null &&
+        w.name === 'workspace:tasks' &&
+        w.args.from === failedWindow.from
+      ) {
+        if (w.error === failedWindow.error) continue
+        w.error = failedWindow.error
+        w.json = undefined
+        changed.add(token)
+        continue
+      }
       if ('error' in whole) {
         w.error = whole.error
         w.json = undefined
@@ -336,6 +350,21 @@ export function liveOver(client: Client): LiveQueries & {
         answer; null holds none. */
     holdWindow(from) {
       heldWindow = from
+      fire(refresh())
+    },
+    /** Fails every task window that starts at `from` with `error`, as a
+        window the server could not load, now, or with `later` only for the
+        next watch of such a window, as a fresh registry's. With null it
+        lets such a window answer once the store runs it again (Convex
+        keeps a failed run until then), with no transition now. */
+    failWindow(from, error = new Error('task window failed'), later = false) {
+      if (from === null) {
+        failedWindow = null
+        refresh()
+        return
+      }
+      failedWindow = { from, error }
+      if (later) return
       fire(refresh())
     },
     /** Drops the socket and connects again, as Convex does after a network

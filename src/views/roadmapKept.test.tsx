@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { KeptView } from '../components/KeptView'
 import { withoutTaken } from '../lib/reveal'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoardWithTasks, taskRow } from './boardFixture.setup'
 
 /* A kept Roadmap (components/KeptView) shown again runs its effects again
    with the props it held: a request to plan or show a task that it took
@@ -111,7 +111,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     ['on a desktop-wide screen, as the desktop timeline', false],
   ])('shows itself %s after it hid with the landscape timeline open', async (_, phoneAgain) => {
     const phone = phoneScreen()
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push(taskRow(snap, 't1', 'todo', 1))
     })
     const { Roadmap } = await import('./Roadmap')
@@ -144,7 +144,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
   })
 
   it('does not plan again a task it took to plan before it hid', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
     })
     const { Roadmap } = await import('./Roadmap')
@@ -182,7 +182,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
     expect(consumed).toHaveBeenCalledTimes(1)
   })
   it('says a task asked for is not on the roadmap any more when the loaded Roadmap does not hold it', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
     })
     const { Roadmap } = await import('./Roadmap')
@@ -214,7 +214,7 @@ describe('a kept Roadmap shown again', { timeout: BOARD_TEST_TIMEOUT * 2 }, () =
   })
 
   it('leaves the request made while it hid, as it lets go of the one it held', async () => {
-    const board = await loadBoard(network, (snap) => {
+    const board = await loadBoardWithTasks(network, (snap) => {
       snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), assignee_id: null })
       snap.issues.push({ ...taskRow(snap, 't2', 'todo', 2), assignee_id: null })
     })

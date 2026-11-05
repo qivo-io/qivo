@@ -556,6 +556,8 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
 
   it('takes away at once the row of a task the person archives, and nothing else', async () => {
     const { board } = await overview(work())
+    // the archive of a task the workspace holds
+    await board.ask()
     // the server accepts the archive; no delivery holds it yet
     network.mutation.mockImplementation((ref) =>
       getFunctionName(ref) === 'issues:archive' ? Promise.resolve(null) : new Promise(() => {}),
