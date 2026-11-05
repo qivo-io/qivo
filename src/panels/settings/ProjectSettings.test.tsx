@@ -955,6 +955,32 @@ describe('changing access', () => {
     expect(has('[data-project-access-kept]')).toBe(false)
   })
 
+  it('drops a kept Added row once the Lead field makes that person the lead', async () => {
+    server.force = { batch: 1 }
+    await open()
+    await click(picker())
+    await type(find('[data-project-access-picker-search]'), 'nora')
+    await rest()
+    await click(find('[data-project-access-choice="nora"]'))
+    await select(find<HTMLSelectElement>('[data-project-access-new-role]'), 'user')
+    await click(addButton())
+    await answer('projects:setAccess', (snap) => {
+      snap.access.push({ project_id: 'plan', profile_id: 'nora', level: 'user' })
+    })
+    expect(has('[data-project-access-kept="nora"]')).toBe(true)
+    // the lead answer names them now, and the loaded batch never reached them
+    await click(find('[data-project-lead-picker]'))
+    await type(find('[data-lead-picker-search]'), 'nora')
+    await rest()
+    await click(find('[data-lead-choice="nora"]'))
+    await answer('projects:update', (snap) => {
+      snap.projects[0].lead_id = 'nora'
+    })
+    expect(find('[data-project-access-lead]').dataset.projectAccessUser).toBe('nora')
+    expect(has('[data-project-access-kept]')).toBe(false)
+    expect(rows('user').filter((name) => name === 'Nora Admin')).toHaveLength(1)
+  })
+
   it("gives an organization Viewer Viewer alone, and reads the picker's batches, cap and refusal", async () => {
     server.force = { batch: 2 }
     await open()

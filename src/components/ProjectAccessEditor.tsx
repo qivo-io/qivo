@@ -413,14 +413,20 @@ export function ProjectAccessEditor({
   const teamSearch = useRef<HTMLInputElement>(null)
   const userSearch = useRef<HTMLInputElement>(null)
 
-  // a kept row goes once a loaded batch holds it, or tells that it does not
+  // the lead the users answer names, whether or not a removal of the lead
+  // is on its way, for the kept rows' cleanup
+  const leadId = firstUsers?.state === 'ready' ? (firstUsers.lead?.id ?? null) : null
+  // a kept row goes once a loaded batch holds it, or tells that it does
+  // not, or, for a person, once the users answer names them as the lead,
+  // as after the Lead field made them lead, so they do not show twice
   useEffect(() => {
     setKept((all) => {
       const left = all.filter((k) =>
         k.kind === 'team'
           ? !teams.list.rows.some((r) => r.id === k.id) &&
             !passed(teams.list, teams.search.settled, k.name, k.id)
-          : !users.list.rows.some((r) => r.id === k.id) &&
+          : k.id !== leadId &&
+            !users.list.rows.some((r) => r.id === k.id) &&
             !passed(users.list, users.search.settled, k.name, k.id),
       )
       return left.length === all.length ? all : left
