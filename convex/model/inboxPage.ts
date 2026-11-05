@@ -111,22 +111,26 @@ import { inboxScope, unreadChange } from './inboxReads'
  * keeps NAMED_RESERVE under the request's limits.
  *
  * The design size names no Inbox figure, so the cases raise one task
- * figure with a group on each of its tasks, or the item cap alone, and
- * assume an everyday Inbox of 60 groups over 3 sub-projects, a little over
- * one page. What one call reads, measured in convex/tests/inboxPage.test.ts
- * ("reads at the design size") in index ranges and documents as Convex
- * counts them, with the default bounds, for a reader in 3 teams:
+ * figure with a group on each of its tasks, open and Done tasks not yet
+ * archived at their sum since one page reads both, or the item cap alone,
+ * and assume an everyday Inbox of 60 groups over 3 sub-projects, a little
+ * over one page. What one call reads, measured in
+ * convex/tests/inboxPage.test.ts ("reads at the design size") in index
+ * ranges and documents as Convex counts them, with the default bounds, for
+ * a reader in 3 teams:
  * - the everyday Inbox: a browse 227 ranges and 237 documents for 50 rows;
  *   a search that matches nothing 207 ranges and 259 documents, one page;
- * - one sub-project's 300 groups: 261 ranges and 258 documents newest
- *   first or Unread only, 271 and 268 oldest first, with 50 actors on the
- *   page; a kind whose 10 matches are the oldest, 71 ranges and 357
- *   documents, one page; a search that matches nothing or only the oldest
- *   group, 963 ranges and 1,258 documents, one page;
- * - one project's 800 groups over 3 sub-projects: the browse as above; a
- *   kind whose 10 matches are the oldest, 77 ranges and 859 documents; a
- *   search that matches nothing, 2 pages, the first stopped at 2,002
- *   ranges and 2,639 documents;
+ * - one sub-project's 450 groups, 300 of open tasks and 150 of Done ones:
+ *   261 ranges and 258 documents newest first or Unread only, 271 and 268
+ *   oldest first, with 50 actors on the page; a kind whose 10 matches are
+ *   the oldest, 71 ranges and 507 documents, one page; a search that
+ *   matches nothing or only the oldest group, 1,413 ranges and 1,858
+ *   documents, one page;
+ * - one project's 1,000 groups over 3 sub-projects, 800 of open tasks and
+ *   200 of Done ones: the browse as above; a kind whose 10 matches are the
+ *   oldest, 77 ranges and 1,059 documents; a search that matches nothing,
+ *   2 pages, the first stopped at 2,002 ranges and 2,639 documents, the
+ *   second 1,133 ranges and 1,479 documents;
  * - one project's 200 read groups of Done tasks: 118 ranges and 161
  *   documents;
  * - 6,000 groups over the 200 sub-projects one person can read (on

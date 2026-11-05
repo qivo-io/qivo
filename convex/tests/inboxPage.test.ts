@@ -108,10 +108,11 @@ async function deliver(t: T, to: Doc<'profiles'>, task: Doc<'issues'>, ...sent: 
   })
 }
 
-/** `n` tasks, the `i`th in project `projectOf(i)` titled `title(i)`, each
- * with an item of `to` holding the messages `sent(i)` (one change at minute
- * i by default), `chunk` tasks a transaction through one item writer.
- * Answers the tasks in the order planted, the oldest group first. */
+/** `n` tasks, the `i`th in project `projectOf(i)` titled `title(i)`, with
+ * the fields `task(i)`, each with an item of `to` holding the messages
+ * `sent(i)` (one change at minute i by default), `chunk` tasks a
+ * transaction through one item writer. Answers the tasks in the order
+ * planted, the oldest group first. */
 async function plantGroups(
   t: T,
   to: Doc<'profiles'>,
@@ -120,7 +121,7 @@ async function plantGroups(
   o: {
     sent?: (i: number) => Sent[]
     title?: (i: number) => string
-    task?: Partial<Doc<'issues'>>
+    task?: (i: number) => Partial<Doc<'issues'>>
     chunk?: number
   } = {},
 ): Promise<Doc<'issues'>[]> {
@@ -147,7 +148,7 @@ async function plantGroups(
             created_at: NOW,
             updated_at: NOW,
             window_key: newWindowKey(),
-            ...o.task,
+            ...o.task?.(i),
           },
           'restore',
         )
@@ -1630,45 +1631,57 @@ describe('reads at the design size', () => {
     expect(missed.at(-1)?.page.next).toBeNull()
   })
 
-  it('2. one sub-project’s 300 open tasks, a group each, in each order, filtered and searched', async () => {
+  it('2. one sub-project’s 300 open and 150 Done tasks, a group each, in each order, filtered and searched', async () => {
     const t = newT()
     const f = await withOrg(t)
     const { me, subs } = await everyday(t, f)
     const people = await actors(t, f, 50)
-    const tasks = await plantGroups(t, me, 300, () => subs[0].id, {
+    // the open and Done-not-archived figures at their sum, as one page reads
+    // both: every third group is of a Done task, and the 10 oldest groups of
+    // open tasks are the only mentions
+    const done = (i: number) => i % 3 === 2
+    const mention = (i: number) => !done(i) && i < 15
+    const tasks = await plantGroups(t, me, 450, () => subs[0].id, {
       title: (i) =>
         i === 0 ? 'Wire the zebra harness for the bench fixture of board revision zero' : title(i),
+      task: (i) => (done(i) ? { status: 'done', done_at: NOW } : {}),
       sent: (i) => [
         {
           minute: i,
-          kind: i < 10 ? ('mention' as const) : ('change' as const),
-          body: i < 10 ? MENTION_DETAILS.comment : 'Status changed from Todo to In progress',
-          // the newest 50 groups each by a different person
+          kind: mention(i) ? ('mention' as const) : ('change' as const),
+          body: mention(i)
+            ? MENTION_DETAILS.comment
+            : done(i)
+              ? 'Status changed from In progress to Done'
+              : 'Status changed from Todo to In progress',
+          // any 50 groups in a row each by a different person
           actor: people[i % 50].id,
         },
       ],
     })
-    const newest = await first(t, me, '300 in a sub-project, newest first')
+    const mentioned = tasks.filter((_, i) => mention(i))
+    expect(mentioned).toHaveLength(10)
+    const newest = await first(t, me, '450 in a sub-project, newest first')
     expect(new Set(newest.page.rows.map((r) => r.latest.actor_id)).size).toBe(50)
-    await first(t, me, '300 in a sub-project, oldest first', { order: 'oldest' })
-    await first(t, me, '300 in a sub-project, unread only', { unread_only: true })
+    await first(t, me, '450 in a sub-project, oldest first', { order: 'oldest' })
+    await first(t, me, '450 in a sub-project, unread only', { unread_only: true })
     const mentions = await every(
       t,
       me,
-      '300 in a sub-project, the 10 oldest are the only mentions',
+      '450 in a sub-project, the 10 oldest of open tasks are the only mentions',
       {
         kinds: ['mention'],
       },
     )
-    expect(allIds(mentions.map((r) => r.page))).toEqual(newestFirst(tasks.slice(0, 10)))
-    const missed = await every(t, me, '300 in a sub-project, a search that matches nothing', {
+    expect(allIds(mentions.map((r) => r.page))).toEqual(newestFirst(mentioned))
+    const missed = await every(t, me, '450 in a sub-project, a search that matches nothing', {
       search: 'oscilloscope',
     })
     expect(allIds(missed.map((r) => r.page))).toEqual([])
     const oldest = await every(
       t,
       me,
-      '300 in a sub-project, a search that matches the oldest group',
+      '450 in a sub-project, a search that matches the oldest group',
       {
         search: 'zebra',
       },
@@ -1676,38 +1689,58 @@ describe('reads at the design size', () => {
     expect(allIds(oldest.map((r) => r.page))).toEqual([tasks[0].id])
   })
 
-  it('3. one project’s 800 open tasks over 3 sub-projects, the same calls', async () => {
+  it('3. one project’s 800 open and 200 Done tasks over 3 sub-projects, the same calls', async () => {
     const t = newT()
     const f = await withOrg(t)
     const { me, subs } = await everyday(t, f)
     const people = await actors(t, f, 50)
-    const tasks = await plantGroups(t, me, 800, (i) => subs[i % 3].id, {
+    // every fifth group is of a Done task, at their sum as in case 2
+    const done = (i: number) => i % 5 === 4
+    const mention = (i: number) => !done(i) && i < 12
+    const tasks = await plantGroups(t, me, 1000, (i) => subs[i % 3].id, {
       title: (i) =>
         i === 0 ? 'Wire the zebra harness for the bench fixture of board revision zero' : title(i),
+      task: (i) => (done(i) ? { status: 'done', done_at: NOW } : {}),
       sent: (i) => [
         {
           minute: i,
-          kind: i < 10 ? ('mention' as const) : ('change' as const),
-          body: i < 10 ? MENTION_DETAILS.comment : 'Status changed from Todo to In progress',
+          kind: mention(i) ? ('mention' as const) : ('change' as const),
+          body: mention(i)
+            ? MENTION_DETAILS.comment
+            : done(i)
+              ? 'Status changed from In progress to Done'
+              : 'Status changed from Todo to In progress',
           actor: people[i % 50].id,
         },
       ],
     })
-    await first(t, me, '800 in a project, newest first')
-    await first(t, me, '800 in a project, oldest first', { order: 'oldest' })
-    await first(t, me, '800 in a project, unread only', { unread_only: true })
-    const mentions = await every(t, me, '800 in a project, the 10 oldest are the only mentions', {
-      kinds: ['mention'],
-    })
-    expect(allIds(mentions.map((r) => r.page))).toEqual(newestFirst(tasks.slice(0, 10)))
-    const missed = await every(t, me, '800 in a project, a search that matches nothing', {
+    const mentioned = tasks.filter((_, i) => mention(i))
+    expect(mentioned).toHaveLength(10)
+    await first(t, me, '1,000 in a project, newest first')
+    await first(t, me, '1,000 in a project, oldest first', { order: 'oldest' })
+    await first(t, me, '1,000 in a project, unread only', { unread_only: true })
+    const mentions = await every(
+      t,
+      me,
+      '1,000 in a project, the 10 oldest of open tasks are the only mentions',
+      {
+        kinds: ['mention'],
+      },
+    )
+    expect(allIds(mentions.map((r) => r.page))).toEqual(newestFirst(mentioned))
+    const missed = await every(t, me, '1,000 in a project, a search that matches nothing', {
       search: 'oscilloscope',
     })
     expect(allIds(missed.map((r) => r.page))).toEqual([])
-    console.log(`800 in a project: a search that matches nothing takes ${missed.length} pages`)
-    const oldest = await every(t, me, '800 in a project, a search that matches the oldest group', {
-      search: 'zebra',
-    })
+    console.log(`1,000 in a project: a search that matches nothing takes ${missed.length} pages`)
+    const oldest = await every(
+      t,
+      me,
+      '1,000 in a project, a search that matches the oldest group',
+      {
+        search: 'zebra',
+      },
+    )
     expect(allIds(oldest.map((r) => r.page))).toEqual([tasks[0].id])
   })
 
@@ -1717,7 +1750,7 @@ describe('reads at the design size', () => {
     const { me, subs } = await everyday(t, f)
     await plantGroups(t, me, 200, (i) => subs[i % 3].id, {
       title,
-      task: { status: 'done', done_at: NOW },
+      task: () => ({ status: 'done', done_at: NOW }),
       sent: (i) => [{ minute: i, read: true, actor: f.admin.id }],
     })
     const browse = await first(t, me, '200 Done in a project, browse')
