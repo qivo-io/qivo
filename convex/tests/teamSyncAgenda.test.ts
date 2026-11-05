@@ -357,6 +357,30 @@ describe('scope', () => {
     await withReach(t)
     expect(okOf(await agendaFor(t, f.user, ALL)).rows).toHaveLength(1)
   })
+
+  it('pages All projects across top-level projects of one name, each read once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // 130 top-level projects of one name beside the fixture's TBED and
+    // SKNK, more than two of the read's steps of 64 rows hold, so two steps
+    // end inside the name and the read goes on by id within it, the second
+    // time from a step that read only that name; each holds a sub-project
+    // of one open task
+    const tied = await plantSharedTops(t, f, f.admin, { tops: 130, subs: 1, teams: false })
+    await t.run(async (ctx) => {
+      for (const p of tied.tops)
+        await ctx.db.patch(p._id, { name: 'Programme', name_key: 'programme' })
+    })
+    for (const [i, sub] of tied.subs.entries())
+      await task(t, sub, { num: 100 + i, status: 'todo', assignee_id: f.user.id })
+    await withReach(t)
+    const ok = okOf(await agendaFor(t, f.admin, ALL))
+    const subs = [...tied.subs.map((p) => p.id), f.sub.id, f.sub2.id]
+    expect(ok.sub_projects).toEqual(sorted(subs))
+    expect(ok.rows).toHaveLength(130)
+    expect(new Set(ok.rows.map((r) => r.project_id)).size).toBe(130)
+    expect(ok.top_projects).toEqual(sorted([...tied.tops.map((p) => p.id), f.meta.id, f.hidden.id]))
+  })
 })
 
 /* ---------------------------------------------------------------------- rows */
