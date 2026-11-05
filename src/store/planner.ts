@@ -6155,26 +6155,31 @@ const cleanTitle = (t: unknown) => String(t ?? '').trim()
     page that pressed showed it (projectSettings.get), which the removal's
     reads and write take before the workspace's, so a project the workspace
     does not hold previews, reassigns and removes; without it the
-    organization comes from the workspace (removalOrg). Build a grant's
-    change with grantRemoval, so a press and its `checking` name it alike. */
+    organization comes from the workspace (removalOrg). `topLevel` is
+    whether the page showed a top-level project, which the window's Keep
+    text reads where the preview does not name the project (P.keepText).
+    Build a grant's change with grantRemoval, so a press and its `checking`
+    name it alike. */
 export type AccessRemoval =
-  | { kind: 'userGrant'; projectId: string; userId: string; orgId?: string }
-  | { kind: 'teamGrant'; projectId: string; teamId: string; orgId?: string }
+  | { kind: 'userGrant'; projectId: string; userId: string; orgId?: string; topLevel?: boolean }
+  | { kind: 'teamGrant'; projectId: string; teamId: string; orgId?: string; topLevel?: boolean }
   | { kind: 'teamMember'; teamId: string; userId: string }
   | { kind: 'deleteTeam'; teamId: string }
 
 /** The removal of a person's (`user`) or a team's grant `id` on project
-    `projectId` of organization `orgId`, with its keys always in the same
-    order, as useAccessRemoval tells a press apart by the change's JSON. */
+    `projectId` of organization `orgId`, top-level or not as `topLevel`
+    says, with its keys always in the same order, as useAccessRemoval tells
+    a press apart by the change's JSON. */
 export function grantRemoval(
   kind: 'team' | 'user',
   projectId: string,
   id: string,
   orgId: string,
+  topLevel: boolean,
 ): Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' }> {
   return kind === 'team'
-    ? { kind: 'teamGrant', projectId, teamId: id, orgId }
-    : { kind: 'userGrant', projectId, userId: id, orgId }
+    ? { kind: 'teamGrant', projectId, teamId: id, orgId, topLevel }
+    : { kind: 'userGrant', projectId, userId: id, orgId, topLevel }
 }
 
 /** The server's preview of a removal (accessRemovals.preview,
@@ -8769,9 +8774,13 @@ export const PLANNER = {
     const others = (n: number) => `${n} other project${n === 1 ? '' : 's'}`
     // a project removal names its own project; a team change names where it reached
     const granted = 'projectId' in change ? change.projectId : null
+    // the preview names the granted project as its Keep target; else what
+    // the page showed, else the workspace's project
     const topLevel = (id: string) => {
       const ref = refs.get(id)
-      return ref ? ref.parent_id === null : PLANNER.project(id)?.type === 'meta'
+      if (ref) return ref.parent_id === null
+      if ('topLevel' in change && change.topLevel !== undefined) return change.topLevel
+      return PLANNER.project(id)?.type === 'meta'
     }
     const seen = granted
       ? topLevel(granted)

@@ -264,14 +264,15 @@ describe("a project's writes with what its Settings page showed", () => {
 describe("a grant's removal from the Settings page", () => {
   it('goes to the organization the change names, and says while its write is on its way', async () => {
     const { grantRemoval } = await import('./planner')
-    const change = grantRemoval('user', 'away', 'leo', AWAY_ORG)
+    const change = grantRemoval('user', 'away', 'leo', AWAY_ORG, true)
     // the keys come in one order, whatever the kind
-    expect(Object.keys(change)).toEqual(['kind', 'projectId', 'userId', 'orgId'])
-    expect(Object.keys(grantRemoval('team', 'away', 'crew', AWAY_ORG))).toEqual([
+    expect(Object.keys(change)).toEqual(['kind', 'projectId', 'userId', 'orgId', 'topLevel'])
+    expect(Object.keys(grantRemoval('team', 'away', 'crew', AWAY_ORG, true))).toEqual([
       'kind',
       'projectId',
       'teamId',
       'orgId',
+      'topLevel',
     ])
     expect(P.removingAccess(change)).toBe(false)
     const removed = P.removeAccess(change, { to: null })
@@ -283,7 +284,7 @@ describe("a grant's removal from the Settings page", () => {
     })
     // the change's organization does not count for the question
     expect(P.removingAccess({ kind: 'userGrant', projectId: 'away', userId: 'leo' })).toBe(true)
-    expect(P.removingAccess(grantRemoval('user', 'away', 'ada', AWAY_ORG))).toBe(false)
+    expect(P.removingAccess(grantRemoval('user', 'away', 'ada', AWAY_ORG, true))).toBe(false)
     await settle('projects:removeAccess', new ConvexError({ code: 'forbidden', message: 'no' }))
     expect(await removed).toBe(false)
     expect(P.removingAccess(change)).toBe(false)
@@ -292,6 +293,31 @@ describe("a grant's removal from the Settings page", () => {
     expect(asked.find((q) => q.name === 'accessRemovals:preview')?.args).toMatchObject({
       org_id: AWAY_ORG,
     })
+    // the Keep text reads the page's top-level project where the preview
+    // names none of it
+    const keep = (topLevel: boolean) =>
+      P.keepText(grantRemoval('user', 'away', 'leo', AWAY_ORG, topLevel), {
+        state: 'ok',
+        pending: true,
+        leave_only: false,
+        people: [{ id: 'leo', name: 'Leo Berg', kind: 'person', org_role: 'user' }],
+        tasks: 1,
+        items: [],
+        items_total: 1,
+        hidden: 0,
+        projects: [],
+        keep: {
+          targets: [],
+          changers: [],
+          allowed: true,
+          refusal: null,
+          offered: true,
+          permitted: true,
+        },
+        reassign: { allowed: true, refusal: null, permitted: true },
+      })
+    expect(keep(true)).toContain('can see the whole project')
+    expect(keep(false)).toContain('can see the whole sub-project')
     // without an organization a project the workspace does not hold is
     // previewed nowhere and removes nothing
     expect(await P.previewRemoval({ kind: 'userGrant', projectId: 'away', userId: 'leo' })).toBe(

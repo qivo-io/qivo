@@ -692,7 +692,7 @@ function ProjectSettingsFields({
   const trackDelay = delayChosen ?? project.track_delay
   const lead = leadChosen ?? (answer.lead ? { id: answer.lead.id, name: answer.lead.name } : null)
   const grant = (kind: 'team' | 'user', id: string) =>
-    grantRemoval(kind, project.id, id, project.org_id)
+    grantRemoval(kind, project.id, id, project.org_id, isMeta)
   return (
     <>
       {/* A sub-project goes back to the project above it, anything else to the
