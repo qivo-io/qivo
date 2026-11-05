@@ -13,8 +13,8 @@
  * and runs the REST upload's start and confirm, and the app's files.ts runs
  * the same attach and remove. lib/activityVisibility.ts taskHistoryPage is the
  * app's activity rule, and planning.ts workloadPage pages the people with
- * each one's load as planning.ownerLoads reads it for the app, its
- * anonymization included. The internal functions below are thin per-surface
+ * each one's load as planning.ownerLoads reads it for the app, without its
+ * paused list, its anonymization included. The internal functions below are thin per-surface
  * wrappers named `mcp*` and `rest*`. Each starts from asMachineCaller, which
  * refuses a read-only credential before anything resolves, then parses its
  * surface's input, calls the shared function and encodes the result. MCP

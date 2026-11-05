@@ -374,11 +374,14 @@ async function workloadPosition(text: string, scope: readonly string[]): Promise
  * after `cursor`, the next_cursor of an earlier page. Each person's hours
  * come from their own open tasks through the owner reader
  * (lib/ownerLoads.ts), the load planning.ownerLoads answers the app, spread
- * over the weeks by weeklyHours. They count work owned by the reviewer
- * while In Review, else the assignee, scheduled, not Done, not paused, with
- * remaining hours, outside archived tasks and projects. Staff also receive
- * the work of projects they cannot see, in hours and again, unnamed, in
- * hidden_hours; guests and Viewers receive only work they can see or own.
+ * over the weeks by weeklyHours. This page asks for no paused list, so a
+ * person whose paused work takes planning.ownerLoads past its bounds, and
+ * so unavailable there, can still have hours here. They count work owned
+ * by the reviewer while In Review, else the assignee, scheduled, not Done,
+ * not paused, with remaining hours, outside archived tasks and projects.
+ * Staff also receive the work of projects they cannot see, in hours and
+ * again, unnamed, in hidden_hours; guests and Viewers receive only work
+ * they can see or own.
  * `project`, a project `me` can see, keeps the work of it and its
  * sub-projects `me` can see, which leaves no hidden hours. No call reads
  * the organization's tasks or projects.
