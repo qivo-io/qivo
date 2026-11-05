@@ -687,6 +687,18 @@ and `matches` and the `search_title` index stay. Once an app reads the page
 they stay through that app's release, and a later release may remove them
 and adds them to the Instant Rollback list above.
 
+The Inbox's pages, `inbox.page`, first ship in the release after v0.1.122.
+No app, REST or MCP caller reads them yet, so that release sets no rollback
+floor and needs no step, and returning the backend to a commit before it is
+safe while no app reads the pages. The release whose app lists the Inbox
+from them makes the release that shipped them the backend's floor, and its
+own paragraph here says so. The pages read the `inbox_items` and
+`inbox_state` rows every deployment holds since the inbox items backfill
+below, and the release changes no table, field or index. The same release
+makes `inbox.item` answer `unread_change` for an unread mention in the
+description too, as the app's task window counts it, which no app reads
+yet either.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -1111,9 +1123,11 @@ ends.
 Every inbox item, a person's messages about one task, has an `inbox_items`
 row that every message write keeps in step, and each person an
 `inbox_state` row that says whether their rows are complete.
-`convex/inbox.ts` reads the rows for the capped unread summary and one
-task's item, and answers that a person's Inbox is not ready while their
-`inbox_state` is not built. The app does not call those reads yet. It keeps
+`convex/inbox.ts` reads the rows for the capped unread summary, one task's
+item and the Inbox's pages of task groups, and answers that a person's Inbox
+is not ready while their `inbox_state` is not built, which a page says by
+naming the organization in `not_ready`. The app does not call those reads
+yet. It keeps
 the workspace inbox until a later release switches it, and REST and MCP
 still read the messages. A person whose messages were stored before the
 release that added the rows (PR 299, merged as `cf3d683`) has no complete

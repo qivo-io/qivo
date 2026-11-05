@@ -3,8 +3,9 @@
  * refuses two at one position unless asked to hand out one of them, whose
  * dropped twins it counts, a
  * batch always moves forward and never claims an end it did not reach, the
- * read guard looks at the metrics only a few times a batch, and a cursor
- * opens only for the list and scope it came from. */
+ * read guard looks at the metrics only a few times a batch, a cursor
+ * opens only for the list and scope it came from, and a list read
+ * descending pages, merges and resumes in that direction. */
 
 import { compareValues, getDocumentSize, type Value } from 'convex/values'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -12,13 +13,17 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { archiveCursorText, ceilingGuard } from '../lib/archivedTasks'
 import {
+  compareIn,
   compareNamed,
   indexAfter,
+  inGroup,
   mergeNamed,
   NAMED_READ,
   type Named,
   type NamedAt,
   type NamedBatch,
+  type NamedIndex,
+  type NamedOrder,
   type NamedStream,
   type NamedTie,
   namedCeiling,
@@ -942,5 +947,220 @@ describe('named cursors', () => {
     const long = { key: '\u{1F600}'.repeat(1000), tie: [5] }
     const big = await namedCursor('labels.picker', scope, long)
     expect(await openNamedCursor(big, 'labels.picker', scope)).toEqual(long)
+  })
+})
+
+/* ------------------------------------------------------ the direction */
+
+/** model/labels.ts labelIndex read the other way, last name first: each
+ * range past a position in descending order, the rest of its instant, the
+ * rest of its name, then every smaller name. */
+function labelIndexDesc(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels'>, LabelTie> {
+  const labels = () => ctx.db.query('labels')
+  return {
+    all: () =>
+      labels()
+        .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId))
+        .order('desc'),
+    after: ({ key, tie: [created] }) => [
+      () =>
+        labels()
+          .withIndex('by_org_name_lower', (q) =>
+            q.eq('org_id', orgId).eq('name_lower', key).eq('_creationTime', created),
+          )
+          .order('desc'),
+      () =>
+        labels()
+          .withIndex('by_org_name_lower', (q) =>
+            q.eq('org_id', orgId).eq('name_lower', key).lt('_creationTime', created),
+          )
+          .order('desc'),
+      () =>
+        labels()
+          .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).lt('name_lower', key))
+          .order('desc'),
+    ],
+    at: (label) => ({ key: label.name_lower, tie: [label._creationTime, label._id] }),
+  }
+}
+
+/** Every label of `orgId` read last name first through `limit`-row
+ * batches, following `at`, with the direction `order` given to indexAfter
+ * and readBatch, which a correct walk sets to 'desc'. */
+async function walkDesc(
+  t: T,
+  orgId: string,
+  limit: number,
+  order: { stream: NamedOrder; batch: NamedOrder } = { stream: 'desc', batch: 'desc' },
+  through: NamedAt | null = null,
+) {
+  const keys: string[] = []
+  let after: NamedAt<LabelTie> | null = null
+  for (let round = 0; round < 100; round++) {
+    const batch = await t.run((ctx) =>
+      readBatch(ctx, {
+        stream: indexAfter(labelIndexDesc(ctx, orgId), after, order.stream),
+        keep: async (label: Doc<'labels'>) => label.name_lower,
+        limit,
+        through,
+        ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+        after,
+        order: order.batch,
+      }),
+    )
+    keys.push(...batch.rows)
+    if (batch.ended) return keys
+    if (through !== null && compareNamed(batch.at, through) === 0) return keys
+    after = labelAt(batch.at)
+  }
+  throw new Error('the walk did not end')
+}
+
+describe('a list read descending', () => {
+  it('orders positions the other way round', () => {
+    const at = (key: string, ...tie: NamedTie) => ({ key, tie })
+    expect(compareIn('asc', at('a', 1), at('b', 1))).toBeLessThan(0)
+    expect(compareIn('desc', at('a', 1), at('b', 1))).toBeGreaterThan(0)
+    expect(compareIn('desc', at('x', 'b'), at('x', 'a'))).toBeLessThan(0)
+    expect(compareIn('desc', at('x', 1), at('x', 1))).toBe(0)
+  })
+
+  it('pages a descending index in batches, resuming after each cursor, and stops at through', async () => {
+    const t = newT()
+    const orgId = uuid()
+    const keys = Array.from({ length: 23 }, (_, i) => `k${String(i).padStart(2, '0')}`)
+    await plantKeys(t, orgId, keys)
+    const descending = [...keys].reverse()
+    for (const limit of [1, 4, 25]) {
+      expect(await walkDesc(t, orgId, limit), `limit ${limit}`).toEqual(descending)
+    }
+    // read with the ascending comparison, a resume finds nothing past its
+    // cursor and the walk ends after its first batch
+    expect(await walkDesc(t, orgId, 4, { stream: 'asc', batch: 'desc' })).toEqual(
+      descending.slice(0, 4),
+    )
+    // and a batch told the other direction than its stream refuses it
+    await expect(walkDesc(t, orgId, 4, { stream: 'desc', batch: 'asc' })).rejects.toThrow(
+      /direction/,
+    )
+    // `through` lies past the batch's rows in its own direction
+    const k10 = await t.run(async (ctx) =>
+      ctx.db
+        .query('labels')
+        .withIndex('by_org_name_lower', (q) => q.eq('org_id', orgId).eq('name_lower', 'k10'))
+        .unique(),
+    )
+    const through = { key: 'k10', tie: [k10?._creationTime ?? 0, k10?._id ?? ''] }
+    expect(await walkDesc(t, orgId, 5, undefined, through)).toEqual(
+      descending.slice(0, descending.indexOf('k10') + 1),
+    )
+  })
+
+  it('merges descending streams in descending order and still refuses one position twice', async () => {
+    const pulled: Record<string, number> = {}
+    const merged = mergeNamed(
+      [
+        memory(
+          'admins',
+          [
+            ['zed', 'id9'],
+            ['bo', 'id2'],
+            ['ann', 'id3'],
+          ],
+          pulled,
+        ),
+        memory(
+          'users',
+          [
+            ['cy', 'id2'],
+            ['bo', 'id1'],
+            ['ann', 'id1'],
+          ],
+          pulled,
+        ),
+        memory('viewers', [['bo', 'id0']], pulled),
+      ],
+      { order: 'desc' },
+    )
+    const want = [
+      'zed/id9@admins',
+      'cy/id2@users',
+      'bo/id2@admins',
+      'bo/id1@users',
+      'bo/id0@viewers',
+      'ann/id3@admins',
+      'ann/id1@users',
+    ]
+    expect(await drain(merged)).toEqual(want)
+    // the ascending comparison takes the smallest head first, out of order
+    const wrong = mergeNamed([
+      memory(
+        'admins',
+        [
+          ['zed', 'id9'],
+          ['bo', 'id2'],
+        ],
+        {},
+      ),
+      memory(
+        'users',
+        [
+          ['cy', 'id2'],
+          ['bo', 'id1'],
+        ],
+        {},
+      ),
+    ])
+    expect(await drain(wrong)).not.toEqual([
+      'zed/id9@admins',
+      'cy/id2@users',
+      'bo/id2@admins',
+      'bo/id1@users',
+    ])
+    const twice = mergeNamed([memory('a', [['bo', 'id1']], {}), memory('b', [['bo', 'id1']], {})], {
+      order: 'desc',
+    })
+    await expect(drain(twice)).rejects.toThrow(/one position/)
+  })
+
+  it('refuses a stream whose positions do not move in the batch’s direction', async () => {
+    const t = newT()
+    const run = (rows: [string, number][], order: NamedOrder, after: NamedAt | null = null) =>
+      t.run((ctx) =>
+        readBatch(ctx, {
+          stream: () => memory('m', rows, {}),
+          keep: async (row: Row) => row.name,
+          limit: 25,
+          through: null,
+          ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+          after,
+          order,
+        }),
+      )
+    const up: [string, number][] = [
+      ['a', 1],
+      ['b', 1],
+    ]
+    expect((await run(up, 'asc')).rows).toEqual(['a', 'b'])
+    await expect(run(up, 'desc')).rejects.toThrow(/direction/)
+    expect((await run([...up].reverse(), 'desc')).rows).toEqual(['b', 'a'])
+    // nor may the first row lie at or before the cursor
+    await expect(run([['b', 1]], 'desc', { key: 'a', tie: [1] })).rejects.toThrow(/direction/)
+  })
+
+  it('takes the groups of a descending list in descending order of their marks', async () => {
+    const all = () => (async function* () {})()
+    const index: NamedIndex<Doc<'labels'>, LabelTie> = {
+      all,
+      after: () => [all],
+      at: () => ({ key: 'k', tie: [1, 'id'] }),
+    }
+    const at = (key: string): NamedAt<LabelTie> => ({ key, tie: [1, 'id'] })
+    // descending, group 1 comes before group 0
+    expect(inGroup(index, '0', 'desc').after(at('1k'))).toEqual([all])
+    expect(inGroup(index, '1', 'desc').after(at('0k'))).toEqual([])
+    // ascending, the other way round
+    expect(inGroup(index, '1').after(at('0k'))).toEqual([all])
+    expect(inGroup(index, '0').after(at('1k'))).toEqual([])
   })
 })

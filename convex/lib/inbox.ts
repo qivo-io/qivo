@@ -15,10 +15,18 @@
  * collects the recipient's rows. It walks two index ranges newest first and
  * stops at fixed bounds, so its cost depends on `limit` and `peek`, never on
  * the size of the inbox. src/ imports this module for blendInbox, so it
- * must stay free of server runtime: its imports are types. */
+ * must stay free of server runtime: its imports are types.
+ *
+ * It also holds the rules of an Inbox row's text and kinds (messageDetail,
+ * messageLine, inboxSearchText, itemKinds, kindsMatch), which the Inbox
+ * page (model/inboxPage.ts) applies on the server. The app's list applies
+ * the same rules in src/panels/Inbox.tsx (detailText, secondLine, its
+ * search text and its kind filter) until it reads the page, so the two
+ * find and show alike. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import type { MessageKind } from './enums'
 
 /* INBOX_LIMIT (lib/limits.ts) is the most unread rows, and separately the
  * most read rows, that one inbox read keeps. The app (per seat) and the
@@ -223,4 +231,81 @@ export function blendInbox<M extends Ordered & Pick<Doc<'messages'>, 'snoozed_un
     readTruncated: seats.some((s) => s.readTruncated),
     messagesCut: seats.some((s) => s.truncated) || unread.length + read.length > cap,
   }
+}
+
+/* ------------------------------------------------------ an Inbox row's text */
+
+/** What an inbox item counts of each kind of message (schema.ts
+ * inbox_items). */
+export type KindCounts = Pick<Doc<'inbox_items'>, 'mentions' | 'changes' | 'comments'>
+
+/* The count of each kind, written in the order of lib/enums.ts
+ * MESSAGE_KINDS, which this module cannot import, because lib/enums.ts
+ * loads convex-helpers at run time. */
+const KIND_COUNT = {
+  mention: 'mentions',
+  change: 'changes',
+  comment: 'comments',
+} as const satisfies Record<MessageKind, keyof KindCounts>
+
+/** The kinds of an item's messages, those it counts at least one of, in
+ * the order of MESSAGE_KINDS (lib/enums.ts). The app (store/viewModels.ts
+ * shapeMessageGroup `kinds`) gathers the same kinds in the order of their
+ * oldest messages. */
+export const itemKinds = (counts: KindCounts): MessageKind[] =>
+  (Object.keys(KIND_COUNT) as MessageKind[]).filter((kind) => counts[KIND_COUNT[kind]] > 0)
+
+/** Whether an item passes the Inbox's kind filter `kinds`: it holds a
+ * message of one of them, so a mention behind a newer change still
+ * matches Mentions. An empty filter passes every item. */
+export const kindsMatch = (counts: KindCounts, kinds: readonly MessageKind[]): boolean =>
+  kinds.length === 0 || kinds.some((kind) => counts[KIND_COUNT[kind]] > 0)
+
+/** A message's detail as the Inbox shows and searches it. Migration 0075
+ * stored one privacy-fenced fallback with the former noun, which reads
+ * "a task in another project" here (src/panels/Inbox.tsx detailText). */
+export const messageDetail = (detail: string): string =>
+  detail.replace('an issue in another project', 'a task in another project')
+
+/** The second line of an Inbox row, from its newest message
+ * (src/panels/Inbox.tsx secondLine): "from @Name" for a mention, with
+ * "Someone" where Qivo cannot name the actor (a machine caller or a
+ * removed profile), "New comment" for a comment, and a change's detail. */
+export function messageLine(
+  message: { kind: MessageKind; detail: string },
+  actorName: string | null,
+): string {
+  if (message.kind === 'mention') return `from @${actorName ?? 'Someone'}`
+  if (message.kind === 'comment') return 'New comment'
+  return messageDetail(message.detail)
+}
+
+/** What an Inbox search reads of one row. */
+export type InboxSearchFields = {
+  /** the task's live title */
+  title: string
+  /** the task ID, such as QN-12 (lib/taskRefs.ts issueKey) */
+  key: string
+  /** the row's second line (messageLine) */
+  line: string
+  /** the names of the project above the task's project, if any, and of
+   * the task's project */
+  places: readonly (string | null | undefined)[]
+  /** the item's messages, each with its actor's name, null where Qivo
+   * cannot name one */
+  messages: readonly { actor_name: string | null; detail: string }[]
+}
+
+/** The text an Inbox search matches against for one row, one field a line,
+ * in the order src/panels/Inbox.tsx joins them: the title, the key, the
+ * second line, the places and then each message as its actor's name
+ * ("API" without one) and its detail. Empty fields are left out. A search
+ * word holds no whitespace (lib/search.ts allWordsMatcher), so it never
+ * spans two lines, and a caller may match the fields without the messages
+ * first and add them only when those miss a word. */
+export function inboxSearchText(o: InboxSearchFields): string {
+  return [o.title, o.key, o.line, ...o.places]
+    .concat(o.messages.map((m) => `${m.actor_name ?? 'API'}\n${messageDetail(m.detail)}`))
+    .filter(Boolean)
+    .join('\n')
 }

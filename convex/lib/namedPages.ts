@@ -17,6 +17,16 @@
  * several groups, such as a person's favorite projects before the rest,
  * marks each group's keys with a one-character prefix (inGroup).
  *
+ * A list reads in one direction (NamedOrder): ascending, as every
+ * name-ordered list reads, or descending. The Inbox's pages
+ * (model/inboxPage.ts) read a list keyed by time, newest or oldest first,
+ * through the same functions. The direction is an option of indexAfter,
+ * inGroup, mergeNamed, readBatch and listBatch, ascending by default, and
+ * each compares positions with compareIn. readBatch throws when a stream
+ * hands out a position that does not move in the batch's direction, so a
+ * stream read one way and batched the other fails at its second row
+ * instead of skipping rows.
+ *
  * A merge throws when two streams hand out one position, which would mean
  * their ranges overlap. Only the project navigation lists merge streams
  * whose rows at one position name one thing, the reach rows of a seat and
@@ -87,12 +97,22 @@ export type NamedStream<Row> = AsyncIterable<Named<Row> | typeof STOPPED>
 export const compareNamed = (a: NamedAt, b: NamedAt): number =>
   compareValues([a.key, ...a.tie], [b.key, ...b.tie])
 
+/** The direction a list reads in: ascending by key and tie, or descending,
+ * as an index read with `.order('desc')`. */
+export type NamedOrder = 'asc' | 'desc'
+
+/** compareNamed in the direction `order`: negative when `a` comes before
+ * `b` in that direction, 0 at one position, else positive. */
+export const compareIn = (order: NamedOrder, a: NamedAt, b: NamedAt): number =>
+  order === 'asc' ? compareNamed(a, b) : compareNamed(b, a)
+
 /* ----------------------------------------------------------- the streams */
 
 /** One index read in name order: the whole list from its start; the index
  * ranges, in order, that hold every row past a position, such as the rest of
  * its key and then every greater key, which may also hold rows at or before
- * it; and the position of a row. */
+ * it; and the position of a row. A descending list reads its ranges in
+ * that direction, each past the position in it (NamedOrder). */
 export type NamedIndex<Row, Tie extends NamedTie> = {
   all: () => AsyncIterable<Row>
   after: (at: NamedAt<Tie>) => readonly (() => AsyncIterable<Row>)[]
@@ -120,10 +140,12 @@ export type NamedReads = {
  * rows before a cursor are more than one read's budget cannot be passed: a
  * batch there answers stopped at its cursor every time, with its reads
  * bounded. Only rows stored with one name key before a list's names were
- * unique, and at one creation time, can make such an instant. */
+ * unique, and at one creation time, can make such an instant. `order` is
+ * the direction `index` reads in, which decides what is past `after`. */
 export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
   index: NamedIndex<Row, Tie>,
   after: NamedAt<Tie> | null,
+  order: NamedOrder = 'asc',
 ): (reads: NamedReads) => NamedStream<Row> {
   const ranges = after === null ? [index.all] : index.after(after)
   return async function* (reads) {
@@ -134,11 +156,11 @@ export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
       }
       for await (const row of range()) {
         const at = index.at(row)
-        const order = after === null ? 1 : compareNamed(at, after)
-        if (order > 0) yield { row, at }
+        const past = after === null ? 1 : compareIn(order, at, after)
+        if (past > 0) yield { row, at }
         // the row at the cursor itself is one row, and passes whatever the
         // budget says; rows before it stop the stream once it is full
-        else if (!(await reads.skip(row)) && order < 0) {
+        else if (!(await reads.skip(row)) && past < 0) {
           yield STOPPED
           return
         }
@@ -152,17 +174,21 @@ export function indexAfter<Row extends GenericDocument, Tie extends NamedTie>(
  * TEAM_MARK and PERSON_MARK, so the groups come in the order of their marks
  * (compareNamed compares the marks first). After a position of its own
  * group it reads what follows it in the index; after a position of an
- * earlier group, the whole index; after one of a later group, nothing. */
+ * earlier group, the whole index; after one of a later group, nothing.
+ * Earlier and later follow `order`, the direction the list reads in, so a
+ * descending list takes its groups in descending order of their marks. */
 export function inGroup<Row, Tie extends NamedTie>(
   index: NamedIndex<Row, Tie>,
   mark: string,
+  order: NamedOrder = 'asc',
 ): NamedIndex<Row, Tie> {
   return {
     all: index.all,
     after: (at) => {
       const group = at.key.slice(0, 1)
       if (group === mark) return index.after({ key: at.key.slice(1), tie: at.tie })
-      return group < mark ? [index.all] : []
+      const earlier = order === 'asc' ? group < mark : group > mark
+      return earlier ? [index.all] : []
     },
     at: (row) => {
       const at = index.at(row)
@@ -181,6 +207,11 @@ export function inGroup<Row, Tie extends NamedTie>(
  * project navigation lists (model/projectNavReads.ts). */
 export type MergeTies = { ties: 'first'; reads: NamedReads }
 
+/** What mergeNamed is asked: the direction its streams read in, ascending
+ * by default, and whether to hand out one row at a shared position
+ * (MergeTies), which needs the batch's reads. */
+export type MergeOptions = { order?: NamedOrder } & Partial<MergeTies>
+
 /** The rows of `streams`, each in name order, as one stream in name order.
  * A position names one row, so no two streams may hand out the same one: a
  * batch that ended at the first would start after both and skip the other.
@@ -191,11 +222,17 @@ export type MergeTies = { ties: 'first'; reads: NamedReads }
  * only when the next row asked for may be it, so a batch reads at most one
  * row past its last from each stream. Once a stream hands out STOPPED, its
  * later rows are unknown, so the merge hands out STOPPED and ends too: the
- * rows it handed out are every row up to the last of them. */
+ * rows it handed out are every row up to the last of them. Every stream
+ * reads in `o.order`, the direction the merge hands rows out in. */
 export async function* mergeNamed<Row extends GenericDocument>(
   streams: readonly NamedStream<Row>[],
-  ties?: MergeTies,
+  o: MergeOptions = {},
 ): AsyncGenerator<Named<Row> | typeof STOPPED> {
+  if (o.ties !== undefined && o.reads === undefined)
+    throw new Error('a merge that hands out one of its ties counts the others with reads')
+  const ties: MergeTies | undefined =
+    o.ties === 'first' && o.reads !== undefined ? { ties: o.ties, reads: o.reads } : undefined
+  const order = o.order ?? 'asc'
   const open = streams.map((stream) => stream[Symbol.asyncIterator]())
   // the next row of stream `i`, or null at its end
   const pull = async (i: number) => {
@@ -219,11 +256,11 @@ export async function* mergeNamed<Row extends GenericDocument>(
       heads.forEach((head, i) => {
         if (head === null) return
         const leader = best < 0 ? null : heads[best]
-        const order = leader === null ? -1 : compareNamed(head.at, leader.at)
-        if (order === 0 && ties === undefined)
+        const first = leader === null ? -1 : compareIn(order, head.at, leader.at)
+        if (first === 0 && ties === undefined)
           throw new Error('two merged streams hand out one position')
-        if (order === 0) tied.push(i)
-        else if (order < 0) {
+        if (first === 0) tied.push(i)
+        else if (first < 0) {
           best = i
           tied = []
         }
@@ -408,6 +445,12 @@ export type NamedBatch<Out> = {
  * a batch kept live between two cursors ends at its own, and a batch that
  * read the row at `through` is complete, never stopped, also when the guard
  * ends it right there.
+ *
+ * `order` is the direction `stream` reads in, ascending by default, which
+ * decides what lies past `through`. Each position the stream hands out must
+ * come after the one before it, and the first after `after`, in that
+ * direction, else the batch throws, since a stream that disagrees with its
+ * batch's direction, or with the order of its index, would skip rows.
  */
 export async function readBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
@@ -419,9 +462,12 @@ export async function readBatch<Row extends GenericDocument, Out>(
     ceiling: ReadCeiling
     /** the position `stream` reads after, if any */
     after?: NamedAt | null
+    /** the direction `stream` reads in, ascending by default */
+    order?: NamedOrder
   },
 ): Promise<NamedBatch<Out>> {
   if (o.limit < 1) throw new Error('a batch holds at least one row')
+  const order = o.order ?? 'asc'
   const guard = readGuard(ctx, o.ceiling)
   // whether the batch has read a row; before it, every range opens
   let moved = false
@@ -434,7 +480,9 @@ export async function readBatch<Row extends GenericDocument, Out>(
     })
     [Symbol.asyncIterator]()
   // whether the batch has read the row at `through`, which completes it
-  const reached = (last: NamedAt) => o.through !== null && compareNamed(last, o.through) >= 0
+  const reached = (end: NamedAt) => o.through !== null && compareIn(order, end, o.through) >= 0
+  // the last position the stream handed out, which the next must come after
+  let prev: NamedAt | null = o.after ?? null
   try {
     for (;;) {
       const step = await stream.next()
@@ -447,7 +495,12 @@ export async function readBatch<Row extends GenericDocument, Out>(
         return { rows, at: last, ended: false, stopped: !full && !reached(last) }
       }
       await guard.document(step.value.row)
-      if (o.through !== null && compareNamed(step.value.at, o.through) > 0) {
+      if (prev !== null && compareIn(order, step.value.at, prev) <= 0)
+        throw new Error(
+          'a stream handed out a position that does not move in its batch’s direction',
+        )
+      prev = step.value.at
+      if (o.through !== null && compareIn(order, step.value.at, o.through) > 0) {
         return { rows, at: o.through, ended: false, stopped: false }
       }
       if (full && at !== null) return { rows, at, ended: false, stopped: false }
@@ -561,7 +614,8 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * `limit` stops there as if the read budget stopped it, and the app splits
  * it, as model/labels.ts labelBatch does. The project settings lists and
  * pickers (model/projectSettings.ts) and the project navigation lists
- * (model/projectNavReads.ts) answer through it. */
+ * (model/projectNavReads.ts) answer through it. `o.order` is the direction
+ * `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
   ask: BatchAsk,
@@ -570,8 +624,10 @@ export async function listBatch<Row extends GenericDocument, Out>(
     keep: (row: Row, guard: ReadGuard, at: NamedAt) => Promise<Out | null>
     limit: number
     ceiling: ReadCeiling
+    order?: NamedOrder
   },
 ): Promise<ListBatch<Out>> {
+  const order = o.order ?? 'asc'
   const batch = await readBatch(ctx, {
     stream: o.stream,
     keep: o.keep,
@@ -579,9 +635,10 @@ export async function listBatch<Row extends GenericDocument, Out>(
     through: ask.through,
     ceiling: o.ceiling,
     after: ask.after,
+    order,
   })
   // a batch under `through` that stopped short of it holds too many rows
-  const short = !batch.ended && ask.through !== null && compareNamed(batch.at, ask.through) < 0
+  const short = !batch.ended && ask.through !== null && compareIn(order, batch.at, ask.through) < 0
   return {
     rows: batch.rows,
     next: batch.ended ? null : await namedCursor(ask.list, ask.scope, batch.at),
