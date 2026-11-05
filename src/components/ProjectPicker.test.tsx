@@ -459,6 +459,22 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(find(`[data-project-pick="${beta}"]`).textContent).toBe(`Beta#${numOf(beta)}`)
   })
 
+  it('lists a sub-project the search matched once when its project expands', async () => {
+    const next = base()
+    const luma = top(next, 'Luma Sensor')
+    const el = sub(next, luma, 'Electronics')
+    const fw = sub(next, luma, 'Luma Firmware')
+    await load(next)
+    await panel()
+    await type('luma')
+    expect(rowIds()).toEqual([fw, luma])
+    await click(find(`[data-project-expand="${luma}"]`))
+    // Luma Firmware stays where the search listed it, and only Electronics
+    // joins under Luma Sensor
+    expect(rowIds()).toEqual([fw, luma, el])
+    expect(asked('children')).toHaveLength(1)
+  })
+
   it('searches once typing rests, every word of a project’s own name, ignoring accents', async () => {
     const next = base()
     const cafe = top(next, 'Café Ordering')

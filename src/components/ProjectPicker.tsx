@@ -385,21 +385,26 @@ export function ProjectPickerPanel({
   useEffect(() => {
     if (lost) setExpanded(null)
   }, [lost])
+  // a sub-project the search already lists stays where the search put it,
+  // so it shows once and takes one keyboard stop
+  const shownIds = new Set(mainShown ? main.rows.map((row) => row.id) : [])
   const kidRows: Entry[] =
     kidsAnswered && expanded
-      ? kids.rows.map((row) => ({
-          kind: 'row',
-          key: `child:${row.id}`,
-          row: {
-            id: row.id,
-            org_id: row.org_id,
-            name: row.name,
-            num: row.num,
-            parent: expanded,
-          },
-          favorite: null,
-          child: true,
-        }))
+      ? kids.rows
+          .filter((row) => !shownIds.has(row.id))
+          .map((row) => ({
+            kind: 'row',
+            key: `child:${row.id}`,
+            row: {
+              id: row.id,
+              org_id: row.org_id,
+              name: row.name,
+              num: row.num,
+              parent: expanded,
+            },
+            favorite: null,
+            child: true,
+          }))
       : []
   const mainEntry = (row: NavPageRow | NavSearchRow): Entry => ({
     kind: 'row',
