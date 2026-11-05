@@ -81,13 +81,18 @@ function far(snap: Snapshot): ViewRow {
 }
 
 /** A Board whose project shows delays, one task the workspace holds, and
-    the answer's task `far` the workspace lacks, with `prepare`'s changes. */
-async function farBoard(prepare: (snap: Snapshot) => void = () => {}) {
-  const board = await loadBoard(network, (snap) => {
-    snap.projects[0].track_delay = true
-    snap.issues.push(taskRow(snap, 'a', 'todo', 1))
-    prepare(snap)
-  })
+    the answer's task `far` the workspace lacks, with `prepare`'s changes,
+    as the phone's task list with `phone`. */
+async function farBoard(prepare: (snap: Snapshot) => void = () => {}, phone = false) {
+  const board = await loadBoard(
+    network,
+    (snap) => {
+      snap.projects[0].track_delay = true
+      snap.issues.push(taskRow(snap, 'a', 'todo', 1))
+      prepare(snap)
+    },
+    { phone },
+  )
   board.server.edit = (answer) =>
     answer.state === 'ok' ? { ...answer, rows: [...answer.rows, far(board.snapshot)] } : answer
   await board.render(root)
@@ -491,6 +496,27 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     })
     const { refParts } = await import('../lib/taskReference')
     await act(async () => board.card('far')?.click())
+    expect(refParts(opened.at(-1))).toEqual({
+      org: board.snapshot.orgs[0].id,
+      num: 50,
+      uuid: 'far',
+    })
+    await act(async () => board.card('a')?.click())
+    expect(opened.at(-1)).toBe(board.P.handleOf('a'))
+  })
+
+  it('opens from a phone row by a reference to its organization, number and uuid', async () => {
+    const board = await farBoard(undefined, true)
+    const opened: (string | null)[] = []
+    await board.render(root, (task) => {
+      opened.push(task)
+      return null
+    })
+    const row = board.card('far')
+    expect(row?.classList.contains('mobile-task-row')).toBe(true)
+    expect(board.P.handleOf('far')).toBeNull()
+    const { refParts } = await import('../lib/taskReference')
+    await act(async () => row?.click())
     expect(refParts(opened.at(-1))).toEqual({
       org: board.snapshot.orgs[0].id,
       num: 50,

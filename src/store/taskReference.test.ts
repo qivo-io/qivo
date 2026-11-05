@@ -588,12 +588,26 @@ describe("the window's delay", () => {
     expect(open('planning:ownerLoads')).toHaveLength(1)
   })
 
-  it('moves at once with a Remaining edit sent from its answer, before the server answers', async () => {
+  it('moves at once with a Remaining edit sent from its answer, before the server answers, as a Board card of the same task does', async () => {
     const view = await showFar()
     const { P } = store
-    one('planning:ownerLoads').deliver(loadOf(busy))
+    // the Board's answer brings a card of the same task
+    P.watchBoard('board:desktop', '{"board":1}')
     await turn()
+    const { description: _text, ...row } = planned(FAR, 40).task
+    one('tasks:board').deliver({
+      state: 'ok',
+      rows: [row],
+      parents: [],
+      held_projects: [snap.projects[0].id],
+    })
+    await turn()
+    for (const load of open('planning:ownerLoads')) load.deliver(loadOf(busy))
+    await turn()
+    const card = () => P.viewTask('board:desktop', FAR)
+    expect(card()).toBeDefined()
     expect(P.windowDelay(view)).toMatchObject({ status: 'late' })
+    expect(P.delayOf(card() ?? '')).toEqual(P.windowDelay(view))
     void P.updateIssue(view.id, { remaining: 0 })
     await turn()
     expect(writes.map((w) => w.name)).toContain('issues:update')
@@ -601,5 +615,8 @@ describe("the window's delay", () => {
     if (!painted) throw new Error('no view')
     expect(painted.remaining).toBe(0)
     expect(P.windowDelay(painted)).not.toMatchObject({ status: 'late' })
+    // the card shows the pending edit too, with the window's verdict
+    expect(card()?.remaining).toBe(0)
+    expect(P.delayOf(card() ?? '')).toEqual(P.windowDelay(painted))
   })
 })

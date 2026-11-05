@@ -37,15 +37,19 @@ vi.mock('./lib/auth', () => ({
   signOut: auth.signOut,
 }))
 vi.mock('./lib/convex', () => ({ convex: { query: vi.fn(), mutation: vi.fn() } }))
+/* What the gate passes the store's boot. */
+type InitArgs = Parameters<typeof import('./store/planner').initStore>
 // a login with no seat, unless a test says otherwise
 const planner = vi.hoisted(() => ({
-  initStore: vi.fn<() => Promise<boolean | null>>(async () => null),
+  initStore: vi.fn<(...args: InitArgs) => Promise<boolean | null>>(async () => null),
   // the root part's answer when the seatless boot found a seat the login
   // cannot open, in an organization being deleted or one that deactivated it
   seatless: vi.fn<() => Seatless | null>(() => null),
 }))
 vi.mock('./store/planner', () => ({
   initStore: planner.initStore,
+  // the task key's prefix, which the router reads an address's task by
+  ISSUE_PREFIX: 'QN',
   P: {
     seatless: planner.seatless,
     getOAuthConnectionContext: async () => ({
@@ -288,6 +292,31 @@ describe('a login with no seat', () => {
     await render()
     await vi.waitFor(() => expect(field('organization-name')).not.toBeNull())
     expect(buttonNamed('Check again')).toBeUndefined()
+  })
+})
+
+/* The boot reads the task its address names with its first stage
+   (store/liveParts.ts `address`), so the gate passes that task to the
+   store, and none for an address that names no organization. */
+describe('the boot on a task address', () => {
+  it('passes the store the task the address names under its organization', async () => {
+    stubLocation('http://localhost:3000/app/northstar/tasks/qn-7')
+    planner.initStore.mockClear()
+    signIn()
+    await render()
+    await vi.waitFor(() => expect(planner.initStore).toHaveBeenCalled())
+    expect(planner.initStore.mock.lastCall?.[2]).toEqual({
+      address: { slug: 'northstar', ref: 'QN-7' },
+    })
+  })
+
+  it('passes no task for an address under ~', async () => {
+    stubLocation('http://localhost:3000/app/~/tasks/7')
+    planner.initStore.mockClear()
+    signIn()
+    await render()
+    await vi.waitFor(() => expect(planner.initStore).toHaveBeenCalled())
+    expect(planner.initStore.mock.lastCall?.[2]?.address).toBeUndefined()
   })
 })
 
