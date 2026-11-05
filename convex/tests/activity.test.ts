@@ -6,7 +6,10 @@
  *   forge phantom clauses);
  * - activity history: each subject (one task, project, person...) keeps
  *   every row, whatever other subjects write, and readers page one task's
- *   rows, newest first, past rows a member does not receive;
+ *   rows, newest first, past rows a member does not receive, which are
+ *   those an oracle of canAccessProject on each project a row names keeps,
+ *   for every grant shape, reading only the projects the rows name and
+ *   refusing a page whose check a bound stopped;
  * - the browser verbs/details ported from the old client — the feed icon
  *   substring-matches the verb (IssueDetail.tsx evIcon), so every byte of
  *   every verb string is load-bearing.
@@ -15,23 +18,32 @@
 /// <reference types="vite/client" />
 
 import type { FunctionArgs, WithoutSystemFields } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { ACCESS_UNCHECKED, canAccessProject, canSeeProject, OWN_READS } from '../lib/access'
 import {
   BEFORE_NOT_A_CHANGE,
   HISTORY_HIDDEN,
   HISTORY_PAGE_MAX,
   HISTORY_ROOM,
+  type HistoryPage,
   historyAnchor,
   NAMED_TASK_ROOM,
   olderRows,
+  receivedRows,
   taskHistoryPage,
   WINDOW_HISTORY_PAGE,
 } from '../lib/activityVisibility'
-import { LIMITS } from '../lib/limits'
+import { byId } from '../lib/db'
+import { PROFILE_KINDS } from '../lib/enums'
+import { printOf, trimmedForm } from '../lib/fieldPrints'
+import { LIMITS, MIB } from '../lib/limits'
+import { restTaskActivity } from '../machine/records'
 import { type ActivityEntry, insertActivity, issueChanges, logActivity } from '../model/activity'
 import { pendingRemoval } from '../model/cascade'
+import { newTeam, SHAPES } from './accessShapes.setup'
 import {
   activityFor,
   allMessages,
@@ -41,12 +53,16 @@ import {
   expectRefusal,
   NOW,
   newT,
+  type OrgFixture,
   plantIssue,
+  plantLogin,
   plantProject,
+  plantSeat,
   type T,
   uuid,
   withOrg,
 } from './helpers.setup'
+import { handlerOf } from './pageOrg.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
 type Patch = FunctionArgs<typeof api.issues.update>['patch']
@@ -1060,6 +1076,472 @@ describe('which task rows a member receives, in the task window and over REST', 
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("a member's history, checked against canAccessProject on each project its rows name", () => {
+  const DEFAULT_OWN_READS = structuredClone(OWN_READS)
+  const DEFAULT_ROOM = NAMED_TASK_ROOM.room
+  afterEach(() => {
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+    NAMED_TASK_ROOM.room = DEFAULT_ROOM
+  })
+
+  type Row = Partial<WithoutSystemFields<Doc<'activity_events'>>>
+
+  /* Rows about `task` inserted raw, a second apart, oldest first, after
+   * `from` rows already planted, answered as stored. A field a row sets to
+   * undefined is not stored, as a legacy row stores no list. */
+  const plantRows = (t: T, task: Doc<'issues'>, rows: Row[], from = 0) =>
+    t.run(async (ctx) => {
+      const out: Doc<'activity_events'>[] = []
+      for (const [i, row] of rows.entries()) {
+        const _id = await ctx.db.insert('activity_events', {
+          id: uuid(),
+          org_id: task.org_id,
+          ts: new Date(Date.parse('2026-01-01T00:00:00.000Z') + (from + i) * 1000).toISOString(),
+          verb: 'linked',
+          target_type: 'issue',
+          target_id: task.id,
+          label: task.title,
+          named_task_nums: [],
+          ...row,
+        })
+        const doc = await ctx.db.get(_id)
+        if (doc === null) throw new Error('a planted row vanished')
+        out.push(doc)
+      }
+      return out
+    })
+
+  /* The ids of `rows` an oracle independent of both readers gives `me`:
+   * those that list the tasks they name and whose every project passes
+   * canAccessProject, their own, their related project and the current
+   * project of each task they name, a missing task or project failing.
+   * Each project and task is read once. */
+  const oracle = (t: T, me: Doc<'profiles'>, rows: Doc<'activity_events'>[]) =>
+    t.run(async (ctx) => {
+      const projects = new Map<string, boolean>()
+      const may = async (id: string) => {
+        let known = projects.get(id)
+        if (known === undefined) {
+          const p = await byId(ctx, 'projects', id)
+          // a parent chain that does not end in a top-level project throws
+          known =
+            p !== null &&
+            (await canAccessProject(ctx, me, p).catch((e: unknown) => {
+              if (e instanceof ConvexError) return false
+              throw e
+            }))
+          projects.set(id, known)
+        }
+        return known
+      }
+      const tasks = new Map<number, string | null>()
+      const taskProject = async (num: number) => {
+        let known = tasks.get(num)
+        if (known === undefined) {
+          const named = await ctx.db
+            .query('issues')
+            .withIndex('by_org_num', (q) => q.eq('org_id', me.org_id).eq('num', num))
+            .first()
+          known = named?.project_id ?? null
+          tasks.set(num, known)
+        }
+        return known
+      }
+      const kept: string[] = []
+      for (const ev of rows) {
+        if (ev.named_task_nums === undefined) continue
+        const ids = [ev.related_project_id, ev.project_id].filter((id) => id !== undefined)
+        let ok = true
+        for (const num of ev.named_task_nums) {
+          const projectId = await taskProject(num)
+          if (projectId === null) ok = false
+          else ids.push(projectId)
+        }
+        for (const id of ids) if (!(await may(id))) ok = false
+        if (ok) kept.push(ev.id)
+      }
+      return kept
+    })
+
+  it('gives every role and kind of member the rows the oracle keeps, in the window, over REST and MCP and to taskWriters, for every grant shape', async () => {
+    // which rows, by their place, some shape's member receives
+    const seen = new Set<string>()
+    for (const [name, plant] of SHAPES) {
+      const t = newT()
+      const f = await withOrg(t)
+      let subject = await plantLogin(
+        t,
+        await plantSeat(t, { org_id: f.org.id, name: 'Subject', accepted_at: NOW }),
+      )
+      await t.run((ctx) => plant(ctx, f, subject))
+      const archived = await plantProject(t, {
+        org_id: f.org.id,
+        type: 'project',
+        parent_id: f.meta.id,
+        archived_at: NOW,
+      })
+      const pcb = (await t.run((ctx) => byId(ctx, 'projects', f.sub2.id))) as Doc<'projects'>
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: pcb.id })
+      // TBED, FW, PCB, SKNK, an archived sub-project, a project of another
+      // organization and a deleted id, each named as a row's project, as
+      // its related project and as the project of a task it names
+      const named = [
+        f.meta.id,
+        f.sub.id,
+        pcb.id,
+        f.hidden.id,
+        archived.id,
+        f.otherProject.id,
+        uuid(),
+      ]
+      const tasks = []
+      for (const project_id of named)
+        tasks.push(await plantIssue(t, { org_id: f.org.id, project_id }))
+      const rows = await plantRows(t, task, [
+        ...named.map((project_id) => ({ project_id })),
+        ...named.map((related_project_id) => ({ project_id: pcb.id, related_project_id })),
+        ...tasks.map((other) => ({ project_id: pcb.id, named_task_nums: [other.num] })),
+        // a task number no task holds
+        { project_id: pcb.id, named_task_nums: [9_999_999] },
+        // the newest row names nothing, so every member who sees the task
+        // receives it, and the earlier page starts below it
+        { project_id: undefined },
+      ])
+      const anchor = rows[rows.length - 1]
+      for (const org_role of ['user', 'guest', 'viewer'] as const) {
+        for (const kind of PROFILE_KINDS) {
+          const as_ = `${name}: ${org_role} ${kind}`
+          subject = await t.run(async (ctx) => {
+            await ctx.db.patch(subject._id, { org_role, kind })
+            return (await ctx.db.get(subject._id)) as Doc<'profiles'>
+          })
+          const kept = await oracle(t, subject, rows)
+          for (const [i, row] of rows.entries()) if (kept.includes(row.id)) seen.add(String(i))
+          const received = await t.run((ctx) => receivedRows(ctx, subject, task, rows))
+          expect(
+            received.map((row) => row.id),
+            `${as_}, receivedRows`,
+          ).toEqual(kept)
+          const machine = { callerId: subject.id, access: 'read' as const, ref: task.id }
+          const thread = { org_id: f.org.id, issue_id: task.id }
+          if (!(await t.run((ctx) => canSeeProject(ctx, subject, pcb)))) {
+            await expectRefusal(
+              t.query(internal.machine.records.restTaskActivity, machine),
+              'not_found',
+            )
+            await expectRefusal(
+              t.query(internal.machine.records.mcpTaskActivity, machine),
+              'not_found',
+            )
+            if (kind === 'person')
+              await expectRefusal(
+                as(t, subject).query(api.snapshot.threadHistory, thread),
+                'not_found',
+              )
+            continue
+          }
+          const rest = await t.query(internal.machine.records.restTaskActivity, machine)
+          expect(
+            rest.map((row) => row.id),
+            `${as_}, REST`,
+          ).toEqual(kept)
+          const mcp: { id: string }[] = JSON.parse(
+            await t.query(internal.machine.records.mcpTaskActivity, machine),
+          )
+          expect(
+            mcp.map((row) => row.id),
+            `${as_}, MCP`,
+          ).toEqual(kept)
+          if (kind !== 'person') continue
+          const window = await as(t, subject).query(api.snapshot.threadHistory, thread)
+          expect(
+            window.events.map((row) => row.id),
+            `${as_}, threadHistory`,
+          ).toEqual(kept)
+          const before = await as(t, subject).query(api.snapshot.historyBefore, {
+            ...thread,
+            before: anchor.id,
+          })
+          expect(
+            before.events.map((row) => row.id),
+            `${as_}, historyBefore`,
+          ).toEqual(kept.filter((id) => id !== anchor.id))
+        }
+      }
+    }
+    // the shapes reach the rows filed under TBED, FW and the archived
+    // sub-project, and none reach SKNK, the other organization's project
+    // or the deleted id
+    expect(['0', '1', '4'].map((i) => seen.has(i))).toEqual([true, true, true])
+    expect(['3', '5', '6'].map((i) => seen.has(i))).toEqual([false, false, false])
+  }, 60_000)
+
+  it("reads the same for a member's window page whatever projects its rows do not name", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // 50 rows filed under FW naming PCB or TBED, which the viewer reads
+    await plantRows(
+      t,
+      task,
+      Array.from({ length: 50 }, (_, i) => ({
+        project_id: f.sub.id,
+        related_project_id: i % 2 === 0 ? f.sub2.id : f.meta.id,
+      })),
+    )
+    const page = () =>
+      t.query(async (ctx) => {
+        const read = await taskHistoryPage(ctx, f.viewer, task, undefined, WINDOW_HISTORY_PAGE)
+        const m = await ctx.meta.getTransactionMetrics()
+        return {
+          rows: read.rows.length,
+          ranges: m.databaseQueries.used,
+          documents: m.documentsRead.used,
+          bytes: m.bytesRead.used,
+        }
+      })
+    const before = await page()
+    console.log("member's window page figures, 3 projects named:", JSON.stringify(before))
+    expect(before.rows).toBe(50)
+    // 10 top-level projects of 3 sub-projects each, which no row names
+    for (let i = 0; i < 10; i++) {
+      const top = await plantProject(t, { org_id: f.org.id })
+      for (let j = 0; j < 3; j++)
+        await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id })
+    }
+    expect(await page()).toEqual(before)
+  })
+
+  it('checks the projects of the first row a page reads whatever the room, and ends before a project it had no room to ask', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // oldest first: PCB, TBED, FW and FW again, each a related project
+    const rows = await plantRows(
+      t,
+      task,
+      [f.sub2.id, f.meta.id, f.sub.id, f.sub.id].map((related_project_id) => ({
+        related_project_id,
+      })),
+    )
+    const ids = (page: HistoryPage) => page.rows.map((row) => row.id)
+    const page = (before?: Doc<'activity_events'>) =>
+      t.run((ctx) => taskHistoryPage(ctx, f.viewer, task, before))
+    NAMED_TASK_ROOM.room = 0
+    // FW is asked for the first row and known for the second; TBED is not
+    // asked yet past the room
+    const first = await page()
+    expect(ids(first)).toEqual([rows[2].id, rows[3].id])
+    expect(first.earlier).toBe(true)
+    // the next page asks TBED for its first row, then stops before PCB
+    const second = await page(first.next)
+    expect(ids(second)).toEqual([rows[1].id])
+    expect(second.earlier).toBe(true)
+    const third = await page(second.next)
+    expect(ids(third)).toEqual([rows[0].id])
+    expect(third.earlier).toBe(false)
+    // with room, one page
+    NAMED_TASK_ROOM.room = DEFAULT_ROOM
+    const whole = await page()
+    expect(ids(whole)).toEqual(rows.map((row) => row.id))
+    expect(whole.earlier).toBe(false)
+  })
+
+  it('refuses a page whose project check a bound stopped, never answering its rows as hidden, and taskWriters names nobody for them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a member of Hardware, which shares a sub-project of TBED with User
+    const member = await plantLogin(
+      t,
+      await plantSeat(t, { org_id: f.org.id, name: 'Mira', accepted_at: NOW }),
+    )
+    const shared = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: member.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: shared.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: shared.id, title: 'Old' })
+    // the lead of TBED retitles it, a row filed under the shared project,
+    // and a newer row names nothing
+    await as(t, f.user).mutation(api.issues.update, {
+      org_id: f.org.id,
+      id: task.id,
+      patch: { title: 'New' },
+    })
+    const [newest] = await plantRows(t, task, [
+      { project_id: undefined, ts: new Date(Date.now() + 60_000).toISOString() },
+    ])
+    // a second task whose rows name the shared project only on a legacy
+    // row without its list, which no project check is asked for
+    const legacy = await plantIssue(t, { org_id: f.org.id, project_id: shared.id })
+    await plantRows(t, legacy, [
+      { related_project_id: shared.id, named_task_nums: undefined },
+      { project_id: undefined },
+    ])
+    const stale = () =>
+      expectRefusal(
+        as(t, member).mutation(api.issues.update, {
+          org_id: f.org.id,
+          id: task.id,
+          patch: { title: 'Mine' },
+          expected: { title: printOf(trimmedForm('Old')) },
+        }),
+        'conflict',
+      )
+    const reads = (issue: Doc<'issues'>) => ({
+      thread: as(t, member).query(api.snapshot.threadHistory, {
+        org_id: f.org.id,
+        issue_id: issue.id,
+      }),
+      rest: t.query(internal.machine.records.restTaskActivity, {
+        callerId: member.id,
+        access: 'read',
+        ref: issue.id,
+      }),
+      mcp: t.query(internal.machine.records.mcpTaskActivity, {
+        callerId: member.id,
+        access: 'read',
+        ref: issue.id,
+      }),
+    })
+    // within the bounds the member reads the row and the writer is named
+    const open = reads(task)
+    expect((await open.thread).events).toHaveLength(2)
+    expect(await open.rest).toHaveLength(2)
+    expect(JSON.parse(await open.mcp)).toHaveLength(2)
+    expect((await stale()).data.changes?.[0].by).toBe(f.user.id)
+    // the shares on a project and the member's own teams' shares past the
+    // bounds, and no room to ask a team by itself
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, teamReads: 0 })
+    const refusal = async (p: Promise<unknown>) => {
+      const e = await expectRefusal(p, 'rule')
+      expect(e.data.reason).toBe(ACCESS_UNCHECKED)
+      expect(e.data.message).toBe(
+        'Qivo could not finish checking which projects you can see in one request. Contact support@qivo.io so we can help.',
+      )
+    }
+    const stopped = reads(task)
+    await refusal(stopped.thread)
+    await refusal(stopped.rest)
+    await refusal(stopped.mcp)
+    await refusal(
+      as(t, member).query(api.snapshot.historyBefore, {
+        org_id: f.org.id,
+        issue_id: task.id,
+        before: newest.id,
+      }),
+    )
+    // the edit keeps its conflict sentence, naming nobody
+    const conflict = await stale()
+    expect(conflict.data.changes?.[0]).toMatchObject({ field: 'title', by: null, at: null })
+    expect(conflict.data.message).toMatch(/^title of QN-\d+ changed since you read it/)
+    // a legacy row is refused before any project is asked about
+    const other = reads(legacy)
+    expect((await other.thread).events).toHaveLength(1)
+    expect(await other.rest).toHaveLength(1)
+  })
+
+  /* A task in a sub-project of TBED with 600 rows filed under it, a tenth
+   * naming PCB and a twentieth a task in FW, which the member reads
+   * neither of, and a tenth another task of the sub-project, the member
+   * reading it through `share`'s team, and the member's REST page of it
+   * with what it read, beside the newest HISTORY_PAGE_MAX rows the oracle
+   * keeps. */
+  async function designPage(t: T, f: OrgFixture, member: Doc<'profiles'>, sub: Doc<'projects'>) {
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: sub.id })
+    const sibling = await plantIssue(t, { org_id: f.org.id, project_id: sub.id })
+    const firmware = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const planned: Row[] = Array.from({ length: 600 }, (_, i) => ({
+      project_id: sub.id,
+      ...(i % 10 === 0 ? { related_project_id: f.sub2.id } : {}),
+      ...(i % 10 === 5 ? { named_task_nums: [sibling.num] } : {}),
+      ...(i % 20 === 7 ? { named_task_nums: [firmware.num] } : {}),
+      detail: 'from “Calibrate the torque sensor on the bench rig before the thermal soak run”',
+    }))
+    const rows: Doc<'activity_events'>[] = []
+    for (let from = 0; from < planned.length; from += 200)
+      rows.push(...(await plantRows(t, task, planned.slice(from, from + 200), from)))
+    const kept = await oracle(t, member, rows)
+    const page = await t.query(async (ctx) => {
+      const answer = await handlerOf<
+        { callerId: string; access: 'read'; ref: string },
+        { id: string }[]
+      >(restTaskActivity)(ctx, { callerId: member.id, access: 'read', ref: task.id })
+      const m = await ctx.meta.getTransactionMetrics()
+      return {
+        ids: answer.map((row) => row.id),
+        figures: {
+          ranges: m.databaseQueries.used,
+          documents: m.documentsRead.used,
+          mib: Math.round((m.bytesRead.used / MIB) * 1000) / 1000,
+        },
+      }
+    })
+    expect(page.figures.ranges).toBeLessThan(4096)
+    expect(page.figures.documents).toBeLessThan(32_000)
+    expect(page.figures.mib).toBeLessThan(16)
+    return { page, expected: kept.slice(-HISTORY_PAGE_MAX), kept }
+  }
+
+  it("answers a member's REST page of 500 rows as the oracle where the task's sub-project is shared with 5 teams", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const member = await plantSeat(t, { org_id: f.org.id, name: 'Mira' })
+    const sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await t.run(async (ctx) => {
+      // the member in 3 teams, the first of 5 that share the sub-project
+      const teams: string[] = []
+      for (let i = 0; i < 7; i++) teams.push(await newTeam(ctx, f.org.id))
+      for (const team_id of teams.slice(0, 3))
+        await ctx.db.insert('team_members', { team_id, profile_id: member.id, is_leader: false })
+      for (const team_id of [teams[0], ...teams.slice(3)])
+        await ctx.db.insert('project_team_access', { project_id: sub.id, team_id, level: 'viewer' })
+    })
+    const { page, expected, kept } = await designPage(t, f, member, sub)
+    console.log(
+      'history page figures, a sub-project shared with 5 teams:',
+      JSON.stringify(page.figures),
+    )
+    expect(kept.length).toBeGreaterThan(HISTORY_PAGE_MAX)
+    expect(page.ids).toEqual(expected)
+  })
+
+  it("answers a member's REST page of 500 rows as the oracle for a member in 5 teams", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const member = await plantSeat(t, { org_id: f.org.id, name: 'Mira' })
+    const sub = await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    await t.run(async (ctx) => {
+      // the member in 5 teams, the last of which shares the sub-project
+      const teams: string[] = []
+      for (let i = 0; i < 5; i++) teams.push(await newTeam(ctx, f.org.id))
+      for (const team_id of teams)
+        await ctx.db.insert('team_members', { team_id, profile_id: member.id, is_leader: false })
+      await ctx.db.insert('project_team_access', {
+        project_id: sub.id,
+        team_id: teams[4],
+        level: 'viewer',
+      })
+    })
+    const { page, expected, kept } = await designPage(t, f, member, sub)
+    console.log('history page figures, a member in 5 teams:', JSON.stringify(page.figures))
+    expect(kept.length).toBeGreaterThan(HISTORY_PAGE_MAX)
+    expect(page.ids).toEqual(expected)
   })
 })
 
