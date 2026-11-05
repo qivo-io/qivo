@@ -566,17 +566,36 @@ export async function filesPage(ctx: QueryCtx, orgId: string, cursor: Cursor) {
   return { file_bytes, image_bytes, next: nextOf(page) }
 }
 
-/** One page of the organization's Deleted items rows, with the bytes of the
- * attachments among them. */
+/* Starts every cursor deletedPage answers, so a cursor of the earlier read
+ * of every Deleted items copy (by_org), which only a monthly job running
+ * across the deploy can hold, is refused instead of being misread. */
+const ATTACHMENT_COPIES = 'attachment-copies:'
+
+/** The refusal of a Deleted items cursor deletedPage did not answer. */
+export const STALE_DELETED_CURSOR =
+  'this Deleted items cursor is from an earlier release; run the month again'
+
+/** One page of the attachment copies the organization's Deleted items hold,
+ * with their bytes. It reads only those copies (deleted_rows
+ * by_table_org_owner), not the task and other copies beside them. A cursor
+ * it did not answer is refused, so that organization's figures fail and the
+ * run counts it in `failed` until the month runs again (usage.ts). */
 export async function deletedPage(ctx: QueryCtx, orgId: string, cursor: Cursor) {
+  if (cursor !== null && !cursor.startsWith(ATTACHMENT_COPIES))
+    throw new Error(STALE_DELETED_CURSOR)
   const page = await ctx.db
     .query('deleted_rows')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .paginate({ cursor, numItems: USAGE_PAGE.rows, maximumBytesRead: USAGE_PAGE.bytes })
+    .withIndex('by_table_org_owner', (q) => q.eq('table', 'issue_attachments').eq('org_id', orgId))
+    .paginate({
+      cursor: cursor === null ? null : cursor.slice(ATTACHMENT_COPIES.length),
+      numItems: USAGE_PAGE.rows,
+      maximumBytesRead: USAGE_PAGE.bytes,
+    })
   let deleted_file_bytes = 0
   for (const stored of page.page)
     if (stored.row.table === 'issue_attachments') deleted_file_bytes += stored.row.doc.size_bytes
-  return { deleted_file_bytes, next: nextOf(page) }
+  const next = nextOf(page)
+  return { deleted_file_bytes, next: next === null ? null : `${ATTACHMENT_COPIES}${next}` }
 }
 
 /** One page of the organization's stored webhook deliveries, counting the
