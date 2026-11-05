@@ -47,6 +47,28 @@ describe('the benchmark server', () => {
     expect(odd.snapshot.issueSubs).toHaveLength(70)
   })
 
+  it('makes the share of Done tasks and the title length the page asks for', async () => {
+    // the visible tasks' ids (server.mjs id), not the hidden projects'
+    const visible = (snapshot) => snapshot.issues.filter((row) => row.id.includes('-0004-'))
+    const share = (rows) => rows.filter((row) => row.status === 'done').length / rows.length
+    // by default about a sixth of the tasks are Done, with titles of about 40
+    const usual = visible((await snapshotOf('tasks=600&hidden=0')).snapshot)
+    expect(share(usual)).toBeGreaterThan(0.1)
+    expect(share(usual)).toBeLessThan(0.25)
+    expect(usual.every((row) => row.title.length < 60)).toBe(true)
+    // a third Done, spread over the numbers, and titles of 91 characters
+    const asked = visible((await snapshotOf('tasks=600&hidden=0&done=0.33&titles=91')).snapshot)
+    expect(share(asked)).toBeCloseTo(0.33, 1)
+    expect(share(asked.slice(0, 60))).toBeGreaterThan(0.2)
+    expect(share(asked.slice(0, 60))).toBeLessThan(0.45)
+    for (const row of asked) expect(row.title.length).toBeGreaterThanOrEqual(88)
+    for (const row of asked) expect(row.title.length).toBeLessThanOrEqual(91)
+    // none Done, and every open status still there
+    const open = visible((await snapshotOf('tasks=60&hidden=0&done=0')).snapshot)
+    expect(share(open)).toBe(0)
+    expect(new Set(open.map((row) => row.status))).toEqual(new Set(['todo', 'progress', 'review']))
+  })
+
   it('puts each label on a task once, whatever orglabels gives', async () => {
     // a stride of 5 over 1 or 5 labels meets the same label again
     for (const orglabels of [1, 5]) {
