@@ -25,12 +25,7 @@ import { ConvexError, type Value } from 'convex/values'
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
 import { AVATAR_COLORS } from '../../convex/lib/avatarColors'
-import {
-  BILLING_READ_ONLY,
-  deletionReadOnly,
-  ORG_DELETING,
-  type OrgCreate,
-} from '../../convex/lib/billingAccess'
+import { ORG_DELETING, type OrgCreate } from '../../convex/lib/billingAccess'
 import type { BoardAnswer } from '../../convex/lib/board'
 import { asciiEmail, cleanEmail, emailRefusal as storedEmailRefusal } from '../../convex/lib/email'
 import { descriptionForm, FIELD_CHANGED, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
@@ -4478,7 +4473,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
         if (DEMO_MODE && epoch === storeEpoch && isDemoLifecycleRefusal(error))
           notifyDemoEnded(error)
         const orgId = args && 'org_id' in args ? args.org_id : undefined
-        noteReadOnlyRefusal(orgId, error)
         if (typeof error === 'object' && error !== null) {
           offlineWaits.set(error, settleWaiting())
           if (typeof orgId === 'string') refusedOrgs.set(error, orgId)
@@ -4491,16 +4485,6 @@ function dispatch<M extends FunctionReference<'mutation'>>(
     releaseUpdate()
     throw error
   }
-}
-
-/* A read-only refusal can say what billing.status does not say yet. The
-   server works the status out again only when data it read changes, not when
-   access ends at a set time. Until the status answers again, removals in the
-   organization follow the refusal (leavesHeldTasks, removalRefusal). */
-function noteReadOnlyRefusal(orgId: unknown, error: unknown) {
-  const d = errData(error)
-  const block = typeof orgId === 'string' && readOnly(d) ? writeBlocks.get(orgId) : undefined
-  if (block) Object.assign(block, { refused: true, message: d.message || block.message })
 }
 
 // Compression, credential hashing and byte uploads span more than one
@@ -5465,51 +5449,79 @@ export type AccessRemoval =
   | { kind: 'teamMember'; teamId: string; userId: string }
   | { kind: 'deleteTeam'; teamId: string }
 
-/* The projects as `uid` would have them after `change`, for levelOnProject's
-   lookup. A project grant changes that project for everyone; a member leaving
-   loses every grant of the team, and a deleted team's grants go for everyone. */
-function projectsAfter(change: AccessRemoval) {
-  const now = (id: string) => PLANNER.project(id)
-  if (change.kind === 'userGrant' || change.kind === 'teamGrant') {
-    const p = PLANNER.project(change.projectId)
-    const changed =
-      p &&
-      (change.kind === 'userGrant'
-        ? { ...p, access: omitKey(p.access, change.userId) }
-        : { ...p, teamAccess: omitKey(p.teamAccess, change.teamId) })
-    const after = (id: string) => (id === change.projectId ? changed : now(id))
-    return (_uid: string) => after
-  }
-  const withoutTeam = (id: string) => {
-    const p = now(id)
-    return p?.teamAccess?.[change.teamId]
-      ? { ...p, teamAccess: omitKey(p.teamAccess, change.teamId) }
-      : p
-  }
-  if (change.kind === 'deleteTeam') return (_uid: string) => withoutTeam
-  return (uid: string) => (uid === change.userId ? withoutTeam : now)
-}
-/* A person's level on a project once `change` has applied. */
-function levelAfter(change: AccessRemoval) {
-  const after = projectsAfter(change)
-  return (uid: string, projectId: string) => {
-    const projects = after(uid)
-    return levelOnProject(projects(projectId), uid, projects)
+/** The server's preview of a removal (accessRemovals.preview,
+    convex/model/removalPreview.ts): unavailable, refused or too large to
+    check, each with the server's sentence, or `ok` with who loses sight of
+    which open tasks and whether the caller may keep them as Viewers or
+    reassign them. */
+export type RemovalPreview = FunctionReturnType<typeof api.accessRemovals.preview>
+/** A preview the removal window shows (P.startRemoval). */
+export type RemovalAnswer = Extract<RemovalPreview, { state: 'ok' }>
+/** One answer of the Reassign picker's read (accessRemovals.reassignChoices). */
+export type ReassignChoices = FunctionReturnType<typeof api.accessRemovals.reassignChoices>
+/** A person the Reassign picker lists. */
+export type ReassignChoice = Extract<ReassignChoices, { state: 'ready' }>['rows'][number]
+
+/* `change` as the server names a removal (convex/model/removalPreview.ts
+   vRemovalChange). */
+function removalChange(
+  change: AccessRemoval,
+): FunctionArgs<typeof api.accessRemovals.preview>['change'] {
+  switch (change.kind) {
+    case 'userGrant':
+      return { kind: 'user_grant', project_id: change.projectId, user_id: change.userId }
+    case 'teamGrant':
+      return { kind: 'team_grant', project_id: change.projectId, team_id: change.teamId }
+    case 'teamMember':
+      return { kind: 'team_member', team_id: change.teamId, user_id: change.userId }
+    case 'deleteTeam':
+      return { kind: 'delete_team', team_id: change.teamId }
   }
 }
-/* The people whose access `change` reduces. */
-function peopleLosing(change: AccessRemoval): Set<string> {
-  if (change.kind === 'userGrant' || change.kind === 'teamMember') return new Set([change.userId])
-  return new Set(PLANNER.users.filter((u) => u.teams.includes(change.teamId)).map((u) => u.id))
+
+/* `answer` when the window can act on it, else null: a state it knows,
+   and for `ok` the fields the window decides by, which a backend older
+   than the removal window's server reads lacks (keep.offered,
+   keep.permitted, reassign.permitted, and reassign.holder_eligible when
+   `checked` asked for it). Reading such an answer as "the caller cannot
+   settle" would remove at once and strand the tasks, so it removes
+   nothing. */
+function readablePreview(answer: RemovalPreview, checked: boolean): RemovalPreview | null {
+  switch (answer.state) {
+    case 'unavailable':
+      return answer
+    case 'refused':
+    case 'too_large':
+      return typeof answer.message === 'string' ? answer : null
+    case 'ok': {
+      const flags = [answer.keep?.offered, answer.keep?.permitted, answer.reassign?.permitted]
+      if (checked) flags.push(answer.reassign?.holder_eligible)
+      return flags.every((flag) => typeof flag === 'boolean') ? answer : null
+    }
+    default:
+      return null
+  }
 }
-/* Where Keep as Viewer puts the Viewer grant that keeps `task` in sight: the
-   project whose grant is removed, or the project the team shared that showed
-   the task (the task's own sub-project first, then its parent). */
-function keptOn(change: AccessRemoval, task: IssueVM): string {
-  if (change.kind === 'userGrant' || change.kind === 'teamGrant') return change.projectId
-  const p = PLANNER.project(task.project)
-  return p?.parent && !p.teamAccess?.[change.teamId] ? p.parent : task.project
-}
+
+/* Whether the caller can carry out both choices of the removal window, so
+   it asks: reassign every lost task, and keep the people as Viewers unless
+   Keep as Viewer is no choice for this removal (a removed Viewer grant).
+   Otherwise the removal goes at once with a notice (design-spec row 330).
+   The `permitted` fields answer the caller's authority whatever size or
+   read-only sentence the `refusal` fields name first. */
+const settlesRemoval = (answer: RemovalAnswer): boolean =>
+  answer.reassign.permitted && (answer.keep.permitted || !answer.keep.offered)
+
+/** What the press or the removal window says when a removal could not be
+    checked on the server: the read failed, or the backend is older than the
+    window's reads. Nothing was removed. */
+export const REMOVAL_UNCHECKED =
+  "Couldn't check which tasks this removal affects. Nothing was removed."
+
+/** The title of a removal control while its press waits for the server's
+    preview (panels/useAccessRemoval.tsx). */
+export const REMOVAL_CHECKING = 'Checking which tasks this affects…'
+
 /* The direct grant rows on a project, without the lead (projects.lead_id). */
 function grantsOn(projectId: string): Record<string, GrantLevel> {
   const access: Record<string, GrantLevel> = {}
@@ -5523,90 +5535,47 @@ const removalOrg = (change: AccessRemoval) =>
   'projectId' in change
     ? rows.projects.get(change.projectId)?.org_id
     : rows.teams.get(change.teamId)?.org_id
-/* Whether an organization refuses writes because of a billing pause or a
-   pending deletion, from billing.status (`writable` matches
-   lib/billingAccess.ts orgWriteBlock), for each organization whose settings
-   page can start a removal (P.watchWriteBlock), with how many pages watch
-   it. The workspace leaves it out, because its root part would then read the billing
-   row and rerun for every member each time the billing sync writes it, which
-   happens on every reconciliation (billingSync.ts), every two minutes while a
-   checkout or payment is pending. `refused` records a read-only refusal the status has not caught up
-   with (see removeAtOnce) until the status answers again. `message` is the
-   server's sentence for the block (lib/billingAccess.ts orgWriteBlock). */
-const writeBlocks = new Map<
-  string,
-  { readOnly: boolean; refused: boolean; message: string; watchers: number; stop: () => void }
->()
-/* Whether a removal can only leave the tasks it hides with their holders.
-   While billing or a pending deletion makes the organization read-only, the
-   server lets an organization admin take access away with 'leave' and
-   refuses keeping people as Viewers or reassigning their tasks
-   (model/projectAccess.ts removeProjectGrantCore, model/teams.ts
-   removeTeamMemberCore). Deleting a team is not such a removal and waits
-   like every other change. */
-function leavesHeldTasks(change: AccessRemoval): boolean {
-  if (change.kind === 'deleteTeam') return false
-  const orgId = removalOrg(change)
-  const block = orgId ? writeBlocks.get(orgId) : undefined
-  return !!block && (block.readOnly || block.refused) && actorIn(orgId)?.orgRole === 'admin'
-}
-/* The read-only sentence the server would refuse a removal with, or null
-   while it may go ahead. While billing or a pending deletion makes the
-   organization read-only, the server refuses every removal by someone who
-   is not an organization admin (accessRemovalMutation), and deleting a team
-   for everyone (orgMutation). */
-function removalRefusal(change: AccessRemoval): string | null {
-  const orgId = removalOrg(change)
-  const block = orgId ? writeBlocks.get(orgId) : undefined
-  if (!block || !(block.readOnly || block.refused)) return null
-  return change.kind === 'deleteTeam' || actorIn(orgId)?.orgRole !== 'admin' ? block.message : null
-}
 /* Removes a person's or a team's grant on one project, a member from a team,
    or a whole team, in one server write that settles the tasks it hides by
-   `choice` (projects.removeAccess, teams.removeMember, teams.deleteDeep), and
-   paints the outcome at once; a refusal takes the paint away again. With
-   nobody losing sight of a task, the access just goes. Resolves whether the
-   server accepted it. */
+   `held` (projects.removeAccess, teams.removeMember, teams.deleteDeep), and
+   paints the outcome at once; a refusal takes the paint away again. The
+   server works out at commit which tasks leave their holders' sight
+   (convex/model/projectAccess.ts findLost), so `shown`, the preview the
+   window showed, only paints: the reassigned holdings the workspace holds
+   with the same holder, and for a person's or a team's grant kept as
+   Viewers a Viewer grant on its project for each of its people without a
+   grant there. A team change paints no Viewer grant; the delivery brings
+   them. Resolves whether the server accepted it. */
 function removeAtOnce(
   change: AccessRemoval,
-  choice: { keep: true } | { to: string | null },
-  items: Holder[],
+  held: 'leave' | 'keep_as_viewer' | { reassign_to: string | null },
+  shown: RemovalAnswer | undefined,
   stays: string,
 ): Promise<boolean> {
   const orgId = removalOrg(change)
   if (!orgId) return Promise.resolve(false)
-  const people = [...new Set(items.map((i) => i.uid))]
-  const held =
-    'keep' in choice
-      ? people.length > 0
-        ? ('keep_as_viewer' as const)
-        : ('leave' as const)
-      : items.length > 0
-        ? { reassign_to: choice.to }
-        : ('leave' as const)
-  const level = levelAfter(change)
-  // everything the paint needs, worked out now from the rows and views
+  // everything the paint needs, worked out now from the answer
   const at = new Date().toISOString()
   const patches =
-    typeof held === 'object'
-      ? items.map((i) => ({
-          uuid: i.task.uuid,
-          uid: i.uid,
+    typeof held === 'object' && shown
+      ? shown.items.map((i) => ({
+          uuid: i.task_id,
+          uid: i.holder_id,
           field: i.role === 'assignee' ? ('assignee_id' as const) : ('reviewer_id' as const),
           db: mapIssuePatch(
             i.role === 'assignee' ? { assignee: held.reassign_to } : { reviewer: held.reassign_to },
           ),
         }))
       : []
-  // the server's Viewer grants: each project that showed a listed task
-  const grants = new Map<string, Row<'project_access'>>()
-  if (held === 'keep_as_viewer') {
-    for (const i of items) {
-      const pid = keptOn(change, i.task)
-      if (grants.has(`${i.uid}:${pid}`) || level(i.uid, pid)) continue
-      grants.set(`${i.uid}:${pid}`, { project_id: pid, profile_id: i.uid, level: 'viewer' })
-    }
-  }
+  // the server's Viewer grants on the project whose grant goes
+  const grants: Row<'project_access'>[] =
+    held === 'keep_as_viewer' && shown && 'projectId' in change
+      ? shown.people.map((p) => ({
+          project_id: change.projectId,
+          profile_id: p.id,
+          level: 'viewer' as const,
+        }))
+      : []
   const view: View = {
     workspace: () => {
       // the server settles only the tasks the person still holds at commit
@@ -5633,7 +5602,7 @@ function removeAtOnce(
         workspaceRows.keepList('teamAccess', (a) => a.team_id !== change.teamId)
         rows.teams.delete(change.teamId)
       }
-      for (const grant of grants.values()) {
+      for (const grant of grants) {
         const has = workspaceRows
           .peekList('access')
           .some((a) => a.project_id === grant.project_id && a.profile_id === grant.profile_id)
@@ -5643,10 +5612,9 @@ function removeAtOnce(
     },
   }
   const onError = (error: unknown) => {
-    // dispatch() has noted a read-only refusal for the next removal
-    // (noteReadOnlyRefusal). Only a refused reassignment or Viewer grant
-    // (model/projectAccess.ts HELD_TASKS_REFUSED) blames the tasks; a
-    // refused removal, a billing pause or a lost connection says so itself
+    // Only a refused reassignment or Viewer grant (model/projectAccess.ts
+    // HELD_TASKS_REFUSED) blames the tasks; a refused removal, a billing
+    // pause or a lost connection says so itself
     const settling = errData(error).reason === 'held_tasks'
     if (settling && typeof held === 'object') {
       toast(`${stays}, because not every task could be reassigned.`, 'error')
@@ -5720,11 +5688,6 @@ function newProjectGrants(
   }
   return grants
 }
-function omitKey<T>(map: Record<string, T> | undefined, key: string): Record<string, T> {
-  const next = { ...map }
-  delete next[key]
-  return next
-}
 /** A team named in a sentence: "Design team", or "Design team" for a team
     already called that; "team" when it is unknown. */
 export function teamNoun(name: string | null | undefined): string {
@@ -5740,13 +5703,20 @@ export function andList(
   if (words.length === 3) return `${words[0]}, ${words[1]} and ${words[2]}`
   return `${words[0]}, ${words[1]} and ${others(words.length - 2)}`
 }
+/** andList for `words.length + more` things of which `words` names the
+    first and `more` counts the rest, as the server names a few projects and
+    counts the others: "A, B and 3 other projects" for three names and two
+    more. */
+export function andMore(words: string[], more: number, others: (n: number) => string): string {
+  if (more === 0) return andList(words, others)
+  if (words.length >= 2) return `${words[0]}, ${words[1]} and ${others(words.length - 2 + more)}`
+  return words.length === 1 ? `${words[0]} and ${others(more)}` : others(more)
+}
 
 /** Someone working on a task, as a parent change or a move checks them. */
 export type Holder = { uid: string; task: IssueVM; role: 'assignee' | 'reviewer' }
 /** A subtask the Archive or delete window lists for a delete (P.deletePlan). */
 export type DeleteRow = { task: IssueVM; depth: number; deletable: boolean }
-/** What a removal would do to work: see P.accessRemoval. */
-export type RemovalEffect = { people: string[]; items: Holder[]; projects: string[] }
 /** A holder who would lose access to `project` (edit access when `edit`). */
 export type AccessBlocker = Holder & { project: ProjectVM; edit: boolean }
 /** What Move and Archive or delete take along with a task (P.familyOf):
@@ -7633,8 +7603,7 @@ export const PLANNER = {
      with the same rule. */
   /* The first task above `it` (its parent, then up) in a project the person
      cannot see, or null. A task outside this view is left to the server.
-     `sees` replaces the current grants, for example with grants as they
-     would be after a removal. */
+     `sees` replaces the current grants, as tests of the view rows pass it. */
   unseenAbove: (
     x: IssueVM | string,
     uid: string,
@@ -7762,225 +7731,228 @@ export const PLANNER = {
         .filter((b) => !PLANNER.canSee(projectId, b.uid)),
     ]
   },
-  /* What a removal would do to work: the active people who would lose sight
-     of open tasks they are assigned to or reviewing, those tasks, and the
-     projects where Keep as Viewer would give them Viewer access. Done tasks
-     keep their history and are not listed. Computed against the grants as
-     they would be, so another grant that still covers someone keeps them off
-     the list. */
-  accessRemoval: (change: AccessRemoval): RemovalEffect => {
-    const level = levelAfter(change)
-    const losing = peopleLosing(change)
-    const items: Holder[] = []
-    for (const task of PLANNER.issues) {
-      const tp = PLANNER.project(task.project)
-      if (!tp || task.status === 'done') continue
-      for (const role of ['assignee', 'reviewer'] as const) {
-        const uid = task[role]
-        if (!uid || !losing.has(uid) || (role === 'reviewer' && PLANNER.isGroup(task))) continue
-        if (!PLANNER.user(uid)?.active) continue
-        if (levelOnProject(tp, uid) && !level(uid, tp.id)) items.push({ uid, task, role })
-      }
-    }
-    return {
-      people: [...new Set(items.map((i) => i.uid))],
-      items,
-      projects: [...new Set(items.map((i) => keptOn(change, i.task)))],
+  /** The server's preview of `change` for the removal window
+      (accessRemovals.preview), read once and never subscribed to, because
+      one call can read a few thousand rows. With `reassignTo` it also says
+      whether that person can take the tasks (reassign.holder_eligible).
+      Null when the read failed or no organization is known, and for an
+      answer that lacks a field the window decides by, as one from an older
+      backend does (readablePreview), so such an answer removes nothing. */
+  previewRemoval: async (
+    change: AccessRemoval,
+    reassignTo?: string,
+  ): Promise<RemovalPreview | null> => {
+    const orgId = removalOrg(change)
+    if (!orgId) return null
+    try {
+      const answer = await convex.query(api.accessRemovals.preview, {
+        org_id: orgId,
+        change: removalChange(change),
+        ...(reassignTo === undefined ? {} : { reassign_to: reassignTo }),
+      })
+      return readablePreview(answer, reassignTo !== undefined)
+    } catch (e) {
+      console.error('[qivo] removal preview failed:', e)
+      return null
     }
   },
-  /* What Keep as Viewer leaves the people of `removal` able to do, for the
-     removal window: they keep their tasks and see the listed projects, and
-     can't change those tasks. Someone who can still change a listed project
-     or one of its sub-projects is named with those projects, from their
-     access once the change and the Viewer grants apply (levelAfter), so the
-     window never says they can't change anything there. */
-  keepText: (change: AccessRemoval, removal: RemovalEffect): string => {
-    const { people, items } = removal
-    const first = (uid: string) => (PLANNER.user(uid)?.name || 'Someone').split(' ')[0]
-    // one row per role, but a task held twice counts once
-    const count = new Set(items.map((i) => i.task.id)).size
+
+  /** One batch of the removal window's Reassign picker
+      (accessRemovals.reassignChoices): the people who could take every task
+      `change` takes out of sight once the access is gone, whose names match
+      `search`, after `after`, an earlier batch's `next`, or from the start.
+      The server works the removal out again for each batch. Read once a
+      batch, never subscribed to; null when the read failed. */
+  reassignChoices: async (
+    change: AccessRemoval,
+    search: string,
+    after: string | null,
+  ): Promise<ReassignChoices | null> => {
+    const orgId = removalOrg(change)
+    if (!orgId) return null
+    try {
+      return await convex.query(api.accessRemovals.reassignChoices, {
+        org_id: orgId,
+        change: removalChange(change),
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] reassign choices failed:', e)
+      return null
+    }
+  },
+
+  /** What a press or the removal window says when the access `change`
+      takes away is already gone, as when someone else removed it first. */
+  removalGoneText: (change: AccessRemoval): string => {
+    const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
+    const person = 'userId' in change ? PLANNER.user(change.userId)?.name || 'Someone' : ''
+    switch (change.kind) {
+      case 'userGrant':
+        return `${person} no longer has this access.`
+      case 'teamGrant':
+        return `The ${teamNoun(team?.name)} no longer has this access.`
+      case 'teamMember':
+        return `${person} has already left the ${teamNoun(team?.name)}.`
+      case 'deleteTeam':
+        return `The ${teamNoun(team?.name)} was already deleted.`
+    }
+  },
+
+  /* What Keep as Viewer leaves the people of `shown`, the server's preview,
+     able to do, for the removal window: they keep their tasks and see the
+     listed projects, and can't change those tasks. Someone who can still
+     change a listed project or one of its sub-projects once the access is
+     gone is named with those projects, a few of them and a count of the
+     rest (keep.changers), so the window never says they can't change
+     anything there. Names, places and counts come from the answer, never
+     from the workspace's tasks. */
+  keepText: (change: AccessRemoval, shown: RemovalAnswer): string => {
+    const refs = new Map(shown.projects.map((p) => [p.id, p]))
+    const label = (id: string) => {
+      const ref = refs.get(id)
+      return ref ? PLANNER.projectLabel(ref) : PLANNER.projectLabelOf(id) || 'a project'
+    }
+    const { people } = shown
+    const first = (name: string) => (name || 'Someone').split(' ')[0]
+    const count = shown.tasks
     // "the task" and "this task" read better than "the 1 task"
     const theTasks = count === 1 ? 'the task' : `the ${count} tasks`
     const these = count === 1 ? 'this task' : 'these tasks'
-    const places = removal.projects.flatMap((id) => PLANNER.project(id) || [])
+    const places = shown.keep.targets
+    const others = (n: number) => `${n} other project${n === 1 ? '' : 's'}`
     // a project removal names its own project; a team change names where it reached
-    const project =
-      change.kind === 'userGrant' || change.kind === 'teamGrant'
-        ? PLANNER.project(change.projectId)
-        : null
-    const seen = project
-      ? project.type === 'meta'
+    const granted = 'projectId' in change ? change.projectId : null
+    const topLevel = (id: string) => {
+      const ref = refs.get(id)
+      return ref ? ref.parent_id === null : PLANNER.project(id)?.type === 'meta'
+    }
+    const seen = granted
+      ? topLevel(granted)
         ? 'the whole project'
         : 'the whole sub-project'
-      : andList(
-          places.map((p) => PLANNER.projectLabel(p)),
-          (n) => `${n} other projects`,
-        )
+      : andList(places.map(label), others)
     const inIt = places.length > 1 ? 'them' : 'it'
     // a deleted team's people each keep sight of the projects of their own tasks
     const canSee =
       change.kind === 'deleteTeam' && places.length > 1 && people.length > 1
         ? 'can each see the projects that hold them'
         : `can see ${seen}`
-    // a Viewer grant adds nothing to change, so what is left is the access
-    // the change leaves, on the listed projects and their sub-projects
-    const level = levelAfter(change)
-    const listed = new Set(places.map((p) => p.id))
-    const shown = PLANNER.projects.filter(
-      (p) => listed.has(p.id) || (!!p.parent && listed.has(p.parent)),
-    )
-    const changers = people.flatMap((uid) => {
-      const labels = shown
-        .filter((p) => ['user', 'lead'].includes(level(uid, p.id) ?? ''))
-        .map((p) => PLANNER.projectLabel(p))
-      return labels.length ? [{ uid, labels }] : []
-    })
-    const projectList = (labels: string[]) => andList(labels, (n) => `${n} other projects`)
+    // what each person can still change, as the server names it: the first
+    // few projects and how many more
+    const changers = shown.keep.changers.map((c) => ({
+      id: c.id,
+      name: people.find((p) => p.id === c.id)?.name ?? '',
+      list: andMore(c.projects.map(label), c.more, others),
+    }))
     if (people.length === 1) {
-      const who = first(people[0])
+      const who = first(people[0].name)
       return changers.length
-        ? `${who} keeps ${theTasks} and ${canSee}, but can change only ${projectList(changers[0].labels)} in ${inIt}, not ${these}.`
+        ? `${who} keeps ${theTasks} and ${canSee}, but can change only ${changers[0].list} in ${inIt}, not ${these}.`
         : `${who} keeps ${theTasks} and ${canSee}, but can't change anything in ${inIt}, including ${these}.`
     }
     if (!changers.length)
       return `They keep their tasks and ${canSee}, but can't change anything in ${inIt}, including ${these}.`
     const still = andList(
-      changers.map((c) => `${first(c.uid)} can still change ${projectList(c.labels)}`),
+      changers.map((c) => `${first(c.name)} can still change ${c.list}`),
       (n) => `${n} others can still change parts of ${inIt}`,
     )
-    const others = people.filter((uid) => !changers.some((c) => c.uid === uid))
+    const rest = people.filter((p) => !changers.some((c) => c.id === p.id))
     // "the others" would be ambiguous after "2 others can still change"
-    const rest = !others.length
+    const tail = !rest.length
       ? ''
-      : `, and ${others.length === 1 ? first(others[0]) : changers.length > 3 ? `${others.length} more` : 'the others'} can't change anything in ${inIt}`
+      : `, and ${rest.length === 1 ? first(rest[0].name) : changers.length > 3 ? `${rest.length} more` : 'the others'} can't change anything in ${inIt}`
     // one of them may change another's task, never their own
-    return `They keep their tasks and ${canSee}, but can't change the tasks they keep. ${still}${rest}.`
+    return `They keep their tasks and ${canSee}, but can't change the tasks they keep. ${still}${tail}.`
   },
-  /* Whether I can carry out either choice of the removal window: give every
-     listed person Viewer access to each of `projects`, and edit every listed
-     task. A team leader without that project authority removes a member
-     straight away instead (see startRemoval). */
-  canSettleRemoval: (removal: RemovalEffect): boolean =>
-    removal.items.every((i) => PLANNER.canWrite(i.task.project)) &&
-    removal.projects.every((pid) =>
-      removal.people.every((uid) => PLANNER.canManageProjectUser(pid, uid)),
-    ),
-  /* Whether the removal can only leave the tasks it hides, because the
-     organization turned read-only for its admin (leavesHeldTasks). An open
-     removal window then hands over to startRemoval. */
-  removalLeavesTasks: (change: AccessRemoval): boolean => leavesHeldTasks(change),
-  /* Follows whether `orgId` refuses writes while a settings page that can
-     start a removal there is open, so an admin's removal can go ahead
-     without the window (leavesHeldTasks). Until billing.status answers, or
-     when it fails, the organization counts as editable and the window asks.
-     Returns the stop. */
-  watchWriteBlock: (orgId: string | undefined): (() => void) => {
-    if (DEMO_MODE || !orgId) return () => {}
-    let block = writeBlocks.get(orgId)
-    if (!block) {
-      const fresh = {
-        readOnly: false,
-        refused: false,
-        message: BILLING_READ_ONLY,
-        watchers: 0,
-        stop: () => {},
-      }
-      writeBlocks.set(orgId, fresh)
-      fresh.stop = convex.onUpdate(
-        api.billing.status,
-        { org_id: orgId },
-        (status) =>
-          Object.assign(fresh, {
-            readOnly: !status.writable,
-            refused: false,
-            message: status.deletion
-              ? deletionReadOnly(status.deletion.delete_after)
-              : BILLING_READ_ONLY,
-          }),
-        () => {
-          fresh.readOnly = false
-        },
-      )
-      block = fresh
-    }
-    const watched = block
-    watched.watchers++
-    return () => {
-      if (--watched.watchers > 0) return
-      watched.stop()
-      writeBlocks.delete(orgId)
-    }
-  },
-  /* Whether the server would refuse the removal because the organization is
-     read-only (removalRefusal). An open removal window then closes. */
-  removalRefused: (change: AccessRemoval): boolean => removalRefusal(change) !== null,
-  /* Start a removal. Returns true when the removal window should ask first:
-     someone would lose sight of their tasks and I can settle them. Otherwise
-     the removal goes ahead now, and once the server accepts it, a notice says
-     who lost sight of how many tasks. An organization admin's removal while
-     the organization is read-only goes ahead too, because it can only leave
-     the tasks (leavesHeldTasks). One the server would refuse then is refused
-     here with the server's sentence, and no window opens (removalRefusal). */
-  startRemoval: (change: AccessRemoval): boolean => {
-    const refusal = removalRefusal(change)
-    if (refusal) {
-      toast(refusal)
-      return false
-    }
-    const removal = PLANNER.accessRemoval(change)
-    const { people, items } = removal
-    if (items.length && PLANNER.canSettleRemoval(removal) && !leavesHeldTasks(change)) return true
-    void PLANNER.removeAccess(change, { to: null }, []).then((removed) => {
-      if (!removed || !items.length) return
-      const who = andList(people.map((id) => PLANNER.user(id)?.name || 'Someone'))
-      // one item per role: a task held twice counts once
-      const count = new Set(items.map((i) => i.task.id)).size
+
+  /** Removes `change` at once and leaves the tasks it takes out of sight
+      with their holders, then, once the server accepts it, says who can no
+      longer see how many tasks. `answer`, the server's preview, names the
+      people and counts every such task, also those in projects the caller
+      cannot see. For a caller who cannot carry out both choices of the
+      removal window (design-spec row 330), and for an organization admin
+      while the organization is read-only (`leave_only`). Resolves whether
+      the server accepted it. */
+  removeLeavingTasks: async (change: AccessRemoval, answer: RemovalAnswer): Promise<boolean> => {
+    const removed = await PLANNER.removeAccess(change, { to: null })
+    if (removed && answer.tasks > 0) {
+      const who = andList(answer.people.map((p) => p.name || 'Someone'))
       toast(
-        count === 1
+        answer.tasks === 1
           ? `${who} can no longer see a task they are assigned to or reviewing. A project lead can reassign it.`
-          : `${who} can no longer see ${count} tasks they are assigned to or reviewing. A project lead can reassign them.`,
+          : `${who} can no longer see ${answer.tasks} tasks they are assigned to or reviewing. A project lead can reassign them.`,
         'info',
       )
-    })
-    return false
+    }
+    return removed
   },
-  /* Who can take over every listed task once the access is gone: anyone in
-     the organization who can hold work, with Edit access to each task's
-     project and sight of every task above, both as the grants would be.
-     Edit access to the project whose grant is removed is not needed: a
-     person who edits only the affected sub-project can take its tasks. */
-  reassignChoices: (change: AccessRemoval, items: Holder[]): UserVM[] => {
-    const orgId =
-      'projectId' in change
-        ? PLANNER.orgOf(change.projectId)
-        : PLANNER.teams.find((t) => t.id === change.teamId)?.org
-    if (!orgId) return []
-    const level = levelAfter(change)
-    const people = new Set(items.map((i) => i.uid))
-    return PLANNER.usersIn(orgId).filter(
-      (u) =>
-        u.active &&
-        (u.orgRole === 'admin' || u.orgRole === 'user' || u.orgRole === 'guest') &&
-        !people.has(u.id) &&
-        items.every(
-          (i) =>
-            ['lead', 'user'].includes(level(u.id, i.task.project) || '') &&
-            !PLANNER.unseenAbove(i.task, u.id, (projectId) => !!level(u.id, projectId)),
-        ),
-    )
+
+  /** Starts removing `change` from a Settings page. It asks the server's
+      preview (P.previewRemoval) and answers it when the removal window
+      should ask: someone loses sight of open tasks and the caller can carry
+      out both choices. Otherwise it answers null, having done what the
+      preview calls for:
+      - a failed or unreadable preview, or one from an older backend: says
+        so (REMOVAL_UNCHECKED) and removes nothing;
+      - nothing left to remove (`unavailable`, or `pending` false): says the
+        access is already gone and changes nothing;
+      - `refused` or `too_large`: the server's sentence, and removes nothing;
+      - no task taken out of sight: the plain removal;
+      - a caller who cannot carry out both choices, or an organization admin
+        while the organization is read-only (`leave_only`): the removal at
+        once, leaving the tasks, with a notice once the server accepts it
+        (P.removeLeavingTasks).
+      `still` says whether the page that pressed is still shown; when it
+      answers false once the preview arrives, nothing happens at all. A
+      paused save refuses before anything is read, since the read would
+      wait for the connection. */
+  startRemoval: async (
+    change: AccessRemoval,
+    still: () => boolean,
+  ): Promise<RemovalAnswer | null> => {
+    if (refusePausedEdit()) return null
+    const answer = await PLANNER.previewRemoval(change)
+    if (!still()) return null
+    if (answer === null) {
+      toast(REMOVAL_UNCHECKED)
+      return null
+    }
+    if (answer.state === 'unavailable' || (answer.state === 'ok' && !answer.pending)) {
+      toast(`${PLANNER.removalGoneText(change)} Nothing was changed.`, 'info')
+      return null
+    }
+    if (answer.state !== 'ok') {
+      toast(asSentence(answer.message))
+      return null
+    }
+    if (answer.tasks === 0) {
+      void PLANNER.removeAccess(change, { to: null })
+      return null
+    }
+    if (answer.leave_only || !settlesRemoval(answer)) {
+      void PLANNER.removeLeavingTasks(change, answer)
+      return null
+    }
+    return answer
   },
-  /* Apply the removal with the choice made in the removal window, for the
-     `items` the person reviewed there: keep their holders as Viewers (a
-     direct Viewer grant each on the listed projects), or hand every item to
-     `to` (null clears it). A person's or a team's grant, a member leaving a
-     team, or a deleted team goes in one server write that settles the tasks
-     too (projects.removeAccess, teams.removeMember, teams.deleteDeep), so a
-     refusal changes nothing. Resolves whether the server accepted the
-     removal. */
+
+  /** Applies a removal with the choice made in the removal window, for
+      `shown`, the preview the person read there: keep its people as Viewers
+      ('keep_as_viewer', when it names anyone), or hand every lost task to
+      `to` (null clears them) when it counts any task, else leave them.
+      Without `shown` it sends 'leave' and paints the removal alone, as the
+      staging check's cleanup and the write recipes call it. A person's or a
+      team's grant, a member leaving a team, or a deleted team goes in one
+      server write that works out at commit which tasks leave sight and
+      settles them (projects.removeAccess, teams.removeMember,
+      teams.deleteDeep), so a refusal changes nothing. Resolves whether the
+      server accepted the removal. */
   removeAccess: async (
     change: AccessRemoval,
     choice: { keep: true } | { to: string | null },
-    items: Holder[],
+    shown?: RemovalAnswer,
   ): Promise<boolean> => {
     if (refusePausedEdit()) return false
     const team = 'teamId' in change ? PLANNER.teams.find((t) => t.id === change.teamId) : null
@@ -8003,24 +7975,20 @@ export const PLANNER = {
       )
       return false
     }
-    const removed = await removeAtOnce(change, choice, items, stays)
+    const held =
+      shown === undefined
+        ? ('leave' as const)
+        : 'keep' in choice
+          ? shown.people.length > 0
+            ? ('keep_as_viewer' as const)
+            : ('leave' as const)
+          : shown.tasks > 0
+            ? { reassign_to: choice.to }
+            : ('leave' as const)
+    const removed = await removeAtOnce(change, held, shown, stays)
     if (removed && change.kind === 'deleteTeam' && team)
       toast(`Team “${team.name}” deleted`, 'success')
     return removed
-  },
-  /* Whether the access a removal takes away is still there: someone else may
-     have removed it while the removal window was open. */
-  removalPending: (change: AccessRemoval): boolean => {
-    switch (change.kind) {
-      case 'userGrant':
-        return !!grantsOn(change.projectId)[change.userId]
-      case 'teamGrant':
-        return !!PLANNER.project(change.projectId)?.teamAccess?.[change.teamId]
-      case 'teamMember':
-        return !!PLANNER.user(change.userId)?.teams.includes(change.teamId)
-      case 'deleteTeam':
-        return rows.teams.has(change.teamId)
-    }
   },
   /* One sentence naming who blocks a change and how to clear it. */
   blockerText: (b: AccessBlocker): string => {

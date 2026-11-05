@@ -5,6 +5,7 @@ import { useUpdateBlocker } from '../lib/updateSafety'
 import {
   type AccessLevel,
   P,
+  REMOVAL_CHECKING,
   type TeamAccessLevel,
   type TeamVM,
   type UserVM,
@@ -13,7 +14,10 @@ import { Avatar, Icon } from './qivo'
 import { SettingsGroup } from './settingsPage'
 
 /** One access list for both project creation and settings. Team membership is
- * resolved by the server; adding a team never copies its members into Users. */
+ * resolved by the server; adding a team never copies its members into Users.
+ * `checking` names the row whose removal waits for the server's preview, so
+ * its Remove is disabled and busy until the answer comes
+ * (panels/useAccessRemoval.tsx). */
 export function ProjectAccessEditor({
   teams,
   users,
@@ -28,6 +32,7 @@ export function ProjectAccessEditor({
   canManageTeams = canManage,
   canManageUsers = canManage,
   canManageUser,
+  checking = () => false,
 }: {
   teams: TeamVM[]
   users: UserVM[]
@@ -42,6 +47,7 @@ export function ProjectAccessEditor({
   canManageTeams?: boolean
   canManageUsers?: boolean
   canManageUser?: (userId: string) => boolean
+  checking?: (kind: 'team' | 'user', id: string) => boolean
 }) {
   const [target, setTarget] = useState('')
   useUpdateBlocker(!!target)
@@ -106,8 +112,9 @@ export function ProjectAccessEditor({
                   className="h-control-sm w-control-sm shrink-0"
                   data-project-access-remove
                   aria-label={`Remove ${name} team access`}
-                  title={`Remove ${name} team access`}
-                  disabled={!canManageTeams}
+                  aria-busy={checking('team', teamId) || undefined}
+                  title={checking('team', teamId) ? REMOVAL_CHECKING : `Remove ${name} team access`}
+                  disabled={!canManageTeams || checking('team', teamId)}
                   onClick={() => onTeamChange(teamId, null)}
                 >
                   <Icon name="close" size={16} />
@@ -181,8 +188,13 @@ export function ProjectAccessEditor({
                   className="h-control-sm w-control-sm shrink-0"
                   data-project-access-remove
                   aria-label={`Remove ${user.name} direct access`}
-                  title={`Remove ${user.name} direct access`}
-                  disabled={!canEdit || userRole === 'lead'}
+                  aria-busy={checking('user', userId) || undefined}
+                  title={
+                    checking('user', userId)
+                      ? REMOVAL_CHECKING
+                      : `Remove ${user.name} direct access`
+                  }
+                  disabled={!canEdit || userRole === 'lead' || checking('user', userId)}
                   onClick={() => onUserChange(userId, null)}
                 >
                   <Icon name="close" size={16} />

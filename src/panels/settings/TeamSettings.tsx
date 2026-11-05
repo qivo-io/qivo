@@ -1,5 +1,5 @@
 /* Home-organization teams and the memberships their leaders can manage. */
-import { useEffect, useRef, useState as useStateS } from 'react'
+import { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -15,12 +15,12 @@ import {
   SettingsSection,
 } from '../../components/settingsPage'
 import { overLimit } from '../../lib/fieldLimits'
-import { focusAround, useFocusAfterRender } from '../../lib/focusWhenGone'
+import { focusAround } from '../../lib/focusWhenGone'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
-import { type AccessRemoval, P } from '../../store/planner'
-import { AccessRemovalModal } from '../Modals'
+import { P, REMOVAL_CHECKING } from '../../store/planner'
+import { useAccessRemoval } from '../useAccessRemoval'
 import { BackLink, TextField } from './controls'
 import { PlannableHoursInput } from './UserControls'
 
@@ -38,19 +38,13 @@ export function TeamPage({
   const ws = teamId // the update calls below all take the team id
   const canManage = P.isTeamLeader(teamId) // team leader or org admin
   const confirm = useConfirmArm<string>()
-  /* Removing a member who would lose sight of tasks they work on first asks
-     whether to keep them as Viewers or reassign their tasks. */
-  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  /* Where focus goes as that window closes, taken as it opens, because the
-     removal takes the member's row away before the server accepts it. That
-     is the next member's Remove, the previous one's, the empty list's line
-     or the member picker. A removal that needs no window takes the row away
-     at once, and focus goes there as it renders. */
-  const removalFocus = useRef<() => HTMLElement | null>(() => null)
-  const focusAfterRender = useFocusAfterRender()
-  // a read-only organization's admin removes members without the window
-  const teamOrg = P.teamById(teamId)?.org
-  useEffect(() => P.watchWriteBlock(teamOrg), [teamOrg])
+  /* Removing a member asks the server which open tasks they would lose
+     sight of, and when some, whether to keep them as Viewers or reassign
+     their tasks (useAccessRemoval). Focus then goes where the press says,
+     taken as it starts, because the removal takes the member's row away
+     before the server accepts it: the next member's Remove, the previous
+     one's, the empty list's line or the member picker. */
+  const removal = useAccessRemoval()
   const [addUid, setAddUid] = useStateS('')
   useUpdateBlocker(!!addUid)
   // Team membership belongs to the home organization; guests cannot join.
@@ -97,6 +91,8 @@ export function TeamPage({
             // Viewers and agents never lead; an old agent leader row can still be cleared.
             const leaderLocked = u.orgRole === 'viewer' || (u.isAgent && !isLeader)
             const arm = confirm.armed === `m:${u.id}`
+            const change = { kind: 'teamMember', teamId: ws, userId: u.id } as const
+            const checking = removal.checking(change)
             return (
               <div
                 key={u.id}
@@ -163,22 +159,30 @@ export function TeamPage({
                     style={{ color: arm ? 'var(--danger)' : undefined }}
                     className="w-control-sm h-control-sm"
                     aria-label={arm ? 'Click again to confirm' : `Remove ${u.name} from this team`}
-                    title={arm ? 'Click again to confirm' : `Remove ${u.name} from this team`}
+                    aria-busy={checking || undefined}
+                    disabled={checking}
+                    title={
+                      checking
+                        ? REMOVAL_CHECKING
+                        : arm
+                          ? 'Click again to confirm'
+                          : `Remove ${u.name} from this team`
+                    }
                     data-team-member-remove
                     onClick={() =>
-                      confirm.press(`m:${u.id}`, () => {
-                        const change = { kind: 'teamMember', teamId: ws, userId: u.id } as const
-                        removalFocus.current = focusAround(
-                          'data-settings-team-member',
-                          u.id,
-                          (row) => row.querySelector<HTMLElement>('[data-team-member-remove]'),
-                          () =>
-                            document.querySelector<HTMLElement>('[data-team-members-none]') ??
-                            document.querySelector<HTMLElement>('[data-team-member-picker]'),
-                        )
-                        if (P.startRemoval(change)) setRemoval(change)
-                        else focusAfterRender(removalFocus.current)
-                      })
+                      confirm.press(`m:${u.id}`, () =>
+                        removal.press(
+                          change,
+                          focusAround(
+                            'data-settings-team-member',
+                            u.id,
+                            (row) => row.querySelector<HTMLElement>('[data-team-member-remove]'),
+                            () =>
+                              document.querySelector<HTMLElement>('[data-team-members-none]') ??
+                              document.querySelector<HTMLElement>('[data-team-member-picker]'),
+                          ),
+                        ),
+                      )
                     }
                   >
                     <Icon name="close" size={16} />
@@ -197,14 +201,7 @@ export function TeamPage({
             </div>
           )}
         </div>
-        {removal && (
-          <AccessRemovalModal
-            key={JSON.stringify(removal)}
-            change={removal}
-            onClose={() => setRemoval(null)}
-            focusAfterClose={() => removalFocus.current()}
-          />
-        )}
+        {removal.window}
         {canManage && (
           <SettingsGroup legend="Add a member">
             <div className="[display:flex] [gap:8px]">
@@ -252,18 +249,14 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   useUpdateBlocker(!!teamName)
   useUnsaved(!!teamName.trim(), 'team name')
   const confirm = useConfirmArm<string>()
-  // deleting a team whose members would lose sight of their tasks asks first
-  const [removal, setRemoval] = useStateS<AccessRemoval | null>(null)
-  /* Where focus goes as that window closes, taken as it opens, because the
-     delete takes the team's row away before the server accepts it. That is
-     the next team's Delete, or its name once it is the last team, whose
-     Delete is disabled, else the previous team's. A delete that needs no
-     window takes the row away at once, and focus goes there as it renders. */
-  const removalFocus = useRef<() => HTMLElement | null>(() => null)
-  const focusAfterRender = useFocusAfterRender()
-  // a read-only organization refuses the deletion before the window opens
+  /* Deleting a team asks the server which open tasks its members would lose
+     sight of, and when some, asks first (useAccessRemoval). Focus then goes
+     where the press says, taken as it starts, because the delete takes the
+     team's row away before the server accepts it: the next team's Delete,
+     or its name once it is the last team, whose Delete is disabled, else the
+     previous team's. */
+  const removal = useAccessRemoval()
   const homeOrg = P.homeOrg
-  useEffect(() => P.watchWriteBlock(homeOrg), [homeOrg])
   const homeTeams = P.teams.filter((t) => t.org === homeOrg)
   const mine = homeTeams.filter((t) => P.isTeamLeader(t.id))
   const addTeam = () => {
@@ -294,6 +287,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             // Count home teams only; P.teams also contains foreign teams.
             const last = homeTeams.length <= 1
             const arm = confirm.armed === `t:${t.id}`
+            const change = { kind: 'deleteTeam', teamId: t.id } as const
+            const checking = removal.checking(change)
             return (
               <div
                 key={t.id}
@@ -319,7 +314,8 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                     type="button"
                     variant="ghost"
                     size={arm ? 'sm' : 'icon-sm'}
-                    disabled={last}
+                    disabled={last || checking}
+                    aria-busy={checking || undefined}
                     style={{ opacity: last ? 0.35 : 1, color: arm ? 'var(--danger)' : undefined }}
                     aria-label={
                       last
@@ -331,25 +327,27 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
                     title={
                       last
                         ? "The last team can't be deleted. Create another team first."
-                        : arm
-                          ? 'Click again to delete this team'
-                          : 'Delete team'
+                        : checking
+                          ? REMOVAL_CHECKING
+                          : arm
+                            ? 'Click again to delete this team'
+                            : 'Delete team'
                     }
                     data-team-delete
                     onClick={() => {
                       if (last) return
-                      confirm.press(`t:${t.id}`, () => {
-                        const change = { kind: 'deleteTeam', teamId: t.id } as const
-                        removalFocus.current = focusAround(
-                          'data-team-row',
-                          t.id,
-                          (row) =>
-                            row.querySelector<HTMLElement>('[data-team-delete]:not(:disabled)') ??
-                            row.querySelector<HTMLElement>('[data-team-open]'),
-                        )
-                        if (P.startRemoval(change)) setRemoval(change)
-                        else focusAfterRender(removalFocus.current)
-                      })
+                      confirm.press(`t:${t.id}`, () =>
+                        removal.press(
+                          change,
+                          focusAround(
+                            'data-team-row',
+                            t.id,
+                            (row) =>
+                              row.querySelector<HTMLElement>('[data-team-delete]:not(:disabled)') ??
+                              row.querySelector<HTMLElement>('[data-team-open]'),
+                          ),
+                        ),
+                      )
                     }}
                   >
                     <Icon name="trash" size={16} />
@@ -365,14 +363,7 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
             </div>
           )}
         </div>
-        {removal && (
-          <AccessRemovalModal
-            key={JSON.stringify(removal)}
-            change={removal}
-            onClose={() => setRemoval(null)}
-            focusAfterClose={() => removalFocus.current()}
-          />
-        )}
+        {removal.window}
         {admin && (
           <SettingsGroup legend="New team">
             <div className="[display:flex] [gap:8px]">

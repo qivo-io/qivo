@@ -8,11 +8,13 @@
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access reads everything. Load more reads after the last batch's
-     `next`; one read runs at a time, so a second press or a Retry while one
-     runs reads nothing. A failed batch keeps the rows and the place, and
-     Retry reads it again, or starts again when the first batch failed.
-     Nothing is subscribed, so a hidden tab has nothing to pause.
+     access and the removal window's Reassign picker read everything. Load
+     more reads after the last batch's `next`; one read runs at a time, so a
+     second press or a Retry while one runs reads nothing. A failed batch
+     keeps the rows and the place, and Retry reads it again, or starts again
+     when the first batch failed. A first answer with no rows stays in
+     `answers`, as the live engine keeps it, so a page can say why. Nothing
+     is subscribed, so a hidden tab has nothing to pause.
    - `live`: each batch is a live read (lib/liveView.ts watchLive) that
      runs again whenever what it read changes, on the rules of the
      Overview's lists (store/overviewLists.ts):
@@ -266,6 +268,8 @@ function onceEngine<A, Row>(
   // start and leaving the page move it on, so an older answer is dropped
   let sequence = 0
   let reads: Read[] = []
+  // a first answer with no rows, which `answers` shows
+  let held: A | null = null
   let phase: PagedList<A, Row>['phase'] = 'first'
   // a read on its way, so a second press or a Retry reads nothing
   let reading = false
@@ -293,6 +297,7 @@ function onceEngine<A, Row>(
       // a first answer with no rows is held; a later one is a failure that
       // keeps the rows and the place
       phase = answer !== null && after === null ? 'held' : 'failed'
+      if (phase === 'held') held = answer
     } else {
       reads = [...reads, { answer, batch }]
       phase = 'ready'
@@ -303,6 +308,7 @@ function onceEngine<A, Row>(
   function start() {
     sequence++
     reads = []
+    held = null
     phase = 'first'
     reading = false
     if (key !== null) read(null)
@@ -327,6 +333,7 @@ function onceEngine<A, Row>(
     stop() {
       sequence++
       reads = []
+      held = null
       reading = false
     },
     view() {
@@ -342,7 +349,7 @@ function onceEngine<A, Row>(
       const end = last()?.batch
       return {
         rows,
-        answers: reads.map((r) => r.answer),
+        answers: held !== null && phase === 'held' ? [held] : reads.map((r) => r.answer),
         batches,
         phase,
         next: (end?.next ?? null) !== null,
