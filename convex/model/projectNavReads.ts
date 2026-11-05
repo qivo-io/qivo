@@ -40,18 +40,25 @@
  * of each top-level project such a row records a source on, and it reads
  * the sub-projects of only those that pass. A Viewer's lead, which writes
  * an on_root row and gives nothing, and a stale row thus open no
- * sub-project the seat cannot see, and where a batch stops never depends
- * on them. A row finds a candidate and grants
- * nothing. The reader reads and judges each candidate's live project, and
- * a reach row's copies must be its project's (organization, kind,
- * top-level project, name key against nameKey(project.name) and live
+ * sub-project the seat cannot see. Each still costs every call its
+ * project's read and accessible check, which, for a role that receives
+ * team access, can read that project's team shares, at most
+ * OWN_READS.projectShares + 1, and look up the person's membership in each
+ * share's team, so how far a call's budget goes depends, within that
+ * bound, on a project the seat does not see, as the page's check of such a
+ * root row does when a batch reaches it. A row finds a candidate and
+ * grants nothing. The reader reads and judges each candidate's live
+ * project, and a reach row's copies must be its project's (organization,
+ * kind, top-level project, name key against nameKey(project.name) and live
  * state, as model/projectNav.ts reachFollows compares them), else the
  * reader skips the row, so a project shows once and at its own name's
  * place. A missing or stale row narrows a list and never widens it. So
  * where a batch ends and how far its budget goes depend only on the
- * person's own rows and the projects they see. A favorite on a project the
- * seat lost costs a lookup of each of its grantees' reach rows on it and
- * nothing of that project (model/projectFavorites.ts favoriteShows).
+ * person's own rows and the projects they see, except for that bounded
+ * check of a project one of their root rows names and they do not see
+ * (above). A favorite on a project the seat lost costs a lookup of each of
+ * its grantees' reach rows on it and nothing of that project
+ * (model/projectFavorites.ts favoriteShows).
  *
  * The order. A list is in the byte order of the name key (lib/namedPages.ts
  * compareNamed), the project id breaking ties. The page's positions also
@@ -1209,8 +1216,13 @@ async function inheritedShows(
  * PROJECT_NAV.roots across the seats, and only then reads and asks about
  * each, so past either bound it rejects with accessUnchecked before it
  * reads a project. A row on a project the seat does not see for a reason
- * of its own, a Viewer's lead or a stale row, costs that project's read
- * and check and opens none of its sub-projects.
+ * of its own, a Viewer's lead or a stale row, opens none of its
+ * sub-projects. It still costs every call that project's read and
+ * accessible check, which, for a role that receives team access, can read
+ * the project's team shares, at most OWN_READS.projectShares + 1, and look
+ * up the person's membership in each share's team, so how far a call's
+ * budget goes depends, within that bound, on a project the seat does not
+ * see, as the page's check of such a root row does when a batch reaches it.
  */
 async function ownRoots(
   ctx: QueryCtx,
