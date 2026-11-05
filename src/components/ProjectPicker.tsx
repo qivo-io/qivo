@@ -271,6 +271,9 @@ export function ProjectPickerPanel({
   label = 'Search projects',
 }: ProjectPickerPanelProps) {
   const id = useId()
+  // a sub-project's text sits 16 px past its project's, which follows the
+  // project's arrow, a 44 px touch target on a phone
+  const childIndent = useMobile() ? 'pl-[62px]' : 'pl-[50px]'
   const [text, setText] = useState('')
   const search = useSettledSearch(text, LIMITS.search)
   const term = nameKey(search.settled)
@@ -562,9 +565,7 @@ export function ProjectPickerPanel({
     return (
       <div
         key={entry.key}
-        // a sub-project's text sits a step past its project's, which follows
-        // the project's arrow
-        className={cn('flex min-w-0 items-center gap-0.5', entry.child && 'pl-[42px]')}
+        className={cn('flex min-w-0 items-center gap-0.5', entry.child && childIndent)}
       >
         {top ? (
           <Button
@@ -700,7 +701,7 @@ export function ProjectPickerPanel({
                           what="sub-projects"
                         />
                       ))}
-                    <div className="pl-[42px]">
+                    <div className={childIndent}>
                       <ListLines
                         list={kids}
                         end={kidsEnd}
