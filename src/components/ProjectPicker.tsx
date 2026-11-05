@@ -427,14 +427,17 @@ export function ProjectPickerPanel({
   useFocusWhenGone(mainEnd === 'more', () => searchBox.current)
 
   /** Whether a row shows checked, whether a picked project includes it,
-      and why it takes no press, null when it takes one. */
+      and why it takes no press, null when it takes one. In one mode only
+      the picked row shows checked, since a press on a sub-project of the
+      picked project narrows the pick to it. */
   const stateOf = (entry: Entry) => {
     if (entry.kind === 'fixed')
       return { checked: isFixedPick(pick, entry.fixed), included: false, refused: null }
     const state = covered(pick, entry.row)
+    const shown = rules.many || state === 'picked' ? state : null
     return {
-      checked: state !== null,
-      included: state === 'included',
+      checked: shown !== null,
+      included: shown === 'included',
       refused: refusalOf(pick, entry.row, rules),
     }
   }

@@ -63,6 +63,12 @@ describe('pickRow', () => {
     expect(ids(press([LUMA], ONE, { kind: 'every' }))).toEqual(['luma'])
   })
 
+  it('narrows a picked project to one of its sub-projects in one mode', () => {
+    // a picked project covers its sub-projects only where picks add up
+    expect(refusalOf(press([LUMA], ONE), FIRMWARE, ONE)).toBeNull()
+    expect(ids(press([LUMA, FIRMWARE], ONE))).toEqual(['fw'])
+  })
+
   it('adds in pick order in many mode and takes a picked row off again', () => {
     const pick = press([ELECTRONICS, FIRMWARE, top('zulu')])
     expect(ids(pick)).toEqual(['el', 'fw', 'zulu'])

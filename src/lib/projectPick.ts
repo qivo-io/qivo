@@ -11,10 +11,12 @@
    later archived, deleted or hidden answers there like any project the
    person cannot see.
 
-   Both reads take a top-level project with its live sub-projects, so a
-   picked top-level project covers its sub-projects: their rows show
-   included, a pick of one of them is refused, and picking the project
-   drops their earlier picks. Each pick counts one of PICK_MOST. */
+   Both reads take a top-level project with its live sub-projects, so in
+   many mode a picked top-level project covers its sub-projects: their rows
+   show included, a pick of one of them is refused, and picking the project
+   drops their earlier picks. Each pick counts one of PICK_MOST. In one
+   mode every pick replaces the last, so a sub-project of the picked
+   project narrows the pick to it. */
 
 import type { NavProject } from '../../convex/model/projectNavReads'
 
@@ -79,16 +81,19 @@ export function covered(
 }
 
 /** Why `row` cannot be added to `pick` under `rules`, or null when it can.
-    A row already picked is never refused, as a press then takes it off. */
+    One mode refuses nothing, as a press there replaces the pick. In many
+    mode a row already picked is never refused, as a press then takes it
+    off. */
 export function refusalOf(
   pick: ProjectPick | null,
   row: PickedProject,
   rules: PickRules,
 ): PickRefusal | null {
+  if (!rules.many) return null
   const state = covered(pick, row)
   if (state === 'picked') return null
   if (state === 'included') return 'covered'
-  if (!rules.many || pick?.kind !== 'projects') return null
+  if (pick?.kind !== 'projects') return null
   if (rules.oneOrg && row.org_id !== pick.org_id) return 'org'
   // a top-level project that drops its sub-projects' picks frees their room
   const kept = pick.projects.filter((p) => p.parent?.id !== row.id)

@@ -474,6 +474,26 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(document.activeElement).toBe(find('[data-palette-scope]'))
   })
 
+  it('narrows a picked project to one of its sub-projects with one press', async () => {
+    await open()
+    await type('firm')
+    await last().answer([task(14)])
+    await choose(META)
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: META })
+    await last().answer([task(14)])
+    await click(find('[data-palette-scope]'))
+    await click(find(`[data-project-expand="${META}"]`))
+    // the picked project's sub-projects show as rows to pick, not included
+    const firmware = find<HTMLButtonElement>(`[data-project-pick="${FW}"]`)
+    expect(firmware.disabled).toBe(false)
+    expect(firmware.getAttribute('aria-pressed')).toBe('false')
+    expect(firmware.textContent).not.toContain('Included in')
+    expect(find(`[data-project-pick="${META}"]`).getAttribute('aria-pressed')).toBe('true')
+    await click(firmware)
+    expect(last().args.scope).toEqual({ org_id: ORG, project_id: FW })
+    expect(scopeLabel()).toBe('Luma Sensor › Firmware')
+  })
+
   it('closes only the picker on Escape, and reads none of the workspace’s projects', async () => {
     await open()
     const spies = [
