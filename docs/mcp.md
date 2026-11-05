@@ -1589,8 +1589,9 @@ or brought back from it, and while Qivo counts an organization again, it is
 ask again later. That includes a project in another top-level project,
 because older versions of Qivo let a subtask sit in another top-level
 project than its parent. An `update_project` that restores a project
-answers its completion as `counting` too, unless it has no sub-project you
-can read, and one that archives a project answers `null`. In a project with
+answers its completion as `counting` too, unless it is a top-level project
+with no live sub-project you can read, which answers `ok` with zero counts,
+and one that archives a project answers `null`. In a project with
 so many sub-projects that the call has no room left to read their counts,
 it is `{"status": "unavailable", "done": null, "total": null, "percent":
 null}` instead. Neither ever fails the read or `update_project`.

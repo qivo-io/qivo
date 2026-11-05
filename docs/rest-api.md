@@ -552,8 +552,9 @@ A row of the list:
   so ask again later. That includes a project in another top-level
   project, because older versions of Qivo let a subtask sit in another
   top-level project than its parent. A `PATCH` that restores a project
-  answers its completion as `counting` too, unless it has no sub-project
-  you can read, and one that archives a project answers `null`, as for any
+  answers its completion as `counting` too, unless it is a top-level
+  project with no live sub-project you can read, which answers `ok` with
+  zero counts, and one that archives a project answers `null`, as for any
   archived project. In a project with so many sub-projects that the request
   has no room left to read their counts, it is `{"status": "unavailable",
   "done": null, "total": null, "percent": null}` instead. Neither ever
