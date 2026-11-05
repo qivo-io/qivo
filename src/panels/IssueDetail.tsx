@@ -1230,8 +1230,9 @@ type GoneAnswer =
    with Restore for someone who can edit its project (`canRestore`), or
    that its project is archived too (`projectArchived`), or for a task the
    window showed that it is no longer here, or for one it never showed
-   that it can't be opened, the same for every reason, or that it could not
-   be checked or opened, with Retry, or, while the read is asked, that the
+   that it can't be opened, the same for every reason, with Retry where no
+   read follows that answer (`retryUnavailable`), or that it could not be
+   checked or opened, with Retry, or, while the read is asked, that the
    task left or is loading. A restored task comes back into the window. A
    reason typed in the task's
    Archive or delete window went unused, so the note says so and shows it
@@ -1250,6 +1251,7 @@ function TaskGone({
   canRestore,
   projectArchived = false,
   onRetry,
+  retryUnavailable = false,
   inWindow = false,
   showPlace = false,
   unusedReason,
@@ -1264,6 +1266,9 @@ function TaskGone({
       lists only once the project is restored */
   projectArchived?: boolean
   onRetry: () => void
+  /** a task opened by a reference that the server said can't be opened,
+      which no read follows any more, so Retry reads it again */
+  retryUnavailable?: boolean
   inWindow?: boolean
   /** above an archived task in a window without its details column, as
       the desktop Inbox pane: where it lives and when it was archived */
@@ -1370,7 +1375,7 @@ function TaskGone({
         {text}
         {unusedReason && ' The reason you typed for it was not used. Copy it to keep it.'}
       </span>
-      {found === 'failed' && (
+      {(found === 'failed' || (found === null && opened && retryUnavailable)) && (
         <Button type="button" variant="ghost" onClick={retry}>
           <Icon name="rotateCcw" size={16} />
           Retry
@@ -2051,6 +2056,11 @@ function IssueDetail({
   // only the server's word makes unavailable
   const refAnswer: GoneAnswer =
     refRead?.state === 'failed' ? 'failed' : refRead?.state === 'unavailable' ? null : undefined
+  // a uuid every organization said can't be opened, which no read follows
+  // once its walk over the seats ended, so Retry reads it again
+  // (P.retryTask); every other answer follows the server by itself
+  const retryUnavailable =
+    !!ref?.uuid && !ref.org && refRead?.state === 'unavailable' && !refRead.task
   const goneAnswer: GoneAnswer = !identity
     ? refAnswer
     : archived && archivedRow
@@ -3441,6 +3451,7 @@ function IssueDetail({
               canRestore={canRestore}
               projectArchived={projectArchived}
               onRetry={P.retryTask}
+              retryUnavailable={retryUnavailable}
               // the open Archive or delete window's reason, in the render
               // where the task goes, before the effect above keeps it
               unusedReason={fateOpen ? fateReason.current.trim() || null : unusedReason}

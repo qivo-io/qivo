@@ -13,7 +13,8 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
    organization (P.watchTaskRef, the `reference` side of the live parts),
    the window's own read that takes over from it, the move of the
    reference to the task's handle, the walk of a uuid across the login's
-   seats, and the boot's read of its address. Then the window's delay of
+   seats, again after an access change or Retry, and the boot's read of
+   its address. Then the window's delay of
    a task the workspace cannot judge (P.windowDelay), from the owner-load
    cache. The live transport is the store's test double, whose side
    queries share one token per arguments, as in Convex. */
@@ -332,6 +333,45 @@ describe('the read of a reference', () => {
     expect(P.reference?.state).toBe('retrying')
     one('taskWindow:task').deliver({ state: 'unavailable' })
     expect(one('taskWindow:task').args).toEqual({ org_id: GUEST, ref: FAR })
+  })
+
+  it('reads a uuid every seat said unavailable for in the seats again once access changes, or on Retry', async () => {
+    const { P } = store
+    P.watchTaskRef(taskRef({ org: null, uuid: FAR }))
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    expect(P.reference?.state).toBe('unavailable')
+    expect(open('taskWindow:task')).toEqual([])
+    // a change that grants nothing reads nothing
+    snap.issues.push(task('task-b', 2))
+    publishWhole(snap)
+    await turn()
+    expect(open('taskWindow:task')).toEqual([])
+    // the partner shares its project with the guest seat, where the task
+    // was archived: every seat is read again, home first, and the window
+    // goes on saying unavailable meanwhile
+    snap.access.push({ project_id: GUEST_PROJECT, profile_id: 'me-guest', level: 'user' })
+    publishWhole(snap)
+    await turn()
+    expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: FAR })
+    expect(P.reference?.state).toBe('unavailable')
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    expect(P.reference?.state).toBe('unavailable')
+    expect(one('taskWindow:task').args).toEqual({ org_id: GUEST, ref: FAR })
+    const archived = archivedAnswer(FAR, 40)
+    one('taskWindow:task').deliver({
+      ...archived,
+      task: { ...archived.task, org_id: GUEST, project_id: GUEST_PROJECT },
+    })
+    expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org: GUEST } })
+    // Retry reads another such uuid in every seat again, from the first
+    P.watchTaskRef(taskRef({ org: null, uuid: OTHER }))
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    expect(open('taskWindow:task')).toEqual([])
+    P.retryTask()
+    expect(P.reference?.state).toBe('retrying')
+    expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: OTHER })
   })
 
   it("hands a uuid's read over to the window's task side with no second subscription, which turns editable at once and runs again on Retry", () => {

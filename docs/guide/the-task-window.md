@@ -176,12 +176,15 @@ description, comments and lists. Until the server answers, the window says
 **Loading QN-12…**, or **Loading this task…** when it knows no number yet.
 A task the server will not show says **QN-12 can't be opened. It may not
 exist, or you may not have access to it.**, the same for every reason, and
-the window and its address stay until you close it. If Qivo cannot reach
-the server, the window says **Couldn't open QN-12.**, with **Retry**. A
-task you open by the number in its link takes no change, which says
-**Available once Qivo can check this task for changes**, until the window
-has read the task on its own, which on a large workspace comes after the
-first tasks have loaded. Then, if you can edit its project, you can
+the window and its address stay until you close it. A link that names the
+task by its internal identifier rather than its number, as a Team sync link
+to another organization's task does, is checked again in each of your
+organizations when your access changes, and its note offers **Retry**. If
+Qivo cannot reach the server, the window says **Couldn't open QN-12.**,
+with **Retry**. A task you open by the number in its link takes no change,
+which says **Available once Qivo can check this task for changes**, until
+the window has read the task on its own, which on a large workspace comes
+after the first tasks have loaded. Then, if you can edit its project, you can
 change it: its fields, its description and the images in it, its
 labels and its files, and **Remove parent**. Each change shows at once and
 is saved against the task as the window showed it, so a change someone else

@@ -1326,8 +1326,9 @@ type TaskArchived = Extract<TaskAnswer, { state: 'archived' }>
    a uuid without one answered unavailable in, `args` the arguments of the
    read now (null while none runs, also while the task side reads them for
    it), `answer` its last ok or archived answer, kept through a failure,
-   and `moved` the handle the reference moved to once the workspace held
-   its task. */
+   `rechecking` whether a uuid every seat said unavailable for is read in
+   the seats again after an access change (syncRefRead), and `moved` the
+   handle the reference moved to once the workspace held its task. */
 type RefRead = {
   ref: string
   parts: RefParts
@@ -1336,6 +1337,7 @@ type RefRead = {
   answer: TaskOk | TaskArchived | null
   state: TaskRefVM['state']
   task: TaskRefVM['task']
+  rechecking: boolean
   moved: string | null
 }
 let refRead: RefRead | null = null
@@ -1344,6 +1346,9 @@ let refRead: RefRead | null = null
    address (store/liveParts.ts `address`), which the window then takes
    over. */
 let refLast: { args: string; news: SideNews } | null = null
+/* Whether a rebuild since the last syncRefRead changed who can open what:
+   the projects, the seats' profiles, or a grant to a person or a team. */
+let refAccessMoved = false
 
 /* The key a reference read's arguments compare by. */
 const refKey = (args: { org_id?: unknown; ref?: unknown }) =>
@@ -1421,7 +1426,8 @@ function runRefRead(read: RefRead) {
     if (refLast?.args === key) takeRefNews(read, refLast.news, args)
     return
   }
-  if (!read.task && read.state !== 'retrying') read.state = 'loading'
+  // a walk that starts over after an access change shows no loading frame
+  if (!read.task && read.state !== 'retrying' && !read.rechecking) read.state = 'loading'
   // a fresh subscription has said nothing yet
   refLast = null
   parts?.watchSide('reference', api.taskWindow.task, args)
@@ -1433,12 +1439,14 @@ function takeRefNews(read: RefRead, news: SideNews, args: { org_id: string; ref:
   if ('error' in news && !seatRefused(news.error)) {
     console.error('[qivo] the read of a task by its reference failed:', news.error)
     read.state = 'failed'
+    read.rechecking = false
     return
   }
   const answer = 'error' in news ? null : (news.value as TaskAnswer)
   if (answer && answer.state !== 'unavailable') {
     read.answer = answer
     read.state = 'resolved'
+    read.rechecking = false
     const group = answer.state === 'ok' ? !!answer.task.has_subtasks : answer.task.is_group
     const row = answer.task
     read.task = {
@@ -1453,15 +1461,23 @@ function takeRefNews(read: RefRead, news: SideNews, args: { org_id: string; ref:
   }
   // unavailable, or no seat there: a uuid without an organization is read
   // in the next seat, until none is left, when no read runs (syncRefRead
-  // walks on to a seat that joins later)
+  // walks on to a seat that joins later, and starts over after an access
+  // change). A walk that starts over keeps saying unavailable meanwhile.
   read.answer = null
   read.state = 'unavailable'
   if (!read.task && !read.parts.org) {
     read.tried.add(args.org_id)
-    if (nextRefArgs(read)) read.state = 'loading'
+    if (!nextRefArgs(read)) read.rechecking = false
+    else if (!read.rechecking) read.state = 'loading'
     runRefRead(read)
   }
 }
+
+/* Whether `read` is a uuid without an organization that every seat it was
+   read in said unavailable for, which no read follows once the walk ends
+   (takeRefNews). */
+const refWalkEnded = (read: RefRead) =>
+  read.state === 'unavailable' && !read.task && !!read.parts.uuid && !read.parts.org
 
 /* The reference side's news in one transition. */
 function referenceNews(news: SideNews) {
@@ -1488,10 +1504,15 @@ function refFromTaskSide(watched: { task: string; org: string }, news: SideNews)
 
 /* Keeps the reference read in step as the sections build. It runs again
    on a fresh registry (stopParts), a uuid walks on to a seat that joined
-   since it said unavailable, and the read stops once the window's own
-   read of the task has answered. */
+   since it said unavailable, and starts over in every seat after a
+   rebuild that changed who can open what (refAccessMoved), as when a
+   project is shared with one of the seats, since no read follows the
+   seats it said unavailable in. The read stops once the window's own read
+   of the task has answered. */
 function syncRefRead() {
   const read = refRead
+  const accessMoved = refAccessMoved
+  refAccessMoved = false
   if (!read || !parts) return
   const t = read.task?.uuid
   if (t && watchedComments === t && sectionAnswers.issue === t && sectionAnswers.task !== null) {
@@ -1499,7 +1520,11 @@ function syncRefRead() {
     read.args = null
     return
   }
-  if (read.state === 'unavailable' && !read.task && read.parts.uuid && !read.parts.org) {
+  if (refWalkEnded(read)) {
+    if (accessMoved && !read.args && !nextRefArgs(read)) {
+      read.tried.clear()
+      read.rechecking = true
+    }
     if (nextRefArgs(read)) runRefRead(read)
     return
   }
@@ -5501,6 +5526,15 @@ function rebuild(now = new Date(), full = false) {
     todayBefore !== TODAY_ISO
   lastIdentity = identity
   const changes = taskChangesOf(dirty)
+  // who can open what, which a uuid every seat said unavailable for is
+  // read again after (syncRefRead)
+  refAccessMoved ||=
+    whole ||
+    dirty.keys.has('projects') ||
+    dirty.keys.has('profiles') ||
+    dirty.lists.has('access') ||
+    dirty.lists.has('teamAccess') ||
+    dirty.lists.has('teamMembers')
   // the tasks taken for groups with subtasks to come, and for subtasks of
   // parents to come, change while loading
   if (
@@ -10304,10 +10338,14 @@ export const PLANNER = {
       'retrying' until the server answers, whether or not the sections
       show. A failure keeps the answer delivered before it. Does nothing
       unless the read failed. While the reference read serves the task, a
-      failure of that read runs it again instead. */
+      failure of that read runs it again instead, and a uuid every seat
+      said unavailable for is read in the seats again, from the first. */
   retryTask: () => {
     const read = refRead
-    if (read?.state === 'failed' && read.args && sectionFailure.task === 'none') {
+    const walked = !!read && refWalkEnded(read)
+    if (read && (walked || (read.state === 'failed' && read.args && sectionFailure.task === 'none'))) {
+      if (walked) read.tried.clear()
+      read.rechecking = false
       read.state = 'retrying'
       // a fresh subscription runs the failed query again
       parts?.stopSide('reference')
@@ -10351,6 +10389,7 @@ export const PLANNER = {
               project: null,
               owner: null,
             },
+            rechecking: false,
             moved: null,
           }
         : null

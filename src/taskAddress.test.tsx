@@ -16,7 +16,9 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    second one. The scope moves to the task's project once the answer names
    it, and the window turns editable in place once the workspace holds the
    task. An archived task's address shows it read-only, with Restore for
-   an editor only. The Board behind it can be past its budget. The
+   an editor only. A task the server answers unavailable can't be opened,
+   with Retry where no read follows that answer, as for a uuid every
+   organization answered. The Board behind it can be past its budget. The
    address-moved gate shows nothing of the task and reads no message. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -273,6 +275,35 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
         level,
       ).toBe(restore)
     }
+  })
+
+  it("says a task the server answers unavailable can't be opened, with Retry where no read follows that answer", async () => {
+    // a number in its organization, whose read goes on after the answer
+    let booted = await bootAt('/app/testbed/tasks/qn-2')
+    await act(async () => reads[0]?.next({ state: 'unavailable' }))
+    await waitFor(() => note()?.startsWith("QN-2 can't be opened."), 'the note')
+    const retry = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-task-gone] button')].find(
+        (b) => b.textContent === 'Retry',
+      )
+    expect(retry()).toBeUndefined()
+    // a uuid, which every organization of the login answered unavailable
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    booted = await bootAt(`/app/testbed/tasks/${SOAK}`)
+    const org = booted.snap.orgs[0].id
+    expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: SOAK }])
+    await act(async () => reads[0]?.next({ state: 'unavailable' }))
+    await waitFor(() => note()?.startsWith("This task can't be opened."), 'the note')
+    // Retry reads it again, and it opens
+    await act(async () => retry()?.click())
+    expect(reads.map((read) => read.args)).toEqual([
+      { org_id: org, ref: SOAK },
+      { org_id: org, ref: SOAK },
+    ])
+    await act(async () => reads[1]?.next(answerOf(booted.snap)))
+    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
   })
 
   it('opens the task when its Board is past its budget', async () => {
