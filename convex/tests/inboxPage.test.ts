@@ -1346,6 +1346,54 @@ describe('the read budget', () => {
     expect(await drift(t)).toEqual([])
   })
 
+  it('counts every message a search and an unread change read, so a lowered document or byte budget alone ends pages within it', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // 30 groups at the item cap: a read change that holds the search word,
+    // then 50 unread mentions in comments, so the search reads every message
+    // of each group and unreadChange walks every unread one
+    const tasks = await plantGroups(t, f.guest, 30, () => f.sub.id, {
+      chunk: 10,
+      sent: (i) => [
+        {
+          minute: 100 * i,
+          read: true,
+          actor: f.admin.id,
+          body: 'Wired the zebra harness to the bench',
+        },
+        ...Array.from({ length: ITEM_UNREAD_CAP }, (_, j) => ({
+          minute: 100 * i + 1 + j,
+          kind: 'mention' as const,
+          body: MENTION_DETAILS.comment,
+          actor: f.admin.id,
+        })),
+      ],
+    })
+    const search = { search: 'zebra' }
+    // what a page of one group reads, that group's own reads included
+    INBOX_PAGE.rows = 1
+    const one = await measured(t, f.guest, search)
+    expect(one.answer.rows).toHaveLength(1)
+    INBOX_PAGE.rows = DEFAULT_PAGE.rows
+    for (const [figure, reads] of [
+      ['documents', { ranges: 1e9, documents: 1000, bytes: 1e12 }],
+      ['bytes', { ranges: 1e9, documents: 1e9, bytes: 512 * 1024 }],
+    ] as const) {
+      INBOX_PAGE.reads = { ...reads }
+      const all = await measuredPages(t, f.guest, search)
+      // each page ends within its ceiling and one group's reads past it
+      for (const r of all) expect(r[figure], figure).toBeLessThan(reads[figure] + one[figure])
+      expect(all.length, figure).toBeGreaterThan(2)
+      for (const r of all.slice(0, -1)) {
+        expect(r.page.stopped, figure).toBe(true)
+        expect(r.page.rows.length, figure).toBeLessThan(INBOX_PAGE.rows)
+      }
+      expect(allIds(all.map((r) => r.page)), figure).toEqual(newestFirst(tasks))
+      expect(all.flatMap((r) => r.page.rows).some((row) => row.unread_change)).toBe(false)
+    }
+    expect(await drift(t)).toEqual([])
+  })
+
   it('says how far it checked by the last shown group, never a later hidden one', async () => {
     const t = newT()
     const f = await withOrg(t)
