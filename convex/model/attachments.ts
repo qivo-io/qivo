@@ -524,15 +524,15 @@ async function committedUpload(
  * answers the attachment `storageId` became when that is a row of this
  * task that `me` uploaded and no description save took out, and, with
  * `sameId`, of `row.id`; it then writes nothing, no row, activity or
- * count. Every other such case is `missing`. `storageId` must be the file its upload URL stored
- * (finishTicketUpload), so a ticket cannot claim or delete any other file.
- * The attachment is `row`, through attachFileCore with every one of its
- * checks, the ticket's declared size enforced unless it was `up_to`, and
- * `provenance` signing the activity row. A completed ticket is spent, and so
- * is one whose file was deleted for exceeding the organization's limit,
- * which for a declared size happens only when the organization lowered its
- * limit after the upload started. Any other refusal leaves the ticket for
- * another try.
+ * count. Every other such case is `missing`. `storageId` must be the file
+ * its upload URL stored (finishTicketUpload), so a ticket cannot claim or
+ * delete any other file. The attachment is `row`, through attachFileCore
+ * with every one of its checks, the ticket's declared size enforced unless
+ * it was `up_to`, and `provenance` signing the activity row. A completed
+ * ticket is spent, and so is one whose file was deleted for exceeding the
+ * organization's limit, which for a declared size happens only when the
+ * organization lowered its limit after the upload started. Any other
+ * refusal leaves the ticket for another try.
  */
 async function completeUpload(
   ctx: MutationCtx,
