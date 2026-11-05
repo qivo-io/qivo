@@ -271,9 +271,10 @@ function LabelRow({
   )
 }
 
-/* The window that deletes a label. It says how many active tasks use it,
-   that deleting removes it from every task, archived ones too, and that
-   this cannot be undone. */
+/* The window that deletes a label. It says how many active tasks use it
+   when the page has the server's count for it (labelDeleteSentence), that
+   deleting removes it from every task, archived ones too, and that this
+   cannot be undone. */
 function LabelDeleteWindow({
   name,
   count,

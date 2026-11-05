@@ -231,9 +231,9 @@ list while the loaded labels do not include it, and so does one whose name
 you are still editing when you search.
 
 **Delete** asks first. The window says how many active tasks use the label
-and that deleting it removes it from all tasks, archived tasks included.
-Deleting a label cannot be undone. New organizations start with
-**Electronics** and **Mechanical**.
+when Qivo has counted them, and that deleting it removes it from all tasks,
+archived tasks included. Deleting a label cannot be undone. New
+organizations start with **Electronics** and **Mechanical**.
 
 People with task-editing access can apply labels. Organization admins manage
 the list in Settings. Organization users with User or Lead access to a
