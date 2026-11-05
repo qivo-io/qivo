@@ -490,13 +490,29 @@ describe('the page at the design size', () => {
     expect(search.figures).toMatchObject({ entries: 25, next: true, missing: 'matches' })
   })
 
-  it('reads for a person in a team that shares 50 live and 150 archived projects', async () => {
+  it('reads for a person in a team that shares 50 live and 150 archived projects, three a project', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await member(t, f)
-    const rows = Array.from({ length: 200 }, (_, i) =>
-      projectRow(f, { type: 'project', parent_id: f.meta.id, archived: i >= 50 }),
-    )
+    // the shared sub-projects three a top-level project in their own state,
+    // two under the last live one: 17 live and 50 archived top-level
+    // projects, none of them shared
+    const rows: ProjectRow[] = []
+    const shared: ProjectRow[] = []
+    for (const [count, archived] of [
+      [50, false],
+      [150, true],
+    ] as const)
+      for (let i = 0; i < count; i += 3) {
+        const top = projectRow(f, { type: 'meta', archived })
+        rows.push(top)
+        for (let s = i; s < Math.min(count, i + 3); s++) {
+          const sub = projectRow(f, { type: 'project', parent_id: top.id, archived })
+          rows.push(sub)
+          shared.push(sub)
+        }
+      }
+    expect(shared).toHaveLength(200)
     await insertProjects(t, rows)
     const team = uuid()
     await t.run(async (ctx) => {
@@ -508,14 +524,14 @@ describe('the page at the design size', () => {
         created_at: NOW,
       })
       await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
-      for (const p of rows)
+      for (const p of shared)
         await ctx.db.insert('project_team_access', {
           project_id: p.id,
           team_id: team,
           level: 'user',
         })
     })
-    await plantTaskItem(t, f, rows[0], f.meta.id, me, START)
+    await plantTaskItem(t, f, shared[0], shared[0].parent_id ?? '', me, START)
     const browse = await readPage(t, me, { scope: { org_id: f.org.id, all: true } })
     record('a person whose team shares 200 projects browsing', browse.figures)
     expect(browse.figures).toMatchObject({ entries: 1, next: false, missing: null })

@@ -179,7 +179,8 @@ type Profile = Doc<'profiles'>
  * past `searches`, 611 ranges and 0.85 MiB. The sight of a seat beside
  * the catalogue of 2,000 projects reads 2,010 documents and 0.70 MiB,
  * beside 1,000 people 1,011 and 0.32 MiB, and for a person whose team
- * shares 200 projects 416 and 0.11 MiB.
+ * shares 50 live and 150 archived sub-projects, three a top-level project,
+ * 483 and 0.13 MiB.
  */
 export const DELETED_PAGE = {
   rows: 25,
