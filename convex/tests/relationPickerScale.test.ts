@@ -187,10 +187,8 @@ type Sizes = {
   /** Done tasks not yet archived in the family, spread over its
    * sub-projects, none */
   familyDone?: number
-  /** the member's teams, 3 */
+  /** the member's teams, 3, which share the top-level projects in turn */
   teams?: number
-  /** every team of the member shares the family, else one */
-  everyTeamOnFamily?: boolean
   /** teams the member is not in that share the family too, none */
   familyTeams?: number
 }
@@ -267,10 +265,8 @@ async function pickerOrg(o: Sizes = {}) {
       })
     const teams: { id: string; name: string }[] = []
     for (let i = 0; i < (o.teams ?? 3); i++) teams.push(await team(`Team ${i}`, true))
-    for (const [i, top] of tops.entries()) {
-      if (i === 0 && o.everyTeamOnFamily === true) for (const one of teams) await share(top, one)
-      else await share(top, teams[i % teams.length] as { id: string; name: string })
-    }
+    for (const [i, top] of tops.entries())
+      await share(top, teams[i % teams.length] as { id: string; name: string })
     for (let i = 0; i < (o.familyTeams ?? 0); i++)
       await share(family, await team(`Other ${i}`, false))
   })
@@ -315,8 +311,10 @@ describe('relation picker reads at the design size', () => {
     await pickers(e.t, 'a project with 200 Done tasks', e.member, e.open)
   })
 
-  it('reads a member in 5 teams that each share the family', async () => {
-    const e = await pickerOrg({ teams: 5, everyTeamOnFamily: true })
+  it('reads a member in 5 teams', async () => {
+    // each team shares a fifth of the top-level projects, the family
+    // with one of them, so only the teams a person is in is raised
+    const e = await pickerOrg({ teams: 5 })
     await pickers(e.t, 'a member in 5 teams', e.member, e.open)
   })
 

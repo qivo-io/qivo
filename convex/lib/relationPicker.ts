@@ -186,8 +186,9 @@ import { taskFields } from './workspaceParts'
  *   documents, a project of 30 live and 40 archived sub-projects of 20
  *   tasks each in 102 ranges, 677 documents and 0.3 MiB (a full batch 98
  *   ranges), and a project with 200 Done tasks in 25 ranges.
- * - A full batch reads at most 49 ranges for a member in 5 teams and 45
- *   where the family is shared with 5 teams.
+ * - A full batch reads at most 41 ranges for a member in 5 teams, as at
+ *   everyday values, and 45 where the family is shared with 5 teams, and a
+ *   rare word in all your projects 105 ranges and 1,833 documents in each.
  * - With the catalogue at its sum, 2,000 projects live and archived, a
  *   rare word in all your projects reads 101 ranges, 2,170 documents and
  *   1 MiB for a member, the catalogue's 2,000 documents included, and 707
