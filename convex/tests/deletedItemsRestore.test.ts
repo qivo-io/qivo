@@ -25,6 +25,7 @@ import {
   newMemo,
   type RestoreResult,
   restoreItems,
+  runStep,
   SIGHT_READ,
   STALLED_MS,
   startPurge,
@@ -809,6 +810,66 @@ describe('restoring a task item', () => {
       'rule',
     )
     expect(refused.data.message).toBe(SUBTASK_WITH_SUBTASKS)
+  })
+
+  it('deletes the search rows of a family of LIMITS.subtasks.max subtasks in steps after its reveal, within a lowered step budget', async () => {
+    // each deleted_tasks row holds its task's searchable text, which at the
+    // description cap in a three-byte script is about 60 KB, so the reveal
+    // leaves them to steps; here the rows a step may delete are lowered so a
+    // family of ordinary text needs several of them
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const description = 'Check the fixture alignment first. Record the readings in the notebook.'
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id, description })
+    const subtasks: string[] = []
+    for (let i = 0; i < LIMITS.subtasks.max; i++)
+      subtasks.push(
+        (await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id, description })).id,
+      )
+    await deleteTask(t, f, root.id, { subtask_ids: subtasks })
+    await runSteps(t)
+    const item = await itemFor(t, root.id)
+    expect(await storedTasks(t, item.id)).toHaveLength(LIMITS.subtasks.max + 1)
+    TRASH_BUDGET.rows = 10
+    const most = TRASH_BUDGET.rows
+
+    expect((await restore(t, f.user, [item.id])).stepping).toEqual([item.id])
+    // each step as deletedItems.step runs it, with the documents it read
+    const trail: { live: boolean; left: number; read: number }[] = []
+    for (let i = 0; (await itemById(t, item.id)) !== null; i++) {
+      expect(i).toBeLessThan(100)
+      const read = await t.run(async (ctx) => {
+        await runStep(ctx, item.id)
+        return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+      })
+      trail.push({
+        live: (await liveTask(t, root.id)) !== null,
+        left: (await storedTasks(t, item.id)).length,
+        read,
+      })
+    }
+    // the step that brought the family back deleted none of its rows
+    const revealed = trail.findIndex((s) => s.live)
+    expect(trail[revealed].left).toBe(LIMITS.subtasks.max + 1)
+    // each step after it deleted some within the step's budget, reading
+    // those rows, each once more to delete it, and a few documents of its own
+    const cleared = trail.slice(revealed + 1)
+    expect(cleared.length).toBeGreaterThan(5)
+    let left = trail[revealed].left
+    for (const s of cleared) {
+      expect(s.live).toBe(true)
+      expect(left - s.left).toBeGreaterThan(0)
+      expect(left - s.left).toBeLessThanOrEqual(most)
+      expect(s.read).toBeLessThanOrEqual(2 * most + 30)
+      left = s.left
+    }
+    expect(left).toBe(0)
+    // the family is back whole, and nothing of it is left in Deleted items
+    expect(await jobFor(t, item.id)).toBeNull()
+    for (const id of subtasks) expect((await liveTask(t, id))?.parent_id).toBe(root.id)
+    expect(await storedRows(t, item.id)).toEqual([])
+    expect(await t.run((ctx) => ctx.db.query('deleted_tasks').collect())).toEqual([])
   })
 
   it('reveals in a step of its own when checking who sees its parent runs out of what the restore call has left', async () => {
@@ -3582,8 +3643,10 @@ describe('restore calls', () => {
       tasks.push(task)
     }
     const items = await Promise.all(tasks.map((task) => itemFor(t, task.id)))
-    // four rows in the call, a quarter of a step
-    TRASH_BUDGET.rows = 16
+    // six rows in the call, a quarter of a step, which hold the first
+    // item's three comments, its task and, after its reveal, its search
+    // row (restore_clear)
+    TRASH_BUDGET.rows = 24
     const result = await restore(
       t,
       f.user,
@@ -3606,6 +3669,42 @@ describe('restore calls', () => {
     expect(rows.map((e) => e.target_id).sort()).toEqual(tasks.map((task) => task.id).sort())
   })
 
+  it("reads no page of a task item's stored tasks once the call's budget is spent, however many items it restores", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // three task items of a task and 70 subtasks each, more than a page
+    const items: Doc<'deleted_items'>[] = []
+    for (let n = 0; n < 3; n++) {
+      const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+      const subtasks: string[] = []
+      for (let i = 0; i < 70; i++)
+        subtasks.push(
+          (await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id })).id,
+        )
+      await deleteTask(t, f, root.id, { subtask_ids: subtasks })
+      items.push(await itemFor(t, root.id))
+    }
+    await runSteps(t)
+    // the call's bytes, a quarter of a step's, hold less than a page of
+    // the stored tasks' rows, whose searchable text a page reads with them
+    TRASH_BUDGET.bytes = 40_000
+    const read = await t.run(async (ctx) => {
+      const me = await byId(ctx, 'profiles', f.user.id)
+      if (me === null) throw new Error('the restorer is gone')
+      const fresh: Doc<'deleted_items'>[] = []
+      for (const item of items) fresh.push((await byId(ctx, 'deleted_items', item.id)) ?? item)
+      const result = await restoreItems(ctx, { me, items: fresh, now: new Date().toISOString() })
+      expect(result.stepping).toEqual(items.map((item) => item.id))
+      return (await ctx.meta.getTransactionMetrics()).documentsRead.used
+    })
+    // the first item's first page and what each item's checks read, not a
+    // page for each item
+    expect(read).toBeLessThan(2 * 64)
+    await runSteps(t)
+    for (const item of items) expect(await itemById(t, item.id)).toBeNull()
+  })
+
   it('reveals a task item too large for what the call has left in a step of its own', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -3622,10 +3721,16 @@ describe('restore calls', () => {
     expect((await itemById(t, item.id))?.state).toBe('restoring')
     expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_reveal' })
     for (const task of [root, ...subtasks]) expect(await liveTask(t, task.id)).toBeNull()
-    // a step that starts at the reveal runs it whatever its size
+    // a step that starts at the reveal runs it whatever its size, and the
+    // next deletes the search rows of its tasks, which the reveal's own
+    // reads left no budget for (restore_clear)
+    await step(t, item.id)
+    for (const task of subtasks) expect((await liveTask(t, task.id))?.parent_id).toBe(root.id)
+    expect(await jobFor(t, item.id)).toMatchObject({ phase: 'restore_clear' })
+    expect(await storedTasks(t, item.id)).toHaveLength(4)
     await step(t, item.id)
     expect(await itemById(t, item.id)).toBeNull()
-    for (const task of subtasks) expect((await liveTask(t, task.id))?.parent_id).toBe(root.id)
+    expect(await storedTasks(t, item.id)).toEqual([])
   })
 
   it('splits off a subtask whose project was deleted after the split, at the reveal', async () => {
