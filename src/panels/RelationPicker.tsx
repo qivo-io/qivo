@@ -134,7 +134,7 @@ type Seen = {
   link?: string | null
 }
 
-/** A row's pick as the picker keeps it: what the row now shows, and
+/** A row's pick as the picker keeps it, with what the row now shows and
     `basis`, what the window's lists and the server's row showed of its
     relation when the person pressed. */
 type Kept = { now: Seen; basis: Seen }
