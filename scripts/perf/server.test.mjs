@@ -480,9 +480,13 @@ describe('the benchmark server', () => {
 
   it("answers the project picker's navigation reads from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
-        `params`. */
+        `params`, each program with the everyday 3 sub-projects, so 45
+        programs give one person 135 readable sub-projects, inside the
+        design size's 200. */
     const nav = async (params, name, args = {}) => {
-      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      const { posted, send } = await server(
+        `tasks=20&subprojects=3&latency=0&mbps=100000&${params}`,
+      )
       await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
       const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
       await send({ type: 'query', id: 'nav', name, args })
@@ -498,7 +502,7 @@ describe('the benchmark server', () => {
     expect(page.answer.rows.map((row) => row.name)).not.toContain('Hidden program')
     const first = page.snap.projects.find((p) => p.name === 'Testbed program')
     const kids = await nav('programs=30', 'projectNav:children', { project_id: first.id })
-    expect(kids.answer.rows).toHaveLength(10)
+    expect(kids.answer.rows).toHaveLength(3)
     expect(kids.answer.rows.every((row) => row.parent_id === first.id)).toBe(true)
     const found = await nav('programs=30', 'projectNav:search', { search: 'project 3' })
     expect(found.answer.rows.length).toBeGreaterThan(0)
