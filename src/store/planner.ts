@@ -1474,11 +1474,14 @@ function takeRefNews(read: RefRead, news: SideNews, args: { org_id: string; ref:
   }
 }
 
-/* Whether `read` is a uuid without an organization that every seat it was
-   read in said unavailable for, which no read follows once the walk ends
+/* Whether `read` is a uuid without an organization that no seat has
+   named yet, so it walks the seats (refSeats). */
+const refWalks = (read: RefRead) => !read.task && !!read.parts.uuid && !read.parts.org
+
+/* Whether `read` walks the seats (refWalks) and every seat it was read in
+   said unavailable for, which no read follows once the walk ends
    (takeRefNews). */
-const refWalkEnded = (read: RefRead) =>
-  read.state === 'unavailable' && !read.task && !!read.parts.uuid && !read.parts.org
+const refWalkEnded = (read: RefRead) => read.state === 'unavailable' && refWalks(read)
 
 /* The reference side's news in one transition. */
 function referenceNews(news: SideNews) {
@@ -1505,14 +1508,15 @@ function refFromTaskSide(watched: { task: string; org: string }, news: SideNews)
 
 /* Keeps the reference read in step as the sections build. It runs again
    on a fresh registry (stopParts), a uuid walks on to a seat that joined
-   since it said unavailable, and starts over in every seat after a
-   rebuild that changed who can open what (refAccessMoved), as when a
-   project is shared with one of the seats, since no read follows the
-   seats it said unavailable in. A read that waits on the task side
-   (runRefRead) reads on its own once the task side no longer reads its
-   arguments, as when the window lets the task go before the task side
-   answered. The read stops once the window's own read of the task has
-   answered. */
+   since it said unavailable, and reads every seat it said unavailable in
+   again after a rebuild that changed who can open what (refAccessMoved),
+   as when a project is shared with one of the seats, since no read
+   follows those seats. That holds also while the walk reads a later
+   seat, whose read goes on, and the walk comes back to the earlier seats
+   before it can end. A read that waits on the task side (runRefRead)
+   reads on its own once the task side no longer reads its arguments, as
+   when the window lets the task go before the task side answered. The
+   read stops once the window's own read of the task has answered. */
 function syncRefRead() {
   const read = refRead
   const accessMoved = refAccessMoved
@@ -1524,16 +1528,18 @@ function syncRefRead() {
     read.args = null
     return
   }
+  if (accessMoved && refWalks(read) && read.tried.size > 0) {
+    // a walk that said unavailable goes on saying so while it reads again
+    if (read.state === 'unavailable') read.rechecking = true
+    read.tried.clear()
+  }
   if (!read.args && !read.task && read.state !== 'resolved' && read.state !== 'unavailable') {
     const next = nextRefArgs(read)
     if (next && !taskSideReads(next)) runRefRead(read)
   }
   if (refWalkEnded(read)) {
-    if (accessMoved && !read.args && !nextRefArgs(read)) {
-      read.tried.clear()
-      read.rechecking = true
-    }
-    if (nextRefArgs(read)) runRefRead(read)
+    // a seat's read that runs goes on
+    if (read.args ? !parts.sideArgs('reference') : nextRefArgs(read)) runRefRead(read)
     return
   }
   if (read.args && !parts.sideArgs('reference')) runRefRead(read)

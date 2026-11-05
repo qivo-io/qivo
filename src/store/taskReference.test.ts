@@ -374,6 +374,27 @@ describe('the read of a reference', () => {
     expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: OTHER })
   })
 
+  it('reads the seats it said unavailable in again when access changes while a later seat reads', async () => {
+    const { P } = store
+    P.watchTaskRef(taskRef({ org: null, uuid: FAR }))
+    one('taskWindow:task').deliver({ state: 'unavailable' })
+    const guest = one('taskWindow:task')
+    expect(guest.args).toEqual({ org_id: GUEST, ref: FAR })
+    // the home organization shares the task's project with you while the
+    // guest seat's read has not answered, and that read goes on
+    snap.access.push({ project_id: snap.projects[0].id, profile_id: me, level: 'user' })
+    publishWhole(snap)
+    await turn()
+    expect(one('taskWindow:task')).toBe(guest)
+    expect(P.reference?.state).toBe('loading')
+    // the guest seat says unavailable, and the walk reads the home seat again
+    guest.deliver({ state: 'unavailable' })
+    expect(one('taskWindow:task').args).toEqual({ org_id: org, ref: FAR })
+    expect(P.reference?.state).toBe('loading')
+    one('taskWindow:task').deliver(okAnswer(FAR, 40))
+    expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org } })
+  })
+
   it("hands a uuid's read over to the window's task side with no second subscription, which turns editable at once and runs again on Retry", () => {
     const { P } = store
     P.watchTaskRef(taskRef({ org: null, uuid: FAR, from: org }))
