@@ -412,6 +412,20 @@ describe('the benchmark server', () => {
       'Zoë 44',
       'Zoë 48',
     ])
+    // a chosen person: one the picker lists can take the tasks, the person
+    // leaving cannot, and nobody can while Reassign is refused
+    const asking = (who) => (snap) => ({ ...leaving(snap), reassign_to: who(snap) })
+    const listed = () => first.answer.rows[0].id
+    const eligible = await ask('removal=open', 'accessRemovals:preview', asking(listed))
+    expect(eligible.answer.reassign).toMatchObject({ allowed: true, holder_eligible: true })
+    const leaver = await ask(
+      'removal=open',
+      'accessRemovals:preview',
+      asking((snap) => snap.profiles[2].id),
+    )
+    expect(leaver.answer.reassign.holder_eligible).toBe(false)
+    const refused = await ask('removal=over', 'accessRemovals:preview', asking(listed))
+    expect(refused.answer.reassign).toMatchObject({ allowed: false, holder_eligible: false })
     const stopped = await ask('removal=choices-stopped', 'accessRemovals:reassignChoices', leaving)
     expect(stopped.answer).toMatchObject({ stopped: true })
     expect(stopped.answer.rows).toHaveLength(13)

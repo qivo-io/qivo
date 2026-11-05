@@ -133,7 +133,8 @@
 // (accessRemovals:preview and reassignChoices), through
 // src/store/removalStandIn.setup.ts, which takes the removed people's open
 // tasks in the projects the change reaches as the lost holdings and every
-// person who can hold work as the choices, without the server's rules.
+// person who can hold work as the choices, and answers a chosen person's
+// holder_eligible by that rule, without the server's rules.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
@@ -1022,7 +1023,7 @@ const read = (name, args = {}) => {
       return ownerLoadsStandIn(snapshot, args)
     // the removal window's reads (src/store/removalStandIn.setup.ts)
     case 'accessRemovals:preview':
-      return removalPreviewStandIn(snapshot, args.change, forcedRemoval)
+      return removalPreviewStandIn(snapshot, args.change, forcedRemoval, args.reassign_to)
     case 'accessRemovals:reassignChoices':
       return reassignChoicesStandIn(snapshot, args, forcedRemoval)
     case 'messages:bulkReach':

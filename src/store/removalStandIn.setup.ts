@@ -12,7 +12,10 @@
    reviews, without asking whether another grant still shows the task, and
    lists every active admin, user and guest of the organization but those
    people as the people who could take them, without asking whether they
-   could. The caller may make every choice, unless `force` says otherwise.
+   could. Asked with a chosen person (`reassign_to`), the preview answers
+   reassign.holder_eligible by that same rule, false while Reassign is
+   refused, as the server does. The caller may make every choice, unless
+   `force` says otherwise.
    The picker answers LIST_BATCH people a batch in name order, with the
    search's every word anywhere in the name, ignoring case and accents, and
    a cursor that is the position as text. It imports nothing the benchmark's
@@ -66,6 +69,20 @@ function losing(snapshot: Workspace, change: RemovalChange): Set<string> {
   )
 }
 
+/* Whether `profile` could take the tasks in the stand-in's rule: an active
+   admin, user or guest of organization `org` who is not one of `people`,
+   those who lose sight of a task. The picker lists them, and a chosen
+   person's holder_eligible answers it. */
+const canTake = (
+  profile: Workspace['profiles'][number],
+  org: string | undefined,
+  people: ReadonlySet<string>,
+) =>
+  profile.org_id === org &&
+  profile.active &&
+  ['admin', 'user', 'guest'].includes(profile.org_role) &&
+  !people.has(profile.id)
+
 /* The projects `change` reaches, with the project Keep as Viewer would
    grant Viewer on for each. */
 function reached(snapshot: Workspace, change: RemovalChange): Map<string, string> {
@@ -83,15 +100,18 @@ function reached(snapshot: Workspace, change: RemovalChange): Map<string, string
 }
 
 /** accessRemovals.preview's answer for `change`, from the workspace, as the
-    module header says. */
+    module header says, with reassign.holder_eligible for `reassignTo` when
+    it is given. */
 export function removalPreviewStandIn(
   snapshot: Workspace,
   change: RemovalChange,
   force: ForcedRemoval,
+  reassignTo?: string,
 ): RemovalPreview {
   if (force.has('too_large')) return { state: 'too_large', message: REMOVAL_FULL }
   if (force.has('refused')) return { state: 'refused', message: NO_USER_MANAGEMENT }
-  if (orgOf(snapshot, change) === undefined) return { state: 'unavailable' }
+  const org = orgOf(snapshot, change)
+  if (org === undefined) return { state: 'unavailable' }
   const people = losing(snapshot, change)
   const where = reached(snapshot, change)
   const lost = snapshot.issues
@@ -137,6 +157,7 @@ export function removalPreviewStandIn(
         : unsettled
           ? NO_WRITE_ACCESS
           : null
+  const taker = snapshot.profiles.find((p) => p.id === reassignTo)
   return {
     state: 'ok',
     pending: true,
@@ -168,6 +189,14 @@ export function removalPreviewStandIn(
       allowed: reassignRefusal === null,
       refusal: reassignRefusal,
       permitted: !unsettled,
+      ...(reassignTo === undefined
+        ? {}
+        : {
+            holder_eligible:
+              reassignRefusal === null &&
+              taker !== undefined &&
+              canTake(taker, org, new Set(holders.map((p) => p.id))),
+          }),
     },
   }
 }
@@ -189,14 +218,7 @@ export function reassignChoicesStandIn(
   const people = new Set(preview.people.map((p) => p.id))
   const matches = allWordsMatcher(nameKey(args.search ?? ''))
   const all = snapshot.profiles
-    .filter(
-      (p) =>
-        p.org_id === org &&
-        p.active &&
-        ['admin', 'user', 'guest'].includes(p.org_role) &&
-        !people.has(p.id) &&
-        matches(nameKey(p.name)),
-    )
+    .filter((p) => canTake(p, org, people) && matches(nameKey(p.name)))
     .sort((a, b) => nameKey(a.name).localeCompare(nameKey(b.name)) || a.id.localeCompare(b.id))
   const from = Number(args.after ?? 0)
   const size = force.has('choices-stopped') ? Math.ceil(LIST_BATCH / 2) : LIST_BATCH
