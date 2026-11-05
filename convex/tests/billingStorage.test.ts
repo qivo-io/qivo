@@ -2,7 +2,7 @@
  * billing.currentUsage (model/billing.ts currentUsageOf) and
  * billing.storageProjects (model/billingStorage.ts storageProjectsBatch).
  *
- *   1. Current storage is the organization's totals: files attached in
+ *   1. Current storage is the organization's totals. Files attached in
  *      several sub-projects add up, a task in Deleted items still counts
  *      until it is purged, profile pictures and backgrounds never count, and
  *      an organization not counted yet or counting answers null, never 0.
@@ -394,7 +394,7 @@ describe("the period's storage sample", () => {
       }),
     )
     expect(await usageOf(t, f.admin)).toMatchObject({ sampled_storage_bytes: null })
-    // the case that must answer: the same row once its sample finished
+    // the case that must answer, the same row once its sample finished
     await t.run((ctx) => ctx.db.patch(row, { storage_failed_at: undefined, storage_bytes: 7 }))
     expect(await usageOf(t, f.admin)).toMatchObject({ sampled_storage_bytes: 7 })
   })
@@ -422,7 +422,7 @@ describe("the period's storage sample", () => {
       period_key: END,
       sampled_storage_bytes: null,
     })
-    // no provider subscription: a calendar month
+    // no provider subscription, so a calendar month
     await t.run((ctx) =>
       ctx.db.patch(sub._id, { status: 'pending', polar_subscription_id: undefined }),
     )
@@ -451,7 +451,7 @@ describe('Storage by project, order and paging', () => {
     expect(rows.every((r) => r.status === 'active' && r.files === 1)).toBe(true)
     const total = rows.reduce((n, r) => n + r.bytes, 0)
     expect(await usageOf(t, f.admin)).toMatchObject({ storage_bytes: total })
-    // the mutation check: a list in creation order would fail the order
+    // the mutation check, as a list in creation order would fail the order
     expect(rows.map((r) => r.bytes)).not.toEqual(bytes)
   })
 
@@ -676,7 +676,7 @@ describe('Billing storage reads, refusals', () => {
         message,
       )
     }
-    // the case that must pass: the admin reads both
+    // the case that must pass, the admin reading both
     expect(await usageOf(t, f.admin)).toMatchObject({ storage_bytes: 10 })
     expect(ready(await batchOf(t, f.admin)).rows).toHaveLength(1)
     for (const by of [f.user, f.viewer, f.guest]) await refusedBoth(by, /admin only/)
@@ -726,7 +726,7 @@ describe('Billing storage reads, refusals', () => {
     const plain = ready(await batchOf(t, f.admin)).next!
     const searched = ready(await batchOf(t, f.admin, { search: 'alpha' })).next!
     const theirs = ready(await batchOf(t, f.otherAdmin)).next!
-    // the cursors that must open: each with its own list and search
+    // the cursors that must open, each with its own list and search
     expect(ready(await batchOf(t, f.admin, { cursor: plain })).rows).toHaveLength(5)
     expect(
       ready(await batchOf(t, f.admin, { search: 'alpha', cursor: searched })).rows,

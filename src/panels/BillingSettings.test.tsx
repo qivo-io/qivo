@@ -7,7 +7,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { BillingSummary, BillingUsage, StorageProjects } from '../../convex/lib/billingTypes'
 import { BillingSettings } from './BillingSettings'
 
-/* The Billing page's reads: the summary stays a live subscription, while
+/* The Billing page's reads. The summary stays a live subscription, while
    the usage (billing.currentUsage) and Storage by project
    (billing.storageProjects) are read once on opening and again on each
    Refresh, never subscribed and never through an action. */

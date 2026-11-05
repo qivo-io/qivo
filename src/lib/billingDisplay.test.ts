@@ -20,7 +20,7 @@ describe('storageSampleLine', () => {
     expect(
       storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: null }, 'trialing'),
     ).toBeNull()
-    // the summary has not answered yet: a paid period still gets its line
+    // before the summary answers, a paid period still gets its line
     expect(storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: 7 }, undefined)).toBe(
       '7 B measured at the start of this period, without files in Deleted items.',
     )

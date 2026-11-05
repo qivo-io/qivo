@@ -20,7 +20,7 @@
  * twice, which the app shows once. The organization's total never depends
  * on the rows loaded.
  *
- * Nothing subscribes to it: the app reads each batch once (convex.query),
+ * Nothing subscribes to it. The app reads each batch once (convex.query),
  * so attaches, moves and purges rerun nothing. */
 
 import type { Doc } from '../_generated/dataModel'
@@ -55,10 +55,10 @@ import { storageTotalsOf } from './storageTotals'
  * ranges, and a kept row adds at most two lookups, so even a search that
  * matches only the smallest row answers in one call. Measured in
  * convex/tests/billingStorage.test.ts ("reads at the design size"), the
- * reader alone without the caller's seat check: a first batch whose 25
+ * reader alone without the caller's seat check, a first batch whose 25
  * rows are all in Deleted items read 52 documents, 52 index ranges and
- * about 25 KB; a search that matches only the smallest of the 1,500 rows
- * read 1,501 documents, 4 index ranges and about 431 KB. Past the share
+ * about 25 KB, and a search that matches only the smallest of the 1,500
+ * rows read 1,501 documents, 4 index ranges and about 431 KB. Past the share
  * the batch answers `stopped` and Load more goes on. Tests lower it. */
 export const STORAGE_PROJECTS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
 
@@ -137,8 +137,8 @@ function bytesIndex(
  * row's number, else the copy Deleted items stores of the same
  * organization and number; neither makes it removed, and so does a row
  * without a number. The number check is what keeps a row from taking the
- * name and state of another project: uuids freed before used_ids existed
- * stay reusable, so a later project can hold a row's id. At most two
+ * name and state of another project, since uuids freed before used_ids
+ * existed stay reusable and a later project can hold a row's id. At most two
  * lookups. The name is the live project's, else the stored copy's, else
  * the row's own copy.
  */

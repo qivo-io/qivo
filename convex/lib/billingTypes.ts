@@ -135,9 +135,9 @@ export type BillingUsage = BillingUsageHead & {
 }
 
 /* The answer of the legacy billing.usageReport, which tabs loaded before
- * billing.currentUsage shipped still read: storage from a scan of the
- * attachment rows of live tasks, files in Deleted items left out, with the
- * whole project breakdown, largest first. */
+ * billing.currentUsage shipped still read. Its storage comes from a scan
+ * of the attachment rows of live tasks, files in Deleted items left out,
+ * with the whole project breakdown, largest first. */
 export type BillingUsageReport = BillingUsageHead & {
   storage_bytes: number
   projects: { project_id: string; name: string; storage_bytes: number }[]
