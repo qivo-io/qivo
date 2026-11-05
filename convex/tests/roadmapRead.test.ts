@@ -376,13 +376,14 @@ describe('visibility', () => {
   it('floors a stored day into the reader’s weeks, whatever day the week starts on', async () => {
     const { t, f } = await visibilityCase()
     const scope = projectScope(f.guest, f.sub.id)
-    // the same weeks from their Sundays: the Sunday before the window is
-    // now in its first week, and the last week's Sunday in the week after
+    // the same weeks counted from their Sundays, so the Sunday before the
+    // window is now in its first week, and the last week's Sunday in the
+    // week after
     const sundays = { from: dayPlus(DEFAULT_WINDOW.from, -1), to: dayPlus(DEFAULT_WINDOW.to, -1) }
     const answer = titles(await roadmapFor(t, f.guest, scope, {}, sundays))
     expect(answer).toContain('Done on the Sunday before')
     expect(answer).not.toContain('Done on the last week’s Sunday')
-    // must fail: a window one week off holds other Done tasks
+    // this must fail, as a window one week off holds other Done tasks
     const later = { from: dayPlus(DEFAULT_WINDOW.from, 7), to: dayPlus(DEFAULT_WINDOW.to, 7) }
     expect(titles(await roadmapFor(t, f.guest, scope, {}, later))).not.toEqual(
       titles(await roadmapFor(t, f.guest, scope)),
@@ -467,7 +468,7 @@ describe('the ceiling', () => {
       state: 'ok',
       rows: 10,
     })
-    // must fail: a rule that counts no group would answer 11 rows here
+    // this must fail for a rule that counts no group, which answers 11 rows
     await plantTasks(t, f.sub, 1, ordinary)
     expect((await roadmapRead(t, [f.guest], scope)).answer).toEqual({
       state: 'over_ceiling',
@@ -530,7 +531,7 @@ describe('the ceiling', () => {
     }))
     await countOrg(t, f.org.id)
     const scopes = [projectScope(f.guest, f.meta.id), { kind: 'mine' } as const]
-    // ten open leaves: the bound does not claim more than ten
+    // with ten open leaves the bound does not claim more than ten
     for (const scope of scopes)
       expect(stateOf((await issueRanges(t, f.guest, scope)).answer)).toEqual({
         state: 'ok',
@@ -612,7 +613,7 @@ describe('the headings', () => {
       })
     // 0.1 and 0.2 sum to 0.30000000000000004 in floats, 3 in tenths
     expect(0.1 + 0.2).not.toBe(0.3)
-    // My view: the person's own leaves
+    // in My view, the person's own leaves
     expect(await roadmapFor(t, f.guest, { kind: 'mine' })).toMatchObject({
       remaining: { state: 'ok', tenths: { [f.sub.id]: 16, [f.sub2.id]: 4 } },
     })
@@ -662,8 +663,8 @@ describe("My view's sub-projects", () => {
       if (answer.state !== 'ok') throw new Error(answer.state)
       expect(answer.held_sub_projects, JSON.stringify(filters)).toEqual(expected)
     }
-    // must fail: a rule that takes the assignee as the owner names the
-    // handed-on task's sub-project and not the reviewed one's
+    // this must fail for a rule that takes the assignee as the owner, which
+    // names the handed-on task's sub-project and not the reviewed one's
     const tasks = await t.run((ctx) =>
       ctx.db
         .query('issues')
@@ -1104,7 +1105,7 @@ describe('real limits', () => {
     record("My view, 1,000 of the person's subtasks under 1,000 parents", mine.answer, mine.read)
     expect(stateOf(mine.answer)).toEqual({ state: 'ok', rows: 1000 })
     if (mine.answer.state === 'ok') expect(mine.answer.parents).toHaveLength(1000)
-    // one more, which its write counts: the counts bound answers
+    // one more, which its write counts, so the counts bound answers
     const parent = await task(t, subs[0], { title: ordinary(0).title })
     await task(t, subs[0], { title: ordinary(1).title, parent_id: parent.id, assignee_id: me.id })
     const over = await roadmapRead(t, [me], { kind: 'mine' })

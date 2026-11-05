@@ -43,8 +43,8 @@ const dated = (from: number, weeks = 1): Partial<Doc<'issues'>> => ({
 const task = (t: T, project: Doc<'projects'>, fields: Partial<Doc<'issues'>> = {}) =>
   plantIssue(t, { org_id: project.org_id, project_id: project.id, ...fields })
 
-/** Plants a link from `source` to `target`, as model/links.ts writes one:
- * a blocks link names its blocker as source. */
+/** Plants a link from `source` to `target`, as model/links.ts writes one,
+ * where a blocks link names its blocker as source. */
 async function link(
   t: T,
   source: Doc<'issues'>,
@@ -143,7 +143,7 @@ describe('the parts', () => {
       tasks: ids(a, b, g, x, y, c, d),
       pairs: [pair(a, b), pair(x, b), pair(c, a), pair(d, c)].sort(),
     })
-    // must fail: a reader that keeps parts inside the selection only
+    // this must fail for a reader that keeps parts inside the selection only
     expect(parts(answer)).not.toEqual({ tasks: ids(a, b), pairs: [pair(a, b)] })
     // the dependency read takes no filter and no window
     if (answer.auto_move.state !== 'ok') throw new Error('parts')
@@ -626,7 +626,7 @@ describe('real limits', () => {
     for (const projects of [1, 2]) {
       const t = newT({ transactionLimits: true })
       const f = await withOrg(t)
-      // the selection: an everyday project of 3 sub-projects of 30
+      // the selection, an everyday project of 3 sub-projects of 30
       const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 1))]
       const own: Doc<'issues'>[] = []
       for (const [k, sub] of subs.entries()) own.push(...(await plantOpen(t, sub, 30, 100 * k)))

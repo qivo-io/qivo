@@ -1,8 +1,8 @@
 /* Helpers of the Roadmap reads' suites (convex/tests/roadmapRead.test.ts,
  * convex/tests/dependencies.test.ts, src/store/roadmapParity.test.ts), the
  * queries as a caller asks them, the reads inside one transaction with
- * what they read, a window of weeks, and ordinary text. Named *.setup.ts:
- * two dots in the basename is the Convex CLI's skip rule (see
+ * what they read, a window of weeks, and ordinary text. Named *.setup.ts,
+ * as two dots in the basename is the Convex CLI's skip rule (see
  * helpers.setup.ts). */
 
 import { api } from '../_generated/api'

@@ -229,7 +229,7 @@ function expectDependencies(
       parts.pairs.map((p) => pairKey({ blocker: uuidOf(p.blocker), blocked: uuidOf(p.blocked) })),
     ),
   )
-  // the arrows: every pair between two selected tasks with a span
+  // the arrows are every pair between two selected tasks with a span
   const dated = new Set(selected.filter((it) => it.start != null).map((it) => it.id))
   const arrows = P.schedule
     .dependencyPairs(P.issues)
@@ -427,7 +427,7 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     end_week: weekDay(from + weeks - 1),
   })
   // the first task by number blocks a group and one of its leaves, the link
-  // to the leaf written first: Auto-move moves the leaf and keeps its
+  // to the leaf written first. Auto-move moves the leaf and keeps its
   // sibling only when it takes the pairs in the app's order
   const blocker = await task(f.sub2, { title: 'Blocker of a family', ...dated(3) })
   const family = await task(f.sub, { title: 'Family', assignee_id: subject.id })
@@ -483,8 +483,8 @@ async function plantCase(t: T, f: OrgFixture, subject: Doc<'profiles'>) {
     remaining_hours: 0.3,
     assignee_id: subject.id,
   })
-  // the chain: k1 in FW starts before c1 in PCB ends, and c1 before c2 in
-  // the sibling ends
+  // in the chain, k1 in FW starts before c1 in PCB ends, and c1 before c2
+  // in the sibling ends
   const k1 = await task(f.sub, { title: 'Blocked in FW', assignee_id: subject.id, ...dated(0, 2) })
   const c1 = await task(f.sub2, { title: 'Blocker in PCB', ...dated(1, 2) })
   const c2 = await task(sibling, { title: 'Blocker in the sibling', ...dated(2, 2) })
@@ -519,7 +519,7 @@ const SHAPE_ROWS = (f: OrgFixture): Filters[] => [
   ['review', { search: 'review' }],
 ]
 
-/** One access case: `shape` planted for a fresh seat of `role`, or the
+/** One access case, `shape` planted for a fresh seat of `role`, or the
  * fixture's admin without a shape, compared over every selection. */
 async function compareShape(
   shape: (typeof SHAPES)[number] | null,
