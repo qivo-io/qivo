@@ -26,6 +26,7 @@ import { insertTask } from '../model/descriptions'
 import { navChildrenOf, PROJECT_NAV } from '../model/projectNavReads'
 import type { ListArgs } from '../model/projectSettings'
 import {
+  type ArchivedProjectRow,
   NOT_SETTINGS_LIST_CURSOR,
   PROJECT_ADMIN,
   PROJECTS_LIST,
@@ -1473,26 +1474,30 @@ describe('reads at the design size', () => {
   /** What one measured call read, with its batch's size. */
   type Call = Read & { rows: number; stopped: boolean }
 
-  /** Every batch of `read` from its start, each measured and answered
-   * whole, with the cursor each answered. */
+  /** Every batch of `read` from `from` or the start, each measured and
+   * answered whole, with the cursor each answered. `rounds` stops the walk
+   * after that many batches; `next` is the cursor the walk stopped at, or
+   * null once the list ended. */
   async function measuredWalk<R>(
     t: T,
     read: (ctx: QueryCtx, after?: string) => Promise<SettingsListAnswer<R>>,
-  ) {
+    o: { from?: string; rounds?: number } = {},
+  ): Promise<{ calls: Call[]; rows: R[]; cursors: string[]; next: string | null }> {
     const calls: Call[] = []
     const rows: R[] = []
     const cursors: string[] = []
-    let after: string | undefined
-    for (let round = 0; round < 80; round++) {
+    let after = o.from
+    for (let round = 0; round < (o.rounds ?? 80); round++) {
       const { out, read: r } = await measured(t, (ctx) => read(ctx, after))
       const batch = batchOf(out)
       calls.push({ ...r, rows: batch.rows.length, stopped: batch.stopped })
       rows.push(...batch.rows)
       expect(batch.stopped).toBe(false)
-      if (batch.next === null) return { calls, rows, cursors }
+      if (batch.next === null) return { calls, rows, cursors, next: null }
       cursors.push(batch.next)
       after = batch.next
     }
+    if (o.rounds !== undefined && after !== undefined) return { calls, rows, cursors, next: after }
     throw new Error('the list did not end')
   }
 
@@ -1792,12 +1797,97 @@ describe('reads at the design size', () => {
     return { t, f, pia, old }
   }
 
-  for (const inherited of [true, false])
-    it(`reads a person’s archive at its sum, 200 live and 300 archived top-level projects and 500 archived sub-projects ${inherited ? 'inherited' : 'by grants on them'}`, async () => {
-      const { t, pia, old } = await archiveSum(inherited)
-      const label = `person, archive sum, ${inherited ? 'inherited' : 'by grants'}`
-      const out = await logReads(t, pia, label, { projects: false })
-      expect(out.archived).toMatchObject({ rows: 550 })
+  /** `make`'s promise for `key`, made once and kept in `cache`. */
+  function memo<K, V>(cache: Map<K, Promise<V>>, key: K, make: () => Promise<V>): Promise<V> {
+    let p = cache.get(key)
+    if (p === undefined) {
+      p = make()
+      cache.set(key, p)
+    }
+    return p
+  }
+
+  /** The archive-sum fixture of each variant, seeded once and shared by the
+   * cases below, which only read it. Each of Pia's reads at the sum costs
+   * about half a second under convex-test, so one case walking every batch
+   * and searching the archive passed vitest's default timeout on CI's
+   * runner. The cases split the walk and the searches instead, and the
+   * walk's first half is memoized too, so the case that walks the rest
+   * continues from its cursor whether or not the first half's case ran. */
+  const sums = new Map<boolean, Promise<Awaited<ReturnType<typeof archiveSum>>>>()
+  const sumOf = (inherited: boolean) => memo(sums, inherited, () => archiveSum(inherited))
+  const HALF = 7
+  const archiveOf = (pia: Doc<'profiles'>) => (ctx: QueryCtx, after?: string) =>
+    settingsArchivedOf(ctx, pia, { after })
+  const firstHalves = new Map<
+    boolean,
+    Promise<{
+      sum: Awaited<ReturnType<typeof archiveSum>>
+      walk: Awaited<ReturnType<typeof measuredWalk<ArchivedProjectRow>>>
+    }>
+  >()
+  const firstHalfOf = (inherited: boolean) =>
+    memo(firstHalves, inherited, async () => {
+      const sum = await sumOf(inherited)
+      return { sum, walk: await measuredWalk(sum.t, archiveOf(sum.pia), { rounds: HALF }) }
+    })
+  const wholeWalks = new Map<
+    boolean,
+    Promise<{
+      sum: Awaited<ReturnType<typeof archiveSum>>
+      calls: Call[]
+      rows: ArchivedProjectRow[]
+      cursors: string[]
+    }>
+  >()
+  const wholeWalkOf = (inherited: boolean) =>
+    memo(wholeWalks, inherited, async () => {
+      const { sum, walk } = await firstHalfOf(inherited)
+      if (walk.next === null) throw new Error('the archive ended inside its first half')
+      const rest = await measuredWalk(sum.t, archiveOf(sum.pia), { from: walk.next })
+      return {
+        sum,
+        calls: [...walk.calls, ...rest.calls],
+        rows: [...walk.rows, ...rest.rows],
+        cursors: [...walk.cursors, ...rest.cursors],
+      }
+    })
+
+  for (const inherited of [true, false]) {
+    const label = `person, archive sum, ${inherited ? 'inherited' : 'by grants'}`
+    const sum = `a person’s archive at its sum, 200 live and 300 archived top-level projects and 500 archived sub-projects ${inherited ? 'inherited' : 'by grants on them'}`
+
+    it(`walks the first ${HALF} batches of ${sum}`, async () => {
+      const { walk } = await firstHalfOf(inherited)
+      inside(walk.calls)
+      expect(walk.rows).toHaveLength(HALF * LIST_BATCH)
+      expect(walk.next).not.toBeNull()
+    })
+
+    it(`walks the rest of ${sum} from the carried cursor and finds every row once`, async () => {
+      const whole = await wholeWalkOf(inherited)
+      inside(whole.calls)
+      expect(whole.rows).toHaveLength(550)
+      expect(new Set(whole.rows.map((r) => r.id)).size).toBe(550)
+      console.log(`settings lists, ${label}`, JSON.stringify({ archived: summary(whole.calls) }))
+    })
+
+    it(`keeps a batch of ${sum} live to 100 rows and searches it for none`, async () => {
+      const whole = await wholeWalkOf(inherited)
+      const { t, pia } = whole.sum
+      const kept = await keptLive(t, (ctx, a) => settingsArchivedOf(ctx, pia, a), whole.cursors)
+      const none = await measuredWalk(t, (ctx, after) =>
+        settingsArchivedOf(ctx, pia, { search: 'zzz', after }),
+      )
+      inside(none.calls)
+      console.log(
+        `settings lists, ${label}, kept live and search for none`,
+        JSON.stringify({ archivedKept: kept, archivedSearchNone: none.calls[0] }),
+      )
+    })
+
+    it(`searches ${sum} for every part through every batch and reads one archived project’s chips`, async () => {
+      const { t, pia, old } = await sumOf(inherited)
       const search = await measuredWalk(t, (ctx, after) =>
         settingsArchivedOf(ctx, pia, { search: 'part', after }),
       )
@@ -1812,6 +1902,7 @@ describe('reads at the design size', () => {
         JSON.stringify({ search: summary(search.calls), chips: chips.calls }),
       )
     })
+  }
 
   it('reads for one of the person’s teams sharing 50 live and 150 archived projects of 3 sub-projects each', async () => {
     const t = newT({ transactionLimits: true })
