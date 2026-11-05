@@ -33,6 +33,8 @@ import {
   PEOPLE_REFUSALS,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PROJECT_SETTINGS_EXPECTED,
+  PROJECT_SETTINGS_STEP,
   pace,
   parseArgs,
   peoplePagesMax,
@@ -118,6 +120,33 @@ describe('staging check REST contract', () => {
     expect(REMOVAL_STEP).toBe('ui/removal-window')
     expect(REMOVAL_EXPECTED.submit).toBe('Reassign and remove')
     expect(REMOVAL_EXPECTED.chosen('Nora Berg')).toBe('New assignee: Nora Berg')
+  })
+  it("checks a project's Settings page on the page's own selectors, after the removal window", () => {
+    const page = readFileSync(
+      new URL('../src/components/ProjectAccessEditor.tsx', import.meta.url),
+      'utf8',
+    )
+    for (const mark of [
+      'data-project-team-role={row.id}',
+      'data-project-access-picker=""',
+      'probe="data-project-access-picker-search"',
+      'data-project-access-choice={row.id}',
+      'data-project-access-new-role',
+      'data-add-project-user',
+      'data-project-access-user={row.id}',
+    ])
+      expect(page).toContain(mark)
+    const settings = readFileSync(
+      new URL('../src/panels/settings/ProjectSettings.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(settings).toContain('data-project-review-hours')
+    expect(PROJECT_SETTINGS_STEP).toBe('ui/project-settings')
+    expect(PROJECT_SETTINGS_EXPECTED).toEqual({ team: 'viewer', nora: 'user', reviewHours: 3 })
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await projectSettingsCheck()')).toBeGreaterThan(
+      check.indexOf('await removalWindowCheck()'),
+    )
   })
   it("opens task links in the window's own words, with the unknown number past every organization's", () => {
     const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')

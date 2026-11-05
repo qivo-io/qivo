@@ -649,6 +649,90 @@ describe('the benchmark server', () => {
     ).toContain('fails')
   }, 60_000)
 
+  it("answers a project's Settings page reads from the workspace, with the states and grants the page asks for", async () => {
+    /** What `name` answers with `args(snap, project)` on a workspace with
+        page parameters `params`, read by an admin, and the server. */
+    const ask = async (params, name, args = () => ({})) => {
+      const at = await server(`tasks=100&latency=0&mbps=100000&role=admin&${params}`)
+      await at.send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(at.posted.find((m) => m.to === 'snap').text)
+      const project = snap.projects.find((p) => p.type === 'meta')
+      await at.send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, project_id: project.id, ...args(snap, project) },
+      })
+      const answer = at.posted.find((m) => m.to === 'read')
+      return {
+        ...at,
+        snap,
+        project,
+        answer: answer.error ? { error: answer.error } : JSON.parse(answer.text),
+      }
+    }
+    const byId = (_, project) => ({ id: project.id, project_id: undefined })
+    const get = await ask('', 'projectSettings:get', byId)
+    expect(get.answer).toMatchObject({ state: 'ok', can_manage_users: true })
+    expect(get.answer.project.name).toBe('Testbed program')
+    // the signed-in admin's own grant only, unless the page asks for more
+    const plain = await ask('', 'projectSettings:users')
+    expect(plain.answer.rows).toHaveLength(1)
+    const grants = await ask('grants=210', 'projectSettings:users')
+    expect(grants.snap.profiles.length).toBeGreaterThanOrEqual(212)
+    expect(grants.answer.rows).toHaveLength(25)
+    expect(grants.answer.next).not.toBeNull()
+    // the forced states
+    expect((await ask('projectsettings=not-ready', 'projectSettings:users')).answer).toEqual({
+      state: 'not_ready',
+    })
+    const stopped = await ask('grants=60&projectsettings=stopped', 'projectSettings:users')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(10)
+    const small = await ask('grants=60&projectsettings=small', 'projectSettings:users')
+    expect(small.answer.rows).toHaveLength(5)
+    expect((await ask('projectsettings=error', 'projectSettings:teams')).answer.error).toContain(
+      'fails',
+    )
+    expect((await ask('projectsettings=refused', 'projectSettings:candidates')).answer).toEqual({
+      state: 'refused',
+      message: 'no permission to manage users on this project',
+    })
+    // unheld: once read, the workspace's parts leave the project out while
+    // its page's reads still answer it
+    const unheld = await ask('projectsettings=unheld', 'projectSettings:get', byId)
+    expect(unheld.answer.state).toBe('ok')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await unheld.send({ type: 'query', id: 'after', name: 'snapshot:forMe', args: {} })
+    const after = JSON.parse(unheld.posted.find((m) => m.to === 'after').text)
+    expect(after.projects.some((p) => p.id === unheld.project.id)).toBe(false)
+    // a level change goes into the workspace the reads answer from
+    await unheld.send({
+      type: 'mutation',
+      id: 'write',
+      name: 'projects:setAccess',
+      args: {
+        org_id: unheld.snap.orgs[0].id,
+        id: unheld.project.id,
+        user_id: unheld.snap.profiles[3].id,
+        level: 'viewer',
+        expected: { level: null },
+      },
+    })
+    await vi.waitFor(() => expect(unheld.posted.some((m) => m.id === 'write')).toBe(true))
+    await unheld.send({
+      type: 'query',
+      id: 'users',
+      name: 'projectSettings:users',
+      args: { org_id: unheld.snap.orgs[0].id, project_id: unheld.project.id },
+    })
+    const users = JSON.parse(unheld.posted.find((m) => m.to === 'users').text)
+    expect(users.rows.map((r) => [r.id, r.level])).toContainEqual([
+      unheld.snap.profiles[3].id,
+      'viewer',
+    ])
+  }, 60_000)
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
