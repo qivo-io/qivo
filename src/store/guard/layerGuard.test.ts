@@ -1,5 +1,6 @@
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { posix } from 'node:path'
+import { parseSync } from 'oxc-parser'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture } from '../plannerFixture.setup'
 import {
@@ -33,6 +34,18 @@ vi.mock('../../lib/auth', () => ({
 
 const STORE = 'src/store/planner.ts'
 const { source, program } = parseFile(STORE)
+
+/* The whole-list walks of the workspace's tasks and of their rows. */
+const WALKS = [
+  /\bP\.issues\b/,
+  /\bPLANNER\.issues\b/,
+  /\bscopedIssues\b/,
+  /\brows\.issues\.(?!get\(|has\()/,
+  /\brows\.issueLabels\b/,
+  /\brows\.attachments\.values\(/,
+  /\brows\.issueSubs\b/,
+  /peekList\('issue(Subs|Labels)'\)/,
+]
 
 type Call = { node: AstNode; ancestors: AstNode[] }
 const calls: Call[] = []
@@ -244,17 +257,6 @@ describe('the writes from the task window’s own answer', () => {
     'createLinked',
     'addIssue',
   ]
-  /* The whole-list walks of the workspace's tasks and of their rows. */
-  const WALKS = [
-    /\bP\.issues\b/,
-    /\bPLANNER\.issues\b/,
-    /\bscopedIssues\b/,
-    /\brows\.issues\.(?!get\(|has\()/,
-    /\brows\.issueLabels\b/,
-    /\brows\.attachments\.values\(/,
-    /\brows\.issueSubs\b/,
-    /peekList\('issue(Subs|Labels)'\)/,
-  ]
   const bodies = new Map<string, string>()
   walk(program, (node, ancestors) => {
     if (
@@ -293,6 +295,108 @@ describe('the writes from the task window’s own answer', () => {
     )
     expect(WALKS.some((walk) => walk.test('rows.issues.get(uuid) ?? rows.issues.has(t)'))).toBe(
       false,
+    )
+  })
+})
+
+describe('the readers of every task', () => {
+  /* Tasks load on demand: the workspace holds none until a reader that
+     needs every task asks (store/planner.ts P.askTasks) and waits for them
+     (P.tasksHeld). So every read of the whole task list outside the store
+     belongs to such a reader, named here with its reason, and a new one
+     fails this scan even where no test mounts it. The store's own reads go
+     through its task index. */
+  const READS = [...WALKS.slice(0, 3), /\bissuesInGroups\b/, /\bremainingByGroups\b/]
+  const ALLOWED: Record<string, { reason: string; reads: string[] }> = {
+    'src/store/planner.ts': {
+      reason:
+        'the field itself: rebuild assigns it, its test-build accessor keeps it, and the Roadmap’s sums walk it behind their own check (wholeListRead)',
+      reads: ['rebuild: P.issues', 'remainingByGroups: issuesInGroups', '(module): PLANNER.issues'],
+    },
+    'src/views/Roadmap.tsx': {
+      reason: 'the Roadmap waits for every task and asks (App’s TasksLoadingView, roadmap)',
+      reads: ['Roadmap: P.issues', 'headRemaining: remainingByGroups'],
+    },
+    'src/views/MobileRoadmap.tsx': {
+      reason: 'the phone Roadmap mounts inside the Roadmap, behind its ask',
+      reads: ['MobileRoadmap: scopedIssues'],
+    },
+    'src/views/Resources.tsx': {
+      reason: 'the Resources strip mounts inside the Roadmap, behind its ask',
+      reads: ['ResourceStrip: P.issues'],
+    },
+    'src/views/TeamSync.tsx': {
+      reason: 'Team sync waits for every task and asks (App’s TasksLoadingView, team_sync)',
+      reads: ['PersonColumns: P.issues', 'walkOf: P.issues'],
+    },
+    'src/views/teamSync/TeamOpening.tsx': {
+      reason: 'Team sync’s opening mounts inside Team sync, behind its ask',
+      reads: ['TeamOpening: P.issues'],
+    },
+  }
+  const FUNCTION_TYPES = new Set([
+    'FunctionDeclaration',
+    'FunctionExpression',
+    'ArrowFunctionExpression',
+  ])
+
+  /** Each read of the whole task list in `source`, outside its comments,
+      string literals and the names of object properties (a method's own
+      definition), as `function: read`, with the innermost named function
+      around it, or `(module)` outside any. */
+  function wholeListReads(path: string, text: string): string[] {
+    const { program: root, comments } = parseSync(path, text)
+    const skipped: { start: number; end: number }[] = [...comments]
+    const fns: { start: number; end: number; name: string }[] = []
+    walk(root as unknown as AstNode, (node, ancestors) => {
+      if (FUNCTION_TYPES.has(node.type))
+        fns.push({ start: node.start, end: node.end, name: functionName(node, ancestors) })
+      if (node.type === 'Literal' && typeof node.value === 'string') skipped.push(node)
+      if (node.type === 'TemplateElement') skipped.push(node)
+      if (node.type === 'Property' && !node.computed) skipped.push(node.key as AstNode)
+    })
+    let code = text
+    for (const s of skipped)
+      code = code.slice(0, s.start) + ' '.repeat(s.end - s.start) + code.slice(s.end)
+    const found: string[] = []
+    for (const read of READS)
+      for (const m of code.matchAll(new RegExp(read.source, 'g'))) {
+        const at = m.index ?? 0
+        const around = fns
+          .filter((fn) => fn.start <= at && at < fn.end && fn.name)
+          .sort((a, b) => a.end - a.start - (b.end - b.start))[0]
+        found.push(`${around?.name || '(module)'}: ${m[0]}`)
+      }
+    return found
+  }
+  const sources = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const path = posix.join(dir, name)
+      if (statSync(path).isDirectory()) return sources(path)
+      return /\.tsx?$/.test(name) && !/\.(test|setup)\.tsx?$/.test(name) ? [path] : []
+    })
+
+  it('finds only the readers that wait for every task', () => {
+    const found: Record<string, string[]> = {}
+    for (const path of sources('src')) {
+      const reads = wholeListReads(path, readFileSync(path, 'utf8'))
+      if (reads.length > 0) found[path] = [...new Set(reads)].sort()
+    }
+    expect(Object.keys(found).sort()).toEqual(Object.keys(ALLOWED).sort())
+    for (const [path, { reads }] of Object.entries(ALLOWED))
+      expect(found[path], path).toEqual([...reads].sort())
+  })
+
+  it('catches a planted reader, and not a comment that names the list', () => {
+    const planted = [
+      'export function Planted() {',
+      '  // P.issues is the whole list',
+      '  return P.issues.filter((it) => it.status === "todo").length',
+      '}',
+    ].join('\n')
+    expect(wholeListReads('src/views/Planted.tsx', planted)).toEqual(['Planted: P.issues'])
+    expect(wholeListReads('src/views/Quiet.tsx', '/* P.scopedIssues(info) */ export {}')).toEqual(
+      [],
     )
   })
 })
