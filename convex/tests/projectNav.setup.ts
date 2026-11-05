@@ -2,15 +2,18 @@
  * favorites reader (model/projectFavorites.ts) worked out from the
  * projects, the favorites rows and lib/access.ts projectLevel alone,
  * without reach rows or the code under test, for the suites that check
- * them (projectNav.test.ts, projectFavorites.test.ts and
- * src/store/projectNavParity.test.ts). Two dots in the basename keep the
- * Convex CLI from deploying this module, as helpers.setup.ts.
+ * them (projectNav.test.ts, projectNavSearch.test.ts,
+ * projectFavorites.test.ts and src/store/projectNavParity.test.ts). Two
+ * dots in the basename keep the Convex CLI from deploying this module, as
+ * helpers.setup.ts.
  *
  * A top-level project shows a seat for navigation when it is a live meta
  * of the seat's organization the seat holds a level on for a reason of its
  * own (projectLevel without navigation, of ordinaryOf(seat)), or under
  * which a live sub-project gives the seat a level. A sub-project shows when
- * it and its parent are live and the seat holds a level on it. */
+ * it and its parent are live and the seat holds a level on it. The search
+ * lists every project and sub-project that shows whose own name holds
+ * every word of the search, each word anywhere in its name key. */
 
 import { compareValues } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
@@ -145,4 +148,76 @@ export const expectedChildren = (t: T, seat: Doc<'profiles'>, parent: Doc<'proje
     return out
       .sort((a, b) => compareValues([nameKey(a.name), a.id], [nameKey(b.name), b.id]))
       .map((c) => ({ id: c.id, org_id: c.org_id, name: c.name, num: c.num, parent_id: p.id }))
+  })
+
+/** A row of projectNav.search as the oracle names it: a top-level project
+ * with its favorite state and no parent, or a sub-project with its parent
+ * and no favorite state. */
+export type ExpectedSearchRow = {
+  id: string
+  org_id: string
+  name: string
+  num: number
+  parent: { id: string; org_id: string; name: string; num: number } | null
+  favorite: boolean | null
+}
+
+/* `p` as the oracle names a project. */
+const named = (p: Doc<'projects'>) => ({ id: p.id, org_id: p.org_id, name: p.name, num: p.num })
+
+/* Positions in the search's order: the group, the name key's bytes, the id
+ * and the organization. */
+const searchOrder = (a: ExpectedSearchRow, b: ExpectedSearchRow) =>
+  compareValues(
+    [a.favorite === true ? 0 : 1, nameKey(a.name), a.id, a.org_id],
+    [b.favorite === true ? 0 : 1, nameKey(b.name), b.id, b.org_id],
+  )
+
+/** What projectNav.search should answer over every batch for `term` and
+ * the login whose seats are `seats`, or only the seat in `orgId` when
+ * given, in order: each seat's live top-level metas and live sub-projects
+ * it sees for navigation (navSees) whose name key holds every word of the
+ * term's name key, a top-level project marked favorite when one of the
+ * seat's rows on it shows (favoriteSeen), a sub-project with its parent;
+ * every favorite first and then the rest, top-level projects and
+ * sub-projects together. */
+export const expectedSearch = (
+  t: T,
+  seats: readonly Doc<'profiles'>[],
+  term: string,
+  orgId?: string,
+) =>
+  t.run(async (ctx) => {
+    const words = nameKey(term)
+      .split(' ')
+      .filter((word) => word !== '')
+    const out: ExpectedSearchRow[] = []
+    for (const seat of seats) {
+      if (orgId !== undefined && seat.org_id !== orgId) continue
+      const projects = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', seat.org_id))
+        .collect()
+      for (const p of projects) {
+        const key = nameKey(p.name)
+        if (!words.every((word) => key.includes(word))) continue
+        if (!(await navSees(ctx, seat, p))) continue
+        if (p.parent_id !== undefined) {
+          const parent = await byId(ctx, 'projects', p.parent_id)
+          if (parent === null) throw new Error(`no parent of ${p.id}`)
+          out.push({ ...named(p), parent: named(parent), favorite: null })
+          continue
+        }
+        const rows = await ctx.db
+          .query('project_favorites')
+          .withIndex('by_project_profile', (q) =>
+            q.eq('project_id', p.id).eq('profile_id', seat.id),
+          )
+          .collect()
+        let favorite = false
+        for (const row of rows) if (await favoriteSeen(ctx, row)) favorite = true
+        out.push({ ...named(p), parent: null, favorite })
+      }
+    }
+    return out.sort(searchOrder)
   })
