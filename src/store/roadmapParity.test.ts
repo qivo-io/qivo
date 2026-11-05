@@ -3,7 +3,7 @@
  * real store from the caller's real workspace, as boardParity.test.ts does,
  * and compares what the queries answer for the same caller, selection,
  * window and filter row with what the app's Roadmap derives in the browser
- * (store/roadmapOracle.setup.ts): the rows, the phone agenda's set
+ * (store/roadmapOracle.setup.ts), the rows, the phone agenda's set
  * (scopedIssues, isRoadmapTaskVisible, passesFilters), each group row's
  * Done and span, the shown parents and a group row's other shown
  * descendants, each sub-project's heading Remaining in tenths, My view's
@@ -104,14 +104,14 @@ const sorted = (ids: Iterable<string>) => [...ids].sort()
 /** A window in the store's weeks, w0 to w1, both counted. */
 type Weeks = [w0: number, w1: number]
 
-/** The window arguments of `weeks`: the first days of its first and last
+/** The window arguments of `weeks`, the first days of its first and last
  * weeks on the store's grid. */
 const windowOf = (P: Store, [w0, w1]: Weeks) => ({
   from: P.dates.weekToISO(w0),
   to: P.dates.weekToISO(w1),
 })
 
-/** The filter row as App hands it to the Roadmap for `scopeId`: My view
+/** The filter row as App hands it to the Roadmap for `scopeId`. My view
  * forces My tasks and drops the people filter (src/App.tsx roadmapFilters),
  * and the Roadmap applies neither Stale nor Focus. */
 function deskFilters(P: Store, scopeId: string, f: RoadmapFilters) {
@@ -257,7 +257,7 @@ function expectDependencies(
 }
 
 /** Auto-move over `inputs` as a view would build the solver's tasks from
- * them: weeks on the store's grid, children from parent ids and each
+ * them, with weeks on the store's grid, children from parent ids and each
  * task's links from the pairs in their order. */
 function movesOf(P: Store, inputs: AutoMoveInputs) {
   const week = (iso: string | undefined) => (iso === undefined ? null : P.dates.isoToWeek(iso))
@@ -292,7 +292,7 @@ function movesOf(P: Store, inputs: AutoMoveInputs) {
 /** A filter row named for a case's label. */
 type Filters = [label: string, filters: Partial<RoadmapFilters>]
 
-/** The selections a caller's store offers: each top-level project it
+/** The selections a caller's store offers, each top-level project it
  * shows, each of their sub-projects and My view. */
 function selectionsOf(P: Store, profile: Doc<'profiles'>) {
   const out: [string, RoadmapScope, string][] = []
@@ -340,7 +340,7 @@ async function compareAll(
   return { found, moves }
 }
 
-/** The windows every case compares, in store `P`'s weeks: the app's
+/** The windows every case compares, in store `P`'s weeks, the app's
  * default, two weeks around `narrow`, and 260 weeks. */
 function windowsOf(P: Store, narrow: number): [string, Weeks][] {
   const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
@@ -407,7 +407,7 @@ const weekDay = (w: number) =>
   new Date(Date.parse('2025-12-29T00:00:00.000Z') + w * 7 * 86_400_000).toISOString().slice(0, 10)
 
 /** The tasks every access case plants over the withOrg fixture for
- * `subject`, dated around the fixture's NOW: in FW, PCB and a sub-project
+ * `subject`, dated around the fixture's NOW. In FW, PCB and a sub-project
  * of SKNK, the review hand-off cases; in FW a group with a subtask in a
  * sibling sub-project, a group stored in Backlog with a To do subtask, a
  * group stored To do whose leaves are Done, Done leaves at and past the

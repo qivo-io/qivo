@@ -76,7 +76,7 @@ import { vIssuePriority } from './lib/enums'
 import { authedQuery } from './lib/functions'
 import { readDependencies, readRoadmap } from './lib/roadmap'
 
-/** A task view's selection: a project of one organization, a top-level
+/** A task view's selection, a project of one organization, a top-level
  * project or a sub-project, or My view. */
 const vViewScope = v.union(
   v.object({ kind: v.literal('project'), org_id: v.string(), project_id: v.string() }),

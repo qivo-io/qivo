@@ -1176,7 +1176,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // may not open answers unavailable.
   taskWindow: { task: 'orgQuery', links: 'orgQuery', attachments: 'orgQuery' },
   // The Board's and the Roadmap's selection with its filters applied, and
-  // the Roadmap's dependency inputs: any signed-in login reads a project
+  // the Roadmap's dependency inputs. Any signed-in login reads a project
   // selection with its seat in that organization, or My view across its
   // seats, under ordinary access, and a selection it does not hold answers
   // unavailable.

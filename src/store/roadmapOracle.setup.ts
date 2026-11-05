@@ -36,7 +36,7 @@ export function remainingTenths(info: ScopeInfo): Record<string, number> {
 }
 
 /** The sub-projects My view's Roadmap keeps a track or band for
- * (Roadmap.tsx held): those holding a task the scope's `only` keeps,
+ * (Roadmap.tsx held), those holding a task the scope's `only` keeps,
  * before the toolbar filters and the window, by id; null outside My view. */
 export function heldSubProjects(info: ScopeInfo): string[] | null {
   if (!info.only) return null
@@ -47,7 +47,7 @@ export function heldSubProjects(info: ScopeInfo): string[] | null {
 }
 
 /** The parts of the dependency graph over every task the workspace holds
- * that hold a task of `selected` and a blocks pair: its nodes are the tasks
+ * that hold a task of `selected` and a blocks pair. Its nodes are the tasks
  * with a span, as autoMoves takes them (schedule.ts scheduledIds), and its
  * edges the pairs between two nodes and each group's link to its subtasks
  * with a span. */

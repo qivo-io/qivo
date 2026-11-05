@@ -1,5 +1,5 @@
 /* Helpers of the Roadmap reads' suites (convex/tests/roadmapRead.test.ts,
- * convex/tests/dependencies.test.ts, src/store/roadmapParity.test.ts): the
+ * convex/tests/dependencies.test.ts, src/store/roadmapParity.test.ts), the
  * queries as a caller asks them, the reads inside one transaction with
  * what they read, a window of weeks, and ordinary text. Named *.setup.ts:
  * two dots in the basename is the Convex CLI's skip rule (see
@@ -137,7 +137,7 @@ export const words = (from: number, length: number): string => {
   return s.slice(0, length).trim()
 }
 
-/** The texts' length: 390 characters, the measured average. */
+/** The texts' length, 390 characters, the measured average. */
 export const TEXT_CHARS = 390
 
 /** An ordinary title of about 80 characters and an ordinary text, for task

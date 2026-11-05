@@ -1,8 +1,8 @@
-/* The filter row's read that the app's task views share: the Board's
- * (lib/board.ts) and the Roadmap's (lib/roadmap.ts), each a selection's
- * tasks with the app's filter row applied on the server as the app's
- * passesFilters applies it (src/store/planner.ts): My tasks and the people
- * filter by the Reviewer rule (lib/review.ts taskOwnerId), Priority,
+/* The filter row's read that the app's task views share, the Board's
+ * (lib/board.ts) and the Roadmap's (lib/roadmap.ts). Each takes a
+ * selection's tasks with the app's filter row applied on the server as the
+ * app's passesFilters applies it (src/store/planner.ts), My tasks and the
+ * people filter by the Reviewer rule (lib/review.ts taskOwnerId), Priority,
  * Stale's recent activity, and the text filter, in the order its search
  * reads in. It holds no rule of one view. A view hands it its own rule
  * (RowRule), which of the tasks that pass the filters are rows, with or
@@ -10,7 +10,7 @@
  * and its own search limits (SearchLimits), which its tests lower.
  *
  * It reads through the shared view reader (lib/viewReads.ts) and follows
- * its working-set rules: every task it takes is in the reader's working
+ * its working-set rules, so every task it takes is in the reader's working
  * set. A view answers OverCeiling and the guard's OverBudget with states of
  * its own, never with the rows read so far. */
 
@@ -117,7 +117,7 @@ export type RowRule = {
 }
 
 /** A view's limits of the search's label reads (filterSearch), which its
- * tests lower: `labelTasks` is how many candidates of one organization a
+ * tests lower. `labelTasks` is how many candidates of one organization a
  * search reads labels for through their own rows before it tries each
  * label's assignments, and `labelScan` how many assignments a candidate
  * that try reads. */
@@ -334,8 +334,8 @@ export function filterRead(
       }
     },
 
-    /** What the read holds once every task was taken: the rest of the
-     * search read, then every row. */
+    /** What the read holds once every task was taken, after the rest of
+     * the search read. */
     async finish(): Promise<FilterResult> {
       await decide(pending.splice(0))
       if (search !== null) await search.finish(decide)

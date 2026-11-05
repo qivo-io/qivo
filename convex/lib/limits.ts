@@ -155,7 +155,7 @@ export const TASK_ROW_MAX_BYTES = 2 * 1024
 export const BOARD_TASKS = 1000
 
 /** The most tasks one Roadmap answers (tasks.ts roadmap), across its whole
- * selection: every seat and sub-project together, each group and each
+ * selection, every seat and sub-project together, each group and each
  * subtask counted, unlike the Board's count (BOARD_TASKS). Shown parents
  * and a group's subtasks that are not rows count toward the Roadmap's read
  * budgets, not here. The Roadmap view names it once it reads the server;

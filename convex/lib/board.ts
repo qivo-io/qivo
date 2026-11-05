@@ -5,7 +5,7 @@
  * row's read the Board shares with the Roadmap (lib/viewFilters.ts
  * filterRead, the filters as the app's passesFilters applies them in
  * src/store/planner.ts, and the order its search reads in), and holds the
- * Board's own rules: which passing tasks are rows under Stale and Focus,
+ * Board's own rules, which passing tasks are rows under Stale and Focus,
  * the ceiling, the lanes that stay without cards, and its states.
  *
  * A selection is a top-level project with its visible live sub-projects, one
@@ -243,7 +243,7 @@ export async function readBoard(
 
 /**
  * The Board's rule over the tasks that pass the filter row
- * (lib/viewFilters.ts filterRead): under Stale, a task without subtasks is
+ * (lib/viewFilters.ts filterRead). Under Stale, a task without subtasks is
  * a row when it is not Done, and a group when it is not done by its group
  * facts and its newest activity, its own and its shown descendants', is
  * before the cutoff, as the app's isStale and isDone combine; every other
@@ -309,8 +309,8 @@ async function boardOf(
   return await boardAnswer(ctx, guard, seats, f, await board.finish(), { seats })
 }
 
-/* The ok answer of the Board read `got`: the parents, the group facts and
- * the lanes. `selection` for a project selection, `seats` for My view. */
+/* The ok answer of the Board read `got`, with the parents, the group facts
+ * and the lanes. `selection` for a project selection, `seats` for My view. */
 async function boardAnswer(
   ctx: QueryCtx,
   guard: ViewBudget,

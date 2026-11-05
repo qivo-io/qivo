@@ -1,11 +1,11 @@
-/* The Roadmap's reads behind tasks.ts roadmap and roadmapDependencies: one
- * Roadmap selection with the Roadmap's filter row and its displayed window
- * applied on the server, and the dependency inputs its arrows and Auto-move
- * need, within the Roadmap's budgets (ROADMAP, DEPENDENCIES) and its
+/* The Roadmap's reads behind tasks.ts roadmap and roadmapDependencies. They
+ * answer one Roadmap selection with the Roadmap's filter row and its
+ * displayed window applied on the server, and the dependency inputs its
+ * arrows and Auto-move need, within the Roadmap's budgets (ROADMAP, DEPENDENCIES) and its
  * ceiling of ROADMAP.ceiling tasks, lib/limits.ts ROADMAP_TASKS. It reads
  * through the shared view reader (lib/viewReads.ts) and the filter row's
  * read the Roadmap shares with the Board (lib/viewFilters.ts filterRead),
- * and holds the Roadmap's own rules: which tasks are rows
+ * and holds the Roadmap's own rules, which tasks are rows
  * (lib/roadmapVisibility.ts isRoadmapTaskVisible, the app's rule), the
  * ceiling with groups counted, the counts bound, the headings' Remaining,
  * the sub-projects My view holds, a group row's subtasks, the parts of the
@@ -26,17 +26,17 @@
  * grid. A stored day's week is the whole number of weeks from `from`,
  * floored, so the window is weeks 0 to (to - from) / 7, both counted.
  *
- * What still follows hidden data at a budget's margin, beside
- * lib/viewReads.ts's list: how many subtasks a shown group has, hidden ones
+ * Beside lib/viewReads.ts's list, these still follow hidden data at a
+ * budget's margin. How many subtasks a shown group has, hidden ones
  * included; how many of a person's own tasks and count rows are in projects
  * they cannot see, and where those projects' ids sort among the others
  * (lib/viewReads.ts mineCounts); the hidden sub-projects of a navigated
  * top-level project; and for the dependency read, how many links a task of
  * a part has to tasks the reader is not shown, archived tasks included,
  * each read by id and dropped. Each such task or link counts at a fixed
- * size, so its contents move no answer. A `counting` Remaining also follows a regroup
- * anywhere in the organization (model/overviewCounts.ts countsReady), so a
- * reader learns for a while that some project, one they cannot see
+ * size, so its contents move no answer. A `counting` Remaining also
+ * follows a regroup anywhere in the organization (model/overviewCounts.ts
+ * countsReady), so a reader learns for a while that some project, one they cannot see
  * included, was archived, restored or moved to Deleted items, as the
  * Overview's figures do (lib/overview.ts). */
 
@@ -135,7 +135,7 @@ import {
  *
  * `context` caps the shown parents and the subtasks of group rows that are
  * not rows themselves, together, the rows a Roadmap holds beside its
- * ROADMAP.ceiling rows: 2,000 view rows of up to about 1.6 KB of JSON,
+ * ROADMAP.ceiling rows, 2,000 view rows of up to about 1.6 KB of JSON,
  * about 3.2 MB. `owners` caps the ids the people filter may name, the
  * design size's 1,000 people. `labelTasks` and `labelScan` are the search's
  * label reads (lib/viewFilters.ts SearchLimits), the Board's values.
@@ -157,7 +157,7 @@ export const ROADMAP = {
  * grows, the selected tasks with a span among them; past it Auto-move's
  * inputs answer over_budget, and the arrows between the selection's own
  * tasks stay. Measured as ROADMAP's are (tests/dependencies.test.ts, real
- * limits), at the everyday link share: 5 percent of tasks with a blocks
+ * limits), at the everyday link share, 5 percent of tasks with a blocks
  * link, half of those to tasks of everyday projects elsewhere in the
  * organization, as the perf seed links its tasks (scripts/perf/server.mjs
  * `links`):
@@ -170,12 +170,12 @@ export const ROADMAP = {
  * - My view of 400 of the reader's own tasks over 200 sub-projects, 20 of
  *   them linked, half to other people's tasks: 1,306, 871 and 0.41.
  * - Each task of a part outside the selection costs about 4.2 ranges, 3.3
- *   documents and 0.0015 MiB: its read by id, its group check, its two
+ *   documents and 0.0015 MiB, for its read by id, its group check, its two
  *   link ranges and its project's access, measured over chains through 60
  *   and 120 tasks of everyday projects (470 and 721 ranges).
  *
  * So beside a project at its design size the parts may hold about 380
- * tasks outside the selection: a chain of 350 tasks through 6 everyday
+ * tasks outside the selection. A chain of 350 tasks through 6 everyday
  * projects, which brings 386 such tasks with their families, reads 3,442
  * ranges, 2,277 documents and 1.16 MiB whole. That is the measured size;
  * past it the ranges run out and Auto-move's inputs answer over_budget.
@@ -195,7 +195,7 @@ export const DEPENDENCIES = {
   tasks: 2000,
 }
 
-/** The most a link row takes, as Convex counts a document: an
+/** The most a link row takes, as Convex counts a document. It holds an
  * organization, a link, a source and a target id, the type, the pair key,
  * the creation time, the archive mark and the source's window key, 414
  * bytes measured (tests/rowBounds.test.ts). The dependency read counts
@@ -210,7 +210,7 @@ const LINK_ROW: Reads = { bytes: LINK_ROW_BYTES, documents: 1, ranges: 0 }
 export type RoadmapScope = BoardScope
 
 /** The Roadmap's filter row, as the app hands the Roadmap the effective
- * filters (src/App.tsx roadmapFilters): My tasks, the people filter,
+ * filters (src/App.tsx roadmapFilters), with My tasks, the people filter,
  * Priority and the text filter. The Roadmap applies neither Stale nor
  * Focus. */
 export type RoadmapFilters = {
@@ -225,7 +225,7 @@ export type RoadmapFilters = {
   search: string
 }
 
-/** The displayed window: the first days, YYYY-MM-DD, of its first and last
+/** The displayed window, the first days, YYYY-MM-DD, of its first and last
  * weeks on the reader's week grid, at most LIMITS.roadmapWeeks.max weeks
  * counted inclusively (src/lib/dates.ts resolveWin). */
 export type RoadmapWindow = { from: string; to: string }
@@ -235,21 +235,21 @@ export type RoadmapAnswer =
   | {
       state: 'ok'
       /** every task the Roadmap shows, groups included, by number, then
-       * organization and id: the selection's tasks that pass the filter row
+       * organization and id, the selection's tasks that pass the filter row
        * and isRoadmapTaskVisible in the window */
       rows: ViewRow[]
       /** the shown ancestors of rows that are not rows themselves, as the
        * Board's parents */
       parents: ViewRow[]
       /** every shown descendant of a group row, at any depth, that is
-       * neither a row nor a parent: Backlog subtasks, Done ones outside the
-       * window, filtered-out ones and those in another sub-project. With
+       * neither a row nor a parent, such as Backlog subtasks, Done ones outside
+       * the window, filtered-out ones and those in another sub-project. With
        * the rows and parents they hold every shown descendant of a group
        * row, so a group's bar during a drag (src/lib/issueGroups.ts
        * groupSpan) and its stale fade (the newest activity of its shown
        * descendants) need nothing else; a view row carries no `newest`. */
       subtasks: ViewRow[]
-      /** My view only: the sub-projects, by id, that hold an active task
+      /** In My view only, the sub-projects, by id, that hold an active task
        * the person owns by the Reviewer rule, whatever its status, its
        * dates or the filters, as the app's Roadmap keeps a track or band
        * (src/views/Roadmap.tsx held). Sub-project ids, where the Board's
@@ -259,10 +259,10 @@ export type RoadmapAnswer =
       projects?: string[]
       /** each sub-project's unfinished leaves' Remaining in whole tenths of
        * an hour, Backlog included, before the filter row, from the counts
-       * (model/overviewCounts.ts left_tenths): in a project selection every
-       * selected sub-project has a key; in My view the person's own leaves,
-       * and a sub-project without a key holds none of them, 0 tenths. Sum
-       * in tenths and divide by 10 once. `counting` while the counts are
+       * (model/overviewCounts.ts left_tenths). In a project selection every
+       * selected sub-project has a key. In My view they are the person's own
+       * leaves, and a sub-project without a key holds none of them, 0
+       * tenths. Sum in tenths and divide by 10 once. `counting` while the counts are
        * not whole, `budget` where their reads did not fit. */
       remaining: Figure<{ tenths: Record<string, number> }>
     }
@@ -270,13 +270,13 @@ export type RoadmapAnswer =
   | { state: 'over_budget'; projects?: string[] }
   | { state: 'unavailable'; reason?: typeof ACCESS_UNCHECKED; message?: string }
 
-/** One blocks link as Auto-move and the arrows read it: the blocker, the
+/** One blocks link as Auto-move and the arrows read it, its blocker, the
  * link's source, and the task it blocks, its target. */
 export type DependencyPair = { blocker: string; blocked: string }
 
-/** A task as the dependency read sends it: what Auto-move (src/lib/schedule.ts
- * autoMoves) reads of it and the stored dates a move sends as expected
- * values (roadmap.ts change). `parent_id` only for a parent in the same
+/** A task as the dependency read sends it, with what Auto-move
+ * (src/lib/schedule.ts autoMoves) reads of it and the stored dates a move
+ * sends as expected values (roadmap.ts change). `parent_id` only for a parent in the same
  * answer; `span` on groups only. */
 export type DependencyRow = Pick<
   ViewRow,
@@ -292,7 +292,7 @@ export type DependencyRow = Pick<
   | 'span'
 >
 
-/** Auto-move's inputs: the parts of the dependency graph that hold a
+/** Auto-move's inputs, the parts of the dependency graph that hold a
  * selected task and a blocks link, whole. */
 export type AutoMoveInputs = {
   state: 'ok'
@@ -300,7 +300,7 @@ export type AutoMoveInputs = {
   tasks: DependencyRow[]
   /** every blocks link between two of `tasks`, by the link's creation
    * time, then its id, the order in which the app lists a task's links
-   * (src/lib/taskSections.ts linkViews): build each task's links from them
+   * (src/lib/taskSections.ts linkViews). Build each task's links from them
    * in this order, so autoMoves takes its pairs in the app's order */
   pairs: DependencyPair[]
   /** the projects of `tasks` the reader may edit (Edit, lead or user
@@ -312,7 +312,7 @@ export type AutoMoveInputs = {
 export type DependencyAnswer =
   | {
       state: 'ok'
-      /** the arrows' inputs: every blocks link between two selected tasks
+      /** the arrows' inputs, every blocks link between two selected tasks
        * with a span, in `auto_move.pairs`'s order; whole whenever the
        * answer is ok */
       pairs: DependencyPair[]
@@ -329,8 +329,8 @@ const UNAVAILABLE = { state: 'unavailable' as const }
 
 // --- the window ---------------------------------------------------------------------
 
-/** A window as the read applies it: its first week's first day, as a day
- * number, and its last week, weeks counted from 0. */
+/** A window as the read applies it, its first week's first day as a day
+ * number and its last week, weeks counted from 0. */
 type Window = { from: number; last: number }
 
 /** The window of `w`, refused where a day is not a real YYYY-MM-DD day, `to`
@@ -353,7 +353,7 @@ const weekIn = (win: Window, iso: string): number => Math.floor((dayNumber(iso) 
 
 /**
  * `t` as isRoadmapTaskVisible reads it, with weeks counted from `win`'s
- * first: a task without subtasks by its stored dates, as the app shapes
+ * first. A task without subtasks goes by its stored dates, as the app shapes
  * them (src/store/viewModels.ts), an end only with an end week, never
  * before the start; a group by its calculated span (GroupFacts span).
  */
@@ -389,13 +389,13 @@ function visibleIn(
 
 // --- the scope ----------------------------------------------------------------------
 
-/** What a scope names: its seats and, for a project selection, the
+/** What a scope names, its seats and, for a project selection, the
  * selection. */
 type Scoped = { seats: ViewSeats; selection: Selection | null }
 
 /* The seats and selection `scope` names for the login whose seats are
  * `profiles`, or null where it names none, alike for every reason, as
- * lib/board.ts reads a Board's: a project selection with the login's seat
+ * lib/board.ts reads a Board's, a project selection with the login's seat
  * in its organization (lib/viewReads.ts projectSelection), named in `known`
  * once known, or My view's seats. */
 async function scoped(
@@ -441,7 +441,7 @@ const selectionSeat = (at: Scoped): ViewAccess => {
  *   (`subtasks`), My view's sub-projects (`held_sub_projects`), a project
  *   selection's sub-projects (`projects`) and the headings' Remaining;
  * - `over_ceiling` once more than ROADMAP.ceiling rows, groups counted,
- *   were established: by the counts bound (roadmapOf) or the
+ *   were established, by the counts bound (roadmapOf) or the
  *   ROADMAP.ceiling + 1th row the read found, whatever the budget says
  *   after;
  * - `over_budget` when the reads reach ROADMAP.reads before the count is
@@ -478,7 +478,7 @@ export async function readRoadmap(
 
 /**
  * The Roadmap's rule over the tasks that pass the filter row
- * (lib/viewFilters.ts filterRead): a task is a row where
+ * (lib/viewFilters.ts filterRead). A task is a row where
  * isRoadmapTaskVisible keeps it in `win`, a group by its facts, its
  * effective completion and calculated span, and every row counts toward
  * ROADMAP.ceiling, groups included (the coordinator's decision of 31
@@ -491,7 +491,7 @@ const roadmapRule = (win: Window): RowRule => ({
   ceiling: ROADMAP.ceiling,
 })
 
-/* A count read's answer, or why it gives none: not whole yet (`counting`),
+/* A count read's answer, or why it gives none, not whole yet (`counting`)
  * or its reads did not fit (`budget`). */
 async function countsRead(
   read: () => Promise<Map<string, LeafCounts> | null>,
@@ -521,7 +521,7 @@ async function roadmapOf(
   const counts = await countsRead(() =>
     selection === null ? mineCounts(ctx, guard, seats) : projectCounts(ctx, guard, selection),
   )
-  // The counts bound, where it costs no read: every counted To do, In
+  // The counts bound, where it costs no read. Every counted To do, In
   // progress and In review leaf is a row whatever its dates, in a project
   // selection without a filter, and in My view without the people filter,
   // Priority or a search, so a sum past the ceiling establishes it
@@ -611,8 +611,8 @@ async function heldSubProjects(
   return [...held].sort(order)
 }
 
-/* The ok answer of the Roadmap read `got`: the parents, the subtasks of
- * group rows, the group facts and the rows out, with `rest`. */
+/* The ok answer of the Roadmap read `got`, with the parents, the subtasks
+ * of group rows, the group facts and the rows out, and `rest`. */
 async function roadmapAnswer(
   ctx: QueryCtx,
   guard: ViewBudget,
@@ -667,14 +667,14 @@ async function roadmapAnswer(
  * link, whole, inside the selection and outside it.
  *
  * The graph's nodes are the tasks of the reader's working set that have a
- * span, as src/lib/schedule.ts autoMoves takes them: a task without
- * subtasks with a start week, or a group with a scheduled shown leaf (its
+ * span, as src/lib/schedule.ts autoMoves takes them, a task without
+ * subtasks with a start week or a group with a scheduled shown leaf (its
  * GroupFacts span). Its edges are the blocks links between two nodes, and
  * each group's link to its shown subtasks that are nodes. A part is a
  * connected set of nodes. autoMoves over a part's tasks gives exactly the
  * moves it gives over every task the workspace holds within that part, as
  * parts share no task and the solver's pushes follow only edges. Parts with
- * no selected task are left out: Auto-move no longer moves tasks with no tie
+ * no selected task are left out, so Auto-move no longer moves tasks with no tie
  * to the selection (an agent decision of 5 November 2026, which the Roadmap
  * view's guide states).
  *
@@ -684,7 +684,7 @@ async function roadmapAnswer(
  * group's facts, and each one with a span's links (issue_links by_source
  * and by_target, two ranges, relates links dropped). Where that does not
  * fit ROADMAP's reads it answers over_budget whole. Then the parts grow
- * outward through links, parents and subtasks: a task a link or a parent
+ * outward through links, parents and subtasks. A task a link or a parent
  * names is read by id, counted at lib/limits.ts TASK_ROW_MAX_BYTES, and
  * kept only where the reader's working set holds it (lib/viewReads.ts
  * viewAccess holds), of the same organization; a kept task's group check,
@@ -743,14 +743,14 @@ function linkRanges(ctx: QueryCtx, ids: readonly string[]): StepRange<Doc<'issue
 const byCreation = (a: Doc<'issue_links'>, b: Doc<'issue_links'>) =>
   order(a.created_at, b.created_at) || order(a.id, b.id)
 
-/* `link` as a pair: a blocks link's source blocks its target. */
+/* `link` as a pair, as a blocks link's source blocks its target. */
 const pairOf = (link: Doc<'issue_links'>): DependencyPair => ({
   blocker: link.source_id,
   blocked: link.target_id,
 })
 
 /**
- * The dependency graph over `seats` as a read learns it: the tasks of the
+ * The dependency graph over `seats` as a read learns it, the tasks of the
  * reader's working set it read (`read`), which of them are groups and what
  * they show (`known`, `facts`), which are nodes, and the blocks links of
  * the nodes whose links it read.
@@ -864,7 +864,7 @@ function dependencyGraph(ctx: QueryCtx, guard: ViewBudget, seats: ViewSeats) {
     resolve,
     /** Whether task `t` is a node, once decided. */
     isNode: (t: Doc<'issues'>) => node.get(t.id) === true,
-    /** The tasks next to node `t`: the other ends of its links, its parent,
+    /** The tasks next to node `t`, the other ends of its links, its parent,
      * by id with their organization, and its shown subtasks. */
     near(t: Doc<'issues'>, ids: Map<string, string>, docs: Doc<'issues'>[]) {
       for (const linkId of linksOf.get(t.id) ?? []) {
@@ -931,7 +931,7 @@ async function dependenciesOf(
   return { state: 'ok', pairs, auto_move }
 }
 
-/* Auto-move's inputs: the parts of `graph` grown from `roots`, the selected
+/* Auto-move's inputs, the parts of `graph` grown from `roots`, the selected
  * nodes, through links, parents and subtasks, those holding a link, past
  * DEPENDENCIES.tasks tasks OverBudget. */
 async function partsOf(

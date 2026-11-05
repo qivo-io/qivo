@@ -408,9 +408,9 @@ export function viewAccess(ctx: QueryCtx, guard: ViewBudget, me: Doc<'profiles'>
     /** Whether the reader can see each project (Access.visible). */
     visible,
     /** The reader's level on each project (Access.level), null where they
-     * cannot see it, asked within the guard as `visible` asks: for a
-     * sub-project the same reads, so a project asked about before takes no
-     * more room. */
+     * cannot see it, asked within the guard as `visible` asks. For a
+     * sub-project these are the same reads, so a project asked about before
+     * takes no more room. */
     levels: (ids: readonly string[]): Promise<(AccessLevel | null)[]> =>
       inRounds(ids, asked, PROJECT_ASK, async (id) => {
         const answer = await access.level(id)

@@ -1,5 +1,5 @@
 /* tasks.roadmapDependencies, the Roadmap's dependency inputs (lib/roadmap.ts
- * readDependencies): the arrows' pairs between a selection's own tasks and
+ * readDependencies), the arrows' pairs between a selection's own tasks and
  * Auto-move's parts, inside the selection and outside it, the links and
  * tasks the reader is not shown, the order of the pairs, the write levels,
  * My view across seats, the budgets that answer over_budget, that hidden
@@ -33,7 +33,7 @@ afterEach(() => {
   Object.assign(DEPENDENCIES, structuredClone(DEFAULT_DEPENDENCIES))
 })
 
-/** A task's weeks: `from` weeks after NOW's week for `weeks` weeks. */
+/** A task's weeks, `from` weeks after NOW's week for `weeks` weeks. */
 const dated = (from: number, weeks = 1): Partial<Doc<'issues'>> => ({
   start_week: dayPlus(NOW_WEEK, 7 * from),
   end_week: dayPlus(NOW_WEEK, 7 * (from + weeks - 1)),
@@ -92,7 +92,7 @@ function ok(answer: DependencyAnswer) {
   return answer
 }
 
-/** Auto-move's inputs of `answer`: task ids sorted and pairs by id. */
+/** Auto-move's inputs of `answer`, task ids sorted and pairs by id. */
 function parts(answer: DependencyAnswer) {
   const a = ok(answer)
   if (a.auto_move.state !== 'ok') return a.auto_move.state
@@ -469,7 +469,7 @@ const record = (name: string, answer: DependencyAnswer, read: ReadFigures) => {
   console.log(`dependency figures, ${name}:`, JSON.stringify({ ...state, ...read }))
 }
 
-/** An open task `i` of an everyday mix: three in five dated around NOW's
+/** An open task `i` of an everyday mix, three in five dated around NOW's
  * week, one in ten Backlog. */
 const openTask = (i: number): Partial<Doc<'issues'>> & { text?: string } => ({
   ...ordinary(i),
@@ -538,7 +538,7 @@ async function everyday(t: T, f: OrgFixture, n: number, links = true) {
 }
 
 /** A project of 800 open tasks over 3 sub-projects at the everyday link
- * share: 5 percent of them, 40 tasks, hold a link, 20 to each other and 20
+ * share, 5 percent of them, 40 tasks, hold a link, 20 to each other and 20
  * to tasks of 2 everyday projects elsewhere, which hold their own share.
  * Answers the fixture and the project's dated tasks. */
 async function eightHundred() {

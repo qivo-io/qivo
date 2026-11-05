@@ -1,5 +1,5 @@
 /* tasks.roadmap, the Roadmap's server read (lib/roadmap.ts readRoadmap on
- * lib/viewFilters.ts and lib/viewReads.ts): its arguments, the selections
+ * lib/viewFilters.ts and lib/viewReads.ts), its arguments, the selections
  * it answers unavailable alike, a check of the caller's access that a bound
  * stops, the visibility rule in the window, the filter row, the ceiling
  * with groups counted and the counts bound, the headings' Remaining, the
@@ -750,12 +750,12 @@ describe('parents and subtasks', () => {
 
 /* --------------------------------------------------------------- hidden data */
 
-/** A fixture whose hidden rows carry ordinary text when `wide`: the
+/** A fixture whose hidden rows carry ordinary text when `wide`, the
  * sibling's tasks, a hidden subtask of a shown group, a hidden parent of a
  * shown task, all the guest's own, so My view reads them too. Every task
  * has the same number in both, so their count rows fall in the same shards
  * (model/overviewCounts.ts OVERVIEW_SHARDS), and the sibling's id sorts
- * after FW's in both: how many count rows a person holds in projects they
+ * after FW's in both. How many count rows a person holds in projects they
  * cannot see, and where those projects' ids sort among the others, may
  * move an answer at the budget's margin (lib/viewReads.ts mineCounts, one
  * count row's bytes measured), which this case leaves alone. */
@@ -852,7 +852,7 @@ async function plantSubs(t: T, parent: Doc<'projects'>, n: number): Promise<Doc<
   return subs
 }
 
-/** The open statuses a fixture's tasks cycle through: To do, In progress,
+/** The open statuses a fixture's tasks cycle through, To do, In progress,
  * In review and Backlog, one in ten Backlog. */
 const OPEN = [
   'todo',
@@ -867,7 +867,7 @@ const OPEN = [
   'progress',
 ] as const
 
-/** An open fixture task `i`: ordinary text, three in five dated around
+/** An open fixture task `i`, with ordinary text, three in five dated around
  * NOW's week, half with remaining hours. */
 const openTask = (i: number): Partial<Doc<'issues'>> & { text?: string } => {
   const start = dayPlus(NOW_WEEK, 7 * ((i % 40) - 20))
@@ -879,7 +879,7 @@ const openTask = (i: number): Partial<Doc<'issues'>> & { text?: string } => {
   }
 }
 
-/** `n` open tasks in `project`: per ten, one parent, two subtasks of the
+/** `n` open tasks in `project`, per ten one parent, two subtasks of the
  * set's parents and seven plain tasks. */
 async function plantOpen(t: T, project: Doc<'projects'>, n: number, from = 0) {
   const parents = await plantTasks(t, project, Math.round(n / 10), (i) => openTask(from + i))
