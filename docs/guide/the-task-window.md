@@ -140,7 +140,8 @@ does, also for one you just picked. While the window is still loading them,
 or could not load them all, the picker says so, and while their list could
 not load, they stay checked and cannot be taken off there. So does one you
 can no longer change while the picker is open, as after your access
-changed. The pickers list the task's own sub-project first, then the other
+changed, and if someone else then takes it off, it shows unchecked and
+cannot be chosen there. The pickers list the task's own sub-project first, then the other
 sub-projects of its project, each in the order its tasks were created. If
 the task moves to another project meanwhile, the picker lists them again
 from the start. **Linked tasks** stops at the end of the task's own

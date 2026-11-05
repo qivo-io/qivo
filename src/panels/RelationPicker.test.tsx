@@ -560,6 +560,21 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(locked?.disabled).toBe(true)
     await click(locked)
     expect(picks).not.toHaveBeenCalled()
+    // someone else takes it off meanwhile, so it shows unchecked, and it
+    // still takes no press, which the server would refuse
+    await show({ current: [] })
+    const gone = rowOf('task-45') as HTMLButtonElement | null
+    expect(gone?.dataset.pickerCurrent).toBeUndefined()
+    expect(gone?.getAttribute('aria-pressed')).toBe('false')
+    expect(gone?.disabled).toBe(true)
+    await click(gone)
+    expect(picks).not.toHaveBeenCalled()
+    // a batch read since offers it, which the server does only for a task
+    // the person may pick, so it takes a press again
+    await typeInto('mount')
+    await rest()
+    await reads[1].answer(batch([row(45, { title: 'Mount the board' })]))
+    expect((rowOf('task-45') as HTMLButtonElement | null)?.disabled).toBe(false)
     // their access comes back, and it takes a press again
     await show({ current: [kid] })
     expect((rowOf('task-45') as HTMLButtonElement | null)?.disabled).toBe(false)

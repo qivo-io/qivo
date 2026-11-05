@@ -32,8 +32,9 @@
      unchecked once it leaves the window's list, so a relation taken off
      can be chosen again. It shows with its last data from the window, or
      with the server's row of it from a batch read after it left, never
-     one read while it was current, which predates its relation. A task
-     shows once.
+     one read while it was current, which predates its relation. One the
+     person could no longer change stays without taking a press until such
+     a batch offers it. A task shows once.
    - A pick toggles its row at once and marks it busy until its write
      answers, and back if it is refused, with the store's toast. The row
      keeps what the person now sees, its parent or its link, for the next
@@ -321,13 +322,16 @@ export function RelationPicker({
     if (shownIds.has(row.uuid) || !matches(key, row.title)) continue
     shownIds.add(row.uuid)
     // the server's row of it where a batch read since holds it, else the
-    // row it showed with
+    // row it showed with. One the person could no longer change keeps its
+    // lock until such a batch offers it, since the server offers only
+    // tasks the person may pick
     const fresh = servedSince(row.uuid)
     choices.push({
       uuid: row.uuid,
       key: fresh ? issueKey(fresh.num) : key,
       title: fresh?.title ?? row.title,
       candidate: fresh ?? row.row,
+      locked: !fresh && !!row.locked,
     })
   }
   for (const row of served) {
