@@ -149,8 +149,9 @@ there. After 200 tasks a picker asks you to search to find more.
 **No matching tasks.** appears only once the whole list and the task's
 current relations have loaded, beside the row that creates a task. Enter
 picks the only task shown, or creates a task when none matches, once the
-whole list and the task's current relations have loaded. A typed task ID
-picks its task at once.
+whole list and the task's current relations have loaded, and in
+**Linked tasks** also at the end of the task's own project. A typed task
+ID picks its task at once.
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.

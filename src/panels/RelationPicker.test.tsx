@@ -377,6 +377,31 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(rowIds()).toEqual(['task-70'])
   })
 
+  it('acts on Enter at the family’s end of Linked tasks as the create row does, and Search all your projects stays', async () => {
+    await load()
+    await show({ kind: 'link' })
+    await typeInto('mast')
+    await rest()
+    await reads[1].answer(
+      batch([row(5, { title: 'Build the mast' })], null, { all_projects: 'all-1' }),
+    )
+    expect(document.querySelector('[data-picker-all]')).not.toBeNull()
+    await enter()
+    expect(picks).toHaveBeenCalledTimes(1)
+    expect(picks.mock.calls[0]?.[0]).toMatchObject({ uuid: 'task-5' })
+    // the button still goes on, and Enter read nothing more
+    expect(document.querySelector('[data-picker-all]')).not.toBeNull()
+    expect(reads).toHaveLength(2)
+    // none in the project: Enter creates, as the row beside the button does
+    await typeInto('fresh wire')
+    await rest()
+    await reads[2].answer(batch([], null, { all_projects: 'all-2' }))
+    expect(text()).toContain('No matching tasks in this project.')
+    expect(document.querySelector('[data-picker-create]')).not.toBeNull()
+    await enter()
+    expect(created).toHaveBeenCalledWith('fresh wire')
+  })
+
   it('claims no end and creates nothing on Enter while the current relations are not whole', async () => {
     await load()
     await show({ note: 'Loading the current subtasks…' })

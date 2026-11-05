@@ -34,11 +34,13 @@
      keeps what the person now sees, its parent or its link, for the next
      press, also across a new text.
    - Enter picks or creates only when the rows answer the typed text, the
-     window's current relations are whole and the list has ended. One row
-     on screen picks it, none creates. A text that is exactly one task ID
-     picks the row the server found by its number (`exact`), whatever the
-     list's end. An Enter pressed while the answer for the typed text is
-     on its way acts once it arrives.
+     window's current relations are whole and the list has ended, or in
+     Linked tasks reached the family's end, where the create row shows
+     beside Search all your projects. One row on screen picks it, none
+     creates. A text that is exactly one task ID picks the row the server
+     found by its number (`exact`), whatever the list's end. An Enter
+     pressed while the answer for the typed text is on its way acts once
+     it arrives.
 
    Every write takes the task as the window shows it (held, or from the
    window's own answer), and a candidate as the server's row showed it,
@@ -301,6 +303,9 @@ export function RelationPicker({
   // nothing
   const whole = current.note === null
   const ended = answered && whole && list.phase === 'ready' && !list.next
+  // where Enter picks or creates: the list's end, or the family's end of
+  // Linked tasks, as the create row beside Search all your projects does
+  const enterEnds = ended || (answered && whole && list.phase === 'ready' && allNext)
   const state = search.tooLong
     ? 'ready'
     : !answered
@@ -358,7 +363,7 @@ export function RelationPicker({
   const onEnter = () => {
     const exact = choices.find((c) => c.candidate?.exact)
     if (answered && exact) return pick(exact)
-    if (!ended || !typed) return
+    if (!enterEnds || !typed) return
     if (choices.length === 1) pick(choices[0])
     else if (choices.length === 0 && createOn) create()
   }
