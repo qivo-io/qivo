@@ -635,13 +635,13 @@ favorites paragraph below describes, so such a row never shows and keeps
 its project, where the seat sees it, in the list of the rest.
 
 The Roadmap's server reads, `tasks.roadmap` and
-`tasks.roadmapDependencies`, first ship in the release after v0.1.117. No
+`tasks.roadmapDependencies`, first ship in the release after v0.1.119. No
 app calls them yet, so that release sets no floor, and returning the
 backend to an earlier commit stays safe until the Roadmap view switches to
-them. The release that switches it makes this release the backend's floor
-for that app. The Board's filter read moved into `convex/lib/viewFilters.ts`
-with `tasks.board`'s answers unchanged. There is no schema change, no
-backfill and no release step.
+them. The release that switches it makes the release that shipped them the
+backend's floor for that app. The Board's filter read moved into
+`convex/lib/viewFilters.ts` with `tasks.board`'s answers unchanged. There
+is no schema change, no backfill and no release step.
 
 ## Node.js version
 
