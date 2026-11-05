@@ -43,13 +43,16 @@ import type { Workspace } from '../../convex/lib/workspaceJoin'
 /** States the stand-in answers whatever the workspace says: a batch whose
     scan stops after this many tasks (`stop`), a read that fails (`fail`),
     an opened task the person may not open (`unavailable`), a request past
-    the picker's budget (`over`), and a smaller batch (`rows`). */
+    the picker's budget (`over`), a smaller batch (`rows`), and the opened
+    task's own block (`blocked`), as for subtasks the window cannot see:
+    has_subtasks for Parent, full for Subtasks and Linked tasks. */
 export type ForcedRelations = {
   stop?: number
   fail?: boolean
   unavailable?: boolean
   over?: boolean
   rows?: number
+  blocked?: boolean
 }
 
 type Task = Workspace['issues'][number]
@@ -113,8 +116,11 @@ export function relationPickerStandIn(
       l.source_id === task.id ? [l.target_id] : l.target_id === task.id ? [l.source_id] : [],
     ),
   )
-  const block: RelationBlock | null =
-    args.kind === 'parent'
+  const block: RelationBlock | null = force.blocked
+    ? args.kind === 'parent'
+      ? 'has_subtasks'
+      : 'full'
+    : args.kind === 'parent'
       ? kids.length > 0 || task.has_hidden_subtasks
         ? 'has_subtasks'
         : null

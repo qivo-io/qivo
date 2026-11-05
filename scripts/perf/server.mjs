@@ -109,9 +109,11 @@
 //                        (src/store/relationPickerStandIn.setup.ts):
 //                        stopped (each batch stops after 8 tasks looked
 //                        at, so Load more goes on), failed (every read
-//                        fails), unavailable, over_budget, and rows-N (N
-//                        tasks a batch, for Load more and the held rows);
-//                        several joined by commas
+//                        fails), unavailable, over_budget, blocked (the
+//                        opened task's own block, as for subtasks the
+//                        window cannot see), and rows-N (N tasks a batch,
+//                        for Load more and the held rows); several joined
+//                        by commas
 //   removal              a state the removal window's reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -243,6 +245,7 @@ const forcedRelations = (() => {
     else if (state === 'failed') force.fail = true
     else if (state === 'unavailable') force.unavailable = true
     else if (state === 'over_budget') force.over = true
+    else if (state === 'blocked') force.blocked = true
     else if (/^rows-\d+$/.test(state)) force.rows = Math.max(1, Number(state.slice(5)))
   }
   return force
