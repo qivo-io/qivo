@@ -797,10 +797,13 @@ project the caller cannot see at a fixed size, so its text no longer moves
 bound of the caller's own access reads stops a check, which the app already
 answers by asking for fewer people at a time. Its arguments and the rows it
 answers otherwise stay as before. The Overview's delay verdicts moved to a
-module the agenda shares, with every Overview answer unchanged, and
-`lib/visibility.ts` `orgProjectView`, which read every project of the
-organization and lastComments was the last to call, is gone; the tests keep
-it as an oracle. There is no schema change and no backfill.
+module the agenda shares, with every Overview answer unchanged. The clock
+check the Overview's queries and the agenda share now also refuses, as a
+bad request, a clock whose last week does not begin at a local midnight of
+its `week`, which no app sends. `lib/visibility.ts` `orgProjectView`, which
+read every project of the organization and lastComments was the last to
+call, is gone; the tests keep it as an oracle. There is no schema change
+and no backfill.
 
 ## Node.js version
 
