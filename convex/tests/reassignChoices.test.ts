@@ -420,7 +420,9 @@ describe('the Reassign picker against the write', () => {
     const b = await base()
     await b.team('Second')
     await b.share(b.f.meta, b.f.team.id)
-    await b.share(b.f.hidden, b.f.team.id, 'viewer')
+    // at User, so a member who edits through the team alone would pass
+    // both projects' rule if the deletion were not left out
+    await b.share(b.f.hidden, b.f.team.id)
     const mia = await b.person('Mia')
     const sam = await b.person('Sam')
     const nils = await b.person('Nils')
