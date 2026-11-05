@@ -53,6 +53,8 @@ let snap: Snapshot
 let subs: Live[]
 let writes: Pending[]
 let ORG: string
+// delivers the workspace again, as the server sends a change
+let workspace: (next: Snapshot) => void
 
 const turn = () => new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -127,7 +129,8 @@ async function load(edit?: (next: Snapshot) => void) {
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      next(structuredClone(snap))
+      workspace = (value) => next(structuredClone(value))
+      workspace(snap)
       return () => {}
     }
     const live: Live = { name, deliver: next, closed: false }
@@ -368,6 +371,30 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
       patch: { parent_id: null },
       expected: { parent_id: 'task-a', has_hidden_parent: false },
     })
+  })
+
+  it('paints the new parent on a child that arrives in the workspace while its write waits', async () => {
+    await load()
+    // QN-45 under a parent the person cannot see, not in the workspace yet
+    const row = pickerRow(task(PICK, 45, { title: 'Mount it' }), { has_hidden_parent: true })
+    void P.setSubtaskParent('QN-1', { uuid: PICK, row, parent: null, hiddenParent: true }, true)
+    expect(last('issues:update').args).toMatchObject({ id: PICK, patch: { parent_id: 'task-a' } })
+    expect(P.handleOf(PICK)).toBeNull()
+    // it arrives with the parent it had before the write
+    const before = task(PICK, 45, { title: 'Mount it', has_hidden_parent: true })
+    workspace({ ...snap, issues: [...snap.issues, before] })
+    await turn()
+    const kid = P.issueById[P.handleOf(PICK) ?? '']
+    expect(kid).toMatchObject({ parent: 'QN-1', hasHiddenParent: false })
+    expect(P.issueById['QN-1'].children).toEqual([kid?.id])
+    // and a refusal shows it as it arrived
+    last('issues:update').reject(new ConvexError({ code: 'rule', message: 'Not allowed' }))
+    await turn()
+    expect(P.issueById[P.handleOf(PICK) ?? '']).toMatchObject({
+      parent: null,
+      hasHiddenParent: true,
+    })
+    expect(P.issueById['QN-1'].children).toEqual([])
   })
 
   it('creates a subtask under a task the window shows from its answer, and refuses a parent it cannot resolve', async () => {

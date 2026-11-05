@@ -10469,8 +10469,10 @@ export const PLANNER = {
       with another parent. A child the workspace holds goes through
       P.updateIssue with that pair. Any other sends issues.update from what
       the window showed of it, marked as from an answer; it paints the
-      window's Subtasks list (subtaskListPaint) and the views' copies of
-      the child, and no workspace row but the hours a held parent loses.
+      window's Subtasks list (subtaskListPaint), the views' copies of the
+      child, the hours a held parent loses, and the child's workspace row
+      once the workspace holds it, as when the child arrives while the
+      write waits, so the Board never shows its old parent meanwhile.
       Resolves whether the server accepted it, false when refused here or
       there, with a toast that says why. */
   setSubtaskParent: (open: string, child: SubtaskEnd, on: boolean): Promise<boolean> => {
@@ -10505,8 +10507,15 @@ export const PLANNER = {
         }
       }),
       detail: { task: openUuid, paint: () => subtaskListPaint(openUuid, kid, uuid, at) },
-      // a parent the workspace holds loses its own hours
-      workspace: () => clearParentHours(parentId, at),
+      // a parent the workspace holds loses its own hours, and the child,
+      // once the workspace holds it, takes the new parent in place of the
+      // one it had, a hidden one too, as the held path paints it
+      workspace: () => {
+        clearParentHours(parentId, at)
+        if (!rows.issues.has(uuid)) return
+        patchIssueRow(uuid, patch, at)
+        rows.hiddenParentTasks.delete(uuid)
+      },
     }
     return send(api.issues.update, { org_id: org, id: uuid, patch }, view, {
       over: {
