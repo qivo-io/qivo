@@ -8,8 +8,8 @@
    dates; ISO strings are built manually (never via toISOString) to avoid
    timezone drift on date-only values. Each week start is built from its
    year, month and day (dayStart), so where a daylight-saving change skips a
-   midnight (Santiago, Havana, Beirut) only that day starts at 01:00, and
-   no other week takes its wall time. */
+   midnight (such as Santiago, Havana and Beirut) only that day starts at
+   01:00, and no other week takes its wall time. */
 
 import { LIMITS } from '../../convex/lib/limits'
 
