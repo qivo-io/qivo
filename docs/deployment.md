@@ -854,7 +854,7 @@ on, as from that one, never return the backend to a commit before v0.1.127;
 roll forward instead. Returning the app alone to an earlier release is safe
 against a later backend, because that app lists the workspace's projects.
 
-From the release after v0.1.128, `deletedItems.roles` answers each seat of
+From the release after v0.1.129, `deletedItems.roles` answers each seat of
 the login its role in Deleted items and whether Delete now applies there,
 `deletedItems.people` answers the people of one organization 25 at a time
 in name order for Deleted by and the assignee filter, and
