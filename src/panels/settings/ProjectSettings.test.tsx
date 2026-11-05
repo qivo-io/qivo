@@ -453,6 +453,29 @@ describe('the page before and after its answer', () => {
     ])
   })
 
+  it("keeps a project's writes off after its failure when another project's read failed in between, until its own answer comes", async () => {
+    await open()
+    server.force = { fail: ['get'] }
+    await rerun()
+    expect(pageState()).toBe('failed')
+    // another project's read fails too, then the first project's read is
+    // on its way again with its last answer kept
+    await open('work')
+    expect(pageState()).toBe('failed')
+    server.force = {}
+    server.reads.hold(true)
+    await open()
+    expect(pageState()).toBe('refreshing')
+    expect(has('[data-project-settings-failed]')).toBe(true)
+    expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(true)
+    expect(nameField().readOnly).toBe(true)
+    server.reads.hold(false)
+    await rerun()
+    expect(pageState()).toBe('ok')
+    expect(has('[data-project-settings-failed]')).toBe(false)
+    expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false)
+  })
+
   it('keeps every write control off and the failure line while Try again waits for an answer', async () => {
     await open()
     server.force = { fail: ['get'] }
