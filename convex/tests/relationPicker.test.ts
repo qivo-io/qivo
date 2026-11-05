@@ -173,7 +173,7 @@ describe('arguments', () => {
           cursor: `${cursor.slice(0, -1)}${cursor.endsWith('0') ? '1' : '0'}`,
         }),
       ],
-      ['junk', pick(t, f.user, open.id, 'link', { search: 'board', cursor: 'rp1~zz' })],
+      ['junk', pick(t, f.user, open.id, 'link', { search: 'board', cursor: 'rp2~zz' })],
       ['no prefix', pick(t, f.user, open.id, 'link', { search: 'board', cursor: cursor.slice(4) })],
     ]
     for (const [why, call] of refused)
@@ -263,7 +263,7 @@ describe('access', () => {
     expect(await allIds(t, me, open.id, 'parent')).toEqual(usual)
   })
 
-  it("answers a typed task ID whose project's check a bound stops as a hidden one, and ends the list", async () => {
+  it("answers a typed task ID whose project's check a bound stops as a hidden one, and finds its task in all your projects", async () => {
     const t = newT()
     const f = await withOrg(t)
     // a user grant on TBED, which needs no team share, and a team that
@@ -293,7 +293,8 @@ describe('access', () => {
       expect.objectContaining({ id: far.id, exact: true }),
     ])
     Object.assign(OWN_READS, UNCHECKED)
-    expect(await pick(t, me, open.id, 'link', { search })).toEqual({
+    const first = await pick(t, me, open.id, 'link', { search })
+    expect(first).toEqual({
       state: 'ok',
       rows: [],
       next: null,
@@ -301,6 +302,15 @@ describe('access', () => {
       stopped: false,
       blocked: null,
     })
+    // the catalogue reads its levels without that bound, so Search all
+    // your projects meets the task and offers it, never an ended list
+    // without it
+    const beyond = okOf(
+      await pick(t, me, open.id, 'link', { search, cursor: okOf(first).all_projects as string }),
+    )
+    expect(beyond).toMatchObject({ next: null, all_projects: null, stopped: false })
+    expect(beyond.rows.map((r) => r.id)).toEqual([far.id])
+    expect(beyond.rows[0]).not.toHaveProperty('exact')
   })
 
   it('refuses Parent and Subtasks to a reader without Edit on the task, whose Linked tasks lists only the projects they edit', async () => {

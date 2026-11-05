@@ -43,8 +43,10 @@
  * title (lib/search.ts allWordsMatcher), the rule the app's pickers apply.
  * A search that is one task ID (QN-12 or 12) also looks that number up in
  * the organization in the first batch. When the reader may pick that task
- * it is the batch's first row, marked `exact`, and every batch's scan
- * leaves the number out. The Linked tasks picker takes it from anywhere in
+ * it is the batch's first row, marked `exact`, and the cursor carries that,
+ * so every batch's scan then leaves the number out. Without that row a
+ * scan offers the task where it meets it, as after a check of its project
+ * that a bound stopped. The Linked tasks picker takes it from anywhere in
  * the organization the reader can link to.
  *
  * Eligibility follows the write. A picker never offers the opened task or
@@ -407,11 +409,17 @@ const OTHERS: Place = [3]
  * at the start of that place's project when `time` is null. */
 type Position = { place: Place; time: number | null; ids: string[] }
 
+/** What a cursor carries, where the next batch starts and whether the
+ * first batch answered a typed task ID's task as its `exact` row, which
+ * every later scan then leaves out. Without that row a later scan offers
+ * the task where it meets it. */
+type Cursor = { at: Position; typedTaken: boolean }
+
 /* The version a cursor carries outside and inside its sealed text. Every
  * sealed cursor shares one key (lib/archiveCursorSeal.ts), so the version
  * inside keeps a body sealed for another list from opening here. */
-const CURSOR_PREFIX = 'rp1~'
-const CURSOR_VERSION = 'relation-picker-1'
+const CURSOR_PREFIX = 'rp2~'
+const CURSOR_VERSION = 'relation-picker-2'
 
 /* The longest cursor text that may open, far above what a position and a
  * 200-character search write, so only junk is refused unopened. */
@@ -427,13 +435,15 @@ export const RELATION_CURSOR_REFUSAL =
 const scopeKey = (me: Doc<'profiles'>, issueId: string, kind: RelationKind, search: string) =>
   JSON.stringify([me.org_id, me.id, issueId, kind, search])
 
-/** Position `p` as a cursor of the batches of `key`. */
-const cursorOf = async (key: string, p: Position): Promise<string> =>
-  `${CURSOR_PREFIX}${await sealCursorText(JSON.stringify([CURSOR_VERSION, key, p.place, p.time, p.ids]))}`
+/** Cursor `c` as the text of a cursor of the batches of `key`. */
+const cursorOf = async (key: string, c: Cursor): Promise<string> =>
+  `${CURSOR_PREFIX}${await sealCursorText(
+    JSON.stringify([CURSOR_VERSION, key, c.at.place, c.at.time, c.at.ids, c.typedTaken]),
+  )}`
 
-/** The position cursor `text` names for the batches of `key`, or a refusal
- * when it is not one cursorOf wrote for them. */
-async function positionOf(text: string, key: string): Promise<Position> {
+/** The cursor `text` names for the batches of `key`, or a refusal when it
+ * is not one cursorOf wrote for them. */
+async function cursorFrom(text: string, key: string): Promise<Cursor> {
   const refuse = () => badRequest(RELATION_CURSOR_REFUSAL)
   if (!text.startsWith(CURSOR_PREFIX) || text.length > CURSOR_MAX) throw refuse()
   const opened = await openCursorText(text.slice(CURSOR_PREFIX.length))
@@ -444,8 +454,8 @@ async function positionOf(text: string, key: string): Promise<Position> {
   } catch {
     throw refuse()
   }
-  if (!Array.isArray(body) || body.length !== 5) throw refuse()
-  const [version, from, place, time, ids] = body as unknown[]
+  if (!Array.isArray(body) || body.length !== 6) throw refuse()
+  const [version, from, place, time, ids, typedTaken] = body as unknown[]
   if (version !== CURSOR_VERSION || from !== key) throw refuse()
   const field = (x: unknown) =>
     typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))
@@ -455,7 +465,8 @@ async function positionOf(text: string, key: string): Promise<Position> {
   const at = typeof time === 'number' && Number.isFinite(time) ? time : null
   if (time !== null && at === null) throw refuse()
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw refuse()
-  return { place: place as Place, time: at, ids: ids as string[] }
+  if (typedTaken !== true && typedTaken !== false) throw refuse()
+  return { at: { place: place as Place, time: at, ids: ids as string[] }, typedTaken }
 }
 
 // --- the opened task and its family ---------------------------------------------
@@ -727,12 +738,12 @@ export async function readRelationCandidates(
 ): Promise<RelationCandidates> {
   const search = limitedText(LIMITS.search, args.search ?? '')
   const key = scopeKey(me, args.issue_id, args.kind, search)
-  const at = args.cursor === undefined ? null : await positionOf(args.cursor, key)
-  if (at !== null && args.kind !== 'link' && comparePlaces(at.place, OTHERS) >= 0)
+  const from = args.cursor === undefined ? null : await cursorFrom(args.cursor, key)
+  if (from !== null && args.kind !== 'link' && comparePlaces(from.at.place, OTHERS) >= 0)
     throw badRequest(RELATION_CURSOR_REFUSAL)
   const guard = viewBudget(ctx, RELATION_PICKER.whole)
   try {
-    return await batchOf(ctx, guard, me, args.issue_id, args.kind, search, key, at, o.measured)
+    return await batchOf(ctx, guard, me, args.issue_id, args.kind, search, key, from, o.measured)
   } catch (e) {
     if (isOverBudget(e)) return { state: 'over_budget' }
     if (isAccessUnchecked(e))
@@ -750,9 +761,10 @@ async function batchOf(
   kind: RelationKind,
   search: string,
   key: string,
-  at: Position | null,
+  from: Cursor | null,
   measured?: (batch: Reads) => void,
 ): Promise<RelationCandidates> {
+  const at = from?.at ?? null
   const seat = viewAccess(ctx, guard, me)
   const opened = await openedTask(ctx, guard, seat, issueId)
   if (opened === null) return UNAVAILABLE
@@ -879,6 +891,10 @@ async function batchOf(
       if (verdict !== 'out') rows.push({ ...verdict.row, exact: true })
     }
   }
+  // the typed task, once a batch answered it, is left out of every scan;
+  // until then a scan offers it where it meets it, as after a check of its
+  // project that a bound stopped
+  const typedTaken = from?.typedTaken ?? rows.some((r) => r.exact === true)
 
   const scan = await scanScope(
     ctx,
@@ -889,20 +905,22 @@ async function batchOf(
     async (task, p) => {
       read.add(task.id)
       if (task.parent_id !== undefined) parents.add(task.parent_id)
-      if (task.num === typed || !matches(`${issueKey(task.num)}\n${task.title}`)) return 'out'
+      if ((typedTaken && task.num === typed) || !matches(`${issueKey(task.num)}\n${task.title}`))
+        return 'out'
       return await decide(task, p)
     },
     RELATION_PICKER.rows - rows.length,
   )
   rows.push(...scan.rows)
   measured?.(count.used)
-  const next = scan.end ? null : await cursorOf(key, scan.at)
+  const next = scan.end ? null : await cursorOf(key, { at: scan.at, typedTaken })
   const familyEnd = kind === 'link' && !others && next === null
+  const allAt: Position = { place: OTHERS, time: null, ids: [] }
   return {
     state: 'ok',
     rows,
     next,
-    all_projects: familyEnd ? await cursorOf(key, { place: OTHERS, time: null, ids: [] }) : null,
+    all_projects: familyEnd ? await cursorOf(key, { at: allAt, typedTaken }) : null,
     stopped: scan.stopped,
     blocked: null,
   }
