@@ -2131,8 +2131,9 @@ export async function viewOf(
  * management data the admin keeps. A root the admin reaches only for
  * navigation to one of its sub-projects counts there, as it does in anyone
  * else's view (projectItemView), so tasks stored on the top-level project
- * itself show to them, unlike lib/visibility.ts accessible; the admin
- * access split's review keeps or changes that for everyone. */
+ * itself show to them, unlike the navigation-free `accessible` of
+ * lib/access.ts; the admin access split's review keeps or changes that for
+ * everyone. */
 async function adminView(s: Scope, me: Doc<'profiles'>): Promise<ItemView> {
   const { item } = s
   const whole = { projects: item.projects, readable: item.projects, redacted: false, hidden: false }
