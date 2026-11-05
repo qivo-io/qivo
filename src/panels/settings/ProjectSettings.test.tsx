@@ -390,6 +390,20 @@ describe('the page before and after its answer', () => {
     expect(nameField().value).toBe('Plan')
   })
 
+  it('keeps focus on the heading Settings focused while the page loaded once the answer comes', async () => {
+    server.reads.hold(true)
+    await open()
+    const heading = find('h1')
+    // Settings gives the new page's heading focus as it opens by keyboard
+    await act(async () => heading.focus())
+    server.reads.hold(false)
+    await rerun()
+    expect(pageState()).toBe('ok')
+    expect(find('h1').textContent).toContain('Plan')
+    expect(document.activeElement).toBe(heading)
+    expect(heading.isConnected).toBe(true)
+  })
+
   it('says it could not load, with Try again, and loads on Try again', async () => {
     server.force = { fail: ['get'] }
     await open()

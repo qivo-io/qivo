@@ -575,12 +575,12 @@ export function ProjectPage({
       aria-busy={read.state === 'loading' || read.state === 'refreshing' || undefined}
       className="contents"
     >
+      <ProjectPageTitle answer={answer} onBackPage={onBackPage} />
       {answer ? (
         <ProjectSettingsFields
           answer={answer}
           read={read}
           setPage={setPage}
-          onBackPage={onBackPage}
           removeButton={removeButton}
           onRemove={() =>
             setRemoving({
@@ -593,45 +593,73 @@ export function ProjectPage({
           }
         />
       ) : (
-        <SettingsFrame read={read} onBackPage={onBackPage} />
+        <SettingsFrame read={read} />
       )}
       {removing && removalWindow(removing)}
     </div>
   )
 }
 
-/* A project page before its first answer, after a failure without one, or
-   for a project the server no longer shows: the title with one line, and
-   no field, right or list. The title's heading takes focus when Settings
-   opens the page by keyboard. */
-function SettingsFrame({
-  read,
+/* A project page's Back link and title. Until the first answer they read
+   Projects and "Project settings"; then the title names the project, and
+   a sub-project's Back goes to the project above it, the target the
+   delete picks. The heading stays one element through both, so the focus
+   Settings gives it as it opens the page by keyboard stays once the
+   fields come. */
+function ProjectPageTitle({
+  answer,
   onBackPage,
 }: {
-  read: ProjectSettingsRead
+  answer: SettingsOk | null
   onBackPage: (page: string) => void
 }) {
+  const parent = answer?.parent ?? null
+  const isMeta = answer?.project.type === 'meta'
   return (
     <>
-      <BackLink to="Projects" onClick={() => onBackPage('projects')} />
-      <PageTitle>Project settings</PageTitle>
-      {read.state === 'failed' ? (
-        <div role="alert" className="flex flex-wrap items-center gap-3 text-base text-text-2">
-          Couldn't load project settings.
-          <Button type="button" size="sm" onClick={read.retry}>
-            Try again
-          </Button>
-        </div>
-      ) : read.state === 'loading' || read.state === 'refreshing' ? (
-        <p role="status" className="text-base text-text-2">
-          Loading project settings…
-        </p>
-      ) : (
-        <p role="status" className="text-base text-text-2">
-          This project is no longer available.
-        </p>
-      )}
+      <BackLink
+        to={parent ? parent.name : 'Projects'}
+        onClick={() => onBackPage(parent ? `project:${parent.id}` : 'projects')}
+      />
+      <PageTitle
+        sub={
+          answer && !isMeta ? 'Controlled by its own lead; permissions can be shared.' : undefined
+        }
+      >
+        {answer ? (
+          <>
+            {answer.project.name}
+            <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
+              {isMeta ? 'Project' : 'Sub-project'}
+            </span>
+          </>
+        ) : (
+          'Project settings'
+        )}
+      </PageTitle>
     </>
+  )
+}
+
+/* A project page before its first answer, after a failure without one, or
+   for a project the server no longer shows: one line under the title, and
+   no field, right or list. */
+function SettingsFrame({ read }: { read: ProjectSettingsRead }) {
+  if (read.state === 'failed')
+    return (
+      <div role="alert" className="flex flex-wrap items-center gap-3 text-base text-text-2">
+        Couldn't load project settings.
+        <Button type="button" size="sm" onClick={read.retry}>
+          Try again
+        </Button>
+      </div>
+    )
+  return (
+    <p role="status" className="text-base text-text-2">
+      {read.state === 'loading' || read.state === 'refreshing'
+        ? 'Loading project settings…'
+        : 'This project is no longer available.'}
+    </p>
   )
 }
 
@@ -659,18 +687,16 @@ function ProjectSettingsFields({
   answer,
   read,
   setPage,
-  onBackPage,
   removeButton,
   onRemove,
 }: {
   answer: SettingsOk
   read: ProjectSettingsRead
   setPage: (page: string) => void
-  onBackPage: (page: string) => void
   removeButton: React.RefObject<HTMLButtonElement | null>
   onRemove: () => void
 }) {
-  const { project, parent } = answer
+  const { project } = answer
   const shown = { orgId: project.org_id }
   // a failure or a project that left: nothing writes until an answer is
   // current again
@@ -704,20 +730,6 @@ function ProjectSettingsFields({
     grantRemoval(kind, project.id, id, project.org_id, isMeta)
   return (
     <>
-      {/* A sub-project goes back to the project above it, anything else to the
-          listing, the same target the delete below picks. */}
-      <BackLink
-        to={parent ? parent.name : 'Projects'}
-        onClick={() => onBackPage(parent ? `project:${parent.id}` : 'projects')}
-      />
-      <PageTitle
-        sub={isMeta ? undefined : 'Controlled by its own lead; permissions can be shared.'}
-      >
-        {project.name}
-        <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
-          {isMeta ? 'Project' : 'Sub-project'}
-        </span>
-      </PageTitle>
       {read.state === 'failed' && (
         <div
           role="alert"
