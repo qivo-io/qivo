@@ -479,6 +479,40 @@ describe('tasks on demand', () => {
     expect(notes.tags).toEqual([])
   })
 
+  it('notifies a later mention on a restored task that brought no message back while not asked', async () => {
+    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
+    await boot()
+    notes.tags.length = 0
+    const restore = (id: string) =>
+      store.P.unarchiveIssue(id, `Task ${id}`, snapshot.projects[0].id, snapshot.orgs[0].id)
+    /** Delivers the snapshot as the server holds it at `at`. */
+    const at = async (time: string) => {
+      snapshot.delivered_at = time
+      deliver(structuredClone(snapshot))
+      await tick()
+    }
+    // as Convex does, the delivery that holds the restore comes before the
+    // write resolves; it brings no message for the person who restored
+    network.mutation.mockImplementationOnce(async () => {
+      snapshot.delivered_at = '2026-09-14T09:10:00.000Z'
+      deliver(structuredClone(snapshot))
+      return {}
+    })
+    expect(await restore('r1')).toBe(true)
+    // the next delivery is a colleague's mention on it
+    snapshot.messages.push(message('m1', 'r1', '2026-09-14T09:20:00.000Z', 'mention'))
+    await at('2026-09-14T09:30:00.000Z')
+    expect(notes.tags).toEqual(['m1'])
+    // a restore that resolves before any delivery ends with the next one
+    network.mutation.mockResolvedValueOnce({})
+    expect(await restore('r2')).toBe(true)
+    await at('2026-09-14T09:40:00.000Z')
+    snapshot.messages.push(message('m2', 'r2', '2026-09-17T10:00:00.000Z', 'mention'))
+    await at('2026-09-17T10:30:00.000Z')
+    expect(notes.tags).toEqual(['m1', 'm2'])
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+
   it('resets the ask when the demo store is disposed', async () => {
     demo.on = true
     try {

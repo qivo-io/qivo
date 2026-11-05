@@ -2099,8 +2099,33 @@ let lastDeliveryAt: string | null = null
    an archived task's messages read in the background, so they usually come
    back read, but a restore that beats that step brings them back unread.
    Either way, keep them from looking like new arrivals when the next
-   snapshot admits the restored task (and any ancestors restored with it). */
-const pendingRestoreIssueIds = new Set<string>()
+   snapshot admits the restored task (and any ancestors restored with it).
+   Each restore maps to whether the server accepted it (unarchiveIssue).
+   Before every task is held, a task only shows that it came back when it
+   brings a message, and one with no message for the restorer never does,
+   so a restore also ends with the delivery that holds it, whether or not
+   its task's messages came: Convex hands that delivery to the listeners
+   before the write resolves, so a restore accepted after such a delivery
+   ends at once, and one accepted before any ends with the next one the
+   store takes (tookInbox). A restore left waiting would swallow the
+   task's next real notification. */
+const pendingRestores = new Map<string, boolean>()
+/* The live deliveries the store took the Inbox from: every complete one
+   and, while every task loads, every partial one, which holds every part
+   but the tasks (tookInbox). */
+let inboxDeliveries = 0
+/* Whether the newest workspace report was such a delivery, as
+   snapshotCurrent is for a complete one. */
+let inboxCurrent = false
+
+/** Counts a live delivery the store took the Inbox from, after its arrival
+    bookkeeping (noteDelivery), and ends each restore the server accepted
+    before it, which it holds. */
+function tookInbox() {
+  inboxDeliveries++
+  inboxCurrent = true
+  for (const [id, accepted] of pendingRestores) if (accepted) pendingRestores.delete(id)
+}
 /* Draft-only uploads a discarded draft let go of while edits were paused
    (removeAttachment's deferWhilePaused), with the task each belongs to
    and, for a task the workspace does not hold, its organization. The
@@ -10290,9 +10315,15 @@ export const PLANNER = {
     orgId?: string,
   ): Promise<boolean> => {
     const org = orgId || orgOfProject(projectId) || HOME_ORG
-    pendingRestoreIssueIds.add(issueUuid)
+    const seen = inboxDeliveries
+    pendingRestores.set(issueUuid, false)
     try {
       const out = await sendAwaited(api.issues.unarchive, { org_id: org, id: issueUuid }, 'none')
+      // a delivery taken since the send holds the restore (pendingRestores)
+      if (pendingRestores.has(issueUuid)) {
+        if (inboxCurrent && inboxDeliveries > seen) pendingRestores.delete(issueUuid)
+        else pendingRestores.set(issueUuid, true)
+      }
       // the parent was full (LIMITS.subtasks), or was deleted after this
       // task was archived and came back since
       if (out.left_parent) {
@@ -10306,7 +10337,7 @@ export const PLANNER = {
         )
       }
     } catch (e) {
-      pendingRestoreIssueIds.delete(issueUuid)
+      pendingRestores.delete(issueUuid)
       console.error('[qivo] restore failed:', e)
       toast(restoreErrorText(e))
       return false
@@ -13672,6 +13703,7 @@ function startParts(
             snapshotDeliveries++
           }
           noteDelivery(base.stage(snap), snap)
+          tookInbox()
         }
         first?.resolve(snap)
         return
@@ -13700,6 +13732,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // writes accepted meanwhile stay saved until a complete transition.
   if (ws.state === 'held') {
     snapshotCurrent = false
+    inboxCurrent = false
     return
   }
   // While the task windows an ask subscribed are on their way, the report
@@ -13710,7 +13743,10 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // held transition does.
   if (ws.state === 'partial') {
     snapshotCurrent = false
-    if (stillLoading === null) return
+    if (stillLoading === null) {
+      inboxCurrent = false
+      return
+    }
     stillLoading = ws.loaded
     const troubled = noteTaskTrouble(ws.tasksFailed)
     subscribeWaitingThread()
@@ -13719,6 +13755,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
       noteDelivery(base.stage(snap), snap)
       owe('workspace')
     } else if (troubled) emit()
+    tookInbox()
     return
   }
   if (ws.state === 'failed') {
@@ -13728,6 +13765,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     if (demoEnded) notifyDemoEnded(ws.error)
     console.error('[qivo] workspace part failed:', ws.error)
     snapshotCurrent = false
+    inboxCurrent = false
     if (!demoEnded) snapshotFailed(ws.error)
     return
   }
@@ -13737,6 +13775,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
   // recovering delivery not painted yet ends no trouble now.
   if (ws.value === null) {
     snapshotCurrent = false
+    inboxCurrent = false
     if (DEMO_MODE) {
       recoveryHeld = false
       notifyDemoEnded()
@@ -13756,6 +13795,7 @@ function receiveWorkspace(ws: PartsReport['workspace'], at: number) {
     const snap = anchor(ws.value)
     noteDelivery(base.stage(snap), snap)
   } else lastDeliveryAt = new Date(at).toISOString()
+  tookInbox()
   subscribeWaitingThread()
   // a complete transition holds every write accepted before it
   const dropped = layers.dropSaved('workspace')
@@ -13781,6 +13821,7 @@ function retrySnapshot() {
   }, RETRY_GAP_MS)
   // the parts run again have delivered nothing yet
   snapshotCurrent = false
+  inboxCurrent = false
   if (parts?.retry()) return
   // nothing failed any more, such as a stall: start every part afresh
   const epoch = storeEpoch
@@ -13910,7 +13951,8 @@ export function disposeDemoStore() {
   watchedSyncOwners = ''
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
-  pendingRestoreIssueIds.clear()
+  pendingRestores.clear()
+  inboxCurrent = false
   lastMessageTasks = new Set()
   tookCreates.clear()
   hasSnapshot = false
@@ -14011,7 +14053,7 @@ function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot)
     ? newlyVisibleIssueIds
     : new Set([...messageTasks].filter((id) => !lastMessageTasks.has(id)))
   lastMessageTasks = messageTasks
-  const arrived = [...pendingRestoreIssueIds].filter((id) => newly.has(id))
+  const arrived = [...pendingRestores.keys()].filter((id) => newly.has(id))
   if (arrived.length > 0) {
     /* A child restore can also surface archived ancestors. Suppress the
        restored tasks and the ancestors that entered with them, so their
@@ -14029,7 +14071,7 @@ function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot)
         restored.add(at)
         at = byRows ? (parentOf.get(at) ?? undefined) : undefined
       }
-      pendingRestoreIssueIds.delete(id)
+      pendingRestores.delete(id)
     }
     if (announcedMessages !== null) {
       for (const message of snap.messages) {
@@ -14159,6 +14201,7 @@ export async function initStore(
   // the new parts have delivered nothing yet; what shows stays partial, if
   // it is, until their first delivery paints
   snapshotCurrent = false
+  inboxCurrent = false
   // New parts start from a clean state; their first complete transition
   // settles the boot, so it never reports recovery from earlier trouble.
   if (snapshotTrouble) {
