@@ -563,6 +563,9 @@ describe('ordinary sight', () => {
       expect.objectContaining({ id: f.sub.id, can_restore: true, can_delete: false }),
     ])
     expect(batchOf(await lists.chips(t, f.user, f.meta.id)).rows).toHaveLength(2)
+    // an archived project the guest holds no grant on, so the request
+    // passes the project's own checks and the guest's sight refuses it
+    await archive(t, f.user, f.hidden.id)
     expect(await lists.chips(t, f.guest, f.hidden.id)).toEqual({ state: 'unavailable' })
   })
 
