@@ -12,9 +12,12 @@ import {
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
+import { billingBytes, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import {
   addDays,
   addsQuery,
+  BILLING_STORAGE_EXPECTED,
+  BILLING_STORAGE_STEP,
   deleteOutcome,
   evaluate,
   FIXTURE_STATUS,
@@ -190,6 +193,26 @@ describe('staging check REST contract', () => {
       ),
     ).toBe(false)
     expect(addsQuery('not json', TASK_WINDOWS_QUERY)).toBe(false)
+  })
+
+  it("checks Billing's storage on a file of its own, in the page's words", () => {
+    const list = readFileSync(new URL('../src/panels/BillingStorage.tsx', import.meta.url), 'utf8')
+    const usage = readFileSync(new URL('../src/panels/BillingUsage.tsx', import.meta.url), 'utf8')
+    expect(list).toContain("{billingBytes(row.bytes)} · {row.files === 1 ? '1 file'")
+    for (const mark of [
+      'data-billing-storage=""',
+      'data-billing-storage-search=""',
+      'data-billing-storage-row={storageRowId(row)}',
+    ])
+      expect(list).toContain(mark)
+    expect(usage).toContain('data-billing-storage-bytes=""')
+    expect(usage).toContain('STORAGE_COUNTING')
+    expect(BILLING_STORAGE_STEP).toBe('ui/billing-storage')
+    expect(BILLING_STORAGE_EXPECTED).toEqual({
+      bytes: 2048,
+      row: `${billingBytes(2048)} · 1 file`,
+      counting: STORAGE_COUNTING,
+    })
   })
   it("checks the relation pickers in the picker's own words", () => {
     const picker = readFileSync(

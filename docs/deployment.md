@@ -237,7 +237,15 @@ the task from the deployment's preview (`accessRemovals.preview`), chooses
 Nora in the **Reassign** picker's search (`accessRemovals.reassignChoices`)
 and saves, then checks over REST that the task is Nora's and the agent's
 grant is gone (`ui/removal-window`). Against a backend from before the
-removal window's release that step fails. After that it checks
+removal window's release that step fails. It then makes a sub-project of
+its own under its project, uploads one file of 2,048 bytes over REST to a
+task there, opens **Billing**, checks that current storage shows a figure
+rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
+1 file** by searching **Storage by project** for its run tag, and deletes
+the file over REST, also after a failure (`ui/billing-storage`). That shows
+the deployment's stored-byte totals are counted and that the page reads
+them (`billing.currentUsage` and `billing.storageProjects`). Against a
+backend from before those queries that step fails. After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a

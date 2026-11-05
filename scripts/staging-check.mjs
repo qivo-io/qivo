@@ -4619,6 +4619,97 @@ async function projectSettingsCheck() {
   })
 }
 
+/** The step that checks Billing's storage figures (billingStorageCheck). */
+export const BILLING_STORAGE_STEP = 'ui/billing-storage'
+
+/** What Billing shows for the run's sub-project and its one file
+ *  (billingStorageCheck): the file's size, the row's bytes and file count
+ *  in Storage by project, and the sentence current storage shows while the
+ *  deployment's stored-byte totals are counted, which the step must not
+ *  see. */
+export const BILLING_STORAGE_EXPECTED = {
+  bytes: 2048,
+  row: '2.0 KB · 1 file',
+  counting: 'Being counted. Check again later.',
+}
+
+/** Billing's storage figures on the deployment's answers
+ *  (billing.currentUsage and billing.storageProjects): the run makes
+ *  `<tag> Billing storage` under its project M over REST, a sub-project no
+ *  other step uploads to, with one task, and uploads one file of
+ *  BILLING_STORAGE_EXPECTED.bytes to it over REST. In the app, as Nora, an
+ *  admin, Billing's current storage must show a figure, never
+ *  BILLING_STORAGE_EXPECTED.counting, and Storage by project, searched for
+ *  the run tag and "storage", must list that sub-project alone with
+ *  BILLING_STORAGE_EXPECTED.row. That shows the deployment's totals are
+ *  counted and that the page reads them. The file is deleted over REST at
+ *  the end, also after a failure, and the cleanup, which deletes M, takes
+ *  the sub-project and its task. It runs while the run's projects are
+ *  active, after ui/removal-window, and needs a backend from the release
+ *  that ships billing.currentUsage. Against an older one the page cannot
+ *  read its usage and the step fails waiting for it. */
+async function billingStorageCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check(BILLING_STORAGE_STEP, async () => {
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Billing storage`,
+      parent: M.id,
+    })
+    expect(Number.isInteger(sub.num), 'the sub-project has no number')
+    const t = await restOk(w, 'POST', '/tasks', {
+      project: sub.id,
+      title: `${run.tag} billing storage`,
+      status: 'todo',
+    })
+    run.created.push(t)
+    const bytes = randomBytes(BILLING_STORAGE_EXPECTED.bytes)
+    const type = 'application/octet-stream'
+    const start = await restOk(w, 'POST', `/tasks/${t.key}/attachments`, {
+      name: `${run.tag} storage.bin`,
+      content_type: type,
+      size: bytes.length,
+    })
+    const storage_id = await putBytes(start.upload_url, bytes, type)
+    const att = await restOk(w, 'POST', `/tasks/${t.key}/attachments/${start.ticket}`, {
+      storage_id,
+    })
+    let current = ''
+    try {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-billing`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const figure = app.locator('[data-billing-usage] [data-billing-storage-bytes]')
+      await figure.waitFor({ timeout: 60_000 })
+      current = ((await figure.textContent()) ?? '').trim()
+      expect(
+        current !== BILLING_STORAGE_EXPECTED.counting,
+        "current storage reads Being counted, so the deployment's stored-byte totals are not complete",
+      )
+      expect(/^[0-9]/.test(current), `current storage reads ${short(current)}`)
+      await app.locator('[data-billing-storage-search]').fill(`${run.tag} storage`)
+      const rows = app.locator('[data-billing-storage] [data-billing-storage-row]')
+      const row = app.locator(`[data-billing-storage-row="${sub.id}:${sub.num}"]`)
+      expect(
+        await until(async () => (await rows.count()) === 1 && (await row.count()) === 1),
+        `a search for the run tag does not list ${sub.name} alone`,
+      )
+      const text = ((await row.textContent()) ?? '').trim()
+      expect(
+        text.includes(sub.name) && text.endsWith(BILLING_STORAGE_EXPECTED.row),
+        `its row reads ${short(text)}, not ${BILLING_STORAGE_EXPECTED.row}`,
+      )
+    } finally {
+      eq(
+        (await restOk(w, 'DELETE', `/tasks/${t.key}/attachments/${att.id}`)).deleted,
+        true,
+        'the file deleted',
+      )
+    }
+    return `found ${sub.name} by its run tag with ${BILLING_STORAGE_EXPECTED.row} in Storage by project, current storage ${current}, and deleted the file`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -6255,6 +6346,8 @@ async function main() {
   await removalWindowCheck()
   // a project's Settings page on the server's reads, on a sub-project of its own
   await projectSettingsCheck()
+  // Billing's current storage and Storage by project, with a file of its own
+  await billingStorageCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
