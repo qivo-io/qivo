@@ -887,6 +887,33 @@ describe('the ceiling', () => {
     expect(await agendaFor(t, f.viewer, scope)).toEqual({ state: 'over_ceiling', ceiling: 10 })
   })
 
+  it('stops reading Done tasks at the step whose certain ones establish the ceiling', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    AGENDA.ceiling = 10
+    await plantTasks(t, f.sub, 1, (i) => ({ ...ordinary(i), assignee_id: f.user.id }))
+    // a sub-project's Done tasks not yet archived at their design size, each
+    // Done after Wednesday's midnight, the reading top of a walker without a
+    // stamp on these UTC weeks, so certain
+    const done = await plantDone(t, f.sub, 150, [f.user])
+    const scope = projectScope(f.sub)
+    const { answer, read } = await agendaRead(t, f.user, scope)
+    console.log(
+      'agenda figures, 150 certain Done tasks past a ceiling of 10:',
+      JSON.stringify(read),
+    )
+    expect(answer).toEqual({ state: 'over_ceiling', ceiling: 10 })
+    // this must fail for a read of the whole range before the checks, which
+    // reads every one of the Done tasks, and answers over_budget where they
+    // do not fit
+    expect(read.documents).toBeLessThan(done.length)
+    AGENDA.reads.documents = done.length
+    expect((await agendaRead(t, f.user, scope)).answer).toEqual({
+      state: 'over_ceiling',
+      ceiling: 10,
+    })
+  })
+
   it('answers over_ceiling from a team’s counts with no task read, falls back to the read while counting, and reads no count row for a project', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

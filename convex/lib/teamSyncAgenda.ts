@@ -174,9 +174,10 @@ import {
  *
  * The Done tasks the reading floor loads beyond the page's exact reading
  * point count toward the ceiling, so a meeting whose certain tasks fit and
- * whose loaded ones do not answers over_budget. A Viewer's agenda reads no
- * load. Past AGENDA.context parents and outside blockers it answers
- * over_budget. */
+ * whose loaded ones do not answers over_budget, while certain ones past the
+ * ceiling stop the Done read at the step that establishes it (doneOf). A
+ * Viewer's agenda reads no load. Past AGENDA.context parents and outside
+ * blockers it answers over_budget. */
 export const AGENDA = {
   reads: { bytes: 12 * MIB, documents: 24_000, ranges: 3_600 },
   context: 2000,
@@ -705,7 +706,13 @@ const doneFacts = (t: Doc<'issues'>): DoneFacts => ({
  * reading point (`top`). Rows, asks and certain Done tasks past
  * AGENDA.ceiling throw OverCeiling; otherwise those with the other Done
  * tasks past it throw OverBudget, as the selection may fit by the page's
- * own rule.
+ * own rule. The certain candidates wait for their group checks until they
+ * could pass the ceiling with the rows, asks and certain tasks before them,
+ * and are then checked a step at a time, so the read of the ranges stops
+ * at the step whose certain tasks establish the ceiling, as scopeRead
+ * stops at the rows'. The other candidates are checked once the ranges are
+ * read and every certain one is decided, and the checks stop at the first
+ * one past the ceiling.
  */
 async function doneOf(
   ctx: QueryCtx,
@@ -733,23 +740,41 @@ async function doneOf(
     }
     return false
   }
+  const fixed = read.rows.length + read.asks.length
+  const done: Doc<'issues'>[] = []
+  let certain = 0
+  /* the group checks of `waiting`, keeping those without subtasks. Certain
+   * ones past the ceiling establish it, and once every certain one is
+   * decided the others past it leave the agenda over budget. */
+  const decide = async (waiting: readonly Doc<'issues'>[]) => {
+    for (let at = 0; at < waiting.length; at += CHECK_STEP) {
+      const step = waiting.slice(at, at + CHECK_STEP)
+      await firstSubtaskCheck(ctx, guard, seats, step, read.known)
+      for (const t of step) {
+        if (isGroupKnown(read.known, t.id) === true) continue
+        done.push(t)
+        if (shows(t, 'top')) certain++
+        if (fixed + certain > AGENDA.ceiling) throw new OverCeiling()
+        if (fixed + done.length > AGENDA.ceiling) throw new OverBudget()
+      }
+    }
+  }
   const from = new Date(Math.min(...[...bounds.values()].map((b) => b.floor))).toISOString()
-  const candidates: Doc<'issues'>[] = []
+  // the candidates waiting for their checks, the certain ones apart
+  const sure: Doc<'issues'>[] = []
+  const loaded: Doc<'issues'>[] = []
   const ranges = read.subProjects.map((p) => doneSinceRange(ctx, p.id, from))
-  for await (const step of inSteps(guard, ranges))
+  for await (const step of inSteps(guard, ranges)) {
     for (const t of step) {
       read.tasks.set(t.id, t)
       read.known.shown.set(t.id, true)
       if (t.parent_id !== undefined) read.known.parents.add(t.parent_id)
-      if (shows(t, 'floor')) candidates.push(t)
+      if (shows(t, 'floor')) (shows(t, 'top') ? sure : loaded).push(t)
     }
-  for (let at = 0; at < candidates.length; at += CHECK_STEP)
-    await firstSubtaskCheck(ctx, guard, seats, candidates.slice(at, at + CHECK_STEP), read.known)
-  const done = candidates.filter((t) => isGroupKnown(read.known, t.id) !== true)
-  const certain = done.filter((t) => shows(t, 'top')).length
-  const fixed = read.rows.length + read.asks.length
-  if (fixed + certain > AGENDA.ceiling) throw new OverCeiling()
-  if (fixed + done.length > AGENDA.ceiling) throw new OverBudget()
+    if (fixed + certain + sure.length > AGENDA.ceiling) await decide(sure.splice(0))
+  }
+  await decide(sure.splice(0))
+  await decide(loaded)
   return done
 }
 
