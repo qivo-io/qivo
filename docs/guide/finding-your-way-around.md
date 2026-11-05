@@ -144,8 +144,11 @@ around the text do not count. The Board narrows its cards as you type and
 asks the server once you pause; a text filter longer than 200 characters
 shows its limit in place of the Board until you shorten it.
 
-Task filters, Archived tasks, Inbox and searchable pickers use the same
-fragment-matching rule. Search matches whole words instead ([Search palette](#search-palette)).
+Task filters, the Archived tasks search, Inbox and searchable pickers use
+the same fragment-matching rule. The project list of **Search in** and
+**Archived tasks** matches every word anywhere in a project's own name and
+also ignores accents, so “cafe” finds “Café”. Search matches whole words
+instead ([Search palette](#search-palette)).
 
 **Assignee** supports multiple people and stays open while you choose.
 **Me only** applies the same filter as **My tasks**; **Anyone** removes the
@@ -174,9 +177,22 @@ covers every project you can open in every organization you belong to,
 whatever page you are on, and **Search in** shows that as **All projects**.
 **Search this sub-project**, which a Board offers when it cannot load a
 sub-project's tasks, opens Search with **Search in** set to that
-sub-project. To narrow it, choose an organization, a project with its
-sub-projects, or one sub-project there. The choice lasts while Search stays
-open. An empty search shows nothing.
+sub-project. An empty search shows nothing.
+
+**Search in** opens a list of your projects, your favorites first and then
+the rest by name, 25 at a time with **Load more**. Type in it to find any
+project or sub-project you can open by its own name, words in any order,
+ignoring case and accents; each sub-project shows with its project. A
+project's arrow shows its sub-projects. Choose **All projects**, an
+organization's **All projects** when you belong to more than one
+organization, a project with its sub-projects, or one sub-project, and
+Search asks again at once. The choice lasts while Search stays open. The
+list shows up to 200 projects and then asks you to search for the rest.
+Escape clears the list's search first, then closes the list. An
+organization admin's list holds the projects they lead or hold a grant or
+team share on, and **All projects** still searches the whole organization
+for them. **Search this sub-project** on a sub-project they reach only as
+an admin opens Search on **All projects**.
 
 Search finds a task by its ID (`QN-12` or `12`), the words of its title and
 the text its description shows, not link addresses or the hidden part of a
