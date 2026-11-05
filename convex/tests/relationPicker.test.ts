@@ -985,13 +985,27 @@ describe('what hidden data moves', () => {
     expect(before[0]?.map((b) => b.rows.length)).toEqual([2, 2, 2])
     expect(before[0]?.[0]).toMatchObject({ stopped: true })
     expect(before[2]?.[0]).toMatchObject({ stopped: true })
-    // the hidden titles grow, each candidate gets 99 subtasks the guest
-    // cannot see, the family gets hidden and archived sub-projects, and the
-    // opened task 40 links to tasks the guest cannot see
+    // the hidden titles grow to the title limit, each candidate gets 99
+    // subtasks the guest cannot see, two candidates' to each of three
+    // hidden sub-projects, so none holds more than 300 open tasks, the
+    // family gets hidden and archived sub-projects, and the opened task 40
+    // links to tasks the guest cannot see
     await t.run(async (ctx) => {
-      for (const x of secrets) await ctx.db.patch(x._id, { title: `Board ${'x'.repeat(400)}` })
+      for (const x of secrets)
+        await ctx.db.patch(x._id, { title: `Board ${'x'.repeat(LIMITS.title.max - 6)}` })
     })
-    for (const c of candidates) await subtasksOf(t, sibling, c, LIMITS.subtasks.max - 1)
+    const hiddenSubs = [
+      sibling,
+      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
+      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id }),
+    ]
+    for (const [i, c] of candidates.entries())
+      await subtasksOf(
+        t,
+        hiddenSubs[Math.floor(i / 2)] as Doc<'projects'>,
+        c,
+        LIMITS.subtasks.max - 1,
+      )
     for (let i = 0; i < 5; i++) {
       await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
       await plantProject(t, {
