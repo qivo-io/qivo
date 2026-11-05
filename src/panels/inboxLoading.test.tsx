@@ -1,20 +1,25 @@
 // @vitest-environment jsdom
+import type { TiptapEditorHTMLElement } from '@tiptap/core'
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, useEffect, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { LIMITS } from '../../convex/lib/limits'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
 
 /* An Inbox item whose task is still to arrive while a large workspace loads
    in stages (store/liveParts.ts): picking it reads its messages at once
    and opens its task in the pane from the server, by a reference with the
    message's organization (lib/taskReference.ts), and the pane's window
    stays the same window when the task arrives, or the home organization
-   changes. Back or Forward to such a task (App pendingTask) shows the
-   pane that says it loads, on a phone too, and Escape closes a pop-out,
-   then the pane. A related task the workspace does not hold, opened from
-   the pop-out, keeps both windows. */
+   changes. The pane edits, moves and takes images for a task it shows
+   from its answer, and offers Open task in board only for a task the
+   workspace holds. Back or Forward to such a task (App pendingTask) shows
+   the pane that says it loads, on a phone too, and Escape closes a
+   pop-out, then the pane. A related task the workspace does not hold,
+   opened from the pop-out, keeps both windows. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -41,6 +46,8 @@ let container: HTMLDivElement
 let root: Root
 /* The task window's reads of a task (taskWindow.task), which a test answers. */
 let windowReads: { args: Record<string, unknown>; next: (value: unknown) => void }[]
+/* The reads of a task's comments, which a test answers. */
+let threadReads: ((value: unknown) => void)[]
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -67,11 +74,16 @@ afterEach(async () => {
 /** Loads a large workspace whose last task window, holding task QN-2 and
     its Inbox item, is still to arrive, and renders the Inbox as App holds
     it, the pane showing the task the address names, `address` at first.
-    Answers the store, the fixture, the tasks the Inbox opened, its exits,
-    its reads and a way to move the address as Back or Forward would. */
-async function loadingInbox(address: ((org: string) => string) | null = null) {
+    `edit` changes the fixture first. Answers the store, the fixture, the
+    tasks the Inbox opened, its exits, its reads, a way to move the address
+    as Back or Forward would and one to publish a changed workspace. */
+async function loadingInbox(
+  address: ((org: string) => string) | null = null,
+  edit?: (snap: Snapshot) => void,
+) {
   vi.resetModules()
   windowReads = []
+  threadReads = []
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
   snap.issues.push({
@@ -125,10 +137,15 @@ async function loadingInbox(address: ((org: string) => string) | null = null) {
     detail: 'New comment',
     created_at: '2026-09-14T09:00:00.000Z',
   })
+  edit?.(snap)
+  let whole: (value: Snapshot) => void = () => {}
   network.onUpdate.mockImplementation((ref, args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'taskWindow:task') windowReads.push({ args, next })
+    if (name === 'workspace:whole') {
+      whole = next
+      next(structuredClone(snap))
+    } else if (name === 'taskWindow:task') windowReads.push({ args, next })
+    else if (name === 'snapshot:threadComments') threadReads.push(next)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -181,7 +198,12 @@ async function loadingInbox(address: ((org: string) => string) | null = null) {
     ),
   )
   const goTo = (handle: string | null) => act(async () => go.to(handle))
-  return { store, snap, opened, onExit, reads, goTo, current: () => shown.open }
+  const publish = () =>
+    act(async () => {
+      whole(structuredClone(snap))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  return { store, snap, opened, onExit, reads, goTo, publish, current: () => shown.open }
 }
 
 /** Lets the last task window answer. */
@@ -207,6 +229,46 @@ const answerOf = (snap: Snapshot, subtasks: unknown[] = []) => {
 }
 /* The pane's window. */
 const paneWindow = () => container.querySelector<HTMLElement>('.inbox-detail-frame [role="region"]')
+/* The editor labelled `label`, once it shows. */
+const editorOf = (label: string) =>
+  vi.waitFor(() => {
+    const found = document.querySelector<TiptapEditorHTMLElement>(
+      `[role="textbox"][aria-label="${label}"]`,
+    )?.editor
+    if (!found) throw new Error(`missing the ${label} editor`)
+    return found
+  })
+/* The writes of mutation `name` the store sent, their arguments in order. */
+const sentArgs = (name: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === name)
+    .map(([, args]) => args as Record<string, unknown>)
+/* The button that reads `text` inside `scope`. */
+const buttonNamed = (text: string, scope: ParentNode = document) =>
+  [...scope.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === text)
+/* Types `value` into a field as a person does, which React hears. */
+const typeInto = (
+  field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+  value: string,
+) =>
+  act(async () => {
+    Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')?.set?.call(field, value)
+    field.dispatchEvent(
+      new Event(field instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }),
+    )
+  })
+/* Opens the pane's Task actions menu, once the frames that move focus
+   have run, and answers its items by their text. */
+async function paneActions() {
+  await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+  await act(async () =>
+    paneWindow()?.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
+  )
+  return (text: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+      b.textContent?.includes(text),
+    )
+}
 
 describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () => {
   it('reads its messages when picked, opens its task in the pane from the server, and keeps the same window once it arrives', async () => {
@@ -235,6 +297,124 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     expect(current()).toBe(store.P.handleOf('fd000000-b'))
     expect(paneWindow()).toBe(pane)
     expect(paneWindow()?.dataset.taskSource).toBe('workspace')
+  })
+
+  it('offers Open task in board only once the workspace holds the task', async () => {
+    const { snap } = await loadingInbox()
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="fd000000-b"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await act(async () => windowReads[0]?.next(answerOf(snap)))
+    await vi.waitFor(() => expect(paneWindow()?.dataset.taskSource).toBe('answer'))
+    const shown = await paneActions()
+    expect(shown('Copy link')).toBeDefined()
+    expect(shown('Open task in board')).toBeUndefined()
+    // the trigger closes the menu again
+    await act(async () =>
+      paneWindow()?.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
+    )
+    await arrive()
+    expect(paneWindow()?.dataset.taskSource).toBe('workspace')
+    const held = await paneActions()
+    expect(held('Open task in board')).toBeDefined()
+  })
+
+  it("saves a field, takes no image past the server's cap and moves a task it shows from its answer", async () => {
+    // the task's project and Bench under one top-level project
+    const { snap } = await loadingInbox(null, (next) => {
+      const [project] = underProgram(next).projects
+      next.projects.push({ ...project, id: 'bench', key: 'BEN', num: 2, name: 'Bench' })
+    })
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="fd000000-b"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await act(async () => windowReads[0]?.next(answerOf(snap)))
+    await vi.waitFor(() => expect(paneWindow()?.dataset.taskSource).toBe('answer'))
+    const org = snap.orgs[0].id
+    // the title, from the one it began from
+    await act(async () => paneWindow()?.querySelector<HTMLElement>('[data-task-title]')?.click())
+    const title = paneWindow()?.querySelector<HTMLTextAreaElement>('[aria-label="Task title"]')
+    if (!title) throw new Error('the title field did not open')
+    await typeInto(title, 'Run the soak test twice')
+    await act(async () => title.blur())
+    expect(sentArgs('issues:update').at(-1)).toMatchObject({
+      org_id: org,
+      id: 'fd000000-b',
+      patch: { title: 'Run the soak test twice' },
+    })
+    // an image: the pane reads no attachments, so the server's cap refuses it
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'files:uploadUrl'
+        ? Promise.reject(new ConvexError({ code: 'rule', message: LIMITS.attachments.refusal }))
+        : Promise.resolve(null),
+    )
+    // the pane shows the description once it is opened
+    await act(async () => paneWindow()?.querySelector<HTMLElement>('[data-desc-toggle]')?.click())
+    const description = await editorOf('Task description')
+    const image = new File(['png'], 'photo.png', { type: 'image/png' })
+    await act(async () => {
+      description.view.pasteHTML('', {
+        clipboardData: { files: [image], getData: () => '' },
+        preventDefault: () => {},
+      } as unknown as ClipboardEvent)
+    })
+    await vi.waitFor(() => expect(sentArgs('files:uploadUrl')).toHaveLength(1))
+    expect(sentArgs('files:uploadUrl')[0]).toEqual({ org_id: org, issue_id: 'fd000000-b' })
+    await vi.waitFor(() =>
+      expect(window.showToast).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Couldn\'t upload "photo.png". This task already has 100 attachments',
+        ),
+        'error',
+      ),
+    )
+    expect(sentArgs('files:attach')).toEqual([])
+    // Move, to another sub-project of the same project
+    const item = await paneActions()
+    await act(async () => item('Move to sub-project…')?.click())
+    const target = document.querySelector<HTMLSelectElement>('select[aria-label="Move to"]')
+    if (!target) throw new Error('the Move window did not open')
+    await typeInto(target, 'bench')
+    await act(async () => buttonNamed('Move')?.click())
+    // against the project the window showed
+    expect(sentArgs('issues:move')).toEqual([
+      {
+        org_id: org,
+        id: 'fd000000-b',
+        project_id: 'bench',
+        expected: { project_id: snap.projects[0].id },
+      },
+    ])
+  })
+
+  it("keeps the pane's window and the comment typed in it when the home organization changes", async () => {
+    const { store, snap, current, publish } = await loadingInbox()
+    await arrive()
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="00000000-a"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    expect(current()).toBe('QN-1')
+    await act(async () => threadReads.at(-1)?.({ comments: [], earlier: false }))
+    const pane = paneWindow()
+    expect(pane?.dataset.taskSource).toBe('workspace')
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Soak it twice'))
+    // the person also holds a seat in Beta, which becomes the home organization
+    const BETA = 'org-beta'
+    const me = snap.profiles[0]
+    snap.orgs.push({ ...snap.orgs[0], id: BETA, slug: 'beta', name: 'Beta', next_issue_num: 0 })
+    snap.profiles.push({ ...me, id: 'me-beta', org_id: BETA })
+    snap.myProfileIds.unshift('me-beta')
+    await publish()
+    expect(store.P.homeOrg).toBe(BETA)
+    // the task's handle moves to its uuid, and the pane follows it
+    expect(current()).toBe('00000000-a')
+    expect(paneWindow()).toBe(pane)
+    expect(composer.isDestroyed).toBe(false)
+    expect((await editorOf('Leave a comment')).getText()).toBe('Soak it twice')
   })
 
   it('keeps both windows when the pop-out opens a related task the workspace does not hold', async () => {
@@ -284,7 +464,7 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
 })
 
 describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
-  it('shows the pane that says so on a phone, with Back to inbox', async () => {
+  it('shows the pane that says so on a phone, with Close', async () => {
     // only the phone breakpoint matches
     vi.stubGlobal(
       'matchMedia',

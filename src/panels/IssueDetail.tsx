@@ -3506,8 +3506,10 @@ function IssueDetail({
                         <>
                           {/* the inbox pane is the one host that isn't the board,
                             so only there does the menu offer the way over to it:
-                            the same jump as the row's right-click entry */}
-                          {embedded && onShowOnBoard && !archived && (
+                            the same jump as the row's right-click entry, for a
+                            task the workspace holds only, since the Board may
+                            hold no card of another one to reveal */}
+                          {embedded && onShowOnBoard && !archived && !!held && (
                             <MenuItem
                               data-task-open-board
                               onClick={() => {
