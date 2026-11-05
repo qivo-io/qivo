@@ -57,20 +57,24 @@
  * that a bound stopped. The Linked tasks picker takes it from anywhere in
  * the organization the reader can link to.
  *
- * Eligibility follows the write. A picker never offers the opened task or
- * its current parent, subtasks or linked tasks, which the window shows from
- * its own lists. The Parent picker offers a task without a parent of its
- * own and with fewer than LIMITS.subtasks.max active subtasks in any
- * project. The Subtasks picker offers a task without any subtask, archived
- * ones included, and another task's subtask, which a pick moves. The opened
- * task's own block comes first (`blocked`), and the answer then holds no
- * row. A task with any subtask takes no parent, a subtask or a task with
- * LIMITS.subtasks.max active subtasks takes no subtask, and a task with
- * LIMITS.links.max links takes no link. That count holds links to tasks the
- * reader may not see, so a Linked tasks reader without Edit on the opened
- * task, who may edit no project at all, gets the block only from a batch
- * that could offer them a task, one whose scope holds a project or whose
- * typed task ID names a row, as a link they send would be refused for it.
+ * Eligibility follows the write. A picker never offers the opened task,
+ * nor its current relations of the picker's own kind, which the window
+ * shows from its own lists. So the Parent picker leaves out the current
+ * parent, the Subtasks picker the current subtasks and the Linked tasks
+ * picker the linked tasks, while Linked tasks offers the current parent
+ * and subtasks, which a link may join. The Parent picker offers a task
+ * without a parent of its own and with fewer than LIMITS.subtasks.max
+ * active subtasks in any project. The Subtasks picker offers a task
+ * without any subtask, archived ones included, and another task's subtask,
+ * which a pick moves. The opened task's own block comes first (`blocked`),
+ * and the answer then holds no row. A task with any subtask takes no
+ * parent, a subtask or a task with LIMITS.subtasks.max active subtasks
+ * takes no subtask, and a task with LIMITS.links.max links takes no link.
+ * That count holds links to tasks the reader may not see, so a Linked
+ * tasks reader without Edit on the opened task, who may edit no project at
+ * all, gets the block only from a batch that could offer them a task, one
+ * whose scope holds a project or whose typed task ID names a row, as a
+ * link they send would be refused for it.
  * Any other such batch reads on as if unblocked. The write keeps the rest
  * with its own sentence, which is the holders' sight of a new parent
  * (design specification row 328), the link limit on the other end, and
