@@ -796,7 +796,8 @@ describe('task list pages', () => {
   it('searches a sweep by the run tag, or by the prefix every run tag shares', () => {
     expect(searchOf('stgchk-0a1b2c')).toBe('stgchk-0a1b2c')
     expect(searchOf(TAG_ANY)).toBe(TAG_PREFIX)
-    // every tagged name holds the search, which the server matches as a word fragment
+    // every tagged name holds the search, which the server matches as a
+    // word fragment
     for (const name of ['stgchk-0a1b2c team', 'stgchk-ffffff Standard agent'])
       expect(name.toLowerCase().includes(searchOf(TAG_ANY))).toBe(true)
   })

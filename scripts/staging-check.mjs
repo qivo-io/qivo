@@ -15,11 +15,10 @@
  * paging, cursor paging of the active and archived task lists, of the
  * workload's people (machine/workload-pages) and of the user, label, team
  * and member lists with their name search, with a label of its own that it
- * deletes in the app again (machine/people-lists), task
- * progress, last comment
- * times, delay and project completion, which it waits to read whole again
- * after an archive or a restore regroups its counts, and the live group
- * rule. It fills one task with a
+ * deletes in the app again (machine/people-lists), task progress, last
+ * comment times, delay and project completion, which it waits to read whole
+ * again after an archive or a restore regroups its counts, and the live
+ * group rule. It fills one task with a
  * little more than a page of comments and of history, pages that history
  * over REST and MCP, and in the browser presses Show earlier comments and
  * Show earlier activity in its task window. It opens the Settings page
@@ -2053,9 +2052,9 @@ async function workloadPageChecks() {
  *  surfaces, and they leave it again, so later steps find it as before. A
  *  label the step makes is found by a search without its accent, and the
  *  step deletes it again in the app, the only place a label is deleted, so
- *  the run leaves nothing to its sweep. An offset, a limit out of range, a cursor of another
- *  search and a users cursor sent to the teams list are refused, and a
- *  users cursor of REST continues on MCP. */
+ *  the run leaves nothing to its sweep. An offset, a limit out of range, a
+ *  cursor of another search and a users cursor sent to the teams list are
+ *  refused, and a users cursor of REST continues on MCP. */
 async function peopleListChecks() {
   const w = run.creds.writeToken
   await check('machine/people-lists', async () => {
