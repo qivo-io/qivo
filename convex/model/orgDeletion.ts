@@ -33,7 +33,9 @@
  * later phases only live rows that nothing in Deleted items still names.
  * A file is let go with its row unless another row still names it, and is
  * held for a restore before it is erased (model/fileHolds.ts). The parts of
- * an export archive, temporary copies of data, are erased at once.
+ * an export archive, temporary copies of data, are erased at once, and so
+ * is the file an upload ticket holds unless something names it, or held
+ * after a restore (model/fileHolds.ts dropTicketFile).
  *
  * Left alone, as deleteOrgDeep leaves them: Better Auth logins (a login may
  * hold seats elsewhere), per-login appearance and roadmap history, pending
@@ -55,7 +57,13 @@ import { rechecksOfOrg } from './archiveRechecks'
 import { budgetSpent, REMOVAL_BUDGET, type RemovalBudget, sweep } from './cascade'
 import { clearOrgTrash } from './deletedItems'
 import { estimateDocumentBytes } from './demoMetrics'
-import { eraseFile, releaseFile } from './fileHolds'
+import {
+  dropTicketFile,
+  eraseFile,
+  type RestoreState,
+  releaseFile,
+  restoreState,
+} from './fileHolds'
 import { recipientItems, stateRows, taskItems } from './inboxItems'
 import { deleteLabelCount } from './labelCounts'
 import { jobsOf, partsOf, requestsOf } from './orgExports'
@@ -189,6 +197,8 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
   const removed = (kind: RemovedAccessKind, key: string) =>
     recordRemoved(ctx, orgId, budget, kind, key)
   const now = Date.now()
+  // read once, for the first upload ticket that holds a file
+  let restore: RestoreState | undefined
   return await parents(
     ctx,
     budget,
@@ -301,6 +311,19 @@ const profilesWithRows = async (ctx: MutationCtx, orgId: string, budget: Removal
             ctx.db
               .query('attachment_uploads')
               .withIndex('by_profile_expiry', (q) => q.eq('profile_id', profile.id)),
+            {
+              // An upload's file goes with its ticket, by the hourly cleanup's
+              // rule (model/fileHolds.ts dropTicketFile), since nothing else
+              // finds it before the weekly orphan sweep. It reads about as
+              // many index ranges as a profile's own rows, so it costs a row
+              // too.
+              after: async (ticket) => {
+                if (ticket.storage_id === undefined) return
+                budget.rows -= 1
+                restore ??= await restoreState(ctx)
+                await dropTicketFile(ctx, ticket.storage_id, restore, now)
+              },
+            },
           ),
         () =>
           parents(

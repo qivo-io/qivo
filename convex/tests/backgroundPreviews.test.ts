@@ -223,15 +223,19 @@ describe('preview identity, storage ownership and cleanup', () => {
       await t.mutation(internal.panoramaImages.discardImport, { storage_id })
     }
     vi.setSystemTime(Date.now() + 61 * 60_000)
-    // the two tickets the refused attaches left expired with their hour
+    // the two tickets the refused attaches left expired with their hour, and
+    // hold files, so the weekly sweep leaves them to the hourly cleanup
     expect(await reap(t)).toEqual({
       deleted: 0,
       held: 0,
       kept: 4,
-      tickets: 2,
+      tickets: 0,
       accounts: 0,
       skipped: 0,
     })
+    // which deletes them and keeps the previews they name
+    await t.mutation(internal.files.reapUploadTickets, {})
+    expect(await t.run((ctx) => ctx.db.query('attachment_uploads').collect())).toEqual([])
     expect(await exists(t, libraryPreview)).toBe(true)
     expect(await exists(t, customPreview)).toBe(true)
   })

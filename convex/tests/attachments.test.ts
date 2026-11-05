@@ -29,6 +29,7 @@ import {
   type OrgFixture,
   plantIssue,
   quietWatch,
+  reap,
   type T,
   uuid,
   withOrg,
@@ -571,6 +572,34 @@ describe('expired upload tickets', () => {
     await run(t)
     expect(await fileState(t, sent)).toBe('gone')
     expect((await ticketRows(t)).map((row) => row.id)).not.toContain(holding.id)
+  })
+
+  it('is left the expired tickets that hold a file when the weekly sweep runs first', async () => {
+    const { t, fx, issue } = await setup()
+    const sent = await storeBlob(t, 8)
+    const expiresAt = Date.now() - 1
+    const holding = await plantTicket(t, { profile: fx.user, issue, storageId: sent, expiresAt })
+    await t.run((ctx) =>
+      // a ticket whose POST never stored a file
+      ctx.db.insert('attachment_uploads', {
+        id: uuid(),
+        org_id: fx.org.id,
+        profile_id: fx.user.id,
+        issue_id: issue.id,
+        name: 'never.bin',
+        size_bytes: 8,
+        expires_at: expiresAt,
+      }),
+    )
+    // the weekly sweep deletes only the ticket without a file, and its
+    // files phase keeps the file, which is younger than its floor
+    expect(await reap(t)).toMatchObject({ tickets: 1, deleted: 0 })
+    expect((await ticketRows(t)).map((row) => row.id)).toEqual([holding.id])
+    expect(await fileState(t, sent)).toBe('kept')
+    // so the hourly cleanup still finds the file and erases it
+    await run(t)
+    expect(await fileState(t, sent)).toBe('gone')
+    expect(await ticketRows(t)).toEqual([])
   })
 
   it('holds the files after a restore it has not noticed, and pages through the rest', async () => {

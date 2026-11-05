@@ -255,6 +255,37 @@ export async function holdAfterRestore(
   })
 }
 
+/**
+ * Lets go of `storageId`, the file an upload ticket held, as the ticket
+ * goes: when an expired ticket is cleaned up (files.ts reapUploadTickets)
+ * and when its organization is deleted (model/orgDeletion.ts). No row ever
+ * named the file, and nothing attaches the file of a ticket that expired or
+ * is gone (model/attachments.ts completeUpload), so it is erased at once
+ * unless something names it now, such as a picture set from it. After a
+ * restore it is held instead, by the orphan sweep's rule (restoreHoldEnd),
+ * since a row written after the restored backup may have named it.
+ * `restore` is restoreState's answer and `now` the run's start, in epoch
+ * milliseconds. Answers what it did, or null for a file that is gone or in
+ * use. Reads the file, storageIdInUse's nine index ranges and, to erase,
+ * the file again.
+ */
+export async function dropTicketFile(
+  ctx: MutationCtx,
+  storageId: Id<'_storage'> | undefined,
+  restore: RestoreState,
+  now: number,
+): Promise<'erased' | 'held' | null> {
+  const file = storageId === undefined ? null : await ctx.db.system.get(storageId)
+  if (file === null || (await storageIdInUse(ctx, file._id))) return null
+  const erase_at = restoreHoldEnd(restore, false, file._creationTime, now)
+  if (erase_at !== null) {
+    await holdAfterRestore(ctx, file, erase_at)
+    return 'held'
+  }
+  await eraseFile(ctx, file._id)
+  return 'erased'
+}
+
 /* Ends `hold`, the hold on file `storageId` or null when it has none, and
  * erases the file unless a row names it again. */
 async function endHold(

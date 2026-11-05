@@ -87,6 +87,7 @@ import {
 } from './model/demoUploads'
 import { reapDroppedImage as reapDropped } from './model/descriptionImages'
 import {
+  dropTicketFile,
   type EraseCounts,
   eraseDueFiles,
   eraseFile,
@@ -606,17 +607,26 @@ export const reapOrphans = internalMutation({
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
       // Tickets own no bytes until the receiver commits the completed upload.
-      // reapUploadTickets takes expired attachment tickets with their files
-      // every hour; one it left falls here, and its bytes to the files phase.
+      // An expired attachment ticket that holds a file stays for
+      // reapUploadTickets, which erases the file with it within the hour.
+      // Nothing else finds that file before the next weekly run, since the
+      // files phase keeps one younger than the floor. That cleanup deletes
+      // the attachment tickets without a file every hour too.
       let more = false
       for (const table of ['background_uploads', 'attachment_uploads'] as const) {
         const expired = await ctx.db
           .query(table)
           .withIndex('by_expiry', (q) => q.lte('expires_at', now))
           .take(REAP_PAGES.tickets + 1)
-        for (const ticket of expired.slice(0, REAP_PAGES.tickets)) await ctx.db.delete(ticket._id)
-        counts.tickets += Math.min(expired.length, REAP_PAGES.tickets)
-        more ||= expired.length > REAP_PAGES.tickets
+        let deleted = 0
+        for (const ticket of expired.slice(0, REAP_PAGES.tickets)) {
+          if ('storage_id' in ticket && ticket.storage_id !== undefined) continue
+          await ctx.db.delete(ticket._id)
+          deleted += 1
+        }
+        counts.tickets += deleted
+        // a leg that deleted nothing would read the same page again
+        more ||= expired.length > REAP_PAGES.tickets && deleted > 0
       }
       next = { phase: more ? 'tickets' : 'accounts' }
     } else if (a.phase === 'accounts') {
@@ -719,13 +729,13 @@ export const reapOrphans = internalMutation({
  * completeUpload), and a POST still storing one deletes it when it finds
  * the ticket expired or gone (finishTicketUpload). A file a row names, such
  * as a picture set from it, stays. After a restore it holds the file
- * instead, by the orphan sweep's rule (model/fileHolds.ts restoreHoldEnd),
+ * instead, by the orphan sweep's rule (model/fileHolds.ts dropTicketFile),
  * since a row written after the restored backup may have named it. The
  * hourly cron (crons.ts) starts a run with empty arguments. Each leg
  * handles one UPLOAD_TICKET_PAGE of the tickets expired at the run's start
  * and schedules the next while more are left; the last leg logs its counts
- * when it handled any. reapOrphans's tickets phase still deletes any
- * expired ticket left, whose file then falls to its files phase. */
+ * when it handled any. reapOrphans's tickets phase deletes only the
+ * expired tickets that hold no file, and leaves the others to this one. */
 
 /** How many expired tickets one reapUploadTickets leg handles. A ticket
  * holding a file nothing names costs eleven index ranges (the file,
@@ -761,17 +771,8 @@ export const reapUploadTickets = internalMutation({
       .withIndex('by_expiry', (q) => q.lte('expires_at', now))
       .take(UPLOAD_TICKET_PAGE.size + 1)
     for (const ticket of expired.slice(0, UPLOAD_TICKET_PAGE.size)) {
-      const file = ticket.storage_id ? await ctx.db.system.get(ticket.storage_id) : null
-      if (file !== null && !(await storageIdInUse(ctx, file._id))) {
-        const erase_at = restoreHoldEnd(restore, false, file._creationTime, now)
-        if (erase_at !== null) {
-          await holdAfterRestore(ctx, file, erase_at)
-          counts.held += 1
-        } else {
-          await eraseFile(ctx, file._id)
-          counts.erased += 1
-        }
-      }
+      const dropped = await dropTicketFile(ctx, ticket.storage_id, restore, now)
+      if (dropped !== null) counts[dropped] += 1
       await ctx.db.delete(ticket._id)
       counts.tickets += 1
     }

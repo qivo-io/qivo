@@ -26,6 +26,7 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { assertNoDanglingRefs } from './refs.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it (same situation as cascade.test.ts) */
@@ -739,6 +740,36 @@ describe('deleting the organization', () => {
     expect(await t.run((ctx) => ctx.db.query('inbox_items').collect())).toEqual([])
     expect(await t.run((ctx) => ctx.db.query('inbox_state').collect())).toEqual([])
     await assertNoDanglingRefs(t, 'organization deletion')
+  })
+
+  it('lets go of the file an upload ticket holds with its ticket, unless something names it', async () => {
+    const { t, f } = await filled()
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const store = () => t.run((ctx) => ctx.storage.store(new Blob(['bytes']) as never))
+    const [sent, picture] = [await store(), await store()]
+    const expiresAt = Date.parse(at(31))
+    await plantTicket(t, { profile: f.user, issue, storageId: sent, expiresAt })
+    // a file another organization's person took as their picture stays
+    await plantTicket(t, { profile: f.user, issue, storageId: picture, expiresAt })
+    await t.run((ctx) => ctx.db.patch(f.otherAdmin._id, { avatar_storage_id: picture }))
+    vi.setSystemTime(Date.parse(at(30)) + 60_000)
+    await t.action(internal.orgRemovals.begin, { org_id: f.org.id })
+    await runSteps(t)
+    expect(await removalOf(t, f.org.id)).toBeNull()
+    expect(await t.run((ctx) => ctx.db.query('attachment_uploads').collect())).toEqual([])
+    // no restore watch counts as a restore, so the unnamed file is held
+    // for one, as the hourly cleanup holds it (model/fileHolds.ts
+    // dropTicketFile), instead of waiting for the weekly sweep
+    expect(await fileState(t, sent)).toBe('held')
+    expect(
+      await t.run((ctx) =>
+        ctx.db
+          .query('file_holds')
+          .withIndex('by_storage', (q) => q.eq('storage_id', sent))
+          .unique(),
+      ),
+    ).toMatchObject({ after_restore: true })
+    expect(await fileState(t, picture)).toBe('kept')
   })
 
   it('resumes a deletion whose step stopped behind removals still waiting', async () => {
