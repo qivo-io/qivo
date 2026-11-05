@@ -762,17 +762,37 @@ describe('rows at one position', () => {
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
     const [parent] = await plantMetas(t, f.org.id, ['Holder'])
-    const subs = await plantSubs(t, parent, names('Sub ', 40))
+    const subs = await plantSubs(t, parent, names('Sub ', 30))
     await plantGrants(t, pia, [parent, ...subs])
     await plantShares(t, await plantTeam(t, f.org.id, 'Red', [pia]), subs)
     await ready(t, f)
     const want = await found(t, [pia], 'sub')
-    expect(namesOf(want)).toEqual(names('Sub ', 40))
+    expect(namesOf(want)).toEqual(names('Sub ', 30))
     Object.assign(NAMED_READ, { documents: 60 })
     const tight = await walk((after) => find(t, [pia], 'sub', { after }))
     expect(tight.batches.some((b) => b.stopped && b.rows.length < LIST_BATCH)).toBe(true)
     for (const b of tight.batches) if (b.stopped) expect(b.next).not.toBeNull()
     expect(tight.rows).toEqual(want)
+    /* A search that matches none of them judges no row, so no check
+     * settles the guard and only the merge's count of the two rows it drops
+     * beside each sub-project's document stops the batch. 30 documents
+     * short of the whole read leaves room for every position counted once
+     * and not for the dropped rows. The batch then reads at most its budget
+     * and the next row of each of its six streams (favorites, Holder's
+     * sub-projects, the child and root rows of Pia and of Red). */
+    Object.assign(NAMED_READ, DEFAULT_READ)
+    const none = () =>
+      measured(t, (ctx) => navSearchOf(ctx, loginOf([pia]), mapOf([pia]), { search: 'zzz' }))
+    const whole = await none()
+    expect(ok(whole.out)).toMatchObject({ rows: [], next: null, stopped: false })
+    const budget = whole.read.documents - 30
+    Object.assign(NAMED_READ, { documents: budget })
+    const cut = await none()
+    expect(ok(cut.out)).toMatchObject({ rows: [], stopped: true })
+    expect(cut.read.documents).toBeLessThanOrEqual(budget + 6)
+    const quiet = await walk((after) => find(t, [pia], 'zzz', { after }))
+    expect(quiet.rows).toEqual([])
+    for (const b of quiet.batches) if (b.stopped) expect(b.next).not.toBeNull()
   })
 })
 
@@ -963,6 +983,50 @@ describe('continuation', () => {
       const after = await namedCursor(SEARCH_LIST, [loginOf(seats), '', 'shared'], at)
       expect(ok(await find(t, seats, 'shared', { after })).rows).toEqual(want)
     })
+
+  /* The second seat finds Shared sub through its own child row (a grant on
+   * it), or through the sub-projects of Shared (a grant on Shared), and the
+   * first seat holds a stale child row on the same id, which the reader
+   * rejects. A cursor at that row's position must still let the second
+   * seat's sub-project through, so each stream reads from the cursor's id
+   * itself. */
+  for (const source of ['child', 'inherited'] as const)
+    it(`shows another seat's sub-project from its ${source === 'child' ? 'child rows' : "parent's sub-projects"} after a cursor at a rejected child row on a reused id of the organization that sorts first`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const [one, two] = [f.org, f.otherOrg].sort((a, b) => compareValues(a.id, b.id))
+      const first = await person(t, one.id, 'Ann')
+      const second = await plantSeat(t, {
+        org_id: two.id,
+        name: 'Ann',
+        auth_user_id: first.auth_user_id,
+      })
+      const [shared, later] = await plantMetas(t, two.id, ['Shared', 'Zed shared'])
+      const [sub] = await plantSubs(t, shared, ['Shared sub'])
+      await plantGrants(t, second, [source === 'child' ? sub : shared, later])
+      await ready(t, f)
+      await t.run((ctx) =>
+        ctx.db.insert('project_reach', {
+          org_id: one.id,
+          grantee_kind: 'profile',
+          grantee_id: first.id,
+          kind: 'child',
+          project_id: sub.id,
+          root_id: shared.id,
+          name_key: nameKey(sub.name),
+          key: sub.key,
+          live: true,
+          on_root: false,
+        }),
+      )
+      const seats = [first, second]
+      const want = await expectedSearch(t, seats, 'shared')
+      expect(want).toEqual([top(shared), under(sub, shared), top(later)])
+      expect(await found(t, seats, 'shared')).toEqual(want)
+      const at = { key: REST + nameKey(sub.name), tie: [sub.id, one.id] }
+      const after = await namedCursor(SEARCH_LIST, [loginOf(seats), '', 'shared'], at)
+      expect(ok(await find(t, seats, 'shared', { after })).rows).toEqual(want.slice(1))
+    })
 })
 
 /* -------------------------------------------------------------- the budgets */
@@ -972,13 +1036,18 @@ describe('budgets', () => {
     const t = newT()
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
-    const [parent] = await plantMetas(t, f.org.id, ['Holder'])
-    const subs = await plantSubs(t, parent, [
-      ...names('Row ', 120),
-      'Row 010 match',
-      'Row 060 match',
-      'Row 110 match',
-    ])
+    // 123 sub-projects over five parents, at most 25 under one
+    const parents = await plantMetas(t, f.org.id, names('Holder ', 5))
+    const all = [...names('Row ', 120), 'Row 010 match', 'Row 060 match', 'Row 110 match']
+    const subs: Doc<'projects'>[] = []
+    for (const [i, parent] of parents.entries())
+      subs.push(
+        ...(await plantSubs(
+          t,
+          parent,
+          all.filter((_, j) => j % parents.length === i),
+        )),
+      )
     await plantGrants(t, pia, subs)
     await ready(t, f)
     const want = await expectedSearch(t, [pia], 'match')
