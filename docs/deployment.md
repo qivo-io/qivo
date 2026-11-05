@@ -613,7 +613,7 @@ The app's removal window reads `accessRemovals.preview`, which v0.1.99
 (`78f5d6ad`) first shipped, with its `reassign_to` argument and its
 `keep.offered`, `keep.permitted` and `reassign.permitted` fields, and its
 Reassign picker reads `accessRemovals.reassignChoices`. The release after
-v0.1.119 first ships the argument, the fields and the picker's query. An app
+v0.1.120 first ships the argument, the fields and the picker's query. An app
 from that release, against a backend before it, says that it could not check
 which tasks a removal affects and removes nothing, also in a tab that was
 open when the backend went back, until the backend rolls forward. From that
