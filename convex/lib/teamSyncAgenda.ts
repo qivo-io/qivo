@@ -627,10 +627,12 @@ async function scopeOf(
   return { tops }
 }
 
-/* The live top-level projects of organization `orgId` in name order
+/** The live top-level projects of organization `orgId` in name order
  * (projects by_org_parent_state_name), name key then id, after a step's
- * last row, the rest of its name key and the later ones. */
-function liveTops(
+ * last row, the rest of its name key and the later ones. scopeOf reads All
+ * projects through it; tests/teamSyncAgenda.test.ts reads it on its own to
+ * check that its steps read each project once. */
+export function liveTops(
   ctx: QueryCtx,
   orgId: string,
   from?: { after: Doc<'projects'>; part: 'same' | 'later' },

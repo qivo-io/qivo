@@ -15,11 +15,18 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { accessOf, OWN_READS } from '../lib/access'
-import { NAME_MAX, TEAM_SYNC_TASKS } from '../lib/limits'
+import { NAME_MAX, PROJECT_ROW_MAX_BYTES, TEAM_SYNC_TASKS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { callRoom, OWNER_LOADS, ownerLoadReader, weeklyHours } from '../lib/ownerLoads'
-import { AGENDA, type AgendaAnswer, type AgendaScope, readAgenda } from '../lib/teamSyncAgenda'
+import {
+  AGENDA,
+  type AgendaAnswer,
+  type AgendaScope,
+  liveTops,
+  readAgenda,
+} from '../lib/teamSyncAgenda'
 import { clockOf } from '../lib/viewLoads'
+import { inSteps, viewBudget } from '../lib/viewReads'
 import { unstampOverview } from '../model/overviewCounts'
 import { plantTasks, type ReadFigures } from './board.setup'
 import {
@@ -380,6 +387,23 @@ describe('scope', () => {
     expect(ok.rows).toHaveLength(130)
     expect(new Set(ok.rows.map((r) => r.project_id)).size).toBe(130)
     expect(ok.top_projects).toEqual(sorted([...tied.tops.map((p) => p.id), f.meta.id, f.hidden.id]))
+    // the answer holds a repeated project once, so the case also reads the
+    // top-level projects as the agenda steps through them, at its room and
+    // its charge of a project row. This must fail for a step that reads a
+    // project of the name again, or skips one.
+    const ids = await t.run(async (ctx) => {
+      const out: string[] = []
+      const row = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges: 0 }
+      for await (const step of inSteps(
+        viewBudget(ctx, AGENDA.reads),
+        [liveTops(ctx, f.org.id)],
+        row,
+      ))
+        out.push(...step.map((p) => p.id))
+      return out
+    })
+    expect(ids).toHaveLength(132)
+    expect(sorted(ids)).toEqual(sorted([...tied.tops.map((p) => p.id), f.meta.id, f.hidden.id]))
   })
 })
 
