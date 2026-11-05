@@ -2371,6 +2371,10 @@ row in this task's history`). The request reads on past rows you do not
 receive. When it cannot find one row you receive before it has read as much
 as one request may, it is a `400` (`too many of this task's changes are
 hidden from you to read them at once; an organization admin can read them`).
+When Qivo cannot finish checking which projects you can see for the
+projects a page's rows name, the request is a `400` (`Qivo could not finish
+checking which projects you can see in one request. Contact support@qivo.io
+so we can help.`) rather than an answer that leaves those rows out.
 Deleting a task for good from Deleted items deletes its history.
 See [Side effects and audit trail](#side-effects-and-audit-trail) for the
 wording.

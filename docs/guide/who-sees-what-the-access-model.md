@@ -94,7 +94,9 @@ than 128 teams that together hold more than 1,000 team shares. The
 workspace then does not open. Qivo says it could not finish checking which
 projects you can see and asks you to contact support, instead of leaving
 projects or their tasks out. **Archived tasks** shows **Couldn't load the
-archive.** with **Retry**.
+archive.** with **Retry**. A task's activity under **All** can show
+**Couldn't load activity.** with **Retry** for the same reason, instead of
+leaving changes out.
 
 An organization-level **Viewer** role ([User roles](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)) limits all project access to
 reading, even if the person has a stronger project role. It does not make
