@@ -510,17 +510,22 @@ export async function assertAssigneeRule(
   }
 }
 
-/* The tasks from `parentId` up, nearest first. Under the one level of
- * subtasks that is the parent alone; the seen set stops a corrupt cycle. */
-async function ancestorsFrom(
+/** The tasks from `parentId` up, nearest first, whose projects the chain
+ * check reads (chainSight). Under the one level of subtasks that is the
+ * parent alone; the seen set stops a corrupt cycle. `guard`, when given,
+ * runs before each read, as the removal window's Reassign picker checks the
+ * room (model/removalPreview.ts). */
+export async function ancestorsFrom(
   ctx: QueryCtx,
   parentId: string | undefined,
+  guard: () => Promise<void> = async () => {},
 ): Promise<Doc<'issues'>[]> {
   const chain: Doc<'issues'>[] = []
   const seen = new Set<string>()
   let cur = parentId
   while (cur !== undefined && !seen.has(cur)) {
     seen.add(cur)
+    await guard()
     const row = await byId(ctx, 'issues', cur)
     if (row === null) break
     chain.push(row)
