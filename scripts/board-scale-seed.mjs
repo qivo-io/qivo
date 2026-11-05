@@ -1080,7 +1080,7 @@ async function seedRelations({
   )
   // The app's task windows range over window keys, which the server sets
   // at random (convex/lib/db.ts newWindowKey), so the task's key, not its
-  // id, says which stage of a staged load brings it.
+  // id, says which task window brings it once a page asks for every task.
   client.setAdminAuth(target.key)
   const row = (await tableRows(client, 'issues')).find((task) => task.id === expected.family)
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
@@ -1088,11 +1088,11 @@ async function seedRelations({
 }
 
 /** What the seed says of the --relations task's window key `key`: how far
-    into the key space it is. A workspace that loads in stages watches its
-    task windows from the lowest keys up (src/store/liveParts.ts STAGES). */
+    into the key space it is, which names the task window that brings it
+    once a page asks for every task (src/store/liveParts.ts). */
 export function windowKeyNote(key) {
   const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
-  return `Its window key is ${key}, ${share}% into the key space. A workspace that loads in stages watches its task windows from the lowest keys up, so a lower key arrives in an earlier stage.`
+  return `Its window key is ${key}, ${share}% into the key space. The app loads its task windows only when a page needs every task, all of them at once, so the key names the window that brings it then.`
 }
 
 /* Archives the tasks `ids` (planArchive) through `client`, which acts as
