@@ -1507,8 +1507,11 @@ function refFromTaskSide(watched: { task: string; org: string }, news: SideNews)
    since it said unavailable, and starts over in every seat after a
    rebuild that changed who can open what (refAccessMoved), as when a
    project is shared with one of the seats, since no read follows the
-   seats it said unavailable in. The read stops once the window's own read
-   of the task has answered. */
+   seats it said unavailable in. A read that waits on the task side
+   (runRefRead) reads on its own once the task side no longer reads its
+   arguments, as when the window lets the task go before the task side
+   answered. The read stops once the window's own read of the task has
+   answered. */
 function syncRefRead() {
   const read = refRead
   const accessMoved = refAccessMoved
@@ -1519,6 +1522,10 @@ function syncRefRead() {
     if (read.args && parts.sideArgs('reference')) parts.stopSide('reference')
     read.args = null
     return
+  }
+  if (!read.args && !read.task && read.state !== 'resolved' && read.state !== 'unavailable') {
+    const next = nextRefArgs(read)
+    if (next && !taskSideReads(next)) runRefRead(read)
   }
   if (refWalkEnded(read)) {
     if (accessMoved && !read.args && !nextRefArgs(read)) {

@@ -433,6 +433,27 @@ describe('the read of a reference', () => {
     expect(P.editsFromAnswer(P.taskDetail(FAR)?.view?.id ?? '')).toBe(true)
   })
 
+  it('reads on its own when the task side it waited on stops before it answered', () => {
+    const { P } = store
+    // an Inbox row's reference names the task, which the window watches
+    P.watchTaskRef(taskRef({ org: GUEST, uuid: FAR }))
+    P.watchComments(FAR, GUEST)
+    const side = one('taskWindow:task')
+    expect(side.args).toEqual({ org_id: GUEST, ref: FAR })
+    // the same window then names it by its uuid under the partner's slug,
+    // whose read is the task side's, which has not answered
+    P.watchTaskRef(taskRef({ org: null, uuid: FAR, from: GUEST }))
+    expect(one('taskWindow:task')).toBe(side)
+    expect(P.reference?.state).toBe('loading')
+    // the window lets the task go before the task side answered
+    P.watchComments(null)
+    expect(side.closed).toBe(true)
+    const read = one('taskWindow:task')
+    expect(read.args).toEqual({ org_id: GUEST, ref: FAR })
+    read.deliver(okAnswer(FAR, 40, { task: { org_id: GUEST } }))
+    expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org: GUEST } })
+  })
+
   it('reads the reference again on a fresh registry', async () => {
     const { P } = store
     P.watchTaskRef(taskRef({ org, num: 40 }))
