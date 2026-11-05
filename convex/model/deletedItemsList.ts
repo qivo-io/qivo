@@ -563,14 +563,20 @@ const TASK_REF = /^(?:QN-)?(\d+)$/i
  * restored by the seat, as its row (rowOf), and a subtask of any other task
  * item names the item's root. Every read of the call spends
  * one LIST.call budget, as a list call's do: the hits, each seat's sight
- * and each item it judges. Once it is spent, the search answers the
- * matches it found so far. `capped` says that the seats see more matches
- * than MATCHES.max, so the page can ask for a longer text instead of hiding
- * the rest: the search finds one visible match past the cap. It is decided
- * by visible matches alone. The scan's MATCHES.scan results and the budget
- * also count tasks the seat cannot see, so a stop at either is not
- * reported, or `capped` would tell that hidden deleted tasks match the
- * text. A search past LIMITS.search is refused.
+ * and each item it judges. It reads the hits one at a time and judges each
+ * as it comes, checking the budget before the next, so it reads at most
+ * one hit past it, which matters since a hit's row holds its task's
+ * searchable text (deleted_tasks.search_text). Once the budget is spent,
+ * the search answers the matches it found so far. `capped` says that the
+ * seats see more matches than MATCHES.max, so the page can ask for a
+ * longer text instead of hiding the rest: the search finds one visible
+ * match past the cap. It is decided by visible matches alone, but for a
+ * login whose every seat is an organization admin's, who sees every task
+ * that is not being purged, a budget stop says it too. For anyone else the
+ * scan's MATCHES.scan results and the budget also count tasks the seat
+ * cannot see, so a stop at either is not reported, or `capped` would tell
+ * that hidden deleted tasks match the text. A search past LIMITS.search is
+ * refused.
  */
 export async function matchesFor(
   ctx: QueryCtx,
@@ -580,33 +586,41 @@ export async function matchesFor(
   const query = limitedText(LIMITS.search, text)
   if (query === '') return { matches: [], capped: false }
   const ref = TASK_REF.exec(query)
+  const logins = [...seats]
   const out: DeletedMatch[] = []
   let capped = false
+  // the budget ran out before the search read every hit it reads
+  let stopped = false
   const call: Reads = { ...LIST.call }
   const reader = spending(ctx, call)
-  search: for (const me of seats) {
-    if (spent(call)) break
+  search: for (const me of logins) {
+    if (spent(call)) {
+      stopped = true
+      break
+    }
     const org = me.org_id
     const hits = reader.db.query('deleted_tasks')
-    const byNum =
-      ref === null
-        ? []
-        : await hits
-            .withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1])))
-            .take(MATCHES.scan)
-    const byTitle = await hits
-      .withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org))
-      .take(MATCHES.scan)
-    const found = [...byNum, ...byTitle]
-    if (found.length === 0) continue
-    const sight = await sightOf(reader, me)
-    const orgName = (await byId(reader, 'organizations', org))?.name ?? ''
+    const sources: AsyncIterable<Doc<'deleted_tasks'>>[] = [
+      hits.withSearchIndex('search_title', (q) => q.search('title', query).eq('org_id', org)),
+    ]
+    if (ref !== null)
+      sources.unshift(
+        hits.withIndex('by_org_num', (q) => q.eq('org_id', org).eq('num', Number(ref[1]))),
+      )
+    // read with the seat's first hit
+    let seat: { sight: Sight; orgName: string } | undefined
     const items = new Map<string, Promise<{ item: Item; view: ItemView } | null>>()
     const seen = new Set<string>()
-    for (const task of found) {
-      if (spent(call)) break search
-      if (seen.has(task.task_id)) continue
+    // adds the match of `task` when the seat sees it; true once a visible
+    // match past the cap was found, which says there are more
+    const judge = async (task: Doc<'deleted_tasks'>): Promise<boolean> => {
+      if (seen.has(task.task_id)) return false
       seen.add(task.task_id)
+      seat ??= {
+        sight: await sightOf(reader, me),
+        orgName: (await byId(reader, 'organizations', org))?.name ?? '',
+      }
+      const { sight, orgName } = seat
       let read = items.get(task.item_id)
       if (read === undefined) {
         read = visibleItem(reader, sight, task.item_id)
@@ -615,15 +629,11 @@ export async function matchesFor(
       const visible = await read
       // a task in a project hidden from the seat, a redacted item's root too
       const project = visible?.view.projects.find((p) => p.id === task.project_id)
-      if (visible === null || project === undefined) continue
+      if (visible === null || project === undefined) return false
       const { item, view } = visible
       // viewOf never shows a purging item; the check narrows the state
-      if (item.state === 'purging') continue
-      // a visible match past the cap: say there are more, and stop
-      if (out.length === MATCHES.max) {
-        capped = true
-        break search
-      }
+      if (item.state === 'purging') return false
+      if (out.length === MATCHES.max) return true
       const ready = item.state === 'ready'
       const block = view.redacted ? 'no_access' : await restoreBlock(reader, me, item, sight.memo)
       let blocked: BlockDetail | undefined
@@ -650,8 +660,25 @@ export async function matchesFor(
         can_restore: ready && block === null,
         blocked,
       })
+      return false
+    }
+    for (const source of sources) {
+      let read = 0
+      for await (const task of source) {
+        if (await judge(task)) {
+          capped = true
+          break search
+        }
+        if (++read === MATCHES.scan) break
+        if (spent(call)) {
+          stopped = true
+          break search
+        }
+      }
     }
   }
+  // a login that sees every task may be told that the budget stopped it
+  if (stopped && logins.every((me) => me.org_role === 'admin')) capped = true
   return { matches: out, capped }
 }
 
