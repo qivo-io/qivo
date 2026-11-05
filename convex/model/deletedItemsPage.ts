@@ -54,7 +54,11 @@
  * come from the task numbers the text names and from search_text queries,
  * each filtered to the items of one of the seat's sources, with fixed
  * allowances set before any reads (gatherTasks); the cross-project items no
- * query covers are read whole. Every page gathers the same candidates and
+ * query covers are read whole. A candidate counts only in a project the
+ * seat may read in its view of the item (ItemView readable), so once the
+ * admin access split lands an admin's search keeps its sources and drops
+ * the tasks they cannot read, which is how it narrows an admin's search
+ * (coordinator, 2026-11-05). Every page gathers the same candidates and
  * orders them, and is the entries after its cursor.
  *
  * Stops. A browse or scan that spends its budget ends the page with
@@ -65,12 +69,14 @@
  * `missing` says that entries sorting before the page's last one may be
  * missing: `reads` when the budget cut an unordered range or the opening of
  * a seat's sources, or the page went past an entry whose row its budget
- * could not build, and for an admin's search also the gathering; `matches`
- * when an admin's search source read its whole allowance. A search page of
- * anyone else always says `matches`, never computed from a stop, since
- * their search sources hold tasks hidden from them (owner, 2026-10-28, as
- * main Search). Rows stored before the page's release hold none of its
- * fields; `legacy` says so (olderRows). */
+ * could not build, and for the search of a seat whose role reads every
+ * task (model/deletedItems.ts roleReadsEveryTask, an organization admin's
+ * until the admin access split) also the gathering; `matches` when such a
+ * seat's search source read its whole allowance. A search page of any
+ * other seat, an admin's after the split included, always says `matches`,
+ * never computed from a stop, since its search sources hold tasks hidden
+ * from it (owner, 2026-10-28, as main Search). Rows stored before the
+ * page's release hold none of its fields; `legacy` says so (olderRows). */
 
 import type { IndexRange } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
@@ -90,7 +96,14 @@ import {
   searchTerms,
 } from '../lib/searchTerms'
 import { issueKey } from '../lib/taskRefs'
-import { type ItemView, type Sight, sameReference, sightOf, viewOf } from './deletedItems'
+import {
+  type ItemView,
+  roleReadsEveryTask,
+  type Sight,
+  sameReference,
+  sightOf,
+  viewOf,
+} from './deletedItems'
 import {
   type DeletedMatch,
   type DeletedRow,
@@ -244,7 +257,10 @@ export type DeletedPage = {
   scope_needed?: true
   /** the scope needs more sources than one page merges; choose fewer projects */
   too_wide?: true
-  /** entries that sort before the last one may be missing */
+  /** entries that sort before the last one may be missing: `reads` after a
+   * budget stop, and `matches` on every search page of a seat whose role
+   * does not read every task, or after a search source of one whose role
+   * does read its whole allowance */
   missing?: 'matches' | 'reads'
   /** the search or the assignee filter may miss tasks deleted before the
    * page's release, unless the search names their key */
@@ -408,8 +424,14 @@ const keyOf = (a: Asked): Promise<string> =>
 
 /* --------------------------------------------------------------- seats */
 
-/** One seat the page reads, with its sight of its organization. */
-type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean }
+/** One seat the page reads, with its sight of its organization. `admin`
+ * decides the management parts, since an organization admin keeps every
+ * item: the organization's ranges, heldFor, the admin's assignee index and
+ * olderRows' probe. `readsAll` decides the search's notes: whether the
+ * seat's role reads every task (model/deletedItems.ts roleReadsEveryTask),
+ * which equals `admin` until the admin access split and is false for
+ * everyone after it. */
+type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean; readsAll: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
  * projects the seat sees with the sub-projects it sees of the top-level
@@ -454,11 +476,12 @@ function holdsTasks(scope: Scoped, item: Item): boolean {
 }
 
 /** Whether `scope` holds the tasks of `item` as `seat` sees it (`view`,
- * from viewOf). An admin sees every project of an item, so the item's
- * fields decide (holdsTasks), its root's top-level project and a deleted
- * project included. For anyone else a task item counts only through a
- * project its view holds, so a scope never lists an item through a project
- * hidden from them, such as a redacted item's root. */
+ * from viewOf). An admin keeps every item with every project of it, so the
+ * item's fields decide (holdsTasks), its root's top-level project and a
+ * deleted project included, and a scoped browse lists a hidden item there.
+ * For anyone else a task item counts only through a project its view
+ * holds, so a scope never lists an item through a project hidden from
+ * them, such as a redacted item's root. */
 const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean =>
   scope.all ||
   seat.admin ||
@@ -535,11 +558,12 @@ type Run = {
   seats: Map<string, Seat>
   entries: Placed[]
   next: Place | null
-  /** an unordered range, a seat's opening or an admin's gathering was cut,
-   * or the page went past an entry whose row it could not build */
+  /** an unordered range, a seat's opening or the gathering of seats whose
+   * role reads every task was cut, or the page went past an entry whose
+   * row it could not build */
   reads: boolean
-  /** an admin's search source read its whole allowance, or the search is
-   * anyone else's */
+  /** a search source of a seat whose role reads every task read its whole
+   * allowance, or the search is another seat's */
   matches: boolean
   path: Path
 }
@@ -571,7 +595,13 @@ async function seatOf(run: Run, me: Profile): Promise<Seat> {
   const reader = spending(run.ctx, run.call)
   const sight = await sightOf(reader, me)
   const orgName = (await byId(reader, 'organizations', me.org_id))?.name ?? ''
-  const seat = { me, sight, orgName, admin: me.org_role === 'admin' }
+  const seat = {
+    me,
+    sight,
+    orgName,
+    admin: me.org_role === 'admin',
+    readsAll: roleReadsEveryTask(me),
+  }
   run.seats.set(me.org_id, seat)
   return seat
 }
@@ -1053,15 +1083,16 @@ const assignedAsAsked = (seat: Seat, a: Asked, item: Item, task: Task): boolean 
   a.assignee === undefined ||
   (task.assignee_id === a.assignee && sameReference(seat.sight.profiles.get(a.assignee), item))
 
-/** Whether `view` holds the project of `task`, so its viewer may be told
- * about it. */
+/** Whether `view` lets its viewer read the project of `task`, so they may
+ * be told about it: every candidate of the search, task reference and
+ * assignee entry passes it. */
 const shows = (view: ItemView, task: Task): boolean =>
-  view.projects.some((p) => p.id === task.project_id)
+  view.readable.some((p) => p.id === task.project_id)
 
 /** The entries of the assignee filter for an item the scan reached (anyone
  * but an admin) in `scope`: a task item once, with the tasks assigned in
- * projects the seat sees, and a project item once for each such task after
- * `from`, by number. */
+ * projects the seat may read, and a project item once for each such task
+ * after `from`, by number. */
 const scanEntry =
   (run: Run, scope: Scoped): Judge =>
   async (seat, item, from) => {
@@ -1104,9 +1135,14 @@ const scanEntry =
  * `from` itself (rangeAfter), as every task of a project item shares one
  * deleted_at, so a later page reads none of the rows before it. A task item
  * is one entry, at the first of its assigned tasks in that order that sits
- * in a project the admin's view holds, so it shows once however its rows
- * fall across pages; a project item is an entry for each such task. A
- * budget stop ends the page at the last row it looked at.
+ * in a project the admin may read (ItemView readable), so it shows once
+ * however its rows fall across pages; a project item is an entry for each
+ * such task. A budget stop ends the page at the last row it looked at.
+ * After the admin access split the index also holds the person's tasks in
+ * projects the admin cannot read, which it drops, so no entry, hit or count
+ * comes from them; a stop can then end a short page at such a row, which
+ * tells only that the person was assigned deleted work there, the owners
+ * an admin keeps (owner, 2026-10-29).
  */
 async function assigneeEntries(run: Run, seat: Seat, scope: Scoped, from: At | null) {
   const person = run.a.assignee
@@ -1301,8 +1337,8 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
  * viewOf, is not purging and meets the scope and filters, its project is
  * one the seat's view of the item holds, and its number, title and
  * readable description hold every term (matchesTerms). A stop of the
- * gathering sets `reads` for an admin only; anyone else's search page says
- * `matches` whatever it read.
+ * gathering sets `reads` only when every seat's role reads every task
+ * (Seat readsAll); any other search page says `matches` whatever it read.
  */
 async function gatherTasks(
   run: Run,
@@ -1428,7 +1464,7 @@ async function gatherTasks(
           if (a.assignee !== undefined) f = f.eq('assignee_id', a.assignee)
           return f
         })
-        if (await readQuery(seat, query, () => true)) run.matches ||= seat.admin
+        if (await readQuery(seat, query, () => true)) run.matches ||= seat.readsAll
       }
       for (const item of plan.crossItems) {
         if (out()) {
@@ -1460,7 +1496,7 @@ async function gatherTasks(
   } catch (e) {
     if (!(e instanceof Stop)) throw e
   }
-  if (cut && seats.every((s) => s.admin)) run.reads = true
+  if (cut && seats.every((s) => s.readsAll)) run.reads = true
   const found = [...groups.values()]
     .filter((p) => from === null || before(from, p.at))
     .sort((x, y) => order(x.at, y.at))
@@ -1583,7 +1619,7 @@ async function unscoped(
   if (cursor !== null && cursor.path !== 'items') throw notThisPath()
   const from = cursor?.place ?? null
   const refs = a.kind !== 'project' && a.terms.some((t) => t.num != null)
-  if (a.terms.length > 0 && profiles.some((p) => p.org_role !== 'admin')) run.matches = true
+  if (a.terms.length > 0 && profiles.some((p) => !roleReadsEveryTask(p))) run.matches = true
   if (a.kind !== 'task' && (from === null || from.part === 0)) {
     if (refs) run.floor = DELETED_PAGE.gather
     const plans: { seat: Seat; plan: Plan }[] = []
@@ -1645,7 +1681,7 @@ async function scoped(
   // probe's answer for an admin, always for anyone else
   const legacy = tasks && (search || a.assignee !== undefined) && (await olderRows(run, seat))
   if (legacy) head.legacy = true
-  if (search && !seat.admin) run.matches = true
+  if (search && !seat.readsAll) run.matches = true
   const first = project !== null && (from === null || from.part === 0)
   if (first) {
     if (tasks && search) run.floor = DELETED_PAGE.gather
@@ -1731,19 +1767,21 @@ async function answerOf(run: Run, key: string, head: Partial<DeletedPage>): Prom
  * first of a task item's matches by number when its row does not show one
  * of them already (the root, or the task a redacted row shows). The root's
  * key and title come with a subtask unless the item is redacted, as its
- * row never names the root then. */
+ * row never names the root then, and a hidden item's key alone, as its row
+ * shows no title. */
 function hitOf(p: Pending, row: DeletedRow): DeletedHit | undefined {
   if (p.tasks.length === 0) return undefined
   if (p.item.kind === 'task' && p.tasks.some((t) => issueKey(t.num) === row.key)) return undefined
   const task = [...p.tasks].sort((x, y) => x.num - y.num)[0]
-  const project = p.view.projects.find((x) => x.id === task.project_id)
+  const project = p.view.readable.find((x) => x.id === task.project_id)
   if (project === undefined) return undefined
   const { item, view } = p
   const subtask = item.kind === 'task' && !view.redacted && task.task_id !== item.target_id
+  const root = view.hidden ? {} : { root_title: item.name }
   return {
     key: issueKey(task.num),
     title: task.title,
-    ...(subtask ? { root_key: issueKey(item.num), root_title: item.name } : {}),
+    ...(subtask ? { root_key: issueKey(item.num), ...root } : {}),
     archived: task.archived,
     path: view.redacted ? [] : hitPath(p.seat.sight, item, project),
     ...(view.redacted ? { redacted: true as const } : {}),

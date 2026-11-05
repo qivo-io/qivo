@@ -137,7 +137,8 @@ export const item = authedQuery({
  * when more may match. Each comes back with its item, whose kind
  * `item_kind` names, so a capped list still finds older items, and a
  * subtask of a task item with its root's key and title unless the match is
- * redacted. */
+ * redacted, and with the key alone where the item is hidden from an admin
+ * after the admin access split. */
 export const matches = authedQuery({
   args: { text: v.string() },
   handler: async (ctx, { text }) => await matchesFor(ctx, ctx.myProfiles.values(), text),
