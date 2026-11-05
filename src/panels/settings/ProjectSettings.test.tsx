@@ -954,6 +954,18 @@ describe('changing access', () => {
     expect(requests).toEqual([])
   })
 
+  it("gives the server's sentence for an address past the limit, and sends nothing", async () => {
+    await open()
+    // 255 characters, one past LIMITS.email, which the lookup refuses
+    await type(find<HTMLInputElement>('[data-invite-email]'), `${'a'.repeat(250)}@x.io`)
+    await click(find('[data-invite-send]'))
+    expect(reads('projectSettings:inviteTarget')).toHaveLength(1)
+    expect(text('[data-invite-note]')).toBe(
+      'An email address must be at most 254 characters. Use a shorter address.',
+    )
+    expect(requests).toEqual([])
+  })
+
   it("removes a grant through the press with the page's organization, hides its row while the write runs and brings it back on a refusal", async () => {
     await open()
     removeOf('leo').focus()

@@ -8714,8 +8714,9 @@ export const PLANNER = {
 
   /** The seat `email` names in organization `orgId` and its grant on
       project `projectId` (projectSettings.inviteTarget), which the invite
-      form sends as its `expected`. Read once, at the press; null when the
-      read failed. */
+      form sends as its `expected`. Read once, at the press. A rule the
+      read refuses with, such as an address past LIMITS.email, answers as
+      `refused` with the server's sentence; null when the read failed. */
   projectInviteTarget: async (
     orgId: string,
     projectId: string,
@@ -8728,6 +8729,8 @@ export const PLANNER = {
         email: email.trim(),
       })
     } catch (e) {
+      const d = errData(e)
+      if (d.code === 'rule' && d.message) return { state: 'refused', message: d.message }
       console.error('[qivo] invite lookup failed:', e)
       return null
     }
