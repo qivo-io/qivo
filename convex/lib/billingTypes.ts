@@ -97,26 +97,76 @@ export type BillingSummary = {
   sync_error: string | null
 }
 
-/* `period_kind` says which usage bucket the report shows: `paid` is the live
+/* `period_kind` says which usage bucket Billing shows: `paid` is the live
  * provider period, `pending` the interval after it while a renewal is
  * unconfirmed (no end yet), and `month` a UTC calendar month, used whenever
  * there is no live paid period. Month dates are UTC days; the end is the
  * month's last day. `period_key` is the bucket's stored key
  * (model/billingUsage.ts usagePeriod), which View credentials hands to API
- * access. Allowances are null when no plan exists. */
-export type BillingUsage = {
+ * access. Allowances are null when no plan exists. These are the fields
+ * both of Billing's usage answers hold besides storage. */
+export type BillingUsageHead = {
   period_kind: 'paid' | 'pending' | 'month'
   period_key: string
   period_start: string
   period_end: string | null
   calls: number
   included_calls: number | null
-  storage_bytes: number
   included_storage_bytes: number | null
   api_overage_cents: number
   storage_overage_cents: number
   waived: boolean
   delivery_unconfirmed: boolean
   users: { profile_id: string; name: string; calls: number }[]
+}
+
+/* Billing's usage (billing.currentUsage) with its two storage figures,
+ * which differ. `storage_bytes` is current storage, the organization's
+ * stored-byte totals (model/storageTotals.ts), files in Deleted items
+ * included until they are deleted for good, or null while the totals are
+ * not complete, which the page shows as being counted and never as 0.
+ * `sampled_storage_bytes` is what a paid period's sample measured at its
+ * start, which the period's storage charge uses and which leaves files in
+ * Deleted items out, or null for any other bucket and for a period whose
+ * sample has not finished. */
+export type BillingUsage = BillingUsageHead & {
+  storage_bytes: number | null
+  sampled_storage_bytes: number | null
+}
+
+/* The answer of the legacy billing.usageReport, which tabs loaded before
+ * billing.currentUsage shipped still read: storage from a scan of the
+ * attachment rows of live tasks, files in Deleted items left out, with the
+ * whole project breakdown, largest first. */
+export type BillingUsageReport = BillingUsageHead & {
+  storage_bytes: number
   projects: { project_id: string; name: string; storage_bytes: number }[]
 }
+
+/* One project of Billing's Storage by project list
+ * (billing.storageProjects), always a sub-project, since tasks live in one.
+ * `num` is the project's number as its totals row holds it, null when the
+ * backfill found no copy of the project, so the project id and the number
+ * name one row. `key` is the project's key from the live project or the
+ * copy Deleted items stores, null for a removed one, and `name` is null
+ * when no copy of its name is left. `status` says where the project is
+ * now: active, archived, in Deleted items, or removed for good while files
+ * of its tasks still count, such as a subtask a task item keeps in Deleted
+ * items. */
+export type StorageProjectRow = {
+  project_id: string
+  num: number | null
+  key: string | null
+  name: string | null
+  status: 'active' | 'archived' | 'deleted' | 'removed'
+  bytes: number
+  files: number
+}
+
+/* One batch of Storage by project: `counting` while the organization's
+ * totals are not complete, else its rows largest first, the cursor of the
+ * next batch (null at the end) and whether the read share stopped the
+ * batch before it was full (lib/namedPages.ts ListBatch). */
+export type StorageProjects =
+  | { state: 'counting' }
+  | { state: 'ready'; rows: StorageProjectRow[]; next: string | null; stopped: boolean }

@@ -23,7 +23,13 @@ import {
 } from '../billingSync'
 import { billingDueBy, getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
-import type { BillingPlan, BillingSummary, BillingUsage } from '../lib/billingTypes'
+import type {
+  BillingPlan,
+  BillingSummary,
+  BillingUsage,
+  BillingUsageReport,
+  StorageProjects,
+} from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { enrollOrganization, nextReminder, STORAGE_PAGE, storageUsage } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
@@ -43,8 +49,14 @@ type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
 const summary = makeFunctionReference<'query', { org_id: string }, BillingSummary>(
   'billing:summary',
 )
-const usageReport = makeFunctionReference<'action', { org_id: string }, BillingUsage>(
+const usageReport = makeFunctionReference<'action', { org_id: string }, BillingUsageReport>(
   'billing:usageReport',
+)
+const currentUsage = makeFunctionReference<'query', { org_id: string }, BillingUsage>(
+  'billing:currentUsage',
+)
+const storageProjects = makeFunctionReference<'query', { org_id: string }, StorageProjects>(
+  'billing:storageProjects',
 )
 const status = makeFunctionReference<'query', { org_id: string }, { writable: boolean }>(
   'billing:status',
@@ -317,6 +329,8 @@ describe('billing authority and plan versions', () => {
         'forbidden',
         /admin only/,
       )
+      for (const read of [currentUsage, storageProjects])
+        await expectRefusal(caller.query(read, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(caller.action(checkout, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(caller.action(portal, { org_id: f.org.id }), 'forbidden', /admin only/)
       expect(await caller.query(status, { org_id: f.org.id })).toMatchObject({ writable: false })
@@ -596,7 +610,7 @@ describe('complimentary access and paid expiry', () => {
     const { t, f } = await fixture()
     await t.mutation(apply, { payload: remote(f.org.id, { status: 'canceled', ended_at: NOW }) })
     await expectRefusal(createTask(t, f), 'forbidden', /read-only/)
-    expect(await as(t, f.admin).action(usageReport, { org_id: f.org.id })).toHaveProperty(
+    expect(await as(t, f.admin).query(currentUsage, { org_id: f.org.id })).toHaveProperty(
       'calls',
       0,
     )
@@ -848,7 +862,7 @@ describe('provider state, retries and billing snapshots', () => {
 
   it('reports the storage of an organization with more files than one transaction may look up within the transaction limits', async () => {
     const { t, f } = await pastOneTransaction()
-    // the admin Billing page
+    // the legacy usage report, which tabs loaded before billing.currentUsage read
     const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
     expect(report.storage_bytes).toBe(9_000_000_000)
     expect(report.projects).toEqual([
@@ -859,7 +873,7 @@ describe('provider state, retries and billing snapshots', () => {
 
   it('records the storage of an organization with more files than one transaction may look up at renewal within the transaction limits', async () => {
     const { t, f } = await pastOneTransaction()
-    // the renewal into the next period samples the figure the Billing page shows
+    // the renewal into the next period samples the figure the legacy report shows
     const next = { start: END, end: '2026-11-01T12:00:00.000Z' }
     await t.mutation(apply, {
       payload: remote(f.org.id, {
