@@ -93,6 +93,14 @@ const span = (issue: string | null, hours = 4, project: string | null = issue &&
   remaining_set_at: null,
 })
 
+/* A paused task of an owner as an answer sends it. */
+const pausedSpan = (issue: string, start = '2026-09-14') => ({
+  issue_id: issue,
+  project_id: 'fw',
+  start_week: start,
+  end_week: '2026-09-21',
+})
+
 describe('the owner-load cache', () => {
   it('asks for a staff seat in calls of at most CALL_OWNERS owners, each owner once, by hash', () => {
     const s = setup(true)
@@ -184,7 +192,7 @@ describe('the owner-load cache', () => {
           owner_id: 'p0',
           state: 'ok',
           spans: [span('task-1'), span(null, 2)],
-          paused: [],
+          paused: [pausedSpan('task-2')],
         },
         { owner_id: 'p1', state: 'unavailable' },
         { owner_id: 'p2', state: 'ok', spans: [], paused: [] },
@@ -291,6 +299,98 @@ describe('the owner-load cache', () => {
     // a view that closes forgets them
     s.cache.release('board')
     expect(s.cache.loadOf('org', 'p0')).toEqual({ state: 'waiting' })
+  })
+
+  it('keeps no paused list, so a change to paused work alone tells the views nothing', () => {
+    const s = setup(true)
+    s.cache.register('board', needs(2))
+    const [call] = s.calls()
+    if (!call) throw new Error('no call')
+    const answer = (paused: ReturnType<typeof pausedSpan>[]): OwnerLoadsJson => ({
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [span('a'), span(null, 2)], paused },
+        { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
+      ],
+    })
+    s.answer(call.token, answer([pausedSpan('b')]))
+    const after = s.changes()
+    const load = s.cache.loadOf('org', 'p0')
+    expect(load.state).toBe('ok')
+    // another paused task, and one whose weeks moved, change nothing
+    s.answer(call.token, answer([pausedSpan('b', '2026-09-21'), pausedSpan('c')]))
+    expect(s.changes()).toBe(after)
+    expect(s.cache.loadOf('org', 'p0')).toBe(load)
+    s.answer(call.token, answer([]))
+    expect(s.changes()).toBe(after)
+    expect(s.cache.loadOf('org', 'p0')).toBe(load)
+    // a visible task moved to another sub-project with the same weeks tells
+    // them once, and its load reads the same
+    s.answer(call.token, {
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [span('a', 4, 'pcb'), span(null, 2)], paused: [] },
+        { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
+      ],
+    })
+    expect(s.changes()).toBe(after + 1)
+    expect(s.cache.loadOf('org', 'p0')).toEqual(load)
+    // a change to a span's hours tells them once
+    s.answer(call.token, {
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [span('a', 5, 'pcb'), span(null, 2)], paused: [] },
+        { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
+      ],
+    })
+    expect(s.changes()).toBe(after + 2)
+    expect(s.cache.loadOf('org', 'p0')).not.toEqual(load)
+  })
+
+  it('reads an answer of a backend before the paused list and the span projects as one with them', () => {
+    const loads = (answer: OwnerLoadsJson) => {
+      const s = setup(true)
+      s.cache.register('board', needs(2))
+      const [call] = s.calls()
+      if (!call) throw new Error('no call')
+      s.answer(call.token, answer)
+      return [s.cache.loadOf('org', 'p0'), s.cache.loadOf('org', 'p1')]
+    }
+    const now = loads({
+      hidden: 'counted',
+      owners: [
+        {
+          owner_id: 'p0',
+          state: 'ok',
+          spans: [span('a'), span(null, 2)],
+          paused: [pausedSpan('b')],
+        },
+        { owner_id: 'p1', state: 'ok', spans: [span('c', 3, 'pcb')], paused: [] },
+      ],
+    })
+    // an older backend sends neither field
+    const older = (issue: string | null, hours: number) => {
+      const { project_id: _, ...rest } = span(issue, hours)
+      return rest
+    }
+    const before = loads({
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [older('a', 4), older(null, 2)] },
+        { owner_id: 'p1', state: 'ok', spans: [older('c', 3)] },
+      ],
+    } as unknown as OwnerLoadsJson)
+    expect(before).toEqual(now)
+    expect(now[0]?.state).toBe('ok')
+    // a span's project changes nothing the views read
+    const moved = loads({
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [span('a', 4, 'pcb'), span(null, 2)], paused: [] },
+        { owner_id: 'p1', state: 'ok', spans: [span('c', 3, 'fw')], paused: [] },
+      ],
+    })
+    expect(moved).toEqual(now)
   })
 
   it('shares an owner two views need, and stops a call only once neither needs it', () => {
