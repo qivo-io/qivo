@@ -6,7 +6,7 @@
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
  *       [--sub-project FW] [--archived 160] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
- *       [--labels 60]
+ *       [--labels 60] [--files 60]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -84,6 +84,25 @@
  * name Northstar holds in any case, so a second run adds only what is
  * missing and puts a label on a task only once. It runs after the tasks
  * and --relations and before --archived.
+ *
+ * `--files N` adds up to N sub-projects with one task and one small file
+ * each, for checking Billing's Storage by project past its first batch of
+ * 25 (planFiles). Nora makes each sub-project through projects:create,
+ * under the live top-level project of Northstar that holds the fewest
+ * live sub-projects, never more than 30 under one (the design size), then
+ * its task through issues:create, then uploads its file through the app's
+ * own path, files:uploadUrl, a POST of the bytes to that URL on the local
+ * backend and files:attach, so the stored-byte totals count it as an
+ * attach does. Each file has its own size, from about 1 KB to 98 KB, so
+ * the list's order shows. The first sub-project's name has an accent
+ * ("Café pilot photos") and the second's a word no other name has
+ * ("Zephyrine bench archive"), for checking the list's search; the rest
+ * are named after what their files hold, with a number. Every id comes
+ * from its number, and a sub-project, task or file the backend holds
+ * anywhere, archived or in Deleted items included, counts as made, so a
+ * second run adds only what is missing and never makes again what a check
+ * archived or deleted. Pass `--tasks 0` to add none of the Board's tasks.
+ * It runs after --relations and before --labels.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
@@ -216,6 +235,24 @@ const LABEL_TOPICS = [
   'Power budget',
   'Release notes',
 ]
+/* The most sub-projects --files makes: eight batches of Storage by project,
+   far past the first. */
+const MOST_FILES = 200
+/* The most live sub-projects --files puts under one project, the design
+   size's figure for one project (docs/limits-plan.md in the private
+   companion). */
+const SUBS_PER_PROJECT = 30
+/* What the --files sub-projects' files hold, in turn. */
+const FILE_TOPICS = [
+  'Test logs',
+  'Firmware images',
+  'Field photos',
+  'Bench captures',
+  'Supplier drawings',
+  'Pilot recordings',
+  'Calibration sheets',
+  'Release builds',
+]
 /* The seeded labels' colors in turn, from the app's palette. */
 const LABEL_COLORS = ['#D97706', '#7C3AED', '#2563EB', '#DB2777', '#0F766E', '#0891B2', '#EA580C']
 /* Seeded credential names, by what each one is for, then its number. */
@@ -238,6 +275,7 @@ export function parseSeedArgs(args) {
     relations: false,
     subProject: null,
     labels: 0,
+    files: 0,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -259,6 +297,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--relations') options.relations = true
     else if (arg === '--sub-project') options.subProject = value()
     else if (arg === '--labels') options.labels = Number(value())
+    else if (arg === '--files') options.files = Number(value())
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -277,6 +316,8 @@ export function parseSeedArgs(args) {
     throw new DemoCliError('--credentials needs --api-url, the local backend site origin.')
   if (!Number.isInteger(options.labels) || options.labels < 0 || options.labels > MOST_LABELS)
     throw new DemoCliError(`--labels takes a whole number from 0 to ${MOST_LABELS}.`)
+  if (!Number.isInteger(options.files) || options.files < 0 || options.files > MOST_FILES)
+    throw new DemoCliError(`--files takes a whole number from 0 to ${MOST_FILES}.`)
   return options
 }
 
@@ -293,6 +334,106 @@ export const inboxCommentId = (taskId) => uuidOf(`board-scale-seed inbox ${taskI
 
 /** The id of --relations row `what`, such as "project" or "link 40". */
 export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
+
+/** The id of the --files sub-project, task or file (`what`) number `n`,
+    from 0, the same for every run. */
+export const fileSeedId = (what, n) => uuidOf(`board-scale-seed files ${what} ${n}`)
+
+/** The name of --files sub-project `n`, from 0: an accented one first, a
+    word no other name has second, then what its files hold and a number,
+    such as "Field photos 03". */
+export function seededFileProject(n) {
+  if (n === 0) return 'Café pilot photos'
+  if (n === 1) return 'Zephyrine bench archive'
+  const topic = FILE_TOPICS[n % FILE_TOPICS.length]
+  return `${topic} ${String(Math.floor(n / FILE_TOPICS.length) + 1).padStart(2, '0')}`
+}
+
+/** The bytes of --files file `n`: a thousand times a step of 1 to 97 that
+    the numbers visit in a scrambled order, plus `n`, so no two of the first
+    MOST_FILES share a size and the list's order is not the order made. */
+export const seededFileBytes = (n) => 1000 * (1 + ((n * 37) % 97)) + n
+
+/**
+ * The --files work still to do in organization `org` for the first `count`
+ * file sub-projects: `projects`, the projects:create calls of the
+ * sub-projects missing, each under the live top-level project of `tops`
+ * (`{ id, subs }`, its live sub-project count, in Northstar's order) that
+ * holds the fewest, never more than SUBS_PER_PROJECT; `tasks`, the
+ * issues:create calls of the tasks missing; and `files`, the uploads to
+ * attach, with the attachment's id, task, name, MIME type and size.
+ * `present` holds the project, task and attachment ids the backend holds
+ * anywhere. Refuses when the top-level projects have no room left.
+ */
+export function planFiles({ org, count, tops, present }) {
+  const room = new Map(tops.map((top) => [top.id, top.subs]))
+  const plan = { projects: [], tasks: [], files: [] }
+  for (let n = 0; n < count; n++) {
+    const project = fileSeedId('project', n)
+    const task = fileSeedId('task', n)
+    const file = fileSeedId('file', n)
+    const name = seededFileProject(n)
+    if (!present.projects.has(project)) {
+      // the first of the fewest, so ties go in Northstar's order
+      let parent = null
+      for (const top of tops)
+        if (
+          room.get(top.id) < SUBS_PER_PROJECT &&
+          (parent === null || room.get(top.id) < room.get(parent))
+        )
+          parent = top.id
+      if (parent === null)
+        throw new DemoCliError(
+          `--files has no room left: every live top-level project of Northstar holds ${SUBS_PER_PROJECT} live sub-projects.`,
+        )
+      room.set(parent, room.get(parent) + 1)
+      plan.projects.push({
+        id: project,
+        org_id: org,
+        type: 'project',
+        parent_id: parent,
+        key: `F${String(n + 1).padStart(3, '0')}`,
+        name,
+        sort_order: 1000 + n,
+      })
+    }
+    if (!present.tasks.has(task))
+      plan.tasks.push({
+        id: task,
+        org_id: org,
+        project_id: project,
+        title: `Collect the ${name.replace(/ \d+$/, '').toLowerCase()} for review`,
+        description: `Seeded by board-scale-seed --files as file ${n + 1}.`,
+        status: STATUSES[n % STATUSES.length],
+        priority: 'medium',
+      })
+    if (!present.files.has(file))
+      plan.files.push({
+        id: file,
+        issue_id: task,
+        name: `${name
+          .normalize('NFKD')
+          .replace(/[̀-ͯ]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')}.csv`,
+        mime: 'text/csv',
+        bytes: seededFileBytes(n),
+      })
+  }
+  return plan
+}
+
+/** `size` bytes of CSV text, readings of a bench run, for a seeded file. */
+export function seededFileText(size) {
+  const lines = ['time,channel,reading']
+  let length = lines[0].length
+  for (let i = 0; length < size; i++) {
+    const line = `${String(i).padStart(6, '0')},ch${i % 8},${((i * 7919) % 10_000) / 100}`
+    lines.push(line)
+    length += line.length + 1
+  }
+  return lines.join('\n').slice(0, size)
+}
 
 /** The name of seeded label `n`, from 0: a topic and a number, such as
     "Field test 01", ten topics before the number moves on. */
@@ -799,6 +940,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   // admin reads them here
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
+  const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id, archived) : null
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -922,6 +1064,8 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       target,
       log,
     })
+  if (stored !== null)
+    await seedFiles(options.files, { client, org, joined, issues, stored, target, log })
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
@@ -971,6 +1115,87 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
     }
   log(
     `Done: ${plan.create.length} labels added and ${plan.toggle.length} put on tasks in Northstar on ${target.url}.`,
+  )
+}
+
+/** The project, task and attachment ids organization `org` holds anywhere,
+    as the local admin reads the tables: live and archived projects, the
+    attachment rows, and every copy Deleted items stores, beside the
+    `archived` tasks the run read. --files counts these as made. */
+async function storedIdsOf(client, org, archived) {
+  const ids = {
+    projects: new Set(),
+    tasks: new Set(archived.map((task) => task.id)),
+    files: new Set(),
+  }
+  for (const project of await tableRows(client, 'projects'))
+    if (project.org_id === org) ids.projects.add(project.id)
+  for (const file of await tableRows(client, 'issue_attachments'))
+    if (file.org_id === org) ids.files.add(file.id)
+  const kinds = { projects: ids.projects, issues: ids.tasks, issue_attachments: ids.files }
+  for (const row of await tableRows(client, 'deleted_rows'))
+    if (row.org_id === org && row.row_id && kinds[row.table]) kinds[row.table].add(row.row_id)
+  return ids
+}
+
+/** Makes the --files sub-projects, tasks and files still missing as Nora
+    (planFiles), uploading each file through files:uploadUrl, a POST to the
+    local backend and files:attach, as the app does. `issues` are the
+    active tasks of the workspace, and `stored` the ids the backend holds
+    anywhere (storedIdsOf). */
+async function seedFiles(count, { client, org, joined, issues, stored, target, log }) {
+  const projects = joined('projects')
+  const tops = projects
+    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+    .sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id))
+    .map((top) => ({
+      id: top.id,
+      subs: projects.filter((p) => p.parent_id === top.id && !p.archived_at).length,
+    }))
+  for (const task of issues) stored.tasks.add(task.id)
+  const plan = planFiles({ org, count, tops, present: stored })
+  log(
+    `${plan.projects.length} sub-projects, ${plan.tasks.length} tasks and ${plan.files.length} files to add for --files.`,
+  )
+  const call = async (name, fields, what) => {
+    try {
+      return await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(`${name} refused ${what}: ${error.data?.message ?? error.message}`)
+    }
+  }
+  for (const fields of plan.projects) await call('projects:create', fields, `"${fields.name}"`)
+  for (const fields of plan.tasks) await call('issues:create', fields, `"${fields.title}"`)
+  for (const file of plan.files) {
+    const url = await call('files:uploadUrl', { org_id: org, issue_id: file.issue_id }, file.name)
+    if (!isLoopbackOrigin(new URL(url).origin))
+      throw new DemoCliError(`files:uploadUrl answered a URL off this machine for ${file.name}.`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': file.mime },
+      body: seededFileText(file.bytes),
+    })
+    const sent = await res.json().catch(() => ({}))
+    if (!res.ok || typeof sent.storageId !== 'string')
+      throw new DemoCliError(`The upload of ${file.name} failed (${res.status}).`)
+    const out = await call(
+      'files:attach',
+      {
+        org_id: org,
+        id: file.id,
+        issue_id: file.issue_id,
+        storage_id: sent.storageId,
+        name: file.name,
+        mime: file.mime,
+        inline: false,
+      },
+      file.name,
+    )
+    if (!out?.attachment)
+      throw new DemoCliError(`files:attach refused ${file.name}: ${out?.refused?.message}`)
+  }
+  log(
+    `Done: ${plan.projects.length} sub-projects and ${plan.files.length} files added in Northstar on ${target.url}.`,
   )
 }
 

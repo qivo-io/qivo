@@ -2,15 +2,20 @@ import { getFunctionName } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../convex/lib/limits'
 import {
+  fileSeedId,
   inboxCommentId,
   parseSeedArgs,
   planArchive,
+  planFiles,
   planInbox,
   planLabels,
   planRelations,
   planSeed,
   relationId,
   runBoardScaleSeed,
+  seededFileBytes,
+  seededFileProject,
+  seededFileText,
   seededLabelName,
   seededTask,
   seededTasks,
@@ -42,6 +47,10 @@ const fake = vi.hoisted(() => ({
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
   linkRows: [],
+  // the projects, issue_attachments and deleted_rows tables, for --files
+  projectRows: [],
+  fileRows: [],
+  storedRows: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -88,6 +97,9 @@ vi.mock('convex/browser', () => ({
             ],
             mcp_tokens: fake.tokens,
             issue_links: fake.linkRows,
+            projects: fake.projectRows,
+            issue_attachments: fake.fileRows,
+            deleted_rows: fake.storedRows,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
             issue_descriptions: [
@@ -144,6 +156,9 @@ vi.mock('convex/browser', () => ({
         const task = fake.issues.find((issue) => issue.id === fields.id)
         if (task) task.archived_at = '2026-10-29T00:00:00.000Z'
       }
+      if (name === 'files:uploadUrl')
+        return `http://127.0.0.1:3214/api/storage/upload?token=${fields.issue_id}`
+      if (name === 'files:attach') return { attachment: { id: fields.id } }
       if (name !== 'comments:create') return
       if (fake.comments.has(fields.id))
         throw Object.assign(new Error('taken'), {
@@ -1235,5 +1250,143 @@ describe('board-scale-seed --relations', () => {
     expect(fake.calls.filter(([name]) => name === 'issues:create')).toHaveLength(205)
     expect(lines.at(-1)).toBe(windowKeyNote('c0000000'))
     expect(lines.join('\n')).not.toMatch(/first stage/)
+  })
+})
+
+describe('board-scale-seed --files', () => {
+  /* Two top-level projects of Northstar, the first with 28 live
+     sub-projects and an archived one, the second with three, and an
+     archived top-level project, which takes none. */
+  const tops = () => {
+    const rows = [
+      { id: 'luma', org_id: 'org', type: 'meta', sort_order: 1 },
+      { id: 'cloud', org_id: 'org', type: 'meta', sort_order: 2 },
+      { id: 'old', org_id: 'org', type: 'meta', sort_order: 0, archived_at: 'x' },
+    ]
+    for (let i = 0; i < 28; i++)
+      rows.push({ id: `luma-${i}`, org_id: 'org', type: 'project', parent_id: 'luma' })
+    rows.push({ id: 'luma-x', org_id: 'org', type: 'project', parent_id: 'luma', archived_at: 'x' })
+    for (let i = 0; i < 3; i++)
+      rows.push({ id: `cloud-${i}`, org_id: 'org', type: 'project', parent_id: 'cloud' })
+    return rows
+  }
+  const none = { projects: new Set(), tasks: new Set(), files: new Set() }
+  const summed = [
+    { id: 'luma', subs: 4 },
+    { id: 'cloud', subs: 3 },
+    { id: 'pilot', subs: 5 },
+  ]
+  /** How many of `projects` go under each parent. */
+  const perParent = (projects) => {
+    const out = {}
+    for (const p of projects) out[p.parent_id] = (out[p.parent_id] ?? 0) + 1
+    return out
+  }
+
+  it('takes a file count from 0 to 200', () => {
+    expect(parseSeedArgs(local).files).toBe(0)
+    expect(parseSeedArgs([...local, '--tasks', '0', '--files', '60']).files).toBe(60)
+    for (const files of ['-1', '2.5', '201', 'many'])
+      expect(() => parseSeedArgs([...local, '--files', files])).toThrow(
+        '--files takes a whole number from 0 to 200.',
+      )
+  })
+
+  it('plans sub-projects under the project with the fewest, never past 30, with varied sizes and the search names', () => {
+    const plan = planFiles({ org: 'org', count: 60, tops: summed, present: none })
+    expect(plan.projects).toHaveLength(60)
+    // the fewest first, ties in Northstar's order, so all end at 24
+    expect(perParent(plan.projects)).toEqual({ luma: 20, cloud: 21, pilot: 19 })
+    // 26 more under Luma would pass the 30 one project may hold
+    expect(() =>
+      planFiles({ org: 'org', count: 27, tops: [{ id: 'luma', subs: 4 }], present: none }),
+    ).toThrow(/no room left/)
+    expect(
+      perParent(
+        planFiles({ org: 'org', count: 26, tops: [{ id: 'luma', subs: 4 }], present: none })
+          .projects,
+      ),
+    ).toEqual({ luma: 26 })
+    expect(plan.projects.slice(0, 2).map((p) => p.name)).toEqual([
+      'Café pilot photos',
+      'Zephyrine bench archive',
+    ])
+    expect(seededFileProject(10)).toBe('Field photos 02')
+    // only the second name holds its word
+    const names = plan.projects.map((p) => p.name.toLowerCase())
+    expect(names.filter((name) => name.includes('zephyrine'))).toHaveLength(1)
+    expect(new Set(plan.projects.map((p) => p.key)).size).toBe(60)
+    expect(plan.projects.every((p) => /^[A-Z0-9]{1,5}$/.test(p.key))).toBe(true)
+    const sizes = plan.files.map((f) => f.bytes)
+    expect(new Set(sizes).size).toBe(60)
+    expect(sizes).not.toEqual([...sizes].sort((a, b) => a - b))
+    expect(Math.min(...sizes)).toBeGreaterThanOrEqual(1000)
+    expect(Math.max(...sizes)).toBeLessThan(100_000)
+    expect(plan.files[0]).toMatchObject({ name: 'cafe-pilot-photos.csv', mime: 'text/csv' })
+    expect(plan.tasks.map((t) => t.project_id)).toEqual(plan.projects.map((p) => p.id))
+    expect(plan.files.map((f) => f.issue_id)).toEqual(plan.tasks.map((t) => t.id))
+    expect(seededFileText(seededFileBytes(5))).toHaveLength(seededFileBytes(5))
+  })
+
+  it('adds only what a run left missing, and refuses when no project has room', () => {
+    const present = {
+      projects: new Set([fileSeedId('project', 0), fileSeedId('project', 1)]),
+      tasks: new Set([fileSeedId('task', 0)]),
+      files: new Set([fileSeedId('file', 0)]),
+    }
+    const plan = planFiles({ org: 'org', count: 3, tops: summed, present })
+    expect(plan.projects.map((p) => p.id)).toEqual([fileSeedId('project', 2)])
+    expect(plan.tasks.map((t) => t.id)).toEqual([fileSeedId('task', 1), fileSeedId('task', 2)])
+    expect(plan.files.map((f) => f.id)).toEqual([fileSeedId('file', 1), fileSeedId('file', 2)])
+    expect(() =>
+      planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present: none }),
+    ).toThrow(/no room left/)
+  })
+
+  it('makes the sub-projects, then the tasks, then uploads and attaches each file as Nora, and counts a deleted one as made', async () => {
+    const posted = []
+    vi.stubGlobal('fetch', async (url, init) => {
+      posted.push({ url, size: init.body.length, type: init.headers['Content-Type'] })
+      return new Response(JSON.stringify({ storageId: `storage-${posted.length}` }), {
+        status: 200,
+      })
+    })
+    fake.projects = tops()
+    fake.issues = []
+    fake.calls = []
+    // the second sub-project went to Deleted items with its task and file
+    fake.storedRows = [
+      { org_id: 'org', table: 'projects', row_id: fileSeedId('project', 1) },
+      { org_id: 'org', table: 'issues', row_id: fileSeedId('task', 1) },
+      { org_id: 'org', table: 'issue_attachments', row_id: fileSeedId('file', 1) },
+      { org_id: 'other', table: 'projects', row_id: fileSeedId('project', 2) },
+    ]
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--files', '3'], { env, log: () => {} })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.projects = null
+      fake.storedRows = []
+    }
+    expect(fake.calls.map(([name]) => name)).toEqual([
+      'projects:create',
+      'projects:create',
+      'issues:create',
+      'issues:create',
+      'files:uploadUrl',
+      'files:attach',
+      'files:uploadUrl',
+      'files:attach',
+    ])
+    expect(new Set(fake.calls.map(([, , as]) => as))).toEqual(new Set(['nora-login']))
+    expect(fake.calls[0][1]).toMatchObject({ parent_id: 'cloud', name: 'Café pilot photos' })
+    expect(posted.map((p) => p.size)).toEqual([seededFileBytes(0), seededFileBytes(2)])
+    expect(posted[0]).toMatchObject({ type: 'text/csv' })
+    expect(fake.calls[5][1]).toMatchObject({
+      id: fileSeedId('file', 0),
+      issue_id: fileSeedId('task', 0),
+      storage_id: 'storage-1',
+      inline: false,
+    })
   })
 })
