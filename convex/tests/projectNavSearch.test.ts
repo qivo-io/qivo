@@ -159,6 +159,8 @@ describe('arguments', () => {
       data: { code: 'bad_request' },
       ranges: 0,
     })
+    // punctuation alone is something to match
+    expect(ok(await find(t, seats, ' - ')).rows).toEqual([])
     // the longest search the limit allows answers, trimmed, as a short one does
     expect(ok(await find(t, seats, ` ${'a'.repeat(LIMITS.search.max)} `)).rows).toEqual([])
     expect(ok(await find(t, seats, ' Testbed ')).rows).toEqual([top(f.meta)])
