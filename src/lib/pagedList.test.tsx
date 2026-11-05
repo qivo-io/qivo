@@ -186,6 +186,23 @@ async function publish(all = false) {
   })
 }
 
+/** Sends one transition with the answers of the live watches `match`
+    picks, as Convex sends what changed for some batches only. */
+async function publishOnly(match: (args: Args) => boolean) {
+  await act(async () => {
+    const tokens = new Set<string>()
+    for (const [token, w] of transport.watches) {
+      if (!w.live || !match(w.args as Args)) continue
+      const value = answer(w.args as Args)
+      Object.assign(w, { json: JSON.stringify(value), value })
+      tokens.add(token)
+    }
+    for (const fn of transport.handlers)
+      fn({ tokens, at: 0, connection: transport.state.connection })
+    await Promise.resolve()
+  })
+}
+
 const names = () => now().rows.map((row) => row.name)
 /** Labels named `prefix00` to `prefix<n-1>`, each its own id. */
 const plant = (prefix: string, n: number) => {
@@ -545,6 +562,33 @@ describe('a list kept live a batch at a time', () => {
     expect(names()).toHaveLength(50)
     await publish(true)
     expect(now().refreshing).toBe(false)
+  })
+
+  it('waits on return for each batch of a Load more to answer again, so no answer from before the tab hid joins one from after', async () => {
+    plant('a', 60)
+    await render({ listKey: 'k', source: LIVE('k') })
+    await publish()
+    await act(async () => now().more())
+    // the pinned batch answers and the next one has not when the tab hides
+    await publishOnly((args) => !!args.through)
+    expect(names()).toHaveLength(25)
+    await setVisibility('hidden')
+    // a30, past the pinned batch's end, is renamed into it while hidden
+    server.labels.set('a-30', 'a10 moved')
+    await setVisibility('visible')
+    // the next batch answers first, and the pinned batch's answer is from
+    // before the tab hid, so the press-time rows still show
+    await publishOnly((args) => !!args.after)
+    expect(now().phase).toBe('more')
+    expect(names()).toHaveLength(25)
+    // once the pinned batch answers again, both replace the open batch and
+    // the moved row shows once
+    await publishOnly((args) => !!args.through)
+    expect(now().phase).toBe('ready')
+    expect(now().refreshing).toBe(false)
+    expect(names()).toHaveLength(51)
+    expect(names().filter((n) => n === 'a10 moved')).toHaveLength(1)
+    expect(names()).not.toContain('a30')
   })
 
   it('refreshes after a reconnect until each batch answered again', async () => {

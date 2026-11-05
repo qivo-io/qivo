@@ -46,7 +46,10 @@
        every batch's read stops and the answers stay. On return the same
        batches read again, and the list is `refreshing` until each has
        answered on the connection the socket holds now, as after a
-       reconnect, when Convex sends every result again.
+       reconnect, when Convex sends every result again. Batches waiting to
+       replace others, for a Load more or a split, wait the same way before
+       they replace them, so no swap joins an answer from before the tab hid
+       or the socket reconnected with one from after.
 
    Rows show in batch order, each id once, from the first batch that holds
    it. Load more adds a batch while the rows are fewer than `most` and, for
@@ -413,6 +416,11 @@ function liveEngine<A, Row>(
   let connection = 0
   let settling = false
 
+  /** Whether batch `b`'s answer is current, which is to say it came from
+      the read open now, on the connection the socket holds now. */
+  const current = (b: Batch) =>
+    b.fresh && (b.held?.connection === null || b.held?.connection === connection)
+
   const argsOf = (b: Batch): Record<string, Value> | null => {
     const o = options()
     return o.source.kind === 'live' ? o.source.args({ after: b.after, through: b.through }) : null
@@ -608,9 +616,12 @@ function liveEngine<A, Row>(
       // a result that fits again ends the split it started
       if (swap?.why === 'split') cancel(swap)
     }
-    // swaps whose batches all answered replace what they stood for, all at
-    // once, so no row shows twice or goes missing between batches
-    const waiting = swaps.some((s) => !s.to.every((b) => b.shown !== null))
+    // swaps whose batches all hold a current answer replace what they stood
+    // for, all at once, so no row shows twice or goes missing between
+    // batches. A batch that answered before the page hid or the socket
+    // reconnected waits for an answer from its read open now, so no swap
+    // joins an answer from before with one from after.
+    const waiting = swaps.some((s) => !s.to.every((b) => b.shown !== null && current(b)))
     if (!waiting) {
       for (const s of swaps) {
         const at = shown.indexOf(s.from[0] as Batch)
@@ -675,10 +686,6 @@ function liveEngine<A, Row>(
             : pressed
               ? 'more'
               : 'ready'
-    // an answer counts as current when it came from the read open now, on
-    // the connection the socket holds now
-    const current = (b: Batch) =>
-      b.fresh && (b.held?.connection === null || b.held?.connection === connection)
     return {
       rows,
       answers,
