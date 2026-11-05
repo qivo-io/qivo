@@ -1,12 +1,13 @@
 /* The reader behind the task window's relation pickers
- * (taskWindow.ts relationCandidates): the tasks the Parent, Subtasks and
- * Linked tasks pickers offer for the opened task, a batch at a time, under
- * ordinary access, the picker's scope, the write's own rules and the
- * search, so the app no longer filters the workspace's whole task list.
+ * (taskWindow.ts relationCandidates). It answers the tasks the Parent,
+ * Subtasks and Linked tasks pickers offer for the opened task, a batch at a
+ * time, under ordinary access, the picker's scope, the write's own rules
+ * and the search, so the app no longer filters the workspace's whole task
+ * list.
  *
  * A batch answers the next RELATION_PICKER.rows tasks of a fixed order that
- * the write behind a pick would accept for a reason the server can tell,
- * and a sealed cursor for the next batch. The scope, in order:
+ * pass the write's rules below, and a sealed cursor for the next batch. The
+ * scope, in order:
  *
  * 1. the opened task's own sub-project;
  * 2. the other live sub-projects of its top-level project the reader can
@@ -23,41 +24,42 @@
  * opened task. Linked tasks keeps every visible live project for a reader
  * with Edit on the opened task, and else the projects they can edit
  * (model/issues.ts linkAccess). Levels are the writes' levels of the
- * reader (lib/access.ts projectLevel), an organization admin's lead on
- * every project included, never ordinaryOf's: the family's through
- * viewAccess.levels, the rest of the organization's through
- * projectLevelsForOrg, which the tests compare with projectLevel.
+ * reader (lib/access.ts projectLevel), so an organization admin holds lead
+ * on every project, as the writes give it, never ordinaryOf's level. The
+ * family's come from viewAccess.levels and the rest of the organization's
+ * from projectLevelsForOrg, which the tests compare with projectLevel.
  *
  * Within each project the batch reads its active tasks by creation (issues
  * by_project_archived), one project after another, so a batch ends at one
- * position: a project's place in the order above and the creation time and
- * ids of the last tasks it looked at. The cursor seals that position with
- * the reader, the opened task, the picker and the search
- * (lib/archiveCursorSeal.ts), so it opens for nothing else, and names a
- * project by a place that does not move: a project that leaves the scope
- * between batches costs no row, and no row comes twice while the data stays
- * the same. All the tasks a batch reads are in the reader's working set.
+ * position. That is a project's place in the order above with the creation
+ * time and ids of the last tasks the batch looked at. The cursor seals the
+ * position with the reader, the opened task, the picker and the search
+ * (lib/archiveCursorSeal.ts), so it opens for nothing else. A place names
+ * its project by fields that never change, so a project that leaves the
+ * scope between batches costs no row, and no row comes twice while the data
+ * stays the same. Every task a batch reads is in the reader's working set.
  *
  * A task matches when every fragment of the search occurs in its ID or its
  * title (lib/search.ts allWordsMatcher), the rule the app's pickers apply.
  * A search that is one task ID (QN-12 or 12) also looks that number up in
- * the organization in the first batch; the task, when the reader may pick
- * it, is that batch's first row, marked `exact`, and every batch's scan
+ * the organization in the first batch. When the reader may pick that task
+ * it is the batch's first row, marked `exact`, and every batch's scan
  * leaves the number out. The Linked tasks picker takes it from anywhere in
  * the organization the reader can link to.
  *
- * Eligibility follows the write. Never the opened task, nor its current
- * parent, subtasks or linked tasks, which the window shows from its own
- * lists. Parent: a task without a parent of its own and with fewer than
- * LIMITS.subtasks.max active subtasks in any project. Subtasks: a task
- * without any subtask, archived ones included; another task's subtask
- * stays, and a pick moves it. The opened task's own block comes first
- * (`blocked`): a task with any subtask takes no parent, a subtask or a task
- * with LIMITS.subtasks.max active subtasks takes no subtask, and a task with
- * LIMITS.links.max links takes no link; the answer then holds no row. The
- * write keeps the rest with its own sentence: the holders' sight of a new
- * parent (design specification row 328), the link limit on the other end,
- * and anything that changed since the batch was read.
+ * Eligibility follows the write. A picker never offers the opened task or
+ * its current parent, subtasks or linked tasks, which the window shows from
+ * its own lists. The Parent picker offers a task without a parent of its
+ * own and with fewer than LIMITS.subtasks.max active subtasks in any
+ * project. The Subtasks picker offers a task without any subtask, archived
+ * ones included, and another task's subtask, which a pick moves. The opened
+ * task's own block comes first (`blocked`), and the answer then holds no
+ * row. A task with any subtask takes no parent, a subtask or a task with
+ * LIMITS.subtasks.max active subtasks takes no subtask, and a task with
+ * LIMITS.links.max links takes no link. The write keeps the rest with its
+ * own sentence, which is the holders' sight of a new parent (design
+ * specification row 328), the link limit on the other end, and anything
+ * that changed since the batch was read.
  *
  * Reads that can touch rows the reader may not see, and what each costs:
  *
@@ -67,27 +69,28 @@
  *   reader's access to the live ones (lib/viewReads.ts viewAccess), and for
  *   Search all your projects the organization's projects and the reader's
  *   own grants and team shares (projectLevelsForOrg). These run within
- *   RELATION_PICKER.whole, a document the reader may not be shown counted
- *   at its fixed size (viewBudget charge), and their cost never moves
- *   where a batch stops: a batch counts from its own start, and a request
- *   without room for its whole budget after them answers `over_budget`;
+ *   RELATION_PICKER.whole, each document the reader may not be shown
+ *   counted at its fixed size (viewBudget charge). Their cost never moves
+ *   where a batch stops, because a batch counts from its own start, and a
+ *   request without room for a batch's whole budget after them answers
+ *   `over_budget`;
  * - in the batch, each taken at its worst case before it is read, from the
  *   batch's own count (RELATION_PICKER.reads), which never looks at what a
- *   read returned: a parent candidate's active subtasks
+ *   read returned. These are a parent candidate's active subtasks
  *   (LIMITS.subtasks.max rows of TASK_ROW_MAX_BYTES), a subtask candidate's
- *   first subtask (one row), a subtask candidate's parent by id (one row)
- *   and, for a parent outside the family, which only data stored before
- *   the rule that a subtask stays in its parent's top-level project holds,
- *   one access question (PROJECT_ASK and PROJECT_READ), and a typed task
- *   ID's lookup with one access question, whatever it finds.
+ *   first subtask (one row), a subtask candidate's parent by id (one row),
+ *   one access question for a parent outside the family (PROJECT_ASK and
+ *   PROJECT_READ), which only data stored before the rule that a subtask
+ *   stays in its parent's top-level project holds, and a typed task ID's
+ *   lookup with one access question, whatever it finds.
  *
  * So where a batch stops follows only the tasks the reader is shown and
- * their own facts; how many subtasks a candidate has that the reader
- * cannot see, how many hidden or archived sub-projects the family has and
- * what any hidden title holds move no answer. Excluding a candidate for its
- * hidden or archived subtasks tells no more than the write's refusal of
- * that pick does. A subtask row names its parent only when the reader is
- * shown it (lib/workingSet.ts parentLink), else says it has a hidden one.
+ * their own facts. How many subtasks a candidate has that the reader cannot
+ * see, how many hidden or archived sub-projects the family has and what any
+ * hidden title holds move no answer. Excluding a candidate for its hidden
+ * or archived subtasks tells no more than the write's refusal of that pick
+ * does. A subtask row names its parent only when the reader is shown it
+ * (lib/workingSet.ts parentLink), and else says it has a hidden one.
  *
  * RELATION_PICKER names the budgets and the reads measured at the design
  * size. */
@@ -141,25 +144,26 @@ import { taskFields } from './workspaceParts'
  *
  * `rows` is a batch, the tasks one press of Load more adds. `scan` stops a
  * batch after it looked at that many tasks. `reads` is a batch's own
- * budget, counted from its start by the reader itself (see the header):
- * the scope's task rows at their size, each step keeping room for its rows
- * at lib/viewReads.ts ROW_BYTES, and every read that can touch rows the
- * reader may not see at its worst case. `whole` caps what the request reads
- * in all, the reads before the batch included, below Convex's 16 MiB, 4,096
- * ranges and 32,000 documents with room for what one access question can
- * read past its last look (lib/access.ts OWN_READS); a request that cannot
- * hold `reads` after the reads before the batch answers `over_budget`.
+ * budget, which the reader counts from the batch's start (see the header).
+ * It counts the scope's task rows at their size, each step keeping room for
+ * its rows at lib/viewReads.ts ROW_BYTES, and every read that can touch
+ * rows the reader may not see at its worst case. `whole` caps what the
+ * request reads in all, the reads before the batch included, below Convex's
+ * 16 MiB, 4,096 ranges and 32,000 documents, with room for what one access
+ * question can read past its last look (lib/access.ts OWN_READS). A request
+ * that cannot hold `reads` after the reads before the batch answers
+ * `over_budget`.
  *
  * Measured on 5 November 2026 in convex/tests/relationPickerScale.test.ts
  * under convex-test's transaction limits, at the design size with ordinary
  * text, one figure raised a case, in what the whole request read. Every
  * first batch answered whole within these budgets.
  *
- * - A family at everyday values: a full batch at most 41 ranges, 39
- *   documents and 0.02 MiB, while the Parent picker's own count holds 4.9
- *   MiB of its 8 for its 25 checks at their worst case; a rare word reads
- *   the family to its end in 20 ranges and 99 documents, and past it, after
- *   Search all your projects, the member's 57 other sub-projects in 101
+ * - In a family at everyday values a full batch reads at most 41 ranges,
+ *   39 documents and 0.02 MiB, while the Parent picker's own count holds
+ *   4.9 MiB of its 8 for its 25 checks at their worst case. A rare word
+ *   reads the family to its end in 20 ranges and 99 documents, and after
+ *   Search all your projects the member's 57 other sub-projects in 101
  *   ranges, 1,829 documents and 0.81 MiB.
  * - A rare word reads a project of 800 open tasks whole in 34 ranges, 884
  *   documents and 0.4 MiB, a sub-project of 300 in 24 ranges and 373
@@ -168,17 +172,18 @@ import { taskFields } from './workspaceParts'
  *   ranges), and a project with 200 Done tasks in 25 ranges.
  * - A full batch reads at most 49 ranges for a member in 5 teams and 45
  *   where the family is shared with 5 teams.
- * - The catalogue at its sum, 2,000 projects live and archived: a rare
- *   word in all your projects reads 101 ranges, 2,170 documents and 1 MiB
- *   for a member, the catalogue's 2,000 documents included, and 707
- *   ranges, 3,089 documents and 1.65 MiB for an organization admin over its
- *   700 live projects.
+ * - With the catalogue at its sum, 2,000 projects live and archived, a
+ *   rare word in all your projects reads 101 ranges, 2,170 documents and
+ *   1 MiB for a member, the catalogue's 2,000 documents included, and 707
+ *   ranges, 3,089 documents and 1.65 MiB for an organization admin over
+ *   its 700 live projects.
  * - One batch at its full `scan` for an admin, over 167 sub-projects of
- *   about 30 tasks: 242 ranges, 5,642 documents and 3.82 MiB, stopped at
- *   `scan` with its own count at 3.72 MiB.
- * - Search all your projects for a member who reads 200 sub-projects: 288
- *   ranges, 1,407 documents and 0.85 MiB; for one whose team shares 50 live
- *   and 150 archived projects: 131 ranges, 1,099 documents and 0.58 MiB.
+ *   about 30 tasks, reads 242 ranges, 5,642 documents and 3.82 MiB, and
+ *   stops at `scan` with its own count at 3.72 MiB.
+ * - Search all your projects reads 288 ranges, 1,407 documents and 0.85
+ *   MiB for a member who reads 200 sub-projects, and 131 ranges, 1,099
+ *   documents and 0.58 MiB for one whose team shares 50 live and 150
+ *   archived projects.
  *
  * The Boat timing of its slowest calls (owner, 31 October 2026) takes the
  * admin's rare word over the catalogue's 700 live projects, the admin's
@@ -193,25 +198,25 @@ export const RELATION_PICKER = {
   whole: { bytes: 12 * MIB, documents: 24_000, ranges: 3600 },
 }
 
-/** Which of the window's pickers asks: Parent, Subtasks or Linked tasks. */
+/** The picker that asks, Parent, Subtasks or Linked tasks. */
 export type RelationKind = 'parent' | 'subtask' | 'link'
 
 /** Why the opened task can take no new relation of the picker's kind, as
- * the write would refuse it: `has_subtasks`, a task with any subtask,
- * archived ones included, takes no parent; `is_subtask`, a subtask takes no
- * subtask; `full`, a task with LIMITS.subtasks.max active subtasks takes no
- * more, or one with LIMITS.links.max links takes no more links. The app
- * words each as the window's own tooltip does. */
+ * the write would refuse it. With `has_subtasks` it has a subtask, archived
+ * ones included, so it takes no parent. With `is_subtask` it is a subtask,
+ * so it takes no subtask. With `full` it holds LIMITS.subtasks.max active
+ * subtasks and takes no more, or LIMITS.links.max links and takes no more
+ * links. The app words each as the window's own tooltip does. */
 export type RelationBlock = 'has_subtasks' | 'is_subtask' | 'full'
 
-/** One task a picker offers: the window's short row of it
- * (lib/taskWindow.ts ShortRow) without its group fact, which a pick
- * decides (a new parent has the opened task as a subtask, and a new
- * subtask has none of its own), with the reader's level on its project. */
+/** One task a picker offers, as the window's short row of it
+ * (lib/taskWindow.ts ShortRow) with the reader's level on its project and
+ * without its group fact, which a pick decides. A new parent has the opened
+ * task as a subtask, and a new subtask has none of its own. */
 export type RelationCandidate = Omit<ShortRow, 'has_subtasks'> & {
-  /** Subtasks picker only: the task's parent as the reader is shown it
-   * (lib/workingSet.ts parentLink), the pair a pick sends as its expected
-   * values. The other pickers leave both out. */
+  /** In the Subtasks picker only, the task's parent as the reader is shown
+   * it (lib/workingSet.ts parentLink), the pair a pick sends as its
+   * expected values. The other pickers leave both out. */
   parent_id?: string
   has_hidden_parent?: boolean
   /** the task a search of exactly its task ID names, found by its number
@@ -227,12 +232,12 @@ export type RelationCandidates =
        * RELATION_PICKER.rows */
       rows: RelationCandidate[]
       /** the cursor of the next batch, or null once the batch read the
-       * scope to its end: the family's end for a picker that has not
-       * chosen Search all your projects, else the organization's */
+       * scope to its end, which is the family's end for a picker that has
+       * not chosen Search all your projects, else the organization's */
       next: string | null
-      /** Linked tasks only, at the family's end: the cursor that goes on
-       * into the organization's other projects once the person chooses
-       * Search all your projects, else null */
+      /** in the Linked tasks picker at the family's end, the cursor that
+       * goes on into the organization's other projects once the person
+       * chooses Search all your projects, else null */
       all_projects: string | null
       /** the batch reached `scan` or its read budget before it held a
        * full batch, so `next` goes on from where it stopped */
@@ -281,8 +286,8 @@ const times = (cost: Reads, n: number): Reads => ({
 const HIDDEN_BY_ID: Reads = { bytes: TASK_ROW_MAX_BYTES, documents: 1, ranges: 1 }
 
 /** A task's active subtasks up to LIMITS.subtasks.max, one range, each row
- * at its fixed size: a parent candidate's check, and the opened task's
- * count for the Subtasks picker's block. */
+ * at its fixed size, as a parent candidate's check and the Subtasks
+ * picker's block read them. */
 const SUBTASKS: Reads = {
   bytes: LIMITS.subtasks.max * TASK_ROW_MAX_BYTES,
   documents: LIMITS.subtasks.max,
@@ -302,7 +307,7 @@ const LINKS: Reads = {
  * PROJECT_READ). */
 const ASK: Reads = plus(PROJECT_ASK, PROJECT_READ)
 
-/** A typed task ID's lookup: the task by its number at its fixed size and
+/** A typed task ID's lookup, the task by its number at its fixed size and
  * one access question, whatever the number names. */
 const TYPED: Reads = plus(HIDDEN_BY_ID, ASK)
 
@@ -324,12 +329,12 @@ const STEP = { projects: 16, rows: 64, share: 32 }
 // --- the batch's own count ------------------------------------------------------
 
 /**
- * A batch's read count against `cap`, kept by the reader: it never looks at
- * the request's totals, so what a read returned moves it only where the
- * reader is shown the rows. Each read takes its cost before it starts, a
- * read that may touch rows the reader may not see at its worst case
- * (take), and a range of the scope's tasks counts its range and its rows
- * at their size once read (rows). The request's own guard (lib/viewReads.ts
+ * A batch's read count against `cap`, kept by the reader, which never looks
+ * at the request's totals, so what a read returned moves it only where the
+ * reader is shown the rows. A read that may touch rows the reader may not
+ * see takes its worst case before it starts (take), and a range of the
+ * scope's tasks counts its range and its rows at their size once read
+ * (rows). The request's own guard (lib/viewReads.ts
  * viewBudget) takes the same reads besides, so Convex's limits hold
  * whatever the rows weigh.
  */
@@ -374,10 +379,10 @@ type BatchCount = ReturnType<typeof batchCount>
 
 // --- the order and the cursor -----------------------------------------------------
 
-/** A project's place in the picker's order, compared field by field: [0]
- * the opened task's sub-project, [1, created, id] another sub-project of
- * its family, [2] its top-level project, [3, created, id, 0, created, id]
- * a sub-project of another top-level project and [3, created, id, 1] that
+/** A project's place in the picker's order, compared field by field. [0]
+ * is the opened task's sub-project, [1, created, id] another sub-project of
+ * its family, [2] its top-level project, [3, created, id, 0, created, id] a
+ * sub-project of another top-level project and [3, created, id, 1] that
  * project itself. A place names its project by fields that never change,
  * so it holds while projects come and go. */
 type Place = readonly (number | string)[]
@@ -397,9 +402,9 @@ function comparePlaces(a: Place, b: Place): number {
 /** The place where the organization's other projects start. */
 const OTHERS: Place = [3]
 
-/** Where a batch stands: just after the tasks of the project at `place`
- * created at `time` with these `ids`, and every one created before them,
- * or at the start of that place's project when `time` is null. */
+/** Where a batch stands, just after the tasks of the project at `place`
+ * created at `time` with these `ids` and every one created before them, or
+ * at the start of that place's project when `time` is null. */
 type Position = { place: Place; time: number | null; ids: string[] }
 
 /* The version a cursor carries outside and inside its sealed text. Every
@@ -417,8 +422,8 @@ const CURSOR_MAX = 64 << 10
 export const RELATION_CURSOR_REFUSAL =
   'cursor must come from an earlier batch of this picker for this task and search'
 
-/* What a cursor is sealed with: the reader, the opened task, the picker and
- * the search. */
+/* What a cursor is sealed with, the reader, the opened task, the picker
+ * and the search. */
 const scopeKey = (me: Doc<'profiles'>, issueId: string, kind: RelationKind, search: string) =>
   JSON.stringify([me.org_id, me.id, issueId, kind, search])
 
@@ -549,12 +554,12 @@ type Family = {
 }
 
 /**
- * The family of the opened task's top-level project `top`: its
- * sub-projects, live and archived, in steps of FAMILY_ROWS rows, each
- * counted at its fixed size, as the reader may not see them, as
- * lib/viewReads.ts projectSelection reads them, and the reader's level on
- * `top` and each live one (viewAccess levels). A check of the reader's
- * access a bound stopped rejects with accessUnchecked.
+ * The family of the opened task's top-level project `top`, which is its
+ * sub-projects, live and archived, and the reader's level on `top` and on
+ * each live one (viewAccess levels). The sub-projects are read in steps of
+ * FAMILY_ROWS rows, each counted at its fixed size, as the reader may not
+ * see them, as lib/viewReads.ts projectSelection reads them. A check of the
+ * reader's access a bound stopped rejects with accessUnchecked.
  */
 async function familyOf(
   ctx: QueryCtx,
@@ -624,10 +629,10 @@ function familyScope(
 }
 
 /**
- * The organization's other projects of the scope in their order, after
- * Search all your projects: its live top-level projects but the family's,
- * by creation, each with its live sub-projects by creation and then itself,
- * those whose level `fits`. It reads every project of the organization and
+ * The organization's other projects of the scope in their order, which
+ * Search all your projects reads. They are its live top-level projects but
+ * the family's, by creation, each with its live sub-projects by creation
+ * and then itself, those whose level `fits`. It reads every project of the organization and
  * the reader's own grants and team shares once (lib/access.ts
  * projectLevelsForOrg), outside the request's guard, as REST's active list
  * reads its catalogue before its page.
@@ -677,7 +682,7 @@ const projectTasks = (ctx: QueryCtx, id: string, from: number | null) =>
     return from === null ? active : active.gte('_creationTime', from)
   })
 
-/* What one task decides: a row, left out, or a stop before it because the
+/* What one task decides, a row, left out, or a stop before it because the
  * batch cannot hold the reads its checks need. */
 type Verdict = { row: RelationCandidate } | 'out' | 'stop'
 
@@ -686,7 +691,8 @@ type Pair = { parent_id?: string; has_hidden_parent: boolean }
 
 /**
  * The task window's relation picker of kind `args.kind` for the task with
- * id `args.issue_id`, one batch (see the header and RelationCandidates):
+ * id `args.issue_id`, one batch (see the header and RelationCandidates). It
+ * answers
  *
  * - `{ state: 'ok', rows, next, all_projects, stopped, blocked }`;
  * - `{ state: 'unavailable' }` for a task outside the reader's working
@@ -708,7 +714,7 @@ type Pair = { parent_id?: string; has_hidden_parent: boolean }
  * cursor that is not an earlier batch's of the same reader, task, picker
  * and search with RELATION_CURSOR_REFUSAL, before anything is read.
  * `o.measured` hears the batch's own count once a batch is read, for the
- * measurements at the design size; the query passes none.
+ * measurements at the design size. The query passes none.
  */
 export async function readRelationCandidates(
   ctx: QueryCtx,
@@ -900,11 +906,12 @@ async function batchOf(
 }
 
 /**
- * The scan of a batch: the active tasks of the projects of `scope` from
- * position `from` on, one project after another, each by creation, each
- * task given to `decide` in that order, until `want` rows, until
- * RELATION_PICKER.scan tasks were looked at, or until the batch's count
- * stops a read (a step's rows, or a check `decide` answers 'stop' for). It
+ * The scan of a batch. It reads the active tasks of the projects of
+ * `scope` from position `from` on, one project after another, each by
+ * creation, and gives each task to `decide` in that order, until `want`
+ * rows, until RELATION_PICKER.scan tasks were looked at, or until the
+ * batch's count stops a read (a step's rows, or a check `decide` answers
+ * 'stop' for). It
  * answers the rows, the position after the last task whose answer is
  * final, whether it read the scope to its end, and whether it stopped short
  * of `want` rows before that end.
@@ -928,7 +935,7 @@ async function scanScope(
   want: number,
 ): Promise<{ rows: RelationCandidate[]; at: Position; end: boolean; stopped: boolean }> {
   const queue = from === null ? scope : scope.filter((p) => comparePlaces(p.place, from.place) >= 0)
-  // where the batch stands: after the tasks of `at`'s project at its
+  // where the batch stands, after the tasks of `at`'s project at its
   // instant, or at the start of its project
   let at: Position = from ?? { place: queue[0]?.place ?? [0], time: null, ids: [] }
   const rows: RelationCandidate[] = []
@@ -1027,11 +1034,11 @@ function after(p: Position, place: Place, task: Doc<'issues'>): Position {
 
 /**
  * The scope project in which a typed task ID's task `task`, active and
- * read by its number, is a candidate: its project of the scope; for Linked
- * tasks, any live project of the organization outside the family whose
- * level `fits`, asked within the lookup's cost (TYPED), which a check a
- * bound stopped leaves without one, as for a task the reader cannot see.
- * Undefined when there is none.
+ * read by its number, is a candidate. That is its project of the scope, or
+ * for Linked tasks any live project of the organization outside the family
+ * whose level `fits`, asked within the lookup's cost (TYPED). A check a
+ * bound stopped leaves it without one, as for a task the reader cannot
+ * see. Undefined when there is none.
  */
 async function typedHome(
   seat: ViewAccess,

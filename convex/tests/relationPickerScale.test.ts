@@ -2,12 +2,12 @@
  * Convex's real transaction limits at the design size, with ordinary text.
  * Each case raises one figure and keeps the others at everyday values (a
  * person in 3 teams, 20 sub-projects a team, 3 sub-projects a project, 30
- * open tasks a sub-project): the open tasks of one project, of one
- * sub-project, the sub-projects under one project with the archived ones
- * at their sum, a project's Done tasks, the catalogue at its sum for a
- * member and an admin, one batch at its full scan, the teams a person is
- * in, the sub-projects one person reads, the teams a project is shared
- * with and a team's shares. Each case prints what each first batch read,
+ * open tasks a sub-project). The figures are the open tasks of one
+ * project, of one sub-project, the sub-projects under one project with the
+ * archived ones at their sum, a project's Done tasks, the catalogue at its
+ * sum for a member and an admin, one batch at its full scan, the teams a
+ * person is in, the sub-projects one person reads, the teams a project is
+ * shared with and a team's shares. Each case prints what each first batch read,
  * the figures RELATION_PICKER's docstring quotes, and checks that it
  * answered whole within the default budgets. */
 /// <reference types="vite/client" />
@@ -37,7 +37,7 @@ import {
 } from './helpers.setup'
 import { pageOrg } from './pageOrg.setup'
 
-/* What one batch read: the request's reads as Convex counts them, the
+/* What one batch read, as the request's reads Convex counts and the
  * batch's own count (lib/relationPicker.ts batchCount), and what it
  * answered. */
 type Figures = {
@@ -95,10 +95,10 @@ function record(name: string, f: Figures) {
   }
 }
 
-/** The first batches of `me`'s three pickers for `open`: a blank search,
- * which fills a batch, and a rare word, which reads the family to its end,
- * then for Linked tasks the rare word past the family after Search all
- * your projects. Each answers whole within the default budgets. */
+/** The first batches of `me`'s three pickers for `open`, for a blank
+ * search, which fills a batch, and a rare word, which reads the family to
+ * its end, and then for Linked tasks the rare word past the family after
+ * Search all your projects. Each answers whole within the default budgets. */
 async function pickers(
   t: T,
   name: string,

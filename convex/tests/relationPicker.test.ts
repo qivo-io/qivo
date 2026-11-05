@@ -1,10 +1,10 @@
 /* The task window's relation pickers (taskWindow.ts relationCandidates,
- * lib/relationPicker.ts): the arguments and the cursor, one unavailable
- * answer for every task the reader may not open, the writes' levels in
- * every access shape, no hidden task by title or by number, the Parent,
- * Subtasks and Linked tasks rules, the search, the order and its
- * continuation, the budgets, and what hidden data may not move. The reads
- * at the design size are in relationPickerScale.test.ts. */
+ * lib/relationPicker.ts). The cases cover the arguments and the cursor,
+ * one unavailable answer for every task the reader may not open, the
+ * writes' levels in every access shape, no hidden task by title or by
+ * number, the Parent, Subtasks and Linked tasks rules, the search, the
+ * order and its continuation, the budgets, and what hidden data may not
+ * move. The reads at the design size are in relationPickerScale.test.ts. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
@@ -257,7 +257,7 @@ describe('access', () => {
         reason: 'access_unchecked',
         message: expect.stringContaining('could not finish checking'),
       })
-    // the task in PCB is the opened one now: its own check stops
+    // with the task in PCB opened, its own check stops
     expect(await pick(t, me, onPcb.id, 'link')).toEqual({ state: 'unavailable' })
     Object.assign(OWN_READS, ONE_UP)
     expect(await allIds(t, me, open.id, 'parent')).toEqual(usual)
@@ -298,7 +298,8 @@ describe('access', () => {
 
   /* What the write would accept for `who` from task `open`, by the
    * per-project predicate (lib/access.ts projectLevel), in the picker's
-   * order: the family, and the rest of the organization for Linked tasks. */
+   * order, the family first and then the rest of the organization for
+   * Linked tasks. */
   async function expected(
     t: T,
     who: Doc<'profiles'>,
@@ -315,9 +316,9 @@ describe('access', () => {
       if (own === null) return null
       const edits = rank(own) >= LEVEL_RANK.user
       const family = await topOf(open.project_id)
-      // the picker's order: the own project, the family's sub-projects by
-      // creation, the top-level project; then each other top-level project
-      // by creation, its sub-projects first
+      // the picker's order is the own project, the family's sub-projects
+      // by creation and the top-level project, and then each other
+      // top-level project by creation, its sub-projects first
       const place = async (x: Doc<'issues'>) => {
         const p = await projectOf(x.project_id)
         const top = await projectOf(p.parent_id ?? p.id)

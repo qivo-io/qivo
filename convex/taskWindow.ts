@@ -1,6 +1,6 @@
 /* The task window's own queries. The first three are live, and each reads
  * one opened task and its own relations, under ordinary access, so a task
- * opens without the workspace's task windows: in a project of any size,
+ * opens without the workspace's task windows, in a project of any size,
  * from a direct link and in a fresh app session. Readers and budgets are in
  * lib/taskWindow.ts, and the relation pickers' in lib/relationPicker.ts.
  *
