@@ -53,7 +53,7 @@
  * own (`counting`, `budget` or `loads`), never a smaller number, a list
  * batch says whether it is complete, and the health table says when it
  * sorted by name because the asked column needs a figure some row lacks. The day and the weeks are the
- * client's (lib/overview.ts clockOf), passed as arguments, because a query
+ * client's (lib/viewLoads.ts clockOf), passed as arguments, because a query
  * that read the time could answer from Convex's cache on a later day and
  * has no time zones. Live queries: a change to a document one of those reads
  * returned or would now return reruns them, such as a count row, a task due
@@ -70,19 +70,12 @@
 import { v } from 'convex/values'
 import { authedQuery } from './lib/functions'
 import { readAttention, readHealth, readPaused, readRisk, readSummary } from './lib/overview'
+import { vClock } from './lib/viewLoads'
 
 const vScope = v.union(
   v.object({ kind: v.literal('project'), org_id: v.string(), project_id: v.string() }),
   v.object({ kind: v.literal('mine') }),
 )
-
-/* The client's day and weeks (lib/overview.ts clockOf). */
-const vWeeks = {
-  day: v.string(),
-  week: v.string(),
-  week_starts: v.array(v.number()),
-  week_end: v.number(),
-}
 
 export const summary = authedQuery({
   args: { scope: vScope, day: v.string() },
@@ -90,12 +83,12 @@ export const summary = authedQuery({
 })
 
 export const risk = authedQuery({
-  args: { scope: vScope, ...vWeeks },
+  args: { scope: vScope, ...vClock },
   handler: (ctx, args) => readRisk(ctx, ctx.myProfiles, args),
 })
 
 export const attention = authedQuery({
-  args: { scope: vScope, ...vWeeks, cursor: v.optional(v.string()), end: v.optional(v.string()) },
+  args: { scope: vScope, ...vClock, cursor: v.optional(v.string()), end: v.optional(v.string()) },
   handler: (ctx, args) => readAttention(ctx, ctx.myProfiles, ctx.authUserId, args),
 })
 
@@ -119,7 +112,7 @@ const vHealthSort = v.union(
 export const health = authedQuery({
   args: {
     scope: vScope,
-    ...vWeeks,
+    ...vClock,
     sort: vHealthSort,
     dir: v.union(v.literal('asc'), v.literal('desc')),
     search: v.optional(v.string()),
