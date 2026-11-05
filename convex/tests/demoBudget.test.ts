@@ -493,6 +493,70 @@ describe('a demo upload that never attaches', () => {
   })
 })
 
+describe('a demo upload whose POST got no answer', () => {
+  /* Another demo login, the admin of the fixture's other organization. */
+  async function otherLogin(d: Demo) {
+    const user = (await d.t.mutation(components.betterAuth.adapter.create, {
+      input: {
+        model: 'user',
+        data: {
+          name: 'Omar',
+          email: `${uuid()}@demo.invalid`,
+          emailVerified: false,
+          isAnonymous: true,
+          createdAt: NOW,
+          updatedAt: NOW,
+        },
+      },
+    })) as { _id: string }
+    await d.t.run(async (ctx) => {
+      await ctx.db.patch(d.fx.otherAdmin._id, { auth_user_id: user._id })
+      await ctx.db.insert('demo_sessions', {
+        id: uuid(),
+        auth_user_id: user._id,
+        org_id: d.fx.otherOrg.id,
+        created_at: NOW,
+        expires_at: NOW + 86_400_000,
+        status: 'ready',
+      })
+    })
+    return as(d.t, { ...d.fx.otherAdmin, auth_user_id: user._id })
+  }
+  const idOf = (url: string) => new URL(url).pathname.slice('/demo-uploads/'.length)
+
+  it('frees its reserved bytes when its own login cancels it, and keeps one the receiver stored', async () => {
+    const d = await setup()
+    const url = await reserve(d, 3 * MiB)
+    await expectRefusal(reserve(d, 3 * MiB), 'rule')
+    // another login is refused as for an unknown upload, and frees nothing
+    const other = await otherLogin(d)
+    await expectRefusal(
+      other.mutation(api.files.cancelDemoUpload, { id: idOf(url) }),
+      'not_found',
+      /upload not found/,
+    )
+    expect(await ledger(d.t)).toEqual({ bytes: 3 * MiB, rows: 1 })
+    await d.caller.mutation(api.files.cancelDemoUpload, { id: idOf(url) })
+    expect(await ledger(d.t)).toEqual({ bytes: 0, rows: 0 })
+    // the room is free at once, and the cancelled URL stores nothing
+    await reserve(d, 3 * MiB)
+    expect((await post(d.t, url, new Uint8Array(10))).status).toBe(400)
+    // a picture's reservation goes the same way
+    const picture = await d.caller.mutation(api.files.avatarUploadUrl, {
+      profile_id: d.admin.id,
+      size: 1 * MiB,
+    })
+    await d.caller.mutation(api.files.cancelDemoUpload, { id: idOf(picture) })
+    expect(await ledger(d.t)).toEqual({ bytes: 3 * MiB, rows: 1 })
+    // one whose POST the receiver stored stays, and so does an unknown id
+    const sent = await reserve(d, 10)
+    expect((await post(d.t, sent, new Uint8Array(10))).status).toBe(200)
+    await d.caller.mutation(api.files.cancelDemoUpload, { id: idOf(sent) })
+    await d.caller.mutation(api.files.cancelDemoUpload, { id: uuid() })
+    expect(await ledger(d.t)).toEqual({ bytes: 3 * MiB + 10, rows: 2 })
+  })
+})
+
 describe("a demo background's preview", () => {
   /* Uploads a background of `bytes` and answers the preview job's arguments. */
   async function background(d: Demo, bytes: number) {

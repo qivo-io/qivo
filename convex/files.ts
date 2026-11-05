@@ -83,6 +83,7 @@ import {
   assertDemoFileOwnership,
   demoCanRead,
   demoFileExpiry,
+  demoUploadFor,
   reserveDemoUpload,
 } from './model/demoUploads'
 import { reapDroppedImage as reapDropped } from './model/descriptionImages'
@@ -189,6 +190,28 @@ export const avatarUploadUrl = authedMutation({
     if (size !== undefined) uploadSize(size)
     if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, size)
     return await ctx.storage.generateUploadUrl()
+  },
+})
+
+/* Cancels reservation `id` of the private demo, made for an attachment,
+ * description image or profile picture whose POST ended without an answer
+ * from the receiver, so its declared bytes stop counting at once instead of
+ * when it expires (model/demoUploads.ts). The app reads `id` from the
+ * /demo-uploads/ URL it was given. Only the caller's own reservation that no
+ * POST began goes, the rule appearance.cancelUpload keeps for a background.
+ * One the receiver began or stored stays for the receiver and the minute
+ * sweep, and another login's is refused as not found. An unknown id, and
+ * any call outside the demo, change nothing. */
+export const cancelDemoUpload = authedMutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    if (!isDemoDeployment()) return null
+    const row = await demoUploadFor(ctx, id)
+    if (row === null) return null
+    if (row.auth_user_id !== ctx.authUserId || (row.kind !== 'attachment' && row.kind !== 'avatar'))
+      throw notFound('upload not found')
+    if (row.state === 'pending') await ctx.db.delete(row._id)
+    return null
   },
 })
 

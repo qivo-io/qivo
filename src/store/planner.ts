@@ -4983,6 +4983,19 @@ async function receiverRefusal(res: Response): Promise<string | null> {
 const UPLOAD_NOT_FINISHED =
   'The upload did not finish. Check your connection and try again, or send a smaller file.'
 
+/* The private demo's reservation in upload URL `url`, a /demo-uploads/ URL
+   (convex/files.ts demoUploadUrl), else null. An attachment's or picture's
+   upload whose POST got no answer cancels it (files.cancelDemoUpload), so
+   its declared bytes stop counting in the demo's 5 MiB at once. */
+function demoReservation(url: string): string | null {
+  try {
+    const match = /^\/demo-uploads\/([^/]+)$/.exec(new URL(url).pathname)
+    return match ? decodeURIComponent(match[1]) : null
+  } catch {
+    return null
+  }
+}
+
 /* How a POST of a file to an upload URL ended: the stored file, the
    receiver's refusal, or no answer from the receiver at all. */
 type Posted = { storageId: string } | { refused: string } | { unanswered: true }
@@ -11030,7 +11043,8 @@ export const PLANNER = {
       in the demo it reserves that size in the demo's shared storage. A
       refusal from the URL's receiver is toasted in its own words, and a
       POST that ended without the receiver's answer with
-      UPLOAD_NOT_FINISHED.
+      UPLOAD_NOT_FINISHED, after it cancels a demo reservation, which would
+      otherwise hold its bytes until it expires.
 
       No optimistic row until the server accepts it: three awaited hops make
       optimism pointless, and the server deletes oversize bytes inside attach
@@ -11096,6 +11110,11 @@ export const PLANNER = {
         )
         const posted = await postUpload(url, file)
         if (!('storageId' in posted)) {
+          const reservation = 'unanswered' in posted ? demoReservation(url) : null
+          if (reservation !== null)
+            await sendAwaited(api.files.cancelDemoUpload, { id: reservation }, 'none').catch(
+              () => {},
+            )
           const why = 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED
           toast(`Couldn't upload "${file.name}". ${why}`)
           return null
@@ -13133,8 +13152,13 @@ export const PLANNER = {
       )
       // the POST's Content-Type is also what the server's allowlist checks
       const posted = await postUpload(url, small)
-      if (!('storageId' in posted))
-        return 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED
+      if ('refused' in posted) return asSentence(posted.refused)
+      if ('unanswered' in posted) {
+        const reservation = demoReservation(url)
+        if (reservation !== null)
+          await sendAwaited(api.files.cancelDemoUpload, { id: reservation }, 'none').catch(() => {})
+        return UPLOAD_NOT_FINISHED
+      }
       const stored = posted.storageId as Id<'_storage'>
       // the accepted portrait paints until a delivery holds it; a rebuild
       // prunes and revokes the replaced portrait source

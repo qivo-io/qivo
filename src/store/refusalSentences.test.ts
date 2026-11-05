@@ -195,6 +195,38 @@ describe('refusal sentences in restore and upload toasts', () => {
     }
   })
 
+  it("cancels the demo's reservation when its POST gets no answer, and no other upload's", async () => {
+    const demo = (id: string) => `https://demo.example.test/demo-uploads/${id}?e=1&m=login&t=token`
+    const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    answers['files:uploadUrl'] = () => Promise.resolve(demo('reservation-1'))
+    answers['files:avatarUploadUrl'] = () => Promise.resolve(demo('reservation-2'))
+    expect(await P.addAttachment('task-1', file())).toBeNull()
+    expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-1' })
+    expect(await P.setAvatar(snap.profiles[0].id, picture)).toBe(LOST)
+    expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-2' })
+    // a refusal from the receiver, which released the reservation itself,
+    // and an upload ticket outside the demo cancel nothing
+    network.mutation.mockClear()
+    receiverRefuses(BUDGET)
+    expect(await P.addAttachment('task-1', file())).toBeNull()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    answers['files:uploadUrl'] = () =>
+      Promise.resolve('https://api.example.test/attachment-uploads/ticket-1?e=1&m=me&t=token')
+    expect(await P.addAttachment('task-1', file())).toBeNull()
+    expect(sentWith('files:cancelDemoUpload')).toBeUndefined()
+  })
+
   it('declares a picture’s size and answers the sentence its upload URL refused', async () => {
     answers['files:avatarUploadUrl'] = () => Promise.resolve('https://upload.example.test/a')
     receiverRefuses(BUDGET)

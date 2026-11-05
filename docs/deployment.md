@@ -987,7 +987,9 @@ file within Convex's action time limit, so a 20 MiB file needs about
 its size. On the demo backend the shared upload budget falls from
 50 MiB to 5 MiB, reserved at each upload's declared size. A demo above 5 MiB
 keeps its files and admits no upload until enough is freed, and a stored
-upload that never attaches stops counting within minutes.
+upload that never attaches stops counting within minutes. An attachment or
+picture whose POST gets no answer frees its reservation at once through the
+new `files.cancelDemoUpload`, which does nothing outside the demo.
 `files.avatarUploadUrl` and `appearance.createUpload` take a `size` too,
 which only the demo reserves. The app sends arguments an older backend
 refuses, so from that release on never return the backend to a commit

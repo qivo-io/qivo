@@ -257,6 +257,7 @@ demoUploads:sweep mutation internal {"type":"object","value":{"cursor":{"fieldTy
 demoVisitor:record mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"browser":{"fieldType":{"type":"string"},"optional":false},"os":{"fieldType":{"type":"string"},"optional":false}}}
 files:attach mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"mime":{"fieldType":{"type":"string"},"optional":true},"inline":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 files:avatarUploadUrl mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
+files:cancelDemoUpload mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 files:clearAvatar mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
 files:eraseHeldFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 files:eraseHeldFiles mutation internal {"type":"object","value":{"now":{"fieldType":{"type":"number"},"optional":true},"counts":{"fieldType":{"type":"object","value":{"erased":{"fieldType":{"type":"number"},"optional":false},"kept":{"fieldType":{"type":"number"},"optional":false}}},"optional":true}}}
@@ -984,6 +985,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   files: {
     uploadUrl: 'orgMutation',
     avatarUploadUrl: 'authedMutation',
+    // the caller's own demo reservation whose POST got no answer
+    cancelDemoUpload: 'authedMutation',
     attach: 'orgMutation',
     removeAttachment: 'orgMutation',
     setAvatar: 'authedMutation',
@@ -1280,7 +1283,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 235
+const PUBLIC_COUNT = 236
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
