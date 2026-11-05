@@ -817,6 +817,29 @@ describe('search', () => {
   })
 })
 
+describe('Done tasks', () => {
+  it('offers a Done task not yet archived in every picker, and never an archived Done task', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    const done = await task(t, f, f.sub2, {
+      title: 'Wombat finished',
+      status: 'done',
+      done_at: NOW,
+    })
+    await task(t, f, f.sub2, {
+      title: 'Wombat filed away',
+      status: 'done',
+      done_at: NOW,
+      archived_at: NOW,
+    })
+    for (const kind of ['parent', 'subtask', 'link'] as const)
+      expect(await allIds(t, f.user, open.id, kind, { search: 'wombat', all: true }), kind).toEqual(
+        [done.id],
+      )
+  })
+})
+
 describe('order and continuation', () => {
   it('answers the scope in its order a batch at a time, every eligible task once', async () => {
     const t = newT()
