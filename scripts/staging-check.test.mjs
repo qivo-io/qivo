@@ -198,7 +198,11 @@ describe('staging check REST contract', () => {
   it("checks Billing's storage on a file of its own, in the page's words", () => {
     const list = readFileSync(new URL('../src/panels/BillingStorage.tsx', import.meta.url), 'utf8')
     const usage = readFileSync(new URL('../src/panels/BillingUsage.tsx', import.meta.url), 'utf8')
-    expect(list).toContain("{billingBytes(row.bytes)} · {row.files === 1 ? '1 file'")
+    // the step compares the size span's text exactly, so the mark is on the
+    // span that holds the size and file count alone
+    expect(list).toMatch(
+      /data-billing-storage-size=""[^>]*>\s*\{billingBytes\(row\.bytes\)\} · \{row\.files === 1 \? '1 file'/,
+    )
     for (const mark of [
       'data-billing-storage=""',
       'data-billing-storage-search=""',

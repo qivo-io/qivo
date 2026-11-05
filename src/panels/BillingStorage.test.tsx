@@ -306,6 +306,10 @@ describe('Storage by project', () => {
       'Board revRemoved10.0 KB · 1 file',
       'Removed projectRemoved10.0 KB · 3 files',
     ])
+    // the size and file count alone, as the staging check reads them
+    expect(
+      [...container.querySelectorAll('[data-billing-storage-size]')].map((s) => s.textContent),
+    ).toEqual([...Array(4).fill('10.0 KB · 1 file'), '10.0 KB · 3 files'])
     expect(shown().at(-1)).toBe('p5:')
   })
 })

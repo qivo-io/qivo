@@ -4647,14 +4647,15 @@ export const BILLING_STORAGE_EXPECTED = {
  *  BILLING_STORAGE_EXPECTED.bytes to it over REST. In the app, as Nora, an
  *  admin, Billing's current storage must show a figure, never
  *  BILLING_STORAGE_EXPECTED.counting, and Storage by project, searched for
- *  the run tag and "storage", must list that sub-project alone with
- *  BILLING_STORAGE_EXPECTED.row. That shows the deployment's totals are
- *  counted and that the page reads them. The file is deleted over REST at
- *  the end, also after a failure, and the cleanup, which deletes M, takes
- *  the sub-project and its task. It runs while the run's projects are
- *  active, after ui/removal-window, and needs a backend from the release
- *  that ships billing.currentUsage. Against an older one the page cannot
- *  read its usage and the step fails waiting for it. */
+ *  the run tag and "storage", must list that sub-project alone, its size
+ *  and file count reading exactly BILLING_STORAGE_EXPECTED.row. That shows
+ *  the deployment's totals are counted and that the page reads them. The
+ *  file is deleted over REST at the end, also after a failure, and the
+ *  cleanup, which deletes M, takes the sub-project and its task. It runs
+ *  while the run's projects are active, after ui/removal-window, and needs
+ *  a backend from the release that ships billing.currentUsage. Against an
+ *  older one the page cannot read its usage and the step fails waiting for
+ *  it. */
 async function billingStorageCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -4702,10 +4703,9 @@ async function billingStorageCheck() {
         `a search for the run tag does not list ${sub.name} alone`,
       )
       const text = ((await row.textContent()) ?? '').trim()
-      expect(
-        text.includes(sub.name) && text.endsWith(BILLING_STORAGE_EXPECTED.row),
-        `its row reads ${short(text)}, not ${BILLING_STORAGE_EXPECTED.row}`,
-      )
+      expect(text.includes(sub.name), `its row reads ${short(text)}, without ${sub.name}`)
+      const size = ((await row.locator('[data-billing-storage-size]').textContent()) ?? '').trim()
+      eq(size, BILLING_STORAGE_EXPECTED.row, 'its size and file count')
     } finally {
       eq(
         (await restOk(w, 'DELETE', `/tasks/${t.key}/attachments/${att.id}`)).deleted,

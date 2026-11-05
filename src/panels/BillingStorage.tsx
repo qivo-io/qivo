@@ -175,7 +175,7 @@ function StorageRow({ row }: { row: StorageProjectRow }) {
           </Badge>
         )}
       </span>
-      <span className="text-sm whitespace-nowrap text-text-2">
+      <span data-billing-storage-size="" className="text-sm whitespace-nowrap text-text-2">
         {billingBytes(row.bytes)} · {row.files === 1 ? '1 file' : `${row.files} files`}
       </span>
     </li>
