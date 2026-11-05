@@ -150,8 +150,41 @@ import { taskFields } from './workspaceParts'
  * read past its last look (lib/access.ts OWN_READS); a request that cannot
  * hold `reads` after the reads before the batch answers `over_budget`.
  *
- * The figures are proposals that the measurements at the design size and
- * the Boat timing of the slowest call settle.
+ * Measured on 5 November 2026 in convex/tests/relationPickerScale.test.ts
+ * under convex-test's transaction limits, at the design size with ordinary
+ * text, one figure raised a case, in what the whole request read. Every
+ * first batch answered whole within these budgets.
+ *
+ * - A family at everyday values: a full batch at most 41 ranges, 39
+ *   documents and 0.02 MiB, while the Parent picker's own count holds 4.9
+ *   MiB of its 8 for its 25 checks at their worst case; a rare word reads
+ *   the family to its end in 20 ranges and 99 documents, and past it, after
+ *   Search all your projects, the member's 57 other sub-projects in 101
+ *   ranges, 1,829 documents and 0.81 MiB.
+ * - A rare word reads a project of 800 open tasks whole in 34 ranges, 884
+ *   documents and 0.4 MiB, a sub-project of 300 in 24 ranges and 373
+ *   documents, a project of 30 live and 40 archived sub-projects of 20
+ *   tasks each in 102 ranges, 677 documents and 0.3 MiB (a full batch 98
+ *   ranges), and a project with 200 Done tasks in 25 ranges.
+ * - A full batch reads at most 49 ranges for a member in 5 teams and 45
+ *   where the family is shared with 5 teams.
+ * - The catalogue at its sum, 2,000 projects live and archived: a rare
+ *   word in all your projects reads 101 ranges, 2,170 documents and 1 MiB
+ *   for a member, the catalogue's 2,000 documents included, and 707
+ *   ranges, 3,089 documents and 1.65 MiB for an organization admin over its
+ *   700 live projects.
+ * - One batch at its full `scan` for an admin, over 167 sub-projects of
+ *   about 30 tasks: 242 ranges, 5,642 documents and 3.82 MiB, stopped at
+ *   `scan` with its own count at 3.72 MiB.
+ * - Search all your projects for a member who reads 200 sub-projects: 288
+ *   ranges, 1,407 documents and 0.85 MiB; for one whose team shares 50 live
+ *   and 150 archived projects: 131 ranges, 1,099 documents and 0.58 MiB.
+ *
+ * The Boat timing of its slowest calls (owner, 31 October 2026) takes the
+ * admin's rare word over the catalogue's 700 live projects, the admin's
+ * batch at its full `scan`, and a member's rare word over the project of
+ * 800 open tasks, as those cases build them. If the slowest call's
+ * JavaScript passes 0.5 s, lower `scan`.
  */
 export const RELATION_PICKER = {
   rows: 25,
@@ -280,12 +313,13 @@ const PROJECT_ROW: Reads = { bytes: PROJECT_ROW_MAX_BYTES, documents: 1, ranges:
  * and archived (AGENTS.md), which the family's listing reads in one step. */
 const FAMILY_ROWS = 30 + 40
 
-/** How many projects one step of a batch reads side by side at most, and
- * the most rows it asks each for. A step reads one project at first, and
- * twice as many after each step whose every range ended, so small projects
- * go side by side while a project that does not end in one step is read on
- * its own. */
-const STEP = { projects: 16, rows: 64 }
+/** How many projects one step of a batch reads side by side at most, the
+ * most rows it asks each for, and the fewest it gives each before it reads
+ * fewer side by side. A step reads one project at first, and twice as many
+ * after each step whose every range ended, so the small projects of an
+ * organization go side by side while a project that does not end in one
+ * step is read on its own. */
+const STEP = { projects: 16, rows: 64, share: 32 }
 
 // --- the batch's own count ------------------------------------------------------
 
@@ -317,6 +351,10 @@ function batchCount(cap: Reads) {
   }
   return {
     room,
+    /** What the batch counted so far. */
+    get used(): Reads {
+      return used
+    },
     /** Whether one read of `cost` fits. */
     fits: (cost: Reads): boolean => room(cost) >= 1,
     /** Counts one read of `cost`. */
@@ -669,11 +707,14 @@ type Pair = { parent_id?: string; has_hidden_parent: boolean }
  * A search past LIMITS.search is refused with that limit's sentence, and a
  * cursor that is not an earlier batch's of the same reader, task, picker
  * and search with RELATION_CURSOR_REFUSAL, before anything is read.
+ * `o.measured` hears the batch's own count once a batch is read, for the
+ * measurements at the design size; the query passes none.
  */
 export async function readRelationCandidates(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   args: RelationArgs,
+  o: { measured?: (batch: Reads) => void } = {},
 ): Promise<RelationCandidates> {
   const search = limitedText(LIMITS.search, args.search ?? '')
   const key = scopeKey(me, args.issue_id, args.kind, search)
@@ -682,7 +723,7 @@ export async function readRelationCandidates(
     throw badRequest(RELATION_CURSOR_REFUSAL)
   const guard = viewBudget(ctx, RELATION_PICKER.whole)
   try {
-    return await batchOf(ctx, guard, me, args.issue_id, args.kind, search, key, at)
+    return await batchOf(ctx, guard, me, args.issue_id, args.kind, search, key, at, o.measured)
   } catch (e) {
     if (isOverBudget(e)) return { state: 'over_budget' }
     if (isAccessUnchecked(e))
@@ -701,6 +742,7 @@ async function batchOf(
   search: string,
   key: string,
   at: Position | null,
+  measured?: (batch: Reads) => void,
 ): Promise<RelationCandidates> {
   const seat = viewAccess(ctx, guard, me)
   const opened = await openedTask(ctx, guard, seat, issueId)
@@ -844,6 +886,7 @@ async function batchOf(
     RELATION_PICKER.rows - rows.length,
   )
   rows.push(...scan.rows)
+  measured?.(count.used)
   const next = scan.end ? null : await cursorOf(key, scan.at)
   const familyEnd = kind === 'link' && !others && next === null
   return {
@@ -900,9 +943,13 @@ async function scanScope(
     const again = resume?.ids.length ?? 0
     const left = RELATION_PICKER.scan - looked
     if (left <= 0) return { rows, at, end: false, stopped: true }
-    // as many projects as the count holds a row each for, beside their
-    // ranges and the rows the first reads again
-    let k = Math.min(width, queue.length - pi)
+    // as many projects as the count holds STEP.share rows each for, and at
+    // least a row each, beside their ranges and the rows the first reads
+    // again
+    const share = Math.floor(
+      Math.max(0, count.room(ROW, plus(RANGE, times(ROW, again)))) / STEP.share,
+    )
+    let k = Math.max(1, Math.min(width, queue.length - pi, share))
     let per = 0
     for (; k > 0; k = k > 1 ? 1 : 0) {
       const n = count.room(ROW, plus(times(RANGE, k), times(ROW, again)))
