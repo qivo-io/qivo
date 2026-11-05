@@ -7,7 +7,11 @@
  * directory's name search across the person's projects and sub-projects,
  * the favorites first (navSearchOf, projectNav.search). They read the rows
  * the writers in model/projectNav.ts (reach rows) and
- * model/projectFavorites.ts (favorites) keep, and no task.
+ * model/projectFavorites.ts (favorites) keep, and no task. The Settings
+ * project lists (model/projectSettingsLists.ts) judge every seat but an
+ * organization admin's by the same rules, through seatSight, rootShows,
+ * ownRoots, restCandidates, childRowShows, inheritedShows and
+ * navChildrenOf, with cursors of their own and no favorites group.
  *
  * Who sees what. Every candidate is judged by ordinary access, lib/access.ts
  * accessOf of ordinaryOf(seat), so an organization admin's lists hold only
@@ -105,6 +109,7 @@ import {
   receivesTeamAccess,
 } from '../lib/access'
 import { byId } from '../lib/db'
+import type { ArchiveState } from '../lib/enums'
 import { badRequest, type Refusal } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
@@ -443,11 +448,14 @@ export function rootIndex(
 
 /** The live child reach rows of grantee `g` under top-level project
  * `rootId` in name order (project_reach by_grantee_root): copied name key,
- * then sub-project id. */
+ * then sub-project id. With `live` false, the archived ones, which the
+ * Settings list of an archived project's sub-projects reads
+ * (model/projectSettingsLists.ts). */
 export function childIndex(
   ctx: QueryCtx,
   g: Grantee,
   rootId: string,
+  live = true,
 ): NamedIndex<Doc<'project_reach'>, IdTie> {
   const rows = () => ctx.db.query('project_reach')
   return {
@@ -458,7 +466,7 @@ export function childIndex(
           .eq('grantee_id', g.grantee_id)
           .eq('root_id', rootId)
           .eq('kind', 'child')
-          .eq('live', true),
+          .eq('live', live),
       ),
     after: ({ key, tie: [id] }) => [
       () =>
@@ -468,7 +476,7 @@ export function childIndex(
             .eq('grantee_id', g.grantee_id)
             .eq('root_id', rootId)
             .eq('kind', 'child')
-            .eq('live', true)
+            .eq('live', live)
             .eq('name_key', key)
             .gt('project_id', id),
         ),
@@ -479,7 +487,7 @@ export function childIndex(
             .eq('grantee_id', g.grantee_id)
             .eq('root_id', rootId)
             .eq('kind', 'child')
-            .eq('live', true)
+            .eq('live', live)
             .gt('name_key', key),
         ),
     ],
@@ -489,16 +497,19 @@ export function childIndex(
 
 /** The live sub-projects of top-level project `parent` in name order
  * (projects by_org_parent_state_name, archive_state live): name key, then
- * id. */
+ * id. With `state` 'under', those archived beneath it, which the Settings
+ * list of an archived project's sub-projects reads
+ * (model/projectSettingsLists.ts). */
 export function subProjectIndex(
   ctx: QueryCtx,
   parent: Pick<Doc<'projects'>, 'id' | 'org_id'>,
+  state: ArchiveState = 'live',
 ): NamedIndex<Doc<'projects'>, IdTie> {
   const projects = () => ctx.db.query('projects')
   return {
     all: () =>
       projects().withIndex('by_org_parent_state_name', (q) =>
-        q.eq('org_id', parent.org_id).eq('parent_id', parent.id).eq('archive_state', 'live'),
+        q.eq('org_id', parent.org_id).eq('parent_id', parent.id).eq('archive_state', state),
       ),
     after: ({ key, tie: [id] }) => [
       () =>
@@ -506,7 +517,7 @@ export function subProjectIndex(
           q
             .eq('org_id', parent.org_id)
             .eq('parent_id', parent.id)
-            .eq('archive_state', 'live')
+            .eq('archive_state', state)
             .eq('name_key', key)
             .gt('id', id),
         ),
@@ -515,7 +526,7 @@ export function subProjectIndex(
           q
             .eq('org_id', parent.org_id)
             .eq('parent_id', parent.id)
-            .eq('archive_state', 'live')
+            .eq('archive_state', state)
             .gt('name_key', key),
         ),
     ],
@@ -797,17 +808,27 @@ async function starred(
 
 /**
  * The project root reach row `row` of one of `sight`'s grantees names, when
- * it belongs in the list of the rest of the page or of the search, else
- * null: the row holds its project's copies (organization, a root row of
- * the project itself, its name key, live), the project is a live top-level
- * meta of the seat's organization that the seat sees for navigation
- * (seatSight shows), and it is not one of the seat's favorites by the
- * reader rule, which list it first. Rejects with accessUnchecked where a
- * check stopped. navSearchOf asks it too.
+ * the seat sees it for navigation, else null: the row holds its project's
+ * copies (organization, a root row of the project itself, its name key,
+ * live) and the project is a live top-level meta of the seat's organization
+ * that the seat sees for navigation (seatSight shows). Rejects with
+ * accessUnchecked where a check stopped. restShows asks it for the page and
+ * the search, and the Settings project lists (model/projectSettingsLists.ts),
+ * which have no favorites group, ask it alone.
  */
-export async function restShows(
-  ctx: QueryCtx,
+export async function rootShows(
   sight: SeatSight,
+  row: Doc<'project_reach'>,
+): Promise<Doc<'projects'> | null> {
+  const project = await rootRowProject(sight, row)
+  return project !== null && (await sight.shows(project)) ? project : null
+}
+
+/** The live top-level project root reach row `row` of one of `sight`'s
+ * grantees names, when the row holds its copies (rootShows), else null,
+ * without asking whether the seat sees it. */
+export async function rootRowProject(
+  sight: Pick<SeatSight, 'seat' | 'project'>,
   row: Doc<'project_reach'>,
 ): Promise<Doc<'projects'> | null> {
   const { seat } = sight
@@ -818,8 +839,23 @@ export async function restShows(
   if (project === null || project.id !== row.project_id || project.org_id !== row.org_id)
     return null
   if (project.parent_id !== undefined || project.archived_at !== undefined) return null
-  if (row.name_key !== nameKey(project.name)) return null
-  if (!(await sight.shows(project))) return null
+  return row.name_key === nameKey(project.name) ? project : null
+}
+
+/**
+ * The project root reach row `row` of one of `sight`'s grantees names, when
+ * it belongs in the list of the rest of the page or of the search, else
+ * null: it shows (rootShows), and it is not one of the seat's favorites by
+ * the reader rule, which list it first. Rejects with accessUnchecked where
+ * a check stopped. navSearchOf asks it too.
+ */
+export async function restShows(
+  ctx: QueryCtx,
+  sight: SeatSight,
+  row: Doc<'project_reach'>,
+): Promise<Doc<'projects'> | null> {
+  const project = await rootShows(sight, row)
+  if (project === null) return null
   // the seat's grantee holds this row on the project, so the verdict's
   // reach lookup is answered
   const held: FavoriteSight = { ...sight, reached: async () => true }
@@ -911,6 +947,14 @@ export async function navPageOf(
 /** What projectNav.children is asked for: the project and the cursors. */
 export type NavChildrenArgs = NavCursorArgs & { project_id: string }
 
+/** A children list's cursors opened, with the list's name and scope that
+ * seal the next one (lib/namedPages.ts BatchAsk), positions tied by the
+ * sub-project id. */
+export type ChildrenAsk = BatchAsk & {
+  after: NamedAt<IdTie> | null
+  through: NamedAt<IdTie> | null
+}
+
 /**
  * projectNav.children for the login whose active seats are `myProfiles`:
  * one batch of the live sub-projects of top-level project `project_id` the
@@ -939,13 +983,21 @@ export type NavChildrenArgs = NavCursorArgs & { project_id: string }
  * Each sub-project must be live, of the seat's organization, with the
  * project as its parent and, from a reach row, the row's copies, and pass
  * lib/access.ts visible.
+ *
+ * `asked` is the cursors of another list that answers through these
+ * rules, opened by its caller, whose list name and scope then seal the
+ * next cursor, so a cursor of projectNav.children never opens there and
+ * none of that list opens here. Settings' list of a project's sub-projects
+ * (model/projectSettingsLists.ts) passes its own.
  */
 export async function navChildrenOf(
   ctx: QueryCtx,
   myProfiles: ReadonlyMap<string, Doc<'profiles'>>,
   a: NavChildrenArgs,
+  asked?: ChildrenAsk,
 ): Promise<NavChildren> {
-  const ask = await openAsk(CHILDREN_LIST, [a.project_id], a, NOT_CHILDREN_CURSOR, idTieOf)
+  const ask =
+    asked ?? (await openAsk(CHILDREN_LIST, [a.project_id], a, NOT_CHILDREN_CURSOR, idTieOf))
   const ceiling = await namedCeiling(ctx)
   const project = await byId(ctx, 'projects', a.project_id)
   const seat = project === null ? undefined : myProfiles.get(project.org_id)
@@ -1188,13 +1240,14 @@ export async function childRowShows(
   return open?.parent ? { project: sub, parent: open.parent } : null
 }
 
-/* Whether `sub`, read from the live sub-projects of `parent`, a top-level
+/** Whether `sub`, read from the live sub-projects of `parent`, a top-level
  * project the seat sees for a reason of its own, shows for navigation. It
  * does when it is live, of the seat's organization and under `parent` in
  * its meta's tree, when its stored name key is nameKey of its name, so it
  * sits where a child row of it would and the search matched its name, and
- * when the seat sees it (visible), which it inherits from `parent`. */
-async function inheritedShows(
+ * when the seat sees it (visible), which it inherits from `parent`. The
+ * Settings search (model/projectSettingsLists.ts) asks it too. */
+export async function inheritedShows(
   sight: SeatSight,
   parent: Doc<'projects'>,
   sub: Doc<'projects'>,
@@ -1224,8 +1277,11 @@ async function inheritedShows(
  * up the person's membership in each share's team, so how far a call's
  * budget goes depends, within that bound, on a project the seat does not
  * see, as the page's check of such a root row does when a batch reaches it.
+ * The Settings search and Archived projects of a seat that is not an
+ * organization admin (model/projectSettingsLists.ts) read the same
+ * projects through it.
  */
-async function ownRoots(
+export async function ownRoots(
   ctx: QueryCtx,
   sights: readonly SeatSight[],
 ): Promise<Map<string, Doc<'projects'>[]>> {

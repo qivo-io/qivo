@@ -102,15 +102,18 @@ export const receivesTeamAccess = (me: Doc<'profiles'>): boolean =>
  * receive team access, and cappedLevel caps only viewers. So
  * projectLevelsOf and accessOf of it give the level an admin holds once
  * those branches are gone, the ordinary level. The management predicates
- * (canManageOwnProjectAccess, canWriteOrgLabels, canManageOrgLabels) keep
- * their own admin branches and are not asked with it.
+ * (canManageOwnProjectAccess, managesIn, managesEveryProject,
+ * canWriteOrgLabels, canManageOrgLabels) keep their own admin branches and
+ * are not asked with it.
  * A guest or a viewer stays as they are, because as a user a guest would
  * receive the shares of a team it still holds an old membership of, and a
  * viewer would lead a project whose lead_id still names it. The admin
  * access report (internal/adminAccessReport.ts), a project favorite
  * (model/projectFavorites.ts) and the project navigation reads, which
- * judge every caller by ordinary access (model/projectNavReads.ts), ask
- * with it. tests/adminAccessReport.test.ts
+ * judge every caller by ordinary access (model/projectNavReads.ts), and
+ * the Settings project lists for every seat but an admin's
+ * (model/projectSettingsLists.ts, through those reads), ask with it.
+ * tests/adminAccessReport.test.ts
  * fails when those helpers start telling admins and users apart. Once the
  * admin access split removes all three branches, this changes nothing and
  * can go. */
@@ -1254,20 +1257,54 @@ export async function isTeamLeader(
   return await leadsTeam(ctx, me.id, teamId)
 }
 
+/** Whether `me` manages every project of their organization: an active
+ * organization admin. The Settings project lists (model/projectSettingsLists.ts)
+ * ask it to choose management sight, which reads the organization's own
+ * indexes and never asks ordinary access (accessOf, projectLevelsOf), so an
+ * admin lists every project of their organization whether or not they take
+ * part in it. The admin access split removes the admin branches of
+ * levelUnder, projectLevelsOf's sees and levelsFrom (ordinaryOf), and must
+ * leave this one and managesIn's alone, so those lists answer an admin the
+ * same before and after it. A management predicate, like
+ * canManageOwnProjectAccess, so ordinaryOf is never asked with it. */
+export const managesEveryProject = (me: Pick<Doc<'profiles'>, 'active' | 'org_role'>): boolean =>
+  me.active && me.org_role === 'admin'
+
+/** canManageOwnProjectAccess once the caller has the top-level project
+ * `root` above `project`, or `project` itself for a top-level one: an
+ * active seat of the project's organization, the project in `root`'s meta
+ * tree (inMetaTree), and an organization admin or the project's effective
+ * lead (isProjectLead). It reads nothing, so a list that holds the root
+ * works out every row's right for free. A sub-project whose parent is not
+ * a top-level meta, or a top-level project that is not a meta, answers
+ * false where rootMetaOf would throw or the tree check fail. The Settings
+ * project lists' rights (can_create_sub_project, can_restore, can_delete)
+ * are this predicate, before the admin access split, which moves the
+ * writes onto it, and after. */
+export function managesIn(
+  me: Doc<'profiles'>,
+  project: Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>,
+  root: Pick<Doc<'projects'>, 'id' | 'org_id' | 'type' | 'parent_id' | 'lead_id'>,
+): boolean {
+  return (
+    me.active &&
+    project.org_id === me.org_id &&
+    root.org_id === me.org_id &&
+    inMetaTree(project, root) &&
+    (me.org_role === 'admin' || isProjectLead(me, project, root))
+  )
+}
+
 /* Only the named lead and organization administrators control permissions,
- * and nobody controls those of a project outside a meta tree (inMetaTree). */
+ * and nobody controls those of a project outside a meta tree (inMetaTree).
+ * managesIn decides once the root is read. */
 export async function canManageOwnProjectAccess(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,
 ): Promise<boolean> {
   if (!me.active || project.org_id !== me.org_id) return false
-  const root = await rootMetaOf(ctx, project)
-  return (
-    root.org_id === me.org_id &&
-    inMetaTree(project, root) &&
-    (me.org_role === 'admin' || isProjectLead(me, project, root))
-  )
+  return managesIn(me, project, await rootMetaOf(ctx, project))
 }
 
 export const canManageProjectUsers = canManageOwnProjectAccess

@@ -1,0 +1,327 @@
+/* The Settings project lists (convex/projectSettings.ts projects,
+ * subProjects, archived and archivedSubProjects) against what Settings ›
+ * Projects and Archived projects show today. Each case boots the real
+ * store from the caller's real workspace, as projectNavParity.test.ts
+ * does, and compares, as sets over every batch: the projects list with
+ * P.visibleProjects() and each row's right to a sub-project with today's
+ * New sub-project rule (P.levelOn is 'lead', src/panels/settings/
+ * ProjectSettings.tsx); each top-level project's sub-projects with the live
+ * children P.canSee keeps; Archived projects with P.archivedProjects less
+ * the rows beneath an archived parent, each row's parent and its Restore
+ * and Delete with the store's `manage`, in the store's order wherever
+ * archive times differ; each entry's chips with the store's archived
+ * children and `withParent`; and a search for a word with the store's rows
+ * whose name key holds it, through the server's nameKey. The cases are
+ * Northstar's Nora (an admin), Leo and Ben, with Northstar projects
+ * archived as Nora before the store boots, every access shape of a user, a
+ * guest and a Viewer with Firmware archived alone and then Testbed
+ * platform archived carrying Board rev, and the fixture's admin without a
+ * grant. Every answer is also held to the rule worked out without reach
+ * rows (convex/tests/projectSettingsLists.setup.ts).
+ *
+ * Today the store's admin rule (planner.ts levelOnProject) gives an
+ * organization admin every project and Lead on each, which is what
+ * management sight answers, so the admins' sets equal the store's too. The
+ * admin access split removes that rule from the store and replaces these
+ * admin expectations with the server rule's alone. */
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { api } from '../../convex/_generated/api'
+import type { Doc } from '../../convex/_generated/dataModel'
+import { nameKey } from '../../convex/lib/nameKey'
+import { allWordsMatcher } from '../../convex/lib/search'
+import {
+  type SettingsListAnswer,
+  settingsArchivedChildrenOf,
+  settingsArchivedOf,
+  settingsProjectsOf,
+  settingsSubProjectsOf,
+} from '../../convex/model/projectSettingsLists'
+import { SHAPES } from '../../convex/tests/accessShapes.setup'
+import {
+  as,
+  newT,
+  type OrgFixture,
+  plantSeat,
+  type T,
+  uuid,
+  withOrg,
+  workspaceOf,
+} from '../../convex/tests/helpers.setup'
+import { keyOrg } from '../../convex/tests/nameKeys.setup'
+import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
+import { withReach } from '../../convex/tests/projectReach.setup'
+import {
+  expectedArchived,
+  expectedChips,
+  expectedProjects,
+  expectedSubProjects,
+} from '../../convex/tests/projectSettingsLists.setup'
+import type { Snapshot } from './plannerFixture.setup'
+
+vi.hoisted(() => {
+  // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
+  process.env.BETTER_AUTH_SECRET ??= 'project-settings-lists-parity-secret-not-a-deployment-key'
+})
+
+const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
+vi.mock('../lib/convex', async () => ({
+  convex: network,
+  live: (await import('./guard/liveDouble.setup')).liveOver(network),
+}))
+vi.mock('../lib/auth', () => ({
+  armConvexAuth: async () => true,
+  authClient: {
+    getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }),
+  },
+  signOut: vi.fn(),
+}))
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+})
+
+/** A fresh store whose first delivery is `snap`. */
+async function start(snap: Snapshot) {
+  vi.resetModules()
+  vi.stubGlobal('window', { showToast: vi.fn() })
+  network.query.mockResolvedValue(null)
+  network.mutation.mockResolvedValue(null)
+  network.onUpdate.mockImplementation((_ref, _args, next) => {
+    next(structuredClone(snap))
+    return () => {}
+  })
+  const store = await import('./planner')
+  await store.initStore()
+  return store.P
+}
+
+/** The store booted for `profile` from their workspace. */
+async function storeOf(t: T, profile: Doc<'profiles'>) {
+  const snap = await workspaceOf(as(t, profile))
+  if (snap === null) throw new Error(`no workspace for ${profile.name}`)
+  return await start(snap)
+}
+
+const sorted = <V>(values: Iterable<V>) => [...values].map((v) => JSON.stringify(v)).sort()
+
+/** Every row of a list from its start, following `next`. */
+async function rowsOf<R>(read: (after?: string) => Promise<SettingsListAnswer<R>>) {
+  const rows: R[] = []
+  let after: string | undefined
+  for (let round = 0; round < 60; round++) {
+    const batch = await read(after)
+    if (batch.state !== 'ready') throw new Error(`not a batch: ${JSON.stringify(batch)}`)
+    rows.push(...batch.rows)
+    if (batch.next === null) return rows
+    after = batch.next
+  }
+  throw new Error('the list did not end')
+}
+
+/* Searches over withOrg's project names: every one, three, and one
+ * sub-project's. */
+const SHAPE_TERMS = ['r', 'w', 'board']
+
+/* Searches over Northstar's project names. */
+const NORTHSTAR_TERMS = ['e', 'launch', 'customer pilot']
+
+/**
+ * Compares the four lists for `profile` with the store booted from their
+ * workspace and with the rule worked out without reach rows, over every
+ * project of their organization, the searches for each of `terms`
+ * included. Answers how many rows the lists held.
+ */
+async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: readonly string[]) {
+  const P = await storeOf(t, profile)
+  const me = profile
+  const org = me.org_id
+  const projects = await rowsOf((after) => t.run((ctx) => settingsProjectsOf(ctx, me, { after })))
+  expect(projects, `${label}: projects by the rule`).toEqual(await expectedProjects(t, me))
+  const shown = P.visibleProjects().filter((p) => p.org === org)
+  expect(
+    sorted(projects.map((r) => [r.id, r.can_create_sub_project])),
+    `${label}: projects`,
+  ).toEqual(sorted(shown.map((p) => [p.id, P.levelOn(p.id) === 'lead'])))
+  // Settings shows each project's live children P.canSee keeps
+  for (const p of shown) {
+    const kids = await rowsOf((after) =>
+      t.run((ctx) => settingsSubProjectsOf(ctx, me, { project_id: p.id, after })),
+    )
+    const want = (p.children ?? [])
+      .map((c) => P.project(c))
+      .filter((c) => c !== undefined && c !== null && P.canSee(c.id))
+      .map((c) => c?.id)
+    expect(sorted(kids.map((k) => k.id)), `${label}: sub-projects of ${p.key}`).toEqual(
+      sorted(want),
+    )
+    expect(kids, `${label}: sub-projects of ${p.key} by the rule`).toEqual(
+      await expectedSubProjects(t, me, await projectOf(t, p.id)),
+    )
+  }
+  // Archived projects lists the store's rows less those beneath an
+  // archived parent, newest first
+  const archived = await rowsOf((after) => t.run((ctx) => settingsArchivedOf(ctx, me, { after })))
+  expect(archived, `${label}: archived by the rule`).toEqual(await expectedArchived(t, me))
+  const all = P.archivedProjects.filter((r) => r.org === org)
+  const entries = all.filter((r) => !r.parentArchived)
+  expect(
+    sorted(archived.map((r) => [r.id, r.parent?.id ?? null, r.can_restore, r.can_delete])),
+    `${label}: archived`,
+  ).toEqual(sorted(entries.map((r) => [r.id, r.parent ?? null, r.manage, r.manage])))
+  expect(
+    archived.map((r) => Date.parse(r.archived_at)),
+    `${label}: archived order`,
+  ).toEqual(entries.map((r) => r.archivedAt))
+  for (const entry of entries.filter((r) => r.type === 'meta')) {
+    const chips = await rowsOf((after) =>
+      t.run((ctx) => settingsArchivedChildrenOf(ctx, me, { project_id: entry.id, after })),
+    )
+    expect(
+      sorted(chips.map((c) => [c.id, c.with_parent])),
+      `${label}: chips of ${entry.key}`,
+    ).toEqual(sorted(all.filter((c) => c.parent === entry.id).map((c) => [c.id, c.withParent])))
+    expect(chips, `${label}: chips of ${entry.key} by the rule`).toEqual(
+      await expectedChips(t, me, await projectOf(t, entry.id)),
+    )
+  }
+  let seen = projects.length + archived.length
+  for (const term of terms) {
+    const matches = allWordsMatcher(nameKey(term))
+    const named = (p: { name: string }) => matches(nameKey(p.name))
+    const found = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, me, { search: term, after })),
+    )
+    expect(found, `${label}: search ${term} by the rule`).toEqual(
+      await expectedProjects(t, me, term),
+    )
+    const store = [
+      ...shown.filter(named).map((p) => [p.id, null]),
+      ...shown.flatMap((p) =>
+        P.projects
+          .filter((c) => c.parent === p.id && P.canSee(c.id) && named(c))
+          .map((c) => [c.id, p.id]),
+      ),
+    ]
+    expect(
+      sorted(found.map((r) => [r.id, r.parent?.id ?? null])),
+      `${label}: search ${term}`,
+    ).toEqual(sorted(store))
+    const foundOld = await rowsOf((after) =>
+      t.run((ctx) => settingsArchivedOf(ctx, me, { search: term, after })),
+    )
+    expect(foundOld, `${label}: archived search ${term} by the rule`).toEqual(
+      await expectedArchived(t, me, term),
+    )
+    expect(
+      sorted(foundOld.map((r) => [r.id, r.under])),
+      `${label}: archived search ${term}`,
+    ).toEqual(sorted(all.filter(named).map((r) => [r.id, r.parentArchived])))
+    seen += found.length + foundOld.length
+  }
+  return seen
+}
+
+/** The project with id `id` as it is stored now. */
+const projectOf = (t: T, id: string) =>
+  t.run(async (ctx) => {
+    const p = await ctx.db
+      .query('projects')
+      .withIndex('by_uuid', (q) => q.eq('id', id))
+      .unique()
+    if (p === null) throw new Error(`no project ${id}`)
+    return p
+  })
+
+/* A pause of a few milliseconds, so two archives in a row never share an
+ * archive time. */
+const tick = () => new Promise((done) => setTimeout(done, 3))
+
+/** Archives project `id` as `seat` through projects.archive. */
+async function archive(t: T, seat: Doc<'profiles'>, id: string) {
+  await as(t, seat).mutation(api.projects.archive, { org_id: seat.org_id, id })
+  await tick()
+}
+
+describe('Northstar', () => {
+  it('lists what Settings shows Nora, Leo and Ben, with a project archived carrying a sub-project, one archived alone before it and a sub-project of a live project', async () => {
+    const t = newT()
+    const { org, profiles } = await plantNorthstar(t)
+    await keyOrg(t, org.id)
+    await withReach(t)
+    const person = async (key: string) => {
+      const id = await northstarId(`person:${key}`)
+      const p = profiles.find((profile) => profile.id === id)
+      if (p === undefined) throw new Error(`no ${key}`)
+      return p
+    }
+    const [nora, leo, ben] = await Promise.all(['nora', 'leo', 'ben'].map(person))
+    // two top-level projects with live sub-projects, Leo's first: the
+    // first loses one sub-project to an archive of its own and then is
+    // archived with the rest; the second loses one sub-project only
+    const tree = await t.run(async (ctx) => {
+      const all = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', org.id))
+        .collect()
+      const live = all.filter((p) => p.archived_at === undefined)
+      return live
+        .filter((p) => p.parent_id === undefined && p.type === 'meta')
+        .map((p) => ({ p, subs: live.filter((s) => s.parent_id === p.id) }))
+        .filter(({ subs }) => subs.length >= 2)
+    })
+    const leos = new Set((await storeOf(t, leo)).visibleProjects().map((p) => p.id))
+    const [first, second] = [
+      ...tree.filter(({ p }) => leos.has(p.id)),
+      ...tree.filter(({ p }) => !leos.has(p.id)),
+    ]
+    expect(second).toBeDefined()
+    await archive(t, nora, first.subs[0].id)
+    await archive(t, nora, first.p.id)
+    await archive(t, nora, second.subs[0].id)
+    expect(await compare(t, nora, 'Nora', NORTHSTAR_TERMS)).toBeGreaterThan(5)
+    expect(await compare(t, leo, 'Leo', NORTHSTAR_TERMS)).toBeGreaterThan(5)
+    await compare(t, ben, 'Ben', NORTHSTAR_TERMS)
+  })
+})
+
+/** One access case: `shape` planted for a fresh seat of `role`, or the
+ * fixture's admin without a shape, compared with Firmware archived alone
+ * and again with Testbed platform archived carrying Board rev. Answers how
+ * many rows the lists held. */
+async function compareShape(
+  shape: (typeof SHAPES)[number] | null,
+  role: 'user' | 'guest' | 'viewer' | 'admin',
+) {
+  const t = newT()
+  const f: OrgFixture = await withOrg(t)
+  const subject =
+    role === 'admin'
+      ? f.admin
+      : await plantSeat(t, { org_id: f.org.id, org_role: role, auth_user_id: `auth_${uuid()}` })
+  if (shape !== null) await t.run((ctx) => shape[1](ctx, f, subject))
+  await keyOrg(t, f.org.id)
+  await keyOrg(t, f.otherOrg.id)
+  await withReach(t)
+  const label = `${role}, ${shape?.[0] ?? 'admin'}`
+  await archive(t, f.admin, f.sub.id)
+  let seen = await compare(t, subject, `${label}, Firmware archived`, SHAPE_TERMS)
+  await archive(t, f.admin, f.meta.id)
+  seen += await compare(t, subject, `${label}, Testbed platform archived`, SHAPE_TERMS)
+  return seen
+}
+
+describe('access shapes', () => {
+  for (const role of ['user', 'guest', 'viewer'] as const)
+    it(`lists what Settings shows a ${role} in every shape`, async () => {
+      let showing = 0
+      for (const shape of SHAPES) if ((await compareShape(shape, role)) > 0) showing++
+      // a guest takes no team shares, so fewer shapes show them anything
+      expect(showing).toBeGreaterThan(SHAPES.length / 3)
+    })
+
+  it('lists every project for an admin without a grant, as the store’s admin rule shows them', async () => {
+    expect(await compareShape(null, 'admin')).toBeGreaterThan(5)
+  })
+})

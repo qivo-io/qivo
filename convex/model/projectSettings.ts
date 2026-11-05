@@ -9,14 +9,20 @@
  * reach rows under it, once the organization's are complete, or else its
  * sub-projects, in one range, with the caller's own grants, memberships and
  * team shares (lib/access.ts accessOf); it reads nothing else about them. A
- * check a bound of those reads stopped answers `unavailable`.
+ * check a bound of those reads stopped answers `unavailable`. The project
+ * lists of Settings (Settings › Projects and Archived projects) are in
+ * model/projectSettingsLists.ts, which opens its cursors here
+ * (orderedListAsk) and answers such a check with the access_unchecked
+ * refusal instead, as the navigation reads do.
  *
  * One gate (settingsGate) decides who reads a project: whoever sees it
  * (lib/access.ts projectLevel, navigation included, the rule behind
  * canSeeProject) or manages it (canManageOwnProjectAccess). Today every
  * manager also sees the project; the admin access split takes an admin's
  * ordinary access away from projects they only manage, and the gate keeps
- * them in. An unknown id, a project of another organization, one in Deleted
+ * them in, as the Settings project lists list every project of an admin's
+ * organization by management (model/projectSettingsLists.ts). An unknown
+ * id, a project of another organization, one in Deleted
  * items, one outside a meta tree and one the caller neither sees nor
  * manages all answer `unavailable`, so an answer tells nothing about a
  * project the caller cannot reach.
@@ -65,6 +71,7 @@ import { badRequest, notFound, require } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import {
+  compareIn,
   compareNamed,
   indexAfter,
   inGroup,
@@ -73,8 +80,10 @@ import {
   mergeNamed,
   type Named,
   type NamedAt,
+  type NamedOrder,
   type NamedReads,
   type NamedStream,
+  type NamedTie,
   namedCeiling,
   openNamedCursor,
   type ReadGuard,
@@ -207,7 +216,9 @@ async function treeOf(
  * cannot reach; a caller who manages the project gets `lead` before any of
  * those reads (levelUnder), so only one who does not can meet it.
  * canManageOwnProjectAccess reads the root again, one range for a
- * sub-project.
+ * sub-project. After the admin access split an admin reaches a project they
+ * only manage through `manages`, which every row the Settings project lists
+ * give an admin passes (model/projectSettingsLists.ts).
  */
 export async function settingsGate(
   ctx: QueryCtx,
@@ -414,13 +425,14 @@ export type ListArgs = { search?: string; after?: string; through?: string }
 /** A name-ordered list asked for: the list's name and scope, which seal
  * its cursors (lib/namedPages.ts namedCursor), the search as typed, trimmed,
  * and the positions the batch reads between, a lib/namedPages.ts BatchAsk
- * with the search. */
-export type ListAsk = {
+ * with the search. The positions' tie is one id unless the list orders by
+ * more (orderedListAsk). */
+export type ListAsk<Tie extends NamedTie = IdTie> = {
   list: string
   scope: readonly string[]
   search: string
-  after: NamedAt<IdTie> | null
-  through: NamedAt<IdTie> | null
+  after: NamedAt<Tie> | null
+  through: NamedAt<Tie> | null
 }
 
 /** The refusal of an `after` or `through` that is not a cursor of this
@@ -428,14 +440,18 @@ export type ListAsk = {
 const NOT_LIST_CURSOR =
   'after and through must be cursors from an earlier answer of this list, with the same project and search; start again from the first batch'
 
+/** The tie of a position of an index that orders equal name keys by one id,
+ * or null for any other shape. */
+export const idTieOf = ({ tie }: NamedAt): IdTie | null => {
+  const [id] = tie
+  return tie.length === 1 && typeof id === 'string' ? [id] : null
+}
+
 /**
  * The arguments of list `list` checked and opened, for `scope`, which the
- * normalized search ends. Refuses a search longer than LIMITS.search with
- * that limit's sentence, and with badRequest an `after` or `through` that is
- * not a cursor this list gave for the same scope and search, or whose key
- * `known` refuses, and a `through` that does not come after `after`. Two
- * searches with one name key, such as "Café" and "cafe", share cursors,
- * since they match the same rows.
+ * normalized search ends, for a list whose positions tie on one id
+ * (orderedListAsk with idTieOf). `known` refuses a key the list never
+ * hands out, such as one without its group mark.
  */
 export async function listAsk(
   list: string,
@@ -443,20 +459,42 @@ export async function listAsk(
   a: ListArgs,
   known: (key: string) => boolean = () => true,
 ): Promise<ListAsk> {
+  return await orderedListAsk(list, scope, a, {
+    tieOf: (at) => (known(at.key) ? idTieOf(at) : null),
+  })
+}
+
+/**
+ * The arguments of list `list` checked and opened, for `scope`, which the
+ * normalized search ends. Refuses a search longer than LIMITS.search with
+ * that limit's sentence, and with badRequest (`o.refusal`, a sentence of
+ * this module's lists by default) an `after` or `through` that is not a
+ * cursor this list gave for the same scope and search, or whose position
+ * `o.tieOf` refuses (a tie of another shape, a key the list never hands
+ * out), and a `through` that does not come after `after` in `o.order`, the
+ * direction the list reads in, ascending by default. Two searches with one
+ * name key, such as "Café" and "cafe", share cursors, since they match the
+ * same rows. Settings' project lists (model/projectSettingsLists.ts) open
+ * their cursors here, Archived projects' descending.
+ */
+export async function orderedListAsk<Tie extends NamedTie>(
+  list: string,
+  scope: readonly string[],
+  a: ListArgs,
+  o: { tieOf: (at: NamedAt) => Tie | null; order?: NamedOrder; refusal?: string },
+): Promise<ListAsk<Tie>> {
   const search = limitedText(LIMITS.search, a.search ?? '')
   const sealed = [...scope, nameKey(search)]
-  const open = async (text: string | undefined): Promise<NamedAt<IdTie> | null> => {
+  const open = async (text: string | undefined): Promise<NamedAt<Tie> | null> => {
     if (text === undefined) return null
     const at = await openNamedCursor(text, list, sealed)
-    const id = at?.tie[0]
-    if (at === null || at.tie.length !== 1 || typeof id !== 'string' || !known(at.key)) {
-      throw badRequest(NOT_LIST_CURSOR)
-    }
-    return { key: at.key, tie: [id] }
+    const tie = at === null ? null : o.tieOf(at)
+    if (at === null || tie === null) throw badRequest(o.refusal ?? NOT_LIST_CURSOR)
+    return { key: at.key, tie }
   }
   const after = await open(a.after)
   const through = await open(a.through)
-  if (after !== null && through !== null && compareNamed(through, after) <= 0) {
+  if (after !== null && through !== null && compareIn(o.order ?? 'asc', through, after) <= 0) {
     throw badRequest('through must be a cursor after the one in after')
   }
   return { list, scope: sealed, search, after, through }
