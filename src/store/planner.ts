@@ -10323,9 +10323,15 @@ export const PLANNER = {
       (P.reference), and moves the reference to the task's handle in the
       repaint in which the workspace first holds the task
       (P.watchHandles). One reference at a time, as one task is watched;
-      the Inbox pane's pop-out leaves it to the pane. */
+      the Inbox pane's pop-out leaves it to the pane. None stops the
+      boot's read of its address, which no window took over, as when the
+      workspace holds the task the address names. */
   watchTaskRef: (ref: string | null) => {
     const named = refParts(ref)
+    if (!refRead && !named) {
+      if (parts?.sideArgs('reference')) parts.stopSide('reference')
+      return
+    }
     if ((refRead?.ref ?? null) === (named ? ref : null)) return
     const known = named?.uuid && named.org ? { uuid: named.uuid, org: named.org } : null
     refRead =

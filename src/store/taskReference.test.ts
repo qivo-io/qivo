@@ -421,6 +421,19 @@ describe("the boot's read of its address", () => {
     expect(store.P.reference?.state).toBe('failed')
   })
 
+  it('stops the read once a window opens the task by the handle the workspace holds it by', async () => {
+    subs = []
+    await boot({ address: { slug: 'testbed', ref: 'QN-1' } })
+    const read = one('taskWindow:task')
+    expect(read.args).toEqual({ org_id: org, ref: 'QN-1' })
+    await turn()
+    // the first delivery holds task-a, so the window names it by its handle
+    expect(store.P.handleOf('task-a')).toBe('QN-1')
+    store.P.watchTaskRef(null)
+    expect(read.closed).toBe(true)
+    expect(open('taskWindow:task')).toEqual([])
+  })
+
   it('reads nothing for a slug the login cannot resolve', async () => {
     subs = []
     await boot({ address: { slug: 'globex', ref: 'QN-40' } })
