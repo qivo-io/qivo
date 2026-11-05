@@ -1326,9 +1326,15 @@ function App() {
          put, task or not. A task the workspace does not hold keeps the
          scope until its answer names its project (pendingTask). */
       const preferred = r.view && !r.scope && P.isWideScope(was.scope) ? null : was.scope
-      const task = r.issue ? scopeTaskOf(r.issue) : undefined
+      /* The address names the open task when it names the same task
+         (sameTask), as the address of a task opened by a reference does,
+         which reads back as another string: the open task stays, so the
+         move closes no window and reads nothing again, as a Back that
+         closes a phone layer over the task. */
+      const issue = r.issue && sameTask(r.issue, was.openIssue) ? was.openIssue : r.issue || null
+      const task = issue ? scopeTaskOf(issue) : undefined
       // a task named by a reference whose project is not known yet
-      const resolving = !!r.issue && !task
+      const resolving = !!issue && !task
       const sc = r.sync
         ? undefined
         : liveScope(r.scope)
@@ -1346,7 +1352,7 @@ function App() {
           : !r.issue && !r.inbox && !r.settings && !r.projects && !r.sync
             ? 'overview'
             : was.view,
-        openIssue: r.issue || null,
+        openIssue: issue,
         // a project page held while its project left (Settings) keeps its
         // own address, which parses to no project now: a Back within it,
         // as from its Archive or delete window, stays on the page
@@ -1394,11 +1400,11 @@ function App() {
       if (!r.settings) settingsReturn.current = NO_RETURN
       if (!r.sync) syncReturn.current = NO_RETURN
       pendingTask.current =
-        resolving && r.issue
+        resolving && issue
           ? {
               pathname: location.pathname,
               hash: location.hash,
-              ref: r.issue,
+              ref: issue,
               page: pageKey(next),
               scope: r.scope,
               preferred,

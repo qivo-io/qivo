@@ -13,9 +13,10 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    store. A layer that closes with the move it started, as Create and a
    search result do, gives that move its entry, so Back returns to the page
    the layer opened on. A task that someone else removes keeps the address
-   its window shows. A refused Back returns to the entry it left. An
-   archived task Search opened closes with an entry of its own, and Back and
-   Forward to its address open its window again. */
+   its window shows. A refused Back returns to the entry it left. A Back
+   that closes a layer over a task the workspace does not hold leaves its
+   window open. An archived task Search opened closes with an entry of its
+   own, and Back and Forward to its address open its window again. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -39,6 +40,9 @@ let removeHistory = () => {}
 // task window's own read answers (taskWindow.task), which a test sets
 // after boot
 let archive: (Snapshot['issues'][number] & { archived_at: string })[] = []
+// the active tasks the workspace does not hold, which Search finds and the
+// task window's own read answers, which a test sets after boot
+let unheld: Snapshot['issues'] = []
 // how many times the window subscribed its read of a task
 let reads = 0
 
@@ -177,7 +181,7 @@ async function boot(address: string, phone: boolean, second = false) {
       setTimeout(() => {
         if (closed) return
         const row = archive.find(named)
-        const live = server.issues.find(named)
+        const live = server.issues.find(named) ?? unheld.find(named)
         next(
           row
             ? {
@@ -210,11 +214,12 @@ async function boot(address: string, phone: boolean, second = false) {
   // word of the text, in the Work sub-project, and with Include archived
   // tasks the archived ones too
   archive = []
+  unheld = []
   network.query.mockImplementation(async (ref, args) => {
     const name = getFunctionName(ref)
     if (name !== 'search:page') return null
     const words: string[] = args.text.toLowerCase().split(/\s+/).filter(Boolean)
-    const rows = [...snap.issues, ...(args.include_archived ? archive : [])]
+    const rows = [...snap.issues, ...unheld, ...(args.include_archived ? archive : [])]
       .filter((issue) => words.every((word) => issue.title.toLowerCase().includes(word)))
       .map((issue) => ({
         kind: 'task',
@@ -580,6 +585,84 @@ describe('a pick from the Back menu past a task with a comment not yet sent', {
     expect(question()).toBeNull()
     expect(document.querySelector('[data-modal-shell]')).not.toBeNull()
     expect(location.pathname).toBe(task)
+  })
+})
+
+describe('a Back that closes a phone layer over a task the workspace does not hold', {
+  timeout: 30_000,
+}, () => {
+  it('keeps the window and its comment, asks nothing and reads the task no more', async () => {
+    await boot('/app/testbed/board/p/1', true)
+    await waitFor(() => document.querySelector('.mobile-task-row'), 'the task list')
+    const { P } = await import('./store/planner')
+    unheld = [
+      {
+        id: crypto.randomUUID(),
+        org_id: P.homeOrg,
+        project_id: 'work',
+        num: 3,
+        title: 'Replace the cable',
+        description: '',
+        status: 'todo',
+        priority: 'medium',
+        paused: false,
+        created_at: AT,
+        updated_at: AT,
+        has_hidden_subtasks: false,
+        has_hidden_parent: false,
+      },
+    ]
+    await settle()
+    await press('Search tasks and projects')
+    await type(
+      await waitFor(
+        () => document.querySelector<HTMLInputElement>('[cmdk-root] input'),
+        'the search box',
+      ),
+      'Replace',
+    )
+    const result = await waitFor(
+      () =>
+        [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+          item.textContent?.includes('Replace the cable'),
+        ),
+      'the result',
+    )
+    await act(async () => result.click())
+    // the window shows the task from its own read, by a reference
+    await waitFor(
+      () =>
+        document
+          .querySelector('[data-task-chrome]')
+          ?.closest('[role="dialog"]')
+          ?.textContent?.includes('Replace the cable'),
+      'the task window',
+    )
+    await settle()
+    const task = location.pathname
+    expect(task).toBe('/app/testbed/board/tasks/qn-3')
+    const composer = await waitFor(
+      () =>
+        document.querySelector<TiptapEditorHTMLElement>(
+          '[role="textbox"][aria-label="Leave a comment"]',
+        )?.editor,
+      'the comment editor',
+    )
+    await act(async () => composer.commands.insertContent('The old one is frayed'))
+    const read = reads
+    // a layer over the task, on an entry of the task's own address
+    await press('Search tasks and projects')
+    await waitFor(() => document.querySelector('[cmdk-root] input'), 'the search box again')
+    await settle()
+    expect(history.state?.qivoLayer).toBeTruthy()
+    await act(async () => history.back())
+    await settle()
+    // Back closes the search and nothing else
+    expect(document.querySelector('[cmdk-root]')).toBeNull()
+    expect(document.querySelector('[data-discard-prompt] h2')).toBeNull()
+    expect(location.pathname).toBe(task)
+    expect(composer.getText()).toBe('The old one is frayed')
+    expect(reads).toBe(read)
   })
 })
 
