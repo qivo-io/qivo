@@ -1261,9 +1261,8 @@ planned hours per person, `update_comment` and `delete_comment` for comments,
 task, `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone` for projects,
 and `list_team_members`, `set_team` and `set_team_member` for teams. This
-pre-launch rename
-replaces the former tool names; clients
-with a cached tool catalogue must refresh discovery or reconnect.
+pre-launch rename replaces the former tool names; clients with a cached tool
+catalogue must refresh discovery or reconnect.
 
 A refused tool call answers its refusal sentence as the tool's error result
 (`isError: true`). A call whose change keeps conflicting with changes other
@@ -1311,9 +1310,9 @@ placeholder alone, is read as a call of the older catalogue, which drops
 the unknown arguments and answers the first page. A call that sends one of
 its own arguments refuses an unknown one beside it, and `next_cursor` is
 refused even alone, so a loop that passes the answer's `next_cursor` back
-under that name, instead of as `cursor`, is told so. The schema check covers each
-argument's type, its allowed values and the pattern of a uuid or a date. A
-text's length, a number's range and a list's size are the server's checks,
+under that name, instead of as `cursor`, is told so. The schema check covers
+each argument's type, its allowed values and the pattern of a uuid or a date.
+A text's length, a number's range and a list's size are the server's checks,
 which answer the limit's sentence from [Limits](#limits) as REST does, such
 as `a task title must be at most 255 characters. Shorten it.`
 
@@ -1853,11 +1852,10 @@ result.
 can create teams`). With `team_id` it renames that team, which an
 organization admin or a leader of the team may do (`requires an organization
 admin or a leader of this team` otherwise). `name` is trimmed, may not be
-blank and holds at most 80 characters. The result is the team as
-`list_teams` lists it, `{id, name, member_count}`, plus `created`, and a new
-team's `member_count` is `0`. Neither writes an activity row, as in the
-app. Deleting a
-team stays in the app ([Stays in the app](#stays-in-the-app)).
+blank and holds at most 80 characters. The result is the team as `list_teams`
+lists it, `{id, name, member_count}`, plus `created`, and a new team's
+`member_count` is `0`. Neither writes an activity row, as in the app.
+Deleting a team stays in the app ([Stays in the app](#stays-in-the-app)).
 
 **Members and leaders.** `set_team_member` changes one `user_id` in a team.
 Members decide who sees the projects shared with the team, so it needs a

@@ -306,10 +306,10 @@ Useful field rules:
   adding another kind. A task has at most 100 links, 20 labels and 100
   attachments; past each the request is a `400` saying which task is full.
   `get_task` lists `links`.
-- **Label:** find label ids or names with `list_labels` or `GET /v1/labels`, a page at a time or by `search`,
-  then send `add_labels` and `remove_labels` on `update_task` or PATCH.
-  `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only
-  organization admins rename or recolor one.
+- **Label:** find label ids or names with `list_labels` or `GET /v1/labels`,
+  a page at a time or by `search`, then send `add_labels` and `remove_labels`
+  on `update_task` or PATCH. `set_label` or `POST /v1/labels` creates a label
+  (`#rrggbb` color); only organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog, and holds at most
   500 characters. The comment limits apply to it, and a refused reason

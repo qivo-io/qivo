@@ -188,11 +188,10 @@ tag. It puts the run's two agents in the run's team, checks that the team's
 `member_count` is 2 and that its member pages over REST and MCP, one member
 a page, list both, and removes them again. It finds a label it makes by a
 search without the label's accent on both surfaces, deletes it again in the
-app, and checks that
-`offset=1`, `limit=0`, a cursor of another search and a users cursor sent to
-the teams list are refused with their sentences. Against a backend from
-before the paged people lists that step fails, and so do the run's other
-reads of those lists. In the
+app, and checks that `offset=1`, `limit=0`, a cursor of another search and a
+users cursor sent to the teams list are refused with their sentences.
+Against a backend from before the paged people lists that step fails, and so
+do the run's other reads of those lists. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
