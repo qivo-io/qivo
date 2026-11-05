@@ -484,6 +484,23 @@ describe('the live parts registry', () => {
     expect(s.watched.has(other)).toBe(false)
   })
 
+  it("never hands the task side's subscription to a reference read with the same arguments", async () => {
+    const { s, parts } = await started()
+    const args = { org_id: ORG, ref: 't' }
+    const key = s.keyOf('taskWindow:task', args)
+    parts.watchSide('task', TASK, args)
+    s.set('taskWindow:task', args, { value: { state: 'ok' } })
+    s.send([key])
+    s.log.length = 0
+    // a reference read with the task side's arguments, which the store
+    // never starts (planner.ts runRefRead), takes nothing from the task
+    // side, which keeps its subscription
+    expect(parts.watchSide('reference', TASK, args)).toBeUndefined()
+    expect(parts.sideArgs('task')).toEqual(args)
+    expect(parts.sideArgs('reference')).toEqual(args)
+    expect(s.log).toEqual([`watch ${key}`])
+  })
+
   it('fails a workspace that stays incomplete with no part answering while online, and waits while offline', async () => {
     vi.useFakeTimers()
     STALL.ms = 1000
