@@ -218,7 +218,13 @@ on the row's name must open the sub-project's Board on the deployment's
 answer. That needs a backend from the release that added `overview.health`
 or later, whose organization counts are whole, as
 `internal/overviewCountsBackfill` left them. Against an older backend, or
-while the counts read **Counting…**, the step fails. Next it makes a label
+while the counts read **Counting…**, the step fails. It then records the
+frames the page sends on its sync socket and opens its project's Board and
+one fixture task's address in fresh loads, neither of which may subscribe
+the workspace's task windows (`workspace:tasks`), and then the Roadmap from
+the view switch, which must subscribe them and show that task's row once
+every task has loaded (`ui/tasks-on-demand`). It reads only, and an app
+from before tasks on demand fails it. Next it makes a label
 with its run tag over REST, puts it on one of its fixture tasks, opens
 **Settings → Labels** on the deployment's batches (`labels.settingsPage`),
 finds the label by search with **1 active task**, renames it in place and
@@ -907,6 +913,16 @@ every deployment holds since their backfills, so the release changes no
 table, field or index and needs no step, and a list in name order answers
 `this list cannot be read until this organization's names are ready; try
 again in a few minutes` for an organization whose names are not ready.
+
+From the release after v0.1.132, the app subscribes the workspace's task
+windows (`workspace.tasks`) only when a page or action needs every task:
+the Roadmap, Team sync, a create and the Inbox's search. The Board, the
+phone's task list, the Overview, Search, task windows, task links and the
+Inbox's rows read the server's own answers meanwhile, as they did before.
+The release changes no server function, so it has no server change, no
+release step and no rollback floor. An older app works against its
+backend, and this app works against any backend from v0.1.127 on, the
+relation pickers' floor, which the floors above already hold.
 
 ## Node.js version
 

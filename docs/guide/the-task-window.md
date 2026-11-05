@@ -179,8 +179,8 @@ groups omit status, and unowned tasks omit the portrait.
 
 **Subtasks**, **Linked tasks** and **Attachments** load their own lists when
 the window shows them. Until a list arrives, its section shows the items
-Qivo already has, also while you are offline, or, while a very large
-workspace is still loading its tasks, says the list is loading, such as
+Qivo already has once every task has loaded for a page that needs them,
+also while you are offline, and otherwise says the list is loading, such as
 **Loading subtasks…**. A list that could not load says **Couldn't load
 subtasks.** with **Retry**. When Qivo no longer lets you
 see the task, a section says **Subtasks are not available.** A list too large
@@ -215,8 +215,9 @@ organizations when your access changes, and its note offers **Retry**. If
 Qivo cannot reach the server, the window says **Couldn't open QN-12.**,
 with **Retry**. A task you open by the number in its link takes no change,
 which says **Available once Qivo can check this task for changes**, until
-the window has read the task on its own, which on a large workspace comes
-after the first tasks have loaded. Then, if you can edit its project, you can
+the window has read the task on its own, which comes after the reads
+already on their way, such as every task loading for a page that needs
+them. Then, if you can edit its project, you can
 change it: its fields, its description and the images in it, its
 labels and its files, its parent, its subtasks and its links, and create
 a parent, subtask or linked task from its pickers. Each change shows at once and
@@ -229,9 +230,9 @@ project access** you cannot change it or comment on it, but you can link it
 to a task you can edit, and you can still edit or delete your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
 once every task has loaded and then highlights it, unless you have left the
-roadmap meanwhile. When the task arrives, the window shows it from
-the workspace in place, and a title, hours or a comment you were typing
-stay. If Qivo cannot check such a task for changes, the window keeps showing
+roadmap meanwhile. Once every task has loaded for a page that needs them,
+the window shows the task from the workspace in place, and a title, hours
+or a comment you were typing stay. If Qivo cannot check such a task for changes, the window keeps showing
 it as it last loaded and says so, with **Retry**. Its changes then wait with
 **Available once Qivo can check this task for changes**, and a title,
 description, hours or comment you are typing stays until you can save it.
