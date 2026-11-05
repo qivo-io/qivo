@@ -66,6 +66,7 @@ afterEach(() => {
 })
 
 const sorted = (ids: Iterable<string>) => [...ids].sort()
+const HOUR_MS = 3_600_000
 
 /** The titles of `rows`, sorted. */
 const titles = (rows: readonly { title: string }[]) => rows.map((r) => r.title).sort()
@@ -113,6 +114,20 @@ describe('arguments', () => {
       'bad_request',
       /week_end/,
     )
+    // weeks that begin on other days than `week` names, which would leave a
+    // walker's running sitting with no local day to read from
+    await task(t, f.sub, { assignee_id: f.user.id, status: 'todo' })
+    await plantStamp(t, f.user, { at: '2026-01-01T10:00:00.000Z' })
+    const moved = (ms: number): AgendaClock => ({
+      ...NOW_CLOCK,
+      week_starts: NOW_CLOCK.week_starts.map((s) => s + ms),
+      week_end: NOW_CLOCK.week_end + ms,
+    })
+    for (const ms of [-3 * 86_400_000, -14 * HOUR_MS - 1, 12 * HOUR_MS + 1, 86_400_000])
+      await expectRefusal(ask(moved(ms)), 'bad_request', /week_starts/)
+    // a local midnight of `week` in any zone, from UTC+14 to UTC-12
+    for (const ms of [-14 * HOUR_MS, 12 * HOUR_MS])
+      expect(okOf(await ask(moved(ms))).people.map((p) => p.id)).toEqual([f.user.id])
     await expect(
       as(t, f.user).query(api.teamSync.agenda, {
         org_id: f.org.id,

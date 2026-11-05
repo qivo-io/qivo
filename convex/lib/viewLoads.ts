@@ -92,6 +92,11 @@ export const WEEK_STARTS = 53
  * as Antarctica/Troll's. */
 const WEEK_SLACK_MS = 3 * 3_600_000
 
+/* How far before and after a day's UTC midnight its local midnight can
+ * fall: UTC offsets run from minus 12 to plus 14 hours. */
+const ZONE_EAST_MS = 14 * 3_600_000
+const ZONE_WEST_MS = 12 * 3_600_000
+
 /** The day and the weeks a verdict is judged by, on the client's grid:
  * week 0 is the client's current week. */
 export type Clock = {
@@ -121,14 +126,18 @@ export const vClock = {
  * where one is malformed: `day` and `week` not real days, `week` not the
  * first day of a week holding `day`, `week_starts` not exactly WEEK_STARTS
  * instants in milliseconds, ascending, each within three hours of 7 days
- * after the one before (a daylight-saving change), or `week_end`, the
- * instant the next local week begins at, not as far after the last of them.
- * An instant falls in the local week whose start it is at or after and
- * whose end it is before, so a week a daylight-saving change makes 167 or
- * 169 hours long ends where the client's does. One before the first start
- * falls in whole weeks of 7 days before it, and one after `week_end` in
- * whole weeks after it, exact unless a daylight-saving change lies past
- * the window, and then only within an hour of a week's start.
+ * after the one before (a daylight-saving change), the last of them not an
+ * instant the local midnight of `week` can fall on in some zone (from 14
+ * hours before its UTC midnight to 12 after), or `week_end`, the instant
+ * the next local week begins at, not as far after the last of them. So the
+ * weeks begin on the days `week` names, as lib/teamSync.ts readingBounds
+ * places local midnights. An instant falls in the local week whose start it
+ * is at or after and whose end it is before, so a week a daylight-saving
+ * change makes 167 or 169 hours long ends where the client's does. One
+ * before the first start falls in whole weeks of 7 days before it, and one
+ * after `week_end` in whole weeks after it, exact unless a daylight-saving
+ * change lies past the window, and then only within an hour of a week's
+ * start.
  */
 export function clockOf(a: {
   day: string
@@ -149,6 +158,9 @@ export function clockOf(a: {
     if (Math.abs(starts[i] - starts[i - 1] - WEEK_MS) > WEEK_SLACK_MS)
       throw badRequest('week_starts must be ascending, a week apart')
   const last = starts.length - 1
+  const midnight = first * DAY_MS
+  if (starts[last] < midnight - ZONE_EAST_MS || starts[last] > midnight + ZONE_WEST_MS)
+    throw badRequest('week_starts must end at the local midnight that begins week')
   const end = a.week_end
   if (!Number.isSafeInteger(end) || Math.abs(end - starts[last] - WEEK_MS) > WEEK_SLACK_MS)
     throw badRequest('week_end must be the instant the week after the last of week_starts began at')

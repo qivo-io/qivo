@@ -121,7 +121,8 @@ const HOUR_MS = 60 * 60 * 1000
 /** The client's day and local weeks as a query takes them
  * (lib/viewLoads.ts vClock and clockOf, which checks them): its day and the
  * first day of its week, YYYY-MM-DD, the instants (ms) its last local weeks
- * began at, oldest first, and the instant its next week begins at. */
+ * began at, oldest first, the last the local midnight of `week`, and the
+ * instant its next week begins at. */
 export type ReadingClock = {
   day: string
   week: string
