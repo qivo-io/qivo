@@ -1343,7 +1343,7 @@ describe('board-scale-seed --files', () => {
     ).toThrow(/no room left/)
   })
 
-  it('makes the sub-projects, then the tasks, then uploads and attaches each file as Nora, and counts a deleted one as made', async () => {
+  it('makes the sub-projects, then the tasks, then uploads and attaches each file as Nora, and counts a deleted or archived one as made', async () => {
     const posted = []
     vi.stubGlobal('fetch', async (url, init) => {
       posted.push({ url, size: init.body.length, type: init.headers['Content-Type'] })
@@ -1361,17 +1361,20 @@ describe('board-scale-seed --files', () => {
       { org_id: 'org', table: 'issue_attachments', row_id: fileSeedId('file', 1) },
       { org_id: 'other', table: 'projects', row_id: fileSeedId('project', 2) },
     ]
+    // the third one's task is in an archived sub-project, which the
+    // workspace leaves out and which stamps no archived_at on the task
+    fake.archived = [{ id: fileSeedId('task', 2), org_id: 'org' }]
     try {
       await runBoardScaleSeed([...local, '--tasks', '0', '--files', '3'], { env, log: () => {} })
     } finally {
       vi.unstubAllGlobals()
       fake.projects = null
       fake.storedRows = []
+      fake.archived = []
     }
     expect(fake.calls.map(([name]) => name)).toEqual([
       'projects:create',
       'projects:create',
-      'issues:create',
       'issues:create',
       'files:uploadUrl',
       'files:attach',
@@ -1382,7 +1385,7 @@ describe('board-scale-seed --files', () => {
     expect(fake.calls[0][1]).toMatchObject({ parent_id: 'cloud', name: 'Café pilot photos' })
     expect(posted.map((p) => p.size)).toEqual([seededFileBytes(0), seededFileBytes(2)])
     expect(posted[0]).toMatchObject({ type: 'text/csv' })
-    expect(fake.calls[5][1]).toMatchObject({
+    expect(fake.calls[4][1]).toMatchObject({
       id: fileSeedId('file', 0),
       issue_id: fileSeedId('task', 0),
       storage_id: 'storage-1',

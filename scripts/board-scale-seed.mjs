@@ -940,7 +940,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   // admin reads them here
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
-  const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id, archived) : null
+  const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id) : null
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -1119,17 +1119,16 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
 }
 
 /** The project, task and attachment ids organization `org` holds anywhere,
-    as the local admin reads the tables: live and archived projects, the
-    attachment rows, and every copy Deleted items stores, beside the
-    `archived` tasks the run read. --files counts these as made. */
-async function storedIdsOf(client, org, archived) {
-  const ids = {
-    projects: new Set(),
-    tasks: new Set(archived.map((task) => task.id)),
-    files: new Set(),
-  }
+    as the local admin reads the tables: live and archived projects, every
+    task row, archived ones and those of an archived project included,
+    which keep no archived_at of their own, the attachment rows, and every
+    copy Deleted items stores. --files counts these as made. */
+async function storedIdsOf(client, org) {
+  const ids = { projects: new Set(), tasks: new Set(), files: new Set() }
   for (const project of await tableRows(client, 'projects'))
     if (project.org_id === org) ids.projects.add(project.id)
+  for (const task of await tableRows(client, 'issues'))
+    if (task.org_id === org) ids.tasks.add(task.id)
   for (const file of await tableRows(client, 'issue_attachments'))
     if (file.org_id === org) ids.files.add(file.id)
   const kinds = { projects: ids.projects, issues: ids.tasks, issue_attachments: ids.files }
