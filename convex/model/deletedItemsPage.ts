@@ -30,7 +30,8 @@
  * stored-lead and cross-project ranges have no order, so they are read whole
  * and sorted. Every item is judged by viewOf for the seat in its
  * organization, so its scope, filters and visibility decide before the page
- * is cut.
+ * is cut. A task item is in the scope of anyone but an admin through a
+ * project of it they see (heldFor).
  *
  * Order and cursor. Project entries come before task entries. Within each,
  * items come by deleted_at, _creationTime and _id, all descending, the
@@ -389,9 +390,9 @@ const keyOf = (a: Asked): Promise<string> =>
 type Seat = { me: Profile; sight: Sight; orgName: string; admin: boolean }
 
 /** What a scope holds in one seat's sight: every project, or the named
- * projects the seat sees with the sub-projects of the top-level ones among
- * them (`ids`), the named top-level projects (`tops`) and the named
- * projects themselves (`named`). */
+ * projects the seat sees with the sub-projects it sees of the top-level
+ * ones among them (`ids`), the named top-level projects (`tops`) and the
+ * named projects themselves (`named`). */
 type Scoped = { all: boolean; ids: Set<string>; tops: Set<string>; named: Doc<'projects'>[] }
 
 /** The scope `ids` names in `seat`'s sight, or null when it names nothing
@@ -399,16 +400,17 @@ type Scoped = { all: boolean; ids: Set<string>; tops: Set<string>; named: Doc<'p
 function scopedOf(seat: Seat, ids: string[] | null): Scoped | null {
   if (ids === null) return { all: true, ids: new Set(), tops: new Set(), named: [] }
   const { sight } = seat
+  const sees = (p: Doc<'projects'>) => sight.levels.levelOf(p) !== null
   const named: Doc<'projects'>[] = []
   for (const id of ids) {
     const p = sight.projects.get(id)
-    if (p !== undefined && sight.levels.levelOf(p) !== null) named.push(p)
+    if (p !== undefined && sees(p)) named.push(p)
   }
   if (named.length === 0) return null
   const tops = new Set(named.filter((p) => p.type === 'meta').map((p) => p.id))
   const held = new Set(named.map((p) => p.id))
   for (const p of sight.projects.values())
-    if (p.parent_id !== undefined && tops.has(p.parent_id)) held.add(p.id)
+    if (p.parent_id !== undefined && tops.has(p.parent_id) && sees(p)) held.add(p.id)
   return { all: false, ids: held, tops, named }
 }
 
@@ -420,13 +422,26 @@ const holdsProject = (scope: Scoped | null, item: Item): boolean =>
   (item.parent_project_id !== undefined && scope.tops.has(item.parent_project_id))
 
 /** Whether `scope` holds the tasks of `item`: a project item it holds, or
- * a task item with a project in it. */
+ * a task item with a project in it. It reads the item's fields, before
+ * viewOf; heldFor then checks a task item against what the seat sees. */
 function holdsTasks(scope: Scoped, item: Item): boolean {
   if (scope.all) return true
   if (item.kind === 'project') return holdsProject(scope, item)
   const ids = [item.project_id, item.parent_project_id, ...item.projects.map((p) => p.id)]
   return ids.some((id) => id !== undefined && scope.ids.has(id))
 }
+
+/** Whether `scope` holds the tasks of `item` as `seat` sees it (`view`,
+ * from viewOf). An admin sees every project of an item, so the item's
+ * fields decide (holdsTasks), its root's top-level project and a deleted
+ * project included. For anyone else a task item counts only through a
+ * project its view holds, so a scope never lists an item through a project
+ * hidden from them, such as a redacted item's root. */
+const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean =>
+  scope.all ||
+  seat.admin ||
+  item.kind === 'project' ||
+  view.projects.some((p) => scope.ids.has(p.id))
 
 /** Whether `item` passes the deleter filters for `seat`: deleted by the
  * person `deletedBy` names while their profile is the one that deleted
@@ -962,13 +977,15 @@ const projectEntry =
     return { pending: [{ seat, item, view, at: last, tasks: [] }], last }
   }
 
-/** A task entry for a task item the seat sees, as a browse lists it. */
+/** A task entry for a task item the seat sees in `scope`, as a browse
+ * lists it. */
 const taskEntry =
-  (run: Run): Judge =>
+  (run: Run, scope: Scoped): Judge =>
   async (seat, item) => {
     const last = itemAt(item)
     const view = await viewOf(spending(run.ctx, run.call), seat.sight.memo, seat.me, item)
     if (view === null || item.state === 'purging') return { pending: [], last }
+    if (!heldFor(seat, scope, item, view)) return { pending: [], last }
     return { pending: [{ seat, item, view, at: last, tasks: [] }], last }
   }
 
@@ -986,11 +1003,11 @@ const shows = (view: ItemView, task: Task): boolean =>
   view.projects.some((p) => p.id === task.project_id)
 
 /** The entries of the assignee filter for an item the scan reached (anyone
- * but an admin): a task item once, with the tasks assigned in projects the
- * seat sees, and a project item once for each such task after `from`, by
- * number. */
+ * but an admin) in `scope`: a task item once, with the tasks assigned in
+ * projects the seat sees, and a project item once for each such task after
+ * `from`, by number. */
 const scanEntry =
-  (run: Run): Judge =>
+  (run: Run, scope: Scoped): Judge =>
   async (seat, item, from) => {
     const done = { pending: [], last: itemAt(item) }
     const person = run.a.assignee
@@ -998,6 +1015,7 @@ const scanEntry =
     const reader = spending(run.ctx, run.call)
     const view = await viewOf(reader, seat.sight.memo, seat.me, item)
     if (view === null || item.state === 'purging') return done
+    if (!heldFor(seat, scope, item, view)) return done
     if (!sameReference(seat.sight.profiles.get(person), item)) return done
     const tasks = reader.db
       .query('deleted_tasks')
@@ -1263,7 +1281,8 @@ async function gatherTasks(
         if (scope !== null && !holdsTasks(scope, item)) return null
         if (!deletedAsAsked(seat, a, item)) return null
         const view = await viewOf(ctx, seat.sight.memo, seat.me, item)
-        return view === null ? null : { item, view }
+        if (view === null || (scope !== null && !heldFor(seat, scope, item, view))) return null
+        return { item, view }
       })()
       items.set(id, known)
     }
@@ -1588,7 +1607,7 @@ async function scoped(
   if (search) await gatherTasks(run, [seat], scope, after, legacy && a.assignee === undefined)
   else if (viaIndex) await assigneeEntries(run, seat, scope, after)
   else if (scan !== null) {
-    const judge = a.assignee === undefined ? taskEntry(run) : scanEntry(run)
+    const judge = a.assignee === undefined ? taskEntry(run, scope) : scanEntry(run, scope)
     await readPart(run, 1, [{ seat, plan: scan }], after, judge, !first)
   }
   return null

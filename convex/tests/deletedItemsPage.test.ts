@@ -403,6 +403,59 @@ describe('who sees what', () => {
     await expectAsListed(t, [f.admin, f.user, f.guest, omar, f.viewer])
   })
 
+  it("holds a task item in a scope only through a project of it the person sees, after its deleter lost access to its root's project", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const omar = await person(t, org_id, 'Omar')
+    const trial = await tree(t, f, 'Field trial', omar, [{ name: 'Lab' }, { name: 'Site' }])
+    await grant(t, trial.top.id, f.guest.id, 'user')
+    // a family from before the subtask rule: the root in Lab, a subtask in
+    // Firmware under another top-level project
+    const root = await plantIssue(t, {
+      org_id,
+      project_id: trial.subs[0].id,
+      title: 'Calibrate the probe',
+      assignee_id: f.guest.id,
+    })
+    const sub = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      parent_id: root.id,
+      title: 'Probe firmware',
+      assignee_id: f.guest.id,
+    })
+    await deleteTask(t, f.guest, root.id, { subtask_ids: [sub.id] })
+    const item = (await itemFor(t, root.id)).id
+    // the guest keeps Site, and with it sight of Field trial, but loses Lab
+    await t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('project_access')
+        .withIndex('by_project_profile', (q) =>
+          q.eq('project_id', trial.top.id).eq('profile_id', f.guest.id),
+        )
+        .unique()
+      if (row === null) throw new Error('no grant on Field trial')
+      await ctx.db.delete(row._id)
+    })
+    await grant(t, trial.subs[1].id, f.guest.id, 'user')
+    const scoped = (project: string, extra: Partial<PageArgs>) =>
+      page(t, f.guest, { scope: { org_id, project_ids: [project] }, ...extra })
+    // the guest sees the item through Firmware only, its root hidden
+    const shown = await scoped(f.meta.id, {})
+    expect(shown.entries).toEqual([{ item_id: item }])
+    expect(shown.items).toEqual([expect.objectContaining({ redacted: true })])
+    for (const extra of [{}, { search: 'probe' }, { assignee: f.guest.id }]) {
+      const label = JSON.stringify(extra)
+      // Field trial holds only the hidden root, so it lists nothing
+      expect((await scoped(trial.top.id, extra)).entries, label).toEqual([])
+      expect(
+        (await scoped(f.meta.id, extra)).entries.map((e) => e.item_id),
+        label,
+      ).toEqual([item])
+    }
+  })
+
   it('answers unknown, foreign, hidden and deleted project ids alike, and an organization without a seat', async () => {
     const t = newT()
     const f = await withOrg(t)
