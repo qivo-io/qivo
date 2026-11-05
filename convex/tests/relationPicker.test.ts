@@ -734,6 +734,50 @@ describe('the Linked tasks picker', () => {
       blocked: 'full',
     })
   })
+
+  it('blocks a task with 100 links for a reader without Edit on it only where a batch could offer them a task', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    await task(t, f, f.sub2)
+    const ends = await plantTasks(t, f.hidden, LIMITS.links.max)
+    const far = await task(t, f, f.hidden, { num: 960_001 })
+    await t.run(async (ctx) => {
+      for (const end of ends) await ctx.db.insert('issue_links', linkRow(f, end, open.id))
+    })
+    // a Viewer seat edits no project, so neither batch tells them how many
+    // links the task has, which counts links to tasks they cannot see
+    const unblocked = { state: 'ok', rows: [], next: null, stopped: false, blocked: null }
+    const family = okOf(await pick(t, f.viewer, open.id, 'link'))
+    expect(family).toEqual({ ...unblocked, all_projects: expect.any(String) })
+    const cursor = family.all_projects as string
+    expect(await pick(t, f.viewer, open.id, 'link', { cursor })).toEqual({
+      ...unblocked,
+      all_projects: null,
+    })
+    // one who views the task and edits Skunkworks gets the block where a
+    // batch could offer a Skunkworks task, as their link would be refused
+    const me = await seat(t, f)
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: me.id,
+        level: 'viewer',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: f.hidden.id,
+        profile_id: me.id,
+        level: 'user',
+      })
+    })
+    const mine = okOf(await pick(t, me, open.id, 'link'))
+    expect(mine).toEqual({ ...unblocked, all_projects: expect.any(String) })
+    const blockedBatch = { ...unblocked, all_projects: null, blocked: 'full' }
+    expect(await pick(t, me, open.id, 'link', { cursor: mine.all_projects as string })).toEqual(
+      blockedBatch,
+    )
+    expect(await pick(t, me, open.id, 'link', { search: issueKey(far.num) })).toEqual(blockedBatch)
+  })
 })
 
 describe('search', () => {

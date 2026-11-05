@@ -58,10 +58,15 @@
  * task's own block comes first (`blocked`), and the answer then holds no
  * row. A task with any subtask takes no parent, a subtask or a task with
  * LIMITS.subtasks.max active subtasks takes no subtask, and a task with
- * LIMITS.links.max links takes no link. The write keeps the rest with its
- * own sentence, which is the holders' sight of a new parent (design
- * specification row 328), the link limit on the other end, and anything
- * that changed since the batch was read.
+ * LIMITS.links.max links takes no link. That count holds links to tasks the
+ * reader may not see, so a Linked tasks reader without Edit on the opened
+ * task, who may edit no project at all, gets the block only from a batch
+ * that could offer them a task, one whose scope holds a project or whose
+ * typed task ID names a row, as a link they send would be refused for it.
+ * Any other such batch reads on as if unblocked. The write keeps the rest
+ * with its own sentence, which is the holders' sight of a new parent
+ * (design specification row 328), the link limit on the other end, and
+ * anything that changed since the batch was read.
  *
  * Reads that can touch rows the reader may not see, and what each costs:
  *
@@ -252,7 +257,9 @@ export type RelationCandidates =
       /** the batch reached `scan` or its read budget before it held a
        * full batch, so `next` goes on from where it stopped */
       stopped: boolean
-      /** the opened task's own block, with no row */
+      /** the opened task's own block, with no row. A Linked tasks reader
+       * without Edit on the opened task gets it only from a batch that could
+       * offer them a task (see the header). */
       blocked: RelationBlock | null
     }
   | { state: 'unavailable'; reason?: typeof ACCESS_UNCHECKED; message?: string }
@@ -784,8 +791,19 @@ async function batchOf(
   const editsOpen = levelRank(opened.level) >= levelRank('user')
   if (kind !== 'link' && !editsOpen) return { state: 'refused', message: NO_WRITE_ACCESS }
   const { blocked, linked } = await blockOf(ctx, guard, open, kind)
-  if (blocked !== null)
-    return { state: 'ok', rows: [], next: null, all_projects: null, stopped: false, blocked }
+  const blockedBatch = (b: RelationBlock): RelationCandidates => ({
+    state: 'ok',
+    rows: [],
+    next: null,
+    all_projects: null,
+    stopped: false,
+    blocked: b,
+  })
+  // a reader who edits the opened task learns its block at once, as the
+  // write would refuse them for it; a Linked tasks reader without Edit on
+  // it learns it only from a batch that could offer them a task, since the
+  // count holds links to tasks they may not see
+  if (blocked !== null && (kind !== 'link' || editsOpen)) return blockedBatch(blocked)
 
   const family = await familyOf(ctx, guard, seat, opened.top)
   // Edit for Parent and Subtasks, and for Linked tasks unless the reader
@@ -796,6 +814,7 @@ async function batchOf(
   const scope = others
     ? await otherScope(ctx, me, family, fits)
     : familyScope(family, opened.project, fits)
+  if (blocked !== null && scope.length > 0) return blockedBatch(blocked)
   // the batch's whole budget, after every read before it, the catalogue's
   // included, which the guard sees at its next look
   guard.forget()
@@ -901,7 +920,11 @@ async function batchOf(
       guard.refund(found, TASK_ROW_MAX_BYTES)
       const verdict = await decide(found, home)
       if (verdict === 'stop') throw new OverBudget()
-      if (verdict !== 'out') rows.push({ ...verdict.row, exact: true })
+      if (verdict !== 'out') {
+        // a task the reader could link, so the block holds for them
+        if (blocked !== null) return blockedBatch(blocked)
+        rows.push({ ...verdict.row, exact: true })
+      }
     }
   }
   // the typed task, once a batch answered it, is left out of every scan;
