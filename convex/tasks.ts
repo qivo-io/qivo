@@ -35,11 +35,14 @@
  *   rule (lib/roadmapVisibility.ts), groups included and counted toward
  *   its ceiling, with the shown parents, the shown subtasks of its groups
  *   that are not rows, My view's sub-projects and the headings' Remaining.
- *   It reads what board reads with every status, each passing group's
- *   subtree for its facts, and the counts (overview_counts
- *   by_project_owner_shard of each selected sub-project, or in My view the
- *   person's rows, by_owner_project, with the organization's readiness and
- *   regroups).
+ *   The task a planning session plans, named by `planned_task_id`, skips
+ *   the filter row alone, as the app's Roadmap keeps it, and never the
+ *   selection, the caller's access or the visibility rule. It reads what
+ *   board reads with every status, each passing group's subtree for its
+ *   facts, the counts (overview_counts by_project_owner_shard of each
+ *   selected sub-project, or in My view the person's rows,
+ *   by_owner_project, with the organization's readiness and regroups), and
+ *   under My tasks the planned task by id.
  * - roadmapDependencies: a selection's dependency inputs, the blocks links
  *   between its own tasks for the arrows and the parts of the dependency
  *   graph Auto-move works on, inside the selection and outside it. It reads
@@ -64,8 +67,8 @@
  * project or access row they asked about, for a search a profile, text,
  * label or label row, for roadmap a count row of its sub-projects (any leaf
  * write there), and for roadmapDependencies a link row or a task of its
- * parts; edits to other projects' tasks do not. A new filter, window or
- * scope is a new subscription; roadmapDependencies takes neither filters
+ * parts; edits to other projects' tasks do not. A new filter, window,
+ * planned task or scope is a new subscription; roadmapDependencies takes neither filters
  * nor window, so panning and typing never rerun it. authedQuery, not
  * orgQuery, as My view spans seats and a project selection whose seat goes
  * away answers `unavailable` instead of throwing in a subscription. */
@@ -108,6 +111,7 @@ export const roadmap = authedQuery({
       search: v.string(),
     }),
     window: v.object({ from: v.string(), to: v.string() }),
+    planned_task_id: v.optional(v.string()),
   },
   handler: (ctx, args) => readRoadmap(ctx, ctx.myProfiles, args),
 })

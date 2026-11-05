@@ -1,13 +1,14 @@
 /* tasks.roadmap, the Roadmap's server read (lib/roadmap.ts readRoadmap on
  * lib/viewFilters.ts and lib/viewReads.ts), its arguments, the selections
  * it answers unavailable alike, a check of the caller's access that a bound
- * stops, the visibility rule in the window, the filter row, the ceiling
- * with groups counted and the counts bound, the headings' Remaining, the
- * sub-projects My view holds, the parents and subtasks it sends, that data
- * the caller cannot see moves nothing, and real limits under Convex's
- * transaction limits with the figures they read, one figure at its design
- * size a case. src/store/roadmapParity.test.ts compares its answers with
- * the app's own rules. */
+ * stops, the visibility rule in the window, the filter row, the planning
+ * session's task past the filter row, the ceiling with groups counted and
+ * the counts bound, the headings' Remaining, the sub-projects My view
+ * holds, the parents and subtasks it sends, that data the caller cannot see
+ * moves nothing, and real limits under Convex's transaction limits with
+ * the figures they read, one figure at its design size a case.
+ * src/store/roadmapParity.test.ts compares its answers with the app's own
+ * rules. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
@@ -478,6 +479,71 @@ describe('filters', () => {
       'Awaiting my review',
       'Mine',
     ])
+  })
+})
+
+/* ------------------------------------------------------------ the planned task */
+
+describe('the planned task', () => {
+  it('keeps the planning session’s task past the filter row only, never a task the caller does not hold, one the window hides or an id of nothing', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const sibling = await plantHiddenSibling(t, f, f.guest)
+    await task(t, f.sub, { title: 'Mine', assignee_id: f.guest.id })
+    const theirs = await task(t, f.sub, { title: 'Theirs', assignee_id: f.user.id })
+    const archived = await task(t, f.sub, {
+      title: 'Archived',
+      assignee_id: f.user.id,
+      archived_at: NOW,
+    })
+    const hidden = await task(t, sibling, { title: 'Hidden', assignee_id: f.user.id })
+    const elsewhere = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+      title: 'Elsewhere',
+    })
+    const backlog = await task(t, f.sub, {
+      title: 'Backlog',
+      status: 'backlog',
+      assignee_id: f.user.id,
+    })
+    const scope = projectScope(f.guest, f.meta.id)
+    const plain = await roadmapFor(t, f.guest, scope, { mine: true })
+    expect(titles(plain)).toEqual(['Mine'])
+    // My tasks hides Theirs, which the read takes by id as the session's
+    expect(
+      titles(await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, theirs.id)),
+    ).toEqual(['Mine', 'Theirs'])
+    // this must fail for a read that keeps a planned task outside the
+    // caller's working set, which shows the archived task
+    for (const id of [archived.id, hidden.id, elsewhere.id, backlog.id, uuid()])
+      expect(
+        await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, id),
+        id === archived.id ? 'archived' : id,
+      ).toEqual(plain)
+  })
+
+  it('counts the planned task toward the ceiling', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    ROADMAP.ceiling = 3
+    await plantTasks(t, f.sub, 3, (i) => ({ ...ordinary(i), priority: 'high' }))
+    const low = await task(t, f.sub, { title: 'Low', priority: 'low' })
+    const scope = projectScope(f.guest, f.sub.id)
+    const high = { priority: 'high' as const }
+    expect(stateOf(await roadmapFor(t, f.guest, scope, high))).toEqual({ state: 'ok', rows: 3 })
+    // this must fail for a planned task that does not count, which answers
+    // ok with 4 rows
+    expect(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, low.id)).toEqual({
+      state: 'over_ceiling',
+      ceiling: 3,
+      projects: [f.sub.id],
+    })
+    ROADMAP.ceiling = 4
+    expect(stateOf(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, low.id))).toEqual({
+      state: 'ok',
+      rows: 4,
+    })
   })
 })
 
