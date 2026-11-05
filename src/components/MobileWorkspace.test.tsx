@@ -6,6 +6,7 @@ import {
   BOARD_TEST_TIMEOUT,
   loadBoard,
   loadBoardWithTasks,
+  spread,
   taskRow,
 } from '../views/boardFixture.setup'
 
@@ -128,13 +129,12 @@ describe('the phone task list', { timeout: BOARD_TEST_TIMEOUT }, () => {
     timeout: BOARD_TEST_TIMEOUT * 3,
   }, async () => {
     vi.stubGlobal('innerHeight', 400)
+    // 220 To Do and 110 Done tasks over three sub-projects, more than the
+    // list mounts at once
     const board = await loadBoardWithTasks(
       network,
-      (snap) => {
-        for (let n = 0; n < 500; n++)
-          snap.issues.push(taskRow(snap, `t${n}`, n % 2 ? 'todo' : 'done', n + 1))
-      },
-      { phone: true },
+      spread(110, (num) => (num % 3 ? 'todo' : 'done')),
+      { phone: true, scope: 'plan' },
     )
     await board.render(root)
     // To Do comes first; Done waits for slices that never run here

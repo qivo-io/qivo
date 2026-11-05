@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_CARD_PITCH } from '../lib/boardGroups'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import { BOARD_TEST_TIMEOUT, loadBoard, spread, taskRow } from './boardFixture.setup'
 
 /* Opening the Board on the real store renders it once, and a large Board
    mounts its first screen at once and the rest in slices. The slices are
@@ -91,26 +91,6 @@ const tasks =
       snap.issues.push(taskRow(snap, `p${n}`, 'progress', count + n + 1))
   }
 
-/** A top-level project, Plan, over three sub-projects, the fixture's and
-    two more, with `perSub` To Do tasks in each: more cards than one Board
-    mounts at once (SYNC_LIMIT), at most the design size of 300 open tasks a
-    sub-project. The Board shows it with `scope: 'plan'`. */
-const spread = (perSub: number) => (snap: Snapshot) => {
-  const base = snap.projects[0]
-  snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
-  Object.assign(base, { parent_id: 'plan', name: 'One' })
-  snap.projects.push(
-    { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
-    { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
-  )
-  let num = 0
-  for (const project of [base.id, 'two', 'three'])
-    for (let n = 0; n < perSub; n++) {
-      num++
-      snap.issues.push({ ...taskRow(snap, `t${num}`, 'todo', num), project_id: project })
-    }
-}
-
 // Slices size themselves by the real clock, so a busy machine makes them small.
 describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   it('renders it once', async () => {
@@ -172,15 +152,23 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
   })
 
   it('lands an answer that adds and drops cards after the slices mounted', async () => {
-    const board = await loadBoard(network, tasks(500))
+    // 330 cards over three sub-projects
+    const board = await loadBoard(network, spread(110), { scope: 'plan' })
     await board.render(root)
     await finish()
-    expect(cards()).toHaveLength(500)
+    expect(cards()).toHaveLength(330)
+    // the last cards of the first sub-project's To Do cell, which the
+    // answer changes
+    const first = document.querySelector('[data-board-cell][data-status="todo"]')
     const kept = new Map(
-      [...cards()].slice(-20).map((card) => [card.getAttribute('data-card'), card]),
+      [...(first?.querySelectorAll('[data-card]') ?? [])]
+        .slice(-20)
+        .map((card) => [card.getAttribute('data-card'), card]),
     )
-    // the server holds a new urgent task and leaves five out
-    const dropped = ['t0', 't1', 't2', 't3', 't4']
+    expect(kept.size).toBe(20)
+    // the server holds a new urgent task in that sub-project and leaves
+    // five of its tasks out
+    const dropped = ['t1', 't2', 't3', 't4', 't5']
     board.snapshot.issues.push({
       ...taskRow(board.snapshot, 'top', 'todo', 900),
       priority: 'urgent',
@@ -193,7 +181,7 @@ describe('opening the Board', { timeout: BOARD_TEST_TIMEOUT * 3 }, () => {
     await board.deliver()
     await finish()
     expect(state()).toBe('ok')
-    expect(cards()).toHaveLength(496)
+    expect(cards()).toHaveLength(326)
     expect(cards()[0].textContent).toContain('Task top')
     for (const id of dropped) expect(board.card(id)).toBeNull()
     for (const [id, node] of kept) expect(document.querySelector(`[data-card="${id}"]`)).toBe(node)

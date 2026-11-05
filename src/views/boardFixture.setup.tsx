@@ -79,6 +79,31 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
   }
 }
 
+/** A top-level project, Plan, over three sub-projects, the fixture's and
+    two more, with `perSub` tasks in each, numbered from 1 across them and
+    To Do unless `statusOf` gives task number n another status: from 101 a
+    sub-project, more cards than one Board mounts at once (SYNC_LIMIT).
+    Keep within the design size: 300 open and 150 Done tasks a sub-project,
+    and 200 Done tasks in the project. The Board shows it with
+    `scope: 'plan'`. */
+export const spread =
+  (perSub: number, statusOf: (num: number) => Row['status'] = () => 'todo') =>
+  (snap: Snapshot) => {
+    const base = snap.projects[0]
+    snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+    Object.assign(base, { parent_id: 'plan', name: 'One' })
+    snap.projects.push(
+      { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
+      { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
+    )
+    let num = 0
+    for (const project of [base.id, 'two', 'three'])
+      for (let n = 0; n < perSub; n++) {
+        num++
+        snap.issues.push({ ...taskRow(snap, `t${num}`, statusOf(num), num), project_id: project })
+      }
+  }
+
 /** Boots a fresh store on the fixture with the tasks `prepare` adds, and
     returns it with the Board and a way to deliver a changed snapshot. The
     Board is drawn in the `metaViz` layout, or as the phone's task list,
