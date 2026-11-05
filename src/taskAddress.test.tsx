@@ -370,6 +370,32 @@ describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () =
   afterEach(async () => {
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = true
+    // the boot asked for no task, and no write needed one
+    const { __layerProbe } = await import('./store/planner')
+    expect(__layerProbe?.asks()).toEqual([])
+    expect(__layerProbe?.faults()).toEqual([])
+  })
+
+  it('reads a number under ~ only once the store knows the home organization, and asks for no task', async () => {
+    let early: unknown[] = []
+    const { store, snap } = await bootAt('/app/~/board/all/tasks/qn-2', {
+      // the store holds the workspace, App has not rendered: the address
+      // names no organization, so the boot read nothing for it
+      before: () => {
+        early = reads.map((read) => read.args)
+      },
+    })
+    expect(early).toEqual([])
+    const org = snap.orgs[0].id
+    expect(store.P.homeOrg).toBe(org)
+    // the router names the task in the home organization, which the window reads
+    await waitFor(() => reads.length > 0, 'the read of the task')
+    expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
+    await act(async () => reads[0]?.next(answerOf(snap)))
+    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.P.handleOf(SOAK)).toBeNull()
   })
 
   it('shows the task from the read the boot started, editable from that answer, and asks for no task', async () => {

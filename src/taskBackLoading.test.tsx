@@ -233,7 +233,7 @@ async function bootLoading(
       next.delivered_at = '2026-09-15T09:00:00.000Z'
       publish(next)
     })
-  return { store, org: location.pathname.split('/')[2], change }
+  return { store, org: location.pathname.split('/')[2], change, snap }
 }
 
 /** Makes the project at board/p/1 top-level, so the sidebar lists it, adds
@@ -590,8 +590,13 @@ describe.each([
   afterEach(async () => {
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = true
-    // a page of Settings asks for no task
-    if (!asked && settingsStore) expect(settingsStore.P.taskLoad()).toEqual({ state: 'not_asked' })
+    // a page of Settings asks for no task, and sends no write on a path
+    // that needs every task
+    if (!asked && settingsStore) {
+      expect(settingsStore.P.taskLoad()).toEqual({ state: 'not_asked' })
+      expect(settingsStore.__layerProbe?.asks()).toEqual([])
+      expect(settingsStore.__layerProbe?.faults()).toEqual([])
+    }
     settingsStore = null
   })
   let settingsStore: typeof import('./store/planner') | null = null
@@ -735,6 +740,63 @@ describe.each([
       'Second project',
       'Task creation fixture',
     ])
+  })
+})
+
+describe('Back and Forward in a session that never asked for every task', {
+  timeout: 30_000,
+}, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  it('opens a task from its own read on Back, and again on Forward, with no ask', async () => {
+    const { store, org, snap } = await bootLoading()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const row = snap.issues.find((issue) => issue.id === 'fd000000-b')
+    if (!row) throw new Error('no soak test')
+    const okAnswer = {
+      state: 'ok',
+      task: { ...row, has_subtasks: false },
+      level: 'lead',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    }
+    /* Answers every read of the soak test, by its number or its uuid. */
+    const answerReads = () =>
+      act(async () => {
+        for (const read of reads)
+          if (read.args.ref === 'QN-2' || read.args.ref === row.id) read.next(okAnswer)
+      })
+    const title = () => document.querySelector('[data-task-title]')?.textContent
+    const board = `/app/${org}/board/all`
+    const address = `/app/${org}/board/tasks/qn-2`
+    await back(board)
+    await back(address)
+    // the window reads the task by its number, as no task is held
+    expect(reads.map((read) => read.args)).toContainEqual({ org_id: store.P.org.id, ref: 'QN-2' })
+    await answerReads()
+    await waitFor(() => title() === 'Run the soak test', "the task's window")
+    await answerReads()
+    expect(location.pathname).toBe(address)
+    // Back to the Board closes it, and Forward opens it again from its read
+    await back(board)
+    expect(title()).toBeUndefined()
+    await back(address)
+    await answerReads()
+    await waitFor(() => title() === 'Run the soak test', "the task's window again")
+    expect(location.pathname).toBe(address)
+    expect(store.__layerProbe?.asks()).toEqual([])
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.P.handleOf(row.id)).toBeNull()
+    expect(store.__layerProbe?.faults()).toEqual([])
   })
 })
 

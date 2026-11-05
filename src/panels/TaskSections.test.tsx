@@ -990,6 +990,50 @@ describe('a new task while every task loads', { timeout: 20_000 }, () => {
     double.live?.holdWindow(null)
     const { TASKS } = await import('../store/liveParts')
     TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('../store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
+  })
+
+  it("opens the new task's Parent, Subtasks and Linked tasks pickers on the server's candidates, asking for nothing past its create", async () => {
+    const next = fixture()
+    next.orgs[0].next_issue_num = 64 * 200
+    await load(next, async () => {
+      const { TASKS } = await import('../store/liveParts')
+      TASKS.atBoot = false
+    })
+    double.live?.holdWindow('fc000000')
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:create' ? { num: 64 * 200 + 1 } : null,
+    )
+    const { __layerProbe } = await import('../store/planner')
+    let key: string | null = null
+    await act(async () => {
+      key = P.addIssue({ project: 'work', title: 'Order the spare sensors' })
+    })
+    // the create asked for every task before it sent, and nothing else did
+    expect(__layerProbe?.asks()).toEqual(['create'])
+    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    const uuid = P.issueById[key ?? '']?.uuid ?? ''
+    const reads = holdRelations()
+    await openTask(uuid)
+    for (const [label, kind] of [
+      ['Add subtask', 'subtask'],
+      ['Link task', 'link'],
+      ['Set parent', 'parent'],
+    ] as const) {
+      await act(async () =>
+        document.querySelector<HTMLElement>(`button[aria-label="${label}"]`)?.click(),
+      )
+      // the picker opens a frame after the press
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 50)))
+      expect(reads.at(-1)?.args).toMatchObject({ issue_id: uuid, kind })
+      await reads.at(-1)?.answer(pickerBatch([pickerRow(row('other'))]))
+      expect(document.querySelector('[data-picker-row="other"]')).not.toBeNull()
+    }
+    // still on its way: no picker waited for every task or asked for them
+    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    expect(__layerProbe?.asks()).toEqual([])
   })
 
   it('lists empty sections at once, and moves, archives or deletes once every task has loaded', async () => {

@@ -1932,3 +1932,63 @@ describe('the archived task window', { timeout: 30_000 }, () => {
     expect(dialog()?.textContent).not.toContain('No description.')
   })
 })
+
+describe('the task window in a session that never asked for every task', {
+  timeout: 30_000,
+}, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('../store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
+  })
+
+  it('opens nothing for a handle it knows nothing of, and never says it loads', async () => {
+    // the far tasks are on the server; no task window is subscribed
+    await load(true)
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
+    await openWindow('QN-99')
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    // no load is on its way that could bring it, so the window does not wait
+    expect(document.querySelector('[data-task-loading], [data-task-gone]')).toBeNull()
+    expect(dialog()?.getAttribute('aria-hidden')).toBe('true')
+    expect(reads()).toEqual([])
+  })
+
+  it("opens the Parent, Subtasks and Linked tasks pickers of a task shown from its answer on the server's candidates, with no ask", async () => {
+    await load(true)
+    const held = holdRelations()
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    const org = snap.orgs[0].id
+    const { __layerProbe } = await import('../store/planner')
+    for (const [label, kind, picked] of [
+      ['Add subtask', 'subtask', task(PICKED_2, 45, { title: 'Wire it' })],
+      ['Link task', 'link', task(PICKED_3, 46, { title: 'Test the range' })],
+      ['Set parent', 'parent', task(PICKED, 44, { title: 'Build the mast' })],
+    ] as const) {
+      await click(document.querySelector(`[aria-label="${label}"]`))
+      await nextFrame()
+      expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind })
+      await held.at(-1)?.answer(pickerBatch([pickerRow(picked)]))
+      expect(document.querySelector(`[data-picker-row="${picked.id}"]`)).not.toBeNull()
+      // a parent picked from the answer goes out marked, with no ask
+      if (kind === 'parent') {
+        await click(document.querySelector(`[data-picker-row="${picked.id}"]`))
+        expect(sentArgs('issues:update').at(-1)).toMatchObject({
+          id: FAR,
+          patch: { parent_id: PICKED },
+        })
+      }
+    }
+    expect(__layerProbe?.asks()).toEqual([])
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+})
