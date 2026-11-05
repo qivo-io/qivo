@@ -399,7 +399,8 @@ in the window leaves the list.
 **Restore** returns a task to its Board and restores archived parents when
 needed. The task leaves the list at once, and the page asks for its tasks
 again, so the next archived task moves up into it. A task someone else
-restores leaves the list too. A subtask whose parent already has 100 active subtasks comes back as
+restores leaves the list too once every task has loaded for a page that
+needs them, and otherwise when the page asks for its tasks again. A subtask whose parent already has 100 active subtasks comes back as
 a top-level task, and Qivo says so. Its followers are told it left its
 parent, and you can give it a parent again once there is room, as a restore
 from Deleted items does. If a restore would change a parent task in a
