@@ -4150,7 +4150,10 @@ async function removalWindowCheck() {
 /** Chooses project `id` in the shared project picker that `trigger`
  *  opens, found by searching `name` (src/components/ProjectPicker.tsx). A
  *  picker of one project (`many` false, Search in) closes on the pick; one
- *  of several stays open, so Escape, in its emptied field, closes it. */
+ *  of several stays open, so Escape, in its emptied field, closes it. A
+ *  picker of several that holds the project already, as Archived tasks
+ *  does when it opens on the project of the scope behind Settings, keeps
+ *  it, since a press would take it off. */
 async function pickProject(trigger, name, id, many = true) {
   await trigger.click()
   const field = app.locator('[data-project-picker-search]')
@@ -4158,7 +4161,7 @@ async function pickProject(trigger, name, id, many = true) {
   await field.fill(name)
   const row = app.locator(`[data-project-pick="${id}"]`)
   await row.waitFor({ timeout: 30_000 })
-  await row.click()
+  if (!many || (await row.getAttribute('aria-checked')) !== 'true') await row.click()
   if (many) {
     await field.fill('')
     await field.press('Escape')
@@ -4267,6 +4270,11 @@ async function projectPickerCheck(tasks) {
     await trigger.click()
     const field = app.locator('[data-project-picker-search]')
     await field.fill(M.name)
+    // the page opens on the project of the scope behind Settings, which
+    // can be M; chosen whole, it includes Alpha and Zulu, so it comes off
+    const whole = app.locator(`[data-project-pick="${M.id}"]`)
+    await whole.waitFor({ timeout: 30_000 })
+    if ((await whole.getAttribute('aria-checked')) === 'true') await whole.click()
     await app.locator(`[${PICKER_EXPECTED.expand}="${M.id}"]`).click()
     for (const p of [A, Z]) {
       const row = app.locator(`[data-project-pick="${p.id}"]`)
