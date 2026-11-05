@@ -32,8 +32,9 @@
      says why and never shows an empty list as complete; a stopped batch
      says Qivo checked part of the projects and offers Load more; a failed
      one offers Retry. The fixed rows need no read and stay usable.
-   - Equal names of one organization and parent among the rows shown carry
-     their number, "Test #4" (store/viewModels.ts duplicateNameTags).
+   - Equal names of one organization and parent among the rows shown, and
+     among the projects a search's sub-project rows name, carry their
+     number, "Test #4" (store/viewModels.ts duplicateNameTags).
 
    Keyboard: the search field takes focus as the picker opens. Up and Down
    move between the rows, Enter picks the active row, Right expands and
@@ -86,12 +87,11 @@ import {
   type ProjectPick,
   pickLabel,
   pickRow,
-  placeName,
   refusalOf,
 } from '../lib/projectPick'
 import { useMobile } from '../lib/useMobile'
 import { P } from '../store/planner'
-import { duplicateNameTags } from '../store/viewModels'
+import { duplicateNameTags, type TaggableProject } from '../store/viewModels'
 import { Icon, Popover } from './qivo'
 
 /** The cursors of one batch, absent ones left out, as the reads take them. */
@@ -403,18 +403,32 @@ export function ProjectPickerPanel({
       if (expanded && entry.kind === 'row' && entry.row.id === expanded.id) walk.push(...kidRows)
     }
 
-  // equal names among the rows shown carry their number
-  const taggable = new Map<string, PickedProject>()
-  for (const entry of walk) if (entry.kind === 'row') taggable.set(entry.row.id, entry.row)
-  const tags = duplicateNameTags(
-    [...taggable.values()].map((p) => ({
-      id: p.id,
-      org: p.org_id,
-      parent: p.parent?.id,
-      name: p.name,
-      num: p.num,
-    })),
-  )
+  // equal names among the rows shown carry their number, and so do the
+  // projects a search's sub-project rows name before their own, so two
+  // "Test › Firmware" rows read "Test #4 › Firmware" and "Test #7 ›
+  // Firmware"
+  const taggable = new Map<string, TaggableProject>()
+  for (const entry of walk) {
+    if (entry.kind !== 'row') continue
+    const { row } = entry
+    taggable.set(row.id, {
+      id: row.id,
+      org: row.org_id,
+      parent: row.parent?.id,
+      name: row.name,
+      num: row.num,
+    })
+    const up = row.parent
+    if (up)
+      taggable.set(up.id, {
+        id: up.id,
+        org: up.org_id,
+        parent: undefined,
+        name: up.name,
+        num: up.num,
+      })
+  }
+  const tags = duplicateNameTags([...taggable.values()])
 
   const [active, setActive] = useState<string | null>(null)
   const activeEntry = walk.find((entry) => entry.key === active) ?? null
@@ -564,6 +578,7 @@ export function ProjectPickerPanel({
     const { row } = entry
     const top = row.parent === null
     const tag = tags.get(row.id)
+    const tagView = (t: string | undefined) => t && <span className="ml-1 text-text-3">{t}</span>
     const org = foreignOrg(row.org_id)
     const open = expanded?.id === row.id
     return (
@@ -600,8 +615,17 @@ export function ProjectPickerPanel({
         >
           {mark}
           <span className="min-w-0 flex-1 truncate">
-            {entry.child ? row.name : placeName(row)}
-            {tag && <span className="ml-1 text-text-3">{tag}</span>}
+            {/* a search's sub-project after its project, as placeName
+               joins them, each name with its tag */}
+            {!entry.child && row.parent && (
+              <>
+                {row.parent.name}
+                {tagView(tags.get(row.parent.id))}
+                {' › '}
+              </>
+            )}
+            {row.name}
+            {tagView(tag)}
           </span>
           {included && row.parent && (
             <span className="shrink-0 text-xs text-text-3">Included in {row.parent.name}</span>

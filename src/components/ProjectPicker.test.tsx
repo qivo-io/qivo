@@ -412,6 +412,30 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(find(`[data-project-pick="${other}"]`).textContent).toBe('Other')
   })
 
+  it('tags the equal names of the projects a search’s sub-projects name', async () => {
+    const next = base()
+    const first = top(next, 'Test')
+    const second = top(next, 'Test')
+    const other = top(next, 'Other')
+    const fws = [first, second, other].map((parent) => sub(next, parent, 'Firmware'))
+    for (const [id, n] of [
+      [first, 4],
+      [second, 7],
+    ] as const) {
+      const p = next.projects.find((x) => x.id === id)
+      if (p) p.num = n
+    }
+    await load(next)
+    await panel()
+    await type('firmware')
+    // each sub-project row names its project, and the two named Test carry
+    // their number; Other's name is its own
+    expect(new Set(rowIds())).toEqual(new Set(fws))
+    expect(find(`[data-project-pick="${fws[0]}"]`).textContent).toBe('Test#4 › Firmware')
+    expect(find(`[data-project-pick="${fws[1]}"]`).textContent).toBe('Test#7 › Firmware')
+    expect(find(`[data-project-pick="${fws[2]}"]`).textContent).toBe('Other › Firmware')
+  })
+
   it('searches once typing rests, every word of a project’s own name, ignoring accents', async () => {
     const next = base()
     const cafe = top(next, 'Café Ordering')
