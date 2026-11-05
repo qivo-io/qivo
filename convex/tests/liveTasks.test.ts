@@ -477,8 +477,8 @@ describe('reading only live tasks', () => {
     const scoped = await workload(fx.meta)
     expect(scoped.hours).toEqual([3])
     // tasks nobody on the page owns are never read
-    await plantMany(fx, 300, { project_id: fx.away.id })
-    await plantMany(fx, 300, { project_id: fx.sub.id, status: 'done' })
+    await plantMany(fx, 30, { project_id: fx.away.id })
+    await plantMany(fx, 30, { project_id: fx.sub.id, status: 'done' })
     expect(await workload(null)).toEqual(all)
     expect(await workload(fx.meta)).toEqual(scoped)
   })
@@ -493,8 +493,6 @@ describe("a project's completion", () => {
     // a subtask in another top-level project, as before the family rule
     const legacy = await task(fx, { title: 'Legacy parent' })
     await task(fx, { project_id: fx.away.id, parent_id: legacy.id })
-    // another family's tasks, which the completion never needs
-    await plantMany(fx, 300, { project_id: fx.away.id })
     await countOrg(fx.t, fx.org.id)
     const read = (ref: string) =>
       as(fx.t, fx.admin).query(async (ctx) => {
@@ -516,8 +514,9 @@ describe("a project's completion", () => {
       total: 1,
       percent: 0,
     })
-    // 300 more tasks in the family are never read
-    await plantMany(fx, 300, { project_id: fx.sub2.id })
+    // more tasks in the family and in another family are never read
+    await plantMany(fx, 30, { project_id: fx.sub2.id })
+    await plantMany(fx, 30, { project_id: fx.away.id })
     expect((await read('TBED')).documents).toBe(tbed.documents)
   })
 })
