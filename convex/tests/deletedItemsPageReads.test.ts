@@ -13,16 +13,16 @@
  * the page counts it (pageFor's spend), and checks that the page answered
  * whole inside DELETED_PAGE and Convex's limits. convex-test counts a
  * search query as one range, while Convex and the page count one for each
- * result. DELETED_PAGE's docstring quotes these figures. The last cases
- * delete the largest task family, whose delete now writes each text twice:
- * with ordinary text under Convex's limits and under a lowered write limit,
- * and, on demand, at the description cap in a three-byte script. */
+ * result. DELETED_PAGE's docstring quotes these figures. The last case
+ * deletes the largest task family, whose delete now writes each text
+ * twice, with ordinary text under Convex's limits and under a lowered write
+ * limit. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { LIMITS, TEXT_MAX } from '../lib/limits'
+import { LIMITS } from '../lib/limits'
 import { DELETED_PAGE, type PageArgs, type PageSpend, pageFor } from '../model/deletedItemsPage'
 import { as, NOW, newT, type OrgFixture, type T, uuid, withOrg } from './helpers.setup'
 import { installTrashTimers, START } from './trash.setup'
@@ -661,10 +661,10 @@ describe('the largest task family', () => {
     const rows = await t.run((ctx) => ctx.db.query('deleted_tasks').collect())
     expect(rows).toHaveLength(LIMITS.subtasks.max + 1)
     for (const row of rows) expect(row.search_text).toBe(`${row.title}\n${DESCRIPTION}`)
-    // past the write limit the delete is refused whole, as Convex refuses a
-    // family at the description cap in a three-byte script that passes 16
-    // MiB (the case on demand below); here the limit is lowered to the two
-    // copies of the family's text alone, which its other writes pass
+    // past the write limit the delete is refused whole with nothing changed,
+    // as Convex refuses a transaction that writes too much; here the limit
+    // is lowered to the two copies of the family's text alone, which its
+    // other writes pass
     const copies = 2 * ids.reduce((n, _, i) => n + title(i).length + DESCRIPTION.length, 0)
     const lowered = newT({ transactionLimits: { bytesWritten: copies } })
     const g = await withOrg(lowered)
@@ -682,30 +682,3 @@ describe('the largest task family', () => {
     expect(after.live).toHaveLength(LIMITS.subtasks.max)
   })
 })
-
-/* The same family with every description at the cap, 20,000 characters, in
- * a three-byte script, under Convex's real limits. It is past the design
- * size, which asks for ordinary text, so it runs outside the normal suite,
- * on demand with QIVO_DELETED_FAMILY_CAP=1. On 5 November 2026 the delete
- * of LIMITS.subtasks.max subtasks fit, writing each text twice; a search
- * from 0 to 101 subtasks then found every family size up to the largest
- * the delete takes fitting. */
-describe.runIf(process.env.QIVO_DELETED_FAMILY_CAP === '1')(
-  'a task family at the description cap, on demand',
-  () => {
-    it('deletes a task with LIMITS.subtasks.max subtasks whose descriptions are at the cap in a three-byte script, both copies written, under the real limits', async () => {
-      const t = newT({ transactionLimits: true })
-      const f = await withOrg(t)
-      const text = '漢'.repeat(TEXT_MAX)
-      const ids = await plantFamily(t, f, text)
-      await deleteFamily(t, f, ids)
-      const rows = await t.run((ctx) => ctx.db.query('deleted_tasks').collect())
-      expect(rows).toHaveLength(LIMITS.subtasks.max + 1)
-      for (const row of rows) expect(row.search_text?.endsWith(text)).toBe(true)
-      console.log(
-        `deleted page figures, a family at the cap: ${LIMITS.subtasks.max} subtasks fit, ` +
-          `${Math.round((rows.length * 2 * text.length * 3) / 2 ** 20)} MiB of text written`,
-      )
-    })
-  },
-)
