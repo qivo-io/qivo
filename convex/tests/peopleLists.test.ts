@@ -442,10 +442,11 @@ describe('the arguments', () => {
       fx.org.id,
       Array.from({ length: 55 }, (_, i) => `Label ${i}`),
     )
+    // 49 beside withOrg's Hardware, the 50 teams of the design size
     await plantTeams(
       fx.t,
       fx.org.id,
-      Array.from({ length: 55 }, (_, i) => `Team ${i}`),
+      Array.from({ length: 49 }, (_, i) => `Team ${i}`),
     )
     await plantMembers(fx.t, fx.team, people)
     for (const list of everyList(fx)) {
