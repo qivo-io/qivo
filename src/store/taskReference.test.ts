@@ -77,9 +77,10 @@ const pane = {}
 
 const named = (name: string) => subs.filter((s) => s.name === name)
 const open = (name: string) => named(name).filter((s) => !s.closed)
-/* The open subscription of `name`, which the test expects to be the only one. */
-const one = (name: string) => {
-  const live = open(name)
+/* The open subscription of `name`, of those `which` picks, which the
+   test expects to be the only one. */
+const one = (name: string, which: (live: Live) => boolean = () => true) => {
+  const live = open(name).filter(which)
   expect(live).toHaveLength(1)
   return live[0]
 }
@@ -350,6 +351,46 @@ describe('the read of a reference', () => {
     one('taskWindow:task').deliver(okAnswer(FAR, 40))
     expect(P.taskDetail(FAR)?.state).toBe('ok')
     expect(P.editsFromAnswer(id)).toBe(true)
+  })
+
+  it("leaves the task side its subscription when a uuid's walk reaches the seat the window reads it in", async () => {
+    const { P } = store
+    // the window shows the guest organization's task from its own read
+    P.watchComments(FAR, GUEST)
+    const side = one('taskWindow:task')
+    expect(side.args).toEqual({ org_id: GUEST, ref: FAR })
+    side.deliver(okAnswer(FAR, 40, { task: { org_id: GUEST } }))
+    // Back lands on an address that names it by its uuid under the home
+    // organization's slug, which the home organization says is unavailable
+    P.watchTaskRef(taskRef({ org: null, uuid: FAR, from: org }))
+    const home = one('taskWindow:task', (s) => s !== side)
+    expect(home.args).toEqual({ org_id: org, ref: FAR })
+    home.deliver({ state: 'unavailable' })
+    // the next seat is the one the task side reads: its answer names the task
+    expect(home.closed).toBe(true)
+    expect(one('taskWindow:task')).toBe(side)
+    expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org: GUEST } })
+    // the task side keeps its subscription, and the window hears a change
+    side.deliver(okAnswer(FAR, 40, { task: { org_id: GUEST, title: 'Renamed' } }))
+    await turn()
+    expect(side.closed).toBe(false)
+    expect(P.taskDetail(FAR)?.view?.title).toBe('Renamed')
+    expect(P.editsFromAnswer(P.taskDetail(FAR)?.view?.id ?? '')).toBe(true)
+  })
+
+  it("hears the task side's first answer when the walk reaches its seat before it answered", () => {
+    const { P } = store
+    P.watchComments(FAR, GUEST)
+    const side = one('taskWindow:task')
+    P.watchTaskRef(taskRef({ org: null, uuid: FAR, from: org }))
+    one('taskWindow:task', (s) => s.args.org_id === org).deliver({ state: 'unavailable' })
+    expect(P.reference?.state).toBe('loading')
+    expect(one('taskWindow:task')).toBe(side)
+    side.deliver(okAnswer(FAR, 40, { task: { org_id: GUEST } }))
+    expect(P.reference).toMatchObject({ state: 'resolved', task: { uuid: FAR, org: GUEST } })
+    // the answer is the task side's own, which lets a write through
+    expect(side.closed).toBe(false)
+    expect(P.editsFromAnswer(P.taskDetail(FAR)?.view?.id ?? '')).toBe(true)
   })
 
   it('reads the reference again on a fresh registry', async () => {

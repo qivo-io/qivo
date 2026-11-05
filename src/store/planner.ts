@@ -1202,7 +1202,8 @@ function sectionNews(side: SectionSide) {
 }
 
 /* Takes section side `side`'s news `news` (sectionNews) without painting
-   it. Answers whether it was the watched task's. */
+   it, and the task side's also into a reference read that hears it
+   (refFromTaskSide). Answers whether it was the watched task's. */
 function receiveSection(side: SectionSide, news: SideNews): boolean {
   const watched = sectionsWatched[side]
   if (!watched || watchedComments !== watched.task || sectionAnswers.issue !== watched.task)
@@ -1221,6 +1222,7 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
     sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
     if (side === 'task') taskDelivered(watched.task)
   }
+  if (side === 'task') refFromTaskSide(watched, news)
   return true
 }
 
@@ -1291,9 +1293,13 @@ function paintedAnswer(): TaskOk | null {
    (answerTaskOf) and no delivery counts it (taskDelivered). The
    reference read stops once the task side has answered, and a task side
    with the same arguments takes its subscription over
-   (liveParts.ts watchSide). The store moves the reference to the task's
-   handle in the repaint in which the workspace first holds the task
-   (refMoves, P.watchHandles). */
+   (liveParts.ts watchSide). A reference read that needs the arguments the
+   task side reads with already, as a uuid's walk can reach the seat of
+   the task a window shows, starts no watch of its own, which would share
+   that one subscription and take it from the task side: it hears the
+   task side's news instead (runRefRead, refFromTaskSide). The store moves
+   the reference to the task's handle in the repaint in which the workspace
+   first holds the task (refMoves, P.watchHandles). */
 
 /** Where the read of a reference stands. `task` is what the reference
     and its answers name of the task, its uuid and organization once known
@@ -1318,9 +1324,10 @@ type TaskArchived = Extract<TaskAnswer, { state: 'archived' }>
 
 /* The registered reference and its read. `tried` holds the organizations
    a uuid without one answered unavailable in, `args` the arguments of the
-   read now (null while none runs), `answer` its last ok or archived
-   answer, kept through a failure, and `moved` the handle the reference
-   moved to once the workspace held its task. */
+   read now (null while none runs, also while the task side reads them for
+   it), `answer` its last ok or archived answer, kept through a failure,
+   and `moved` the handle the reference moved to once the workspace held
+   its task. */
 type RefRead = {
   ref: string
   parts: RefParts
@@ -1380,9 +1387,20 @@ function seatRefused(e: unknown): boolean {
   )
 }
 
+/* Whether the task side reads with arguments `args`, so a reference read
+   with them would share its one Convex subscription (liveParts.ts
+   watchSide). */
+function taskSideReads(args: { org_id: string; ref: string }): boolean {
+  const watched = sectionsWatched.task
+  return !!watched && watched.org === args.org_id && watched.task === args.ref
+}
+
 /* Makes the reference read run with the arguments `read` needs now, or
    stop when it needs none. A read that runs already with those arguments,
-   as the boot's of its address, goes on, and its last answer counts. */
+   as the boot's of its address, goes on, and its last answer counts. When
+   the task side reads with them, the reference read starts no watch, so
+   the task side keeps its subscription: the task side's answer counts,
+   and until there is one its next news does (refFromTaskSide). */
 function runRefRead(read: RefRead) {
   const args = nextRefArgs(read)
   read.args = args
@@ -1391,9 +1409,16 @@ function runRefRead(read: RefRead) {
     if (running) parts?.stopSide('reference')
     return
   }
+  if (taskSideReads(args)) {
+    if (running) parts?.stopSide('reference')
+    read.args = null
+    const answer = sectionAnswers.issue === args.ref ? sectionAnswers.task : null
+    if (answer && answer !== CREATING) takeRefNews(read, { value: answer }, args)
+    return
+  }
   const key = refKey(args)
   if (running && refKey(running) === key) {
-    if (refLast?.args === key) takeRefNews(read, refLast.news)
+    if (refLast?.args === key) takeRefNews(read, refLast.news, args)
     return
   }
   if (!read.task && read.state !== 'retrying') read.state = 'loading'
@@ -1402,9 +1427,9 @@ function runRefRead(read: RefRead) {
   parts?.watchSide('reference', api.taskWindow.task, args)
 }
 
-/* Takes the reference read's news `news` into `read`. A failure keeps
-   what the answer before it said. */
-function takeRefNews(read: RefRead, news: SideNews) {
+/* Takes the news `news` of the read of `read` with arguments `args` into
+   `read`. A failure keeps what the answer before it said. */
+function takeRefNews(read: RefRead, news: SideNews, args: { org_id: string; ref: string }) {
   if ('error' in news && !seatRefused(news.error)) {
     console.error('[qivo] the read of a task by its reference failed:', news.error)
     read.state = 'failed'
@@ -1431,8 +1456,8 @@ function takeRefNews(read: RefRead, news: SideNews) {
   // walks on to a seat that joins later)
   read.answer = null
   read.state = 'unavailable'
-  if (!read.task && !read.parts.org && read.args) {
-    read.tried.add(read.args.org_id)
+  if (!read.task && !read.parts.org) {
+    read.tried.add(args.org_id)
     if (nextRefArgs(read)) read.state = 'loading'
     runRefRead(read)
   }
@@ -1445,8 +1470,20 @@ function referenceNews(news: SideNews) {
   refLast = { args: refKey(args), news }
   const read = refRead
   if (!read?.args || refKey(read.args) !== refLast.args) return
-  takeRefNews(read, news)
+  takeRefNews(read, news, read.args)
   owe('sections')
+}
+
+/* Passes the task side's news `news` for the task and organization it
+   watches (`watched`) to the registered reference read, when that read
+   needs those arguments, runs no read of its own and has no answer yet
+   (runRefRead). The task side's delivery repaints the sections. */
+function refFromTaskSide(watched: { task: string; org: string }, news: SideNews) {
+  const read = refRead
+  if (!read || read.args || read.state === 'resolved' || read.state === 'unavailable') return
+  const args = nextRefArgs(read)
+  if (!args || args.org_id !== watched.org || args.ref !== watched.task) return
+  takeRefNews(read, news, args)
 }
 
 /* Keeps the reference read in step as the sections build. It runs again

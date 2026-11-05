@@ -80,9 +80,12 @@
    Watching one query with the same arguments twice shares one Convex
    subscription and one token (lib/liveQueries.ts), and a watch that joins
    one hears no transition for an answer that arrived already. So a side
-   whose query and arguments another side watches takes that side's
+   whose query and arguments the `reference` side watches takes that
    subscription over (watchSide), with its answer, rather than watching
-   again. */
+   again, as the task side does when it reads the task a reference read
+   named. No side takes another's: the store never starts a reference read
+   with the arguments the task side reads with (store/planner.ts
+   runRefRead). */
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import { ConvexError, type Value } from 'convex/values'
@@ -595,11 +598,13 @@ export function createLiveParts(
 
   /** Watches `ref` with `args` as side `name`, replacing that side's
       subscription. A fresh subscription runs the query again, so its
-      answer is never one held from before. Another side that watches the
-      same query with the same arguments holds the one subscription Convex
-      keeps for both, so side `name` takes it over instead, and the news it
-      answers is that subscription's current answer, when one arrived on
-      the newest connection, else undefined. */
+      answer is never one held from before. A `reference` side that
+      watches the same query with the same arguments holds the one
+      subscription Convex keeps for both, so side `name` takes it over
+      instead, and the news it answers is that subscription's current
+      answer, when one arrived on the newest connection, else undefined.
+      Only the reference side's is handed over: a read that another side
+      needs goes on, and the caller never watches its arguments again. */
   function watchSide(
     name: SideName,
     ref: FunctionReference<'query'>,
@@ -607,7 +612,7 @@ export function createLiveParts(
   ): SideNews | undefined {
     const before = sides.get(name)
     for (const [other, slot] of sides) {
-      if (other === name || !sameQuery(slot, ref, args)) continue
+      if (other !== 'reference' || other === name || !sameQuery(slot, ref, args)) continue
       if (before) drop(before)
       sides.delete(other)
       slot.side = name
