@@ -443,9 +443,11 @@ const OTHERS: Place = [3]
 
 /** Where a batch stands, just after the tasks of the project at `place`
  * created at `time` with these `ids` and every one created before them, or
- * at the start of that place's project when `time` is null. `bytes` is what
- * the tasks of `ids` weighed when a batch last read them, which a read that
- * goes on from `time` reads again. */
+ * at the start of that place's project when `time` is null. `bytes` is the
+ * room a read that goes on from `time` keeps for the tasks of `ids`, which
+ * it reads again: at least what they weighed when a batch last read them,
+ * those that left since included, since a task never read takes the place
+ * of each that left. */
 type Position = { place: Place; time: number | null; ids: string[]; bytes: number }
 
 /** What a cursor carries, where the next batch starts, whether the
@@ -1041,9 +1043,11 @@ async function batchOf(
  * takes few steps. Only a group that weighs more than a batch's budget
  * with room for one more task stops every batch at it, which takes
  * thousands of tasks of ordinary text, past the design size, or text far
- * past ordinary sizes. A task of the group that left the range since lets
- * one more new task into that range, and one that grew since counts at
- * its size once read, as every read of the scope does.
+ * past ordinary sizes. A task of the group that left lets one new task
+ * into the first step's range at the weight the departed task had, and the
+ * position keeps that weight for it until a range reads past the instant
+ * and proves it gone. One that grew since counts at its size once read, as
+ * every read of the scope does.
  */
 async function scanScope(
   ctx: QueryCtx,
@@ -1112,8 +1116,20 @@ async function scanScope(
     // tasks read again stays taken
     const fresh = got.reduce((n, tasks) => n + tasks.length, 0) - readAgain.length
     guard.giveBack(ROW, Math.max(0, per * k - fresh))
-    // what the tasks read again weigh now, for the next step and cursor
-    if (resume !== null) at = { ...at, bytes: readAgain.reduce((n, t) => n + sizeOf(t), 0) }
+    // what the tasks read again weigh now, for the next step and cursor. A
+    // range that ended, or read past the instant, read every task of `ids`
+    // still there, so the ids of those that left go. Otherwise they stay,
+    // and the position keeps at least what they all weighed, as room for
+    // the tasks never read that take the places of those that left
+    if (resume !== null) {
+      const first = got[0] ?? []
+      const passed =
+        first.length < (asks[0] as number) || first.some((t) => t._creationTime !== resume.time)
+      const weight = readAgain.reduce((n, t) => n + sizeOf(t), 0)
+      at = passed
+        ? { ...at, ids: readAgain.map((t) => t.id), bytes: weight }
+        : { ...at, bytes: Math.max(weight, resume.bytes) }
+    }
     let ended = true
     for (const [i, p] of step.entries()) {
       const tasks = got[i] as Doc<'issues'>[]

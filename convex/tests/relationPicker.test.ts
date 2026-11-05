@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { OWN_READS, projectLevel } from '../lib/access'
-import { sealCursorText } from '../lib/archiveCursorSeal'
+import { openCursorText, sealCursorText } from '../lib/archiveCursorSeal'
 import { byId } from '../lib/db'
 import { type AccessLevel, LEVEL_RANK } from '../lib/enums'
 import { LIMITS } from '../lib/limits'
@@ -966,6 +966,19 @@ describe('tasks created at one time', () => {
     return out
   }
 
+  /* The ids and the bytes of the position cursor `text` names. */
+  const positionOf = async (text: string): Promise<{ ids: string[]; bytes: number }> => {
+    const opened = await openCursorText(text.slice(text.indexOf('~') + 1))
+    const body: unknown[] = JSON.parse(opened as string)
+    return { ids: body[4] as string[], bytes: body[5] as number }
+  }
+
+  /* Archives `tasks`, so they leave their project's active range. */
+  const archive = (t: T, tasks: readonly (Doc<'issues'> | undefined)[]) =>
+    t.run(async (ctx) => {
+      for (const x of tasks) await ctx.db.patch((x as Doc<'issues'>)._id, { archived_at: NOW })
+    })
+
   it('goes past more of them than a batch holds room for at ROW_BYTES each, every one once, and to the tasks after them', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1017,6 +1030,52 @@ describe('tasks created at one time', () => {
       await pick(t, f.user, open.id, 'link', { search: 'needle', cursor: last?.cursor }),
     )
     expect(on.rows.map((r) => r.id)).toEqual([needle.id])
+  })
+
+  it('keeps room for those of them that leave until a range reads past the group, then names only those still there', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    const g = await plantTasks(t, f.sub, 80, () => ({}), 80)
+    const needle = await task(t, f, f.sub, { title: 'Needle' })
+    shareCreationTime(
+      g.map((x) => x._id),
+      g[0]?._creationTime as number,
+    )
+    const weight = (tasks: readonly (Doc<'issues'> | undefined)[]) =>
+      tasks.reduce((n, x) => n + getDocumentSize(x as Doc<'issues'>), 0)
+    RELATION_PICKER.rows = 3
+    const first = okOf(await pick(t, f.user, open.id, 'link'))
+    expect(first.rows.map((r) => r.id)).toEqual(g.slice(0, 3).map((x) => x.id))
+    // two tasks the cursor names leave, and the next range, full of the
+    // group, cannot show they are gone, so their weight stays as room for
+    // the tasks never read that take their places
+    await archive(t, [g[1], g[2]])
+    const second = okOf(await pick(t, f.user, open.id, 'link', { cursor: first.next as string }))
+    expect(second.rows.map((r) => r.id)).toEqual(g.slice(3, 6).map((x) => x.id))
+    expect(await positionOf(second.next as string)).toEqual({
+      ids: g.slice(0, 6).map((x) => x.id),
+      bytes: weight(g.slice(0, 6)),
+    })
+    // once a range reads past the group, those that left go from the
+    // position, and so does their room
+    await archive(t, [g[3], ...g.slice(20)])
+    const third = okOf(await pick(t, f.user, open.id, 'link', { cursor: second.next as string }))
+    expect(third.rows.map((r) => r.id)).toEqual(g.slice(6, 9).map((x) => x.id))
+    const kept = [g[0], g[4], g[5], ...g.slice(6, 9)]
+    expect(await positionOf(third.next as string)).toEqual({
+      ids: kept.map((x) => x?.id),
+      bytes: weight(kept),
+    })
+    // and the list goes on to the rest of the group and the needle, each once
+    const rest: string[] = []
+    let cursor = third.next as string | null
+    while (cursor !== null) {
+      const batch = okOf(await pick(t, f.user, open.id, 'link', { cursor }))
+      rest.push(...batch.rows.map((r) => r.id))
+      cursor = batch.next
+    }
+    expect(rest).toEqual([...g.slice(9, 20), needle].map((x) => x.id))
   })
 })
 
