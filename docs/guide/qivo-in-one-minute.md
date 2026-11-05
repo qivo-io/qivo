@@ -31,8 +31,7 @@ open once every task has loaded, and so do moving, archiving and deleting a
 task that has arrived, unless its window has read every subtask of it. An
 open task's subtasks, linked tasks and attachments load on their own.
 Removing a subtask or linked task that has not arrived yet waits for it.
-Settings opens at once, but its
-Teams and Projects pages wait for every task. A
+Settings and all its pages open at once. A
 link to one task opens once every task has loaded. If loading stops, the
 note says how far it got, and a notice explains what went wrong.
 

@@ -203,7 +203,12 @@ organization admins still manage it. Members receive access to projects shared
 with their team ([Project access](./who-sees-what-the-access-model.md)). Team leadership alone does not grant project authority.
 When you can share the team's projects and edit their tasks, removing a member
 or deleting a team first asks whether to keep people as Viewers or reassign
-open tasks they would no longer see. Deleting a team removes at most 3,000 of
+open tasks they would no longer see. Qivo works out on the server which open
+tasks the removal takes out of sight, over every task, so the Teams pages open
+at once while tasks are still loading. The window lists up to 120 of those
+tasks and says how many more there are. **Reassign** lists 25 people at a time
+who could take every listed task once the access is gone, with a search and
+**Load more**. Deleting a team removes at most 3,000 of
 its memberships, project shares and their access entries at once, one or two
 entries for each share, so remove some of its members or project shares
 before you delete a larger one. Otherwise the member is removed at once
