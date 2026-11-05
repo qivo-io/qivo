@@ -4,7 +4,8 @@
  *
  *   1. Creating projects and sub-projects: the creation setting per kind of
  *      caller, Lead on the parent, a hidden parent read as missing, the
- *      creator's own grant and who may name another lead.
+ *      creator's own grant, who may name another lead, and where a REST or
+ *      MCP create places a new project and what counting its siblings reads.
  *   2. Changing a project: settings with Lead access, archive and restore as
  *      a field, and the lead handover that keeps the old lead as User.
  *   3. Access one user or team at a time, and what a removal does with the
