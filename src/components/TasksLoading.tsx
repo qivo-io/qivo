@@ -13,12 +13,12 @@ import { Progress } from './ui/progress'
     load P.taskLoad reports): "Loading tasks…" with a bar that moves
     without a share, on one line. Once the load stopped it says why and
     that changes show as made until tasks load, with Try again
-    (P.retryTasks), as the pages that wait for every task do, since only
-    Try again or a reload ends a stopped load. It floats, so it covers
-    little and the page does not move when it goes, as a large Board would
-    lay itself out again. Gone before any ask and once every task arrived.
-    Its parent must be positioned. App's useTasksLoadingNews says the
-    start, the stop and the end to a screen reader. */
+    (P.retryTasks), as the pages that wait for every task do. A stopped
+    load also goes on once a task window answers again. It floats, so it
+    covers little and the page does not move when it goes, as a large
+    Board would lay itself out again. Gone before any ask and once every
+    task arrived. Its parent must be positioned. App's useTasksLoadingNews
+    says the start, the stop and the end to a screen reader. */
 export function TasksLoadingBar() {
   usePlannerVersion()
   const load = P.taskLoad()
