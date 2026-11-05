@@ -1282,17 +1282,26 @@ export type OrgProjectLevels = {
 }
 
 /** Every project of organization `orgId`, archived ones included, oldest
- * first. */
+ * first: the catalogue's 2,000 projects and sub-projects at the design
+ * size, a read at the design size's sum that projectLevelsForOrg and
+ * lib/visibility.ts orgProjectView make beside accessRowsOf (whose
+ * docstring has the figures and why it stays). */
 export const orgProjects = (ctx: QueryCtx, orgId: string): Promise<Doc<'projects'>[]> =>
   ctx.db
     .query('projects')
     .withIndex('by_org', (q) => q.eq('org_id', orgId))
     .collect()
 
-/* Amortized counterpart of projectLevel, used by snapshots and list reads.
- * Evaluate actual projects rather than reusing the parent's answer for all
- * siblings. Navigation-only parent visibility is never inherited back down.
- * Callers that already loaded the complete org project list can reuse it. */
+/* Amortized counterpart of projectLevel, used by REST and MCP access flags
+ * and lists (lib/core.ts accessFlags and orgReach) and Deleted items
+ * (model/deletedItems.ts seenBy). Evaluate actual projects rather than
+ * reusing the parent's answer for all siblings. Navigation-only parent
+ * visibility is never inherited back down. Callers that already loaded the
+ * complete org project list can reuse it. It reads every project of the
+ * organization (orgProjects) and every grant and team share of the person
+ * (accessRowsOf), a read at the design size's sum: 13 index ranges, 3,710
+ * documents and 1.15 MiB as convex-test counts them for the catalogue of
+ * 2,000 projects and accessRowsOf's person, accepted as accessRowsOf says. */
 export async function projectLevelsForOrg(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1310,7 +1319,30 @@ export async function projectLevelsForOrg(
  * that receives team access. A caller that also needs the rows reads them
  * here once and passes them to levelsFrom. The teams are read at once, as
  * the memberships of a person in hundreds of teams would take as many
- * reads one after another. */
+ * reads one after another.
+ *
+ * It collects every grant, membership and team share of the person, with
+ * each of their teams, a read at the design size's sum. For a person who
+ * reads the 200 live and 500 archived sub-projects one person can read,
+ * each by a grant, in 5 teams that each share 50 live and 150 archived of
+ * them, it reads 12 index ranges, 1,710 documents and 0.28 MiB as
+ * convex-test counts them; with the catalogue of 2,000 projects
+ * (projectLevelsForOrg, lib/visibility.ts orgProjectView) 13 ranges, 3,710
+ * documents and 1.15 MiB, and with Deleted items' sight of a seat beside
+ * 1,000 people (model/deletedItems.ts sightOf) 15 ranges, 4,716 documents
+ * and 1.46 MiB (tests/accessFlags.test.ts, "the access reads at the design
+ * size"). It stays as it is. Inside the design size it fits Convex's limits
+ * with room, and past it Convex's own read limit refuses the call with a
+ * generic server error, which widens nothing and shows nothing as complete,
+ * where a bounded design would add refusal paths and a second level rule
+ * beside levelsFrom for sizes the design size says not to build for (agent
+ * decision, 5 November 2026, closing t3/limits-machine-access-rows). Its
+ * readers are REST and MCP access flags and lists (lib/core.ts accessFlags
+ * and orgReach, through projectLevelsForOrg), Team sync's latest comments
+ * (lib/visibility.ts orgProjectView) and Deleted items (model/deletedItems.ts
+ * sightOf, pendingAccess and seenBy). Callers that ask for many people at
+ * once keep their own bounds: projectLevelsForPeople with LEVELS_READ, and
+ * Deleted items' steps with SIGHT_READ and the step budget. */
 export async function accessRowsOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

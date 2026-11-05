@@ -19,6 +19,13 @@ export type OrgProjectView = {
   accessible: (projectId: string) => boolean
 }
 
+/** What `me` sees of every project of the organization, read at once:
+ * every project (lib/access.ts orgProjects) and every grant and team share
+ * of theirs (accessRowsOf), a read at the design size's sum of 13 index
+ * ranges, 3,710 documents and 1.15 MiB as convex-test counts them for the
+ * catalogue of 2,000 projects, accepted as accessRowsOf's docstring says.
+ * Past the design size Convex's own read limit refuses the call with a
+ * generic server error, which widens nothing. */
 export async function orgProjectView(ctx: QueryCtx, me: Doc<'profiles'>): Promise<OrgProjectView> {
   // the projects and the caller's grants and shares, read at once
   const [projects, { grants, shares }] = await Promise.all([
