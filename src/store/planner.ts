@@ -1262,6 +1262,10 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
     if (side === 'task') taskDelivered(watched.task)
   }
   if (side === 'task') refFromTaskSide(watched, news)
+  // Move and Archive or delete of a task the workspace holds read its
+  // family from this answer until every task is held (P.familyOf), also
+  // where its lists show the same as before, as for the person's new task
+  if (side === 'task' && rows.issues.has(watched.task) && !tasksAll) familyNews = true
   return true
 }
 
@@ -2752,8 +2756,9 @@ function repaint(parts: {
   // what the window's delay reads besides its task shows with the
   // comments, an owner load or a group's facts from a view's row
   if (windowSpanMoved()) windowLoadNews = true
-  if (windowLoadNews) {
+  if (windowLoadNews || familyNews) {
     windowLoadNews = false
+    familyNews = false
     emit('comments')
   }
 }
@@ -3356,6 +3361,9 @@ let windowLoad: string | null = null
 /* Whether an owner load the window reads changed since the comments last
    showed (the cache's `changed` repaints only the views). */
 let windowLoadNews = false
+/* Whether the task answer that a held task's family comes from before every
+   task is held changed since the comments last showed (receiveSection). */
+let familyNews = false
 /* Whether syncWindowLoad registers now, so the cache's news is its own. */
 let windowLoadSyncing = false
 
