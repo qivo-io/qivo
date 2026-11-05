@@ -609,20 +609,6 @@ safe against a later backend, because that app derives the health table in
 the browser. The health table reads the same counts as the summary, so the
 release adds no step.
 
-The app's removal window reads `accessRemovals.preview`, which v0.1.99
-(`78f5d6ad`) first shipped, with its `reassign_to` argument and its
-`keep.offered`, `keep.permitted` and `reassign.permitted` fields, and its
-Reassign picker reads `accessRemovals.reassignChoices`. The release after
-v0.1.120 first ships the argument, the fields and the picker's query. An app
-from that release, against a backend before it, says that it could not check
-which tasks a removal affects and removes nothing, also in a tab that was
-open when the backend went back, until the backend rolls forward. From that
-release on, never return the backend to a commit before it; roll forward
-instead. Returning the app alone to an earlier release is safe against a
-later backend, because that app works a removal out from its loaded tasks
-and the backend keeps every earlier argument and field. The release adds no
-step.
-
 The task window edits a task the workspace does not hold yet from the
 window's own read of it, through the mutations the app already sends
 (`issues.update`, `issues.move`, `issues.archive`, `issues.deleteDeep`,
@@ -663,6 +649,20 @@ them. The release that switches it makes the release that shipped them the
 backend's floor for that app. The Board's filter read moved into
 `convex/lib/viewFilters.ts` with `tasks.board`'s answers unchanged. There
 is no schema change, no backfill and no release step.
+
+The app's removal window reads `accessRemovals.preview`, which v0.1.99
+(`78f5d6ad`) first shipped, with its `reassign_to` argument and its
+`keep.offered`, `keep.permitted` and `reassign.permitted` fields, and its
+Reassign picker reads `accessRemovals.reassignChoices`. The release after
+v0.1.120 first ships the argument, the fields and the picker's query. An app
+from that release, against a backend before it, says that it could not check
+which tasks a removal affects and removes nothing, also in a tab that was
+open when the backend went back, until the backend rolls forward. From that
+release on, never return the backend to a commit before it; roll forward
+instead. Returning the app alone to an earlier release is safe against a
+later backend, because that app works a removal out from its loaded tasks
+and the backend keeps every earlier argument and field. The release adds no
+step.
 
 ## Node.js version
 
