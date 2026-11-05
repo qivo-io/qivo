@@ -2,8 +2,11 @@
  * Overview's figures (lib/overview.ts) and Team sync's agenda
  * (lib/teamSyncAgenda.ts) read their delays and owners' loads through
  * verdicts here, and the Roadmap (lib/roadmap.ts) its days and figures.
- * They moved here from lib/overview.ts unchanged, so the Overview answers
- * as before.
+ * They moved here from lib/overview.ts. Since then clockOf also refuses a
+ * clock whose last week does not begin at a local midnight of its `week`,
+ * which no app sends, and verdicts answers the profiles and tasks the
+ * agenda reads beside them; the Overview answers every clock it accepted
+ * that is well formed as before.
  *
  * - Figure and Missing, a figure or why it is not given, and bounded, a
  *   figure whose reads did not fit its guard;

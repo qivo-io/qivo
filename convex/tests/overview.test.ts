@@ -505,9 +505,10 @@ describe('lists', () => {
       'bad_request',
       /cursor/,
     )
-    // an At-risk position is bound to the client's day and weeks too: more
-    // than a batch overdue on a Thursday, whose week may be said to start on
-    // any of the days before it
+    // an At-risk position is bound to the client's day and weeks too. More
+    // than a batch is overdue on a Thursday, and each clock below moves its
+    // day, its week, its week starts or its week end and stays well formed
+    // (lib/viewLoads.ts clockOf), so the cursor's binding is what refuses it
     for (let i = 0; i < 11; i++)
       await plantIssue(t, {
         org_id: f.org.id,
