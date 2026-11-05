@@ -3216,12 +3216,12 @@ let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
 let reshaping = false
 
 /** The row of group `uuid` that the window's delay takes the group's
-    facts from (windowDelayIssue): for a group the window shows from its
-    answer whose dates the answer cannot give, as when a subtask has
-    subtasks of its own, its row in a view whose read is current, the live
-    subscription's own answer on the newest connection, which carries the
-    server's span. A stopped view's kept rows hear no change to the task,
-    so they never lend it. Undefined otherwise. */
+    facts from (windowDelayIssue), or undefined. The group is one the
+    window shows from its answer whose dates the answer cannot give, as
+    when a subtask has subtasks of its own, and the row is its row in a
+    view whose read is current, the live subscription's own answer on the
+    newest connection, which carries the server's span. A stopped view's
+    kept rows hear no change to the task, so they never lend it. */
 function windowSpanRow(uuid: string): ViewRow | undefined {
   const detail = PLANNER.taskDetail(uuid)
   if (!detail || detail.datesKnown) return undefined
