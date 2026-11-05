@@ -343,7 +343,7 @@ describe('who sees what', () => {
     later()
     // a family each way between Firmware, which Sam leads, and Bench, where
     // Sam is a member, under Testbed platform, which Sam does not lead: a
-    // scope of Bench holds both through the range of Firmware (ledSiblings)
+    // scope of Bench holds both through Bench's own ranges (scopeRanges)
     const bench = await plantProject(t, {
       org_id,
       type: 'project',
@@ -525,6 +525,59 @@ describe('who sees what', () => {
         label,
       ).toEqual([item])
     }
+  })
+
+  it('holds a family from before the subtask rule in the scope of a project the person only uses, through the one they lead under another top-level project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // Sam leads Lab, under Field trial, which Sam does not lead, and is a
+    // member of Firmware, under Testbed platform
+    const sam = await person(t, org_id, 'Sam')
+    const trial = await tree(t, f, 'Field trial', undefined, [{ name: 'Lab', lead: sam }])
+    const lab = trial.subs[0]
+    await grant(t, f.sub.id, sam.id, 'user')
+    // two families from before the subtask rule, which the admin deleted:
+    // the root in Lab with a subtask in Firmware, and the root in Firmware
+    // with a subtask in Lab
+    const family = async (home: string, other: string, title: string) => {
+      const root = await plantIssue(t, {
+        org_id,
+        project_id: home,
+        title: `${title} probe`,
+        assignee_id: sam.id,
+      })
+      const sub = await plantIssue(t, {
+        org_id,
+        project_id: other,
+        parent_id: root.id,
+        title: `${title} probe mount`,
+        assignee_id: sam.id,
+      })
+      await deleteTask(t, f.admin, root.id, { subtask_ids: [sub.id] })
+      later()
+      return (await itemFor(t, root.id)).id
+    }
+    const labRooted = await family(lab.id, f.sub.id, 'Calibrate the')
+    const firmwareRooted = await family(f.sub.id, lab.id, 'Flash the')
+    const both = [firmwareRooted, labRooted]
+    // Sam sees each through Lab, in All projects and in a scope of
+    // Firmware, browsing, searching and filtering by assignee
+    for (const scope of [
+      { org_id, all: true as const },
+      { org_id, project_ids: [f.sub.id] },
+      { org_id, project_ids: [lab.id] },
+    ])
+      for (const extra of [{}, { search: 'probe' }, { assignee: sam.id }]) {
+        const label = JSON.stringify([scope, extra])
+        const walked = await walk(t, sam, { scope, ...extra })
+        expect([...walked.ids].sort(), label).toEqual([...both].sort())
+        expect(
+          walked.pages.every((p) => p.missing !== 'reads'),
+          label,
+        ).toBe(true)
+      }
+    await expectAsListed(t, [sam])
   })
 
   it('answers unknown, foreign, hidden and deleted project ids alike, and an organization without a seat', async () => {
@@ -1281,11 +1334,13 @@ describe('stops', () => {
     })
     // the project entries need only Sam's own deletes
     expect((await page(t, sam, { scope: all, kind: 'project' })).too_wide).toBeUndefined()
-    // a scope of Firmware also reads Board rev, which Sam leads beside it,
-    // as a task item there can have a subtask in Firmware (ledSiblings)
+    // a scope of Firmware reads Sam's own deletes and Firmware's range,
+    // whose cross-project rows name the task items of Board rev that have a
+    // subtask in Firmware (scopeRanges)
     const firmware = { scope: { org_id, project_ids: [f.sub.id] } }
+    Object.assign(DELETED_PAGE, { sources: 1 })
     expect(await page(t, sam, firmware)).toMatchObject({ entries: [], too_wide: true })
-    Object.assign(DELETED_PAGE, { sources: 3 })
+    Object.assign(DELETED_PAGE, { sources: 2 })
     const one = await page(t, sam, firmware)
     expect(one.entries.map((e) => e.item_id)).toEqual([items[1]])
     expect(one.too_wide).toBeUndefined()
