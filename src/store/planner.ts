@@ -3147,7 +3147,9 @@ function releaseViewRows(slot: ViewSlot) {
  * Registers view `slot`'s read of `query` for the arguments `key`, JSON in
  * a fixed key order, or none with null, as the view's effect runs: the
  * rules of P.watchBoard, which every view read follows. Another query or
- * other arguments, or a new `attempt`, drop what the read held.
+ * other arguments, or a new `attempt`, drop what the read held, except
+ * other arguments that only narrow what the held answer shows (`narrows`):
+ * that answer and its rows stay until the answer for `key` replaces them.
  */
 function watchView(
   slot: ViewSlot,
@@ -3156,6 +3158,7 @@ function watchView(
   attempt = 0,
   owner = 0,
   delays = true,
+  narrows = false,
 ) {
   let read = viewReads.get(slot)
   if (read && key === null && read.owner !== owner) return
@@ -3186,7 +3189,8 @@ function watchView(
   const retry = attempt !== read.attempt
   read.attempt = attempt
   const other =
-    key !== null && (read.query !== query || (read.held !== null && read.held.key !== key))
+    key !== null &&
+    (read.query !== query || (read.held !== null && read.held.key !== key && !narrows))
   if (key !== null && (retry || other)) {
     read.stop?.()
     read.stop = null
@@ -9243,14 +9247,24 @@ export const PLANNER = {
       null, as the view's effect runs. The view passes null while its page
       or the tab is hidden: the read stops and keeps its rows, which show
       again, as refreshing, when it asks for the same arguments. Other
-      arguments, or a new `attempt` (Try again), drop what it held. `owner`
-      names the mounted view: a leaving page stays mounted, hidden, until
-      the next one painted (components/KeptView.tsx), so the one that asks
-      last owns the read, and another's null asks nothing. `delays` says
-      whether the view shows its cards' delays, which then read owners'
-      loads (store/ownerLoadCache.ts). */
-  watchBoard: (slot: ViewSlot, key: string | null, attempt = 0, owner = 0, delays = true) =>
-    watchView(slot, BOARD_QUERY, key, attempt, owner, delays),
+      arguments, or a new `attempt` (Try again), drop what it held, except
+      arguments that only narrow the held answer's text filter (`narrows`,
+      views/board/useBoardView.ts narrowsText): that answer and its rows
+      stay until the answer for `key` arrives, so the Board narrows its
+      cards on screen meanwhile. `owner` names the mounted view: a leaving
+      page stays mounted, hidden, until the next one painted
+      (components/KeptView.tsx), so the one that asks last owns the read,
+      and another's null asks nothing. `delays` says whether the view shows
+      its cards' delays, which then read owners' loads
+      (store/ownerLoadCache.ts). */
+  watchBoard: (
+    slot: ViewSlot,
+    key: string | null,
+    attempt = 0,
+    owner = 0,
+    delays = true,
+    narrows = false,
+  ) => watchView(slot, BOARD_QUERY, key, attempt, owner, delays, narrows),
   /** What view `slot`'s read of the Board's answer holds: the arguments'
       key its result answers (null for none), its value or error, whether
       it is the live subscription's on the current connection, and whether

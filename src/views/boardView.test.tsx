@@ -607,6 +607,38 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector('[data-card]')).toBeNull()
   })
 
+  it('keeps the cards a narrowed text still matches once it goes out, until its answer arrives', async () => {
+    const board = await loadBoard(network, (snap) => {
+      three(snap)
+      for (const [id, title] of [
+        ['a', 'Order cables'],
+        ['b', 'Order the case'],
+        ['c', 'Wire the sensor'],
+      ])
+        Object.assign(snap.issues.find((t) => t.id === id) ?? {}, { title })
+    })
+    await board.render(root)
+    await board.search('order')
+    await wait(300)
+    expect(state()).toBe('ok')
+    board.server.hold = true
+    await board.search('order cab')
+    // typing rests and the new text goes out, its answer held back
+    await wait(300)
+    expect(board.server.asked.at(-1)?.filters.search).toBe('order cab')
+    expect(state()).toBe('refreshing')
+    expect(busy()).toBe(true)
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([true, false, false])
+    // more letters narrow the same answer while the new text's waits
+    await board.search('order cabl')
+    await wait(300)
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([true, false, false])
+    // the answer takes over
+    await board.answer()
+    expect(state()).toBe('ok')
+    expect(['a', 'b', 'c'].map((id) => board.card(id) !== null)).toEqual([true, false, false])
+  })
+
   it('says the selection holds no task from the answer, and that nothing matches under a clearable filter', async () => {
     const board = await loadBoard(network, () => {})
     await board.render(root)

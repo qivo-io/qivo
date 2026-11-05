@@ -244,8 +244,11 @@ let boardReaders = 0
 
 /** The read of the Board's answer that view `slot` registers with the
     store (P.watchBoard) for the arguments `key`, while the page shows, with
-    Try again, and whether the view shows its cards' delays. Renders again
-    on the store's `views` news (views/useViewsNews.ts). */
+    Try again, and whether the view shows its cards' delays. An answer
+    whose text filter `key` only narrows (narrowsText) stays with its rows
+    until the answer for `key` arrives, so the Board narrows its cards
+    meanwhile. Renders again on the store's `views` news
+    (views/useViewsNews.ts). */
 function useBoardRead(slot: string, key: string | null, delays: boolean) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useState(0)
@@ -254,7 +257,10 @@ function useBoardRead(slot: string, key: string | null, delays: boolean) {
   useViewsNews()
   const ask = visible ? key : null
   useEffect(() => {
-    P.watchBoard(slot, ask, attempt, owner, delays)
+    const held = P.boardRead(slot)
+    const narrows =
+      ask !== null && held.key !== null && held.value?.state === 'ok' && narrowsText(held.key, ask)
+    P.watchBoard(slot, ask, attempt, owner, delays, narrows)
     return () => P.watchBoard(slot, null, attempt, owner, delays)
   }, [slot, ask, attempt, owner, delays])
   return { ...P.boardRead(slot), retry: () => setAttempt((n) => n + 1) }
