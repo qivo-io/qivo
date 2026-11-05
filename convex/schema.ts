@@ -151,9 +151,14 @@ const projectsTable = defineTable({
   // A parent's sub-projects, or with parent_id absent the organization's
   // top-level projects, of one archive state in name order, the id breaking
   // ties: an organization admin's Settings list of projects, expanded
-  // sub-project lists (projectNav.children and Settings'), the archived
-  // sub-projects beneath an archived parent and the archived sub-projects of
-  // a live one in Archived projects (model/projectSettingsLists.ts).
+  // sub-project lists (projectNav.children and Settings'), the live
+  // sub-projects of the top-level projects a person sees for a reason of
+  // their own in the directory's and Settings' name searches
+  // (model/projectNavReads.ts restCandidates), the archived sub-projects
+  // beneath an archived parent and the archived sub-projects of a live one
+  // in Archived projects (model/projectSettingsLists.ts), and a top-level
+  // project's live sub-projects for Archived tasks (lib/archivedTasks.ts
+  // liveSubProjects).
   .index('by_org_parent_state_name', ['org_id', 'parent_id', 'archive_state', 'name_key', 'id'])
   // Every project and sub-project of the organization of one archive state
   // in name order, the id breaking ties: an organization admin's Settings

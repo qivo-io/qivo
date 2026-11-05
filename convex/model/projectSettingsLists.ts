@@ -29,7 +29,7 @@
  * rows and the projects they find (archived pages fail closed, 29 October
  * 2026). An archived top-level project shows to it when it sees it for a
  * reason of its own (accessible), or through an archived sub-project
- * beneath it that it sees (archivedShows), as lib/access.ts counts archived
+ * beneath it that it sees (archivedSight), as lib/access.ts counts archived
  * sub-projects for navigation.
  *
  * Rights. Each row's rights are the writes' rule, lib/access.ts managesIn
@@ -947,9 +947,11 @@ type ArchiveCandidate = { project: Doc<'projects'>; at: NamedAt<ArchiveTie> }
  *    project one of those root rows records a source on (on_root) that the
  *    seat sees for a reason of its own (accessible), one range each.
  *
- * With a search a row whose key does not match is left out before its
- * project is read. A row finds a candidate and grants nothing: the batch
- * judges each.
+ * A row finds a candidate and grants nothing: the batch judges each. With
+ * a search a row whose key does not match is left out before its project
+ * is read, except a root row that records a source (on_root), whose
+ * project step 4 reads to decide whether to read the sub-projects beneath
+ * it.
  */
 async function archiveCandidates(
   ctx: QueryCtx,
