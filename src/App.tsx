@@ -2333,7 +2333,9 @@ function App() {
 
   /* Leaves Settings for the workspace, closing the task window over it,
      before Show on board or Plan on roadmap act as from the floating
-     window. */
+     window. The callers check first that the action will act, so one that
+     would only say why, or do nothing, leaves the window and Settings as
+     they are. */
   const leaveSettingsFor = (act: () => void) =>
     closeOrAsk([unsent.task, unsent.page], () => {
       settingsReturn.current = NO_RETURN
@@ -2354,11 +2356,22 @@ function App() {
               issueId={settingsTask}
               onClose={closeSettingsTask}
               onOpen={(id) => closeOrAsk([unsent.task], () => setSettingsTask(id))}
-              onPlanOnRoadmap={(id) => leaveSettingsFor(() => planOnRoadmap(id))}
+              onPlanOnRoadmap={(id) => {
+                // planOnRoadmap's own checks: a Backlog task only gets its
+                // toast, over Settings, and a task or project the store
+                // lacks gets nothing
+                const it = P.taskShown(id)
+                const acts =
+                  it && P.metaOf(it.project) && (P.isGroup(it) || it.status !== 'backlog')
+                if (acts) leaveSettingsFor(() => planOnRoadmap(id))
+                else planOnRoadmap(id)
+              }}
               unread={undefined}
               onPopOut={undefined}
               onShowOnBoard={(projectId, issueKey, keepOpen) =>
-                leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
+                P.project(projectId)
+                  ? leaveSettingsFor(() => showOnBoard(projectId, issueKey, keepOpen))
+                  : undefined
               }
             />
           </UnsentScopeContext.Provider>

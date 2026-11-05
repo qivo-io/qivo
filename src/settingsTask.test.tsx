@@ -13,7 +13,7 @@ import {
   queryProjectNav,
 } from './store/projectNavStandIn.setup'
 
-/* The task window an Settings › Archived tasks row opens, over Settings,
+/* The task window a Settings › Archived tasks row opens, over Settings,
    in the whole App on the real store. The server holds two archived tasks
    in the project the person leads: issues.archivedPage lists them, the
    window's own read (taskWindow:task) answers them archived, and a restore
@@ -295,6 +295,42 @@ describe('an Archived tasks row', { timeout: 30_000 }, () => {
     expect(
       network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:archivedPage'),
     ).toHaveLength(asked + 1)
+  })
+
+  it('keeps Settings and the window where Plan on roadmap only says why', async () => {
+    const { address } = await boot()
+    // the task comes back in Backlog, which the roadmap does not plan
+    archive = archive.map((t) => (t.id === 'arch-42' ? { ...t, status: 'backlog' as const } : t))
+    await click(find('[data-archive-open="arch-42"]'))
+    const dialog = await waitFor(archivedWindow, 'the archived task window')
+    const restore = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Restore',
+    )
+    if (!restore) throw new Error('no Restore in the window')
+    await click(restore)
+    const plan = await waitFor(
+      () =>
+        archivedWindow()
+          ? null
+          : document.querySelector<HTMLButtonElement>(
+              '[role="dialog"] [data-plan-on-roadmap]:not(:disabled)',
+            ),
+      'Plan on roadmap in the restored task',
+    )
+    await click(plan)
+    await waitFor(
+      () =>
+        document.body.textContent?.includes(
+          'Move this task out of Backlog before planning it on the roadmap',
+        )
+          ? true
+          : null,
+      'the Backlog toast',
+    )
+    // the toast shows over Settings, and nothing closed
+    expect(document.querySelector('[data-settings-page="projects-archived-tasks"]')).not.toBeNull()
+    expect(document.querySelector('[role="dialog"] [data-plan-on-roadmap]')).not.toBeNull()
+    expect(location.pathname).toBe(address)
   })
 
   it('asks before a close of the window throws away a comment typed in it', async () => {
