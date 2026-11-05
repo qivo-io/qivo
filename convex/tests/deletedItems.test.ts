@@ -567,13 +567,6 @@ describe('moving a task to Deleted items', () => {
   })
 })
 
-/* A task delete at the caps: the delete's own transaction deletes the
- * messages it has room for and steps delete the rest, and the children it
- * detaches tell their followers from steps. convex-test does not count the
- * index range a backend reads to delete a row, so these suites hold each
- * transaction to 4,096 writes instead, which every delete also spends.
- * One or two followers per task keep convex-test fast; LIMITS.followers.max
- * per task was checked on a local backend. */
 describe("the Deleted items page's fields on each stored task", () => {
   it("stores each task's search text and assignee with its item's fields, for every task of a task item", async () => {
     const t = newT()
@@ -684,6 +677,13 @@ describe("the Deleted items page's fields on each stored task", () => {
   })
 })
 
+/* A task delete at the caps: the delete's own transaction deletes the
+ * messages it has room for and steps delete the rest, and the children it
+ * detaches tell their followers from steps. convex-test does not count the
+ * index range a backend reads to delete a row, so these suites hold each
+ * transaction to 4,096 writes instead, which every delete also spends.
+ * One or two followers per task keep convex-test fast; LIMITS.followers.max
+ * per task was checked on a local backend. */
 describe('a task delete at the caps', () => {
   const TX_LIMITS = { documentsWritten: 4096 }
 
