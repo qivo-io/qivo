@@ -235,12 +235,18 @@ Read state follows you across devices. Sort by newest or oldest, or filter for u
 snoozed, mention, comment or change messages. Desktop search includes the
 messages grouped in each row and their project names.
 
-On desktop, selecting a row opens the task's discussion pane. Click
+On desktop, selecting a row opens the task's discussion pane and marks the
+row read. The pane opens the task at once, read from the server, also before
+it has loaded into the workspace, and says so while it loads or when the task
+can't be opened. Click
 **Description** to expand its collapsed description. The pane shows the
 current assignee or reviewer, Activity and comment box. Use the pop-out button
-for editable details, attachments and links, or **Open task in board** to
-open the full task window over its Board, which scrolls to the task's card
-and rings it until a moment after the window closes. The project breadcrumb
+for editable details, attachments and links; a related task opened there
+opens in both the pane and the pop-out. Once the task has loaded into the
+workspace, **Open task in board**, in the pane's **Task actions** menu or a
+row's right-click menu, opens the full task window over its Board, scrolls
+to the task's card and rings it until a moment after the window closes.
+Before then neither menu offers it. The project breadcrumb
 does the same ([Showing a task on the Board](./the-board.md#showing-a-task-on-the-board)).
 
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,

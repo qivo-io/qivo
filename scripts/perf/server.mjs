@@ -94,9 +94,13 @@
 //                        answers, for screenshots of states a seeded
 //                        backend reaches only by timing: failed (the read
 //                        fails after its first answer, and after Retry
-//                        too) or incomplete (its subtask list is not
-//                        whole, so the window shows the task as a group
-//                        whose subtasks it cannot all read)
+//                        too), incomplete (its subtask list is not whole,
+//                        so the window shows the task as a group whose
+//                        subtasks it cannot all read), loading (the read
+//                        never answers, so a task opened by its address
+//                        or a reference shows its loading frame) or error
+//                        (the read fails from its first answer on, so
+//                        such a task shows that it could not be opened)
 //   removal              a state the removal window's reads answer
 //                        whatever the workspace says, for screenshots of
 //                        states a seeded backend cannot reach inside the
@@ -135,9 +139,13 @@
 // tasks in the projects the change reaches as the lost holdings and every
 // person who can hold work as the choices, and answers a chosen person's
 // holder_eligible by that rule, without the server's rules.
+// The task window's read of a task resolves its ref
+// as the server does (convex/lib/taskWindow.ts taskByRef): a uuid in any
+// case, or a number bare or as QN-12 in the organization asked only.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
+import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
@@ -721,7 +729,10 @@ function deliver(to, result) {
   const sent = lastDelivery.then(async () => {
     let encoded
     try {
-      encoded = encode(result())
+      const value = result()
+      // a read that never answers (window=loading) sends nothing
+      if (value === NO_ANSWER) return
+      encoded = encode(value)
     } catch (error) {
       // a read the server cannot answer fails only its own caller
       post({ type: 'result', to, error: String(error?.message ?? error) })
@@ -794,25 +805,51 @@ function readPart(name, args) {
 }
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-/* The tasks whose own read answered once, for window=failed, which fails
-   every read of them after that. */
+/* The reads of a task, by their organization and ref, that answered
+   once, for window=failed, which fails every later answer of that read.
+   Keyed by the read, not the task, so a task opened by its number reads
+   it once by number and once by uuid, as the app does, and each answers
+   first. */
 const windowAnswered = new Set()
+/** What a read answers when it never answers (window=loading): nothing is
+    sent for it. */
+const NO_ANSWER = Symbol('no answer')
+/** The task `ref` names in organization `orgId` as convex/lib/taskWindow.ts
+    taskByRef reads it: a uuid in any case, or a number bare or as QN-12 in
+    that organization only. */
+function taskByRef(byId, orgId, ref) {
+  const named = typeof ref === 'string' ? parseIssueRef(ref) : null
+  if (!named) return undefined
+  if ('uuid' in named) {
+    const task = byId.get(named.uuid)
+    return task?.org_id === orgId ? task : undefined
+  }
+  return snapshot.issues.find((row) => row.org_id === orgId && row.num === named.num)
+}
 /** What the task window's query `name` answers for `args`, in the shapes
     of convex/lib/taskWindow.ts: the open task with its parent and its
     subtasks as short rows, its links with their other ends, or its
     attachment rows. The signed-in person is shown every visible task, the
     unheld ones too, so every list is complete unless window=incomplete
     says otherwise, and a task it does not hold answers unavailable. With
-    window=failed, the task's read fails after its first answer, which a
-    transition soon after brings. */
+    window=failed, each read of the task, by its arguments, fails after its
+    first answer, which a transition soon after brings; with window=error
+    it fails from the first, and with window=loading it never answers. */
 function readTaskWindow(name, args) {
   const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
-  const task = byId.get(name === 'taskWindow:task' ? args.ref : args.issue_id)
+  if (name === 'taskWindow:task' && forcedWindow === 'loading') return NO_ANSWER
+  if (name === 'taskWindow:task' && forcedWindow === 'error')
+    throw new Error("the task window's read fails, as window=error asks")
+  const task =
+    name === 'taskWindow:task'
+      ? taskByRef(byId, args.org_id ?? org, args.ref)
+      : byId.get(args.issue_id)
   if (!task) return { state: 'unavailable' }
   if (name === 'taskWindow:task' && forcedWindow === 'failed') {
-    if (windowAnswered.has(task.id))
+    const read = JSON.stringify([args.org_id ?? org, args.ref])
+    if (windowAnswered.has(read))
       throw new Error("the task window's read fails, as window=failed asks")
-    windowAnswered.add(task.id)
+    windowAnswered.add(read)
     setTimeout(() => void transition(), 2 * latency + 500)
   }
   // the person's grant on the visible program
@@ -1074,7 +1111,10 @@ function transition() {
     for (const [to, part] of watchedParts) {
       let encoded
       try {
-        encoded = encode(read(part.name, part.args))
+        const value = read(part.name, part.args)
+        // a read that never answers (window=loading) sends nothing
+        if (value === NO_ANSWER) continue
+        encoded = encode(value)
       } catch (error) {
         results.push({ to, error: String(error?.message ?? error) })
         continue

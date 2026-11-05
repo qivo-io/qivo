@@ -11,20 +11,24 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
 /* Back or Forward to a task's address while a large workspace still loads
    its tasks in stages (store/liveParts.ts), on App and the real store: the
-   task window waits for a task still to arrive, the address keeps naming
-   it, and the task opens once it arrives, in its own scope. The waiting
-   window closes, and a task that never arrives closes it once every task
-   has loaded. A task address Back reaches during the first load, before
-   App shows, is held the same way. A project in scope deleted meanwhile
-   goes with the task's arrival, and the task opens in the one left. A page
-   moved meanwhile names itself, and earns an entry where it would with the
-   task open. A task that arrives while a refused Back steps back is named
-   once that step lands. A held address of another organization never
-   shows a home task with the same number. Settings and every one of its
-   pages open meanwhile: Teams, a team, Projects and a project, where a
-   removal asks the server which tasks it affects, Labels, with the
-   server's counts, and Archived tasks. Back to a task or project that is
-   gone, once every task has loaded, names the page it shows in place. */
+   task window opens the task the workspace does not hold by a reference
+   (lib/taskReference.ts), which the store reads from the server, the
+   address keeps naming it, and the task opens once its answer or the
+   workspace brings it, in its own scope. The window closes only when the
+   person closes it: a task that never arrives keeps it and its address
+   once every task has loaded, and the server's answer says it can't be
+   opened. A task address Back reaches during the first load, before App
+   shows, opens the same way. A project in scope deleted meanwhile goes
+   with the task's arrival, and the task opens in the one left. A page
+   moved meanwhile names itself with the task, and earns an entry where it
+   would with the task open. A task that arrives while a refused Back
+   steps back is named once that step lands. An address of another
+   organization never shows a home task with the same number. Settings
+   and every one of its pages open meanwhile: Teams, a team, Projects and
+   a project, where a removal asks the server which tasks it affects,
+   Labels, with the server's counts, and Archived tasks. Back to a project
+   that is gone, once every task has loaded, names the page it shows in
+   place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -76,6 +80,13 @@ const LAST_WINDOW = 'fc000000'
 
 let container: HTMLDivElement
 let root: Root
+/* The reads of a task by its reference or the window's own read
+   (taskWindow.task), which the test answers. */
+let reads: {
+  args: Record<string, unknown>
+  next: (value: unknown) => void
+  fail?: (error: unknown) => void
+}[]
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -172,6 +183,7 @@ async function bootLoading(
   shape?: (snap: Snapshot) => void,
 ) {
   vi.resetModules()
+  reads = []
   const snap: Snapshot = plannerFixture()
   snap.orgs[0].next_issue_num = 64 * 200
   snap.issues.push(task('fd000000-b', snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
@@ -188,6 +200,7 @@ async function bootLoading(
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'taskWindow:task') reads.push({ args, next, fail })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (name === 'labels:settingsPage') answerLabelPages(server, args, next, fail)
@@ -333,21 +346,34 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(ALL_BOARD)
   })
 
-  it('closes the window once every task has loaded without the task', async () => {
+  it('keeps the window and the address once every task has loaded without the task, until the server says', async () => {
     const { store, org } = await bootLoading()
     await back(`/app/${org}/board/all`)
     // no task has number 3
-    await back(`/app/${org}/board/tasks/qn-3`)
+    const address = `/app/${org}/board/tasks/qn-3`
+    await back(address)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
-    expect(location.pathname).toBe(`/app/${org}/board/tasks/qn-3`)
+    expect(location.pathname).toBe(address)
+    expect(reads.map((read) => read.args)).toEqual([{ org_id: store.P.org.id, ref: 'QN-3' }])
 
+    // a complete workspace without the task is no word on it
     await arrive()
     expect(store.P.stillLoading()).toBeNull()
-    await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
-    expect(location.pathname).toBe(ALL_BOARD)
+    expect(document.querySelector('[data-task-loading]')?.textContent).toContain('Loading QN-3…')
+    expect(location.pathname).toBe(address)
+    // the server's is
+    await act(async () => reads[0]?.next({ state: 'unavailable' }))
+    await waitFor(
+      () =>
+        document.body.textContent?.includes(
+          "QN-3 can't be opened. It may not exist, or you may not have access to it.",
+        ),
+      'the note',
+    )
+    expect(location.pathname).toBe(address)
   })
 
-  it('names a page moved to while it waits, then that page with the task once it arrives', async () => {
+  it('names a page moved to while it waits, with the task, then keeps it once it arrives', async () => {
     const { org } = await bootLoading()
     await back(`/app/${org}/board/all`)
     await back(`/app/${org}/board/tasks/qn-2`)
@@ -356,7 +382,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     // the page moves under the waiting window, which stays
     await switchView('Overview')
     expect(document.querySelector('[data-task-loading]')).not.toBeNull()
-    expect(location.pathname).toBe('/app/~/overview/all')
+    expect(location.pathname).toBe(`/app/${org}/overview/all/tasks/qn-2`)
     expect(history.length).toBe(entries + 1)
 
     await arrive()
@@ -376,7 +402,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     await switchView('Overview')
     await switchView('Board')
-    expect(location.pathname).toBe(ALL_BOARD)
+    expect(location.pathname).toBe(`/app/${org}/board/all/tasks/qn-2`)
 
     await arrive()
     await waitFor(
@@ -419,7 +445,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
     ['All projects', () => ALL_BOARD, 'board/all/tasks/qn-2', 1],
   ])(
     'names %s moved to while it waits as it would with the task open',
-    async (label, page, withTask, more) => {
+    async (label, _page, withTask, more) => {
       const { org } = await bootLoading(true, undefined, secondProject)
       await back(`/app/${org}/board/p/1`)
       await back(`/app/${org}/board/tasks/qn-2`)
@@ -427,7 +453,7 @@ describe('Back to a task still to arrive', { timeout: 30_000 }, () => {
       const entries = history.length
       // a stand-in click (pressScope)
       await pressScope(label)
-      expect(location.pathname).toBe(page(org))
+      expect(location.pathname).toBe(`/app/${org}/${withTask}`)
       expect(history.length).toBe(entries + more)
 
       await arrive()
@@ -531,15 +557,22 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
     expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/p/1`)
   })
 
-  it('closes the window in place once every task has loaded without the task', async () => {
+  it('keeps the window and the address once every task has loaded without the task', async () => {
     const { store } = await bootLoading(true, (slug) => `/app/${slug}/board/tasks/qn-3`)
-    expect(location.pathname).toBe(`/app/${store.P.org.slug}/board/tasks/qn-3`)
+    const address = `/app/${store.P.org.slug}/board/tasks/qn-3`
+    expect(location.pathname).toBe(address)
     await waitFor(() => document.querySelector('[data-task-loading]'), 'the waiting window')
     const entries = history.length
     await arrive()
-    await waitFor(() => !document.querySelector('[data-task-loading]'), 'the closed window')
-    // the page it shows, named in place as Back to a gone task names it
-    expect(location.pathname).toBe(`/app/${store.P.org.slug}`)
+    expect(document.querySelector('[data-task-loading]')?.textContent).toContain('Loading QN-3…')
+    expect(location.pathname).toBe(address)
+    // a failed read keeps both, with Retry
+    await act(async () => reads[0]?.fail?.(new Error('Server Error')))
+    await waitFor(() => document.body.textContent?.includes("Couldn't open QN-3."), 'the failure')
+    expect(
+      [...document.querySelectorAll('button')].some((b) => b.textContent?.includes('Retry')),
+    ).toBe(true)
+    expect(location.pathname).toBe(address)
     expect(history.length).toBe(entries)
   })
 })
@@ -674,22 +707,41 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
 })
 
 describe('Back to an address that is gone', { timeout: 30_000 }, () => {
-  it.each([
-    ['a task', 'board/tasks/qn-3'],
-    ['a project', 'board/p/9'],
-  ])(
-    'names the page it shows in place when Back reaches %s that is gone, once every task loaded',
-    async (_, gone) => {
-      const { org } = await bootLoading(false)
-      await back(`/app/${org}/board/all`)
-      expect(location.pathname).toBe(ALL_BOARD)
-      const entries = history.length
-      // the page stays All projects' Board
-      await back(`/app/${org}/${gone}`)
-      expect(document.querySelector('[role="dialog"]')).toBeNull()
-      expect(location.pathname).toBe(ALL_BOARD)
-      // replaced, not pushed: Back from here leaves the page
-      expect(history.length).toBe(entries + 1)
-    },
-  )
+  it('names the page it shows in place when Back reaches a project that is gone, once every task loaded', async () => {
+    const { org } = await bootLoading(false)
+    await back(`/app/${org}/board/all`)
+    expect(location.pathname).toBe(ALL_BOARD)
+    const entries = history.length
+    // the page stays All projects' Board
+    await back(`/app/${org}/board/p/9`)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(location.pathname).toBe(ALL_BOARD)
+    // replaced, not pushed: Back from here leaves the page
+    expect(history.length).toBe(entries + 1)
+  })
+
+  it("keeps the address of a task the workspace does not hold and asks the server, which says it can't be opened", async () => {
+    const { store, org } = await bootLoading(false)
+    await back(`/app/${org}/board/all`)
+    const entries = history.length
+    const address = `/app/${org}/board/tasks/qn-3`
+    await back(address)
+    // a complete workspace without the task is no word on it
+    await waitFor(() => document.querySelector('[data-task-loading]'), 'the loading window')
+    expect(location.pathname).toBe(address)
+    expect(reads.at(-1)?.args).toEqual({ org_id: store.P.org.id, ref: 'QN-3' })
+    await act(async () => reads.at(-1)?.next({ state: 'unavailable' }))
+    await waitFor(
+      () =>
+        document.body.textContent?.includes(
+          "QN-3 can't be opened. It may not exist, or you may not have access to it.",
+        ),
+      'the note',
+    )
+    expect(location.pathname).toBe(address)
+    expect(history.length).toBe(entries + 1)
+    // closing it shows the page, by an entry of its own
+    await close()
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
 })

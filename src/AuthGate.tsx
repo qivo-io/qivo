@@ -48,7 +48,7 @@ import { leaveDeliberately, pageLeaving, useUnsaved } from './lib/leaveGuard'
 import { loadFailureText } from './lib/loadFailure'
 import { oauthConnectRequest, oauthNeedsLogin } from './lib/oauthConnection'
 import { reloadPage } from './lib/pageHistory'
-import { addressesTask } from './lib/router'
+import { addressedTask } from './lib/router'
 import { unconfirmedNote } from './lib/unconfirmedNote'
 import { beginUpdateBlock, isUpdateBlocked, useUpdateBlocker } from './lib/updateSafety'
 import { loadWorkspace, preloadWorkspacePage } from './lib/workspacePreload'
@@ -301,7 +301,9 @@ export function AuthGate() {
             if (attempt === loadAttempt.current) setAppearanceAccount(accountId)
           },
           knownSession,
-          { whole: addressesTask(location.pathname, location.hash) },
+          // the task the address names, which the first stage reads, so
+          // its window shows with the first paint
+          { address: addressedTask(location.pathname, location.hash) },
         ),
         connection ? null : loadWorkspace(),
       ])

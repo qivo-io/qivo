@@ -28,7 +28,12 @@
  * takes the absent archived_at filter and still returns active matches
  * (convex/lib/mainSearch.ts ARCHIVED_FILTER), and that the deployment
  * answers an archived task's text and history (taskWindow.task,
- * snapshot.threadHistory). It opens the Board of the project it made and
+ * snapshot.threadHistory). It opens task links in fresh loads: that
+ * archived task's, which must show read-only with its note and title, a
+ * number no task has, which must say it can't be opened, and an active
+ * task's, which must show its title (ui/task-link), so the deployment
+ * answers a number in the organization the address names and an archived
+ * link opens. It opens the Board of the project it made and
  * waits for the deployment's answer for it (tasks.board), whose cards must
  * hold its two fixture tasks (ui/board). It makes a sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
@@ -4168,6 +4173,64 @@ async function paletteSearchCheck(target, active) {
   })
 }
 
+/** The step that opens task links (taskLinkCheck). */
+export const TASK_LINK_STEP = 'ui/task-link'
+
+/** The link of a task number no organization reaches, and what the window
+ *  says of it (src/panels/IssueDetail.tsx TaskGone). */
+export const TASK_LINK_UNKNOWN = {
+  ref: 'qn-99999999',
+  note: "QN-99999999 can't be opened. It may not exist, or you may not have access to it.",
+}
+
+/** Task links in fresh loads, each opening its task through the
+ *  deployment's taskWindow.task in the organization the address names,
+ *  without waiting for every task: `target`, a task the run archived,
+ *  shows read-only with the archived note and its title, a number no task
+ *  has says it can't be opened, and `active`, a task the run made, shows
+ *  its title with no note. It reads only. It must run before the run
+ *  archives its project. */
+async function taskLinkCheck(target, active) {
+  await check(TASK_LINK_STEP, async () => {
+    const at = (ref) => `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${ref.toLowerCase()}`
+    // the archived task, read-only under its note
+    await app.goto(at(target.key), { waitUntil: 'domcontentloaded' })
+    const archived = app.locator('[role="dialog"][data-task-archived]')
+    await archived.waitFor({ timeout: 60_000 })
+    const note = archived.locator('[data-task-gone] [role="status"]')
+    expect(
+      await until(async () =>
+        ((await note.textContent()) ?? '').startsWith(`${target.key} was archived.`),
+      ),
+      `the link of ${target.key} does not say it was archived`,
+    )
+    eq(
+      (await archived.locator('[data-task-title]').textContent())?.trim(),
+      target.title,
+      'the title of the archived task',
+    )
+    eq(await archived.locator('[data-composer]').count(), 0, 'a composer on an archived task')
+    // a number no task has, which only the deployment can say
+    await app.goto(at(TASK_LINK_UNKNOWN.ref), { waitUntil: 'domcontentloaded' })
+    const unknown = app.locator('[role="dialog"] [data-task-gone] [role="status"]')
+    await unknown.waitFor({ timeout: 60_000 })
+    expect(
+      await until(async () => (await unknown.textContent()) === TASK_LINK_UNKNOWN.note),
+      `the link of ${TASK_LINK_UNKNOWN.ref} does not say it can't be opened`,
+    )
+    // an active task, with its title and no note
+    await app.goto(at(active.key), { waitUntil: 'domcontentloaded' })
+    const title = app.locator('[role="dialog"] [data-task-title]')
+    await title.waitFor({ timeout: 60_000 })
+    expect(
+      await until(async () => ((await title.textContent()) ?? '').trim() === active.title),
+      `the link of ${active.key} does not show its title`,
+    )
+    eq(await app.locator('[data-task-gone]').count(), 0, 'a note on an active task')
+    return `opened ${target.key} read-only as archived, ${TASK_LINK_UNKNOWN.ref} as one that can't be opened, and ${active.key} by their links`
+  })
+}
+
 /** Archived task lists need a project and page with a cursor; archived
  *  projects are listed first (#128). Archives the run's project at the end. */
 async function archiveChecks() {
@@ -4313,6 +4376,7 @@ async function archiveChecks() {
     })
     await archivedTasksPageCheck(archivedTasks[2])
     await paletteSearchCheck(archivedTasks[2], run.parent)
+    await taskLinkCheck(archivedTasks[2], run.parent)
   } else
     for (const id of [
       'archived-lists/rest/cursor-pages',
@@ -4320,6 +4384,7 @@ async function archiveChecks() {
       'task-lists/active-only',
       'ui/archived-tasks-page',
       'ui/search-archived',
+      TASK_LINK_STEP,
     ])
       skip(id, 'the three archived tasks could not be made')
 

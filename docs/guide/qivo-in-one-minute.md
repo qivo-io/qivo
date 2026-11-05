@@ -20,10 +20,12 @@ Until it is gone, the Board and the task list show the tasks that have
 arrived. Their counts show once the server has said which tasks they show
 and every one of those has arrived. Search works meanwhile, but on a slow
 connection its results come after the tasks already on their way. A task you open from
-Search, or from a task's subtasks or linked tasks, before it has arrived
+Search, a link, a bookmark, Back or Forward, an Inbox row, or a task's
+subtasks or linked tasks before it has arrived
 shows at once, and you can change it at once, apart from setting or
 changing its parent, its subtasks and its links, which wait until it has
-arrived. Moving, archiving and
+arrived. A task opened by the number in its link takes changes once the
+window has read it on its own. Moving, archiving and
 deleting such a task work at once too, once its window has read every
 subtask of it. The Overview shows its figures,
 lists and health table from the server meanwhile. The Roadmap and Team sync
@@ -32,7 +34,8 @@ task that has arrived, unless its window has read every subtask of it. An
 open task's subtasks, linked tasks and attachments load on their own.
 Removing a subtask or linked task that has not arrived yet waits for it.
 Settings and all its pages open at once. A
-link to one task opens once every task has loaded. If loading stops, the
+link to one task opens with the first tasks, read from the server, without
+waiting for every task. If loading stops, the
 note says how far it got, and a notice explains what went wrong.
 
 If your organization uses Microsoft and sign-in asks for admin approval, see

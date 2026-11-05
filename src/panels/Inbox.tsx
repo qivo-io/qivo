@@ -43,9 +43,11 @@ import { restoreFocus } from '../lib/focusVisibility'
 import { UnsentScopeContext, useUnsentScope } from '../lib/leaveGuard'
 import { noProjectsHint, seesNoProject } from '../lib/noProjects'
 import { notificationPermission, requestNotificationPermission } from '../lib/notify'
+import { sameTask, taskFacts } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
 import { type UnreadStart, unreadStart } from '../lib/spine'
+import { taskRef } from '../lib/taskReference'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
 import {
@@ -58,6 +60,7 @@ import {
 import { type MessageGroupVM, type MessageVM, P } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { IssueDetail } from './IssueDetail'
+import { useTaskKey } from './taskKey'
 
 /* Spec'd age form: hours up to 24 h, then days (minutes only under an hour —
    "0h" would read as broken). */
@@ -354,18 +357,11 @@ function MessageRow({
   )
 }
 
-/* The two things the task window cannot be asked to show: nothing selected,
-   and an item whose task is not loaded here (its messages carry the title
-   they were written with, so the row can still say what it was). */
-function PaneNote({ title, children }: { title?: string; children?: React.ReactNode }) {
+/* What the pane shows with no task selected. */
+function PaneNote({ children }: { children?: React.ReactNode }) {
   return (
     <div data-inbox-detail className="inbox-note">
       <div className="[text-align:center] [color:var(--text-3)] [font-size:var(--fs-base)]">
-        {title && (
-          <div className="[font-weight:600] [color:var(--text-1)] [margin-bottom:4px] [overflow-wrap:anywhere]">
-            {title}
-          </div>
-        )}
         {children}
       </div>
     </div>
@@ -482,36 +478,18 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   /* What the pane shows is the task the ADDRESS names — `openIssue`, which
      is also what `/app/<org>/inbox/tasks/<task>` restores. So a row click, a deep
      link, Back, and following a subtask inside the pane are all one thing,
-     and a reload lands where you were reading. The single exception can't be
-     addressed at all: an item whose task is not loaded here has no handle to
-     put in a URL, so the row that was clicked is remembered
-     instead and the pane says so. */
-  const paneIssue = openIssue ? P.issueById[openIssue] : null
-  // the task the pane showed, kept while the address names it once the task
-  // left the board, so its window stays and says so (IssueDetail TaskGone)
-  const paneShown = useRef<{ at: string; id: string; uuid: string } | null>(null)
-  // and follows the task's handle as it moves, as the address does
-  // (P.watchHandles), so the pane keeps a task that left once a change of
-  // the home organization gives it another handle
-  useEffect(
-    () =>
-      P.watchHandles((moved) => {
-        const shown = paneShown.current
-        const to = shown && moved.get(shown.at)
-        if (shown && to) paneShown.current = { ...shown, at: to, id: moved.get(shown.id) ?? to }
-      }),
-    [],
-  )
-  if (paneIssue && openIssue)
-    paneShown.current = { at: openIssue, id: paneIssue.id, uuid: paneIssue.uuid }
-  else if (paneShown.current?.at !== openIssue) paneShown.current = null
-  const paneId = paneIssue ? paneIssue.id : (paneShown.current?.id ?? null)
-  const [deadItem, setDeadItem] = useState(null as string | null) // item id (= issue uuid)
-  // Back or Forward to a task still to arrive (App pendingTask): the pane
-  // says it is loading
-  const waiting = !paneId && !deadItem && !!openIssue && P.stillLoading() !== null
-  // deadItem while its task may be one still to arrive (selectNow)
-  const arriving = useRef<string | null>(null)
+     and a reload lands where you were reading. A task the workspace does not
+     hold opens by a reference with its organization (lib/taskReference.ts),
+     and the window shows it from the server, or says it loads, can't be
+     opened, or couldn't be opened. */
+  const paneId = openIssue ?? null
+  // the pane's task's uuid once known, from the workspace, the reference or
+  // its answer, which lights its row and keeps the New mark frozen for it
+  const paneUuid = taskFacts(paneId)?.uuid ?? null
+  // one key while the pane is on the same task, so neither a reference
+  // turning into its handle nor a change of the home organization, which
+  // moves handles, remounts the pane's window
+  const paneKey = useTaskKey(paneId)
   /* The pane is the discussion alone — no details column fits beside a 380px
      message list — so the header offers a way to the rest of it: the SAME
      window, floating, over the inbox. It holds no task of its own, which is
@@ -521,13 +499,10 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
-  // Leaving ends the row picked without a task and the unread part frozen
-  // for the pane, as the Inbox's unmount did: it shows again with an empty
-  // pane.
+  // Leaving ends the unread part frozen for the pane, as the Inbox's
+  // unmount did: it shows again with an empty pane.
   useEffect(
     () => () => {
-      arriving.current = null
-      setDeadItem(null)
       setFrozen(null)
     },
     [],
@@ -536,12 +511,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)
   const popScope = useUnsentScope()
-  const showTask = (handle: string | null) => {
-    setDeadItem(null)
-    openTask(handle || null)
-  }
+  const showTask = (handle: string | null) => openTask(handle || null)
   const closeTask = () => {
-    setDeadItem(null)
     setPoppedOut(false)
     openTask(null)
   }
@@ -549,13 +520,13 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // place goes back only when the pane closed since this last ran.
   const restoredFor = useRef<string | null>(null)
   useEffect(() => {
-    const at = `${mobile}\n${!!paneId}\n${deadItem}`
+    const at = `${mobile}\n${!!paneId}`
     if (restoredFor.current === at) return
     restoredFor.current = at
-    if (mobile && !paneId && !deadItem && listScrollRef.current) {
+    if (mobile && !paneId && listScrollRef.current) {
       listScrollRef.current.scrollTop = queueScrollTop.current
     }
-  }, [mobile, !!paneId, deadItem])
+  }, [mobile, !!paneId])
 
   // Escape leaves the inbox (Settings/Archive parity) — but only once the
   // pane is clear, innermost first. Anything that owns Escape — popovers, the
@@ -567,22 +538,11 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     const k = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       if (paneId) return // the task window has it, and closes on it
-      if (deadItem) {
-        setDeadItem(null)
-        return
-      }
-      if (waiting) {
-        // as its Back to inbox (closeTask): a pop-out left from the task
-        // before must not catch the next one
-        setPoppedOut(false)
-        openTask(null)
-        return
-      }
       onExit?.()
     }
     window.addEventListener('keydown', k)
     return () => window.removeEventListener('keydown', k)
-  }, [onExit, paneId, deadItem, waiting, openTask])
+  }, [onExit, paneId, openTask])
 
   const q = mobile ? '' : search.trim()
   const visible = P.messageGroups
@@ -613,48 +573,30 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   if (sort === 'old') visible.reverse() // P.messageGroups is newest-first
 
   // which row is lit: the one whose task the pane holds
-  const selected = deadItem || (paneIssue ? paneIssue.uuid : null)
+  const selected = paneUuid
   // Freeze what this visit found BEFORE marking it read — the order of these
   // lines is the feature. markMessagesRead is synchronous and reading closes
   // the New mark (and prunes the item back to its last message, 0109), so a
   // mark computed after it would show nothing at all. The task window is
   // mounted by the render this click schedules — far too late to ask — so the
   // answer is handed to it.
+  // the task a row opens: its handle where the workspace holds it, else a
+  // reference by the message's organization and the task's uuid
+  const rowTask = (g: MessageGroupVM) =>
+    g.issueKey ?? taskRef({ org: g.issueOrg, uuid: g.issueUuid })
   const select = (g: MessageGroupVM) =>
-    closeOrAsk([g.issueKey !== openIssue && taskScope], () => selectNow(g))
+    closeOrAsk([!sameTask(rowTask(g), openIssue) && taskScope], () => selectNow(g))
   const selectNow = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     // the list as it shows now, which a read row leaves under Unread only
     paneRows.current = { id: g.id, ids: visible.map((x) => x.id) }
     setFrozen({ uuid: g.issueUuid, unread: unreadStart(P.messages, g.issueUuid) })
-    // a task still to arrive opens once it does, and its item reads then
-    const later = !g.issueKey && P.stillLoading() !== null
     // a sleeping row is a reminder that returns unread; looking does not read it
-    if (!g.snoozed && !later) P.markMessagesRead(g.ids)
-    if (g.issueKey) showTask(g.issueKey)
-    else {
-      openTask(null)
-      setDeadItem(g.id)
-      arriving.current = later ? g.id : null
-    }
+    if (!g.snoozed) P.markMessagesRead(g.ids)
+    showTask(rowTask(g))
   }
-  // The item picked while its task was still to arrive: the task opens
-  // once it arrives, and the item reads then, or once every task has
-  // loaded without it.
-  const deadKey = deadItem
-    ? (P.messageGroups.find((g) => g.id === deadItem)?.issueKey ?? null)
-    : null
-  const loading = P.stillLoading() !== null
-  useEffect(() => {
-    if (arriving.current !== deadItem) arriving.current = null
-    if (!deadItem || arriving.current === null || (!deadKey && loading)) return
-    arriving.current = null
-    const g = P.messageGroups.find((x) => x.id === deadItem)
-    if (g && !g.snoozed) P.markMessagesRead(g.ids)
-    if (deadKey) showTask(deadKey)
-  }, [deadItem, deadKey, loading])
   // …and only for the task it was frozen about
-  const unread = frozen && paneIssue && frozen.uuid === paneIssue.uuid ? frozen.unread : undefined
+  const unread = frozen && paneUuid && frozen.uuid === paneUuid ? frozen.unread : undefined
   const menuGroup = menu ? P.messageGroups.find((g) => g.id === menu.id) : null
   const filterCount = (unreadOnly ? 1 : 0) + (showSnoozed ? 1 : 0) + kinds.length
   const toggleKind = (k: string) =>
@@ -670,7 +612,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      to the empty list's line. The menu's Mark all as read and Remove all
      read start at the first row, and the toolbar's at their own button.
      Focus that went elsewhere stays there. */
-  const paneRow = deadItem || (paneShown.current?.uuid ?? null)
+  const paneRow = paneUuid
   useLayoutEffect(() => {
     if (!paneRow) return
     const ids = visible.map((g) => g.id)
@@ -705,7 +647,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // Effects, not layout effects: a phone's task window, which is modal,
   // releases the list it made inert, and gives focus back where it can, in
   // its own effect's cleanup, which runs before these.
-  const paneOpen = !!(paneId || deadItem || waiting)
+  const paneOpen = !!paneId
   const paneWas = useRef(paneOpen)
   useEffect(() => {
     const was = paneWas.current
@@ -801,7 +743,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   return (
     <div
       data-inbox
-      data-inbox-mobile-detail={mobile && (paneId || deadItem || waiting) ? '' : undefined}
+      data-inbox-mobile-detail={mobile && paneId ? '' : undefined}
       className="inbox-layout animate-in fade-in slide-in-from-bottom-1"
     >
       {/* left: the message list */}
@@ -1031,16 +973,20 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
         </div>
       </section>
 
-      {/* right: the task window itself, filling the pane. Keyed on the task so
-          switching rows remounts it — the same reset an in-place issue swap
-          does inside the floating window, and the only thing that re-freezes
-          the New mark for the item just clicked. */}
+      {/* right: the task window itself, filling the pane, for every task the
+          pane opens: it says itself when the task loads, can't be opened or
+          couldn't be opened. Keyed on the task so switching rows remounts
+          it, the same reset an in-place issue swap does inside the floating
+          window, and the only thing that re-freezes the New mark for the
+          item just clicked. The key is the task's (useTaskKey), not the
+          string that names it, so a reference that turns into its handle,
+          or a handle a change of the home organization moves, keeps it. */}
       <div className={`inbox-detail-frame${paneId ? '' : ' inbox-detail-frame--note'}`}>
         {paneId ? (
           <IssueDetail
             embedded
             modalActive={!poppedOut}
-            key={paneId}
+            key={paneKey}
             issueId={paneId}
             unread={unread}
             onClose={closeTask}
@@ -1050,46 +996,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             onPopOut={() => setPoppedOut(true)}
             onShowOnBoard={showOnBoard}
           />
-        ) : deadItem ? (
-          <>
-            {mobile && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="inbox-mobile-back"
-                onClick={closeTask}
-              >
-                <Icon name="chevronLeft" size={20} />
-                Back to inbox
-              </Button>
-            )}
-            <PaneNote
-              title={`“${P.messageGroups.find((g) => g.id === deadItem)?.issueTitle || 'This task'}”`}
-            >
-              {P.stillLoading() === null
-                ? 'This task is archived or unavailable.'
-                : 'This task is still loading. It opens here once it arrives.'}
-            </PaneNote>
-          </>
-        ) : waiting ? (
-          <>
-            {mobile && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="inbox-mobile-back"
-                onClick={closeTask}
-              >
-                <Icon name="chevronLeft" size={20} />
-                Back to inbox
-              </Button>
-            )}
-            <PaneNote>
-              <span data-task-loading>
-                This task is still loading. It opens here once it arrives.
-              </span>
-            </PaneNote>
-          </>
         ) : (
           <PaneNote>
             <Icon name="mail" size={26} color="var(--text-3)" className="[margin:0_auto_8px]" />
@@ -1256,7 +1162,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           cache, which the pane behind it still owns and would otherwise have
           released out from under itself when this closed. `onOpen` is the
           PANE's, so following a subtask in here moves both and there is never
-          a second task to come back to. */}
+          a second task to come back to, also to a related task the workspace
+          does not hold, which both show from its reference. */}
       {paneId && poppedOut && (
         <UnsentScopeContext.Provider value={popScope}>
           <IssueDetail

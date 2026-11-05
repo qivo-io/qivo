@@ -281,6 +281,39 @@ describe('the benchmark server', () => {
     expect(answer('none')).toEqual({ state: 'unavailable' })
   })
 
+  it("reads the task window's task by its uuid in any case, or its number or key in the organization asked only", async () => {
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
+    const org = '00000000-0000-4000-8000-000000000001'
+    const other = '00000000-0000-4000-8000-0000000000ff'
+    const answer = (to) => JSON.parse(posted.find((m) => m.to === to).text)
+    const ask = (id, args) => send({ type: 'query', id, name: 'taskWindow:task', args })
+    await ask('uuid', { org_id: org, ref: TASK_1.toUpperCase() })
+    const { num } = answer('uuid').task
+    const asks = {
+      number: { org_id: org, ref: String(num) },
+      key: { org_id: org, ref: `qn-${num}` },
+      elsewhere: { org_id: other, ref: `QN-${num}` },
+      uuidElsewhere: { org_id: other, ref: TASK_1 },
+      unknown: { org_id: org, ref: 'QN-999' },
+      junk: { org_id: org, ref: 'not-a-task' },
+    }
+    for (const [id, args] of Object.entries(asks)) await ask(id, args)
+    for (const id of ['uuid', 'number', 'key'])
+      expect(answer(id), id).toMatchObject({ state: 'ok', task: { id: TASK_1, num } })
+    for (const id of ['elsewhere', 'uuidElsewhere', 'unknown', 'junk'])
+      expect(answer(id), id).toEqual({ state: 'unavailable' })
+  })
+
+  it("leaves the task window's read unanswered with window=loading, and fails it from the first with window=error", async () => {
+    const args = { org_id: '00000000-0000-4000-8000-000000000001', ref: 'QN-1' }
+    const loading = await server('tasks=20&latency=0&mbps=100000&window=loading')
+    await loading.send({ type: 'query', id: 'task', name: 'taskWindow:task', args })
+    expect(loading.posted.filter((m) => m.to === 'task')).toEqual([])
+    const failing = await server('tasks=20&latency=0&mbps=100000&window=error')
+    await failing.send({ type: 'query', id: 'task', name: 'taskWindow:task', args })
+    expect(failing.posted.find((m) => m.to === 'task')?.error).toContain('window=error')
+  })
+
   it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
     const modeOf = async (params) => {
       const { posted, send } = await server(`tasks=20&latency=0&mbps=100000${params}`)
@@ -555,6 +588,22 @@ describe('the benchmark server', () => {
     expect(JSON.parse(results()[0].text)).toMatchObject({ state: 'ok' })
     await vi.waitFor(() => expect(results().some((r) => r.error)).toBe(true), 5000)
     expect(results().find((r) => r.error)?.error).toContain('window=failed')
+    // a task opened by its number is read by number, then by the window by
+    // uuid, and each read answers first and fails only after that
+    const byNumber = await server('tasks=40&latency=0&mbps=100000&window=failed')
+    const org = '00000000-0000-4000-8000-000000000001'
+    const ask = (id, ref) =>
+      byNumber.send({ type: 'query', id, name: 'taskWindow:task', args: { org_id: org, ref } })
+    await ask('number', 'QN-1')
+    const first = JSON.parse(byNumber.posted.find((m) => m.to === 'number').text)
+    expect(first).toMatchObject({ state: 'ok', task: { num: 1 } })
+    await ask('uuid', first.task.id)
+    expect(JSON.parse(byNumber.posted.find((m) => m.to === 'uuid').text)).toMatchObject({
+      state: 'ok',
+      task: { id: first.task.id },
+    })
+    await ask('again', 'QN-1')
+    expect(byNumber.posted.find((m) => m.to === 'again')?.error).toContain('window=failed')
     const cut = await server('tasks=40&latency=0&mbps=100000&subtasks=0.2&window=incomplete')
     await cut.send({ type: 'query', id: 'task', name: 'taskWindow:task', args: { ref: parent() } })
     const answer = JSON.parse(cut.posted.find((m) => m.to === 'task').text)

@@ -503,9 +503,15 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     const remove = far.querySelector<HTMLButtonElement>('.task-related-remove')
     expect(remove?.disabled).toBe(true)
     expect(await hintOf(remove)).toBe('Available once every task has loaded')
-    // opening it asks for its handle, and the window waits for it
+    // opening it passes a reference with its organization, number and
+    // uuid, which the window reads from the server
     await act(async () => far.querySelector<HTMLElement>('button')?.click())
-    expect(opened).toHaveBeenCalledWith('QN-39')
+    const { refParts } = await import('../lib/taskReference')
+    expect(refParts(opened.mock.calls.at(-1)?.[0])).toEqual({
+      org: snap.orgs[0].id,
+      num: 39,
+      uuid: 'far',
+    })
   })
 
   it('draws a short group without a status, and a short task in review with its reviewer', async () => {

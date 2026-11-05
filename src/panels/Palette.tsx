@@ -13,9 +13,10 @@
    with Previous and Next, and a note when the search could not cover
    everything (lib/searchNote.ts), which it never calls no results. An empty
    search reads nothing, and nothing subscribes, so a hidden tab reads
-   nothing. Opening a result and the Search in choices still use the
-   workspace (openTaskResult, openProjectResult, scopeChoices), the places
-   later stages switch. */
+   nothing. A task result opens by its handle or by a reference the task
+   window reads from the server (openTaskResult). Opening a project result
+   and the Search in choices still use the workspace (openProjectResult,
+   scopeChoices), the places later stages switch. */
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -34,7 +35,6 @@ import { searchTerms } from '../../convex/lib/searchTerms'
 import { Icon, IssueKey, ProjectName, StatusDot } from '../components/qivo'
 import { limitSentence, overLimit } from '../lib/fieldLimits'
 import { lastInputWasPointer, restoreFocus } from '../lib/focusVisibility'
-import { noteOpenedTask } from '../lib/openedTasks'
 import { withStart } from '../lib/pageStarts'
 import { type SearchCoverage, searchNote } from '../lib/searchNote'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -173,25 +173,14 @@ function scopeChoices(): {
 }
 
 /**
- * Opens task result `row` with `open` (App openNav) by the handle the store
- * gives it now (P.handleNow), not the one its page arrived with, as a role
- * change meanwhile can change it. It notes the task first in the
- * opened-task registry (lib/openedTasks.ts), so a task window opened on a
- * task the workspace does not hold shows it from its own read, archived
- * ones read-only, or says what became of one deleted or moved out of sight
- * since the search. t3/limits-direct-links opens such a task by itself
- * instead.
+ * Opens task result `row` with `open` (App openNav): by its handle when the
+ * workspace holds the task, else by a reference that names its
+ * organization, number and uuid (lib/taskReference.ts), so the task window
+ * shows it from its own read, archived ones read-only, or says that one
+ * deleted or moved out of sight since the search can't be opened.
  */
 function openTaskResult(row: SearchTaskRow, open: (handle: string) => void): void {
-  noteOpenedTask({
-    uuid: row.id,
-    num: row.num,
-    key: row.key,
-    title: row.title,
-    project: row.project.id,
-    org: row.org_id,
-  })
-  open(P.handleNow(row.id, row.org_id, row.num))
+  open(P.openTask(row.id, row.org_id, row.num))
 }
 
 /** The name of organization `org` when it is not the home organization,

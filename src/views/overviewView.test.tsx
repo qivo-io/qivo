@@ -529,7 +529,7 @@ describe('All projects and My view', { timeout: BOARD_TEST_TIMEOUT }, () => {
 })
 
 describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, () => {
-  it('opens a row of a task only the answer brings from the window’s own read', async () => {
+  it('opens a row of a task only the answer brings by a reference to its organization, number and uuid', async () => {
     const { board, opened } = await overview(work())
     const far: OverviewRow = {
       ...(taskRow(board.snapshot, 'far', 'todo', 90) as unknown as OverviewRow),
@@ -546,10 +546,12 @@ describe('rows and the person’s own writes', { timeout: BOARD_TEST_TIMEOUT }, 
     const row = rows('paused').at(-1)
     expect(board.P.handleOf('far')).toBeNull()
     await click(row)
-    expect(opened.at(-1)).toBe(row?.dataset.ovrow)
-    // the registry of the store's own module instance
-    const { openedTaskList } = await import('../lib/openedTasks')
-    expect(openedTaskList().some((task) => task.uuid === 'far')).toBe(true)
+    const { refParts } = await import('../lib/taskReference')
+    expect(refParts(opened.at(-1))).toEqual({
+      org: board.snapshot.orgs[0].id,
+      num: 90,
+      uuid: 'far',
+    })
   })
 
   it('takes away at once the row of a task the person archives, and nothing else', async () => {

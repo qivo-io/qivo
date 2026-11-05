@@ -1,7 +1,8 @@
 /* One cache of people's loads, read live through planning.ownerLoads
    (convex/planning.ts), for the delays of tasks the workspace does not
-   hold: today the Board's cards a view's answer brings (store/planner.ts
-   viewDelay), later the task window and the Roadmap.
+   hold or cannot judge yet: the Board's cards a view's answer brings
+   (store/planner.ts viewDelay) and the task window's task
+   (P.windowDelay), later the Roadmap.
 
    - A view registers the owners whose loads its cards need, by
      organization, and releases them when it closes. The cache subscribes

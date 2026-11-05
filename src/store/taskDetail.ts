@@ -70,8 +70,8 @@ export type TaskDetailVM = {
   parent: RelatedTaskVM | null
   /** when it was archived (ms), null for an active task */
   archivedAt: number | null
-  /** its number, which the opened-task registry notes (lib/openedTasks.ts),
-      null without a view */
+  /** its number, which names its handle when the home organization
+      changes (store/planner.ts withUnheldMoves), null without a view */
   num: number | null
   /** whether a group's dates are known (always true for a leaf); unknown
       dates are null in `view` */

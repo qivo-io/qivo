@@ -220,7 +220,14 @@ task the run archived only with it on. That shows whether the deployment's
 search index takes the filter for an absent `archived_at` and still returns
 active matches. The archived task must then open read-only in its task
 window, with its description and, under **All**, its history, which shows
-whether the deployment answers an archived task's text and history.
+whether the deployment answers an archived task's text and history. It then
+opens task links in fresh loads (`ui/task-link`): that archived task's,
+which must show read-only under its archived note with its title,
+`/tasks/qn-99999999`, which must say the task can't be opened, and an active
+task's, which must show its title with no note. That shows whether the
+deployment answers a task's number in the organization the address names
+(`taskWindow.task`). The step is skipped with the archived steps when the
+run could not make its archived tasks.
 Everything it creates
 carries a run tag such as `stgchk-1a2b3c`, and its tasks live in projects it
 creates. It deletes all of it at the end, also after a failure. Its deleted
@@ -619,6 +626,17 @@ release that first does so changes no server function, so it has no server
 change, no step and no rollback floor. An older app works against its
 backend, and it works against an older backend that has the task window's
 read.
+
+A task link, a bookmark, Back and Forward and an Inbox row open their task
+through the task window's read (`taskWindow.task`), by the task's number or
+its uuid in the organization the address or the message names, and a boot
+on a task address reads it with the workspace's first parts instead of
+waiting for every task. The task window reads the owner's load of a task it
+cannot judge from the workspace through `planning.ownerLoads`. The release
+that does so changes no server function, so it has no server change, no
+step and no rollback floor. An older app works against its backend, and
+this app works against any backend that has the task window's read and
+`planning.ownerLoads`, which the floors above already hold.
 
 Settings › Labels reads its rows 25 at a time from `labels.settingsPage`,
 which v0.1.97 (`92434062`) first shipped, and keeps the batches it loaded

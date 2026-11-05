@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { taskRef } from '../lib/taskReference'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* Main Search's palette on the real store, with the network mocked. The
@@ -61,8 +62,6 @@ let FW: string
 let PARTNER: string
 let PORTAL: string
 let palette: typeof import('./Palette')
-let opened: typeof import('../lib/openedTasks')
-let planner: typeof import('../store/planner')
 let pageStarts: typeof import('../lib/pageStarts')
 
 /* Lets answers and renders land. */
@@ -181,8 +180,6 @@ async function open({
   const store = await import('../store/planner')
   await store.initStore()
   palette = await import('./Palette')
-  opened = await import('../lib/openedTasks')
-  planner = store
   pageStarts = await import('../lib/pageStarts')
   const version = await import('../store/usePlannerVersion')
   ctx = {
@@ -254,10 +251,9 @@ const last = () => {
   if (!call) throw new Error('nothing was asked')
   return call
 }
-/** What Search noted of the task `handle` names now, as the router and
-    the task window read the registry. */
-const noted = (handle: string) =>
-  opened.openedTask(handle, (task) => planner.P.handleNow(task.uuid, task.org, task.num))
+/** The reference a result of task number `num` of organization `org`
+    opens by when the workspace does not hold it (lib/taskReference.ts). */
+const refTo = (org: string, num: number, uuid = `task-${num}`) => taskRef({ org, num, uuid })
 const pageButton = (to: 'previous' | 'next') =>
   document.querySelector<HTMLButtonElement>(`[data-palette-page="${to}"]`)
 
@@ -762,11 +758,11 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     await last().answer([task(20), task(21)])
     await press(input(), 'ArrowDown')
     await press(input(), 'Enter')
-    expect(ctx.openIssue).toHaveBeenCalledWith('QN-21')
+    expect(ctx.openIssue).toHaveBeenCalledWith(refTo(ORG, 21))
     expect(onClose).toHaveBeenCalled()
   })
 
-  it('opens a result by the handle the store gives it when it opens, after a role change', async () => {
+  it('opens a result by the handle the store gives it when it opens, after a role change, else by a reference', async () => {
     await open()
     await type('firm')
     await last().answer([task(14), task(15)])
@@ -798,16 +794,16 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     expect(store.P.homeOrg).toBe('')
     expect(store.P.handleOf('task-15')).toBe('task-15')
     const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
+    // one the workspace does not hold opens by a reference that names its
+    // organization, number and uuid, never a handle
     await click(rows()[0])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith('task-14')
-    expect(noted('task-14')).toMatchObject({ key: 'QN-14', org: ORG })
-    expect(noted('QN-14')).toBeUndefined()
+    expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(ORG, 14))
+    // one it holds by the handle it has now
     await click(rows()[1])
     expect(ctx.openIssue).toHaveBeenLastCalledWith('task-15')
-    expect(noted('task-15')).toMatchObject({ key: 'QN-15' })
   })
 
-  it('opens a task by its handle, noting it, and a project the workspace holds as the scope', async () => {
+  it('opens a task the workspace does not hold by a reference, and a project the workspace holds as the scope', async () => {
     await open({ partner: true })
     await type('firm')
     const partnerTask = task(5, {
@@ -825,21 +821,11 @@ describe('the Search palette', { timeout: 20_000 }, () => {
     ])
     const rows = () => [...document.querySelectorAll<HTMLElement>('[cmdk-item]')]
     await click(rows()[1])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith('QN-16')
-    expect(noted('QN-16')).toEqual({
-      uuid: 'task-16',
-      num: 16,
-      key: 'QN-16',
-      title: 'Old firmware notes',
-      project: FW,
-      org: ORG,
-    })
+    expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(ORG, 16))
     await click(rows()[2])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith('partner-task')
-    expect(noted('partner-task')).toMatchObject({ key: 'QN-5', org: PARTNER })
+    expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(PARTNER, 5, 'partner-task'))
     await click(rows()[0])
-    expect(ctx.openIssue).toHaveBeenLastCalledWith('QN-14')
-    expect(noted('QN-14')).toMatchObject({ key: 'QN-14', org: ORG })
+    expect(ctx.openIssue).toHaveBeenLastCalledWith(refTo(ORG, 14))
     await click(rows()[3])
     expect(ctx.setScope).toHaveBeenCalledWith(FW)
     // a project the workspace does not hold yet stays unopened

@@ -13,9 +13,14 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
    query, such as a task's thread or the Board's, is watched through the
-   client's own onUpdate, each result a transition of its own. A view's own
-   handler (onTransition `view`) hears every transition but starts no store
-   generation.
+   client's own onUpdate, each result a transition of its own. The task
+   window's side queries (SHARED) share one subscription and one token per
+   store between watches of the same arguments, as Convex does, and a watch
+   that joins one whose answer arrived hears no transition for it
+   (`joined`), so a registry that starts a second watch of a side query
+   and waits for its first answer waits for ever, as it would in the app.
+   A view's own handler (onTransition `view`) hears every transition but
+   starts no store generation.
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -43,6 +48,16 @@ type Whole = Omit<Workspace, 'messagesCut'> & { messagesCut?: boolean }
 export const SEATS_DELETING: Seatless = { deleting: true, create: 'after_deletion' }
 type Published = Whole | Seatless | null
 const seatless = (value: Published): value is Seatless => value !== null && 'deleting' in value
+
+/* The task window's side queries (store/liveParts.ts SIDE_NAMES), whose
+   watches of the same arguments share one token, as in Convex. */
+const SHARED = new Set([
+  'snapshot:threadComments',
+  'snapshot:threadHistory',
+  'taskWindow:task',
+  'taskWindow:links',
+  'taskWindow:attachments',
+])
 
 const KINDS = ['tasks', 'people', 'projects'] as const
 const PARTS: Record<string, string> = {
@@ -204,12 +219,21 @@ export function liveOver(client: Client): LiveQueries & {
       if (name === 'workspace:root') subscribeWhole()
       // Any other query is watched through the client's own onUpdate, one
       // subscription per watch, since a test resets the client between
-      // stores while this double lives on.
+      // stores while this double lives on, but a side query's watches of
+      // one store share one (SHARED).
       const token = isPart(name)
         ? `${name}:${JSON.stringify(args)}`
-        : `${name}:${JSON.stringify(args)}#${++watches}`
+        : SHARED.has(name)
+          ? `${name}:${JSON.stringify(args)}@${generation}`
+          : `${name}:${JSON.stringify(args)}#${++watches}`
       const known = watched.get(token)
-      if (known) {
+      // a side query's watch that joins one whose answer arrived reads it at
+      // once and hears no transition for it
+      let joined = false
+      if (known && !isPart(name)) {
+        known.count++
+        joined = known.value !== undefined || known.error !== undefined
+      } else if (known) {
         // a store an earlier test left running holds no count of it
         known.count = known.gen === generation ? known.count + 1 : 1
         known.gen = generation
@@ -268,9 +292,9 @@ export function liveOver(client: Client): LiveQueries & {
       let stopped = false
       return {
         token,
-        // every watch hears its first answer in a transition of its own
-        // (above), so none reads one at once
-        joined: false,
+        // every other watch hears its first answer in a transition of its
+        // own (above), so none reads one at once
+        joined,
         stop: () => {
           if (stopped) return
           stopped = true
