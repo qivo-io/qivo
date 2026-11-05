@@ -32,8 +32,10 @@ import {
    organization's, the personal
    tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
    `fake.usage` hold, and every mutation it receives, with the login it came
-   as. A comment whose id `fake.comments` holds is refused as taken, and an
-   archive marks its task in `fake.issues` archived. */
+   as. A comment whose id `fake.comments` holds is refused as taken, so is
+   a project or task create whose id `fake.usedRows` (the used_ids table)
+   holds, as the server refuses it, and an archive marks its task in
+   `fake.issues` archived. */
 const fake = vi.hoisted(() => ({
   issues: [],
   archived: [],
@@ -48,10 +50,12 @@ const fake = vi.hoisted(() => ({
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
   linkRows: [],
-  // the projects, issue_attachments and deleted_rows tables, for --files
+  // the projects, issue_attachments, deleted_rows and used_ids tables, for
+  // --files
   projectRows: [],
   fileRows: [],
   storedRows: [],
+  usedRows: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -101,6 +105,7 @@ vi.mock('convex/browser', () => ({
             projects: fake.projectRows,
             issue_attachments: fake.fileRows,
             deleted_rows: fake.storedRows,
+            used_ids: fake.usedRows,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
             issue_descriptions: [
@@ -153,6 +158,11 @@ vi.mock('convex/browser', () => ({
     async mutation(ref, fields) {
       const name = getFunctionName(ref)
       fake.calls.push([name, fields, this.login])
+      if (
+        (name === 'projects:create' || name === 'issues:create') &&
+        fake.usedRows.some((row) => row.row_id === fields.id)
+      )
+        throw Object.assign(new Error('taken'), { data: { message: 'this id is already taken' } })
       if (name === 'issues:archive') {
         const task = fake.issues.find((issue) => issue.id === fields.id)
         if (task) task.archived_at = '2026-10-29T00:00:00.000Z'
@@ -1299,27 +1309,38 @@ describe('board-scale-seed --files', () => {
   })
 
   it('plans sub-projects under the project with the fewest, never past 30, with varied sizes and the search names', () => {
-    const plan = planFiles({ org: 'org', count: 60, tops: summed, present: none })
+    const plan = planFiles({ org: 'org', count: 60, tops: summed, present: none, rows: none })
     expect(plan.projects).toHaveLength(60)
     // the fewest first, ties in Northstar's order, so all end at 24
     expect(perParent(plan.projects)).toEqual({ luma: 20, cloud: 21, pilot: 19 })
     // 27 more under Luma would pass the 30 one project may hold
     expect(() =>
-      planFiles({ org: 'org', count: 27, tops: [{ id: 'luma', subs: 4 }], present: none }),
+      planFiles({
+        org: 'org',
+        count: 27,
+        tops: [{ id: 'luma', subs: 4 }],
+        present: none,
+        rows: none,
+      }),
     ).toThrow(
       "--files 27 needs 27 new sub-projects, but Northstar's live top-level projects have room for 26, at most 30 under one.",
     )
     // Northstar as seeded holds 78, and one more refuses
-    expect(planFiles({ org: 'org', count: 78, tops: summed, present: none }).projects).toHaveLength(
-      78,
-    )
-    expect(() => planFiles({ org: 'org', count: 79, tops: summed, present: none })).toThrow(
-      /needs 79 new sub-projects, but .* have room for 78,/,
-    )
+    expect(
+      planFiles({ org: 'org', count: 78, tops: summed, present: none, rows: none }).projects,
+    ).toHaveLength(78)
+    expect(() =>
+      planFiles({ org: 'org', count: 79, tops: summed, present: none, rows: none }),
+    ).toThrow(/needs 79 new sub-projects, but .* have room for 78,/)
     expect(
       perParent(
-        planFiles({ org: 'org', count: 26, tops: [{ id: 'luma', subs: 4 }], present: none })
-          .projects,
+        planFiles({
+          org: 'org',
+          count: 26,
+          tops: [{ id: 'luma', subs: 4 }],
+          present: none,
+          rows: none,
+        }).projects,
       ),
     ).toEqual({ luma: 26 })
     expect(plan.projects.slice(0, 2).map((p) => p.name)).toEqual([
@@ -1343,22 +1364,40 @@ describe('board-scale-seed --files', () => {
     expect(seededFileText(seededFileBytes(5))).toHaveLength(seededFileBytes(5))
   })
 
-  it('adds only what a run left missing, and refuses when no project has room', () => {
+  it('adds only what a run left missing, nothing where a sub-project or task has no row, and refuses when no project has room', () => {
     const present = {
       projects: new Set([fileSeedId('project', 0), fileSeedId('project', 1)]),
       tasks: new Set([fileSeedId('task', 0)]),
       files: new Set([fileSeedId('file', 0)]),
     }
-    const plan = planFiles({ org: 'org', count: 3, tops: summed, present })
+    const rows = { projects: new Set(present.projects), tasks: new Set(present.tasks) }
+    const plan = planFiles({ org: 'org', count: 3, tops: summed, present, rows })
     expect(plan.projects.map((p) => p.id)).toEqual([fileSeedId('project', 2)])
     expect(plan.tasks.map((t) => t.id)).toEqual([fileSeedId('task', 1), fileSeedId('task', 2)])
     expect(plan.files.map((f) => f.id)).toEqual([fileSeedId('file', 1), fileSeedId('file', 2)])
+    // sub-project 1 without its row, in Deleted items or deleted for good,
+    // takes no task and no file, and task 0 without its row takes no file
+    const gone = planFiles({
+      org: 'org',
+      count: 3,
+      tops: summed,
+      present: { ...present, files: new Set() },
+      rows: { projects: new Set([fileSeedId('project', 0)]), tasks: new Set() },
+    })
+    expect(gone.tasks.map((t) => t.id)).toEqual([fileSeedId('task', 2)])
+    expect(gone.files.map((f) => f.id)).toEqual([fileSeedId('file', 2)])
     expect(() =>
-      planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present: none }),
+      planFiles({
+        org: 'org',
+        count: 3,
+        tops: [{ id: 'luma', subs: 29 }],
+        present: none,
+        rows: none,
+      }),
     ).toThrow(/needs 3 new sub-projects, but .* have room for 1,/)
     // the sub-projects made already take no place, so the one missing fits
     expect(
-      planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present }).projects,
+      planFiles({ org: 'org', count: 3, tops: [{ id: 'luma', subs: 29 }], present, rows }).projects,
     ).toHaveLength(1)
   })
 
@@ -1377,6 +1416,52 @@ describe('board-scale-seed --files', () => {
       fake.projects = null
     }
     expect(fake.calls).toEqual([])
+  })
+
+  it('counts a sub-project or task deleted for good as made on a rerun, skips its task and file, and makes a removed file again', async () => {
+    const posted = []
+    vi.stubGlobal('fetch', async (_url, init) => {
+      posted.push(init.body.length)
+      return new Response(JSON.stringify({ storageId: `storage-${posted.length}` }), {
+        status: 200,
+      })
+    })
+    const sub = (n) => ({
+      id: fileSeedId('project', n),
+      org_id: 'org',
+      type: 'project',
+      parent_id: 'cloud',
+    })
+    const used = (table, what, n) => ({ table, row_id: fileSeedId(what, n), org_id: 'org' })
+    // an earlier run made fixtures 0 to 2. File 0 was removed in the task
+    // window, sub-project 1 was deleted for good with its task, and task 2
+    // was deleted for good on its own. Only used_ids holds their ids now.
+    fake.projects = [...tops(), sub(0), sub(2)]
+    fake.projectRows = [sub(0), sub(2)]
+    fake.issues = [{ id: fileSeedId('task', 0), org_id: 'org', project_id: sub(0).id }]
+    fake.usedRows = [0, 1, 2].flatMap((n) => [
+      used('projects', 'project', n),
+      used('issues', 'task', n),
+    ])
+    fake.calls = []
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--files', '4'], { env, log: () => {} })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.projects = null
+      fake.projectRows = []
+      fake.issues = []
+      fake.usedRows = []
+    }
+    expect(fake.calls.map(([name, fields]) => [name, fields.id ?? fields.issue_id])).toEqual([
+      ['projects:create', fileSeedId('project', 3)],
+      ['issues:create', fileSeedId('task', 3)],
+      ['files:uploadUrl', fileSeedId('task', 0)],
+      ['files:attach', fileSeedId('file', 0)],
+      ['files:uploadUrl', fileSeedId('task', 3)],
+      ['files:attach', fileSeedId('file', 3)],
+    ])
+    expect(posted).toEqual([seededFileBytes(0), seededFileBytes(3)])
   })
 
   it('makes the sub-projects, then the tasks, then uploads and attaches each file as Nora, and counts a deleted or archived one as made', async () => {

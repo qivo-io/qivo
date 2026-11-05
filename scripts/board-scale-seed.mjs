@@ -101,12 +101,17 @@
  * sub-project's name has an accent ("Café pilot photos") and the second's
  * a word no other name has ("Zephyrine bench archive"), for checking the
  * list's search; the rest are named after what their files hold, with a
- * number. Every id comes from its number, and a sub-project, task or file
- * the backend holds anywhere, archived or in Deleted items included,
- * counts as made, so a second run adds only what is missing and never
- * makes again what a check archived or deleted. Pass `--tasks 0` to add
- * none of the Board's tasks. It runs after --relations and before
- * --labels.
+ * number. Every id comes from its number. A sub-project, task or file the
+ * backend holds anywhere, archived or in Deleted items included, counts as
+ * made, and so does a sub-project or task deleted for good, whose id
+ * used_ids keeps, so a second run adds only what is missing and never
+ * makes again a sub-project or task that a check archived or deleted. A
+ * task goes only into a sub-project that has its row or that the run
+ * makes, and a file only onto such a task, so a sub-project or task in
+ * Deleted items or deleted for good gets no new task or file. A file
+ * removed in the task window is made again on its task, since nothing
+ * records its removal. Pass `--tasks 0` to add none of the Board's tasks.
+ * It runs after --relations and before --labels.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
@@ -368,11 +373,15 @@ export const seededFileBytes = (n) => 1000 * (1 + ((n * 37) % 97)) + n
  * holds the fewest, never more than SUBS_PER_PROJECT; `tasks`, the
  * issues:create calls of the tasks missing; and `files`, the uploads to
  * attach, with the attachment's id, task, name, MIME type and size.
- * `present` holds the project, task and attachment ids the backend holds
- * anywhere. Refuses, with the places left, when the sub-projects missing
- * do not fit under the top-level projects.
+ * `present` holds the project, task and attachment ids that count as made,
+ * which the backend holds anywhere or keeps taken, and `rows` the project
+ * and task ids that have a row now. A task is planned only in a
+ * sub-project with a row or one planned here, and a file only on such a
+ * task, so one deleted for good or in Deleted items takes none. Refuses,
+ * with the places left, when the sub-projects missing do not fit under the
+ * top-level projects.
  */
-export function planFiles({ org, count, tops, present }) {
+export function planFiles({ org, count, tops, present, rows }) {
   const missing = Array.from({ length: count }, (_, n) => fileSeedId('project', n)).filter(
     (id) => !present.projects.has(id),
   ).length
@@ -388,7 +397,9 @@ export function planFiles({ org, count, tops, present }) {
     const task = fileSeedId('task', n)
     const file = fileSeedId('file', n)
     const name = seededFileProject(n)
-    if (!present.projects.has(project)) {
+    const newProject = !present.projects.has(project)
+    const newTask = !present.tasks.has(task) && (newProject || rows.projects.has(project))
+    if (newProject) {
       // the first of the fewest, so ties go in Northstar's order; the check
       // above leaves one with room for every sub-project missing
       let parent = null
@@ -409,7 +420,7 @@ export function planFiles({ org, count, tops, present }) {
         sort_order: 1000 + n,
       })
     }
-    if (!present.tasks.has(task))
+    if (newTask)
       plan.tasks.push({
         id: task,
         org_id: org,
@@ -419,7 +430,7 @@ export function planFiles({ org, count, tops, present }) {
         status: STATUSES[n % STATUSES.length],
         priority: 'medium',
       })
-    if (!present.files.has(file))
+    if (!present.files.has(file) && (newTask || rows.tasks.has(task)))
       plan.files.push({
         id: file,
         issue_id: task,
@@ -1132,29 +1143,35 @@ async function seedLabels(count, { client, org, seeded, target, log }) {
   )
 }
 
-/** The project, task and attachment ids organization `org` holds anywhere,
-    as the local admin reads the tables: live and archived projects, every
-    task row, archived ones and those of an archived project included,
-    which keep no archived_at of their own, the attachment rows, and every
-    copy Deleted items stores. --files counts these as made. */
+/** The project, task and attachment ids of organization `org` that
+    --files counts as made, as the local admin reads the tables: live and
+    archived projects, every task row, archived ones and those of an
+    archived project included, which keep no archived_at of their own, the
+    attachment rows, every copy Deleted items stores, and the project and
+    task ids used_ids keeps after a delete for good, which projects:create
+    and issues:create refuse. `rows` holds the project and task ids that
+    have a row, which alone can take a new task or file. */
 async function storedIdsOf(client, org) {
-  const ids = { projects: new Set(), tasks: new Set(), files: new Set() }
+  const rows = { projects: new Set(), tasks: new Set() }
   for (const project of await tableRows(client, 'projects'))
-    if (project.org_id === org) ids.projects.add(project.id)
+    if (project.org_id === org) rows.projects.add(project.id)
   for (const task of await tableRows(client, 'issues'))
-    if (task.org_id === org) ids.tasks.add(task.id)
+    if (task.org_id === org) rows.tasks.add(task.id)
+  const ids = { projects: new Set(rows.projects), tasks: new Set(rows.tasks), files: new Set() }
   for (const file of await tableRows(client, 'issue_attachments'))
     if (file.org_id === org) ids.files.add(file.id)
   const kinds = { projects: ids.projects, issues: ids.tasks, issue_attachments: ids.files }
   for (const row of await tableRows(client, 'deleted_rows'))
     if (row.org_id === org && row.row_id && kinds[row.table]) kinds[row.table].add(row.row_id)
-  return ids
+  for (const row of await tableRows(client, 'used_ids'))
+    if (row.org_id === org && kinds[row.table]) kinds[row.table].add(row.row_id)
+  return { ...ids, rows }
 }
 
 /** The --files work for the first `count` file sub-projects (planFiles),
     under Northstar's live top-level projects as the workspace (`joined`)
-    holds them, given `stored`, the ids the backend holds anywhere
-    (storedIdsOf). The workspace's active tasks count as made too. */
+    holds them, given `stored`, the ids that count as made and those with
+    a row (storedIdsOf). The workspace's active tasks count as both too. */
 function planFileSeed(count, { org, joined, stored }) {
   const projects = joined('projects')
   const tops = projects
@@ -1164,8 +1181,11 @@ function planFileSeed(count, { org, joined, stored }) {
       id: top.id,
       subs: projects.filter((p) => p.parent_id === top.id && !p.archived_at).length,
     }))
-  for (const task of joined('issues')) stored.tasks.add(task.id)
-  return planFiles({ org, count, tops, present: stored })
+  for (const task of joined('issues')) {
+    stored.tasks.add(task.id)
+    stored.rows.tasks.add(task.id)
+  }
+  return planFiles({ org, count, tops, present: stored, rows: stored.rows })
 }
 
 /** Makes the --files sub-projects, tasks and files of `plan` (planFiles)
