@@ -4,13 +4,22 @@
  * what canSeeProject and hasProjectLevel answer project by project, which is
  * how they were computed before and how the single-project reads and writes
  * still decide. The per-project walk is kept here as the reference, and the
- * grant shapes are in accessShapes.setup.ts. */
+ * grant shapes are in accessShapes.setup.ts. The last cases read, under
+ * convex-test's transaction limits, the reads accepted at the design size's
+ * sum: accessRowsOf, projectLevelsForOrg, orgProjectView, Deleted items'
+ * sightOf and the REST and MCP project lists over the catalogue of 2,000
+ * projects for a person's 700 grants and 5 teams of 200 shares beside 1,000
+ * people, and projectLevel's navigation walk over the 70 sub-projects of
+ * one parent, which hasProjectLevel and canAccessProject do not read. Each
+ * prints what it read, the figures the docstrings of those reads quote. */
+import type { WithoutSystemFields } from 'convex/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   accessOf,
+  accessRowsOf,
   canAccessProject,
   canManageProjectUsers,
   canSeeProject,
@@ -20,25 +29,36 @@ import {
   machineAccess,
   type OrgProjectLevels,
   OWN_READS,
+  orgProjects,
   projectLevel,
   projectLevelsForOrg,
   projectLevelsForPeople,
   projectLevelsOf,
 } from '../lib/access'
 import { type AccessFlag, accessFlags, loadCatalogue } from '../lib/core'
+import { byId, newWindowKey } from '../lib/db'
 import { type CredentialAccess, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
+import { MIB } from '../lib/limits'
+import { named } from '../lib/nameKey'
+import { orgProjectView } from '../lib/visibility'
+import { listProjects as mcpListProjects } from '../machine/mcp'
+import { listProjects as restListProjects } from '../machine/rest'
+import { meterDb, sightOf } from '../model/deletedItems'
 import { newTeam, SHAPES } from './accessShapes.setup'
 import {
   expectRefusal,
   NOW,
   newT,
+  type OrgFixture,
   plantIssue,
   plantProject,
   plantSeat,
+  type T,
   TODAY,
   uuid,
   withOrg,
 } from './helpers.setup'
+import { handlerOf } from './pageOrg.setup'
 import { withReach } from './projectReach.setup'
 
 const ACCESS: CredentialAccess[] = ['read', 'write']
@@ -889,5 +909,345 @@ describe('accessFlags', () => {
       await t.query(internal.machine.mcp.listProjects, { callerId: f.agent.id, access: 'write' }),
     )
     expect(mcp.filter((p) => p.access.read)).toHaveLength(2 * parents)
+  })
+})
+
+/* What a transaction has read so far, as convex-test counts it. */
+async function readsSoFar(ctx: QueryCtx) {
+  const m = await ctx.meta.getTransactionMetrics()
+  return {
+    ranges: m.databaseQueries.used,
+    documents: m.documentsRead.used,
+    mib: Math.round((m.bytesRead.used / MIB) * 1000) / 1000,
+  }
+}
+
+type Reads = Awaited<ReturnType<typeof readsSoFar>>
+
+/* `fn` in a query of its own, with what it read there. A query, as a
+ * read-only credential refuses in a mutation (lib/core.ts
+ * asMachineCaller). */
+const measured = <R>(t: T, fn: (ctx: QueryCtx) => Promise<R>) =>
+  t.query(async (ctx) => {
+    const answer = await fn(ctx)
+    return { answer, reads: await readsSoFar(ctx) }
+  })
+
+/* A project row of the withOrg fixture's organization numbered `n`, with
+ * an ordinary name. */
+const projectDoc = (
+  f: OrgFixture,
+  n: number,
+  o: { parent?: Doc<'projects'>; archived?: boolean } = {},
+): WithoutSystemFields<Doc<'projects'>> => ({
+  id: uuid(),
+  org_id: f.org.id,
+  type: o.parent === undefined ? 'meta' : 'project',
+  ...(o.parent === undefined ? {} : { parent_id: o.parent.id }),
+  key: `D${n}`,
+  ...named(`Design size workstream ${n} of the bench`),
+  description: '',
+  sort_order: n,
+  num: n,
+  track_delay: false,
+  created_at: NOW,
+  window_key: newWindowKey(),
+  ...(o.archived === true ? { archived_at: NOW } : {}),
+})
+
+/* Inserts `rows` in transactions of 500, so the planting stays inside
+ * convex-test's write limits, and answers them as stored. */
+async function insertAll<
+  Table extends 'projects' | 'project_access' | 'project_team_access' | 'profiles',
+>(t: T, table: Table, rows: WithoutSystemFields<Doc<Table>>[]): Promise<Doc<Table>[]> {
+  const out: Doc<Table>[] = []
+  for (let from = 0; from < rows.length; from += 500)
+    out.push(
+      ...(await t.run(async (ctx) => {
+        const stored: Doc<Table>[] = []
+        for (const row of rows.slice(from, from + 500)) {
+          const doc = await ctx.db.get(await ctx.db.insert(table, row))
+          if (doc === null) throw new Error(`an insert into ${table} vanished`)
+          stored.push(doc)
+        }
+        return stored
+      })),
+    )
+  return out
+}
+
+describe('the access reads at the design size', () => {
+  it('walks 70 sub-projects of a parent seen only for navigation within the limits, and hasProjectLevel and canAccessProject read none', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const member = await plantSeat(t, { org_id: f.org.id, name: 'Member' })
+    const top = await plantProject(t, { org_id: f.org.id })
+    // 40 archived and then 30 live sub-projects, the most one project holds
+    // at the design size, none with shares of its own, read in this order
+    const subs = await insertAll(
+      t,
+      'projects',
+      Array.from({ length: 70 }, (_, i) =>
+        projectDoc(f, 5000 + i, { parent: top, archived: i < 40 }),
+      ),
+    )
+    /* `fn` on the top-level project in a transaction of its own, with what
+     * it read and how many of its sub-projects it read */
+    const walk = <R>(fn: (ctx: QueryCtx, p: Doc<'projects'>) => Promise<R>) =>
+      t.run(async (ctx) => {
+        let subProjects = 0
+        const counted = meterDb(ctx, {
+          range: () => {},
+          doc: (doc) => {
+            if ((doc as Partial<Doc<'projects'>>).parent_id === top.id) subProjects += 1
+          },
+        })
+        const p = await byId(ctx, 'projects', top.id)
+        if (p === null) throw new Error('the top-level project is gone')
+        const answer = await fn(counted, p)
+        return { answer, subProjects, ...(await readsSoFar(ctx)) }
+      })
+    const canSee = () => walk((ctx, p) => canSeeProject(ctx, member, p))
+    const hasUser = () => walk((ctx, p) => hasProjectLevel(ctx, member, p.id, 'user'))
+    // without a grant the walk reads every sub-project and answers no
+    const none = await canSee()
+    console.log('navigation walk figures, no grant:', JSON.stringify(none))
+    expect(none).toMatchObject({ answer: false, subProjects: 70 })
+    // a grant on the last one only, which answers after the 69 before it
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: subs[69].id,
+        profile_id: member.id,
+        level: 'user',
+      }),
+    )
+    const sees = await canSee()
+    console.log('navigation walk figures, a grant on the last:', JSON.stringify(sees))
+    expect(sees).toMatchObject({ answer: true, subProjects: 70 })
+    // 3 ranges for the parent and 2 for each sub-project, with the parent's
+    // own read
+    expect(sees.ranges).toBeGreaterThanOrEqual(143)
+    expect(sees.ranges).toBeLessThanOrEqual(150)
+    expect(await walk((ctx, p) => projectLevel(ctx, member, p))).toMatchObject({
+      answer: 'viewer',
+      subProjects: 70,
+    })
+    for (const [name, read] of [
+      ['canAccessProject', await walk((ctx, p) => canAccessProject(ctx, member, p))],
+      ['hasProjectLevel', await hasUser()],
+    ] as const) {
+      console.log(`navigation walk figures, ${name}:`, JSON.stringify(read))
+      expect(read, name).toMatchObject({ answer: false, subProjects: 0 })
+      expect(read.ranges, name).toBeLessThan(10)
+    }
+    // hasProjectLevel answers as it did with navigation, so the lead of the
+    // parent still passes, and still reads no sub-project
+    await t.run((ctx) => ctx.db.patch(top._id, { lead_id: member.id }))
+    expect(await hasUser()).toMatchObject({ answer: true, subProjects: 0 })
+  })
+
+  it("reads the catalogue of 2,000 projects with a person's 700 grants and 5 teams of 200 shares inside the limits, beside 1,000 people", async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const member = await plantSeat(t, { org_id: f.org.id, name: 'Member' })
+    // with withOrg's two live top-level projects and two live sub-projects,
+    // 200 and 300 top-level projects and 500 and 1,000 sub-projects, live
+    // and archived, at most 3 live and 4 archived under one project
+    let n = 10_000
+    const liveTops = await insertAll(
+      t,
+      'projects',
+      Array.from({ length: 198 }, () => projectDoc(f, n++)),
+    )
+    const archivedTops = await insertAll(
+      t,
+      'projects',
+      Array.from({ length: 300 }, () => projectDoc(f, n++, { archived: true })),
+    )
+    const liveSubs = await insertAll(
+      t,
+      'projects',
+      Array.from({ length: 498 }, (_, i) => projectDoc(f, n++, { parent: liveTops[i % 198] })),
+    )
+    const archivedSubs = await insertAll(
+      t,
+      'projects',
+      Array.from({ length: 1000 }, (_, i) =>
+        projectDoc(f, n++, { parent: archivedTops[i % 300], archived: true }),
+      ),
+    )
+    // the 200 live and 500 archived sub-projects one person can read, each
+    // by a Viewer grant
+    const granted = [...liveSubs.slice(0, 200), ...archivedSubs.slice(0, 500)]
+    await insertAll(
+      t,
+      'project_access',
+      granted.map((p) => ({ project_id: p.id, profile_id: member.id, level: 'viewer' as const })),
+    )
+    // 5 teams of the member, each sharing 50 live and 150 archived of those
+    // with User, so each of them is shared with 5 teams and the member
+    // reads no project more
+    const shared = [...liveSubs.slice(0, 50), ...archivedSubs.slice(0, 150)]
+    const teams = await t.run(async (ctx) => {
+      const ids: string[] = []
+      for (let i = 0; i < 5; i++) {
+        const id = await newTeam(ctx, f.org.id)
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: member.id,
+          is_leader: false,
+        })
+        ids.push(id)
+      }
+      return ids
+    })
+    await insertAll(
+      t,
+      'project_team_access',
+      teams.flatMap((team_id) =>
+        shared.map((p) => ({ project_id: p.id, team_id, level: 'user' as const })),
+      ),
+    )
+    // 1,000 people with withOrg's five and the member
+    await insertAll(
+      t,
+      'profiles',
+      Array.from({ length: 994 }, (_, i) => ({
+        id: uuid(),
+        org_id: f.org.id,
+        name: `Person ${i} of the lab`,
+        initials: 'PL',
+        color: '#7a7ad0',
+        org_role: 'user' as const,
+        active: true,
+        kind: 'person' as const,
+        plannable_hours: 40,
+        created_at: NOW,
+        email: `person${i}@testbed.test`,
+      })),
+    )
+    /* inside convex-test's limits with room: a quarter of its documents and
+     * bytes, and few ranges */
+    const roomy = (name: string, r: Reads) => {
+      console.log(`access reads at the sum, ${name}:`, JSON.stringify(r))
+      expect(r.documents, name).toBeLessThan(32_000 / 4)
+      expect(r.mib, name).toBeLessThan(16 / 4)
+      expect(r.ranges, name).toBeLessThan(64)
+    }
+    const rows = await measured(t, (ctx) => accessRowsOf(ctx, member))
+    roomy('accessRowsOf', rows.reads)
+    expect(rows.answer.grants).toHaveLength(700)
+    expect(rows.answer.shares).toHaveLength(1000)
+    expect((await measured(t, (ctx) => orgProjects(ctx, f.org.id))).answer).toHaveLength(2000)
+    /* The levels, navigation and visibility the batched reads give on
+     * `sample`, beside projectLevel's on each, which reads its walk alone. */
+    const sample = [
+      liveSubs[0],
+      liveSubs[100],
+      liveSubs[300],
+      archivedSubs[0],
+      archivedSubs[300],
+      archivedSubs[900],
+      liveTops[0],
+      archivedTops[0],
+      f.meta,
+      f.sub,
+      f.hidden,
+    ]
+    const batched = await measured(t, async (ctx) => {
+      const { levelOf, navigationOnly } = await projectLevelsForOrg(ctx, member)
+      return sample.map((p) => ({ level: levelOf(p), navigationOnly: navigationOnly(p.id) }))
+    })
+    roomy('projectLevelsForOrg', batched.reads)
+    const view = await measured(t, async (ctx) => {
+      const v = await orgProjectView(ctx, member)
+      expect(v.projects).toHaveLength(2000)
+      return sample.map((p) => ({ visible: v.visible(p.id), accessible: v.accessible(p.id) }))
+    })
+    roomy('orgProjectView', view.reads)
+    const single: { level: string | null; own: string | null }[] = []
+    for (const p of sample)
+      single.push(
+        await t.run(async (ctx) => ({
+          level: await projectLevel(ctx, member, p),
+          own: await projectLevel(ctx, member, p, false),
+        })),
+      )
+    // shared, granted, hidden, the same archived, two parents shown only
+    // for navigation, and withOrg's TBED, FW and SKNK
+    expect(single.map((s) => s.level)).toEqual([
+      'user',
+      'viewer',
+      null,
+      'user',
+      'viewer',
+      null,
+      'viewer',
+      'viewer',
+      null,
+      null,
+      null,
+    ])
+    expect(single.map((s) => s.own)).toEqual([
+      'user',
+      'viewer',
+      null,
+      'user',
+      'viewer',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ])
+    expect(batched.answer.map((b) => b.level)).toEqual(single.map((s) => s.level))
+    expect(batched.answer.map((b) => b.navigationOnly)).toEqual(
+      single.map((s) => s.level !== null && s.own === null),
+    )
+    expect(view.answer).toEqual(
+      single.map((s) => ({ visible: s.level !== null, accessible: s.own !== null })),
+    )
+    // Deleted items' sight of a seat, which also reads every profile and team
+    const sight = await measured(t, async (ctx) => {
+      const s = await sightOf(ctx, member)
+      return { projects: s.projects.size, profiles: s.profiles.size }
+    })
+    roomy('sightOf', sight.reads)
+    expect(sight.answer).toEqual({ projects: 2000, profiles: 1000 })
+    // REST and MCP project lists, live and archived, answer whole
+    const live = new Set([...liveSubs.slice(0, 200), ...liveTops].map((p) => p.id))
+    const archived = new Set([...archivedSubs.slice(0, 500), ...archivedTops].map((p) => p.id))
+    for (const [state, expected] of [
+      ['live', live],
+      ['archived', archived],
+    ] as const) {
+      const rest = await measured(t, (ctx) =>
+        handlerOf<{ callerId: string; access: 'read'; archived?: string }, { id: string }[]>(
+          restListProjects,
+        )(ctx, {
+          callerId: member.id,
+          access: 'read',
+          ...(state === 'archived' ? { archived: 'true' } : {}),
+        }),
+      )
+      roomy(`REST GET /v1/projects, ${state}`, rest.reads)
+      expect(new Set(rest.answer.map((p) => p.id))).toEqual(expected)
+      const mcp = await measured(
+        t,
+        async (ctx) =>
+          JSON.parse(
+            await handlerOf<{ callerId: string; access: 'read'; archived?: boolean }, string>(
+              mcpListProjects,
+            )(ctx, {
+              callerId: member.id,
+              access: 'read',
+              ...(state === 'archived' ? { archived: true } : {}),
+            }),
+          ) as { id: string }[],
+      )
+      roomy(`MCP list_projects, ${state}`, mcp.reads)
+      expect(new Set(mcp.answer.map((p) => p.id))).toEqual(expected)
+    }
   })
 })
