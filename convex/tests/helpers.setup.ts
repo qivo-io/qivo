@@ -30,6 +30,7 @@ import { newWindowKey } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { loadRowFor, type OrgLoadRow } from '../lib/loadRows'
+import { taskOwnerId } from '../lib/review'
 import { readWorkspace, type Workspace } from '../lib/workspaceJoin'
 import { type ActivityEntry, insertActivity } from '../model/activity'
 import { insertTask, type TaskWithText, withText } from '../model/descriptions'
@@ -1203,4 +1204,53 @@ export function appLoadRows(snap: Workspace): OrgLoadRow[] {
     return row === null ? [] : [row]
   })
   return [...shown, ...snap.orgLoad]
+}
+
+/** One paused task the app marks in Team utilization, with its owner. */
+export type AppPausedRow = {
+  owner_id: string
+  issue_id: string
+  project_id: string
+  start_week: string
+  end_week: string
+}
+
+/** The paused tasks the app marks for workspace `snap`, beside
+ * appLoadRows. They are the tasks it shows that are paused and not groups
+ * (the store's isPaused), not Done, scheduled, not archived and in a live
+ * project, owned (lib/review.ts taskOwnerId) by a profile of its
+ * organization, as src/views/Resources.tsx passes them to
+ * pausedWeeksByPerson. The workspace holds only tasks of projects the
+ * reader can see. */
+export function appPausedRows(snap: Workspace): AppPausedRow[] {
+  const parents = new Set(snap.issues.flatMap((task) => task.parent_id ?? []))
+  const projects = new Map(snap.projects.map((project) => [project.id, project]))
+  const orgOf = new Map(snap.profiles.map((person) => [person.id, person.org_id]))
+  return snap.issues.flatMap((task) => {
+    const project = projects.get(task.project_id)
+    const owner = taskOwnerId(task)
+    if (
+      !task.paused ||
+      parents.has(task.id) ||
+      task.has_hidden_subtasks ||
+      task.status === 'done' ||
+      task.archived_at !== undefined ||
+      project === undefined ||
+      project.archived_at !== undefined ||
+      task.start_week === undefined ||
+      task.end_week === undefined ||
+      owner === undefined ||
+      orgOf.get(owner) !== task.org_id
+    )
+      return []
+    return [
+      {
+        owner_id: owner,
+        issue_id: task.id,
+        project_id: task.project_id,
+        start_week: task.start_week,
+        end_week: task.end_week,
+      },
+    ]
+  })
 }

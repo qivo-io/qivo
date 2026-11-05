@@ -441,7 +441,7 @@ describe('the delays of tasks only a view brings', () => {
     expect(P.delayUnknown(P.viewTask(SLOT, 'far') ?? '')).toBe(false)
     const receive = loads.get(me)
     if (!receive) throw new Error('no owner load asked')
-    receive({ hidden: 'counted', owners: [{ owner_id: me, state: 'ok', spans: [] }] })
+    receive({ hidden: 'counted', owners: [{ owner_id: me, state: 'ok', spans: [], paused: [] }] })
     await turn()
     const judged = P.viewTask(SLOT, 'far')
     expect(P.delayOf(judged ?? '')?.status).toBe('ok')
@@ -519,7 +519,7 @@ describe('the delays of tasks only a view brings', () => {
     expect(unknown(capped)).toBe(false)
     loads.get(people[capped].id)?.({
       hidden: 'counted',
-      owners: [{ owner_id: people[capped].id, state: 'ok', spans: [] }],
+      owners: [{ owner_id: people[capped].id, state: 'ok', spans: [], paused: [] }],
     })
     await turn()
     const card = P.viewTask(SLOT, row.id)

@@ -717,6 +717,24 @@ makes `inbox.item` answer `unread_change` for an unread mention in the
 description too, as the app's task window counts it, which no app reads
 yet either.
 
+From the release after v0.1.124, `planning.ownerLoads` answers each span's
+`project_id` where the span names its task, and each owner's paused tasks
+in live projects the caller can see as `paused`. No app reads either yet.
+The Board's and the task window's owner-load cache keeps the spans as
+before and leaves `paused` out, so that release sets no rollback floor and
+needs no step, and an older app ignores both fields. An owner's paused work
+now counts toward the owner reader's bounds in that query, so the Board and
+the task window can show Delay unknown for an owner whose paused work
+takes them past those bounds, where they showed a delay before. Every
+other owner's delay stays as it was. In a staff call the paused reads also
+spend the call's room, so an owner can come back `not_read` sooner and the
+cache asks for it again in a call of its own. `planning.assigneeLoad`, the
+REST and MCP workload pages and delays and the Overview ask nothing about
+paused tasks' projects or subtasks, and read and answer as before. The
+release whose Roadmap view reads the fields makes this release the
+backend's floor for that app, and its own paragraph here says so. There is
+no schema change and no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.

@@ -1,13 +1,16 @@
 /* The Roadmap's rows, headings, tracks and dependency inputs as the app's
  * Roadmap derives them from the workspace's tasks (src/views/Roadmap.tsx,
- * src/views/MobileRoadmap.tsx), kept as the oracle
- * store/roadmapParity.test.ts compares the server's Roadmap reads with
- * (convex/lib/roadmap.ts), and which the Roadmap view stage's stand-in can
- * use. The stage that stops loading every task ends or rewrites it. The
- * test imports it after the store it boots, so it reads that store. */
+ * src/views/MobileRoadmap.tsx), and Team utilization's hours and paused
+ * weeks as its strip derives them (src/views/Resources.tsx), kept as the
+ * oracle store/roadmapParity.test.ts compares the server's Roadmap reads
+ * (convex/lib/roadmap.ts) and planning.ownerLoads' answers with, and which
+ * the Roadmap view stage's stand-in can use. The stage that stops loading
+ * every task ends or rewrites it. The test imports it after the store it
+ * boots, so it reads that store. */
 
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { type AutoMove, autoMoves, type DepPair, dependencyPairs } from '../lib/schedule'
+import { issueLoadByPerson, type LoadIssue, pausedWeeksByPerson } from '../lib/workload'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from './planner'
 
 /** The Roadmap's rows of `info` in the weeks `w0` to `w1` with `filters`,
@@ -91,3 +94,34 @@ export function dependencyParts(selected: readonly IssueVM[]): {
  * write access, as the Roadmap's pendingMoves (Roadmap.tsx). */
 export const workspaceMoves = (): AutoMove[] =>
   autoMoves({ issues: P.issues, byId: P.issueById, canWrite: (it) => P.canWrite(it.project) })
+
+/** Team utilization's choice of projects, every visible project
+ * ('all', All projects) or the selection's own (This project, 'scope'),
+ * which the strip offers only outside All projects and My view. */
+export type TeamMode = 'all' | 'scope'
+
+/**
+ * Team utilization's figures for scope `info` in the weeks `w0` to `w1`
+ * under `mode`, as ResourceStrip derives them (Resources.tsx, its scope
+ * set, open tasks and the two spreads), each person's committed hours by
+ * week and project (issueLoadByPerson) and the weeks of their paused work
+ * (pausedWeeksByPerson). `tasks` are the tasks it spreads, by default the
+ * strip's own, every task of the workspace that is not a group and not
+ * Done, without a drag; a test passes the tasks it built from the
+ * server's answers to spread them by the same rules.
+ */
+export function teamLoad(
+  info: ScopeInfo,
+  mode: TeamMode,
+  w0: number,
+  w1: number,
+  tasks: readonly LoadIssue[] = P.issues.filter((it) => !P.isGroup(it) && it.status !== 'done'),
+) {
+  const scopeSet = new Set([info.id, ...info.subIds])
+  const inScope = mode === 'scope' && !info.wide ? (pid: string) => scopeSet.has(pid) : undefined
+  const shown = { from: w0, to: w1 }
+  return {
+    loads: issueLoadByPerson([...tasks], inScope, shown),
+    paused: pausedWeeksByPerson([...tasks], inScope, shown),
+  }
+}

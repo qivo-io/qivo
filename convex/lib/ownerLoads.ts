@@ -13,7 +13,10 @@
  * owned (lib/review.ts taskOwnerId) by a profile of the caller's
  * organization, scheduled, neither Done nor paused, with remaining hours
  * above zero unless the caller keeps unestimated ones, not archived and in
- * a live project, which the caller may receive (loadShown).
+ * a live project, which the caller may receive (loadShown). For
+ * planning.ownerLoads alone (the `paused` option) it also answers the
+ * owner's paused tasks in live projects the caller can see, which are not
+ * groups, read and bounded with the others.
  *
  * Every read is bounded before it is made (OWNER_LOADS). An owner whose
  * reads pass a bound answers unavailable, never fewer tasks presented as all
@@ -44,18 +47,24 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * - `owners`: the most owners one planning.ownerLoads call asks about, as
  *   lib/teamSync.ts SYNC_OWNERS_MAX for teamSync.lastComments.
  * - `open`: the most rows an owner's five open-task ranges may read,
- *   duplicates, Backlog and unscheduled tasks and the open tasks of
+ *   duplicates, Backlog, unscheduled and paused tasks and the open tasks of
  *   archived projects included. Each range is read one row at a time and
  *   stops at the row past it. A task row without its text copy takes up to
  *   about 1.8 KB at the title cap, so the rows take up to about 3.6 MB.
  * - `checks`: the most tasks of one owner checked for subtasks, one index
- *   range each, once the fence and the caller's sight have left them.
+ *   range each, once the fence and the caller's sight have left them. With
+ *   the `paused` option the paused tasks in projects the caller can see
+ *   count with the load's.
  * - `projects`: the most live projects of one owner's scheduled tasks
- *   whose access the read asks about, each one question. That is the
- *   design size's 200 live sub-projects one person can read.
- * - `spans`: the most load spans one planning.ownerLoads answer carries. A
- *   span is about 130 bytes of JSON, so an answer stays under about 650 KB
- *   however many owners it holds, and one owner holds at most `checks`.
+ *   whose access the read asks about, each one question, those of the
+ *   paused tasks included with the `paused` option. That is the design
+ *   size's 200 live sub-projects one person can read.
+ * - `spans`: the most spans one planning.ownerLoads answer carries, its
+ *   load spans and its paused spans counted together. Measured at the
+ *   design size, a load span with its task and project takes about 215
+ *   bytes of JSON and a paused span about 155, so an answer stays under
+ *   about 1.1 MB however many owners it holds, and one owner holds at most
+ *   `checks` of both.
  * - `call`: what one call may read past the caller's own grants,
  *   memberships and team shares (lib/access.ts accessOf `shared`), alike in
  *   every call, as lib/taskWindow.ts TASK_WINDOW counts them.
@@ -79,7 +88,8 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * of those rows near the name caps can still make a call pass 16 MiB.
  *
  * A lone owner reads 1 range for the profile, 5 for the open tasks, 1 for
- * each project its scheduled tasks name, at most 6 for each live one asked
+ * each project its scheduled tasks that can carry load name (and, with the
+ * `paused` option, its paused ones), at most 6 for each live one asked
  * about (`projects` of them) and at most 2 for each check (`checks`), and in
  * documents up to `open` rows, the project rows, at most 134 for each
  * question and 2 for each check. Once a caller's own rows are read at a
@@ -93,7 +103,19 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * shares of 3 teams on their top-level projects, takes 848 ranges, 2,403
  * documents and 1.1 MB; 50 owners, the other 49 with 40 planned tasks
  * each, take two calls, of 26 owners (2,007 ranges, 3,469 documents,
- * 1.7 MB) and of the other 24. Tests lower these. */
+ * 1.7 MB) and of the other 24. With the `paused` option, as
+ * planning.ownerLoads reads, the same owner with one in twelve of its 450
+ * planned leaves paused takes the same 848 ranges, 2,403 documents and
+ * 1.1 MB, as its paused leaves fill `checks` beside the rest, and an owner
+ * with 30 planned tasks in 3 sub-projects and a paused task in each of the
+ * 200 takes 578 ranges, 583 documents and 0.24 MB. Past `projects` live
+ * projects named by tasks that can carry load and paused ones together,
+ * past `checks` checked tasks (the load tasks the caller receives by
+ * loadShown, hidden ones included for staff and a guest's or Viewer's own,
+ * and the paused ones in projects the caller can see), or past `open`
+ * rows, an owner is unavailable in planning.ownerLoads, their paused weeks
+ * with their hours, as for any figure that depends on people's workloads
+ * (the owner's choice of 1 November 2026). Tests lower these. */
 export const OWNER_LOADS = {
   owners: 50,
   open: 2000,
@@ -108,13 +130,15 @@ export const OWNER_LOADS = {
 export type OwnedTask = { task: Doc<'issues'>; project: Doc<'projects'>; visible: boolean }
 
 /** An owner's load as one read answers it: `ok` with every task that passes
- * the fence, groups left out; `unavailable` when the owner's reads do not
- * fit the bounds (`why` 'reads') or a check of the caller's access a bound
- * stopped (`why` 'access', lib/access.ts accessUnchecked); `not_read` when
- * the call ran out of room before this owner, so a call with fewer owners
- * can read it. */
+ * the fence (`tasks`), groups left out, and with the `paused` option the
+ * owner's paused tasks in live projects the caller can see that are not
+ * groups (`paused`, else empty), both in creation order; `unavailable` when
+ * the owner's reads do not fit the bounds (`why` 'reads') or a check of the
+ * caller's access a bound stopped (`why` 'access', lib/access.ts
+ * accessUnchecked); `not_read` when the call ran out of room before this
+ * owner, so a call with fewer owners can read it. */
 export type OwnedLoad =
-  | { state: 'ok'; tasks: OwnedTask[] }
+  | { state: 'ok'; tasks: OwnedTask[]; paused: OwnedTask[] }
   | { state: 'unavailable'; why: 'reads' | 'access' }
   | { state: 'not_read' }
 
@@ -207,12 +231,24 @@ const openRanges = (ctx: QueryCtx, ownerId: string) => [
  * A reader of the owners' loads for caller `me`, through `access`, an
  * accessOf instance for `me` that the reads share, within `room` (callRoom
  * for a call of its own). `unestimated` keeps tasks without remaining hours
- * or with zero, as planning.assigneeLoad does. read() answers one owner by
- * profile id; call it for one owner after another, in the order asked.
+ * or with zero, as planning.assigneeLoad does. `paused` also answers the
+ * owner's paused tasks in live projects `me` can see, whatever their
+ * remaining hours, as planning.ownerLoads alone asks. Their projects' rows,
+ * access questions and subtask checks count in the same bounds and room as
+ * the load's, so an owner whose paused work passes one is unavailable or
+ * not_read as a whole. Without it the reader reads no paused task's
+ * project, access or subtasks. read() answers one owner by profile id; call
+ * it for one owner after another, in the order asked.
  */
 export function ownerLoadReader(
   ctx: QueryCtx,
-  o: { me: Doc<'profiles'>; access: Access; room: ReadRoom; unestimated?: boolean },
+  o: {
+    me: Doc<'profiles'>
+    access: Access
+    room: ReadRoom
+    unestimated?: boolean
+    paused?: boolean
+  },
 ) {
   const { me, access } = o
   const staff = isOrgStaff(me)
@@ -317,7 +353,7 @@ export function ownerLoadReader(
     const owner = await byId(ctx, 'profiles', ownerId)
     if (owner !== null) spendRow(owner)
     // the fence gives an owner outside the organization no rows
-    if (owner === null || owner.org_id !== me.org_id) return { state: 'ok', tasks: [] }
+    if (owner === null || owner.org_id !== me.org_id) return { state: 'ok', tasks: [], paused: [] }
 
     // the open tasks, one row at a time, to the row past `open`
     const tasks = new Map<string, Doc<'issues'>>()
@@ -333,19 +369,24 @@ export function ownerLoadReader(
       }
     }
     // what the fence drops on the task's own fields needs no other read
-    const candidates = [...tasks.values()].filter(
+    const planned = [...tasks.values()].filter(
       (task) =>
         task.org_id === me.org_id &&
         taskOwnerId(task) === owner.id &&
         task.start_week !== undefined &&
         task.end_week !== undefined &&
-        task.status !== 'done' &&
-        !task.paused &&
-        (o.unestimated === true || (task.remaining_hours ?? 0) > 0),
+        task.status !== 'done',
     )
+    const candidates = planned.filter(
+      (task) => !task.paused && (o.unestimated === true || (task.remaining_hours ?? 0) > 0),
+    )
+    // with the option, the paused ones whatever their hours, Backlog
+    // included, as the app keeps a stored pause on a Backlog leaf
+    const pausedCandidates = o.paused === true ? planned.filter((task) => task.paused) : []
 
-    // the projects' rows, then the caller's sight of the live ones
-    const named = [...new Set(candidates.map((task) => task.project_id))]
+    // the projects' rows, then the caller's sight of the live ones, for
+    // both lists in the same rounds and bounds
+    const named = [...new Set([...candidates, ...pausedCandidates].map((task) => task.project_id))]
     const fresh = named.filter((id) => !lives.has(id))
     await inRounds(fresh, PROJECT_READ, false, liveOf)
     const live = new Set<string>()
@@ -374,18 +415,28 @@ export function ownerLoadReader(
           meId: me.id,
         }),
     )
-    if (shown.length > OWNER_LOADS.checks) return UNAVAILABLE
+    // a paused task only of a live project the caller can see, for every
+    // role, so no one learns of paused work they cannot see
+    const pausedShown = pausedCandidates.filter(
+      (task) => live.has(task.project_id) && sight.get(task.project_id) === true,
+    )
+    if (shown.length + pausedShown.length > OWNER_LOADS.checks) return UNAVAILABLE
     await look()
-    const groups = await inRounds(shown, CHECK, false, isGroup)
+    const checked = [...shown, ...pausedShown]
+    const groups = await inRounds(checked, CHECK, false, isGroup)
     const out: OwnedTask[] = []
-    for (const [i, task] of shown.entries()) {
+    const paused: OwnedTask[] = []
+    for (const [i, task] of checked.entries()) {
+      // a group's stored pause is dormant, and a group carries no load
       if (groups[i]) continue
       const project = await access.project(task.project_id)
       if (project === null) continue // unreachable: a live project was read
-      out.push({ task, project, visible: sight.get(task.project_id) === true })
+      const one = { task, project, visible: sight.get(task.project_id) === true }
+      if (i < shown.length) out.push(one)
+      else paused.push(one)
     }
-    out.sort((a, b) => a.task._creationTime - b.task._creationTime)
-    return { state: 'ok', tasks: out }
+    const byCreation = (a: OwnedTask, b: OwnedTask) => a.task._creationTime - b.task._creationTime
+    return { state: 'ok', tasks: out.sort(byCreation), paused: paused.sort(byCreation) }
   }
 
   /* whether an owner was read yet, and whether one was not read */
