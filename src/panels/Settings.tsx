@@ -20,6 +20,7 @@ import { OrgGeneralPage } from './settings/OrganizationSettings'
 import { ArchivedProjectsPage, OrgProjectsPage, ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
+import { useProjectSettings } from './settings/useProjectSettings'
 
 function SettingsScreen({
   page,
@@ -63,6 +64,10 @@ function SettingsScreen({
   const desktopSettings = window.qivoDesktop?.isElectron ? window.qivoDesktop.settings : undefined
   // Only home-organization team leaders and admins can open team settings.
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
+  /* A project page's read of its settings, the same one the page holds
+     (equal arguments share one subscription), for the check below and the
+     phone's Back. */
+  const projectRead = useProjectSettings(page.startsWith('project:') ? page.slice(8) : null)
 
   useEffectS(() => {
     const h = (e: KeyboardEvent) => {
@@ -124,10 +129,10 @@ function SettingsScreen({
     if (page === 'desktop' && !desktopSettings) {
       resetPage('account')
     } else if (page.indexOf('project:') === 0) {
-      const pid = page.slice(8)
-      const pr = P.project(pid)
-      const meta = pr ? (pr.type === 'meta' ? pr : P.project(pr.parent)) : null
-      if (!(meta && P.canSee(meta.id)) && holdingProject !== pid) resetPage('account')
+      // the server's answer decides, whether or not the workspace holds the
+      // project; nothing moves while it loads, refreshes or failed
+      const gone = projectRead.state === 'unavailable' || projectRead.state === 'archived'
+      if (gone && holdingProject !== page.slice(8)) resetPage('account')
     } else if (page.indexOf('team:') === 0) {
       if (!P.isTeamLeader(page.slice(5))) resetPage('account')
     } else if (page.startsWith('user:')) {
@@ -313,8 +318,9 @@ function SettingsScreen({
     if (page.startsWith('user:')) return { page: 'org-users', label: 'Users' }
     if (page.startsWith('team:')) return { page: 'org-teams', label: 'Teams' }
     if (page.startsWith('project:')) {
-      const project = P.project(page.slice(8))
-      const parent = project?.parent ? P.project(project.parent) : null
+      // a sub-project's parent from the server's answer, which a top-level
+      // project and a page still loading do not have
+      const parent = projectRead.answer?.parent ?? projectRead.archived?.parent ?? null
       return parent
         ? { page: `project:${parent.id}`, label: parent.name }
         : { page: 'projects', label: 'Projects' }

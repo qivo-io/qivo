@@ -8304,22 +8304,6 @@ export const PLANNER = {
     const u = p ? actorIn(p.org, uid) : null
     return !!(u?.active && levelOnProject(p, uid) === 'lead')
   },
-  canManageProjectUsers: (pid: string, uid?: string): boolean =>
-    PLANNER.canManageOwnProjectAccess(pid, uid),
-  canManageProjectTeams: (pid: string, uid?: string): boolean =>
-    PLANNER.canManageProjectUsers(pid, uid),
-  canManageProjectUser: (pid: string, targetId: string, uid?: string): boolean => {
-    const m = PLANNER.metaOf(pid)
-    const u = m ? actorIn(m.org, uid) : null
-    const target = PLANNER.user(targetId)
-    return !!(
-      m &&
-      u &&
-      target?.org === m.org &&
-      PLANNER.canManageProjectUsers(pid, uid) &&
-      (targetId !== u.id || PLANNER.canManageOwnProjectAccess(pid, uid))
-    )
-  },
   /* Navigation is flat: every project this user can see, in one list (0078
      retired the per-workspace silo and its switcher). Since 0081 the list is
      also BLENDED across organizations — home-org projects first, then each

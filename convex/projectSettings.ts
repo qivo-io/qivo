@@ -43,10 +43,12 @@
  * until the organization's rows hold their name keys, and every list cursor
  * opens only for the list, arguments and search it came from.
  *
- * The app does not call these yet; t3/limits-project-settings-ui moves the
- * Settings page and the New project and New sub-project dialogs onto them,
- * and t3/limits-project-admin-ui Settings › Projects, Archived projects and
- * the New sub-project dialog's parents. The writes stay in projects.ts. */
+ * A project's Settings page in the app reads all six
+ * (src/panels/settings/ProjectSettings.tsx); t3/limits-project-admin-ui
+ * moves Settings › Projects and Archived projects onto the project lists,
+ * and t3/limits-project-dialogs the New project and New sub-project dialogs
+ * onto candidates, leadCandidates and the sub-project parents. The writes
+ * stay in projects.ts. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgQuery } from './lib/functions'

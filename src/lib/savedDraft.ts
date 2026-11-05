@@ -24,6 +24,7 @@
 
 import { useId, useLayoutEffect, useReducer, useRef } from 'react'
 import { asciiEmail } from '../../convex/lib/email'
+import { roundReviewHours } from '../../convex/lib/review'
 import type { Writer } from '../store/fieldNotice'
 import { cleanName } from './fieldLimits'
 import { useUnsaved } from './leaveGuard'
@@ -397,4 +398,20 @@ export function wholeNumber<T extends number | null | undefined>(fallback: numbe
     same: (a, b) =>
       a.trim() === b.trim() || (a.trim() !== '' && b.trim() !== '' && Number(a) === Number(b)),
   }
+}
+
+/** A project's review time in hours, null for none, which shows empty: the
+    field then means the inherited time. Texts compare as the numbers the
+    store saves, rounded to the 0.1 h grain (roundReviewHours), so 2 and
+    2.04 are one; two empty texts are one too. */
+export const REVIEW_HOURS: DraftForm<number | null> = {
+  text: (value) => (value === null ? '' : String(value)),
+  same: (a, b) => {
+    const x = a.trim()
+    const y = b.trim()
+    if (x === '' || y === '') return x === y
+    const m = Number(x)
+    const n = Number(y)
+    return Number.isFinite(m) && Number.isFinite(n) && roundReviewHours(m) === roundReviewHours(n)
+  },
 }

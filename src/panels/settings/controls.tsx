@@ -135,7 +135,10 @@ export function DraftConflictLine<T>({
     types shows under the field, which then saves nothing until they choose
     Use saved or Keep mine. A text over `limit` is not saved: the field
     keeps it, shows it invalid and says why. Leaving the stored text
-    unchanged says nothing. A save while editing is paused keeps the text. */
+    unchanged says nothing. A save while editing is paused keeps the text.
+    `readOnly` keeps what was typed, with its close warning, and saves
+    nothing, for a page whose answer is not current; `disabled` shows the
+    saved text and holds nothing. */
 export function TextField({
   label,
   record,
@@ -148,6 +151,7 @@ export function TextField({
   multiline = false,
   limit,
   disabled = false,
+  readOnly = false,
 }: {
   label: string
   /** The record the text belongs to, such as the organization's id. */
@@ -161,10 +165,12 @@ export function TextField({
   multiline?: boolean
   limit: Limit
   disabled?: boolean
+  readOnly?: boolean
 }) {
   const draft = useSavedDraft(`${record}:${label}`, value, TRIMMED, 'text', disabled)
   const commit = () => {
     const t = draft.text.trim()
+    if (readOnly) return
     if (disabled || draft.isSaved(t)) draft.showSaved()
     // a conflict waits for Use saved or Keep mine
     else if (draft.conflict) return
@@ -182,6 +188,7 @@ export function TextField({
         value={draft.text}
         rows={multiline ? 1 : undefined}
         disabled={disabled}
+        readOnly={readOnly || undefined}
         onChange={(e) => draft.edit(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {

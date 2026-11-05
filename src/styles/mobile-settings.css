@@ -109,6 +109,7 @@
     overflow-wrap: anywhere;
   }
   .settings-content-scroll > *,
+  .settings-content-scroll > [data-project-settings-state] > *,
   .settings-field,
   .settings-content-scroll :is(input, select, textarea, code) {
     min-width: 0;

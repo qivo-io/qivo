@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import type { ProjectRemovalSummary } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
 
 /* The Archive or delete windows on the real store, fed one snapshot. Mira
    (me) is a standard user who leads Plan and only views Docs. In Work, under
@@ -114,9 +115,18 @@ async function load() {
   )
   windowRead = null
   windowFail = null
-  network.onUpdate.mockImplementation((ref, _args, next, fail) => {
-    if (getFunctionName(ref) === 'workspace:whole') {
-      deliver = (snapshot) => next(structuredClone(snapshot))
+  // a project's page reads its settings from the snapshot last delivered
+  let held = snap
+  const settings = projectSettingsServer(() => held)
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (name === 'workspace:whole') {
+      deliver = (snapshot) => {
+        held = structuredClone(snapshot)
+        next(structuredClone(snapshot))
+        settings.rerun()
+      }
       deliver(snap)
     }
     if (getFunctionName(ref) === 'taskWindow:task') {
