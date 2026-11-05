@@ -458,6 +458,24 @@ describe('tasks on demand', () => {
     expect(notes.tags).toEqual(['mention'])
   })
 
+  it('notifies a first mention made just before the previous delivery whose commit reached only this one, while not asked', async () => {
+    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
+    await boot()
+    notes.tags.length = 0
+    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
+    deliver(structuredClone(snapshot))
+    await tick()
+    // the mention's mutation read the clock before the 09:30 delivery and
+    // committed after it, so that delivery did not hold it; no task enters
+    // the rows, and nothing else tells x apart from a task coming into view
+    snapshot.messages.push(message('late', 'x', '2026-09-14T09:29:59.000Z', 'mention'))
+    snapshot.delivered_at = '2026-09-14T09:30:01.000Z'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(notes.tags).toEqual(['late'])
+  })
+
   it('raises no notification for the messages a restore brings back while not asked', async () => {
     snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
     await boot()

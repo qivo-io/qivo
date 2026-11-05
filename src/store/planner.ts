@@ -14045,6 +14045,12 @@ export function disposeDemoStore() {
 /* The tasks the previous live delivery held messages of (noteDelivery). */
 let lastMessageTasks: ReadonlySet<string> = new Set()
 
+/* How long a message's commit can trail its created_at. A mutation reads
+   the clock when it starts and commits later, so a delivery can carry a
+   delivered_at past a message's created_at and still not hold it. A
+   message made this close before the previous delivery counts as new. */
+const COMMIT_SLACK_MS = 60_000
+
 /* The arrival bookkeeping of live delivery `snap`, once per delivery and
    never on a repaint: the stored messages of tasks that a restore brought
    back, or that newly came into view, raise no desktop notification, and
@@ -14054,9 +14060,10 @@ let lastMessageTasks: ReadonlySet<string> = new Set()
    rows lacked. Before that no task enters the delivery's rows, so they are
    the tasks with a message in this delivery and none in the previous one,
    as when access returns or a task moves back into view, and the Inbox
-   part brings its stored messages back. A message whose created_at is at
-   or before the previous delivery, but whose commit reached only this
-   one, then raises none either, a task's first mention included. */
+   part brings its stored messages back. A message made within
+   COMMIT_SLACK_MS before the previous delivery, but whose commit reached
+   only this one, still counts as new, so a task's first mention notifies;
+   one made earlier than that counts as stored. */
 function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot) {
   const byRows = tasksAll
   const messageTasks = new Set(snap.messages.map((message) => message.issue_id))
@@ -14092,12 +14099,14 @@ function noteDelivery(newlyVisibleIssueIds: ReadonlySet<string>, snap: Snapshot)
   }
   /* A task also enters the working set when access returns or it moves back
      into view, and its stored messages come with it. Those created before the
-     previous delivery raise no desktop notification; newer ones still do. */
+     previous delivery, less the slack a commit can trail its clock read by,
+     raise no desktop notification; newer ones still do. */
   if (announcedMessages !== null && lastDeliveryAt !== null) {
+    const storedBefore = Date.parse(lastDeliveryAt) - COMMIT_SLACK_MS
     for (const message of snap.messages) {
       if (
         newly.has(message.issue_id) &&
-        message.created_at <= lastDeliveryAt &&
+        Date.parse(message.created_at) <= storedBefore &&
         !announcedMessages.has(message.id)
       )
         announcedMessages.set(message.id, message.woke_at)
