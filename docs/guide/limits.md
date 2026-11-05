@@ -37,6 +37,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Profile picture size | 2 MiB | A profile picture must be at most 2 MiB. Choose a smaller image. |
 | Background image size | 8 MiB | A background image must be at most 8 MiB. Choose a smaller image. |
 | Text file from attach_text_file | 256 KiB as UTF-8 | text must be at most 256 KiB (262,144 bytes) as UTF-8. Split it into several files. |
+| Uploads in progress | 20 uploads per person in an organization | You already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
 
 ## Tasks and organizations
 

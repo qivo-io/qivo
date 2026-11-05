@@ -41,9 +41,10 @@
  * expires, through completeUpload: files.ts attach finds the ticket by its
  * file, and confirmAttachmentUpload, on either machine surface, by its id.
  * Convex's own upload URLs are not used for task files, because one of them
- * stores any number of files of any size until it expires. Unconfirmed
- * bytes are reaped with every other unreferenced file (files.ts
- * reapOrphans), which also deletes expired tickets.
+ * stores any number of files of any size until it expires. A person holds
+ * at most LIMITS.uploadsInProgress unexpired tickets in an organization, and
+ * within an hour of a ticket's expiry files.ts reapUploadTickets erases the
+ * file it holds unless something names it, and deletes it.
  *
  * Downloads go through the /files gateway with a 10-minute token minted for
  * the reader (lib/fileTokens.ts), which the gateway re-checks on every fetch.
@@ -261,7 +262,7 @@ export async function removeAttachmentCore(
 export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
 
 /** How many of a caller's expired tickets one new upload deletes, keeping
- * that write bounded; reapOrphans deletes the rest. */
+ * that write bounded; files.ts reapUploadTickets deletes the rest. */
 const EXPIRED_TICKETS_PER_UPLOAD = 100
 
 /** A new upload ticket and its upload URL. */
@@ -271,12 +272,14 @@ type OpenedUpload = { ticket: Doc<'attachment_uploads'>; uploadUrl: string }
  * Records a ticket for an upload of a file of `size` bytes to `issue` by
  * `me` and answers its upload URL, which stores one file. The caller has
  * checked the write gate and the task's room. Refuses a size over the
- * organization's limit with that limit's `rule`. Without `size`, for an app
- * loaded before uploads declared one, the ticket is `up_to` the
- * organization's limit. `name` and `content_type` are what a REST or MCP
- * confirm attaches the file as; the app's attach names the file itself.
- * `nowMs` is the request's clock. Deletes some of the caller's expired
- * tickets on the way.
+ * organization's limit with that limit's `rule`, and then a start while
+ * `me` holds LIMITS.uploadsInProgress unexpired tickets, on any surface,
+ * with that limit's. Without `size`, for an app loaded before uploads
+ * declared one, the ticket is `up_to` the organization's limit. `name` and
+ * `content_type` are what a REST or MCP confirm attaches the file as; the
+ * app's attach names the file itself. `nowMs` is the request's clock.
+ * Reads at most LIMITS.uploadsInProgress live tickets and deletes up to
+ * EXPIRED_TICKETS_PER_UPLOAD of the caller's expired ones on the way.
  */
 export async function openUploadTicket(
   ctx: MutationCtx,
@@ -292,6 +295,12 @@ export async function openUploadTicket(
   const { me, issue } = a
   const cap = await attachmentCapMb(ctx, issue.org_id)
   if (a.size !== undefined && a.size > cap * MIB) throw rule(attachmentTooLarge(cap))
+  // two starts at once read the same range, so one of them retries
+  const live = await ctx.db
+    .query('attachment_uploads')
+    .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).gt('expires_at', a.nowMs))
+    .take(LIMITS.uploadsInProgress.max)
+  if (live.length >= LIMITS.uploadsInProgress.max) throw rule(LIMITS.uploadsInProgress.refusal)
   const expired = await ctx.db
     .query('attachment_uploads')
     .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).lte('expires_at', a.nowMs))

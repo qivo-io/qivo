@@ -59,6 +59,11 @@ crons.weekly(
   {},
 )
 
+// Deletes expired attachment upload tickets and erases the files nothing
+// names that they hold, within an hour of their expiry. The empty arguments
+// start a run; each leg schedules the next (files.ts reapUploadTickets).
+crons.interval('reap-expired-upload-tickets', { hours: 1 }, internal.files.reapUploadTickets, {})
+
 // Erases deleted files whose hold has ended and whose scheduled erase did
 // not, and checks for a restore. The hold is two intervals shorter than 7
 // days, so a file is erased within 7 days of its deletion even when its

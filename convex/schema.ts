@@ -1870,8 +1870,11 @@ export default defineSchema({
   // openUploadTicket). It names the caller that asked for the upload URL,
   // the task it attaches to and when it expires, and holds the one file the
   // URL stored. Only that caller may attach it (files.ts attach) or confirm
-  // it (REST and MCP), once, for that task, before it expires. files.ts
-  // reapOrphans deletes expired tickets with the unreferenced bytes.
+  // it (REST and MCP), once, for that task, before it expires. A person
+  // holds at most LIMITS.uploadsInProgress unexpired tickets in an
+  // organization. Within an hour of a ticket's expiry files.ts
+  // reapUploadTickets erases its file unless something names it, and
+  // deletes it.
   attachment_uploads: defineTable({
     id: v.string(), // the ticket
     org_id: v.string(),

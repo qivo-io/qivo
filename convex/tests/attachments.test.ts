@@ -14,6 +14,7 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import { UPLOAD_TICKET_PAGE } from '../files'
 import { attachmentFileUrl, mintFileToken, verifyFileToken } from '../lib/fileTokens'
 import { attachmentTooLarge, LIMITS } from '../lib/limits'
 import { UPLOAD_NOT_STARTED, UPLOAD_OVER_URL, UPLOAD_SIZE_SHAPE } from '../model/attachments'
@@ -27,6 +28,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  quietWatch,
   type T,
   uuid,
   withOrg,
@@ -58,6 +60,7 @@ g.process.env.BETTER_AUTH_SECRET ??= 'test-files-secret'
 g.process.env.CONVEX_SITE_URL = 'https://test.convex.site'
 
 const MiB = 1024 * 1024
+const DEFAULT_TICKET_PAGE = UPLOAD_TICKET_PAGE.size
 
 /* Store n zero bytes; contentType patched on when given (the upload POST's
  * Content-Type header in production). */
@@ -376,6 +379,153 @@ describe('app uploads on tickets', () => {
       'forbidden',
     )
     expect(await ticketRows(t)).toEqual([])
+  })
+})
+
+describe('uploads in progress', () => {
+  const MAX = LIMITS.uploadsInProgress.max
+  const start = (t: T, fx: OrgFixture, by: Doc<'profiles'>, issue: Doc<'issues'>) =>
+    as(t, by).mutation(api.files.uploadUrl, {
+      org_id: fx.org.id,
+      issue_id: issue.id,
+      size: 8,
+      name: 'spec.pdf',
+    })
+
+  it('refuses the 21st start until an attach spends a ticket or one expires', async () => {
+    const { t, fx, issue } = await setup()
+    const urls: string[] = []
+    for (let i = 0; i < MAX; i++) urls.push(await start(t, fx, fx.user, issue))
+    const refusal = await expectRefusal(start(t, fx, fx.user, issue), 'rule')
+    expect(refusal.data.message).toBe(LIMITS.uploadsInProgress.refusal)
+    expect(refusal.data.message).toBe(
+      'you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started.',
+    )
+    // another person's count is their own
+    await start(t, fx, fx.admin, issue)
+    // an attach spends its ticket
+    const sent = await postTo(t, urls[0], new Uint8Array(8))
+    await as(t, fx.user).mutation(api.files.attach, {
+      org_id: fx.org.id,
+      id: uuid(),
+      issue_id: issue.id,
+      storage_id: sent.json.storageId!,
+      name: 'spec.pdf',
+      inline: false,
+    })
+    await start(t, fx, fx.user, issue)
+    await expectRefusal(start(t, fx, fx.user, issue), 'rule')
+    // a ticket whose POST failed counts until its hour ends
+    expect((await postTo(t, urls[1], new Uint8Array(7))).status).toBe(400)
+    await expectRefusal(start(t, fx, fx.user, issue), 'rule')
+    await t.run(async (ctx) => {
+      const [first] = await ctx.db
+        .query('attachment_uploads')
+        .withIndex('by_profile_expiry', (q) => q.eq('profile_id', fx.user.id))
+        .take(1)
+      await ctx.db.patch(first._id, { expires_at: Date.now() })
+    })
+    await start(t, fx, fx.user, issue)
+  })
+
+  it('counts REST, MCP and app starts together, and names the room before the cap', async () => {
+    const { t, fx, issue } = await setup()
+    const machine = (surface: 'rest' | 'mcp') =>
+      surface === 'rest'
+        ? t.mutation(internal.machine.records.restStartUpload, {
+            callerId: fx.user.id,
+            access: 'write',
+            ref: `QN-${issue.num}`,
+            body: JSON.stringify({ name: 'spec.pdf', size: 8 }),
+          })
+        : t.mutation(internal.machine.records.mcpStartUpload, {
+            callerId: fx.user.id,
+            access: 'write',
+            ref: `QN-${issue.num}`,
+            name: 'spec.pdf',
+            size: 8,
+          })
+    for (let i = 0; i < MAX / 2; i++) {
+      await machine(i % 2 === 0 ? 'rest' : 'mcp')
+      await start(t, fx, fx.user, issue)
+    }
+    for (const call of [start(t, fx, fx.user, issue), machine('rest'), machine('mcp')]) {
+      const refusal = await expectRefusal(call, 'rule')
+      expect(refusal.data.message).toBe(LIMITS.uploadsInProgress.refusal)
+    }
+    // a full task says so, not that the uploads are at their cap
+    await t.run(async (ctx) => {
+      for (let i = 0; i < LIMITS.attachments.max; i++)
+        await ctx.db.insert('issue_attachments', {
+          id: uuid(),
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `${i}.pdf`,
+          size_bytes: 1,
+          storage_id: await ctx.storage.store(new Blob([new Uint8Array(1)]) as never),
+          inline: false,
+          uploaded_by: fx.admin.id,
+          created_at: NOW,
+        })
+    })
+    for (const call of [start(t, fx, fx.user, issue), machine('rest'), machine('mcp')]) {
+      const refusal = await expectRefusal(call, 'rule')
+      expect(refusal.data.message).toBe(LIMITS.attachments.refusal)
+    }
+  })
+})
+
+describe('expired upload tickets', () => {
+  const run = async (t: T) => {
+    await t.mutation(internal.files.reapUploadTickets, {})
+    await t.finishAllScheduledFunctions(() => {})
+  }
+
+  it('erases the file an expired ticket holds unless something names it, and leaves live tickets', async () => {
+    const { t, fx, issue } = await setup()
+    await quietWatch(t)
+    const loose = await storeBlob(t, 8)
+    const picture = await storeBlob(t, 8, 'image/png')
+    const live = await storeBlob(t, 8)
+    const expired = Date.now() - 1
+    await plantTicket(t, { profile: fx.user, issue, storageId: loose, expiresAt: expired })
+    await plantTicket(t, { profile: fx.user, issue, storageId: picture, expiresAt: expired })
+    await plantTicket(t, { profile: fx.user, issue, storageId: live })
+    await t.run(async (ctx) => {
+      await ctx.db.patch(fx.user._id, { avatar_storage_id: picture })
+      // a ticket whose POST never stored a file
+      await ctx.db.insert('attachment_uploads', {
+        id: uuid(),
+        org_id: fx.org.id,
+        profile_id: fx.user.id,
+        issue_id: issue.id,
+        name: 'never.bin',
+        size_bytes: 8,
+        expires_at: expired,
+      })
+    })
+    await run(t)
+    expect(await fileState(t, loose)).toBe('gone')
+    expect(await fileState(t, picture)).toBe('kept')
+    expect(await fileState(t, live)).toBe('kept')
+    const left = await ticketRows(t)
+    expect(left.map((row) => row.storage_id)).toEqual([live])
+  })
+
+  it('holds the files after a restore it has not noticed, and pages through the rest', async () => {
+    const { t, fx, issue } = await setup()
+    UPLOAD_TICKET_PAGE.size = 1
+    try {
+      const files = [await storeBlob(t, 8), await storeBlob(t, 8), await storeBlob(t, 8)]
+      for (const storageId of files)
+        await plantTicket(t, { profile: fx.user, issue, storageId, expiresAt: Date.now() - 1 })
+      // no restore watch yet counts as a restore
+      await run(t)
+      for (const id of files) expect(await fileState(t, id)).toBe('held')
+      expect(await ticketRows(t)).toEqual([])
+    } finally {
+      UPLOAD_TICKET_PAGE.size = DEFAULT_TICKET_PAGE
+    }
   })
 })
 

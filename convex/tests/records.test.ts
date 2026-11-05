@@ -1072,6 +1072,17 @@ describe('the REST upload', () => {
     expect((await tickets(fx.t)).map((r) => r.name)).toEqual(['live.txt'])
   })
 
+  it('refuses the 21st upload in progress over HTTP with the limit sentence', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    for (let i = 0; i < LIMITS.uploadsInProgress.max; i++)
+      await start(fx, issue.id, { name: `${i}.txt`, size: 1 })
+    expect(
+      await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments`, { name: 'one.txt', size: 1 }),
+    ).toEqual({ status: 400, text: JSON.stringify({ error: LIMITS.uploadsInProgress.refusal }) })
+    expect(await tickets(fx.t)).toHaveLength(LIMITS.uploadsInProgress.max)
+  })
+
   it("deletes the caller's own expired tickets when it starts another", async () => {
     const fx = await setup()
     const issue = await task(fx)
@@ -1215,6 +1226,28 @@ describe('the MCP upload', () => {
       'mcp.txt, via the REST API (CI key)',
       'rest.txt, via MCP',
     ])
+  })
+
+  it('refuses the 21st upload in progress, counted with the REST ones, as an error result', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const secret = await personalToken(fx.t, fx.user, 'write')
+    for (let i = 0; i < LIMITS.uploadsInProgress.max; i++)
+      await (i % 2 === 0
+        ? start(fx, issue.id, { name: `${i}.txt`, size: 1 }, fx.user.id)
+        : fx.t.mutation(internal.machine.records.restStartUpload, {
+            callerId: fx.user.id,
+            access: 'write',
+            ref: issue.id,
+            body: JSON.stringify({ name: `${i}.txt`, size: 1 }),
+          }))
+    expect(
+      await mcpTool(fx.t, secret, 'start_attachment_upload', {
+        ref: `QN-${issue.num}`,
+        name: 'one.txt',
+        size: 1,
+      }),
+    ).toEqual({ text: LIMITS.uploadsInProgress.refusal, isError: true })
   })
 
   it('checks sight, Edit and the fields before minting a ticket', async () => {

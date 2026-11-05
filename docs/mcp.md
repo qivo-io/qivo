@@ -633,6 +633,7 @@ the range.
 | Attachment media type | 255 characters | a file's media type must be at most 255 characters. Send a media type such as application/pdf. |
 | Attachment size | 20 MiB per file | a file must be at most 20 MiB, this organization's attachment limit. Attach a smaller file. |
 | Text file from attach_text_file | 256 KiB as UTF-8 | text must be at most 256 KiB (262,144 bytes) as UTF-8. Split it into several files. |
+| Uploads in progress | 20 uploads per person in an organization | you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
 
 ### Tasks and organizations
 

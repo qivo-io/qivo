@@ -605,8 +605,9 @@ export const reapOrphans = internalMutation({
     const since = a.now === undefined ? await reapSince(ctx, now) : a.since
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
-      // Tickets own no bytes until the receiver commits the completed upload,
-      // and an expired upload ticket's unconfirmed bytes fall to the files phase.
+      // Tickets own no bytes until the receiver commits the completed upload.
+      // reapUploadTickets takes expired attachment tickets with their files
+      // every hour; one it left falls here, and its bytes to the files phase.
       let more = false
       for (const table of ['background_uploads', 'attachment_uploads'] as const) {
         const expired = await ctx.db
@@ -704,6 +705,78 @@ export const reapOrphans = internalMutation({
     }
     if (state === null) await ctx.db.insert('orphan_reaps', done)
     else await ctx.db.patch(state._id, done)
+    return null
+  },
+})
+
+/* ----------------------------------------------------- reapUploadTickets
+ * Deletes the attachment upload tickets that have expired, and erases the
+ * file each one holds unless something names it, so an upload that never
+ * attaches stops taking storage within an hour of its ticket's end instead
+ * of waiting for the weekly reapOrphans (LIMITS.uploadsInProgress). Erasing
+ * at the expiry is safe, because neither the app's attach nor the REST and
+ * MCP confirm takes an expired ticket's file (model/attachments.ts
+ * completeUpload), and a POST still storing one deletes it when it finds
+ * the ticket expired or gone (finishTicketUpload). A file a row names, such
+ * as a picture set from it, stays. After a restore it holds the file
+ * instead, by the orphan sweep's rule (model/fileHolds.ts restoreHoldEnd),
+ * since a row written after the restored backup may have named it. The
+ * hourly cron (crons.ts) starts a run with empty arguments. Each leg
+ * handles one UPLOAD_TICKET_PAGE of the tickets expired at the run's start
+ * and schedules the next while more are left; the last leg logs its counts
+ * when it handled any. reapOrphans's tickets phase still deletes any
+ * expired ticket left, whose file then falls to its files phase. */
+
+/** How many expired tickets one reapUploadTickets leg handles. A ticket
+ * holding a file nothing names costs the ticket, the file, storageIdInUse's
+ * nine ranges and the erase, so a full leg reads about 2,600 of Convex's
+ * 4,096 documents with the page and the restore check. Tests lower it. */
+export const UPLOAD_TICKET_PAGE = { size: 200 }
+
+const vTicketCounts = v.object({
+  tickets: v.number(), // expired tickets deleted
+  erased: v.number(), // their files erased
+  held: v.number(), // their files held after a restore instead
+})
+
+const ticketArgs = {
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+  counts: v.optional(vTicketCounts),
+}
+
+const ticketLegRef = makeFunctionReference<'mutation', ObjectType<typeof ticketArgs>, null>(
+  'files:reapUploadTickets',
+)
+
+/* One leg of the ticket cleanup (header above). Empty arguments start a run. */
+export const reapUploadTickets = internalMutation({
+  args: ticketArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    const counts = a.counts ?? { tickets: 0, erased: 0, held: 0 }
+    const restore = await restoreState(ctx)
+    const expired = await ctx.db
+      .query('attachment_uploads')
+      .withIndex('by_expiry', (q) => q.lte('expires_at', now))
+      .take(UPLOAD_TICKET_PAGE.size + 1)
+    for (const ticket of expired.slice(0, UPLOAD_TICKET_PAGE.size)) {
+      const file = ticket.storage_id ? await ctx.db.system.get(ticket.storage_id) : null
+      if (file !== null && !(await storageIdInUse(ctx, file._id))) {
+        const erase_at = restoreHoldEnd(restore, false, file._creationTime, now)
+        if (erase_at !== null) {
+          await holdAfterRestore(ctx, file, erase_at)
+          counts.held += 1
+        } else {
+          await eraseFile(ctx, file._id)
+          counts.erased += 1
+        }
+      }
+      await ctx.db.delete(ticket._id)
+      counts.tickets += 1
+    }
+    if (expired.length > UPLOAD_TICKET_PAGE.size)
+      await ctx.scheduler.runAfter(0, ticketLegRef, { now, counts })
+    else if (counts.tickets > 0) console.log('deleted expired upload tickets', counts)
     return null
   },
 })
