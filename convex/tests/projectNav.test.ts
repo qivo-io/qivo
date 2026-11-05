@@ -23,6 +23,7 @@ import {
   NAMED_READ,
   type NamedAt,
   namedCeiling,
+  namedCursor,
   openNamedCursor,
   readBatch,
 } from '../lib/namedPages'
@@ -30,6 +31,7 @@ import { nameKey } from '../lib/nameKey'
 import { insertTask } from '../model/descriptions'
 import {
   CHILDREN_LIST,
+  FAVORITES,
   type NavBatch,
   type NavCursorArgs,
   type NavRefusal,
@@ -40,6 +42,7 @@ import {
   PAGE_LIST,
   PROJECT_NAV,
   RESOLVE_FORM,
+  REST,
   subProjectIndex,
 } from '../model/projectNavReads'
 import { SHAPES } from './accessShapes.setup'
@@ -982,6 +985,91 @@ describe('continuation', () => {
     const back = await walk(from)
     expect(back.rows.map((r) => r.name)).toEqual(names('Sub ', 30).slice(25))
   })
+})
+
+describe('continuation across two seats', () => {
+  it('walks two seats past one batch in the order of the rule, each row once, also when the read budget stops batches', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ann = await person(t, f.org.id, 'Ann')
+    const elsewhere = await plantSeat(t, {
+      org_id: f.otherOrg.id,
+      name: 'Ann',
+      auth_user_id: ann.auth_user_id,
+    })
+    // the two organizations' names interleave, and one name is in both
+    const all = names('P', 40)
+    const here = await plantMetas(t, f.org.id, [...all.filter((_, i) => i % 2 === 0), 'Same'])
+    const there = await plantMetas(t, f.otherOrg.id, [...all.filter((_, i) => i % 2 === 1), 'Same'])
+    await plantGrants(t, ann, here)
+    await plantGrants(t, elsewhere, there)
+    await ready(t, f)
+    for (const p of [here[3], here[17]]) await plantStar(t, ann, p)
+    for (const p of [there[5], there[11]]) await plantStar(t, elsewhere, p)
+    const seats = [ann, elsewhere]
+    const want = await expectedPage(t, seats)
+    expect(want).toHaveLength(42)
+    const whole = await walk((after) => page(t, seats, { after }))
+    expect(whole.batches).toHaveLength(2)
+    expect(whole.rows).toEqual(want)
+    Object.assign(NAMED_READ, { ranges: 40 })
+    const tight = await walk((after) => page(t, seats, { after }))
+    expect(tight.batches.some((b) => b.stopped && b.rows.length < LIST_BATCH)).toBe(true)
+    expect(tight.rows).toEqual(want)
+  })
+
+  for (const group of ['favorites', 'rest'] as const)
+    it(`shows another seat's ${group} row after a cursor at a rejected row on a reused id of the organization that sorts first`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      // `first` is the seat in the organization whose id sorts first
+      const [one, two] = [f.org, f.otherOrg].sort((a, b) => compareValues(a.id, b.id))
+      const first = await person(t, one.id, 'Ann')
+      const second = await plantSeat(t, {
+        org_id: two.id,
+        name: 'Ann',
+        auth_user_id: first.auth_user_id,
+      })
+      const [shared, later] = await plantMetas(t, two.id, ['Shared', 'Zed'])
+      await plantGrants(t, second, [shared, later])
+      await ready(t, f)
+      // the first seat kept a row on the id the second organization's
+      // project holds now, with its name key, which the reader rejects
+      if (group === 'favorites') {
+        await plantStar(t, second, shared)
+        await plantStar(t, first, shared)
+      } else
+        await t.run((ctx) =>
+          ctx.db.insert('project_reach', {
+            org_id: one.id,
+            grantee_kind: 'profile',
+            grantee_id: first.id,
+            kind: 'root',
+            project_id: shared.id,
+            root_id: shared.id,
+            name_key: nameKey(shared.name),
+            key: shared.key,
+            live: true,
+            on_root: true,
+          }),
+        )
+      const seats = [first, second]
+      const want = await expectedPage(t, seats)
+      expect(want.map((r) => [r.name, r.favorite])).toEqual([
+        ['Shared', group === 'favorites'],
+        ['Zed', false],
+      ])
+      expect((await walk((after) => page(t, seats, { after }))).rows).toEqual(want)
+      // a batch the read budget stopped at the first seat's rejected row
+      // seals its position, before the second seat's row at the same key
+      // and id
+      const at = {
+        key: (group === 'favorites' ? FAVORITES : REST) + nameKey(shared.name),
+        tie: [shared.id, one.id],
+      }
+      const after = await namedCursor(PAGE_LIST, [], at)
+      expect(ok(await page(t, seats, { after })).rows).toEqual(want)
+    })
 })
 
 /* -------------------------------------------------------------- the budgets */
