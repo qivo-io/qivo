@@ -579,9 +579,31 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
   })
 })
 
-describe('Settings while tasks load', { timeout: 30_000 }, () => {
+describe.each([
+  ['while every task loads', true],
+  ['in a session that never asked for every task', false],
+])('Settings %s', { timeout: 30_000 }, (_session, asked) => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = asked
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+    // a page of Settings asks for no task
+    if (!asked && settingsStore) expect(settingsStore.P.taskLoad()).toEqual({ state: 'not_asked' })
+    settingsStore = null
+  })
+  let settingsStore: typeof import('./store/planner') | null = null
+  /* Boots as bootLoading does, keeping the store for the check above. */
+  const bootSettings = async (shape?: (snap: Snapshot) => void) => {
+    const booted = await bootLoading(true, undefined, shape)
+    settingsStore = booted.store
+    return booted
+  }
+
   it('opens Teams, a team, Projects and a project at once, and a removal there asks the server', async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       const home = snap.orgs[0].id
       snap.projects[0].type = 'meta'
       snap.profiles.push({
@@ -663,7 +685,7 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
   })
 
   it("opens Labels at once with the server's counts, though the task that carries a label is still to arrive", async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       snap.labels.push({
         id: 'soak',
         org_id: snap.orgs[0].id,
@@ -688,7 +710,7 @@ describe('Settings while tasks load', { timeout: 30_000 }, () => {
   })
 
   it('opens Archived tasks at once, with the projects the person leads in its picker', async () => {
-    const { org } = await bootLoading(true, undefined, (snap) => {
+    const { org } = await bootSettings((snap) => {
       secondProject(snap)
       // the navigation reads judge the admin by ordinary access, so the
       // person leads both projects to see them listed
