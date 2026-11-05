@@ -40,8 +40,8 @@
     "reason": "dialog width and the armed milestone delete color; field layout uses classes"
   },
   "src/panels/settings/LabelsSettings.tsx": {
-    "count": 3,
-    "reason": "persisted label colors and armed-delete emphasis"
+    "count": 2,
+    "reason": "persisted label colors"
   },
   "src/panels/settings/ProjectSettings.tsx": {
     "count": 1,

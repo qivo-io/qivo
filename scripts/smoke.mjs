@@ -2092,23 +2092,32 @@ try {
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/settings/org-labels`, {
     waitUntil: 'domcontentloaded',
   })
+  // a label's delete asks in a window, whose Delete is painted as a
+  // delete that cannot be undone; Cancel leaves the label as it was
   const labelDelete = pageA.locator('[data-delete-label]').first()
   await labelDelete.waitFor({ state: 'visible', timeout: 30000 })
-  const settledColor = (el) =>
-    Promise.all(el.getAnimations().map((animation) => animation.finished)).then(
-      () => getComputedStyle(el).color,
-    )
-  const colorBeforeArm = await labelDelete.evaluate(settledColor)
   await labelDelete.click()
-  if (((await labelDelete.textContent()) || '').trim() !== 'Delete?') {
-    await fail('armed compact delete did not expand to "Delete?"')
+  const labelWindow = pageA.locator('[data-modal-shell]')
+  const windowButton = (name) =>
+    labelWindow.locator('button').filter({ hasText: new RegExp(`^${name}$`) })
+  await windowButton('Delete').waitFor({ state: 'visible', timeout: 10000 })
+  const settledBackground = (el) =>
+    Promise.all(el.getAnimations().map((animation) => animation.finished)).then(
+      () => getComputedStyle(el).backgroundColor,
+    )
+  if (
+    (await windowButton('Delete').evaluate(settledBackground)) ===
+    (await windowButton('Cancel').evaluate(settledBackground))
+  ) {
+    await fail('the label delete window lost its danger-color Delete')
   }
-  const colorAfterArm = await labelDelete.evaluate(settledColor)
-  if (colorAfterArm === colorBeforeArm) {
-    await fail('armed compact delete lost its existing danger-color change')
+  if (!((await labelWindow.textContent()) || '').includes('including archived tasks')) {
+    await fail('the label delete window does not say it reaches archived tasks')
   }
+  await windowButton('Cancel').click()
+  await labelWindow.waitFor({ state: 'detached', timeout: 10000 })
   log(
-    'A: Settings labels, project creation, aligned identities, + Add, key fingerprint and Delete? verified',
+    'A: Settings labels, project creation, aligned identities, + Add, key fingerprint and the label delete window verified',
   )
 
   await pageA.goto(`${BASE}/app/~/board/all`, { waitUntil: 'domcontentloaded' })

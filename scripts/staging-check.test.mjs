@@ -19,6 +19,8 @@ import {
   hasTag,
   historyRows,
   isSiteOf,
+  LABELS_EXPECTED,
+  LABELS_STEP,
   LIST_REFUSALS,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
@@ -64,6 +66,23 @@ describe('staging check REST contract', () => {
       completion: '0 of 2 tasks done',
       paused: '1',
       sentence: '1 task is overdue.',
+    })
+  })
+  it("checks its own label in Settings › Labels on its one task, in the page's words", () => {
+    const page = readFileSync(
+      new URL('../src/panels/settings/LabelsSettings.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(page).toMatch(/`\$\{grouped\(n\)\} active task\$\{n === 1 \? '' : 's'\}`/)
+    expect(page).toMatch(/`Used by \$\{activeTasks\(count\)\}\. `/)
+    expect(page).toContain(
+      'Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
+    )
+    expect(LABELS_STEP).toBe('ui/settings-labels')
+    expect(LABELS_EXPECTED).toEqual({
+      count: '1 active task',
+      confirm:
+        'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     })
   })
   it("checks its sub-project's health row on what its two tasks give, in the table's words", () => {

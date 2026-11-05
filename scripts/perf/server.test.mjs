@@ -47,6 +47,19 @@ describe('the benchmark server', () => {
     expect(odd.snapshot.issueSubs).toHaveLength(70)
   })
 
+  it('puts each label on a task once, whatever orglabels gives', async () => {
+    // a stride of 5 over 1 or 5 labels meets the same label again
+    for (const orglabels of [1, 5]) {
+      const { snapshot } = await snapshotOf(`tasks=100&orglabels=${orglabels}`)
+      const pairs = snapshot.issueLabels.map((row) => `${row.issue_id} ${row.label_id}`)
+      expect(new Set(pairs).size, `orglabels=${orglabels}`).toBe(pairs.length)
+      expect(pairs, `orglabels=${orglabels}`).toHaveLength(snapshot.issues.length)
+    }
+    // the default gives every task its two labels
+    const usual = await snapshotOf('tasks=100')
+    expect(usual.snapshot.issueLabels).toHaveLength(2 * usual.snapshot.issues.length)
+  })
+
   it('counts the UTF-8 bytes it sends', async () => {
     const { bytes, text } = await snapshotOf('tasks=20')
     // the workspace holds names past ASCII, so the two counts differ
@@ -279,15 +292,63 @@ describe('the benchmark server', () => {
     expect(await modeOf('&appearance=sepia')).toBe('dark')
   })
 
-  it('signs the person in as an organization Viewer only when the page asks for one', async () => {
+  it('signs the person in as an organization Viewer or admin only when the page asks for one', async () => {
     const roleOf = async (params) => {
       const { snapshot } = await snapshotOf(`tasks=20${params}`)
       return snapshot.profiles.find((p) => p.id === snapshot.myProfileIds[0]).org_role
     }
     expect(await roleOf('&role=viewer')).toBe('viewer')
+    expect(await roleOf('&role=admin')).toBe('admin')
     expect(await roleOf('')).toBe('user')
-    expect(await roleOf('&role=admin')).toBe('user')
+    expect(await roleOf('&role=owner')).toBe('user')
   })
+
+  it("answers Settings › Labels' batches for an admin, with the labels and states the page asks for", async () => {
+    /** What labels:settingsPage answers with `args` on a workspace with
+        page parameters `params`, read by an admin unless they say. */
+    const page = async (params, args = {}) => {
+      const { posted, send } = await server(`tasks=100&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({
+        type: 'query',
+        id: 'labels',
+        name: 'labels:settingsPage',
+        args: { org_id: snap.orgs[0].id, ...args },
+      })
+      const answer = posted.find((m) => m.to === 'labels')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const plain = await page('role=admin')
+    expect(plain.snap.labels).toHaveLength(12)
+    expect(plain.answer.rows.map((row) => row.name)).toEqual(
+      Array.from({ length: 12 }, (_, n) => `Label ${String.fromCharCode(65 + n)}`),
+    )
+    expect(plain.answer).toMatchObject({ next: null, stopped: false, counting: false })
+    // the tasks' labels spread over every label, each counted
+    expect(plain.answer.rows.every((row) => row.active_tasks > 0)).toBe(true)
+    const sixty = await page('role=admin&orglabels=60')
+    expect(new Set(sixty.snap.labels.map((l) => l.name)).size).toBe(60)
+    expect(sixty.snap.labels.map((l) => l.name)).toContain('Field test 01')
+    expect(sixty.answer.rows).toHaveLength(25)
+    expect(sixty.answer.next).not.toBeNull()
+    // the forced states
+    const counting = await page('role=admin&labelpage=counting')
+    expect(counting.answer.counting).toBe(true)
+    expect(counting.answer.rows.every((row) => row.active_tasks === null)).toBe(true)
+    const uncounted = await page('role=admin&labelpage=uncounted')
+    expect(uncounted.answer.counting).toBe(false)
+    expect(uncounted.answer.rows.filter((row) => row.active_tasks === null)).toHaveLength(4)
+    const stopped = await page('role=admin&orglabels=60&labelpage=stopped')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(10)
+    const small = await page('role=admin&orglabels=60&labelpage=small,counting')
+    expect(small.answer.rows).toHaveLength(5)
+    expect(small.answer.counting).toBe(true)
+    expect((await page('role=admin&labelpage=error')).answer.error).toContain('fails')
+    // only an admin reads the list
+    expect((await page('')).answer.error).toContain('only organization admins')
+  }, 60_000)
 
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')

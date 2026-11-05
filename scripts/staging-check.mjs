@@ -34,7 +34,11 @@
  * whose figures, sentence and lists must count exactly those two, then
  * opens its project's Overview, whose health table (overview.health) must
  * hold that sub-project's row with those two tasks' figures, and opens the
- * sub-project's Board from the row (ui/overview). Every task, comment,
+ * sub-project's Board from the row (ui/overview). It makes a label with
+ * its run tag over REST and puts it on a fixture task, opens Settings ›
+ * Labels on the deployment's live batches (labels.settingsPage), finds the
+ * label by search with its count of active tasks, renames it in place and
+ * deletes it in its window (ui/settings-labels). Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
  * refused, and removes everything it made, also after a failure
@@ -1380,6 +1384,8 @@ async function appMessages(call, arg) {
  *     the signed-in app, so no credential of a run outlives a REST outage;
  *  2. with a temporary token for REST reads, projects (with their tasks,
  *     comments, files, grants and milestones), tasks elsewhere and teams;
+ *     then, with or without that token, labels, which only the app
+ *     deletes;
  *  3. the agents, each confirmed gone;
  *  4. the temporary token, then a fresh read of every list to prove that
  *     nothing with the tag is left.
@@ -1525,6 +1531,22 @@ async function sweep(tag, label) {
           })
       })
     }
+    // labels, which only the app deletes, so they go without the token too
+    await step('labels', async () => {
+      const labels = (
+        await evaluate(app, () =>
+          window.PLANNER.orgLabels().map((l) => ({ id: l.id, name: l.name })),
+        )
+      ).filter((l) => matches(l.name))
+      for (const label of labels)
+        await step(`label ${label.name}`, async () => {
+          expect(
+            await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
+            'the app could not delete it',
+          )
+          note(`label ${label.name}`)
+        })
+    })
 
     // 3. the agents, whose keys went in phase 1. The app removes an agent
     // in the background, so each removal is confirmed on the server.
@@ -1556,6 +1578,7 @@ async function sweep(tag, label) {
         ].filter((p) => matches(p.name))
         const tasks = await findTasks(cleaner, tag)
         const teams = (await readList(cleaner, '/teams')).filter((t) => matches(t.name))
+        const labels = (await readList(cleaner, '/labels')).filter((l) => matches(l.name))
         const users = (await readList(cleaner, '/users')).filter(
           (u) => u.kind === 'agent' && matches(u.name),
         )
@@ -1563,6 +1586,7 @@ async function sweep(tag, label) {
           [projects.length, 'project'],
           [tasks.length, 'task'],
           [teams.length, 'team'],
+          [labels.length, 'label'],
           [users.length, 'agent'],
         ].filter(([n]) => n > 0)
         expect(
@@ -3703,6 +3727,90 @@ async function overviewCheck() {
   })
 }
 
+/** The step that checks Settings › Labels (settingsLabelsCheck). */
+export const LABELS_STEP = 'ui/settings-labels'
+
+/** What Settings › Labels shows for the run's label on its one fixture
+ *  task (settingsLabelsCheck): its count of active tasks, and the sentence
+ *  of its delete window. */
+export const LABELS_EXPECTED = {
+  count: '1 active task',
+  confirm:
+    'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
+}
+
+/** Settings › Labels on the deployment's live batches (labels.settingsPage):
+ *  the run makes `<tag> Label` over REST and puts it on its fixture task
+ *  Alpha, then in the app the page reaches its ok state, a search for the
+ *  label lists it alone, from the deployment's answer rather than kept in
+ *  the page, with LABELS_EXPECTED.count, a rename in place with Enter
+ *  reaches GET /labels, and its delete window says LABELS_EXPECTED.confirm
+ *  and deletes it, which GET /labels then no longer lists. A count reads
+ *  Counting… only while a label count backfill runs on the deployment, and
+ *  the step then fails with that reason. The sweep finds a label a failure
+ *  left by its tag. It runs while the run's tasks are active, after
+ *  ui/overview. */
+async function settingsLabelsCheck() {
+  const w = run.creds.writeToken
+  await check(LABELS_STEP, async () => {
+    const label = await restOk(w, 'POST', '/labels', {
+      name: `${run.tag} Label`,
+      color: '#2563EB',
+    })
+    await restOk(w, 'PATCH', `/tasks/${run.t0.key}`, { add_labels: [label.id] })
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-labels`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator('[data-org-labels][data-labels-state="ok"]').waitFor({ timeout: 60_000 })
+    await app.locator('[data-labels-search]').fill(label.name)
+    const rows = app.locator('[data-org-labels] [data-label-row]')
+    const row = app.locator(`[data-org-labels] [data-label-row="${label.id}"]`)
+    expect(
+      await until(async () => (await rows.count()) === 1 && (await row.count()) === 1),
+      `a search for ${label.name} does not list it alone`,
+    )
+    eq(await row.locator('[data-label-kept]').count(), 0, 'kept rows')
+    const count = async () =>
+      ((await row.locator('[data-label-count]').first().textContent()) ?? '').trim()
+    expect(
+      (await count()) !== 'Counting…',
+      'the counts read Counting…, so a label count backfill runs on this deployment',
+    )
+    expect(
+      await until(async () => (await count()) === LABELS_EXPECTED.count),
+      `its count reads ${short(await count())}, not ${LABELS_EXPECTED.count}`,
+    )
+    const renamed = `${run.tag} Label renamed`
+    const name = row.locator('[data-label-name]')
+    await name.fill(renamed)
+    await name.press('Enter')
+    expect(
+      await until(async () =>
+        (await readList(w, '/labels')).some((l) => l.id === label.id && l.name === renamed),
+      ),
+      'GET /labels does not name it renamed',
+    )
+    await row.locator('[data-delete-label]').click()
+    const window = app.locator('[data-modal-shell]')
+    await window.waitFor({ timeout: 10_000 })
+    eq(
+      ((await window.locator('[data-label-delete-sentence]').textContent()) ?? '').trim(),
+      LABELS_EXPECTED.confirm,
+      'the delete window',
+    )
+    await window
+      .locator('button')
+      .filter({ hasText: /^Delete$/ })
+      .click()
+    expect(await until(async () => (await row.count()) === 0), 'its row did not go')
+    expect(
+      await until(async () => !(await readList(w, '/labels')).some((l) => l.id === label.id)),
+      'GET /labels still lists it',
+    )
+    return `found ${label.name} by search with ${LABELS_EXPECTED.count}, renamed it in place and deleted it in its window`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -5102,6 +5210,8 @@ async function main() {
   await boardCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
+  // Settings › Labels with a label of its own on a fixture task
+  await settingsLabelsCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

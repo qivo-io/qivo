@@ -8347,8 +8347,10 @@ export const PLANNER = {
   },
   /* one curated list for the whole organization (0078). `orgId` picks which:
      the blend (0081) also carries a host org's vocabulary, and a label only
-     attaches to tasks of its OWN org (the 0028 trigger). Defaults to home —
-     Settings › Labels curates that one. */
+     attaches to tasks of its OWN org (the 0028 trigger). Defaults to home.
+     Settings › Labels lists its rows from the server (labels.settingsPage)
+     and reads this catalogue for its duplicate-name check and to paint its
+     rows' names and colors. */
   orgLabels: (orgId?: string) => {
     const org = orgId || PLANNER.homeOrg
     return PLANNER.labels.filter((l) => l.org === org)
@@ -11945,8 +11947,15 @@ export const PLANNER = {
 
   /** Renames or recolors a label. Returns false when nothing was written,
       either refused with a toast or already stored, so an inline editor
-      can put the stored name back. */
-  updateLabel: (id: string, patch: { name?: string; color?: string }): boolean => {
+      can keep or put back its text. `save` is a settings field's draft
+      (FieldSave). Its base goes out as the value seen, so the server
+      refuses a rename over someone else's change, and a refusal keeps the
+      draft. Without it the values on screen go out, as for a recolor. */
+  updateLabel: (
+    id: string,
+    patch: { name?: string; color?: string },
+    save: FieldSave = {},
+  ): boolean => {
     const row = rows.labels.get(id)
     if (!row || refusePausedEdit()) return false
     const wire: FunctionArgs<typeof api.labels.update>['patch'] = {}
@@ -11976,7 +11985,8 @@ export const PLANNER = {
       },
     }
     void send(api.labels.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('labels', row, Object.keys(wire)),
+      over: overOf('labels', row, Object.keys(wire), save.seen),
+      ...fieldSendOptions(save),
     })
     return true
   },

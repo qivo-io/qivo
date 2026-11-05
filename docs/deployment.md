@@ -189,7 +189,13 @@ on the row's name must open the sub-project's Board on the deployment's
 answer. That needs a backend from the release that added `overview.health`
 or later, whose organization counts are whole, as
 `internal/overviewCountsBackfill` left them. Against an older backend, or
-while the counts read **Counting…**, the step fails. After that it checks
+while the counts read **Counting…**, the step fails. Next it makes a label
+with its run tag over REST, puts it on one of its fixture tasks, opens
+**Settings → Labels** on the deployment's batches (`labels.settingsPage`),
+finds the label by search with **1 active task**, renames it in place and
+deletes it in its delete window (`ui/settings-labels`). While a label count
+backfill runs on the deployment, the counts read **Counting…** and that step
+fails. After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
@@ -582,6 +588,14 @@ release that first does so changes no server function, so it has no server
 change, no step and no rollback floor. An older app works against its
 backend, and it works against an older backend that has the task window's
 read.
+
+Settings › Labels reads its rows 25 at a time from `labels.settingsPage`,
+which v0.1.97 (`92434062`) first shipped, and keeps the batches it loaded
+live while the page shows. The release that switches the page to it
+changes no server function, so it has no server change, no release step and
+no new rollback floor. An older app works against its backend, and this app
+works against any backend from v0.1.97 on, which the floors above already
+hold.
 
 ## Node.js version
 

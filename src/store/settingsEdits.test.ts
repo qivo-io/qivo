@@ -308,6 +308,34 @@ describe('settings edits through the client store', () => {
       expect(latest().args.expected).toEqual({ description: 'Old text' })
     })
 
+    it('sends it from updateLabel, the value on screen without it, and keeps the draft a rename refused', async () => {
+      P.updateLabel('l-feat', { name: 'Firmware' })
+      expect(latest().args.expected).toEqual({ name: 'Feature' })
+      const kept: unknown[] = []
+      const save = {
+        seen: { name: 'Feature' },
+        keepDraft: (shown: unknown, by: unknown) => {
+          kept.push([shown, by])
+          return true
+        },
+        keepUnsaved: () => kept.push('keepUnsaved'),
+      }
+      // the field began before the first save's paint, which the screen shows
+      expect(P.labelById['l-feat'].name).toBe('Firmware')
+      expect(P.updateLabel('l-feat', { name: 'Field test' }, save)).toBe(true)
+      expect(latest().args.expected).toEqual({ name: 'Feature' })
+      latest().reject(changed('label', 'l-feat', 'name'))
+      // a recolor sends the color on screen
+      P.updateLabel('l-feat', { color: '#DC2626' })
+      expect(latest().args.expected).toEqual({ color: '#2563EB' })
+      latest().reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
+      await settle()
+      expect(kept).toEqual([[undefined, { name: 'Ana' }]])
+      expect(showToast.mock.calls.map(([message]) => message)).toContain(
+        'The server said no. Change reverted.',
+      )
+    })
+
     it('sends it from both writes of updateUser', () => {
       P.updateUser('u-ana', { name: 'Ana Berg' })
       expect(latest()).toMatchObject({

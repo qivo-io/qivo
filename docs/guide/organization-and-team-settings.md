@@ -211,11 +211,29 @@ and a message says who can no longer see how many tasks.
 
 ## Labels
 
-**Organization → Labels** holds the shared label list. Renaming a label updates
-it everywhere. Click its color dot and choose a swatch to save a new color.
-Escape or clicking outside cancels without changes. Before deletion, Qivo
-shows how many tasks use the label. New organizations start with
-**Electronics** and **Mechanical**.
+**Organization → Labels** holds the shared label list. It shows 25 labels in
+name order, and **Load more** adds the next 25. The search box finds any
+label by the words of its name, in any order, ignoring case and accents,
+also labels the list has not shown yet.
+
+Each label shows how many active tasks use it across the organization:
+open tasks and Done tasks not yet archived, in every project, archived
+projects included. Where Qivo has no count yet, the label reads
+**Counting…** while Qivo counts the organization's labels, or **Not counted
+yet**, never 0.
+
+Renaming a label updates it everywhere. If someone else renames the same
+label while you type, your text stays and a line under the name says what
+it was changed to, with **Use saved** and **Keep mine**. Click its color dot
+and choose a swatch to save a new color. Escape or clicking outside cancels
+without changes. A label you created or renamed shows at the top of the
+list while the loaded labels do not include it, and so does one whose name
+you are still editing when you search.
+
+**Delete** asks first. The window says how many active tasks use the label
+when Qivo has counted them, and that deleting it removes it from all tasks,
+archived tasks included. Deleting a label cannot be undone. New
+organizations start with **Electronics** and **Mechanical**.
 
 People with task-editing access can apply labels. Organization admins manage
 the list in Settings. Organization users with User or Lead access to a

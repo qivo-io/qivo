@@ -6,10 +6,12 @@ import {
   parseSeedArgs,
   planArchive,
   planInbox,
+  planLabels,
   planRelations,
   planSeed,
   relationId,
   runBoardScaleSeed,
+  seededLabelName,
   seededTask,
   seededTasks,
   threeByteText,
@@ -174,6 +176,79 @@ describe('board-scale-seed', () => {
     // no tasks hold no inbox items
     expect(parseSeedArgs([...local, '--tasks', '0']).inbox).toBe(0)
     expect(() => parseSeedArgs([...local, '--tasks', '0', '--inbox', '1'])).toThrow(/--inbox/)
+  })
+
+  it('takes a label count from 0 to 500, with or without tasks', () => {
+    expect(parseSeedArgs(local).labels).toBe(0)
+    expect(parseSeedArgs([...local, '--tasks', '0', '--labels', '60']).labels).toBe(60)
+    expect(parseSeedArgs([...local, '--labels', '500']).labels).toBe(500)
+    for (const labels of ['-1', '2.5', '501', 'many'])
+      expect(() => parseSeedArgs([...local, '--labels', labels])).toThrow(
+        '--labels takes a whole number from 0 to 500.',
+      )
+    expect(() => parseSeedArgs([...local, '--labels'])).toThrow('--labels needs a value.')
+  })
+
+  it('plans labels with ordinary names on a few tasks each, and only what a run left missing', () => {
+    expect([0, 1, 9, 10, 59].map(seededLabelName)).toEqual([
+      'Field test 01',
+      'Supplier review 01',
+      'Release notes 01',
+      'Field test 02',
+      'Release notes 06',
+    ])
+    const tasks = ['t1', 't2', 't3', 't4', 't5']
+    const first = planLabels({ org: 'o', count: 8, present: [], tasks, on: new Map() })
+    expect(first.create).toHaveLength(8)
+    expect(new Set(first.create.map((c) => c.id)).size).toBe(8)
+    expect(first.create[0]).toMatchObject({ org_id: 'o', name: 'Field test 01' })
+    expect(first.create.every((c) => /^#[0-9A-F]{6}$/.test(c.color))).toBe(true)
+    // label n goes on n % 4 tasks, so the counts differ and some are 0
+    const onEach = first.create.map((c) => first.toggle.filter((t) => t.label_id === c.id).length)
+    expect(onEach).toEqual([0, 1, 2, 3, 0, 1, 2, 3])
+    expect(first.toggle.every((t) => t.on === true && tasks.includes(t.issue_id))).toBe(true)
+    // a second run makes and puts on nothing new; a name held in any case
+    // counts as made, and its own id is used
+    const held = first.create.map((c, n) => ({ id: n === 1 ? 'mine' : c.id, name: c.name }))
+    held[1].name = 'SUPPLIER REVIEW 01'
+    const on = new Map()
+    for (const t of first.toggle) on.set(t.issue_id, [...(on.get(t.issue_id) ?? []), t.label_id])
+    const again = planLabels({ org: 'o', count: 8, present: held, tasks, on })
+    expect(again.create).toEqual([])
+    expect(again.toggle).toEqual([
+      {
+        org_id: 'o',
+        issue_id: first.toggle.find((t) => t.label_id === first.create[1].id).issue_id,
+        label_id: 'mine',
+        on: true,
+      },
+    ])
+    // a task at the label cap takes no more
+    const full = new Map([['t1', Array.from({ length: LIMITS.labels.max }, (_, i) => `x${i}`)]])
+    const capped = planLabels({ org: 'o', count: 8, present: [], tasks: ['t1'], on: full })
+    expect(capped.toggle).toEqual([])
+    // no task: labels only
+    expect(
+      planLabels({ org: 'o', count: 3, present: [], tasks: [], on: new Map() }).toggle,
+    ).toEqual([])
+  })
+
+  it('keeps a seeded label a person renamed and adds only the labels after it', () => {
+    const tasks = ['t1', 't2', 't3', 't4', 't5']
+    const first = planLabels({ org: 'o', count: 4, present: [], tasks, on: new Map() })
+    const on = new Map()
+    for (const t of first.toggle) on.set(t.issue_id, [...(on.get(t.issue_id) ?? []), t.label_id])
+    // a person renames "Bench rig 01", seeded label 2, then a run asks for 8
+    const renamed = first.create[2].id
+    const present = first.create.map((c) => ({
+      id: c.id,
+      name: c.id === renamed ? 'Bench trials' : c.name,
+    }))
+    const again = planLabels({ org: 'o', count: 8, present, tasks, on })
+    expect(again.create.map((c) => c.name)).toEqual([4, 5, 6, 7].map(seededLabelName))
+    expect(again.create.map((c) => c.id)).not.toContain(renamed)
+    // its tasks carry it already, so nothing goes on them again
+    expect(again.toggle.filter((t) => t.label_id === renamed)).toEqual([])
   })
 
   it('takes an archived count up to the task count', () => {
