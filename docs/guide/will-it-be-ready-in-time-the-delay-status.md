@@ -63,8 +63,10 @@ due date.
 - **Task window** shows **Currently delayed** or **Delayed** beside Due.
   Hover for the projected finish week. A missed or projected-to-miss deadline
   outlines Due in red. While tasks still load, or for a task that has not
-  loaded yet, it says **Delay unknown** when the projection needs the
-  owner's other work, and a passed due date still shows **Overdue**. A task
+  loaded yet, Qivo reads the owner's other work from the server, as for a
+  Board card, and the window shows the same verdict as the card. It shows
+  nothing while that work is on its way, and says **Delay unknown** only
+  where it cannot be read. A passed due date shows **Delayed**. A task
   with subtasks takes its delay from its subtasks' dates, not from anyone's
   other work, so it says **Delay unknown** only while some of those dates
   have not loaded.

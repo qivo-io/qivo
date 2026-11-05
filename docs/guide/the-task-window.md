@@ -169,9 +169,18 @@ subtask or linked task that has not loaded into the workspace yet keeps its
 **×** disabled with **Available once every task has loaded**, because
 removing it waits for every task.
 
-A task you open from these lists, or from Search, before it has loaded into
-the workspace shows at once, read from the server: its fields, labels,
-description, comments and lists. If you can edit its project, you can
+A task you open from these lists, from Search, from a link, a bookmark,
+Back or Forward, or from an Inbox row before it has loaded into the
+workspace shows at once, read from the server: its fields, labels,
+description, comments and lists. Until the server answers, the window says
+**Loading QN-12…**, or **Loading this task…** when it knows no number yet.
+A task the server will not show says **QN-12 can't be opened. It may not
+exist, or you may not have access to it.**, the same for every reason, and
+the window and its address stay until you close it. If Qivo cannot reach
+the server, the window says **Couldn't open QN-12.**, with **Retry**. A
+task you open by the number in its link takes no change, which says
+**Available once Qivo can check this task for changes**, until the window
+has read the task on its own, a moment later. If you can edit its project, you can
 change it at once: its fields, its description and the images in it, its
 labels and its files, and **Remove parent**. Each change shows at once and
 is saved against the task as the window showed it, so a change someone else
@@ -343,8 +352,11 @@ While the parent's project is being moved to Deleted items, Qivo refuses
 the restore for everyone until the move finishes.
 Parents restored this way send no **Restored** update. Restoring a Done task
 restarts its auto-archive clock. Archived tasks appear only in **Archived
-tasks** and in Search with **Include archived tasks** on, and shared task
-links work again only after restoration.
+tasks** and in Search with **Include archived tasks** on. A shared link to an
+archived task opens it read-only under the note that it was archived, with
+**Restore** for someone who can edit its project. When its project is
+archived too, the note says so: restore the project first, then the task
+from Archived tasks.
 
 When someone else archives a task you have open, its window stays, says the
 task was archived and shows the task read-only under that note. If you can

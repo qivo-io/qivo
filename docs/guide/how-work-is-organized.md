@@ -130,8 +130,8 @@ parents. Use **Move** to relocate an existing task while keeping its ID.
 Qivo assigns `QN-1`, `QN-2`, … from one counter per organization. Numbers do
 not change or get reused. Moving a task between projects or sub-projects in
 the organization keeps its number and labels. Task links still require
-access to the task, and archived or deleted tasks must be restored before
-they open.
+access to the task. A link to an archived task opens it read-only, and
+deleted tasks must be restored before their links open.
 
 ## Archiving a project. Putting a finished one away
 

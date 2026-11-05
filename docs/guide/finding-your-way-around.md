@@ -242,10 +242,18 @@ own paths, `…/board/all` and `…/board/mine`. Opening a task adds
 `/tasks/qn-482`, so a reload preserves both task and scope.
 
 Copying a task link uses its short permanent address. Opening that link
-keeps a saved My view scope if the task is yours; otherwise, it opens the
-task's project. Recipients still need access. Restore archived tasks from
-Archived tasks before opening their links ([Archiving](./the-task-window.md#archiving)),
-and deleted ones from Deleted items.
+shows the task at once, read from the server, also before every task has
+loaded, and the same goes for a bookmark, a reload and Back or Forward to a
+task. A link opens the task in the organization its address names, never
+another organization's task with the same number. Opening it keeps a saved
+My view scope if the task is yours; otherwise, once the task has loaded, it
+opens the task's project. Recipients still need access. A link to an
+archived task opens it read-only, with **Restore** for someone who can edit
+its project ([Archiving](./the-task-window.md#archiving)). A link to a task
+you cannot open says that it can't be opened, the same whether it does not
+exist or you have no access to it; if Qivo cannot reach the server, the
+window says it couldn't open the task, with **Retry**. Restore deleted tasks
+from Deleted items before opening their links.
 
 ## Keyboard, in brief
 
