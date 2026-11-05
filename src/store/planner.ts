@@ -167,6 +167,11 @@ import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex
 
 export type { UIPrefs } from './preferences'
 
+import type {
+  RelationCandidate,
+  RelationCandidates,
+  RelationKind,
+} from '../../convex/lib/relationPicker'
 import type { ViewRow } from '../../convex/lib/viewReads'
 import type { Seatless, Workspace } from '../../convex/lib/workspaceJoin'
 import {
@@ -611,15 +616,34 @@ export type RelatedTaskVM = {
       the answer */
   isGroup: boolean
   done: boolean
-  /** whether the workspace holds it, which removing it needs */
+  /** whether the workspace holds it; a removal of one it does not hold
+      sends from this row (P.setSubtaskParent, P.unlinkTasks) */
   held: boolean
+  /** the person's level on its project: the workspace's for a task it
+      holds, else the answer's, which a removal's control reads together
+      with the workspace's, so a stale source only takes it away */
+  level: ShortRow['level'] | null
   remaining: number | undefined
 }
+/** A task a Subtasks change edits, as the window showed it, for
+    P.setSubtaskParent: a Subtasks picker's row
+    (convex/lib/relationPicker.ts RelationCandidate) or a row of the
+    window's Subtasks list. `row` is the short row the window's list
+    shows once it is a subtask, which a pick needs; `parent` and
+    `hiddenParent` are its parent as the person saw it, the write's
+    expected values. */
+export type SubtaskEnd = {
+  uuid: string
+  row?: RelationCandidate
+  parent: string | null
+  hiddenParent: boolean
+}
+
 /** A row of Linked tasks: the other task, the relation as seen from the
     open task (blocks, blocked_by or relates), and whether the workspace
-    holds the link row itself (`linkHeld`). Removing a link edits that row
-    and sends the kind it shows as the one expected, so a link the answer
-    alone holds, as during a held transition, cannot be removed yet. */
+    holds the link row itself (`linkHeld`). Removing a link sends the kind
+    the row shows as the one expected, whether the workspace or only the
+    links answer holds it. */
 export type LinkedTaskVM = RelatedTaskVM & { type: string; linkHeld: boolean }
 
 /** One of the watched task's sections: where its list stands
@@ -1617,6 +1641,7 @@ function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM |
       isGroup: PLANNER.isGroup(it),
       done: PLANNER.isDone(it),
       held: true,
+      level: levelOf(PLANNER.levelOn(it.project)),
       remaining: it.remaining,
     }
   if (!short) return null
@@ -1634,8 +1659,17 @@ function relatedTask(uuid: string, short: ShortRow | undefined): RelatedTaskVM |
     // a short group's leaves are not in the answer
     done: !short.has_subtasks && short.status === 'done',
     held: false,
+    level: short.level,
     remaining: short.remaining_hours != null ? Number(short.remaining_hours) : undefined,
   }
+}
+
+/** Level `level` as a short row names it (convex/lib/taskWindow.ts
+    ShortRow), or null for none or any other text. */
+function levelOf(level: string | null | undefined): ShortRow['level'] | null {
+  return level === 'lead' || level === 'user' || level === 'viewer' || level === 'admin'
+    ? level
+    : null
 }
 
 /* Whether two rows hold the same fields, as a paint's copy of an untouched
@@ -3496,9 +3530,12 @@ function moveHandles(moved: ReadonlyMap<string, string>) {
 type WriteAbout = {
   task?: string
   background?: boolean
-  /** a write on a task the window shows from its own answer, which the
-      workspace does not hold (answerTaskOf), so a later guard against
-      writes that need every task can tell it apart by this mark */
+  /** a write whose task or other end comes from a server answer rather
+      than the workspace: the task the window shows from its own answer
+      (answerTaskOf), a task a relation picker offered or a row of the
+      window's Subtasks or Linked tasks that the workspace does not hold,
+      so a later guard against writes that need every task can tell it
+      apart by this mark */
   answer?: true
 }
 
@@ -3954,8 +3991,15 @@ function withClockAhead(paint: () => void): number {
 
 /** Test builds only: breaks the layer rules on purpose, so a test sees
     checkLayers catch it (layerGuard.test.ts). */
+/* In tests, the writes sent with the mark of a write from a server answer
+   (WriteAbout.answer), by name, in order, for __layerProbe. */
+const answerMarked: string[] = []
+
 export const __layerProbe = STRICT_LAYERS
   ? {
+      /** The writes sent since the last call with the mark of a write
+          from a server answer (WriteAbout.answer), by name, in order. */
+      answerMarks: () => answerMarked.splice(0),
       /** The rows in canonical form, without server stamps when `noStamps`,
           and how many layers are live. */
       rows: (noStamps = false) => canonicalRows(noStamps),
@@ -4955,6 +4999,7 @@ function dispatch<M extends FunctionReference<'mutation'>>(
   const name = getFunctionName(mutation)
   if (isPausedWrite(name))
     return Promise.reject(new ConvexError({ code: 'paused', message: pausedText(name) }))
+  if (STRICT_LAYERS && about.answer) answerMarked.push(name)
   const releaseUpdate = beginUpdateBlock()
   const change =
     about.background || BACKGROUND_WRITES.has(name) ? null : describeWrite(name, args, about.task)
@@ -6281,7 +6326,11 @@ export type NewIssueInput = IssuePatch & { project: string }
    updated_at, done_at, remaining_set_at, review_at, status_at, archived_at
    have no slot in the validator either). */
 type IssueWirePatch = FunctionArgs<typeof api.issues.update>['patch']
-function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
+/* `patch` as the wire patch, or null when its `parent` names a task that
+   parentUuidOf cannot resolve, which the caller refuses with
+   PARENT_UNKNOWN rather than sending a detach. `parentRow` is the row a
+   picker showed for a parent the workspace may not hold. */
+function mapIssuePatch(patch: IssuePatch, parentRow?: { id: string }): IssueWirePatch | null {
   const db: IssueWirePatch = {}
   if ('title' in patch) db.title = cleanTitle(patch.title)
   // required column; drawer commits null to clear. Painted as the server
@@ -6291,7 +6340,11 @@ function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   if ('priority' in patch) db.priority = patch.priority
   if ('assignee' in patch) db.assignee_id = patch.assignee || null
   if ('reviewer' in patch) db.reviewer_id = patch.reviewer || null
-  if ('parent' in patch) db.parent_id = patch.parent ? keyToUuid.get(patch.parent) || null : null
+  if ('parent' in patch) {
+    const parent = patch.parent ? parentUuidOf(patch.parent, parentRow) : null
+    if (parent === undefined) return null
+    db.parent_id = parent
+  }
   if ('start' in patch) db.start_week = patch.start != null ? weekToISO(patch.start) : null
   if ('end' in patch) db.end_week = patch.end != null ? weekToISO(patch.end) : null
   if ('due' in patch) db.due_date = patch.due || null
@@ -6303,6 +6356,59 @@ function mapIssuePatch(patch: IssuePatch): IssueWirePatch {
   if ('paused' in patch) db.paused = !!patch.paused
   return db
 }
+/* What a write says when the parent it names is a task Qivo cannot find
+   here: a handle the workspace does not hold, which a picker's row did not
+   name either. It sends nothing, rather than a detach or a top-level task. */
+const PARENT_UNKNOWN = "Couldn't set the parent task, because Qivo cannot find it here."
+
+/** The uuid of the task `parent` names, a handle or a uuid: a task the
+    workspace holds by either, `row`, the task a relation picker showed, by
+    its uuid, or the task the window shows from a current answer
+    (answerTaskOf). Undefined for anything else, which the write refuses
+    (PARENT_UNKNOWN). */
+function parentUuidOf(parent: string, row?: { id: string }): string | undefined {
+  const held = keyToUuid.get(parent)
+  if (held) return held
+  if (rows.issues.has(parent) || row?.id === parent) return parent
+  return answerTaskOf(parent)?.uuid
+}
+
+/** New task `row`, whose number is `num`, as the short row the window's
+    answer lists it by (convex/lib/taskWindow.ts ShortRow), with the
+    person's `level` on its project. */
+function newShortRow(
+  row: Row<'issues'>,
+  num: number,
+  has_subtasks: boolean,
+  level: ShortRow['level'],
+) {
+  const { description: _text, parent_id: _parent, ...fields } = row
+  return { ...fields, num, has_subtasks, level } satisfies ShortRow
+}
+
+/** Paints the window's own answer of task `parent` (detailRows) as the
+    server answers it once task `kid` is its subtask, or with `kid` null
+    once task `gone` is not: the list in number order, the group fact, and
+    the hours a task loses when it gains a subtask (clearParentHours).
+    Skips while another task's answer is painted. */
+function subtaskListPaint(parent: string, kid: ShortRow | null, gone: string, at: string) {
+  const shown = detailRows.task
+  if (!shown || shown.task.id !== parent) return
+  const rest = shown.subtasks.rows.filter((row) => row.id !== gone)
+  if (kid) rest.push({ ...kid })
+  rest.sort(byNumber)
+  shown.subtasks = { ...shown.subtasks, rows: rest }
+  shown.task.has_subtasks =
+    rest.length > 0 || !shown.subtasks.complete || shown.task.has_hidden_subtasks
+  const task = shown.task
+  if (kid && (task.remaining_hours != null || task.review_at != null)) {
+    task.remaining_hours = undefined
+    task.remaining_set_at = undefined
+    task.review_at = undefined
+    task.updated_at = at
+  }
+}
+
 /* The remaining time a task in this sub-project gets on entering Review: its
    own review_hours, else its parent project's, else the default. The same
    resolver the server's reviewHoursFor uses, so the paint never flickers. */
@@ -6345,6 +6451,7 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     }
   }
   const wire = mapIssuePatch(patch)
+  if (!wire) return Promise.resolve(false)
   const shown: Record<string, unknown> = { ...row }
   for (const key of Object.keys(wire) as (keyof typeof wire)[])
     if ((wire[key] ?? null) === (shown[key] ?? null)) delete wire[key]
@@ -6381,6 +6488,11 @@ type UpdateOptions = {
   seen?: Partial<Row<'issues'>>
   keepDraft?: (shown: unknown) => boolean
   keepUnsaved?: () => void
+  /** for a `parent` the workspace may not hold, the row the Parent picker
+      showed for it (convex/lib/relationPicker.ts RelationCandidate): it
+      names the parent by its uuid, and the window paints its Parent row
+      from it at once */
+  parentRow?: RelationCandidate
 }
 
 /** Puts label `labelId` on task `uuid` in the workspace's rows, or takes
@@ -6882,8 +6994,10 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
 
 /** P.updateIssue on the watched task the window shows from its own answer
     (answerTaskOf), which the workspace does not hold. It takes every field
-    the window offers and Remove parent, a `parent` of null; any other
-    parent answers false (t3/limits-relation-pickers widens it). The held
+    the window offers, Remove parent (a `parent` of null) and a parent the
+    Parent picker offered, named by its uuid with its row in
+    `opts.parentRow`, which the window's Parent row shows at once; a
+    parent without that row is refused (PARENT_UNKNOWN). The held
     path's rules hold, read from the answer: the text caps, a new holder's
     sight of the tasks above (P.unseenAbove reads the answer's parent; a
     hidden parent and the parent's own parent are left to the server), a
@@ -6899,8 +7013,14 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
     the answer (WriteAbout). It joins no Roadmap history: the Roadmap opens
     only once every task is held. */
 function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
-  if ('parent' in patch && patch.parent !== null) return Promise.resolve(false)
   if (refusePausedEdit()) return Promise.resolve(false)
+  // a new parent comes from the Parent picker's row, which the window's
+  // Parent row is painted from
+  const parentRow = patch.parent && opts.parentRow?.id === patch.parent ? opts.parentRow : null
+  if (patch.parent && !parentRow) {
+    toast(PARENT_UNKNOWN, 'error')
+    return Promise.resolve(false)
+  }
   // text the server would refuse is refused before the paint, as on the
   // held path
   if ('title' in patch && refuseOver(LIMITS.title, cleanTitle(patch.title)))
@@ -6934,7 +7054,11 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   const row = a.answer.task
   const uuid = a.uuid
   const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
-  const wire = mapIssuePatch(asked)
+  const wire = mapIssuePatch(asked, parentRow ?? undefined)
+  if (!wire) {
+    toast(PARENT_UNKNOWN, 'error')
+    return Promise.resolve(false)
+  }
   // as on the held path, a field sent with the value the person saw stays
   // unsent; a detach from a parent the person cannot see is a change
   for (const key of Object.keys(wire) as (keyof typeof wire)[]) {
@@ -6954,13 +7078,17 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
   // a view's row sends no text
   const viewDb = { ...paintDb }
   delete viewDb.description
-  const detach = 'parent_id' in paintDb
+  // a detach, or a new parent, replaces a hidden parent too
+  const parentChange = 'parent_id' in paintDb
+  const newParent = paintDb.parent_id ?? null
   const prevDesc = String(row.description || '')
   const at = new Date().toISOString()
+  // the new parent's short row as the window's next answer holds it
+  const parentShort = newParent && parentRow ? parentShortOf(parentRow, at) : null
   const viewPart = viewPaint([uuid], () => {
     for (const copy of viewRows.edit(uuid)) {
       stampTaskPatch(copy, viewDb, at)
-      if (detach) copy.has_hidden_parent = false
+      if (parentChange) copy.has_hidden_parent = false
     }
   })
   if ('description' in paintDb) unsentText.set(viewPart, uuid)
@@ -6971,10 +7099,10 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
         const shown = detailRows.task
         if (!shown || shown.task.id !== uuid) return
         stampTaskPatch(shown.task, paintDb, at)
-        // the parent goes, a hidden one too
-        if (detach) {
+        // the parent goes, a hidden one too, or the new one shows
+        if (parentChange) {
           shown.task.has_hidden_parent = false
-          shown.parent = null
+          shown.parent = parentShort ? { ...parentShort } : null
         }
       },
     },
@@ -6982,9 +7110,10 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
     // skips until the workspace holds the task, then paints it as the held
     // path does
     workspace: () => {
+      clearParentHours(newParent, at)
       if (!rows.issues.has(uuid)) return
       patchIssueRow(uuid, paintDb, at)
-      if (detach) rows.hiddenParentTasks.delete(uuid)
+      if (parentChange) rows.hiddenParentTasks.delete(uuid)
       if ('description' in paintDb)
         paintDescriptionImages(uuid, prevDesc, String(paintDb.description || ''), at)
     },
@@ -6998,6 +7127,43 @@ function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions)
     keepUnsaved: opts.keepUnsaved,
     about: { task: uuid, answer: true },
   })
+}
+
+/** A link of `kind` from task `from` to task `to`, as seen from `from`, in
+    the form the server stores it (convex/model/links.ts storedLink): a
+    blocks link runs from the blocking task, a blocked_by one flips, and a
+    relates link is ordered by uuid. Answers its source, target and type. */
+function storedLinkOf(
+  from: string,
+  kind: string,
+  to: string,
+): [string, string, Row<'issue_links'>['type']] {
+  if (kind === 'blocks') return [from, to, 'blocks']
+  if (kind === 'blocked_by') return [to, from, 'blocks']
+  return from < to ? [from, to, 'relates'] : [to, from, 'relates']
+}
+
+/** Picker row `row` as the short row the window's answer lists it by
+    (convex/lib/taskWindow.ts ShortRow), without the picker's own fields,
+    with whether it has subtasks, which a pick decides. */
+function shortOfCandidate(row: RelationCandidate, has_subtasks: boolean): ShortRow {
+  const { parent_id: _parent, has_hidden_parent: _hidden, exact: _exact, ...fields } = row
+  return { ...fields, has_subtasks }
+}
+
+/** Picker row `row` as the short row of a new parent (convex/lib/taskWindow.ts
+    ShortRow) the window's answer holds once the server attached the
+    opened task under it: a group, without the row's own hours, which a
+    parent loses when it gains a subtask (clearParentHours). */
+function parentShortOf(row: RelationCandidate, at: string): ShortRow {
+  const short = shortOfCandidate(row, true)
+  if (short.remaining_hours != null || short.review_at != null) {
+    short.remaining_hours = undefined
+    short.remaining_set_at = undefined
+    short.review_at = undefined
+    short.updated_at = at
+  }
+  return short
 }
 
 /* Paints the issues.update wire patch `db` on task `uuid` at `at`, with the
@@ -9289,7 +9455,11 @@ export const PLANNER = {
       and the server's answer fixes it. A caller that keeps the handle
       follows it with P.watchHandles. `onRefused` hears the handle shown just
       before the refusal takes the task away, so an open preview can close
-      first. Returns null for an invalid target (callers take their
+      first. A `parent` names a task the workspace holds, or the task the
+      window shows from a current answer, whose Subtasks list shows the new
+      task at once and whose write is marked as from the answer; any other
+      parent is refused, never created as a top-level task. Returns null
+      for an invalid target or a refused parent (callers take their
       no-create path). */
   addIssue: (it: NewIssueInput, onRefused?: (key: string) => void) => {
     const proj = rows.projects.get(it.project)
@@ -9298,6 +9468,15 @@ export const PLANNER = {
     const orgRow = proj ? rows.orgs.get(proj.org_id) : null
     if (proj?.type !== 'project' || !orgRow) return null
     if (refuseOver(LIMITS.title, cleanTitle(it.title)) || refusePausedEdit()) return null
+    // a parent the workspace does not hold is the task the window shows
+    // from a current answer; any other is refused rather than created as a
+    // top-level task
+    const parentId = it.parent ? parentUuidOf(it.parent) : undefined
+    if (it.parent && !parentId) {
+      if (!PLANNER.refuseStaleEdit(it.parent)) toast(PARENT_UNKNOWN, 'error')
+      return null
+    }
+    const shownParent = parentId && !rows.issues.has(parentId) ? answerTaskOf(parentId) : null
     const uuid = crypto.randomUUID()
     const now = new Date().toISOString()
     const previewNum = (orgRow.next_issue_num || 0) + 1
@@ -9319,7 +9498,7 @@ export const PLANNER = {
       reviewer_id: it.reviewer || undefined,
       reporter_id: reporterId,
       created_by: profileIn(orgRow.id) || undefined,
-      parent_id: it.parent ? keyToUuid.get(it.parent) || undefined : undefined,
+      parent_id: parentId,
       start_week: it.start != null ? weekToISO(it.start) : undefined,
       end_week: it.end != null ? weekToISO(it.end) : undefined,
       due_date: it.due || undefined,
@@ -9345,6 +9524,28 @@ export const PLANNER = {
     const created = { num: null as number | null }
     const paint = newTaskPaint(row, created)
     const preview = handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
+    // the person's level on the new task's project: the window's answer's
+    // for a subtask in the project of the task it shows, else the workspace's
+    const level =
+      (shownParent?.answer.task.project_id === it.project ? shownParent.answer.level : null) ??
+      levelOf(PLANNER.levelOn(it.project)) ??
+      'viewer'
+    // the window's Subtasks list of the parent shows the new task at once
+    const view: View = parentId
+      ? {
+          workspace: paint,
+          detail: {
+            task: parentId,
+            paint: () =>
+              subtaskListPaint(
+                parentId,
+                newShortRow(row, created.num ?? row.num, false, level),
+                uuid,
+                now,
+              ),
+          },
+        }
+      : { workspace: paint }
     void send(
       api.issues.create,
       {
@@ -9365,13 +9566,14 @@ export const PLANNER = {
         remaining_hours: hasRemaining ? Number(it.remaining) : null,
         paused: row.paused,
       },
-      { workspace: paint },
+      view,
       {
         // the server's number, painted while no delivery holds the task yet
         keep: (result) => {
           created.num = result.num
-          return { workspace: paint }
+          return view
         },
+        ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
           toastWriteError(error)
           // the handle on screen, which a delivery may have moved
@@ -9392,6 +9594,11 @@ export const PLANNER = {
      `opts.keepDraft` runs when the server refuses because someone changed
      the field first and the editor keeps the draft, and `opts.keepUnsaved`
      when the save fails for any other reason (SendOptions.keepUnsaved). A
+     `parent` names a task by its handle or its uuid; one the workspace does
+     not hold needs the Parent picker's row of it in `opts.parentRow`, and
+     any other is refused (PARENT_UNKNOWN) rather than sent as a detach. A
+     new parent also paints the window's own answer of the task, so its
+     Parent row shows it where the workspace does not hold the parent. A
      task the workspace does not hold saves from the window's own answer
      while the window shows it from a current one (updateAnswerTask), else
      from a view's row (updateViewTask). */
@@ -9412,11 +9619,19 @@ export const PLANNER = {
       return Promise.resolve(false)
     if ('description' in patch && refuseText(LIMITS.description, patch.description ?? ''))
       return Promise.resolve(false)
+    // a parent the workspace does not hold comes from the Parent picker's
+    // row; any other is refused rather than sent as a detach
+    const parentUuid = patch.parent ? parentUuidOf(patch.parent, opts.parentRow) : null
+    if (parentUuid === undefined) {
+      toast(PARENT_UNKNOWN, 'error')
+      return Promise.resolve(false)
+    }
     // whoever holds a subtask must see every task above it: refuse here, with
-    // the server's reason, before anything is painted (a hidden parent is
-    // left to the server)
+    // the server's reason, before anything is painted (a hidden parent, or
+    // one the workspace does not hold, is left to the server)
     const it = PLANNER.issueById[id]
-    const stranded = it && patch.parent ? PLANNER.parentBlockers(it, patch.parent) : []
+    const parentHandle = parentUuid ? uuidToKey.get(parentUuid) : undefined
+    const stranded = it && parentHandle ? PLANNER.parentBlockers(it, parentHandle) : []
     if (stranded.length) {
       toast(PLANNER.blockerText(stranded[0]), 'error')
       return Promise.resolve(false)
@@ -9457,10 +9672,14 @@ export const PLANNER = {
     }
     const at = new Date().toISOString()
     // attaching a sub-issue clears the new parent's own hours (0066 mirror)
-    const newParent = 'parent' in patch && patch.parent ? keyToUuid.get(patch.parent) : undefined
+    const newParent = parentUuid ?? undefined
     const prevDesc = String(row.description || '') // pre-patch, for the image paint below
     const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
-    const wire = mapIssuePatch(patch)
+    const wire = mapIssuePatch(patch, opts.parentRow)
+    if (!wire) {
+      toast(PARENT_UNKNOWN, 'error')
+      return Promise.resolve(false)
+    }
     // A field sent with the value the person saw changes nothing they
     // chose, such as the start date setEnd sends along, so it stays unsent
     // and cannot undo a change someone made to it meanwhile. Dates compare
@@ -9481,7 +9700,25 @@ export const PLANNER = {
     if (!Object.keys(wire).length) return Promise.resolve(true)
     const paintDb = { ...wire }
     if (PLANNER.isGroup(id)) delete paintDb.status
+    // the window's Parent row of a parent the workspace does not hold reads
+    // the window's own answer (P.shownParent), which a picked one paints
+    const parentShort =
+      parentUuid && opts.parentRow?.id === parentUuid ? parentShortOf(opts.parentRow, at) : null
     const view: View = {
+      ...('parent_id' in paintDb
+        ? {
+            detail: {
+              task: uuid,
+              paint: () => {
+                const shown = detailRows.task
+                if (!shown || shown.task.id !== uuid) return
+                shown.task.parent_id = paintDb.parent_id ?? undefined
+                shown.task.has_hidden_parent = false
+                shown.parent = parentShort ? { ...parentShort } : null
+              },
+            },
+          }
+        : {}),
       workspace: () => {
         clearParentHours(newParent, at)
         patchIssueRow(uuid, paintDb, at)
@@ -9503,6 +9740,10 @@ export const PLANNER = {
         over,
         keepDraft: opts.keepDraft,
         keepUnsaved: opts.keepUnsaved,
+        // a parent the workspace does not hold came from a server answer
+        ...(parentUuid && !rows.issues.has(parentUuid)
+          ? { about: { task: uuid, answer: true as const } }
+          : {}),
       })
     return saved
   },
@@ -9571,11 +9812,23 @@ export const PLANNER = {
       subtasks, which also keep a task from getting a parent
       (convex/lib/limits.ts), so a refusal shows its sentence and takes
       the new task away again. The new task paints at once, with
-      createIssueCore's defaults. */
-  createParent: (id: string, title: string): void => {
-    const it = PLANNER.issueById[id]
+      createIssueCore's defaults, and the window's Parent row shows it. A
+      task the workspace does not hold creates from the window's current
+      answer of it (answerTaskOf), with that answer's parent pair as the
+      expected values, marked as from the answer; the workspace's row of
+      the task paints once the workspace holds it. Resolves whether the
+      server accepted it, false when refused here or there. */
+  createParent: (id: string, title: string): Promise<boolean> => {
+    if (refuseOver(LIMITS.title, title) || refusePausedEdit()) return Promise.resolve(false)
+    const held = PLANNER.issueById[id]
+    const shown = held ? null : answerTaskOf(id)
+    const it = held ?? shown?.model
     const orgRow = it ? rows.orgs.get(it.org) : undefined
-    if (!it || !orgRow || refuseOver(LIMITS.title, title) || refusePausedEdit()) return
+    if (!it || !orgRow) {
+      PLANNER.refuseStaleEdit(id)
+      return Promise.resolve(false)
+    }
+    const level = shown?.answer.level ?? levelOf(PLANNER.levelOn(it.project)) ?? 'viewer'
     const parentId = crypto.randomUUID()
     const at = new Date().toISOString()
     const me = profileIn(it.org) || undefined
@@ -9597,19 +9850,41 @@ export const PLANNER = {
     }
     const created = { num: null as number | null }
     const paintParent = newTaskPaint(parent, created)
-    const child = mapIssuePatch({})
-    child.parent_id = parentId
+    const child: IssueWirePatch = { parent_id: parentId }
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(it.uuid)) return
+        // a task the window shows from its answer gets its new parent at
+        // once, and its own row once the workspace holds it
+        if (!shown && !rows.issues.has(it.uuid)) return
         paintParent()
+        if (!rows.issues.has(it.uuid)) return
         if (rows.issues.get(it.uuid)?.parent_id === parentId) return
         patchIssueRow(it.uuid, child, at)
         rows.hiddenParentTasks.delete(it.uuid)
       },
+      // the window's Parent row
+      detail: {
+        task: it.uuid,
+        paint: () => {
+          const answer = detailRows.task
+          if (!answer || answer.task.id !== it.uuid) return
+          answer.task.parent_id = parentId
+          answer.task.has_hidden_parent = false
+          answer.task.updated_at = at
+          answer.parent = newShortRow(parent, created.num ?? parent.num, true, level)
+        },
+      },
     }
     const row = rows.issues.get(it.uuid)
-    void send(
+    const over: Over | undefined = row
+      ? overOf('issues', row, ['parent_id'])
+      : shown
+        ? {
+            ...overOf('issues', shown.answer.task, ['parent_id']),
+            hiddenParent: shown.answer.task.has_hidden_parent,
+          }
+        : undefined
+    return send(
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
       view,
@@ -9619,7 +9894,8 @@ export const PLANNER = {
           created.num = answer.parent_num
           return view
         },
-        ...(row ? { over: overOf('issues', row, ['parent_id']) } : {}),
+        ...(over ? { over } : {}),
+        ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
     )
   },
@@ -9628,15 +9904,26 @@ export const PLANNER = {
       task `id`'s sub-project, linked to it with `type` as seen from task
       `id`, in one server write (api.issues.createLinked), so a refused link
       leaves no new task behind. The view's own link cap check toasts first;
-      the server also counts links to tasks this view does not hold. */
-  createLinked: (id: string, type: string, title: string): void => {
-    const it = PLANNER.issueById[id]
+      the server also counts links to tasks this view does not hold. A task
+      the workspace does not hold creates from the window's current answer
+      of it (answerTaskOf), marked as from the answer: the new task paints
+      at once, the link only where the workspace holds both tasks, and the
+      window's Linked tasks show it with the links answer's next delivery.
+      Resolves whether the server accepted it. */
+  createLinked: (id: string, type: string, title: string): Promise<boolean> => {
+    if (refuseOver(LIMITS.title, title) || refusePausedEdit()) return Promise.resolve(false)
+    const held = PLANNER.issueById[id]
+    const shown = held ? null : answerTaskOf(id)
+    const it = held ?? shown?.model
     const orgRow = it ? rows.orgs.get(it.org) : undefined
-    if (!it || !orgRow || refuseOver(LIMITS.title, title) || refusePausedEdit()) return
+    if (!it || !orgRow) {
+      PLANNER.refuseStaleEdit(id)
+      return Promise.resolve(false)
+    }
     const full = linkBlock(capInputs(it).links)
     if (full) {
       toast(full)
-      return
+      return Promise.resolve(false)
     }
     const kind = type === 'blocks' || type === 'blocked_by' ? type : 'relates'
     const taskId = crypto.randomUUID()
@@ -9675,13 +9962,13 @@ export const PLANNER = {
     }
     const view: View = {
       workspace: () => {
-        if (!rows.issues.has(it.uuid)) return
+        if (!shown && !rows.issues.has(it.uuid)) return
         paintTask()
-        if (!rows.issues.has(taskId) || rows.links.has(link.id)) return
+        if (!rows.issues.has(it.uuid) || !rows.issues.has(taskId) || rows.links.has(link.id)) return
         rows.links.set(link.id, { ...link })
       },
     }
-    void send(
+    return send(
       api.issues.createLinked,
       { org_id: it.org, id: it.uuid, new_id: taskId, link_id: link.id, title: task.title, kind },
       view,
@@ -9691,6 +9978,7 @@ export const PLANNER = {
           created.num = answer.num
           return view
         },
+        ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
     )
   },
@@ -9997,17 +10285,21 @@ export const PLANNER = {
       while a large workspace still loads; one it lacks then may still be
       on its way. */
   isLiveTask: (uuid: string): boolean => rows.issues.has(uuid),
-  addLink: (srcId: string, type: string, dstId: string) => {
-    if (srcId === dstId) return
+  /** Links two tasks the workspace holds, `type` as seen from task `srcId`.
+      Resolves whether the server accepted it; false for a link it sent
+      nothing for. A link with a task the workspace does not hold goes
+      through P.linkTasks. */
+  addLink: (srcId: string, type: string, dstId: string): Promise<boolean> => {
+    if (srcId === dstId) return Promise.resolve(false)
     const a = keyToUuid.get(srcId)
     const b = keyToUuid.get(dstId)
-    if (!a || !b) return
+    if (!a || !b) return Promise.resolve(false)
     const already = [...rows.links.values()].some(
       (l) => (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a),
     )
-    if (already || refusePausedEdit()) return
+    if (already || refusePausedEdit()) return Promise.resolve(false)
     const src = rows.issues.get(a)
-    if (!src) return
+    if (!src) return Promise.resolve(false)
     // the per-task cap on links, as this view counts them (the server checks too)
     const from = PLANNER.issueById[srcId]
     const to = PLANNER.issueById[dstId]
@@ -10016,7 +10308,7 @@ export const PLANNER = {
       linkBlock(to ? capInputs(to).links : [], to?.key)
     if (full) {
       toast(full)
-      return
+      return Promise.resolve(false)
     }
     // canonical storage stays client-side: blocks is directed source→target,
     // blocked_by flips, relates is ordered by uuid — the wire carries the
@@ -10052,19 +10344,23 @@ export const PLANNER = {
         rows.links.set(row.id, { ...row })
       },
     }
-    void send(
+    return send(
       api.issues.addLink,
       { org_id: src.org_id, id: row.id, source_id: source, target_id: target, type: dbType },
       view,
     )
   },
 
-  removeLink: (aId: string, bId: string) => {
+  /** Removes the link between two tasks the workspace holds, sending the
+      kind its row shows as the one expected. Resolves whether the server
+      accepted it. A link with a task the workspace does not hold goes
+      through P.unlinkTasks. */
+  removeLink: (aId: string, bId: string): Promise<boolean> => {
     const a = keyToUuid.get(aId)
     const b = keyToUuid.get(bId)
-    if (!a || !b) return
+    if (!a || !b) return Promise.resolve(false)
     const src = rows.issues.get(a) || rows.issues.get(b)
-    if (!src || refusePausedEdit()) return
+    if (!src || refusePausedEdit()) return Promise.resolve(false)
     const view: View = {
       workspace: () => {
         for (const id of rows.links.keysWhere(
@@ -10086,12 +10382,202 @@ export const PLANNER = {
         : shown.source_id === a
           ? 'blocks'
           : 'blocked_by'
-    void send(
+    return send(
       api.issues.removeLink,
       { org_id: src.org_id, a, b, ...(kind ? { expected: { kind } } : {}) },
       view,
       { notice: { deletes: true } },
     )
+  },
+
+  /* --- the task window's relation pickers ------------------------------- */
+  /** One batch of the tasks the window's Parent, Subtasks or Linked tasks
+      picker offers for task `task` (taskWindow.relationCandidates), read
+      once and never subscribed to: after `cursor` (an earlier answer's
+      `next` or `all_projects`), matching `search`. A search past its limit
+      or a cursor the server no longer accepts answers `refused` with the
+      server's sentence, and a failed read null. */
+  relationCandidates: async (o: {
+    task: { uuid: string; org: string }
+    kind: RelationKind
+    search: string
+    cursor: string | null
+  }): Promise<RelationCandidates | null> => {
+    try {
+      return await convex.query(api.taskWindow.relationCandidates, {
+        org_id: o.task.org,
+        issue_id: o.task.uuid,
+        kind: o.kind,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { cursor: o.cursor }),
+      })
+    } catch (e) {
+      const { code, message } = errData(e)
+      if (code === 'bad_request' || code === 'rule')
+        return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
+      console.error('[qivo] relation picker read failed:', e)
+      return null
+    }
+  },
+
+  /** The parent of task `uuid` as the window's own answer of it shows it,
+      painted, for the Parent row of a task the workspace holds whose
+      parent it does not hold, as one the Parent picker offered. Null for
+      none, a hidden one, or a task the window does not watch. */
+  shownParent: (uuid: string): RelatedTaskVM | null => {
+    const parent = uuid === watchedComments ? paintedAnswer()?.parent : null
+    return parent ? relatedTask(parent.id, parent) : null
+  },
+
+  /** Whether the person may edit some live sub-project of organization
+      `org`, for Link task on a task they only view: a link needs Edit on
+      either task (convex/model/issues.ts linkAccess), and the Linked tasks
+      picker then lists the projects they can edit. Reads the workspace's
+      projects, never its tasks. */
+  editsSomeProject: (org: string): boolean =>
+    PLANNER.projects.some((p) => p.type === 'project' && p.org === org && PLANNER.canWrite(p.id)),
+
+  /** Makes task `child` a subtask of the window's task `open` with `on`,
+      or takes it off `open`, for a pick in the Subtasks picker and a
+      Subtasks row's ×. `open` is the window's handle of its task, held or
+      shown from a current answer; for any other it sends nothing and says
+      why (P.refuseStaleEdit). A child the workspace holds goes through
+      P.updateIssue. Any other sends issues.update from what the window
+      showed of it, its parent pair as the expected values, marked as from
+      an answer; it paints the window's Subtasks list (subtaskListPaint)
+      and the views' copies of the child, and no workspace row but the
+      hours a held parent loses. Resolves whether the server accepted it,
+      false when refused here or there, with a toast that says why. */
+  setSubtaskParent: (open: string, child: SubtaskEnd, on: boolean): Promise<boolean> => {
+    if (refusePausedEdit()) return Promise.resolve(false)
+    const heldOpen = PLANNER.issueById[open]
+    const shown = heldOpen ? null : answerTaskOf(open)
+    const openUuid = heldOpen?.uuid ?? shown?.uuid
+    const org = heldOpen?.org ?? shown?.org
+    if (!openUuid || !org) {
+      PLANNER.refuseStaleEdit(open)
+      return Promise.resolve(false)
+    }
+    const handle = uuidToKey.get(child.uuid)
+    if (handle !== undefined && rows.issues.has(child.uuid))
+      return PLANNER.updateIssue(handle, { parent: on ? openUuid : null })
+    const parentId = on ? openUuid : null
+    if (child.parent === parentId && !child.hiddenParent) return Promise.resolve(true)
+    if (on && !child.row) return Promise.resolve(false)
+    const at = new Date().toISOString()
+    const patch: IssueWirePatch = { parent_id: parentId }
+    const kid = on && child.row ? shortOfCandidate(child.row, false) : null
+    const uuid = child.uuid
+    const view: View = {
+      view: viewPaint([uuid], () => {
+        for (const copy of viewRows.edit(uuid)) {
+          stampTaskPatch(copy, patch, at)
+          copy.has_hidden_parent = false
+        }
+      }),
+      detail: { task: openUuid, paint: () => subtaskListPaint(openUuid, kid, uuid, at) },
+      // a parent the workspace holds loses its own hours
+      workspace: () => clearParentHours(parentId, at),
+    }
+    return send(api.issues.update, { org_id: org, id: uuid, patch }, view, {
+      over: {
+        table: 'issues',
+        id: uuid,
+        fields: { parent_id: child.parent },
+        hiddenParent: child.hiddenParent,
+      },
+      about: { task: uuid, answer: true },
+    })
+  },
+
+  /** Links the window's task `open` to task `other`, `kind` as seen from
+      `open`, for a pick in the Linked tasks picker. `open` is held or
+      shown from a current answer, as for P.setSubtaskParent. Two tasks the
+      workspace holds go through P.addLink. Any other pair sends
+      issues.addLink in its stored form, marked as from an answer, after
+      the link limit check of `open` (the other end's is the server's); it
+      paints the workspace's link only where the workspace holds both
+      tasks, and the window's Linked tasks show it with the links answer's
+      next delivery. Resolves whether the server accepted it. */
+  linkTasks: (open: string, kind: string, other: { uuid: string }): Promise<boolean> => {
+    if (refusePausedEdit()) return Promise.resolve(false)
+    const heldOpen = PLANNER.issueById[open]
+    const it = heldOpen ?? answerTaskOf(open)?.model
+    if (!it) {
+      PLANNER.refuseStaleEdit(open)
+      return Promise.resolve(false)
+    }
+    if (other.uuid === it.uuid) return Promise.resolve(false)
+    const otherHandle = uuidToKey.get(other.uuid)
+    if (heldOpen && otherHandle !== undefined && rows.issues.has(other.uuid))
+      return PLANNER.addLink(open, kind, otherHandle)
+    const full = linkBlock(capInputs(it).links)
+    if (full) {
+      toast(full)
+      return Promise.resolve(false)
+    }
+    const [source, target, type] = storedLinkOf(it.uuid, kind, other.uuid)
+    const row: Row<'issue_links'> = {
+      id: crypto.randomUUID(),
+      source_id: source,
+      target_id: target,
+      type,
+      pair_key: source < target ? `${source}:${target}` : `${target}:${source}`,
+      created_at: new Date().toISOString(),
+    }
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(source) || !rows.issues.has(target)) return
+        if (rows.links.keysWhere((l) => l.pair_key === row.pair_key).length) return
+        rows.links.set(row.id, { ...row })
+      },
+    }
+    return send(
+      api.issues.addLink,
+      { org_id: it.org, id: row.id, source_id: source, target_id: target, type },
+      view,
+      { about: { task: it.uuid, answer: true } },
+    )
+  },
+
+  /** Removes the link between the window's task `open` and task `other`,
+      for a Linked tasks row's × and a pick of a linked task in the
+      picker, with `shownKind`, the relation the window showed as seen from
+      `open`, as the one expected, so a link someone changed meanwhile is
+      refused rather than removed unseen. A link row the workspace holds
+      goes through P.removeLink, whose kind is the one shown. Any other
+      link, as one only the links answer holds, sends `shownKind`, is
+      marked as from an answer unless the workspace holds both tasks, and
+      paints the workspace's link rows only where it holds both tasks.
+      Resolves whether the server accepted it. */
+  unlinkTasks: (open: string, other: { uuid: string }, shownKind: string): Promise<boolean> => {
+    if (refusePausedEdit()) return Promise.resolve(false)
+    const heldOpen = PLANNER.issueById[open]
+    const it = heldOpen ?? answerTaskOf(open)?.model
+    if (!it) {
+      PLANNER.refuseStaleEdit(open)
+      return Promise.resolve(false)
+    }
+    const a = it.uuid
+    const b = other.uuid
+    const otherHandle = uuidToKey.get(b)
+    const bothHeld = !!heldOpen && otherHandle !== undefined && rows.issues.has(b)
+    const pair = (l: Row<'issue_links'>) =>
+      (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a)
+    // the workspace's own link row, whose kind is the one the row shows
+    if (bothHeld && rows.links.keysWhere(pair).length > 0)
+      return PLANNER.removeLink(open, otherHandle)
+    const kind = shownKind === 'blocks' || shownKind === 'blocked_by' ? shownKind : 'relates'
+    const view: View = {
+      workspace: () => {
+        if (!rows.issues.has(a) || !rows.issues.has(b)) return
+        for (const id of rows.links.keysWhere(pair)) rows.links.delete(id)
+      },
+    }
+    return send(api.issues.removeLink, { org_id: it.org, a, b, expected: { kind } }, view, {
+      notice: { deletes: true },
+      ...(bothHeld ? {} : { about: { task: a, answer: true as const } }),
+    })
   },
 
   /* --- attachments ---------------------------------------------------------- */

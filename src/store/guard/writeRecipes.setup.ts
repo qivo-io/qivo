@@ -2,6 +2,7 @@ import type { FunctionReturnType } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import type { api } from '../../../convex/_generated/api'
 import type { BoardAnswer } from '../../../convex/lib/board'
+import type { RelationCandidate } from '../../../convex/lib/relationPicker'
 import type { ViewRow } from '../../../convex/lib/viewReads'
 import type { Workspace } from '../../../convex/lib/workspaceJoin'
 import type { Row } from '../rows'
@@ -357,6 +358,46 @@ const windowKid = () => {
   return { ...rest, has_subtasks: false, level: 'lead' as const }
 }
 
+/** Task `id`, number `num`, as a relation picker's row offers it
+    (convex/lib/relationPicker.ts RelationCandidate), which the workspace
+    does not hold. */
+const pickerRow = (id: string, num: number): RelationCandidate => {
+  const { description: _text, parent_id: _parent, ...fields } = task(id, num)
+  return { ...fields, level: 'lead' }
+}
+
+/** Picker row `row` as the window's answer lists it once a pick made it
+    a subtask (`has_subtasks` false) or the parent (true). */
+const shortOf = (row: RelationCandidate, has_subtasks: boolean) => {
+  const { parent_id: _parent, has_hidden_parent: _hidden, exact: _exact, ...fields } = row
+  return { ...fields, has_subtasks }
+}
+
+/** New task `id`, number `num`, as createIssueCore stores it and the
+    window's answer lists it, with `over`. */
+const createdShort = (
+  id: string,
+  num: number,
+  has_subtasks: boolean,
+  over: Partial<Row<'issues'>>,
+) => {
+  const {
+    description: _text,
+    parent_id: _parent,
+    ...fields
+  } = task(id, num, {
+    status: 'backlog',
+    priority: 'low',
+    reporter_id: ME,
+    created_by: ME,
+    status_at: SERVER,
+    created_at: SERVER,
+    updated_at: SERVER,
+    ...over,
+  })
+  return { ...fields, has_subtasks, level: 'lead' as const }
+}
+
 /** A file of WINDOW_TASK as its attachments answer sends it. */
 const windowFile = {
   id: 'att-w',
@@ -603,6 +644,150 @@ export const recipes: Recipe[] = [
       }),
     },
     act: (P) => P.removeAttachment('att-w'),
+  },
+  /* --- the relation pickers' writes, with an end only an answer holds - */
+  {
+    mutation: 'issues:update',
+    mutator: 'updateIssue',
+    what: 'a parent only a picker row names set on a task the workspace holds',
+    pause: 'P',
+    act: (P) => P.updateIssue('QN-1', { parent: 'task-p' }, { parentRow: pickerRow('task-p', 85) }),
+    truth: (snap) =>
+      Object.assign(issue(snap, 'task-a'), { parent_id: 'task-p', updated_at: SERVER }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateAnswerTask',
+    what: 'a parent only a picker row names set on a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? windowAnswer(
+              { parent_id: 'task-p', updated_at: SERVER },
+              { parent: shortOf(pickerRow('task-p', 85), true) },
+            )
+          : windowAnswer(),
+    },
+    act: (P) =>
+      P.updateIssue('QN-80', { parent: 'task-p' }, { parentRow: pickerRow('task-p', 85) }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'setSubtaskParent',
+    what: 'a task only a picker row names made a subtask of a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? windowAnswer(
+              { has_subtasks: true },
+              {
+                subtasks: {
+                  rows: [{ ...shortOf(pickerRow('task-p', 85), false), updated_at: SERVER }],
+                  complete: true,
+                },
+              },
+            )
+          : windowAnswer(),
+    },
+    act: (P) =>
+      P.setSubtaskParent(
+        'QN-80',
+        { uuid: 'task-p', row: pickerRow('task-p', 85), parent: null, hiddenParent: false },
+        true,
+      ),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'setSubtaskParent',
+    what: 'a subtask the workspace does not hold taken off a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? windowAnswer()
+          : windowAnswer(
+              { has_subtasks: true },
+              { subtasks: { rows: [windowKid()], complete: true } },
+            ),
+    },
+    act: (P) =>
+      P.setSubtaskParent(
+        'QN-80',
+        { uuid: 'task-wk', parent: WINDOW_TASK, hiddenParent: false },
+        false,
+      ),
+  },
+  {
+    mutation: 'issues:addLink',
+    mutator: 'linkTasks',
+    what: 'a link from a task the window shows from its own answer',
+    pause: 'P',
+    detail: { answer: () => windowAnswer() },
+    act: (P) => P.linkTasks('QN-80', 'blocks', { uuid: 'task-a' }),
+  },
+  {
+    mutation: 'issues:removeLink',
+    mutator: 'unlinkTasks',
+    what: 'a link removed from a task the window shows from its own answer',
+    pause: 'P',
+    detail: { answer: () => windowAnswer() },
+    act: (P) => P.unlinkTasks('QN-80', { uuid: 'task-a' }, 'blocked_by'),
+  },
+  {
+    mutation: 'issues:createParent',
+    mutator: 'createParent',
+    what: 'a new parent for a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? windowAnswer(
+              { parent_id: str(args.parent_id), updated_at: SERVER },
+              {
+                parent: createdShort(str(args.parent_id), 4, true, { title: 'New parent' }),
+              },
+            )
+          : windowAnswer(),
+    },
+    act: (P) => P.createParent('QN-80', 'New parent'),
+    answers: { 'issues:createParent': () => ({ parent_num: 4 }) },
+    truth: (snap, args) => created(snap, str(args.parent_id), 4, { title: 'New parent' }),
+  },
+  {
+    mutation: 'issues:createLinked',
+    mutator: 'createLinked',
+    what: 'a new task linked to a task the window shows from its own answer',
+    pause: 'P',
+    detail: { answer: () => windowAnswer() },
+    act: (P) => P.createLinked('QN-80', 'relates', 'New linked task'),
+    answers: { 'issues:createLinked': () => ({ num: 4 }) },
+    truth: (snap, args) => created(snap, str(args.new_id), 4, { title: 'New linked task' }),
+  },
+  {
+    mutation: 'issues:create',
+    mutator: 'addIssue',
+    what: 'a new subtask of a task the window shows from its own answer',
+    pause: 'P',
+    detail: {
+      answer: (args) =>
+        args
+          ? windowAnswer(
+              { has_subtasks: true },
+              {
+                subtasks: {
+                  rows: [createdShort(str(args.id), 4, false, { title: 'New subtask' })],
+                  complete: true,
+                },
+              },
+            )
+          : windowAnswer(),
+    },
+    act: (P) => P.addIssue({ project: 'work', title: 'New subtask', parent: 'QN-80' }),
+    answers: { 'issues:create': () => ({ num: 4 }) },
+    truth: (snap, args) =>
+      created(snap, str(args.id), 4, { title: 'New subtask', parent_id: WINDOW_TASK }),
   },
   {
     mutation: 'issues:createParent',

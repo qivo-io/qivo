@@ -370,7 +370,8 @@ describe('a field written from the window’s own answer', { timeout: 30_000 }, 
       expected: { parent_id: null, has_hidden_parent: true },
     })
     expect(shown().hasHiddenParent).toBe(false)
-    // any other parent is the relation pickers', and goes nowhere here
+    // a new parent comes with the Parent picker's row of it
+    // (relationWrites.test.ts), and without one nothing is sent
     await expect(P.updateIssue(H, { parent: 'QN-1' })).resolves.toBe(false)
     expect(sent('issues:update')).toHaveLength(1)
   })
