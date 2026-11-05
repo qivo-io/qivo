@@ -13,10 +13,10 @@
  * the page counts it (pageFor's spend), and checks that the page answered
  * whole inside DELETED_PAGE and Convex's limits. convex-test counts a
  * search query as one range, while Convex and the page count one for each
- * result. DELETED_PAGE's docstring quotes these figures. The last case
- * deletes the largest task family at the description cap in a three-byte
- * script under Convex's real limits, as the delete now writes each text
- * twice. */
+ * result. DELETED_PAGE's docstring quotes these figures. The last cases
+ * delete the largest task family, whose delete now writes each text twice:
+ * with ordinary text under Convex's limits and under a lowered write limit,
+ * and, on demand, at the description cap in a three-byte script. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -602,18 +602,20 @@ describe('the page at the design size', () => {
   })
 })
 
-describe('a task family at the description cap', () => {
-  it('deletes a task with LIMITS.subtasks.max subtasks whose descriptions are at the cap in a three-byte script, both copies written, under the real limits', async () => {
-    // each task's text goes into its stored copy and into its search text
-    // (deleted_tasks.search_text), so the delete writes it twice; a search
-    // from 0 to 101 on 5 November 2026 found every family size up to the
-    // largest the delete takes fitting
-    const t = newT({ transactionLimits: true })
-    const f = await withOrg(t)
-    const text = '漢'.repeat(TEXT_MAX)
-    const ids = await t.run(async (ctx) => {
-      const out: string[] = []
-      for (let i = 0; i <= LIMITS.subtasks.max; i++) {
+/** Plants a task in Firmware with LIMITS.subtasks.max subtasks, each with
+ * an ordinary title and `description` on its description row, and answers
+ * their ids, the root first. A transaction plants `batch` of them, so a
+ * lowered write limit leaves the planting alone. */
+async function plantFamily(
+  t: T,
+  f: OrgFixture,
+  description: string,
+  batch = LIMITS.subtasks.max + 1,
+): Promise<string[]> {
+  const out: string[] = []
+  for (let from = 0; from <= LIMITS.subtasks.max; from += batch)
+    await t.run(async (ctx) => {
+      for (let i = from; i <= Math.min(LIMITS.subtasks.max, from + batch - 1); i++) {
         const id = uuid()
         await ctx.db.insert('issues', {
           id,
@@ -632,23 +634,78 @@ describe('a task family at the description cap', () => {
           issue_id: id,
           org_id: f.org.id,
           project_id: f.sub.id,
-          description: text,
+          description,
         })
         out.push(id)
       }
-      return out
     })
-    await as(t, f.user).mutation(api.issues.deleteDeep, {
-      org_id: f.org.id,
-      id: ids[0],
-      subtask_ids: ids.slice(1),
-    })
+  return out
+}
+
+/** The delete of the family `ids` by the fixture's user. */
+const deleteFamily = (t: T, f: OrgFixture, ids: string[]) =>
+  as(t, f.user).mutation(api.issues.deleteDeep, {
+    org_id: f.org.id,
+    id: ids[0],
+    subtask_ids: ids.slice(1),
+  })
+
+describe('the largest task family', () => {
+  it('deletes LIMITS.subtasks.max subtasks of ordinary text, writing each text twice, and a write limit lowered below those copies refuses it with nothing changed', async () => {
+    // each task's text goes into its stored copy and into its search text
+    // (deleted_tasks.search_text), so the delete writes it twice
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const ids = await plantFamily(t, f, DESCRIPTION)
+    await deleteFamily(t, f, ids)
     const rows = await t.run((ctx) => ctx.db.query('deleted_tasks').collect())
     expect(rows).toHaveLength(LIMITS.subtasks.max + 1)
-    for (const row of rows) expect(row.search_text?.endsWith(text)).toBe(true)
-    console.log(
-      `deleted page figures, a family at the cap: ${LIMITS.subtasks.max} subtasks fit, ` +
-        `${Math.round((rows.length * 2 * text.length * 3) / 2 ** 20)} MiB of text written`,
-    )
+    for (const row of rows) expect(row.search_text).toBe(`${row.title}\n${DESCRIPTION}`)
+    // past the write limit the delete is refused whole, as Convex refuses a
+    // family at the description cap in a three-byte script that passes 16
+    // MiB (the case on demand below); here the limit is lowered to the two
+    // copies of the family's text alone, which its other writes pass
+    const copies = 2 * ids.reduce((n, _, i) => n + title(i).length + DESCRIPTION.length, 0)
+    const lowered = newT({ transactionLimits: { bytesWritten: copies } })
+    const g = await withOrg(lowered)
+    const kept = await plantFamily(lowered, g, DESCRIPTION, 10)
+    await expect(deleteFamily(lowered, g, kept)).rejects.toThrow(/too much data/)
+    const after = await lowered.run(async (ctx) => ({
+      items: await ctx.db.query('deleted_items').collect(),
+      stored: await ctx.db.query('deleted_tasks').collect(),
+      live: await ctx.db
+        .query('issues')
+        .withIndex('by_parent_archived', (q) => q.eq('parent_id', kept[0]))
+        .collect(),
+    }))
+    expect(after).toMatchObject({ items: [], stored: [] })
+    expect(after.live).toHaveLength(LIMITS.subtasks.max)
   })
 })
+
+/* The same family with every description at the cap, 20,000 characters, in
+ * a three-byte script, under Convex's real limits. It is past the design
+ * size, which asks for ordinary text, so it runs outside the normal suite,
+ * on demand with QIVO_DELETED_FAMILY_CAP=1. On 5 November 2026 the delete
+ * of LIMITS.subtasks.max subtasks fit, writing each text twice; a search
+ * from 0 to 101 subtasks then found every family size up to the largest
+ * the delete takes fitting. */
+describe.runIf(process.env.QIVO_DELETED_FAMILY_CAP === '1')(
+  'a task family at the description cap, on demand',
+  () => {
+    it('deletes a task with LIMITS.subtasks.max subtasks whose descriptions are at the cap in a three-byte script, both copies written, under the real limits', async () => {
+      const t = newT({ transactionLimits: true })
+      const f = await withOrg(t)
+      const text = '漢'.repeat(TEXT_MAX)
+      const ids = await plantFamily(t, f, text)
+      await deleteFamily(t, f, ids)
+      const rows = await t.run((ctx) => ctx.db.query('deleted_tasks').collect())
+      expect(rows).toHaveLength(LIMITS.subtasks.max + 1)
+      for (const row of rows) expect(row.search_text?.endsWith(text)).toBe(true)
+      console.log(
+        `deleted page figures, a family at the cap: ${LIMITS.subtasks.max} subtasks fit, ` +
+          `${Math.round((rows.length * 2 * text.length * 3) / 2 ** 20)} MiB of text written`,
+      )
+    })
+  },
+)
