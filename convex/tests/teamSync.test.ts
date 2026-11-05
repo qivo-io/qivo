@@ -598,9 +598,6 @@ describe('teamSync.lastComments', () => {
       return { answer, ranges: m.databaseQueries.used, documents: m.documentsRead.used }
     })
 
-  /* An organization whose user holds open tasks in FW and PCB, with
-   * `extra` more top-level projects the tasks do not name, each with a
-   * sub-project, led by the admin. */
   /* How many live top-level projects and live sub-projects the fixture's
    * organization holds, its own included. */
   const projectsOf = (o: { t: T; f: OrgFixture }) =>
@@ -616,6 +613,9 @@ describe('teamSync.lastComments', () => {
       }
     })
 
+  /* An organization whose user holds open tasks in FW and PCB, with
+   * `extra` more top-level projects the tasks do not name, each with a
+   * sub-project, led by the admin. */
   async function namedOrg(extra: number) {
     const t = newT()
     const f = await withOrg(t)
