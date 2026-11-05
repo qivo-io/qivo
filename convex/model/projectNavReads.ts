@@ -130,6 +130,11 @@ import { type Grantee, grantee, navReady } from './projectNav'
  * - page for 200 sub-projects read through grants under 67 parents shown
  *   for navigation only: 187 ranges and 211 documents a batch, and each
  *   parent's children at most 16 ranges and 14 documents;
+ * - page beside 500 archived sub-projects the person holds grants on under
+ *   167 live parents, which lib/access.ts shows for navigation and these
+ *   reads leave out: 599 ranges and 557 documents for its one batch of 20
+ *   rows, which reads every parent's live root row and finds no live
+ *   sub-project under it, the most of any batch;
  * - children of a project with 30 live sub-projects for a person with
  *   access on it: 55 ranges and 29 documents for the first of two batches,
  *   and 10 ranges for one who holds one of them; a project's own 3 beside
@@ -138,7 +143,8 @@ import { type Grantee, grantee, navReady } from './projectNav'
  * - resolve of a sub-project of a project shared with 5 teams: 15 ranges
  *   and 14 documents.
  * No case reads the archived rows it leaves out: 500 archived sub-projects
- * and 300 favorites on archived projects beside live ones change no figure.
+ * under archived parents and 300 favorites on archived projects beside
+ * live ones change no figure.
  * All of them far inside NAMED_READ (2,000 ranges, 8,000 documents). */
 export const PROJECT_NAV = { teams: 64, children: 4 }
 

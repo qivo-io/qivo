@@ -1515,6 +1515,30 @@ describe('reads at the design size', () => {
     }
   })
 
+  it('pages beside 500 archived sub-projects the person holds grants on under 167 live parents, which it leaves out, in one whole batch', async () => {
+    /* Every parent shows Pia only through archived sub-projects, which
+     * lib/access.ts counts for navigation and these reads do not, so the
+     * one batch reads each parent's live root row and leaves it out. */
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    const pia = await person(t, f.org.id, 'Pia')
+    const tops = await plantMetas(t, f.org.id, names('Live top ', 20))
+    const parents = await plantMetas(t, f.org.id, names('Parent ', 167))
+    const subs: Doc<'projects'>[] = []
+    for (const p of parents)
+      subs.push(...(await plantSubs(t, p, names(`${p.name} sub `, 3), { archived_at: NOW })))
+    await plantGrants(t, pia, [...tops, ...subs.slice(0, 500)])
+    await ready(t, f)
+    const seats = mapOf([pia])
+    const first = await measured(t, (ctx) => navPageOf(ctx, seats, {}))
+    console.log('page, 500 archived sub-projects under 167 live parents, its one batch', first.read)
+    const batch = ok(first.out)
+    expect(batch.rows).toEqual(tops.map((p) => ({ ...row(p), favorite: false })))
+    expect(batch.next).toBeNull()
+    whole([{ ...first.read, stopped: batch.stopped }])
+    expect(await kids(t, [pia], parents[0].id)).toEqual({ state: 'unavailable' })
+  })
+
   it('lists 30 live sub-projects under one project in two batches for a person with access on it, and the one a person holds', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
