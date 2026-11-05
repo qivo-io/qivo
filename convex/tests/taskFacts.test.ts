@@ -129,7 +129,9 @@ async function appView(fx: Fx, person: Doc<'profiles'>) {
 }
 
 /* The Overview's Completion of the top-level project `metaId` over the app's
- * view (src/store/planner.ts progressIn over scopeInfo's sub-projects). */
+ * view (src/store/overviewOracle.setup.ts progressIn over scopeInfo's
+ * sub-projects, which the store gave up when tasks began to load on
+ * demand). */
 function appCompletion(view: Awaited<ReturnType<typeof appView>>, metaId: string) {
   const subs = new Set(
     view.projects.filter((p) => p.parent_id === metaId && p.archived_at == null).map((p) => p.id),

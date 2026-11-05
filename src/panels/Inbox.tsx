@@ -177,9 +177,10 @@ function secondLine(m: MessageVM): string {
 }
 
 /* Where the row's task lives: its project, then its sub-project. Null while
-   the task is not loaded here — an older message can briefly outlive a
-   working snapshot update, and it still carries the title it was written
-   with even though it cannot say where the task is. */
+   the workspace does not hold the task, which before something asks for
+   every task is every task (store/planner.ts P.askTasks), or when an older
+   message outlives its task in the workspace; the row still carries the
+   title it was written with even though it cannot say where the task is. */
 function itemPlace(g: MessageGroupVM) {
   const it = g.issueKey ? P.issueById[g.issueKey] : null
   if (!it) return null

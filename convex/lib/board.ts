@@ -347,10 +347,10 @@ async function boardAnswer(
 }
 
 /**
- * The projects whose lanes the Board keeps without a card, as the app's own
- * result keeps a lane, a side-board or in My view a top-level project for a
- * group whose scope holds a task (src/views/board/useBoardView.ts
- * provisionalBoard), unless a filter the
+ * The projects whose lanes the Board keeps without a card, as the app kept a
+ * lane, a side-board or in My view a top-level project for a group whose
+ * scope holds a task when it showed its own result before the answer
+ * (src/views/board/useBoardView.ts takes them from here alone), unless a filter the
  * Clear button clears is on (clearable: My tasks outside My view, people,
  * priority, Stale or a search) and drops a lane without cards. With such a
  * filter they are the projects of the cards; without one, every scoped task

@@ -124,9 +124,10 @@ function EditorSlot({ fallback, children }: { fallback: ReactNode; children: Rea
 }
 const NO_PROFILE = '__none__'
 /* WAITS_FOR_TASKS (from Modals.tsx) says why moving, archiving or deleting
-   a task the workspace holds waits while tasks still load and no answer of
-   its own serves its subtasks, since each acts on subtasks and blockers
-   that may be still to arrive. WAITS_FOR_CHECK says why a change to a task
+   a task the workspace holds waits before it holds every task and no answer
+   of its own serves its subtasks, as for the person's new task during a
+   load, since each acts on subtasks and blockers that may be still to
+   arrive. WAITS_FOR_CHECK says why a change to a task
    the window shows from its own read waits while that read failed or runs
    again, the Parent, Subtasks and Linked tasks changes included, and
    FAMILY_UNKNOWN why Move and Archive or delete are off while that read

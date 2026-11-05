@@ -21,7 +21,9 @@
      (store/planner.ts viewPartHeld).
    - The rows never enter the workspace's rows, the task index, P.issues or
      P.issueById. A task the workspace holds shows as the workspace's view
-     model; the store asks this module only for the others (`unheld`).
+     model; the store asks this module only for the others (`unheld`), which
+     until something asks for every task (store/planner.ts P.askTasks) are
+     all of a view's tasks but the person's own new ones.
    - A model keeps its object while its row, its own and its parent's
      handles, its delay and the week grid hold the same data, so an answer
      that arrives again renders no card again (views/kanbanCards.tsx
