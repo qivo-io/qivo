@@ -850,11 +850,33 @@ describe('stops', () => {
     const capped = await page(t, f.admin, args)
     expect(capped.missing).toBe('matches')
     expect(capped.entries).toHaveLength(2)
-    Object.assign(DELETED_PAGE, {
-      candidates: 256,
-      gather: { bytes: 1 << 30, rows: 1e6, ranges: 3 },
-    })
-    expect((await page(t, f.admin, args)).missing).toBe('reads')
+    // with no older row in the organization the one query takes all of
+    // results, as no title source for older rows shares it
+    Object.assign(DELETED_PAGE, { candidates: 256, results: 4 })
+    const shared = await page(t, f.admin, args)
+    expect(shared.entries).toHaveLength(3)
+    expect(shared.missing).toBeUndefined()
+    Object.assign(DELETED_PAGE, { results: DEFAULT_PAGE.results })
+
+    // a task item whose root and two subtasks hold the word: the query's
+    // range, a range for each result and the item's read, so a gathering
+    // with 4 ranges stops at its second result, while one with 8 does not
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Solenoid bank' })
+    const subs: Doc<'issues'>[] = []
+    for (const title of ['Solenoid coil', 'Solenoid spring'])
+      subs.push(await plantIssue(t, { org_id, project_id: f.sub.id, parent_id: root.id, title }))
+    await deleteTask(t, f.user, root.id, { subtask_ids: subs.map((s) => s.id) })
+    const item = (await itemFor(t, root.id)).id
+    const tasks = { scope: { org_id, all: true as const }, kind: 'task' as const }
+    const solenoid = { ...tasks, search: 'solenoid' }
+    Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges: 8 } })
+    const roomy = await page(t, f.admin, solenoid)
+    expect(roomy.entries.map((e) => e.item_id)).toEqual([item])
+    expect(roomy.missing).toBeUndefined()
+    Object.assign(DELETED_PAGE, { gather: { ...DEFAULT_PAGE.gather, ranges: 4 } })
+    const cut = await page(t, f.admin, solenoid)
+    expect(cut.entries.map((e) => e.item_id)).toEqual([item])
+    expect(cut.missing).toBe('reads')
   })
 
   it('ends a browse page early on a lowered budget, and pages on to the end with no entry twice', async () => {
@@ -906,6 +928,21 @@ describe('stops', () => {
       too_wide: true,
     })
     expect(await page(t, f.user, { scope, assignee: f.user.id })).toMatchObject({ too_wide: true })
+    // without a scope the same project ranges are too wide, and task
+    // entries still need a scope
+    expect(await page(t, f.user)).toEqual({
+      entries: [],
+      items: [],
+      next_cursor: null,
+      too_wide: true,
+      scope_needed: true,
+    })
+    expect(await page(t, f.user, { kind: 'project' })).toEqual({
+      entries: [],
+      items: [],
+      next_cursor: null,
+      too_wide: true,
+    })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
     Object.assign(DELETED_PAGE, { sources: 1 })
     expect((await page(t, f.admin, { scope })).entries.map((e) => e.item_id)).toEqual(items)
@@ -915,6 +952,38 @@ describe('stops', () => {
     expect(found.entries.map((e) => e.item_id)).toEqual(items)
     expect(found.missing).toBe('matches')
     expect(found.too_wide).toBeUndefined()
+  })
+
+  it('counts each sub-project a member leads without its top-level project toward the lowered sources', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // Sam leads both sub-projects of a top-level project the user leads
+    const sam = await person(t, org_id, 'Sam')
+    await patch(t, 'projects', f.sub.id, { lead_id: sam.id })
+    await patch(t, 'projects', f.sub2.id, { lead_id: sam.id })
+    const a = await plantIssue(t, { org_id, project_id: f.sub.id, title: 'Clamp' })
+    const b = await plantIssue(t, { org_id, project_id: f.sub2.id, title: 'Bracket' })
+    await deleteTask(t, f.user, a.id)
+    later()
+    await deleteTask(t, f.user, b.id)
+    const items = [(await itemFor(t, b.id)).id, (await itemFor(t, a.id)).id]
+    const all = { org_id, all: true as const }
+    // Sam's own deletes and a range for each sub-project: three
+    Object.assign(DELETED_PAGE, { sources: 3 })
+    expect((await page(t, sam, { scope: all })).entries.map((e) => e.item_id)).toEqual(items)
+    Object.assign(DELETED_PAGE, { sources: 2 })
+    expect(await page(t, sam, { scope: all })).toEqual({
+      entries: [],
+      items: [],
+      next_cursor: null,
+      too_wide: true,
+    })
+    // the project entries need only Sam's own deletes, and one sub-project fits
+    expect((await page(t, sam, { scope: all, kind: 'project' })).too_wide).toBeUndefined()
+    const one = await page(t, sam, { scope: { org_id, project_ids: [f.sub.id] } })
+    expect(one.entries.map((e) => e.item_id)).toEqual([items[1]])
+    expect(one.too_wide).toBeUndefined()
   })
 })
 
