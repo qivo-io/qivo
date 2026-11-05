@@ -127,17 +127,18 @@ export const PEOPLE_BATCH = 25
  * What one batch of the people may read: at most `candidates` profiles,
  * and `read` past what the call read before the batch (lib/namedPages.ts
  * namedCeiling), checked with the transaction's metrics as it reads
- * (readGuard). Each profile is one document of one index range, a few
- * hundred bytes with ordinary text, so `candidates` stops a batch first
- * and `read` only one over unusually large rows. Past either, the batch
- * answers what it found with a cursor, marked as stopped early. Measured
- * on 5 November 2026 in convex-test beside 1,000 people with ordinary
- * names (tests/deletedItemsChoices.test.ts, "reads at the design size"):
- * the first batch without a search reads 15 index ranges, 37 documents and
- * 0.01 MiB, and a search whose only matches sit last in name order reads to
- * `candidates`, 16 ranges, 412 documents and 0.13 MiB, then pages on. A
- * mutable object, so tests can lower it; replace `read` whole rather than
- * change its fields.
+ * (readGuard). The profiles come from one or two index ranges, a few
+ * hundred bytes each with ordinary text, so `candidates` stops a batch
+ * first and `read` only one over unusually large rows. Past either, the
+ * batch answers what it found with a cursor, marked as stopped early.
+ * Measured on 5 November 2026 in convex-test in an organization of 1,000
+ * people with ordinary names (tests/deletedItemsChoices.test.ts, "reads at
+ * the design size"), without the login's own reads: the first batch
+ * without a search reads 2 index ranges, 27 documents and 0.01 MiB, and a
+ * search whose only matches sit last in name order reads to `candidates`,
+ * 2 ranges, 402 documents and 0.14 MiB a batch, and answers them in its
+ * third batch. A mutable object, so tests can lower it; replace `read`
+ * whole rather than change its fields.
  */
 export const DELETED_PEOPLE: { candidates: number; read: ReadCeiling } = {
   candidates: 400,
@@ -263,11 +264,11 @@ function upTo<Row>(
  * convex-test for a project item that stores 30 live and 40 archived
  * sub-projects, with a task item in each live one and three earlier
  * sub-project items each with one task item (tests/deletedItemsChoices.test.ts,
- * "reads at the design size"): 296 ranges, 36 documents and 0.03 MiB as it
- * counts them, which is how far under these the bounds stand. Past any of
- * them it answers the count so far with `exact: false`. A subscription
- * query reruns when a dependent changes state or is added, inside the
- * same bounds. A mutable object, so tests can lower it.
+ * "reads at the design size"): 36 items in 297 index ranges, 37 documents
+ * and 0.04 MiB with the item's own read, answered exactly. Past any bound it
+ * answers the count so far with `exact: false`. A subscription query
+ * reruns when a dependent changes state or is added, inside the same
+ * bounds. A mutable object, so tests can lower it.
  */
 export const PURGE_ALONG = { items: 1_000, rows: 2_000, bytes: 4 * MIB, ranges: 1_024 }
 
