@@ -7,13 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { answerLabelPages } from '../../store/labelPagesStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import {
+  isProjectSettingsRead,
+  projectSettingsServer,
+} from '../../store/projectSettingsStandIn.setup'
 
 /* Create forms and rename toasts wait for the server's answer, on the real
    store. A create keeps the typed name until the server accepts it, and
    keeps it after a refusal; a success toast shows only for a saved change.
    I am the admin of Testbed Labs, with one team and the Luma Sensor
    project. Settings › Labels reads its rows from the label pages'
-   stand-in (store/labelPagesStandIn.setup.ts). */
+   stand-in (store/labelPagesStandIn.setup.ts), and a project's page its
+   settings from the project settings stand-in
+   (store/projectSettingsStandIn.setup.ts). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -103,8 +109,11 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     })
   requests = []
   network.query.mockResolvedValue(null)
+  const settings = projectSettingsServer(() => snap)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
-    if (getFunctionName(ref) === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
+    const name = getFunctionName(ref)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (name === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
     else next(structuredClone(snap))
     return () => {}
   })

@@ -650,9 +650,10 @@ export type AccessListArgs = ListArgs & { project_id: string }
  * current name does not match the search. The lead's own legacy grant is
  * left out of the rows, which the lead row stands for. The lead row uses the
  * effective lead, as the lead rule does (model/projectAccess.ts
- * assertNotLead), where the app's planner shows only a project's own
- * lead_id (src/store/viewModels.ts withLead): a legacy sub-project without
- * a lead of its own shows its parent's.
+ * assertNotLead): a legacy sub-project without a lead of its own shows its
+ * parent's, which the app's Settings page marks as from the project, where
+ * the app's planner shows only a project's own lead_id
+ * (src/store/viewModels.ts withLead).
  */
 export async function projectUsersOf(
   ctx: QueryCtx,

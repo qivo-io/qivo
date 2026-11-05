@@ -2091,7 +2091,10 @@ function ArchiveOrDeleteProjectModal({
   onDelete,
   focusAfterClose,
 }: {
-  project: Pick<ProjectVM, 'id' | 'name' | 'type'>
+  /** the project, with its organization when a page that read it from the
+      server opened the window (projectSettings.get), so its counts read
+      also for a project the workspace does not hold */
+  project: Pick<ProjectVM, 'id' | 'name' | 'type'> & { orgId?: string }
   deleteOnly?: boolean
   /** whether the project left the board while the window was open */
   gone?: boolean
@@ -2110,14 +2113,15 @@ function ArchiveOrDeleteProjectModal({
   useEffectM(() => {
     let current = true
     setSummary(undefined)
-    void P.projectRemovalSummary(project.id).then((answer) => {
+    const shown = project.orgId === undefined ? undefined : { orgId: project.orgId }
+    void P.projectRemovalSummary(project.id, shown).then((answer) => {
       if (current) setSummary(answer)
     })
     return () => {
       current = false
     }
     // a new attempt, from Try again, asks once more
-  }, [project.id, attempt])
+  }, [project.id, project.orgId, attempt])
   const archiving = fate === 'archive'
   const noun = project.type === 'meta' ? 'project' : 'sub-project'
   const subs = summary?.sub_projects ?? []

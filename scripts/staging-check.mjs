@@ -76,7 +76,13 @@
  * removes the agent's grant there in the app, whose removal window lists
  * the task from the deployment's preview (accessRemovals.preview), and
  * hands the task to Nora through the window's picker
- * (accessRemovals.reassignChoices) (ui/removal-window). Every task, comment,
+ * (accessRemovals.reassignChoices) (ui/removal-window). It makes another
+ * sub-project there, led by the Standard agent and shared with its team,
+ * and on that sub-project's Settings page, from the deployment's reads
+ * (projectSettings.get, users, teams and candidates), sets the team's
+ * level to Viewer, adds Nora, an admin who is not its lead, through the
+ * Add team or user picker's search, and sets its Review time, each checked
+ * over REST (ui/project-settings). Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
  * refused, and removes everything it made, also after a failure
@@ -4514,6 +4520,105 @@ async function settledPicker(trigger) {
   )
 }
 
+/** The step that checks a project's Settings page (projectSettingsCheck). */
+export const PROJECT_SETTINGS_STEP = 'ui/project-settings'
+
+/** What the project's Settings page saves (projectSettingsCheck): the
+ *  team's level after its role select, Nora's grant through the picker and
+ *  the Review time typed. */
+export const PROJECT_SETTINGS_EXPECTED = { team: 'viewer', nora: 'user', reviewHours: 3 }
+
+/** A project's Settings page on the deployment's reads
+ *  (projectSettings.get, users, teams and candidates): the run makes
+ *  `<tag> Settings` under its second project N over REST (or the removal
+ *  step's R), led by the Standard agent, whose user role may lead, and
+ *  shares it with the run's team at User. In the app it opens the
+ *  sub-project's Settings page, waits for the team's row from the server's
+ *  list and sets its role to Viewer, opens the Add team or user picker,
+ *  searches it for Nora's name, picks her, an organization admin who is
+ *  not the lead, chooses User and presses + Add, waits for her row, and
+ *  types 3 into Review time and leaves it. Over REST the share must then be
+ *  Viewer, Nora's grant User and the review time 3, so the writes went out
+ *  with `expected` values the deployment accepted. The sub-project goes
+ *  with its parent in the cleanup, and the sweep finds it by its tag. It
+ *  needs the run's team, and a backend from v0.1.102 on, which answers the
+ *  reads. */
+async function projectSettingsCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  await check(PROJECT_SETTINGS_STEP, async () => {
+    const team = run.team
+    expect(team, 'the run has no team to share the sub-project with')
+    let parent = run.projects.N ?? run.projects.R
+    if (!parent) {
+      parent = await restOk(w, 'POST', '/projects', { name: `${run.tag} settings project` })
+      run.projects.R = parent
+    }
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Settings`,
+      parent: parent.id,
+      lead_id: std.id,
+    })
+    eq(sub.lead_id, std.id, "the sub-project's lead")
+    await restOk(w, 'PUT', `/projects/${sub.id}/access/teams/${team.id}`, { level: 'user' })
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/project/${sub.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    // the team's level, from the server's list
+    const teamRole = app.locator(`[data-project-team-role="${team.id}"]`)
+    await teamRole.waitFor({ timeout: 60_000 })
+    await teamRole.selectOption(PROJECT_SETTINGS_EXPECTED.team)
+    expect(
+      await until(
+        async () =>
+          !(await teamRole.isDisabled()) &&
+          (await teamRole.inputValue()) === PROJECT_SETTINGS_EXPECTED.team,
+        30_000,
+      ),
+      "the team's level did not settle on Viewer",
+    )
+    // Nora, offered by the server's picker although she is an admin
+    await app.locator('[data-project-access-picker]').click()
+    await app.locator('[data-project-access-picker-search]').fill(run.nora.name)
+    const choice = app.locator(`[data-project-access-choice="${run.nora.id}"]`)
+    await choice.waitFor({ timeout: 30_000 })
+    await choice.click()
+    await app.locator('[data-project-access-new-role]').selectOption(PROJECT_SETTINGS_EXPECTED.nora)
+    await app.locator('[data-add-project-user]').click()
+    await app
+      .locator(
+        `[data-project-access-user="${run.nora.id}"], [data-project-access-kept="${run.nora.id}"]`,
+      )
+      .first()
+      .waitFor({ timeout: 30_000 })
+    // Review time, saved on leaving the field
+    const review = app.locator('[data-project-review-hours]')
+    await review.fill(String(PROJECT_SETTINGS_EXPECTED.reviewHours))
+    await review.press('Enter')
+    const saved = async () => {
+      const p = await restOk(w, 'GET', `/projects/${sub.id}`)
+      return {
+        team: p.grants.teams.find((g) => g.id === team.id)?.level,
+        nora: p.grants.users.find((g) => g.id === run.nora.id)?.level,
+        reviewHours: p.review_hours,
+      }
+    }
+    let last = null
+    expect(
+      await until(async () => {
+        last = await saved()
+        return (
+          last.team === PROJECT_SETTINGS_EXPECTED.team &&
+          last.nora === PROJECT_SETTINGS_EXPECTED.nora &&
+          last.reviewHours === PROJECT_SETTINGS_EXPECTED.reviewHours
+        )
+      }, 30_000),
+      `${sub.name} holds ${JSON.stringify(last)}`,
+    )
+    return `on ${sub.name}'s Settings page set ${team.name} to Viewer, added ${run.nora.name} as User through the picker's search and set Review time to 3, each saved`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -6148,6 +6253,8 @@ async function main() {
   await settingsLabelsCheck()
   // the removal window and its Reassign picker on a sub-project of its own
   await removalWindowCheck()
+  // a project's Settings page on the server's reads, on a sub-project of its own
+  await projectSettingsCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

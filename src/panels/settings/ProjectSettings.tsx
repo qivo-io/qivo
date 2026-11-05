@@ -1,4 +1,11 @@
-/* Visible project navigation, archived projects and project access settings. */
+/* Visible project navigation, archived projects and a project's settings.
+   A project's Settings page reads the project, its parent, its lead and
+   every right from the server (projectSettings.get, useProjectSettings),
+   its access lists and pickers too (components/ProjectAccessEditor.tsx),
+   and sends every write with what it showed, so it works the same for a
+   project the workspace does not hold. It reads the workspace only for the
+   Sub-projects section, the names the removal window and the Archive or
+   delete window give, and the avatars. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -6,9 +13,9 @@ import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
 import { LIMITS } from '../../../convex/lib/limits'
-import { DEFAULT_REVIEW_HOURS, roundReviewHours } from '../../../convex/lib/review'
+import { roundReviewHours } from '../../../convex/lib/review'
 import { navRowDiv } from '../../components/navRow'
-import { ProjectAccessEditor } from '../../components/ProjectAccessEditor'
+import { LeadPicker, ProjectAccessEditor } from '../../components/ProjectAccessEditor'
 import { Icon, MenuItem, Popover, ProjectName } from '../../components/qivo'
 import {
   FieldHint,
@@ -19,21 +26,23 @@ import {
 } from '../../components/settingsPage'
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
-import { limitSentence } from '../../lib/fieldLimits'
+import { limitSentence, sentence } from '../../lib/fieldLimits'
 import {
   focusAround,
   menuTrigger,
   useFocusAfterRender,
   useFocusWhenGone,
 } from '../../lib/focusWhenGone'
-import { useFieldUnsaved, useUnsaved } from '../../lib/leaveGuard'
+import { useUnsaved } from '../../lib/leaveGuard'
+import { REVIEW_HOURS, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import type { AccessLevel, ArchivedProjectVM, ProjectVM } from '../../store/planner'
-import { P } from '../../store/planner'
+import { grantRemoval, P } from '../../store/planner'
 import { ArchiveOrDeleteProjectModal } from '../Modals'
 import { useAccessRemoval } from '../useAccessRemoval'
-import { BackLink, DemoCapabilityNotice, TextField, Toggle } from './controls'
+import { BackLink, DemoCapabilityNotice, DraftConflictLine, TextField, Toggle } from './controls'
 import { InviteOutcome } from './UserControls'
+import { type ProjectSettingsRead, type SettingsOk, useProjectSettings } from './useProjectSettings'
 
 // Show home projects first, then foreign organizations. Remember one expanded
 // project for this browser session; access settings determine visibility.
@@ -462,14 +471,29 @@ export function ArchivedProjectsPage() {
   )
 }
 
+/** What the Archive or delete window holds of the project it opened with,
+    from the page's answer. */
+type RemovalShown = {
+  id: string
+  name: string
+  type: SettingsOk['project']['type']
+  orgId: string
+  parent: string | null
+}
+
 export function ProjectPage({
   projectId,
+  read: given,
   setPage,
   onBackPage = setPage,
   onProjectGone,
   onHolding,
 }: {
   projectId: string
+  /** the read of the project's settings that Settings holds for this page
+      (useProjectSettings), so Try again subscribes afresh; a page rendered
+      on its own reads its own */
+  read?: ProjectSettingsRead
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
   onProjectGone?: (parent: string | null) => void
@@ -483,20 +507,29 @@ export function ProjectPage({
       text lets go (lib/discardQuestion.ts closeOrAsk). */
   onHolding?: (projectId: string | null) => void
 }) {
-  const proj = P.project(projectId)
+  /* The page reads its project, its parent, its lead and every right from
+     the server, and shows nothing of the project until that answer comes
+     (useProjectSettings). It keeps one watch of that read: a second one
+     beside Settings' would join the subscription Settings holds, so its
+     Try again would read back the failure Convex stored and never ask the
+     server again. */
+  const own = useProjectSettings(given ? null : projectId)
+  const read = given ?? own
   /* The Archive or delete window, from the section at the end of the page.
      It holds the project as it was when the window opened, so it stays up
-     when the project leaves the board, whether by a delete it sent before
-     the server's answer, a refused one or someone else's change. It is the
+     when the project leaves, whether by a delete it sent before the
+     server's answer, a refused one or someone else's change. It is the
      page's last child with or without the project, so React keeps the same
      window, still deleting, until that answer closes it. */
-  const [removing, setRemovingState] = useStateS<ProjectVM | null>(null)
-  const setRemoving = (shown: ProjectVM | null) => {
+  const [removing, setRemovingState] = useStateS<RemovalShown | null>(null)
+  const setRemoving = (shown: RemovalShown | null) => {
     setRemovingState(shown)
     onHolding?.(shown ? shown.id : null)
   }
   const removeButton = React.useRef<HTMLButtonElement>(null)
-  const removalWindow = (shown: ProjectVM) => {
+  const gone = read.state === 'unavailable' || read.state === 'archived'
+  const removalWindow = (shown: RemovalShown) => {
+    const showing = { orgId: shown.orgId }
     // Archiving lands on the Archived projects page rather than back on the
     // list, because the page that can take it back is where you should be
     // standing when the toast appears.
@@ -505,20 +538,21 @@ export function ProjectPage({
       if (P.refusePausedEdit()) return
       // the hold stays until the page moves (onHolding)
       setRemovingState(null)
-      P.archiveProject(shown.id)
+      P.archiveProject(shown.id, showing)
       window.showToast?.(`Archived “${shown.name}”`)
-      onProjectGone?.(shown.parent || null)
+      onProjectGone?.(shown.parent)
       setPage('projects-archived')
     }
     // the window waits for the server, so a refusal leaves it open
     const del = async (reason: string) => {
-      const parent = shown.parent || null
-      if (!(await P.removeProject(shown.id, reason))) return false
+      const parent = shown.parent
+      if (!(await P.removeProject(shown.id, reason, showing))) return false
       setRemovingState(null)
       window.showToast?.(`Deleted “${shown.name}”`)
       onProjectGone?.(parent)
-      // a sub-project falls back to its project; a project back to the list it
-      // was opened from (never to some other project the caller may not see)
+      // a sub-project falls back to its project while the workspace holds
+      // it; a project back to the list it was opened from (never to some
+      // other project the caller may not see)
       if (parent && P.project(parent)) setPage(`project:${parent}`)
       else setPage('projects')
       return true
@@ -526,7 +560,7 @@ export function ProjectPage({
     return (
       <ArchiveOrDeleteProjectModal
         project={shown}
-        gone={!proj}
+        gone={gone}
         onClose={() => setRemoving(null)}
         onArchive={archive}
         onDelete={del}
@@ -534,19 +568,98 @@ export function ProjectPage({
       />
     )
   }
+  const answer = read.answer
   return (
-    <>
-      {proj && (
+    <div
+      data-project-settings-state={read.state}
+      aria-busy={read.state === 'loading' || read.state === 'refreshing' || undefined}
+      className="contents"
+    >
+      <ProjectPageTitle answer={answer} onBackPage={onBackPage} />
+      {answer ? (
         <ProjectSettingsFields
-          proj={proj}
+          answer={answer}
+          read={read}
           setPage={setPage}
-          onBackPage={onBackPage}
           removeButton={removeButton}
-          onRemove={() => setRemoving(proj)}
+          onRemove={() =>
+            setRemoving({
+              id: answer.project.id,
+              name: answer.project.name,
+              type: answer.project.type,
+              orgId: answer.project.org_id,
+              parent: answer.parent?.id ?? null,
+            })
+          }
         />
+      ) : (
+        <SettingsFrame read={read} />
       )}
       {removing && removalWindow(removing)}
+    </div>
+  )
+}
+
+/* A project page's Back link and title. Until the first answer they read
+   Projects and "Project settings"; then the title names the project, and
+   a sub-project's Back goes to the project above it, where the delete
+   also goes while the workspace holds that project. The heading stays one
+   element through both, so the focus Settings gives it as it opens the
+   page by keyboard stays once the fields come. */
+function ProjectPageTitle({
+  answer,
+  onBackPage,
+}: {
+  answer: SettingsOk | null
+  onBackPage: (page: string) => void
+}) {
+  const parent = answer?.parent ?? null
+  const isMeta = answer?.project.type === 'meta'
+  return (
+    <>
+      <BackLink
+        to={parent ? parent.name : 'Projects'}
+        onClick={() => onBackPage(parent ? `project:${parent.id}` : 'projects')}
+      />
+      <PageTitle
+        sub={
+          answer && !isMeta ? 'Controlled by its own lead; permissions can be shared.' : undefined
+        }
+      >
+        {answer ? (
+          <>
+            {answer.project.name}
+            <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
+              {isMeta ? 'Project' : 'Sub-project'}
+            </span>
+          </>
+        ) : (
+          'Project settings'
+        )}
+      </PageTitle>
     </>
+  )
+}
+
+/* A project page before its first answer, after a failure without one, or
+   for a project the server no longer shows: one line under the title, and
+   no field, right or list. */
+function SettingsFrame({ read }: { read: ProjectSettingsRead }) {
+  if (read.state === 'failed')
+    return (
+      <div role="alert" className="flex flex-wrap items-center gap-3 text-base text-text-2">
+        Couldn't load project settings.
+        <Button type="button" size="sm" onClick={read.retry}>
+          Try again
+        </Button>
+      </div>
+    )
+  return (
+    <p role="status" className="text-base text-text-2">
+      {read.state === 'loading' || read.state === 'refreshing'
+        ? 'Loading project settings…'
+        : 'This project is no longer available.'}
+    </p>
   )
 }
 
@@ -565,86 +678,73 @@ function focusAfterAccessRemoval(kind: 'team' | 'user', id: string) {
   )
 }
 
-/** A project's settings sections while the project is in the store, for
+/** A project's settings sections from the server's answer, for
     ProjectPage, which owns the Archive or delete window that `onRemove`
-    opens and gives focus back to `removeButton`. */
+    opens and gives focus back to `removeButton`. Every right comes from the
+    answer. While the answer is not current after a failure, or the project
+    has gone, every control of the page that writes is off, and a typed text
+    stays. A removal window or the Archive or delete window that is already
+    open acts on its own server preview, and the server checks each of its
+    writes again. */
 function ProjectSettingsFields({
-  proj,
+  answer,
+  read,
   setPage,
-  onBackPage,
   removeButton,
   onRemove,
 }: {
-  proj: ProjectVM
+  answer: SettingsOk
+  read: ProjectSettingsRead
   setPage: (page: string) => void
-  onBackPage: (page: string) => void
   removeButton: React.RefObject<HTMLButtonElement | null>
   onRemove: () => void
 }) {
+  const { project } = answer
+  const shown = { orgId: project.org_id }
+  // after a failure, Try again's wait included, or for a project that
+  // left, no control of the page writes until an answer is current again
+  const gone = read.state === 'unavailable' || read.state === 'archived'
+  const blocked = read.afterFailure || gone
   const [grantRole, setGrantRole] = useStateS<AccessLevel>('user')
   /* Removing a grant asks the server which open tasks it would take out of
      someone's sight, and when some, whether to keep them as Viewers or
      reassign their tasks (useAccessRemoval). Focus then goes to the target
      taken as the press starts (focusAfterAccessRemoval). */
   const removal = useAccessRemoval()
-  const [inviteEmail, setInviteEmail] = useStateS('')
-  const [inviting, setInviting] = useStateS(false)
-  /* The seats this form's invitations emailed, newest last, for
-     InviteOutcome. Each stays until the window closes, so a later invitation
-     does not hide an earlier one's result. */
-  const [emailed, setEmailed] = useStateS<{ seat: string; email: string }[]>([])
-  useUpdateBlocker(!!inviteEmail || inviting)
-  useUnsaved(!!inviteEmail.trim(), 'email')
-  // the review time typed and not yet saved (the field saves on blur)
-  const reviewUnsaved = useFieldUnsaved(
-    P.editsPaused,
-    `${proj.id}:${proj.reviewHours ?? ''}`,
-    'review hours',
-  )
-  // a review time refused on blur stays typed and marked until it changes
-  const [reviewRefused, setReviewRefused] = useStateS(false)
+  // the choice controls' values on their way to the server: they keep no
+  // draft (row 373), and show what was chosen until the write is answered
+  const [delayChosen, setDelayChosen] = useStateS<boolean | null>(null)
+  const [leadChosen, setLeadChosen] = useStateS<{ id: string; name: string } | null>(null)
   const accessHeading = React.useRef<HTMLDivElement>(null)
-  const isMeta = proj.type === 'meta'
-  const parentMeta = proj.parent ? P.project(proj.parent) : null
-  // what an empty Review time box means: the parent project's effective
-  // value for a sub-project, the default for a project
-  const inheritedReview = parentMeta ? P.reviewHoursFor(parentMeta.id) : DEFAULT_REVIEW_HOURS
-  const visibleChildren = isMeta
-    ? (proj.children || [])
-        .map((id) => P.project(id))
-        .filter((child) => !!child && P.canSee(child.id))
-    : []
-  // Organization admins already have full access; everyone else can receive
-  // a direct grant independently of team membership.
-  const grantable = P.usersFor(proj.id).filter((u) => u.orgRole !== 'admin' && !proj.access?.[u.id])
-  const isLead = P.levelOn(proj.id) === 'lead'
-  const canManageUsers = P.canManageProjectUsers(proj.id)
-  const canManageTeams = P.canManageProjectTeams(proj.id)
-  const inviteTarget = P.users.find(
-    (user) =>
-      user.org === proj.org && user.email?.toLowerCase() === inviteEmail.trim().toLowerCase(),
-  )
-  const canInvite =
-    canManageUsers && (!inviteTarget || P.canManageProjectUser(proj.id, inviteTarget.id))
+  const isMeta = project.type === 'meta'
+  // the workspace's copy, read only for the Sub-projects section until
+  // t3/limits-project-admin-ui reads it from the server
+  const held = P.project(project.id)
+  const visibleChildren =
+    held && isMeta
+      ? (held.children || [])
+          .map((id) => P.project(id))
+          .filter((child) => !!child && P.canSee(child.id))
+      : []
   const subCount = visibleChildren.length
+  const trackDelay = delayChosen ?? project.track_delay
+  const lead = leadChosen ?? (answer.lead ? { id: answer.lead.id, name: answer.lead.name } : null)
+  const grant = (kind: 'team' | 'user', id: string) =>
+    grantRemoval(kind, project.id, id, project.org_id, isMeta)
   return (
     <>
-      {/* A sub-project goes back to the project above it, anything else to the
-          listing — the same target the delete below picks, and for the same
-          reason: an archived or unreadable parent leaves `parentMeta` null, so
-          the fallback is the list rather than a page that would not render. */}
-      <BackLink
-        to={parentMeta ? parentMeta.name : 'Projects'}
-        onClick={() => onBackPage(parentMeta ? `project:${parentMeta.id}` : 'projects')}
-      />
-      <PageTitle
-        sub={isMeta ? undefined : 'Controlled by its own lead; permissions can be shared.'}
-      >
-        {proj.name}
-        <span className="[font-size:var(--fs-sm)] [font-weight:500] [color:var(--text-2)] [margin-left:10px]">
-          {isMeta ? 'Project' : 'Sub-project'}
-        </span>
-      </PageTitle>
+      {read.afterFailure && !gone && (
+        <div
+          role="alert"
+          data-project-settings-failed=""
+          className="mb-6 flex flex-wrap items-center gap-3 text-base text-danger"
+        >
+          Couldn't load project settings. Changes are off until they load.
+          <Button type="button" size="sm" onClick={read.retry}>
+            Try again
+          </Button>
+        </div>
+      )}
 
       <Button
         variant="outline"
@@ -655,20 +755,21 @@ function ProjectSettingsFields({
         }}
       >
         <Icon name="people" size={16} />
-        {canManageUsers ? 'Manage people' : 'View project access'}
+        {answer.can_manage_users ? 'Manage people' : 'View project access'}
         <Icon name="chevronDown" size={16} />
       </Button>
 
       <SettingsSection title={isMeta ? 'Project' : 'Sub-project'}>
         <TextField
           label="Name"
-          record={proj.id}
-          value={proj.name}
+          record={project.id}
+          value={project.name}
           limit={LIMITS.projectName}
-          disabled={!isLead}
+          disabled={!answer.can_edit}
+          readOnly={blocked}
           onCommit={(v, save) => {
             // the toast waits for the server, so a refusal never reads as done
-            void P.updateProject(proj.id, { name: v }, save.as('name')).then((saved) => {
+            void P.updateProject(project.id, { name: v }, save.as('name'), shown).then((saved) => {
               if (saved) window.showToast?.(`Renamed to “${v}”`)
             })
           }}
@@ -676,13 +777,14 @@ function ProjectSettingsFields({
         {isMeta && (
           <TextField
             label="Description"
-            record={proj.id}
+            record={project.id}
             multiline
             limit={LIMITS.projectDescription}
-            value={proj.description || ''}
-            disabled={!isLead}
+            value={project.description}
+            disabled={!answer.can_edit}
+            readOnly={blocked}
             onCommit={(v, save) =>
-              P.updateProject(proj.id, { description: v }, save.as('description'))
+              P.updateProject(project.id, { description: v }, save.as('description'), shown)
             }
             width={520}
           />
@@ -690,7 +792,7 @@ function ProjectSettingsFields({
         <SettingsField
           label="Delay tracking"
           hint={
-            proj.trackDelay ? (
+            trackDelay ? (
               <>
                 Yellow: projected to miss the planned end.
                 <br />
@@ -702,14 +804,25 @@ function ProjectSettingsFields({
           }
         >
           <div className="[display:flex] [align-items:center] [gap:8px]">
-            <span data-project-delay-toggle className="[display:inline-flex]">
+            <span
+              data-project-delay-toggle
+              aria-busy={delayChosen !== null || undefined}
+              className="[display:inline-flex]"
+            >
               <Toggle
-                on={proj.trackDelay}
-                disabled={!isLead}
-                title={proj.trackDelay ? 'Delay tracking is on' : 'Delay tracking is off'}
+                on={trackDelay}
+                disabled={!answer.can_edit || blocked || delayChosen !== null}
+                title={trackDelay ? 'Delay tracking is on' : 'Delay tracking is off'}
                 onClick={() => {
-                  const v = !proj.trackDelay
-                  void P.updateProject(proj.id, { trackDelay: v }).then((saved) => {
+                  const v = !project.track_delay
+                  setDelayChosen(v)
+                  void P.updateProject(
+                    project.id,
+                    { trackDelay: v },
+                    { seen: { track_delay: project.track_delay } },
+                    shown,
+                  ).then((saved) => {
+                    setDelayChosen(null)
                     if (saved)
                       window.showToast?.(
                         v ? 'Projected delays are highlighted' : 'Tasks stay neutral',
@@ -719,92 +832,44 @@ function ProjectSettingsFields({
               />
             </span>
             <span className="[font-size:var(--fs-base)] [color:var(--text-1)]">
-              {proj.trackDelay ? 'Projected delays highlighted' : 'Tasks stay neutral'}
+              {trackDelay ? 'Projected delays highlighted' : 'Tasks stay neutral'}
             </span>
           </div>
         </SettingsField>
-        {/* The remaining time a task gets on entering Review (#314). Empty
-            inherits: a sub-project takes its project's value, a project the
-            default. 0 is a real setting, so never test the parse for truth. */}
-        <SettingsField
-          label="Review time"
+        <ReviewTimeField
+          answer={answer}
+          disabled={!answer.can_edit}
+          readOnly={blocked}
           hint={
             isMeta
               ? 'Remaining time a task gets when it moves into Review. Sub-projects use it unless they set their own.'
               : "Remaining time a task gets when it moves into Review. Empty uses the project's time."
           }
-        >
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              min={LIMITS.reviewHours.min}
-              max={LIMITS.reviewHours.max}
-              step={0.5}
-              data-project-review-hours
-              aria-label="Review time"
-              aria-invalid={reviewRefused || undefined}
-              {...reviewUnsaved}
-              key={`review:${proj.id}:${proj.reviewHours ?? ''}`}
-              defaultValue={proj.reviewHours ?? ''}
-              placeholder={String(inheritedReview)}
-              disabled={!isLead}
-              onChange={() => setReviewRefused(false)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur()
-              }}
-              onBlur={(e) => {
-                if (!isLead) return
-                const el = e.currentTarget
-                const raw = el.value.trim()
-                const own = proj.reviewHours ?? null
-                // an unparsable entry reads as '' too, so it is caught before
-                // the empty case would take it for a clear
-                const n = Number(raw)
-                if (el.validity.badInput || !Number.isFinite(n)) {
-                  el.value = own === null ? '' : String(own)
-                  return
-                }
-                if (!raw) {
-                  if (own !== null) {
-                    void P.updateProject(proj.id, { reviewHours: null }).then((saved) => {
-                      if (saved) window.showToast?.(`Review time set to ${inheritedReview} h`)
-                    })
-                  }
-                  return
-                }
-                // the typed number against the range, as the server checks
-                // it, so -0.04 is refused rather than saved as 0
-                if (n < LIMITS.reviewHours.min || n > LIMITS.reviewHours.max) {
-                  setReviewRefused(true)
-                  window.showToast?.(limitSentence(LIMITS.reviewHours), 'error')
-                  return
-                }
-                const h = roundReviewHours(n)
-                el.value = String(h)
-                if (h === own) return
-                void P.updateProject(proj.id, { reviewHours: h }).then((saved) => {
-                  if (saved) window.showToast?.(`Review time set to ${h} h`)
-                })
-              }}
-              className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
-            />
-            <span className="text-base text-text-2">hours</span>
-          </div>
-        </SettingsField>
+        />
         <SettingsField label="Lead" hint="Controls this project's settings and access.">
-          <NativeSelect
-            aria-label="Lead"
-            value={proj.lead || parentMeta?.lead || ''}
-            disabled={!canManageUsers}
-            onChange={(event) => P.setProjectAccess(proj.id, event.target.value, 'lead')}
-            className="h-control w-full bg-surface-1 text-base font-sans"
-          >
-            {P.assigneesFor(proj.id).map((user) => (
-              <option key={user.id} value={user.id}>
-                {user.name}
-              </option>
-            ))}
-          </NativeSelect>
+          <LeadPicker
+            on={{ org_id: project.org_id, project_id: project.id }}
+            lead={
+              lead && answer.lead?.inherited && !leadChosen
+                ? { ...lead, name: `${lead.name} (from the project)` }
+                : lead
+            }
+            disabled={!answer.can_change_lead || blocked}
+            busy={leadChosen !== null}
+            onPick={(person) => {
+              // a pick of the lead shown changes nothing, a legacy
+              // sub-project's inherited lead included, which a write would
+              // pin to the sub-project, dropping that person's grant on it
+              if (person.id === project.lead_id || person.id === answer.lead?.id) return
+              setLeadChosen(person)
+              void P.updateProject(
+                project.id,
+                { lead: person.id },
+                { seen: { lead_id: project.lead_id } },
+                shown,
+              ).then(() => setLeadChosen(null))
+            }}
+          />
         </SettingsField>
       </SettingsSection>
       {isMeta && (
@@ -834,8 +899,11 @@ function ProjectSettingsFields({
               </Button>
             ))}
             {visibleChildren.length === 0 && (
-              <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]">
-                No sub-projects yet.
+              <div
+                data-project-subprojects-none=""
+                className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]"
+              >
+                {held ? 'No sub-projects yet.' : "Sub-projects can't be listed here yet."}
               </div>
             )}
           </div>
@@ -853,87 +921,37 @@ function ProjectSettingsFields({
       >
         <div className="settings-project-members">
           <ProjectAccessEditor
-            teams={P.teams.filter((team) => team.org === proj.org)}
-            users={grantable}
-            teamAccess={proj.teamAccess || {}}
-            access={proj.access || {}}
-            onTeamChange={(teamId, level) =>
-              level === null
-                ? removal.press(
-                    { kind: 'teamGrant', projectId: proj.id, teamId },
-                    focusAfterAccessRemoval('team', teamId),
-                  )
-                : P.setProjectTeamAccess(proj.id, teamId, level)
-            }
-            onUserChange={(userId, level) =>
-              level === null
-                ? removal.press(
-                    { kind: 'userGrant', projectId: proj.id, userId },
-                    focusAfterAccessRemoval('user', userId),
-                  )
-                : P.setProjectAccess(proj.id, userId, level)
-            }
-            checking={(kind, id) =>
-              removal.checking(
-                kind === 'team'
-                  ? { kind: 'teamGrant', projectId: proj.id, teamId: id }
-                  : { kind: 'userGrant', projectId: proj.id, userId: id },
-              )
-            }
+            project={{ id: project.id, org_id: project.org_id }}
+            canManageUsers={answer.can_manage_users}
+            canManageTeams={answer.can_manage_teams}
+            canChangeLead={answer.can_change_lead}
+            current={!blocked}
             role={grantRole}
             onRoleChange={setGrantRole}
-            canManageUsers={canManageUsers}
-            canManageTeams={canManageTeams}
-            canManageUser={(userId) => P.canManageProjectUser(proj.id, userId)}
+            onLevel={(kind, id, level, was) =>
+              kind === 'team'
+                ? P.setProjectTeamAccess(project.id, id, level === 'viewer' ? 'viewer' : 'user', {
+                    ...shown,
+                    level: was,
+                  })
+                : P.setProjectAccess(project.id, id, level, {
+                    ...shown,
+                    level: was,
+                    leadId: project.lead_id,
+                  })
+            }
+            onRemove={(kind, id) =>
+              removal.press(grant(kind, id), focusAfterAccessRemoval(kind, id))
+            }
+            checking={(kind, id) => removal.checking(grant(kind, id))}
+            removing={(kind, id) => P.removingAccess(grant(kind, id))}
           />
           {removal.window}
           {/* External invitees gain a guest seat with access to this project. */}
           {DEMO_MODE ? (
             <DemoCapabilityNotice>Inviting people is unavailable in the demo.</DemoCapabilityNotice>
           ) : (
-            <SettingsGroup legend="Invite by email" className="settings-project-invite">
-              <div className="[display:flex] [gap:8px]">
-                <Input
-                  data-invite-email
-                  disabled={!canManageUsers}
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  placeholder="Email address"
-                  aria-label="Invite by email"
-                  type="email"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.currentTarget.blur()
-                  }}
-                  className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
-                />
-                <Button
-                  type="button"
-                  disabled={!canInvite || !inviteEmail.trim() || inviting}
-                  onClick={async () => {
-                    if (!canInvite) return
-                    setInviting(true)
-                    const invited = await P.inviteToProject(proj.id, inviteEmail, grantRole)
-                    setInviting(false)
-                    if (invited) {
-                      window.showToast?.(`${inviteEmail.trim()} was added to “${proj.name}”`)
-                      const seat = invited.emailed
-                      if (seat)
-                        setEmailed((all) => [
-                          ...all.filter((e) => e.seat !== seat),
-                          { seat, email: inviteEmail.trim() },
-                        ])
-                      setInviteEmail('')
-                    }
-                  }}
-                >
-                  <Icon name="plus" size={16} />
-                  {inviting ? 'Inviting…' : 'Invite'}
-                </Button>
-              </div>
-              {emailed.map((e) => (
-                <InviteOutcome key={e.seat} orgId={proj.org} seat={e.seat} email={e.email} />
-              ))}
-            </SettingsGroup>
+            <InviteForm answer={answer} blocked={blocked} />
           )}
           <FieldHint>
             Organization admins retain access. Assigning a new Lead changes the previous Lead to
@@ -945,21 +963,23 @@ function ProjectSettingsFields({
       {/* Archive is the answer to almost every reason someone opens this, and
           the window offers it first; the counts come with the window, because
           only the lead may read them and the store holds no archived tasks. */}
-      <SettingsSection title="Archive or delete" data-project-removal={proj.id}>
+      <SettingsSection title="Archive or delete" data-project-removal={project.id}>
         <div className="flex items-center gap-4">
           <p className="min-w-0 flex-1 text-sm leading-normal text-text-2">
-            {isLead && isMeta && subCount
+            {answer.can_archive && isMeta && held && subCount
               ? `Archive hides it and its ${subCount} sub-project${subCount === 1 ? '' : 's'}. Delete moves them and their tasks to Deleted items.`
-              : isMeta && !isLead
+              : isMeta && (!answer.can_archive || !held)
                 ? 'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.'
                 : 'Archive hides it. Delete moves it and its tasks to Deleted items.'}
           </p>
           <Button
             ref={removeButton}
             type="button"
-            data-remove-project={proj.id}
-            disabled={!isLead}
-            title={isLead ? undefined : "Only the project's lead can archive or delete it"}
+            data-remove-project={project.id}
+            disabled={!answer.can_archive || blocked}
+            title={
+              answer.can_archive ? undefined : "Only the project's lead can archive or delete it"
+            }
             onClick={onRemove}
           >
             <Icon name="archive" size={16} />
@@ -968,5 +988,221 @@ function ProjectSettingsFields({
         </div>
       </SettingsSection>
     </>
+  )
+}
+
+/* The remaining time a task gets on entering Review (#314), as a draft
+   against the saved value it began from (lib/savedDraft.ts REVIEW_HOURS),
+   saved on blur and Enter. Empty inherits: a sub-project takes its
+   project's value, a project the default, which the placeholder shows.
+   0 is a real setting, so the parse is never tested for truth. On blur:
+   an unparsable entry, and an empty field over an empty saved value, show
+   the saved value; a number outside LIMITS.reviewHours stays typed and
+   marked with the limit's sentence; a number that rounds to the saved
+   value shows it; a value changed elsewhere waits for Use saved or Keep
+   mine, and a paused save keeps the text; else it saves, null for an
+   empty field, the rounded number otherwise. */
+function ReviewTimeField({
+  answer,
+  disabled,
+  readOnly,
+  hint,
+}: {
+  answer: SettingsOk
+  disabled: boolean
+  readOnly: boolean
+  hint: string
+}) {
+  const { project } = answer
+  const draft = useSavedDraft(
+    `${project.id}:review_hours`,
+    project.review_hours,
+    REVIEW_HOURS,
+    'review time',
+    disabled,
+  )
+  // a number refused on blur stays typed and marked until the field changes
+  const [refused, setRefused] = useStateS(false)
+  const inherited = answer.inherited_review_hours
+  const save = (hours: number | null, toast: number) => {
+    void P.updateProject(project.id, { reviewHours: hours }, draft.save(hours).as('review_hours'), {
+      orgId: project.org_id,
+    }).then((saved) => {
+      if (saved) window.showToast?.(`Review time set to ${toast} h`)
+    })
+  }
+  const commit = (el: HTMLInputElement) => {
+    if (disabled || readOnly) return
+    const raw = draft.text.trim()
+    // an unparsable entry reads as '' too, so it is caught before the
+    // empty case would take it for a clear
+    const n = Number(raw)
+    if (el.validity.badInput || !Number.isFinite(n)) return draft.showSaved()
+    if (!raw) {
+      if (project.review_hours === null) return draft.showSaved()
+      if (draft.conflict || P.refusePausedEdit()) return
+      return save(null, inherited)
+    }
+    // the typed number against the range, as the server checks it, so
+    // -0.04 is refused rather than saved as 0
+    if (n < LIMITS.reviewHours.min || n > LIMITS.reviewHours.max) {
+      setRefused(true)
+      window.showToast?.(limitSentence(LIMITS.reviewHours), 'error')
+      return
+    }
+    const h = roundReviewHours(n)
+    if (draft.isSaved(String(h))) return draft.showSaved()
+    if (draft.conflict || P.refusePausedEdit()) return
+    draft.edit(String(h))
+    save(h, h)
+  }
+  return (
+    <SettingsField label="Review time" hint={hint}>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          min={LIMITS.reviewHours.min}
+          max={LIMITS.reviewHours.max}
+          step={0.5}
+          data-project-review-hours
+          aria-label="Review time"
+          aria-invalid={(refused && draft.unsaved) || undefined}
+          aria-describedby={draft.conflict ? draft.conflictId : undefined}
+          value={draft.text}
+          placeholder={String(inherited)}
+          disabled={disabled}
+          readOnly={readOnly || undefined}
+          onChange={(e) => {
+            setRefused(false)
+            draft.edit(e.target.value)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          onBlur={(e) => commit(e.currentTarget)}
+          className="h-control w-15 bg-surface-1 px-2.5 text-base font-sans"
+        />
+        <span className="text-base text-text-2">hours</span>
+      </div>
+      <DraftConflictLine draft={draft} text={REVIEW_HOURS.text} />
+    </SettingsField>
+  )
+}
+
+/* Invite by email. The press asks the server which seat the address names
+   and the level that seat holds on the project (P.projectInviteTarget),
+   then sends the invitation with that level as its `expected`, so a seat or
+   grant made in between refuses it. Inviting… covers both calls, and the
+   field, the level and the button stay off until both answer. The form's
+   own level is User or Viewer; once the lookup finds an organization
+   viewer for the address, only Viewer for that address, which it says
+   rather than change the level unseen. The chosen level stays as it was,
+   so another address, or the next invitation, goes out with it again. A
+   lookup that fails or refuses sends nothing and says why. */
+function InviteForm({ answer, blocked }: { answer: SettingsOk; blocked: boolean }) {
+  const { project } = answer
+  const [email, setEmail] = useStateS('')
+  const [level, setLevel] = useStateS<'user' | 'viewer'>('user')
+  // the address the lookup found an organization viewer for
+  const [viewerAddress, setViewerAddress] = useStateS<string | null>(null)
+  const [inviting, setInviting] = useStateS(false)
+  const [note, setNote] = useStateS<string | null>(null)
+  /* The seats this form's invitations emailed, newest last, for
+     InviteOutcome. Each stays until the page closes, so a later invitation
+     does not hide an earlier one's result. */
+  const [emailed, setEmailed] = useStateS<{ seat: string; email: string }[]>([])
+  useUpdateBlocker(!!email || inviting)
+  useUnsaved(!!email.trim(), 'email')
+  const typed = email.trim()
+  const viewerOnly = viewerAddress !== null && viewerAddress === typed.toLowerCase()
+  const sending = viewerOnly ? 'viewer' : level
+  const canInvite = answer.can_invite && !blocked
+  const invite = async () => {
+    if (!canInvite || !typed || inviting) return
+    // the lookup would wait for the connection a pause lost
+    if (P.refusePausedEdit()) return
+    setInviting(true)
+    setNote(null)
+    const found = await P.projectInviteTarget(project.org_id, project.id, typed)
+    if (found === null || found.state !== 'ready') {
+      setInviting(false)
+      setNote(
+        found === null
+          ? "Couldn't check this address. Nothing was sent."
+          : found.state === 'refused'
+            ? sentence(found.message)
+            : 'This project is no longer available.',
+      )
+      return
+    }
+    if (found.person?.org_role === 'viewer' && sending !== 'viewer') {
+      setInviting(false)
+      setViewerAddress(typed.toLowerCase())
+      setNote(
+        `${found.person.name} is an organization viewer, so they can only be given Viewer. Invite again to give them Viewer.`,
+      )
+      return
+    }
+    const invited = await P.inviteToProject(project.id, typed, sending, {
+      orgId: project.org_id,
+      level: found.level,
+    })
+    setInviting(false)
+    if (!invited) return
+    window.showToast?.(`${typed} was added to “${project.name}”`)
+    const seat = invited.emailed
+    if (seat) setEmailed((all) => [...all.filter((e) => e.seat !== seat), { seat, email: typed }])
+    setEmail('')
+  }
+  return (
+    <SettingsGroup legend="Invite by email" className="settings-project-invite">
+      <div className="[display:flex] [gap:8px]">
+        <Input
+          data-invite-email
+          disabled={!canInvite || inviting}
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value)
+            setNote(null)
+          }}
+          placeholder="Email address"
+          aria-label="Invite by email"
+          type="email"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+          }}
+          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans [flex:1]"
+        />
+        <NativeSelect
+          data-invite-level
+          aria-label="Invitation role"
+          disabled={!canInvite || inviting}
+          value={sending}
+          onChange={(e) => setLevel(e.target.value === 'viewer' ? 'viewer' : 'user')}
+          className="h-control w-28 shrink-0 bg-surface-1 text-base font-sans"
+        >
+          {!viewerOnly && <option value="user">User</option>}
+          <option value="viewer">Viewer</option>
+        </NativeSelect>
+        <Button
+          type="button"
+          data-invite-send
+          aria-busy={inviting || undefined}
+          disabled={!canInvite || !typed || inviting}
+          onClick={() => void invite()}
+        >
+          <Icon name="plus" size={16} />
+          {inviting ? 'Inviting…' : 'Invite'}
+        </Button>
+      </div>
+      {note && (
+        <p role="status" data-invite-note="" className="mt-2 text-sm text-text-2">
+          {note}
+        </p>
+      )}
+      {emailed.map((e) => (
+        <InviteOutcome key={e.seat} orgId={project.org_id} seat={e.seat} email={e.email} />
+      ))}
+    </SettingsGroup>
   )
 }

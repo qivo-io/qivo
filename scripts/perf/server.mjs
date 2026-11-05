@@ -148,6 +148,31 @@
 //                        state, the first team shares each program at
 //                        User, so a removal on Settings' team or program
 //                        pages opens the window
+//   projectsettings      states a project's Settings page reads answer
+//                        whatever the workspace says, for screenshots of
+//                        states a seeded backend cannot reach inside the
+//                        design size (src/store/projectSettingsStandIn.setup.ts):
+//                        not-ready (the lists and pickers answer
+//                        not_ready), stopped (each open batch stops after
+//                        ten rows), error (the lists, pickers and the
+//                        invite lookup fail), get-error (the page's own
+//                        read fails), loading (the page's own read never
+//                        answers), refused (the pickers and the invite
+//                        lookup answer with the write's refusal), small
+//                        (batches of five) and unheld (once a project's
+//                        page has read it, the workspace's parts leave the
+//                        project and its grants out while the page's reads
+//                        still answer them, as for a project an admin
+//                        manages without taking part in it); several
+//                        joined by commas. Open it with role=admin
+//   grants (0)           User grants on the first program for that many
+//                        more people, with more people in the
+//                        organization when it needs them, so the Users
+//                        list's Load more and its cap show (grants=210 is
+//                        past the 200 rows it gathers). With grants or
+//                        projectsettings the second person, an admin, leads
+//                        the first program, so its sub-projects show an
+//                        inherited lead
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -165,13 +190,18 @@
 // (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
 // reads no read budget. So are the project picker's navigation reads
 // (projectNav:page, children, search and resolve), through
-// src/store/projectNavStandIn.setup.ts, which judges the signed-in person
-// by ordinary access, reads no budget and has no favorites unless
-// projectnav=favorites asks. Archived tasks' own read (issues:archivedPage)
-// has no stand-in, so its page fails once projects are chosen here. So are
-// the removal window's reads (accessRemovals:preview and reassignChoices),
-// through src/store/removalStandIn.setup.ts, which takes the removed
-// people's open tasks in the projects the change reaches as the lost
+// src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
+// ordinary access, reads no budget and has no favorites unless
+// projectnav=favorites asks. Archived tasks' own read (issues:archivedPage) has
+// no stand-in, so its page fails once projects are chosen here. So are a
+// project's Settings page reads (projectSettings:get, users, teams, candidates,
+// leadCandidates and inviteTarget), through the stand-in the jsdom tests use
+// (src/store/projectSettingsStandIn.setup.ts), over the whole workspace, with
+// the access rules but no read budget, and the project writes they lead to
+// (projects:update, setAccess, removeAccess and inviteGuest) change the
+// workspace. So are the removal window's reads (accessRemovals:preview and
+// reassignChoices), through src/store/removalStandIn.setup.ts, which takes the
+// removed people's open tasks in the projects the change reaches as the lost
 // holdings and every person who can hold work as the choices, and answers a
 // chosen person's holder_eligible by that rule, without the server's rules.
 // The task window's read of a task resolves its ref
@@ -187,6 +217,7 @@ import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
+import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 
@@ -209,7 +240,8 @@ const linkShare = option('links', 0.05)
 const attachmentShare = option('attachments', 0.1)
 const subtaskShare = option('subtasks', 0.2)
 const followShare = option('follows', 0.1)
-const peopleCount = Math.max(2, option('people', 50))
+const grantCount = Math.max(0, option('grants', 0))
+const peopleCount = Math.max(2, option('people', 50), grantCount + 2)
 const hiddenCount = option('hidden', 4)
 const programCount = Math.max(1, option('programs', 1))
 const subprojectCount = Math.max(1, option('subprojects', 10))
@@ -290,6 +322,24 @@ const forcedRelations = (() => {
     else if (state === 'blocked') force.blocked = true
     else if (/^rows-\d+$/.test(state)) force.rows = Math.max(1, Number(state.slice(5)))
   }
+  return force
+})()
+/* A project's Settings page forced states (the `projectsettings`
+   parameter), as the stand-in's `force` takes them, and the two the
+   server handles itself: `loading`, a page read that never answers, and
+   `unheld`. */
+const settingsStates = new Set((parameters.get('projectsettings') ?? '').split(',').filter(Boolean))
+const forcedSettings = (() => {
+  const force = {}
+  if (settingsStates.has('not-ready')) force.notReady = true
+  if (settingsStates.has('stopped')) force.stop = 10
+  if (settingsStates.has('refused')) force.refused = true
+  if (settingsStates.has('small')) force.batch = 5
+  const fail = []
+  if (settingsStates.has('error'))
+    fail.push('users', 'teams', 'candidates', 'leadCandidates', 'inviteTarget')
+  if (settingsStates.has('get-error')) fail.push('get')
+  if (fail.length) force.fail = fail
   return force
 })()
 /* The removal window's forced states (the `removal` parameter). */
@@ -405,11 +455,21 @@ const programs = Array.from({ length: programCount }, (_, n) =>
   ),
 )
 const visible = programs[0]
+/* With projectsettings or grants, the second person, an admin, leads the
+   first program, and its sub-projects, which name no lead of their own,
+   are led by that lead, so their Settings pages show an inherited lead. */
+if (parameters.has('projectsettings') || grantCount) visible.meta.lead_id = profiles[1].id
 const hiddenNum = Math.max(20, 1 + programCount * (subprojectCount + 1))
 const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
 const projects = programs.flatMap((p) => p.children)
 // a grant on each program reaches its sub-projects; the hidden one has none
-const access = programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' }))
+const access = [
+  ...programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' })),
+  // `grants`: more people's User grants on the first program
+  ...profiles
+    .slice(2, 2 + grantCount)
+    .map((p) => ({ project_id: visible.meta.id, profile_id: p.id, level: 'user' })),
+]
 /* With the `removal` parameter, the first team shares each program at
    User, so a member's removal on its team page, or the team's own on a
    program's page, takes its members' tasks out of their sight and opens
@@ -728,13 +788,21 @@ const unheld = new Set(
     .slice(0, unheldCount)
     .map((row) => row.id),
 )
+/* The projects whose Settings page read them while
+   projectsettings=unheld, which the workspace's parts then leave out. */
+const settingsUnheld = new Set()
 /** The workspace as its parts and forMe send it: without the unheld tasks
-    and the rows hung on them. */
+    and the rows hung on them, and without the projects a Settings page read
+    under projectsettings=unheld, with their grants. */
 function heldWorkspace() {
-  if (unheld.size === 0) return snapshot
+  if (unheld.size === 0 && settingsUnheld.size === 0) return snapshot
   const held = (row) => !unheld.has(row.issue_id)
+  const shown = (row) => !settingsUnheld.has(row.project_id)
   return {
     ...snapshot,
+    projects: snapshot.projects.filter((p) => !settingsUnheld.has(p.id)),
+    access: snapshot.access.filter(shown),
+    teamAccess: snapshot.teamAccess.filter(shown),
     issues: snapshot.issues.filter((row) => !unheld.has(row.id)),
     issueLabels: snapshot.issueLabels.filter(held),
     attachments: snapshot.attachments.filter(held),
@@ -1096,6 +1164,7 @@ const read = (name, args = {}) => {
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
   if (name.startsWith('projectNav:'))
     return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+  if (name.startsWith('projectSettings:')) return readSettings(name, args)
   // the relation pickers' read, before the task window's other reads
   if (name === 'taskWindow:relationCandidates')
     return relationPickerStandIn(
@@ -1197,6 +1266,22 @@ const read = (name, args = {}) => {
     default:
       throw new Error(`Unimplemented benchmark query: ${name}`)
   }
+}
+/** What a project's Settings page read `name` answers for `args`, through
+    the stand-in over the whole workspace, so a project the parts leave
+    out still answers (projectsettings=unheld). */
+function readSettings(name, args) {
+  if (name === 'projectSettings:get' && settingsStates.has('loading')) return NO_ANSWER
+  if (
+    name === 'projectSettings:get' &&
+    settingsStates.has('unheld') &&
+    !settingsUnheld.has(args.id)
+  ) {
+    // the parts leave the project out from the next transition on
+    settingsUnheld.add(args.id)
+    setTimeout(() => void emitWorkspace(), 0)
+  }
+  return projectSettingsStandIn(snapshot, name, { org_id: org, ...args }, forcedSettings)
 }
 /** Delivers query `name`'s new result to its listeners, and resolves once
     it reached them. */
@@ -1367,6 +1452,56 @@ async function mutate(name, args) {
     }
     writes++
     return null
+  }
+  // a project's Settings page writes, applied as the server stores them
+  if (name === 'projects:update') {
+    const at = snapshot.projects.findIndex((p) => p.id === args.id)
+    if (at < 0) throw new Error('Unknown benchmark project')
+    const row = { ...snapshot.projects[at] }
+    for (const [field, value] of Object.entries(args.patch)) {
+      if (value === null) delete row[field]
+      else row[field] = value
+    }
+    const lead = args.patch.lead_id
+    if (lead && lead !== snapshot.projects[at].lead_id) {
+      // the outgoing lead keeps User, the incoming one's own grant goes
+      const was = snapshot.projects[at].lead_id
+      snapshot.access = [
+        ...snapshot.access.filter((a) => a.project_id !== args.id || a.profile_id !== lead),
+        ...(was ? [{ project_id: args.id, profile_id: was, level: 'user' }] : []),
+      ]
+    }
+    snapshot.projects = snapshot.projects.map((p, n) => (n === at ? row : p))
+    await emitWorkspace()
+    writes++
+    return null
+  }
+  if (name === 'projects:setAccess' || name === 'projects:removeAccess') {
+    const team = args.team_id !== undefined
+    const list = team ? 'teamAccess' : 'access'
+    const holder = team ? 'team_id' : 'profile_id'
+    const who = team ? args.team_id : args.user_id
+    const others = snapshot[list].filter((a) => a.project_id !== args.id || a[holder] !== who)
+    snapshot[list] =
+      name === 'projects:removeAccess'
+        ? others
+        : [...others, { project_id: args.id, [holder]: who, level: args.level }]
+    await emitWorkspace()
+    writes++
+    return null
+  }
+  if (name === 'projects:inviteGuest') {
+    const seat = snapshot.profiles.find((p) => p.email === args.email.trim().toLowerCase())
+    if (!seat) throw new Error('the benchmark invites only seats it holds')
+    snapshot.access = [
+      ...snapshot.access.filter(
+        (a) => a.project_id !== args.project_id || a.profile_id !== seat.id,
+      ),
+      { project_id: args.project_id, profile_id: seat.id, level: args.level },
+    ]
+    await emitWorkspace()
+    writes++
+    return { id: seat.id, emailed: false }
   }
   if (name === 'roadmap:change') {
     // Only dates change here, so no task becomes or stops being a group.

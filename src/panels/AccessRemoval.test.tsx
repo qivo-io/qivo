@@ -8,13 +8,18 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { CONFIRM_IGNORE_MS } from '../lib/useConfirmArm'
 import type { AccessRemoval, ReassignChoices, RemovalAnswer } from '../store/planner'
 import { plannerFixture } from '../store/plannerFixture.setup'
+import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
 
 /* The removal window and its press on the real store, fed one snapshot.
    The signed-in Planner is an organization admin; Leo edits the project and
    is assigned to one open task in it. The network double answers the
    server's preview (accessRemovals.preview) with `preview`, its Reassign
    picker (accessRemovals.reassignChoices) with `choices`, and records each
-   read and write; a write is refused with `refusal` when one is set. */
+   read and write; a write is refused with `refusal` when one is set. A
+   project's page reads its settings and lists from the project settings
+   stand-in over the snapshot last delivered, which an accepted grant
+   removal changes before it answers, as Convex delivers a write's results
+   first. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -165,16 +170,41 @@ async function load({ viaTeam = false, ada = false } = {}) {
     if (name === 'accessRemovals:reassignChoices') return choices(args)
     return Promise.resolve(null)
   })
-  network.onUpdate.mockImplementation((ref, _args, next) => {
-    if (getFunctionName(ref) === 'workspace:whole') {
-      deliver = (snapshot) => next(structuredClone(snapshot))
+  // what the server holds: the snapshot last delivered
+  let held = snap
+  const settings = projectSettingsServer(() => held)
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (name === 'workspace:whole') {
+      deliver = (snapshot) => {
+        held = structuredClone(snapshot)
+        next(structuredClone(snapshot))
+        settings.rerun()
+      }
       deliver(snap)
     }
     return () => {}
   })
-  network.mutation.mockImplementation((_ref, args) =>
-    refusal && args.on_held_tasks !== undefined ? Promise.reject(refusal) : Promise.resolve(null),
-  )
+  network.mutation.mockImplementation((ref, args) => {
+    if (refusal && args.on_held_tasks !== undefined) return Promise.reject(refusal)
+    // a grant's removal reaches the workspace and the project's lists
+    // before its answer, as Convex delivers a write's results first
+    if (getFunctionName(ref) === 'projects:removeAccess' && args.user_id) {
+      const keep = args.on_held_tasks === 'keep_as_viewer'
+      const next = structuredClone(held)
+      next.access = next.access.flatMap((a) =>
+        a.project_id === args.id && a.profile_id === args.user_id
+          ? keep
+            ? [{ ...a, level: 'viewer' as const }]
+            : []
+          : [a],
+      )
+      next.delivered_at = '2026-09-15T09:00:00.000Z'
+      deliver(next)
+    }
+    return Promise.resolve(null)
+  })
   const store = await import('../store/planner')
   P = store.P
   await store.initStore()

@@ -9,6 +9,7 @@ import { answerLabelPages } from './store/labelPagesStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 
 /* Back or Forward to a task's address while every task loads
    (store/liveParts.ts), on App and the real store: the
@@ -192,12 +193,16 @@ async function bootLoading(
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
+  // a project's Settings page reads from the workspace last published
+  const settings = projectSettingsServer(() => server)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
+        settings.rerun()
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })

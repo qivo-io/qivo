@@ -109,6 +109,7 @@
     overflow-wrap: anywhere;
   }
   .settings-content-scroll > *,
+  .settings-content-scroll > [data-project-settings-state] > *,
   .settings-field,
   .settings-content-scroll :is(input, select, textarea, code) {
     min-width: 0;
@@ -301,10 +302,22 @@
     grid-column: 3;
     grid-row: 1;
   }
-  .settings-content-scroll [data-project-access-picker] {
+  .settings-content-scroll [data-project-access-picker],
+  .settings-content-scroll [data-popover-wrap]:has(> [data-project-access-picker]) {
     flex-basis: 100%;
   }
   .settings-content-scroll [data-project-access-new-role] {
+    flex: 1;
+  }
+  /* the invite form puts the address on a row of its own, over its level
+     and Invite */
+  .settings-project-invite div:has(> [data-invite-email]) {
+    flex-wrap: wrap;
+  }
+  .settings-content-scroll [data-invite-email] {
+    flex-basis: 100%;
+  }
+  .settings-content-scroll [data-invite-level] {
     flex: 1;
   }
   .settings-content-scroll :is([data-settings-team-member], [data-guest-row]) {

@@ -142,7 +142,9 @@ can choose **New project** and set its name, lead and optional team/user
 shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).
 
 Project settings includes the name, description, lead, access, delay tracking
-and review time. Names allow up to 80 characters and descriptions up to 500
+and review time. The **Lead** field lists the people who may lead the
+project 25 at a time, with a search over the organization's people and
+**Load more**. Names allow up to 80 characters and descriptions up to 500
 ([Limits](./limits.md)). A description saves when you click outside; clearing the field removes
 the description. Renaming a project or changing its key updates the access
 entry of every person and team who reaches it in one change, at most 2,000

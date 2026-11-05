@@ -81,8 +81,8 @@ The settings fields keep your text the same way while you edit them: the
 organization's name, address, attachment size and default plannable hours,
 **Your name**, a person's name and plannable hours and an invitation's email
 address in **Organization → Users**, a label's name in **Organization →
-Labels**, a team's name and its members' hours, and a project's name and
-description. If someone changes the same setting while
+Labels**, a team's name and its members' hours, and a project's name,
+description and review time. If someone changes the same setting while
 you type, your text stays and a line under the field says what it was
 changed to, such as **Changed elsewhere to “Northstar Labs”.** It does not
 say who made the change. The field saves nothing until you choose **Use
