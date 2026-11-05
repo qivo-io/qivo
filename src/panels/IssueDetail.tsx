@@ -2009,9 +2009,9 @@ function IssueDetail({
     const { uuid, org, key, title, project } = it
     shownTask.current = { at: issueId, task: { uuid, org, key, title, project } }
   } else if (shownTask.current && !sameTask(shownTask.current.at, issueId)) shownTask.current = null
-  // the task as this render shows it: its key and title from the window's
-  // own answer once that names them, as for an archived task an Inbox row
-  // opened by its uuid alone, whose reference names no number
+  // the task as this render shows it, with its key and title from the
+  // window's own answer once that names them, as for an archived task an
+  // Inbox row opened by its uuid alone, whose reference names no number
   const shownNow = windowTaskOf(
     issueId,
     held,

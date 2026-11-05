@@ -588,8 +588,8 @@ describe('the benchmark server', () => {
     expect(JSON.parse(results()[0].text)).toMatchObject({ state: 'ok' })
     await vi.waitFor(() => expect(results().some((r) => r.error)).toBe(true), 5000)
     expect(results().find((r) => r.error)?.error).toContain('window=failed')
-    // a task opened by its number reads it by number, then the window by
-    // uuid: each read answers first, and fails only after that
+    // a task opened by its number is read by number, then by the window by
+    // uuid, and each read answers first and fails only after that
     const byNumber = await server('tasks=40&latency=0&mbps=100000&window=failed')
     const org = '00000000-0000-4000-8000-000000000001'
     const ask = (id, ref) =>

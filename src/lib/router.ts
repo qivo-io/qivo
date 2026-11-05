@@ -516,8 +516,9 @@ function taskNamed(open: string): NamedRef | undefined {
   return undefined
 }
 
-/** How taskNamed names a task: the organization whose slug the address
-    writes `ref` under, and the task's uuid when the store knows it. */
+/** The name taskNamed gives a task. `org` is the organization whose slug
+    the address writes `ref` under, and `uuid` the task's uuid when the
+    store knows it. */
 type NamedRef = { org: string | null; ref: string; uuid?: string }
 
 /** Whether `open` is a reference no address can name (taskNamed). An

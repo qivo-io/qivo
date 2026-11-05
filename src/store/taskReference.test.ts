@@ -348,7 +348,7 @@ describe('the read of a reference', () => {
     await turn()
     expect(open('taskWindow:task')).toEqual([])
     // the partner shares its project with the guest seat, where the task
-    // was archived: every seat is read again, home first, and the window
+    // was archived. Every seat is read again, home first, and the window
     // goes on saying unavailable meanwhile
     snap.access.push({ project_id: GUEST_PROJECT, profile_id: 'me-guest', level: 'user' })
     publishWhole(snap)
