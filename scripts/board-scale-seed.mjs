@@ -109,9 +109,9 @@
  * task goes only into a sub-project that has its row or that the run
  * makes, and a file only onto such a task, so a sub-project or task in
  * Deleted items or deleted for good gets no new task or file. A file
- * removed in the task window is made again on its task, since nothing
- * records its removal. Pass `--tasks 0` to add none of the Board's tasks.
- * It runs after --relations and before --labels.
+ * removed in the task window is made again on its task, since no table
+ * keeps a removed attachment's id. Pass `--tasks 0` to add none of the
+ * Board's tasks. It runs after --relations and before --labels.
  *
  * `--relations` adds one task at both per-task caps, for checking the task
  * window's Subtasks, Linked tasks and Attachments at scale (planRelations):
