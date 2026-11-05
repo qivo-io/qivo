@@ -169,7 +169,10 @@
 //                        more people, with more people in the
 //                        organization when it needs them, so the Users
 //                        list's Load more and its cap show (grants=210 is
-//                        past the 200 rows it gathers)
+//                        past the 200 rows it gathers). With grants or
+//                        projectsettings the second person, an admin, leads
+//                        the first program, so its sub-projects show an
+//                        inherited lead
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -452,6 +455,10 @@ const programs = Array.from({ length: programCount }, (_, n) =>
   ),
 )
 const visible = programs[0]
+/* With projectsettings or grants, the second person, an admin, leads the
+   first program, and its sub-projects, which name no lead of their own,
+   are led by that lead, so their Settings pages show an inherited lead. */
+if (parameters.has('projectsettings') || grantCount) visible.meta.lead_id = profiles[1].id
 const hiddenNum = Math.max(20, 1 + programCount * (subprojectCount + 1))
 const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
 const projects = programs.flatMap((p) => p.children)
