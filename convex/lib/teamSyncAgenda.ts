@@ -128,14 +128,15 @@ import {
  * - An everyday team, 20 sub-projects of 30 open tasks, read by a member in
  *   3 teams: 1,609, 1,612 and 0.99. The same for a member in 5 teams.
  * - A team that shares 50 live and 150 archived projects, the archived
- *   shares read first, over_ceiling from the counts in 1,325, 1,980 and
- *   0.98, and while the counts are not whole from the read in 1,732, 2,616
- *   and 1.41.
+ *   shares read first, over_ceiling from the counts in 1,352, 1,992 and
+ *   0.99, and while the counts are not whole from the read in 1,759, 2,628
+ *   and 1.42.
  * - All projects over 200 live top-level projects with 500 live and 1,000
- *   archived sub-projects, over_ceiling from the counts in 1,117, 1,676 and
- *   0.95 for an admin, 1,146, 1,685 and 0.95 for a member in 3 teams who
- *   sees 54 sub-projects across the names; while counting from the read in
- *   1,681, 3,039 and 1.78 and in 1,256, 2,053 and 1.21.
+ *   archived sub-projects, the organization's whole figures, over_ceiling
+ *   from the counts in 1,117, 1,686 and 0.96 for an admin, 1,146, 1,688
+ *   and 0.95 for a member in 3 teams who sees 54 sub-projects across the
+ *   names; while counting from the read in 1,677, 3,047 and 1.79 and in
+ *   1,256, 2,054 and 1.21.
  * - An everyday project whose 90 tasks 90 people of a roster of 1,000 own:
  *   1,026, 375 and 0.19, every walker's week.
  * - An everyday team whose 600 rows 200 of its members own, of a roster of

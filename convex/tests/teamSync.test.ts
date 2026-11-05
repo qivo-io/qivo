@@ -601,6 +601,21 @@ describe('teamSync.lastComments', () => {
   /* An organization whose user holds open tasks in FW and PCB, with
    * `extra` more top-level projects the tasks do not name, each with a
    * sub-project, led by the admin. */
+  /* How many live top-level projects and live sub-projects the fixture's
+   * organization holds, its own included. */
+  const projectsOf = (o: { t: T; f: OrgFixture }) =>
+    o.t.run(async (ctx) => {
+      const all = await ctx.db
+        .query('projects')
+        .withIndex('by_org', (q) => q.eq('org_id', o.f.org.id))
+        .collect()
+      const live = all.filter((p) => p.archived_at === undefined)
+      return {
+        tops: live.filter((p) => p.parent_id === undefined).length,
+        subs: live.filter((p) => p.parent_id !== undefined).length,
+      }
+    })
+
   async function namedOrg(extra: number) {
     const t = newT()
     const f = await withOrg(t)
@@ -616,7 +631,10 @@ describe('teamSync.lastComments', () => {
 
   it("reads only the projects its owners' tasks name, however many the organization holds", async () => {
     const small = await namedOrg(0)
-    const large = await namedOrg(200)
+    // with the fixture's TBED and SKNK, 200 live top-level projects, the
+    // design size, and 200 live sub-projects
+    const large = await namedOrg(198)
+    expect(await projectsOf(large)).toEqual({ tops: 200, subs: 200 })
     const a = await measured(small.t, small.f.viewer, [small.f.user.id])
     const b = await measured(large.t, large.f.viewer, [large.f.user.id])
     expect(a.answer.complete).toBe(true)
@@ -763,10 +781,11 @@ describe('teamSync.lastComments', () => {
     const owners: Doc<'profiles'>[] = []
     for (let n = 0; n < 50; n++)
       owners.push(await plantSeat(t, { org_id: f.org.id, name: `Owner ${n}`, accepted_at: NOW }))
-    // 100 top-level projects of 2 sub-projects led by the user, and 20
+    // 99 top-level projects of 2 sub-projects led by the user, with the
+    // fixture's FW and PCB the 200 live sub-projects the user reads, and 20
     // archived sub-projects, each owner's 20 open tasks spread over them
-    const subs: Doc<'projects'>[] = []
-    for (let n = 0; n < 100; n++) {
+    const subs: Doc<'projects'>[] = [f.sub, f.sub2]
+    for (let n = 0; n < 99; n++) {
       const top = await plantProject(t, { org_id: f.org.id, lead_id: f.user.id })
       for (let k = 0; k < 2; k++)
         subs.push(await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: top.id }))
@@ -801,6 +820,7 @@ describe('teamSync.lastComments', () => {
           })
         }
     })
+    expect(await projectsOf({ t, f })).toEqual({ tops: 101, subs: 200 })
     const ids = owners.map((o) => o.id)
     const got = await measured(t, f.user, ids)
     console.log(

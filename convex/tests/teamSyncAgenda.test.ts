@@ -1078,7 +1078,8 @@ async function sharedCase(o: { tops: number; subs: number | ((top: number) => nu
 }
 
 /** `tops` top-level projects named in order from `from`, each with `subs`
- * sub-projects that track delay and `archived` archived ones, and unless
+ * sub-projects that track delay and `archived` archived ones (a count, or
+ * one for each top-level project by its place), and unless
  * `teams` is false three teams of `me`, or of `members`, that share them in
  * turn (those `shared` keeps), as overview.setup.ts plantShared shares
  * them. */
@@ -1089,7 +1090,7 @@ async function plantSharedTops(
   o: {
     tops: number
     subs: number | ((top: number) => number)
-    archived?: number
+    archived?: number | ((top: number) => number)
     shared?: (top: number) => boolean
     teams?: boolean
     from?: number
@@ -1120,8 +1121,9 @@ async function plantSharedTops(
       const topDoc = (await ctx.db.get(top)) as Doc<'projects'>
       tops.push(topDoc)
       const n = typeof o.subs === 'number' ? o.subs : o.subs(i)
+      const gone = typeof o.archived === 'function' ? o.archived(i) : (o.archived ?? 0)
       const own: Doc<'projects'>[] = []
-      for (let k = 0; k < n + (o.archived ?? 0); k++) {
+      for (let k = 0; k < n + gone; k++) {
         const sub = `${name}-${k}`
         const _id = await ctx.db.insert('projects', {
           id: uuid(),
@@ -1336,17 +1338,20 @@ describe('real limits', () => {
     const f = await withOrg(t)
     const me = await seatOf(t, f)
     const owners = [me, ...(await plantPeople(t, f.org.id, 9))]
-    // 200 live top-level projects with 500 live sub-projects, three under
-    // the first 100 and two under the rest, and 1,000 archived ones, five
-    // under each; the member's three teams share 21 projects spread over
-    // the names, three of every 29, 54 sub-projects, 18 a team
+    // with the fixture's TBED, SKNK, FW and PCB, 200 live top-level
+    // projects with 500 live sub-projects, three under the first 102
+    // planted and two under the other 96, and 1,000 archived ones, six
+    // under each of the first 10 and five under the rest; the member's
+    // three teams share 21 projects spread over the names, three of every
+    // 29, 54 sub-projects, 18 a team
     const theirs = (i: number) => i % 29 < 3
     const all = await plantSharedTops(t, f, me, {
-      tops: 200,
-      subs: (i) => (i < 100 ? 3 : 2),
-      archived: 5,
+      tops: 198,
+      subs: (i) => (i < 102 ? 3 : 2),
+      archived: (i) => (i < 10 ? 6 : 5),
       shared: theirs,
     })
+    expect(await projectsOf(t, f.org.id)).toEqual({ tops: 200, subs: 500, archivedSubs: 1000 })
     const mine = new Set(
       all.tops
         .filter((_, i) => theirs(i))
@@ -1444,6 +1449,21 @@ describe('real limits', () => {
     expect(ok.people.every((p) => p.week.state === 'ok' || p.week.reason === 'loads')).toBe(true)
   })
 })
+
+/* How many live top-level projects, live sub-projects and archived
+ * sub-projects organization `orgId` holds, the fixture's included. */
+const projectsOf = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    const all = await ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect()
+    const count = (top: boolean, live: boolean) =>
+      all.filter(
+        (p) => (p.parent_id === undefined) === top && (p.archived_at === undefined) === live,
+      ).length
+    return { tops: count(true, true), subs: count(false, true), archivedSubs: count(false, false) }
+  })
 
 /* How many people organization `orgId` holds, agents and invitations
  * included, the people figure of the design size. */
