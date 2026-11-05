@@ -36,8 +36,11 @@
  * with its row, its text, its labels and the caller's level, which the
  * window shows read-only. The app subscribes `task` while a window shows
  * the task's details, while a window shows a task the workspace does not
- * hold, and to read a task a window opens by its address, by its number or
- * by its uuid in the organization the address names (src/lib/taskReference.ts).
+ * hold, and to read a task a window opens by its address: by its number in
+ * the organization the address names, or by its uuid, first in that
+ * organization and then in the caller's other organizations, one read at a
+ * time, until one finds it (src/lib/taskReference.ts,
+ * src/store/planner.ts refSeats).
  * A list a budget stops answers `complete: false`, never an error.
  * orgQuery still refuses a caller without a seat in the organization, or
  * one whose organization is being deleted, before the handler runs. The
