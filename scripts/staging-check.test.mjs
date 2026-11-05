@@ -43,9 +43,11 @@ import {
   taskPages,
   WAITS,
   WORKLOAD_PAGE,
+  WORKLOAD_PEOPLE,
   WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  workloadPagesMax,
   workloadPeople,
 } from './staging-check.mjs'
 
@@ -634,10 +636,37 @@ describe('task list pages', () => {
       cursors.push(cursor)
       return pages[at++]
     }
-    expect((await workloadPeople(read, 'the workload')).map((p) => p.id)).toEqual(['a', 'b'])
+    expect((await workloadPeople(read, 'the workload', 1)).map((p) => p.id)).toEqual(['a', 'b'])
     expect(cursors).toEqual([null, 'p1', 'p2'])
     await expect(
-      workloadPeople(async () => ({ week_starts: [], project: null, people: [] }), 'the workload'),
+      workloadPeople(
+        async () => ({ week_starts: [], project: null, people: [] }),
+        'the workload',
+        1,
+      ),
     ).rejects.toThrow('the workload answered no {next_cursor, people} page')
+  })
+  it('reads every person of an organization at the design size at the pages each surface asks for', async () => {
+    expect(WORKLOAD_PEOPLE).toBe(1000)
+    // the smallest page first, which takes the most pages
+    for (const limit of Object.values(WORKLOAD_PAGE).sort((a, b) => a - b)) {
+      // a full organization in pages of `limit`, the last one short
+      const people = Array.from({ length: WORKLOAD_PEOPLE }, (_, i) => ({ id: `p${i}` }))
+      let at = 0
+      const read = async () => {
+        const page = people.slice(at, at + limit)
+        at += limit
+        return { next_cursor: at < people.length ? `c${at}` : null, people: page }
+      }
+      expect(await workloadPeople(read, 'the workload', limit), `limit ${limit}`).toHaveLength(
+        WORKLOAD_PEOPLE,
+      )
+      // a next_cursor that never ends still fails, two pages past them
+      const endless = async () => ({ next_cursor: 'again', people: [] })
+      await expect(workloadPeople(endless, 'the workload', limit)).rejects.toThrow(
+        `the workload still had a next_cursor after ${Math.ceil(WORKLOAD_PEOPLE / limit) + 2} pages`,
+      )
+    }
+    expect(workloadPagesMax(2)).toBe(502)
   })
 })
