@@ -36,6 +36,14 @@
  * and visibility decide before the page is cut. A task item is in the
  * scope of anyone but an admin through a project of it they see (heldFor).
  *
+ * Deleter filters. `deleted_by` keeps one person's deletes by the
+ * reference predicate, and `via` narrows them to 'app', a kind of
+ * credential (its bare table, which every viewer may know) or one
+ * credential where the seat may know which (`table:id`). `someone` keeps
+ * the deletes whose deleter line says Someone for the seat: no profile that
+ * passes the reference predicate deleted them. No index serves it, so the
+ * seat reads its usual ranges and keeps those in code (deletedAsAsked).
+ *
  * Order and cursor. Project entries come before task entries. Within each,
  * items come by deleted_at, _creationTime and _id, all descending, the
  * order every range's index gives, and the tasks a search or the assignee
@@ -267,13 +275,16 @@ export type DeletedPage = {
   legacy?: true
 }
 
-/** What the page is asked (deletedItems.page). */
+/** What the page is asked (deletedItems.page). `someone` keeps the deletes
+ * of people no longer in the organization and goes with neither
+ * `deleted_by` nor `via`. */
 export type PageArgs = {
   scope?: { org_id: string; project_ids: string[] } | { org_id: string; all: true }
   kind?: DeletedItemKind
   search?: string
   deleted_by?: string
   via?: string
+  someone?: true
   assignee?: string
   cursor?: string
   limit?: number
@@ -372,6 +383,8 @@ type Asked = {
   terms: SearchTerm[]
   deletedBy?: string
   via?: string
+  /** only the deletes whose deleter line says Someone */
+  someone: boolean
   assignee?: string
   limit: number
 }
@@ -393,6 +406,8 @@ function asked(a: PageArgs): Asked {
   }
   if (a.assignee !== undefined && scope === undefined)
     throw badRequest('assignee needs a scope, one organization and its projects or all of them')
+  if (a.someone === true && (a.deleted_by !== undefined || a.via !== undefined))
+    throw badRequest('someone goes with neither deleted_by nor via, as it names no person')
   if (a.via !== undefined && a.deleted_by === undefined)
     throw badRequest('via needs deleted_by, the person whose deletes it narrows')
   const text = limitedText(LIMITS.search, a.search ?? '')
@@ -403,13 +418,15 @@ function asked(a: PageArgs): Asked {
     terms: searchTerms(text),
     deletedBy: a.deleted_by,
     via: a.via,
+    someone: a.someone === true,
     assignee: a.assignee,
     limit,
   }
 }
 
 /** The digest a cursor of `a` seals: everything but the cursor and the
- * limit, so a cursor of other arguments never opens. */
+ * limit, so a cursor of other arguments never opens. `someone` joins it
+ * only when asked, so the cursors of every other page keep their digest. */
 const keyOf = (a: Asked): Promise<string> =>
   digestText(
     JSON.stringify([
@@ -419,6 +436,7 @@ const keyOf = (a: Asked): Promise<string> =>
       a.deletedBy ?? null,
       a.via ?? null,
       a.assignee ?? null,
+      ...(a.someone ? ['someone'] : []),
     ]),
   )
 
@@ -488,15 +506,25 @@ const heldFor = (seat: Seat, scope: Scoped, item: Item, view: ItemView): boolean
   item.kind === 'project' ||
   view.projects.some((p) => scope.ids.has(p.id))
 
-/** Whether `item` passes the deleter filters for `seat`: deleted by the
- * person `deletedBy` names while their profile is the one that deleted
- * (the reference predicate), and, with `via`, deleted the way `via` names
- * as the seat may know it (deletedItemsList.ts howOf). */
+/** Whether `item` passes the deleter filters for `seat`. With `someone`,
+ * its deleter line says Someone: no profile that passes the reference
+ * predicate deleted it, as deletedItemsList.ts deleterOf decides. With
+ * `deletedBy`, the person it names deleted it while their profile is the
+ * one that deleted, and, with `via`, the way `via` names: the way the seat
+ * may know it (deletedItemsList.ts howOf), or that way's table for a bare
+ * table, since a row shows the kind of credential to every viewer, while a
+ * `table:id` the seat may not know matches nothing. */
 function deletedAsAsked(seat: Seat, a: Asked, item: Item): boolean {
+  if (a.someone) {
+    const id = item.deleted_by
+    return id === undefined || !sameReference(seat.sight.profiles.get(id), item)
+  }
   if (a.deletedBy === undefined) return true
   const deleter = seat.sight.profiles.get(a.deletedBy)
   if (item.deleted_by !== a.deletedBy || !sameReference(deleter, item)) return false
-  return a.via === undefined || howOf(seat.me, item) === a.via
+  if (a.via === undefined) return true
+  const how = howOf(seat.me, item)
+  return how === a.via || how.startsWith(`${a.via}:`)
 }
 
 /** Whether `seat`'s person leads live or archived project `p`. */
@@ -1546,11 +1574,11 @@ async function olderRows(run: Run, seat: Seat): Promise<boolean> {
  * One page of Deleted items for the login whose active seats are `seats`
  * (deletedItems.page): see the file comment. Refuses a limit, scope,
  * search or cursor that is not one the page takes, an assignee without a
- * scope and `via` without `deleted_by`. An organization without the
- * caller's seat, and a scope that names nothing the seat sees, answer an
- * empty last page, as do a search without a word to match. `spend`, for
- * tests, receives what the call spent of each budget, as the page counts
- * its reads.
+ * scope, `via` without `deleted_by` and `someone` with either. An
+ * organization without the caller's seat, and a scope that names nothing
+ * the seat sees, answer an empty last page, as do a search without a word
+ * to match. `spend`, for tests, receives what the call spent of each
+ * budget, as the page counts its reads.
  */
 export async function pageFor(
   ctx: QueryCtx,

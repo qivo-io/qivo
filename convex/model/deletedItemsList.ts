@@ -576,8 +576,10 @@ const namesCredential = (me: Doc<'profiles'>, item: Item): boolean =>
 /** How `item` was deleted, as `me` may know it: 'app', the table of the
  * credential of a REST or MCP delete, or `table:id` where `me` may know
  * which credential (namesCredential). The deleter line's `who` ends with
- * it, and the page's `via` filter matches it, so an id `me` may not know
- * matches nothing, as an unknown one does. */
+ * it, and the page's `via` filter matches it, or its table for a bare
+ * table, which every viewer may know (model/deletedItemsPage.ts
+ * deletedAsAsked), so an id `me` may not know matches nothing, as an
+ * unknown one does. */
 export function howOf(me: Doc<'profiles'>, item: Item): string {
   const { via } = item
   if (via === undefined) return 'app'

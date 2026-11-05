@@ -1559,7 +1559,7 @@ describe('the assignee filter', () => {
 })
 
 describe('deleted by', () => {
-  it("reaches a person's older deletes for an admin, filters anyone else's own ranges, and matches via only as the caller may know it", async () => {
+  it("reaches a person's older deletes for an admin, filters anyone else's own ranges, and matches via by its kind or as the caller may know the credential", async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -1597,9 +1597,10 @@ describe('deleted by', () => {
     expect(await ids(f.user, {})).toEqual(all)
     expect(await ids(f.user, { deleted_by: f.user.id })).toHaveLength(25)
     expect(await ids(f.admin, { via: 'app' })).toEqual([guestItems.app])
-    // an admin knows which token, the lead only that it was a token
+    // an admin knows which token, the lead only that it was a token, and
+    // the kind alone matches every delete through a token for both
     expect(await ids(f.admin, { via: `mcp_tokens:${token.id}` })).toEqual([guestItems.token])
-    expect(await ids(f.admin, { via: 'mcp_tokens' })).toEqual([])
+    expect(await ids(f.admin, { via: 'mcp_tokens' })).toEqual([guestItems.token])
     expect(await ids(f.user, { via: 'mcp_tokens' })).toEqual([guestItems.token])
     expect(await ids(f.user, { via: `mcp_tokens:${token.id}` })).toEqual([])
     expect(await ids(f.user, { via: `mcp_tokens:${uuid()}` })).toEqual([])

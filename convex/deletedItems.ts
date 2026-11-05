@@ -78,10 +78,13 @@ async function loadItems(ctx: QueryCtx, me: Doc<'profiles'>, ids: string[]) {
  * scope names one organization and some of its projects (1 to 50 ids, a
  * top-level project standing for its sub-projects) or all of them, and
  * lists that scope's project entries and then its task entries. `kind`,
- * `deleted_by` (a profile id) with `via` ('app', a credential table or
- * `table:id`), `search` (every word matches, the last also as a prefix,
- * accents exact; a task reference finds its task) and `assignee` (a
- * profile id, needs a scope) apply before the page is cut. Pass
+ * `deleted_by` (a profile id) with `via` ('app', a credential table, which
+ * matches every delete through that kind of credential, or `table:id`,
+ * which matches only where the caller may know the credential),
+ * `someone` (the deletes of people no longer in the organization, without
+ * `deleted_by` or `via`), `search` (every word matches, the last also as a
+ * prefix, accents exact; a task reference finds its task) and `assignee`
+ * (a profile id, needs a scope) apply before the page is cut. Pass
  * `next_cursor` back as `cursor` with the same arguments until it is null;
  * a page may hold fewer entries, even none, while it is not. `too_wide`
  * asks a caller who is no organization admin for a narrower scope,
@@ -101,6 +104,7 @@ export const page = authedQuery({
     search: v.optional(v.string()),
     deleted_by: v.optional(v.string()),
     via: v.optional(v.string()),
+    someone: v.optional(v.literal(true)),
     assignee: v.optional(v.string()),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
