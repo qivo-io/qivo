@@ -42,7 +42,7 @@ const local = (day: number, hour = 0, minute = 0, month = 8) =>
   new Date(2026, month, day, hour, minute).getTime()
 const HOUR = 60 * 60 * 1000
 const iso = (ms: number) => new Date(ms).toISOString()
-const DEFAULT_LAST_COMMENTS = { ...LAST_COMMENTS }
+const DEFAULT_LAST_COMMENTS = structuredClone(LAST_COMMENTS)
 const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 
 describe('previousWorkingDayStart', () => {
@@ -325,7 +325,7 @@ describe('teamSync.stamp', () => {
 
 describe('teamSync.lastComments', () => {
   afterEach(() => {
-    Object.assign(LAST_COMMENTS, DEFAULT_LAST_COMMENTS)
+    Object.assign(LAST_COMMENTS, structuredClone(DEFAULT_LAST_COMMENTS))
     Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   })
 
@@ -711,6 +711,50 @@ describe('teamSync.lastComments', () => {
     expect((await lastComments(t, me, f.org.id, [f.user.id])).rows).toHaveLength(1)
     Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0, navRows: 0 })
     expect(await lastComments(t, me, f.org.id, [f.user.id])).toEqual({ rows: [], complete: false })
+  })
+
+  it('cuts the answer short where the guard stops a step, the owners decided before it keeping their rows', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // the first owner's tasks in one status of one sub-project, the
+    // second's in another sub-project, which needs its own access question
+    const first: Doc<'issues'>[] = []
+    for (let n = 0; n < 3; n++)
+      first.push(
+        await plantIssue(t, {
+          org_id: f.org.id,
+          project_id: f.sub.id,
+          assignee_id: f.user.id,
+          status: 'todo',
+          num: 100 + n,
+        }),
+      )
+    for (let n = 0; n < 3; n++)
+      await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: f.sub2.id,
+        assignee_id: f.admin.id,
+        status: 'todo',
+        num: 200 + n,
+      })
+    const within = (ranges: number) => {
+      LAST_COMMENTS.reads.ranges = ranges
+      return lastComments(t, f.viewer, f.org.id, [f.user.id, f.admin.id])
+    }
+    expect((await within(DEFAULT_LAST_COMMENTS.reads.ranges)).rows).toHaveLength(6)
+    expect(await within(0)).toEqual({ rows: [], complete: false })
+    // the fewest ranges at which the answer holds a row, just past the
+    // first owner's step and project questions
+    let low = 0
+    let high = DEFAULT_LAST_COMMENTS.reads.ranges
+    while (high - low > 1) {
+      const mid = Math.floor((low + high) / 2)
+      if ((await within(mid)).rows.length > 0) high = mid
+      else low = mid
+    }
+    const cut = await within(high)
+    expect(cut.complete).toBe(false)
+    expect(cut.rows.map((r) => r.issue_id).sort()).toEqual(first.map((i) => i.id).sort())
   })
 
   it('reads 50 owners whose 1,000 open tasks span 200 sub-projects, with open tasks in archived ones, under real limits', async () => {
