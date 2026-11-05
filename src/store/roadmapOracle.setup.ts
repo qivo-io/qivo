@@ -12,15 +12,19 @@ import { type IssueFilters, type IssueVM, P, type ScopeInfo } from './planner'
 
 /** The Roadmap's rows of `info` in the weeks `w0` to `w1` with `filters`,
  * as the phone's agenda derives them (MobileRoadmap.tsx) and the desktop
- * buckets them (Roadmap.tsx passes), without a planning session. */
+ * buckets them (Roadmap.tsx passes), where the task with store id
+ * `session`, the planning session's, skips the filters alone. */
 export function roadmapRows(
   info: ScopeInfo,
   w0: number,
   w1: number,
   filters: IssueFilters,
+  session?: string,
 ): IssueVM[] {
   return P.scopedIssues(info).filter(
-    (it) => isRoadmapTaskVisible(it, P.isDone(it), w0, w1) && P.passesFilters(it, filters),
+    (it) =>
+      isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
+      (it.id === session || P.passesFilters(it, filters)),
   )
 }
 

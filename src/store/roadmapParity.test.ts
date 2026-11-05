@@ -10,7 +10,8 @@
  * tracks (Roadmap.tsx held), and for the dependency inputs the arrows'
  * pairs, the parts of the dependency graph over every task the workspace
  * holds, the write levels, and Auto-move's moves over the answer against
- * its moves over the workspace within those parts. Northstar runs as Nora
+ * its moves over the workspace within those parts, and the planning
+ * session's task, which skips the filter row alone. Northstar runs as Nora
  * (admin), Leo and Ben over every selection; the small fixture runs every
  * access shape for a user, a guest and a viewer, and the admin. Cases that
  * must fail if a rule drifts compare a drifted rule with the server's
@@ -130,7 +131,8 @@ function deskFilters(P: Store, scopeId: string, f: RoadmapFilters) {
 }
 
 /** Compares `answer`, tasks.roadmap's for the store scope `scopeId` in
- * `weeks` with `f`, with what store `P` derives; answers the rows' ids. */
+ * `weeks` with `f`, with what store `P` derives, the task with store id
+ * `session` being the planning session's; answers the rows' ids. */
 function expectRows(
   P: Store,
   answer: RoadmapAnswer,
@@ -138,6 +140,7 @@ function expectRows(
   weeks: Weeks,
   f: RoadmapFilters,
   label: string,
+  session?: string,
 ): Set<string> {
   const info = P.scopeInfo(scopeId)
   if (info === null) {
@@ -146,7 +149,7 @@ function expectRows(
   }
   if (answer.state !== 'ok') throw new Error(`${label}: ${JSON.stringify(answer)}`)
   const { desk } = deskFilters(P, scopeId, f)
-  const rows = P.oracle.roadmapRows(info, weeks[0], weeks[1], desk)
+  const rows = P.oracle.roadmapRows(info, weeks[0], weeks[1], desk, session)
   const rowIds = new Set(answer.rows.map((row) => row.id))
   expect(sorted(rowIds), `${label}: rows`).toEqual(sorted(rows.map((it) => it.uuid)))
   const byUuid = new Map(Object.values(P.issueById).map((it) => [it.uuid, it]))
@@ -640,5 +643,136 @@ describe('the rules that must hold', () => {
     expect(movesOf(P, inside)).not.toEqual(
       whole.filter((m) => inside.tasks.some((r) => r.id === m.id)),
     )
+  })
+})
+
+// ------------------------------------------------------ the planning session
+
+describe('the planning session', () => {
+  it("keeps the session's task past the filter row as Roadmap.tsx passes does, and never past the visibility rule or the selection", async () => {
+    const { t, f, P, subject } = await compareShape(null, 'admin')
+    /** The store's task titled `title`, in `project` where given. */
+    const named = (title: string, project?: string) => {
+      const it = P.issues.find((x) => x.title === title && (!project || x.project === project))
+      if (it === undefined) throw new Error(title)
+      return it
+    }
+    const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
+    const narrow = P.dates.isoToWeek(weekDay(0))
+    const meta = projectScope(subject, f.meta.id)
+    const fw = projectScope(subject, f.sub.id)
+    const mine: RoadmapScope = { kind: 'mine' }
+    const cases: [
+      label: string,
+      scope: RoadmapScope,
+      storeScope: string,
+      filters: Partial<RoadmapFilters>,
+      weeks: Weeks,
+      task: Issue,
+      kept: boolean,
+    ][] = [
+      [
+        'a task Priority hides',
+        meta,
+        f.meta.id,
+        { priority: 'high' },
+        [w0, w1],
+        named('Low'),
+        true,
+      ],
+      [
+        'a task My tasks hides, which the read takes by id',
+        meta,
+        f.meta.id,
+        { mine: true },
+        [w0, w1],
+        named('Blocker in PCB'),
+        true,
+      ],
+      [
+        'a task the people filter hides',
+        meta,
+        f.meta.id,
+        { owners: [f.user.id] },
+        [w0, w1],
+        named('Low'),
+        true,
+      ],
+      [
+        'a task the search hides',
+        fw,
+        f.sub.id,
+        { search: 'review' },
+        [w0, w1],
+        named('High'),
+        true,
+      ],
+      [
+        "the person's task Priority hides in My view",
+        mine,
+        P.MINE_SCOPE,
+        { priority: 'high' },
+        [w0, w1],
+        named('Low'),
+        true,
+      ],
+      [
+        'a Done task past the window',
+        meta,
+        f.meta.id,
+        { priority: 'high' },
+        [narrow, narrow + 1],
+        named('Done past the edge'),
+        false,
+      ],
+      ['a Backlog leaf', fw, f.sub.id, {}, [w0, w1], named('Backlog leaf'), false],
+      [
+        "the person's task in another sub-project",
+        fw,
+        f.sub.id,
+        { mine: true },
+        [w0, w1],
+        named('Low'),
+        false,
+      ],
+      [
+        'a task in another sub-project read by id',
+        fw,
+        f.sub.id,
+        { mine: true },
+        [w0, w1],
+        named('Blocker in PCB'),
+        false,
+      ],
+      [
+        'a task the person handed to review, in My view',
+        mine,
+        P.MINE_SCOPE,
+        {},
+        [w0, w1],
+        named('Handed to review', f.sub.id),
+        false,
+      ],
+      [
+        "another person's task in My view",
+        mine,
+        P.MINE_SCOPE,
+        {},
+        [w0, w1],
+        named('Blocker in PCB'),
+        false,
+      ],
+    ]
+    for (const [label, scope, storeScope, partial, weeks, it, kept] of cases) {
+      const row = { ...NO_ROADMAP_FILTERS, ...partial }
+      const { server } = deskFilters(P, storeScope, row)
+      // without the session the filter row, the window or the selection
+      // hides the task
+      const without = await roadmapFor(t, subject, scope, server, windowOf(P, weeks))
+      expect(expectRows(P, without, storeScope, weeks, row, label).has(it.uuid), label).toBe(false)
+      const answer = await roadmapFor(t, subject, scope, server, windowOf(P, weeks), it.uuid)
+      const ids = expectRows(P, answer, storeScope, weeks, row, `${label}, planned`, it.id)
+      expect(ids.has(it.uuid), `${label}, planned`).toBe(kept)
+    }
   })
 })
