@@ -269,6 +269,7 @@ identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId"
 identity:createOrganization mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
 identity:whoami query public {"type":"object","value":{}}
 inbox:item query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+inbox:page query public {"type":"object","value":{"order":{"fieldType":{"type":"union","value":[{"type":"literal","value":"newest"},{"type":"literal","value":"oldest"}]},"optional":false},"unread_only":{"fieldType":{"type":"boolean"},"optional":false},"include_snoozed":{"fieldType":{"type":"boolean"},"optional":false},"kinds":{"fieldType":{"type":"array","value":{"type":"union","value":[{"type":"literal","value":"mention"},{"type":"literal","value":"change"},{"type":"literal","value":"comment"}]}},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true}}}
 inbox:summary query public {"type":"object","value":{}}
 internal/adminAccessReport:check query internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"projects"},{"type":"literal","value":"work"},{"type":"literal","value":"machine"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
 internal/adminAccessReport:run action internal {"type":"object","value":{"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"page_size":{"fieldType":{"type":"number"},"optional":true}}}
@@ -961,9 +962,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     acceptInvitation: 'authedMutation',
   },
   // The inbox reads over inbox_items, the capped unread summary across the
-  // login's own seats and one task's own item in one organization, which is
-  // null unless the caller is shown the task.
-  inbox: { summary: 'authedQuery', item: 'orgQuery' },
+  // login's own seats, one task's own item in one organization, which is
+  // null unless the caller is shown the task, and a page of the login's own
+  // task groups across its seats, each about a task the caller is shown.
+  inbox: { summary: 'authedQuery', item: 'orgQuery', page: 'authedQuery' },
   // Whether the invitation emails behind pending seats went out: an org admin
   // sees every pending seat, anyone else only the sends they caused.
   invites: { deliveries: 'orgQuery', sendAgain: 'orgMutation' },
@@ -1225,7 +1227,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 222
+const PUBLIC_COUNT = 223
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

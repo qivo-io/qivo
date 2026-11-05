@@ -1,8 +1,10 @@
 /* The inbox reads that need only inbox_items rows (schema.ts), the capped
  * unread summary across a person's seats and one task's item for the task
- * window, which convex/inbox.ts serves. The app does not call them yet. It
- * reads the workspace inbox part (lib/workspaceParts.ts readInbox) until a
- * later release switches it.
+ * window, which convex/inbox.ts serves. The Inbox's pages
+ * (model/inboxPage.ts) judge their rows with the same scope (inboxScope)
+ * and answer the same unread change (unreadChange). The app does not call
+ * these reads yet. It reads the workspace inbox part
+ * (lib/workspaceParts.ts readInbox) until a later release switches it.
  *
  * Both show the seat's working set, as readInbox does, which holds a task
  * that is not archived, in a project of the seat's organization that is
@@ -36,12 +38,28 @@ import { bulkRows } from './messages'
 export const SUMMARY = { most: 100, batch: 16, room: 0.5 }
 
 /** One seat's view of its inbox items, the tasks it is shown and the
- * projects that can hold them, each task and each project checked once
- * (lib/access.ts accessOf). */
+ * projects that can hold them, each task read once and each project checked
+ * once (lib/access.ts accessOf). Every answer rejects with accessUnchecked
+ * where a bound stopped the check. */
 export function inboxScope(ctx: QueryCtx, me: Doc<'profiles'>) {
   const access = accessOf(ctx, me)
   const tasks = new Map<string, Promise<Doc<'issues'> | null>>()
   const projects = new Map<string, Promise<boolean>>()
+  /* the task with this id, read once, by `read` the first time */
+  const task = (
+    issueId: string,
+    read: (id: string) => Promise<Doc<'issues'> | null> = (id) => byId(ctx, 'issues', id),
+  ): Promise<Doc<'issues'> | null> => {
+    let known = tasks.get(issueId)
+    if (known === undefined) {
+      known = read(issueId)
+      tasks.set(issueId, known)
+    }
+    return known
+  }
+  /* whether `t` is in the seat's working set */
+  const shows = async (t: Doc<'issues'>): Promise<boolean> =>
+    t.org_id === me.org_id && (await access.holds(t))
   return {
     /** Whether the project with this id can hold a task the seat is shown,
      * which needs it to be one of the seat's organization's, not archived
@@ -59,16 +77,25 @@ export function inboxScope(ctx: QueryCtx, me: Doc<'profiles'>) {
     },
     /** The task with this id when it is in the seat's working set, else
      * null. */
-    shownTask(issueId: string): Promise<Doc<'issues'> | null> {
-      let known = tasks.get(issueId)
-      if (known === undefined) {
-        known = byId(ctx, 'issues', issueId).then(async (task) =>
-          task !== null && task.org_id === me.org_id && (await access.holds(task)) ? task : null,
-        )
-        tasks.set(issueId, known)
-      }
-      return known
+    async shownTask(issueId: string): Promise<Doc<'issues'> | null> {
+      const t = await task(issueId)
+      return t !== null && (await shows(t)) ? t : null
     },
+    /** The task with this id, of any organization and whether shown or
+     * not, or null. `read` reads it the first time, such as through a
+     * walk's read guard (lib/namedPages.ts ReadGuard lookup), so the walk
+     * counts it. */
+    task,
+    /** Whether task `t`, read by `task`, is in the seat's working set: of
+     * the seat's organization, not archived, in a project of it that is
+     * not archived and that the seat can see (lib/access.ts accessOf
+     * holds). */
+    shows,
+    /** The project with this id, of any organization, or null, read once
+     * for every answer here (lib/access.ts accessOf project), so a reader
+     * names the project of a task the scope showed without reading it
+     * again. */
+    project: access.project,
   }
 }
 

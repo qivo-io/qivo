@@ -1047,8 +1047,10 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * projects the read already read, and `bounds` the reads' bounds
  * (OWN_READS). Every answer rejects with accessUnchecked where a bound
  * stopped its check, never answering no access for it. The workspace parts
- * (lib/workspaceParts.ts), the inbox reads (model/inboxReads.ts), the task
- * window (lib/taskWindow.ts), main Search (lib/mainSearch.ts), the Board
+ * (lib/workspaceParts.ts), the inbox reads (model/inboxReads.ts), the
+ * Inbox's pages (model/inboxPage.ts, which leave out a group whose check
+ * stopped and say so), the task window (lib/taskWindow.ts), main Search
+ * (lib/mainSearch.ts), the Board
  * (lib/board.ts, which answers it `unavailable` with access_unchecked), the
  * Overview's reads (lib/overview.ts, which answer it the same way),
  * project settings (model/projectSettings.ts) and the project navigation

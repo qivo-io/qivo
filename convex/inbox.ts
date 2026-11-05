@@ -1,7 +1,7 @@
-/* The inbox reads that need only inbox_items rows (model/inboxReads.ts).
- * The app does not call them yet. It keeps the workspace inbox part
- * (workspace.ts inbox) until a later release switches the badge and the
- * task window to these.
+/* The inbox reads that need only inbox_items rows (model/inboxReads.ts,
+ * model/inboxPage.ts). The app does not call them yet. It keeps the
+ * workspace inbox part (workspace.ts inbox) until later releases switch the
+ * badge, the task window and the Inbox list to these.
  *
  * - summary (across the caller's seats): each seat's organization, whether
  *   its items are complete (model/inboxItems.ts seatReady) and whether Mark
@@ -43,12 +43,31 @@
  *   unread message tells of a change, a change or a mention in the
  *   description, the app's rule (src/lib/spine.ts unreadStart). It reruns
  *   when any of those change.
+ * - page (across the caller's seats): one page of at most 50 task groups,
+ *   newest or oldest first by list time, with Unread only, Show snoozed,
+ *   the kind filter and the search applied before the page is cut, and a
+ *   sealed `next` that continues after the last group it examined
+ *   (model/inboxPage.ts). Each row names its task, its project and the
+ *   project above it, its newest message with its actor, its counts, kinds
+ *   and snooze, its oldest unread time, `unread_change` as item answers it
+ *   and the `through` the item actions take. `stopped` says the read
+ *   budget ended the page before it was full, `checked_to` how far it
+ *   looked, `not_ready` which seats' items are not complete and
+ *   `unchecked` that a check a bound stopped left a group out, so an
+ *   unfinished read never answers as an empty Inbox. It reads each seat's
+ *   readiness and its items up to where the page ends, the task, project
+ *   and access rows of each item its project lets through, and the newest
+ *   messages, actors and unread fields of each group it examines, and with
+ *   a search every message of a group whose title, key, second line and
+ *   places miss a word. It reruns when any of those change.
  *
- * Both show the working set as the workspace parts do (lib/access.ts
+ * All three show the working set as the workspace parts do (lib/access.ts
  * accessOf). Nothing here writes. The item actions are in messages.ts. */
 
 import { v } from 'convex/values'
+import { vMessageKind } from './lib/enums'
 import { authedQuery, orgQuery } from './lib/functions'
+import { readInboxPage } from './model/inboxPage'
 import { readInboxItem, readInboxSummary } from './model/inboxReads'
 
 export const summary = authedQuery({
@@ -59,4 +78,17 @@ export const summary = authedQuery({
 export const item = orgQuery({
   args: { issue_id: v.string() },
   handler: async (ctx, { issue_id }) => await readInboxItem(ctx, ctx.me, issue_id),
+})
+
+export const page = authedQuery({
+  args: {
+    order: v.union(v.literal('newest'), v.literal('oldest')),
+    unread_only: v.boolean(),
+    include_snoozed: v.boolean(),
+    kinds: v.array(vMessageKind),
+    search: v.optional(v.string()),
+    after: v.optional(v.string()),
+  },
+  handler: async (ctx, args) =>
+    await readInboxPage(ctx, ctx.authUserId, [...ctx.myProfiles.values()], args),
 })
