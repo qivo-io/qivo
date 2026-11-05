@@ -311,7 +311,8 @@ export function createLiveParts(
   let asked = !!opts?.ask
   let askWaits = false
   let completed = false
-  // whether the task windows' silence stopped the task load (watchStall)
+  // whether the task windows' silence stopped the task load (watchStall),
+  // until a task window answers
   let tasksStalled = false
   // whether the root part's first answer was read for the boot's address
   let addressed = !opts?.address
@@ -650,7 +651,8 @@ export function createLiveParts(
 
   /** Starts or ends the stall check of an incomplete workspace, starting
       it over when a part answered (`progress`). Where every part but some
-      task windows is current when it fires, only the task load stops. */
+      task windows is current when it fires, only the task load stops, until
+      a task window answers or Try again (retryTasks). */
   function watchStall(held: boolean, progress: boolean) {
     if (!held || progress) {
       if (stallTimer) clearTimeout(stallTimer)
@@ -766,9 +768,12 @@ export function createLiveParts(
         // a side query never holds the workspace, so it is no progress
         progress = true
         // a task window's answer moves the share until the load ends, and
-        // the complete report after it holds the tasks
-        if (slot.task) tasksDirty = true
-        else dirty = true
+        // the complete report after it holds the tasks; it also ends a
+        // stall, which stands only while the windows stay silent
+        if (slot.task) {
+          tasksDirty = true
+          tasksStalled = false
+        } else dirty = true
       }
     }
     settle({ news, progress })

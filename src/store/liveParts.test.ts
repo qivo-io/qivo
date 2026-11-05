@@ -793,6 +793,43 @@ describe('tasks on demand', () => {
     expect(t.last()?.state).toBe('failed')
   })
 
+  it('stops the task load only while its windows stay silent, and goes on loading once one answers', async () => {
+    vi.useFakeTimers()
+    STALL.ms = 1000
+    const { s, parts, last } = big()
+    for (const w of WINDOWS) s.set('workspace:tasks', { org_id: ORG, ...w }, {})
+    parts.askTasks()
+    await vi.advanceTimersByTimeAsync(1000)
+    const stalled = last()
+    expect(stalled?.state === 'partial' && String(stalled.tasksFailed)).toContain(
+      'did not arrive in time',
+    )
+    // a window answers: loading again, with no failure
+    const first = { org_id: ORG, ...WINDOWS[0] }
+    s.set('workspace:tasks', first, { value: tasksPart(['t0']) })
+    s.send([s.keyOf('workspace:tasks', first)])
+    const loading = last()
+    expect(loading).toMatchObject({ state: 'partial', loaded: 1 / 64 })
+    expect(loading?.state === 'partial' && loading.tasksFailed).toBeUndefined()
+    // silent again for STALL.ms: stopped again
+    await vi.advanceTimersByTimeAsync(999)
+    const quiet = last()
+    expect(quiet?.state).toBe('partial')
+    expect(quiet?.state === 'partial' && quiet.tasksFailed).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    const again = last()
+    expect(again?.state === 'partial' && String(again.tasksFailed)).toContain(
+      'did not arrive in time',
+    )
+    // Try again runs the silent windows again, not the one that answered
+    serveBig(s)
+    const before = s.log.length
+    expect(parts.retryTasks()).toBe(true)
+    const rerun = s.log.slice(before).filter((l) => l.startsWith('watch '))
+    expect(rerun).toHaveLength(63)
+    expect(rerun).not.toContain(`watch ${s.keyOf('workspace:tasks', first)}`)
+  })
+
   it('names a failing task window in its partial reports, and Try again runs only the task windows again', () => {
     const { s, parts, last } = big()
     parts.askTasks()
