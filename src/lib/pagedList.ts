@@ -1,7 +1,9 @@
 /* A list the server answers a batch at a time in its own order, with a
-   search over the whole list and Load more, as Settings' lists read them:
-   API access's person filter, Settings › Labels, and later Settings' teams
-   and people and the pickers (the limits plan's "Settings team list
+   search over the whole list and Load more, as Settings' lists and the
+   pickers read them: API access's person filter, Settings › Labels, the
+   removal window's Reassign picker, the task window's relation pickers,
+   the shared project picker (components/ProjectPicker.tsx), and later
+   Settings' teams and people (the limits plan's "Settings team list
    loading"). It holds only what the page shows, in the page, and drops it
    when the page is left. It imports nothing from the store.
 
