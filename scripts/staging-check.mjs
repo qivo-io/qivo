@@ -4155,6 +4155,7 @@ async function removalWindowCheck() {
  *  does when it opens on the project of the scope behind Settings, keeps
  *  it, since a press would take it off. */
 async function pickProject(trigger, name, id, many = true) {
+  await settledPicker(trigger)
   await trigger.click()
   const field = app.locator('[data-project-picker-search]')
   await field.waitFor({ timeout: 30_000 })
@@ -4167,6 +4168,17 @@ async function pickProject(trigger, name, id, many = true) {
     await field.press('Escape')
   }
   await field.waitFor({ state: 'detached', timeout: 10_000 })
+}
+
+/** Waits until the project picker `trigger` names its pick rather than
+ *  Loading…, which it reads while the page it is on resolves the project
+ *  it opened on, so a row's checked state read after it is the page's
+ *  own. */
+async function settledPicker(trigger) {
+  expect(
+    await until(async () => (await trigger.getAttribute(PICKER_EXPECTED.busy)) === null, 30_000),
+    'the project picker still reads Loading…',
+  )
 }
 
 /** The Settings page Archived tasks opens with its search as the first
@@ -4243,6 +4255,8 @@ export const PICKER_EXPECTED = {
   chip: 'data-archive-pick',
   /** a top-level row's arrow, by the project's id */
   expand: 'data-project-expand',
+  /** the trigger's mark while it reads Loading… */
+  busy: 'data-project-picker-busy',
 }
 
 /** Archived tasks chooses through the shared project picker on the
@@ -4265,8 +4279,10 @@ async function projectPickerCheck(tasks) {
         .evaluateAll((els) => els.map((el) => el.getAttribute('data-archive-row')).sort())
     const exactly = async (ids) =>
       until(async () => JSON.stringify(await listed()) === JSON.stringify([...ids].sort()))
-    // Alpha and Zulu from projectNav.children, both chosen
+    // Alpha and Zulu from projectNav.children, both chosen, once the page
+    // resolved the project it may open on
     const trigger = page.locator('[data-archive-project]')
+    await settledPicker(trigger)
     await trigger.click()
     const field = app.locator('[data-project-picker-search]')
     await field.fill(M.name)

@@ -1019,13 +1019,16 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
           }
         },
       })
-      // nothing reads while the project resolves
+      // nothing reads while the project resolves, and the trigger carries
+      // the mark the staging check waits on
       expect(trigger()).toBe('Loading…')
+      expect(has('[data-archive-project][data-project-picker-busy]')).toBe(true)
       expect(text('[data-archived-tasks]')).toContain('Loading archived tasks…')
       await act(async () => release())
       await settle()
       expect(calls).toEqual([])
       expect(trigger()).toBe('Choose projects…')
+      expect(has('[data-project-picker-busy]')).toBe(false)
       expect(text('[data-archived-tasks]')).toContain(MISSED)
       await act(async () => root.unmount())
       root = createRoot(container)

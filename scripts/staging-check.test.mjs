@@ -141,6 +141,8 @@ describe('staging check REST contract', () => {
     expect(PICKER_STEP).toBe('ui/project-picker')
     for (const mark of ['data-project-picker-search', 'data-project-pick', PICKER_EXPECTED.expand])
       expect(picker).toContain(mark)
+    // the trigger's own attribute, not a comment that names it
+    expect(picker).toContain(`${PICKER_EXPECTED.busy}={`)
     for (const mark of [PICKER_EXPECTED.open, PICKER_EXPECTED.chip]) expect(page).toContain(mark)
     expect(pick).toContain(`\`\${p.parent.name}${PICKER_EXPECTED.place}\${p.name}\``)
   })

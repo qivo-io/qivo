@@ -795,7 +795,8 @@ export type ProjectPickerProps = Omit<ProjectPickerPanelProps, 'onDone'> & {
   name: string
   /** what the trigger says before any pick */
   none?: string
-  /** what the trigger says instead of the pick, such as while it loads */
+  /** what the trigger says instead of the pick, such as while it loads,
+      which marks it `data-project-picker-busy` for scripts that wait */
   busyLabel?: string | null
   triggerRef?: Ref<HTMLButtonElement>
   className?: string
@@ -843,6 +844,7 @@ export function ProjectPicker({
           variant="default"
           {...trigger}
           aria-label={`${name}, ${text}`}
+          data-project-picker-busy={busyLabel === null ? undefined : ''}
           className={cn(
             'min-w-0 max-w-[260px] justify-between gap-2 bg-surface-1 font-sans text-sm',
             className,
