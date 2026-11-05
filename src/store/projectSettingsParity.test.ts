@@ -229,9 +229,7 @@ describe('the project settings stand-in', () => {
       expect(await server(name, { ...base, ...extra, after: after.server }), name).toBe(
         'bad_request',
       )
-      expect(await stand(name, { ...base, ...extra, after: after.stand }), name).toBe(
-        'bad_request',
-      )
+      expect(await stand(name, { ...base, ...extra, after: after.stand }), name).toBe('bad_request')
     }
     const long = 'x'.repeat(201)
     expect(await server('projectSettings:users', { ...base, search: long })).toBe('rule')
