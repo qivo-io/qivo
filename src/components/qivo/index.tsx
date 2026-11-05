@@ -276,7 +276,10 @@ function ProjectNameOf({ id, withOwner }: { id: string | null | undefined; withO
    onEscapeKeyDown hears Escape before the popover closes on it, and keeps it
    open by preventing the event's default, as a search field inside that
    clears its text first does. Only the Radix popover calls it, not the
-   landscape Roadmap's. */
+   landscape Roadmap's. `modal` makes the Radix popover modal: it keeps
+   focus and scrolling inside itself and hides the rest from screen
+   readers, which a popover over a modal dialog needs to scroll its own
+   list (components/ProjectPicker.tsx inside Search). */
 type PopoverProps = {
   button: (toggle: () => void, open: boolean) => ReactNode
   children: (close: (then?: () => void) => void) => ReactNode
@@ -285,6 +288,7 @@ type PopoverProps = {
   wrapStyle?: CSSProperties
   backLayer?: boolean
   onEscapeKeyDown?: (event: KeyboardEvent) => void
+  modal?: boolean
 }
 
 function landscapeBottomAnchor(
@@ -416,11 +420,16 @@ function LivePopover({
   wrapStyle,
   backLayer = false,
   onEscapeKeyDown,
+  modal = false,
 }: PopoverProps) {
   const [open, setOpen] = useState(false)
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
   return (
-    <ShadcnPopover open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
+    <ShadcnPopover
+      open={open}
+      modal={modal}
+      onOpenChange={(next) => (next ? setOpen(true) : close())}
+    >
       <div style={wrapStyle} data-popover-wrap>
         <PopoverTrigger asChild>{button(() => undefined, open)}</PopoverTrigger>
       </div>

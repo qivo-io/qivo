@@ -10248,6 +10248,26 @@ export const PLANNER = {
       tooWide: data.too_wide === true,
     }
   },
+  /** Whether project `id` is open to this person for navigation
+      (projectNav.resolve), with its name, number, organization and
+      top-level project, for the project Search and Archived tasks open on.
+      The server judges it by ordinary access, as the project picker's
+      lists, so an organization admin resolves only the projects their own
+      leads, grants and team shares reach. A check the server could not
+      finish answers `unavailable` with reason access_unchecked and its
+      sentence, apart from a project the person cannot open. Null for a
+      failed read. One read, never subscribed to and never part of the
+      snapshot. */
+  resolveProject: async (
+    id: string,
+  ): Promise<FunctionReturnType<typeof api.projectNav.resolve> | null> => {
+    try {
+      return await convex.query(api.projectNav.resolve, { project_id: id })
+    } catch (e) {
+      console.error('[qivo] project resolve failed:', e)
+      return null
+    }
+  },
   /** One page of main Search for `text` (search:page): task and project
       results ranked together across every organization of this login, or
       the narrower `scope`, with archived tasks when `includeArchived`, from
