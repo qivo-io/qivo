@@ -190,8 +190,8 @@ of one fixture task and, from the deployment's batches
 its ID, a search with no match that says so at the end of the project and
 again once **Search all your projects** ended, a task it makes in its second
 project only after **Search all your projects**, and the subtask it made
-as a current subtask in **Add subtask**, and writes nothing
-(`ui/relation-pickers`). Against a backend from before the relation
+as a current subtask in **Add subtask**, and writes nothing through the
+pickers (`ui/relation-pickers`). Against a backend from before the relation
 pickers' release that step fails. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
@@ -768,7 +768,7 @@ describes, as the navigation reads do.
 
 The task window's Parent, Subtasks and Linked tasks pickers read the tasks
 they offer from `taskWindow.relationCandidates`, once a batch and never
-subscribed, which the release after v0.1.123 first ships together with the
+subscribed, which the release after v0.1.124 first ships together with the
 app that reads it. An app from that release, against a backend before it,
 says in every relation picker that it couldn't load tasks, also in a tab
 that was open when the backend went back, until the backend rolls forward.
