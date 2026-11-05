@@ -27,12 +27,15 @@
  *
  * Both surfaces upload a file in the same three steps, through the same
  * ticket (model/attachments.ts startAttachmentUpload and
- * confirmAttachmentUpload). The start answers an upload URL that takes no
- * credential and stores one file (machine/uploads.ts), the client sends the
- * bytes there, and the confirm attaches them. So the file never passes
- * through an MCP or REST request, and an OAuth token never leaves /mcp. A
- * ticket belongs to the user, not the credential, so either surface may
- * confirm it. MCP's attach_text_file stores text the assistant writes
+ * confirmAttachmentUpload), which the app's uploads use too. The start
+ * answers an upload URL that takes no credential and stores one file
+ * (machine/uploads.ts), the client sends the bytes there, and the confirm
+ * attaches them. So the file never passes through an MCP or REST request,
+ * and an OAuth token never leaves /mcp. A ticket belongs to the user, not
+ * the credential, so either surface, and the app, may complete it, and the
+ * user's live tickets on all three count toward LIMITS.uploadsInProgress. A
+ * confirm sent again after its answer was lost answers the attachment the
+ * first one made. MCP's attach_text_file stores text the assistant writes
  * itself, for a client that cannot send the bytes anywhere. Its action stores the text and a mutation attaches
  * it, both behind the same checks as every other MCP write. */
 
@@ -73,7 +76,9 @@ import {
   removeAttachmentCore,
   startAttachmentUpload,
   taskAttachments,
+  UPLOAD_SIZE_SHAPE,
   UPLOAD_STORAGE_ID,
+  uploadSize,
 } from '../model/attachments'
 import { newUuid } from '../model/orgs'
 import { calendarDay } from '../model/taskValues'
@@ -152,10 +157,8 @@ function uploadFields(b: Record<string, unknown>): {
     }
     content_type = value
   }
-  if (typeof b.size !== 'number' || !Number.isInteger(b.size) || b.size < 0) {
-    throw badRequest('size must be the file size in bytes, a whole number')
-  }
-  return { name, content_type, size: b.size }
+  if (typeof b.size !== 'number') throw badRequest(UPLOAD_SIZE_SHAPE)
+  return { name, content_type, size: uploadSize(b.size) }
 }
 
 /* GET /v1/tasks/{ref}/attachments, the task's attachments with fresh

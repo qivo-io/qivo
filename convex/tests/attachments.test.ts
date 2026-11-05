@@ -319,6 +319,24 @@ describe('app uploads on tickets', () => {
     expect(await ticketRows(t)).toEqual([])
   })
 
+  it('answers the same attach sent again after it committed, only with the same id', async () => {
+    const { t, fx, issue } = await setup()
+    const sid = await uploaded(t, fx, fx.user, issue, 16)
+    const id = uuid()
+    const first = await attach(t, fx, fx.user, issue, sid, { id, inline: true })
+    const activity = (await activityFor(t, fx.org.id)).length
+    expect(await attach(t, fx, fx.user, issue, sid, { id, inline: true })).toEqual(first)
+    expect(await attachmentRows(t)).toHaveLength(1)
+    expect(await activityFor(t, fx.org.id)).toHaveLength(activity)
+    // another id would put the description's att:<id> on a row it never made
+    const other = await expectRefusal(attach(t, fx, fx.user, issue, sid), 'not_found')
+    expect(other.data.message).toBe(UPLOAD_NOT_STARTED)
+    // nor does another person or another task get it
+    await expectRefusal(attach(t, fx, fx.admin, issue, sid, { id }), 'not_found')
+    const elsewhere = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
+    await expectRefusal(attach(t, fx, fx.user, elsewhere, sid, { id }), 'not_found')
+  })
+
   it("refuses a size over the organization's limit, one that is not whole bytes and a name the attach would refuse, before any bytes", async () => {
     const { t, fx, issue } = await setup()
     await setOrgCap(t, fx, 1)

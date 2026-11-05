@@ -42,6 +42,7 @@ import {
   UPLOAD_URL_USED,
   uploadSizeWrong,
 } from '../model/attachments'
+import { storageTotalsOf } from '../model/storageTotals'
 import {
   activityFor,
   as,
@@ -634,12 +635,13 @@ describe('the REST upload', () => {
       verb: 'attached a file to',
       detail: 'wiring.pdf, via the REST API (CI key)',
     })
-    // the ticket is spent, and so is its upload URL
-    await refused(
-      confirm(fx, issue.id, started.ticket, { storage_id: stored }),
-      'not_found',
-      UPLOAD_TICKET_MISSING,
+    // the ticket is spent: the same confirm sent again answers its
+    // attachment and changes nothing, and the upload URL is spent too
+    expect(await confirm(fx, issue.id, started.ticket, { storage_id: stored })).toEqual(
+      expect.objectContaining({ attachment: expect.objectContaining({ id: out.attachment.id }) }),
     )
+    expect(await tickets(fx.t)).toEqual([])
+    expect(await attachmentRows(fx.t)).toHaveLength(1)
     expect(await send(fx.t, started.upload_url, 2048)).toEqual({
       status: 404,
       json: { error: UPLOAD_TICKET_MISSING },
@@ -1072,6 +1074,117 @@ describe('the REST upload', () => {
     expect((await tickets(fx.t)).map((r) => r.name)).toEqual(['live.txt'])
   })
 
+  it('answers a confirm sent again after its answer was lost with the same attachment, once', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    await fx.t.run((ctx) =>
+      ctx.db.insert('storage_org_totals', { org_id: fx.org.id, bytes: 0, files: 0, revision: 0 }),
+    )
+    const res = await rest(fx, 'POST', `/v1/tasks/QN-${issue.num}/attachments`, {
+      name: 'log.txt',
+      size: 3,
+    })
+    const { ticket, upload_url } = JSON.parse(res.text) as { ticket: string; upload_url: string }
+    const stored = await upload(fx.t, upload_url, 3)
+    const path = `/v1/tasks/QN-${issue.num}/attachments/${ticket}`
+    const first = await rest(fx, 'POST', path, { storage_id: stored })
+    const again = await rest(fx, 'POST', path, { storage_id: stored })
+    expect([first.status, again.status]).toEqual([201, 201])
+    const ids = [first, again].map((r) => (JSON.parse(r.text) as { id: string }).id)
+    expect(ids[1]).toBe(ids[0])
+    expect(JSON.parse(again.text)).toMatchObject({ name: 'log.txt', size_bytes: 3 })
+    expect(await attachmentRows(fx.t)).toHaveLength(1)
+    expect(
+      (await activityFor(fx.t, fx.org.id)).filter((row) => row.verb === 'attached a file to'),
+    ).toHaveLength(1)
+    expect(await fx.t.run((ctx) => storageTotalsOf(ctx, fx.org.id))).toEqual({ bytes: 3, files: 1 })
+  })
+
+  it('answers two confirms of one ticket sent at once with the same attachment', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.txt', size: 2 })
+    const stored = await upload(fx.t, upload_url, 2)
+    const outs = await Promise.all([
+      confirm(fx, issue.id, ticket, { storage_id: stored }),
+      confirm(fx, issue.id, ticket, { storage_id: stored }),
+    ])
+    const ids = outs.map((out) => ('attachment' in out ? out.attachment.id : null))
+    expect(ids[0]).not.toBeNull()
+    expect(ids[1]).toBe(ids[0])
+    expect(await attachmentRows(fx.t)).toHaveLength(1)
+  })
+
+  it('refuses a confirm sent again in every other case as before', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const other = await task(fx)
+    const attached = async (size: number) => {
+      const { ticket, upload_url } = await start(fx, issue.id, { name: 'a.txt', size })
+      const storage_id = await upload(fx.t, upload_url, size)
+      const out = await confirm(fx, issue.id, ticket, { storage_id })
+      if (!('attachment' in out)) throw new Error('expected an attachment')
+      return { ticket, storage_id, id: out.attachment.id }
+    }
+    const a = await attached(2)
+    const b = await attached(3)
+    const missing = (ref: string, ticket: string, storage_id: string, caller = fx.agent.id) =>
+      refused(confirm(fx, ref, ticket, { storage_id }, caller), 'not_found', UPLOAD_TICKET_MISSING)
+    // another caller who can edit the task, another task, a file another
+    // person attached, a file nothing attached and a storage_id that is no id
+    await missing(issue.id, a.ticket, a.storage_id, fx.admin.id)
+    await missing(other.id, a.ticket, a.storage_id)
+    await missing(issue.id, a.ticket, (await plantAttachment(fx, issue)).storage_id)
+    await missing(issue.id, a.ticket, await storeFile(fx.t, 2))
+    await missing(issue.id, a.ticket, 'no such file')
+    // a file dropped from the description, and one removed
+    await fx.t.run(async (ctx) => {
+      const row = await ctx.db
+        .query('issue_attachments')
+        .withIndex('by_uuid', (q) => q.eq('id', a.id))
+        .unique()
+      await ctx.db.patch(row!._id, { dropped_at: NOW })
+    })
+    await missing(issue.id, a.ticket, a.storage_id)
+    await fx.t.mutation(internal.machine.records.restDeleteAttachment, {
+      callerId: fx.agent.id,
+      access: 'write',
+      keyName: 'CI key',
+      ref: issue.id,
+      id: b.id,
+    })
+    await missing(issue.id, b.ticket, b.storage_id)
+    // a caller who lost Edit is refused before the confirm
+    const c = await attached(4)
+    await fx.t.run(async (ctx) => {
+      const grant = (await ctx.db.query('project_access').collect()).find(
+        (g) => g.profile_id === fx.agent.id,
+      )
+      if (grant) await ctx.db.patch(grant._id, { level: 'viewer' })
+    })
+    await refused(
+      confirm(fx, issue.id, c.ticket, { storage_id: c.storage_id }),
+      'forbidden',
+      AGENT_NO_WRITE,
+    )
+  })
+
+  it('answers 404 again for a ticket the oversize refusal spent', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const { ticket, upload_url } = await start(fx, issue.id, { name: 'big.bin', size: 2 * MiB })
+    const stored = await upload(fx.t, upload_url, 2 * MiB)
+    await fx.t.run((ctx) => ctx.db.patch(fx.org._id, { max_attachment_mb: 1 }))
+    expect(await confirm(fx, issue.id, ticket, { storage_id: stored })).toEqual({
+      refused: attachmentTooLarge(1),
+    })
+    await refused(
+      confirm(fx, issue.id, ticket, { storage_id: stored }),
+      'not_found',
+      UPLOAD_TICKET_MISSING,
+    )
+  })
+
   it('refuses the 21st upload in progress over HTTP with the limit sentence', async () => {
     const fx = await setup()
     const issue = await task(fx)
@@ -1226,6 +1339,52 @@ describe('the MCP upload', () => {
       'mcp.txt, via the REST API (CI key)',
       'rest.txt, via MCP',
     ])
+  })
+
+  it('answers a confirm sent again with the same attachment, on either surface', async () => {
+    const fx = await setup()
+    const issue = await task(fx)
+    const secret = await personalToken(fx.t, fx.user, 'write')
+    const started = await mcpTool(fx.t, secret, 'start_attachment_upload', {
+      ref: `QN-${issue.num}`,
+      name: 'notes.txt',
+      size: 5,
+    })
+    const { ticket, upload_url } = JSON.parse(started.text) as {
+      ticket: string
+      upload_url: string
+    }
+    const storage_id = await upload(fx.t, upload_url, 5)
+    const viaRest = await fx.t.mutation(internal.machine.records.restConfirmUpload, {
+      callerId: fx.user.id,
+      access: 'write',
+      keyName: 'Personal token',
+      ref: issue.id,
+      ticket,
+      body: JSON.stringify({ storage_id }),
+    })
+    if (!('attachment' in viaRest)) throw new Error('expected an attachment')
+    const again = await mcpTool(fx.t, secret, 'confirm_attachment_upload', {
+      ref: `QN-${issue.num}`,
+      ticket,
+      storage_id,
+    })
+    expect(again.isError).toBe(false)
+    expect(JSON.parse(again.text)).toMatchObject({ id: viaRest.attachment.id, name: 'notes.txt' })
+    // another user still meets the 404
+    expect(
+      await mcpTool(
+        fx.t,
+        await personalToken(fx.t, fx.admin, 'write'),
+        'confirm_attachment_upload',
+        {
+          ref: `QN-${issue.num}`,
+          ticket,
+          storage_id,
+        },
+      ),
+    ).toEqual({ text: UPLOAD_TICKET_MISSING, isError: true })
+    expect(await attachmentRows(fx.t)).toHaveLength(1)
   })
 
   it('refuses the 21st upload in progress, counted with the REST ones, as an error result', async () => {
