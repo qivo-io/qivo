@@ -2,7 +2,6 @@
 import { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Icon } from '../components/qivo'
-import { TasksLoadingView } from '../components/TasksLoading'
 import { WorkspacePageHeader, WorkspaceShell } from '../components/WorkspaceShell'
 import type { ApiAccessEntry } from '../lib/apiAccess'
 import { restoreFocus } from '../lib/focusVisibility'
@@ -21,23 +20,6 @@ import { OrgGeneralPage } from './settings/OrganizationSettings'
 import { ArchivedProjectsPage, OrgProjectsPage, ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
-
-/** Whether the Settings page `page` reads every task, so it waits while a
-    large workspace still loads them (P.stillLoading). Removing access from
-    a team or a project counts the tasks the change reaches before it asks.
-    Every other page, Sign out, tokens, people, Labels and Archived tasks
-    included, opens at once. Labels reads its rows and their counts from
-    the server, and Archived tasks its rows, with its chooser reading only
-    the projects and organizations, which a large workspace loads before its
-    tasks. */
-function readsEveryTask(page: string) {
-  return (
-    page === 'org-teams' ||
-    page.startsWith('team:') ||
-    page === 'projects' ||
-    page.startsWith('project:')
-  )
-}
 
 function SettingsScreen({
   page,
@@ -246,8 +228,6 @@ function SettingsScreen({
         onHolding={setHoldingProject}
       />
     )
-  if (P.stillLoading() !== null && readsEveryTask(page))
-    content = <TasksLoadingView what="This page" />
 
   const navigation = (
     <aside className="settings-navigation" aria-label="Settings navigation">

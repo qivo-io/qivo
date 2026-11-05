@@ -20,9 +20,10 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    moved meanwhile names itself, and earns an entry where it would with the
    task open. A task that arrives while a refused Back steps back is named
    once that step lands. A held address of another organization never
-   shows a home task with the same number. Settings opens meanwhile, and
-   so do Labels, with the server's counts, and Archived tasks, but its
-   pages that read every task wait. Back to a task or project that is
+   shows a home task with the same number. Settings and every one of its
+   pages open meanwhile: Teams, a team, Projects and a project, where a
+   removal asks the server which tasks it affects, Labels, with the
+   server's counts, and Archived tasks. Back to a task or project that is
    gone, once every task has loaded, names the page it shows in place. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -544,23 +545,86 @@ describe('Back to a task during the first load', { timeout: 30_000 }, () => {
 })
 
 describe('Settings while tasks load', { timeout: 30_000 }, () => {
-  it('opens, with Sign out, while a page that reads every task waits', async () => {
-    const { org } = await bootLoading()
+  it('opens Teams, a team, Projects and a project at once, and a removal there asks the server', async () => {
+    const { org } = await bootLoading(true, undefined, (snap) => {
+      const home = snap.orgs[0].id
+      snap.projects[0].type = 'meta'
+      snap.profiles.push({
+        ...snap.profiles[0],
+        id: 'leo',
+        auth_user_id: 'account-leo',
+        name: 'Leo Berg',
+        org_role: 'user',
+      })
+      snap.access.push({ project_id: snap.projects[0].id, profile_id: 'leo', level: 'user' })
+      for (const id of ['crew', 'bench'])
+        snap.teams.push({ id, org_id: home, name: id, track_delay_default: false, created_at: AT })
+      snap.teamMembers.push({ team_id: 'crew', profile_id: 'leo', is_leader: false })
+      // the held window's task is Leo's
+      const held = snap.issues.find((issue) => issue.id === 'fd000000-b')
+      if (held) held.assignee_id = 'leo'
+    })
     await back(`/app/${org}/settings/account`)
     await waitFor(
       () => [...document.querySelectorAll('button')].find((b) => b.textContent === 'Sign out'),
       'Sign out',
     )
-    expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
-    await back(`/app/${org}/settings/org-teams`)
-    await waitFor(() => document.querySelector('[data-tasks-loading-view]'), 'the waiting page')
-    await arrive()
-    await waitFor(
-      () =>
-        !document.querySelector('[data-tasks-loading-view]') &&
-        document.querySelector('[data-settings-page="org-teams"] [data-org-teams]'),
-      'the Teams page',
+    for (const [page, address, shows] of [
+      ['org-teams', 'org-teams', '[data-org-teams] [data-team-row="crew"]'],
+      ['team:crew', 'team:crew', '[data-settings-team-member="leo"]'],
+      ['projects', 'projects', '[data-settings-projects]'],
+      [undefined, 'project/1', '[data-project-access-user="leo"]'],
+    ] as const) {
+      await back(`/app/${org}/settings/${address}`)
+      const scope = page ? `[data-settings-page="${page}"] ` : ''
+      await waitFor(() => document.querySelector(`${scope}${shows}`), address)
+      expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
+    }
+    // the press asks the server, which lists the held task that has not arrived
+    network.query.mockImplementation(async (ref, args) =>
+      getFunctionName(ref) === 'accessRemovals:preview'
+        ? {
+            state: 'ok',
+            pending: true,
+            leave_only: false,
+            people: [{ id: 'leo', name: 'Leo Berg', kind: 'person', org_role: 'user' }],
+            tasks: 1,
+            items: [
+              {
+                task_id: 'fd000000-b',
+                num: 2,
+                title: 'Run the soak test',
+                project_id: (args as { change: { project_id: string } }).change.project_id,
+                holder_id: 'leo',
+                role: 'assignee',
+              },
+            ],
+            items_total: 1,
+            hidden: 0,
+            projects: [],
+            keep: {
+              targets: [],
+              changers: [],
+              allowed: true,
+              refusal: null,
+              offered: true,
+              permitted: true,
+            },
+            reassign: { allowed: true, refusal: null, permitted: true },
+          }
+        : null,
     )
+    const remove = document.querySelector<HTMLButtonElement>(
+      '[data-project-access-user="leo"] [data-project-access-remove]',
+    )
+    await act(async () => remove?.click())
+    const dialog = await waitFor(
+      () => document.querySelector('[data-access-removal]'),
+      'the window',
+    )
+    expect(dialog.textContent).toContain('QN-2')
+    expect(dialog.textContent).toContain('Run the soak test')
+    expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
   })
 
   it("opens Labels at once with the server's counts, though the task that carries a label is still to arrive", async () => {
