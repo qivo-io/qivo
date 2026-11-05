@@ -1149,7 +1149,8 @@ describe('continuation', () => {
     const f = await withOrg(t)
     const pia = await person(t, f.org.id, 'Pia')
     const tops = await plantMetas(t, f.org.id, names('Top ', 40), { lead_id: pia.id })
-    await plantSubs(t, tops[0], names('Sub ', 40))
+    // the design size of live sub-projects under one project, two batches
+    await plantSubs(t, tops[0], names('Sub ', 30))
     await plantMetas(t, f.org.id, names('Old ', 40), { lead_id: pia.id, archived_at: NOW })
     // the same projects for either role
     await plantGrants(t, pia, [f.meta, f.hidden])
@@ -1165,6 +1166,8 @@ describe('continuation', () => {
     ) => {
       await t.run((ctx) => ctx.db.patch(pia._id, { org_role: from }))
       const first = batchOf(await read(await seatNow(t, pia)))
+      // the list goes on past its first batch, so a cursor is carried
+      expect(first.next, `${from} to ${to}: ${label}`).not.toBeNull()
       await t.run((ctx) => ctx.db.patch(pia._id, { org_role: to }))
       const after = await seatNow(t, pia)
       const rest = await walked((cursor) => read(after, cursor ?? first.next ?? ''))
