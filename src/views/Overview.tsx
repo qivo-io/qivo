@@ -923,7 +923,7 @@ const narrower = (info: ScopeInfo) =>
 
 /** Whether every seat of the login that `info` reads is a guest's or an
     organization Viewer's, whose reads see other people's work one person
-    at a time (convex/lib/overview.ts verdicts). */
+    at a time (convex/lib/viewLoads.ts verdicts). */
 function onePersonAtATime(info: ScopeInfo): boolean {
   const seats = P.myProfileIds.map((id) => P.user(id)).filter((u) => !!u)
   const read = info.mine ? seats : seats.filter((u) => u.org === info.proj?.org)

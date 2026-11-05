@@ -261,7 +261,7 @@ export function viewBudget(ctx: QueryCtx, reads: Reads) {
     /** The request's totals the reads keep under, with the fixed charges
      * folded in and the held room left out as they stand when a check reads
      * them, for the readers that step by them (model/descriptions.ts
-     * descriptionsOf and projectTextReader, lib/overview.ts loadRoom). */
+     * descriptionsOf and projectTextReader, lib/viewLoads.ts loadRoom). */
     ceiling: {
       get ranges() {
         return reads.ranges - held.ranges

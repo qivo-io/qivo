@@ -32,7 +32,7 @@ export const shift = (day: string, days: number) =>
   new Date(Date.parse(`${day}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10)
 
 /** The client's day and weeks for `day`, a Monday, on UTC weeks: the
- * arguments lib/overview.ts clockOf takes. */
+ * arguments lib/viewLoads.ts clockOf takes. */
 export const weeksOf = (day: string) => ({
   day,
   week: day,

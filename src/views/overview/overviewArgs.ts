@@ -29,7 +29,7 @@ export function overviewScope(
 /** The client's day and weeks on the store's timeline now: its day, the
     first day of its week, the instants its last OVERVIEW_WEEKS local weeks
     began at, this one last, and the instant the next one begins at
-    (convex/lib/overview.ts clockOf). The store's rebuild moves them at
+    (convex/lib/viewLoads.ts clockOf). The store's rebuild moves them at
     local midnight, after sleep and when the week grid moves. */
 export function overviewClock(): OverviewClock {
   return {
