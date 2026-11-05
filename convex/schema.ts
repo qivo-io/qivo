@@ -1866,11 +1866,12 @@ export default defineSchema({
     restored_at: v.optional(v.number()),
   }),
 
-  // A REST upload in progress (model/attachments.ts). It names the caller
-  // that asked for the upload URL, the task it attaches to and when it
-  // expires. Only that caller may confirm it, once, for that task, with a
-  // file stored after the ticket's _creationTime. files.ts reapOrphans
-  // deletes expired tickets with the unreferenced bytes.
+  // An upload in progress from the app, REST or MCP (model/attachments.ts
+  // openUploadTicket). It names the caller that asked for the upload URL,
+  // the task it attaches to and when it expires, and holds the one file the
+  // URL stored. Only that caller may attach it (files.ts attach) or confirm
+  // it (REST and MCP), once, for that task, before it expires. files.ts
+  // reapOrphans deletes expired tickets with the unreferenced bytes.
   attachment_uploads: defineTable({
     id: v.string(), // the ticket
     org_id: v.string(),
@@ -1879,6 +1880,11 @@ export default defineSchema({
     name: v.string(),
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
+    // true when size_bytes is not a declared size but the most the upload
+    // URL takes, the organization's per-file limit, for an app loaded before
+    // uploads declared their size (files.ts uploadUrl). Absent, the file
+    // must have exactly size_bytes.
+    up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
     // POST's own id, absent while the URL is unused (model/attachments.ts
@@ -1890,7 +1896,9 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     .index('by_profile_expiry', ['profile_id', 'expires_at'])
-    .index('by_expiry', ['expires_at']),
+    .index('by_expiry', ['expires_at'])
+    // the ticket that stored a file, which the app's attach reads
+    .index('by_storage', ['storage_id']),
 
   // At most one row, written by the last leg of each finished files.ts
   // reapOrphans run, and deleted by one that spans a restore. No row makes

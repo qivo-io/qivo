@@ -12,10 +12,11 @@
  * (verified supported) to stand in for the real upload POST's header. */
 
 import { describe, expect, it } from 'vitest'
-import { api } from '../_generated/api'
+import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import { attachmentFileUrl, mintFileToken, verifyFileToken } from '../lib/fileTokens'
 import { attachmentTooLarge, LIMITS } from '../lib/limits'
+import { UPLOAD_NOT_STARTED, UPLOAD_OVER_URL, UPLOAD_SIZE_SHAPE } from '../model/attachments'
 import {
   activityFor,
   allMessages,
@@ -31,6 +32,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob and URLSearchParams; convex/tsconfig's
  * ESNext-only lib does not declare either. */
@@ -40,6 +42,11 @@ declare class Blob {
 declare class URLSearchParams {
   constructor(init?: string)
   get(name: string): string | null
+}
+declare class URL {
+  constructor(url: string)
+  pathname: string
+  search: string
 }
 
 /* fileTokens reads process.env lazily; guarantee the vars exist in this VM
@@ -87,16 +94,26 @@ const giveAvatar = async (t: T, profile: Doc<'profiles'>, bytes = 64): Promise<I
   return sid
 }
 
-/* attach as `by`, defaulting to a fresh uuid/name; returns the full result. */
-const attachAs = (
+/* attach as `by`, defaulting to a fresh uuid/name; returns the full result.
+ * It first plants the ticket that the upload of `sid` would leave, since the
+ * attach takes only such a file, for `seat`, the seat `by` acts as in the
+ * task's organization (`by` itself unless given). */
+const attachAs = async (
   t: T,
   fx: OrgFixture,
   by: Doc<'profiles'>,
   issue: Doc<'issues'>,
   sid: Id<'_storage'>,
-  extra: { id?: string; name?: string; mime?: string; inline?: boolean } = {},
-) =>
-  as(t, by).mutation(api.files.attach, {
+  extra: {
+    id?: string
+    name?: string
+    mime?: string
+    inline?: boolean
+    seat?: Doc<'profiles'>
+  } = {},
+) => {
+  await plantTicket(t, { profile: extra.seat ?? by, issue, storageId: sid })
+  return await as(t, by).mutation(api.files.attach, {
     org_id: fx.org.id,
     id: extra.id ?? uuid(),
     issue_id: issue.id,
@@ -105,6 +122,7 @@ const attachAs = (
     ...(extra.mime !== undefined ? { mime: extra.mime } : {}),
     inline: extra.inline ?? false,
   })
+}
 
 const setup = async () => {
   const t = newT()
@@ -120,8 +138,7 @@ describe('files.uploadUrl', () => {
       org_id: fx.org.id,
       issue_id: issue.id,
     })
-    expect(typeof url).toBe('string')
-    expect(url.length).toBeGreaterThan(0)
+    expect(url).toMatch(/^https:\/\/test\.convex\.site\/attachment-uploads\//)
     await expectRefusal(
       as(t, fx.viewer).mutation(api.files.uploadUrl, { org_id: fx.org.id, issue_id: issue.id }),
       'forbidden',
@@ -133,6 +150,232 @@ describe('files.uploadUrl', () => {
       }),
       'not_found',
     )
+  })
+})
+
+type Fetched = { status: number; text(): Promise<string> }
+
+/* POSTs `body` to the upload URL `url` as the app does, with `headers`. */
+async function postTo(
+  t: T,
+  url: string,
+  body: Uint8Array,
+  headers: Record<string, string> = { 'Content-Type': 'application/pdf' },
+) {
+  const { pathname, search } = new URL(url)
+  const res = await (
+    t as unknown as {
+      fetch(
+        path: string,
+        init: { method: string; headers: Record<string, string>; body: Uint8Array },
+      ): Promise<Fetched>
+    }
+  ).fetch(`${pathname}${search}`, { method: 'POST', headers, body })
+  return {
+    status: res.status,
+    json: JSON.parse(await res.text()) as { storageId?: Id<'_storage'>; error?: string },
+  }
+}
+
+const ticketRows = (t: T) => t.run((ctx) => ctx.db.query('attachment_uploads').collect())
+
+describe('app uploads on tickets', () => {
+  /* Starts an upload as `by` and sends `bytes` to its URL; answers the file. */
+  async function uploaded(
+    t: T,
+    fx: OrgFixture,
+    by: Doc<'profiles'>,
+    issue: Doc<'issues'>,
+    bytes: number,
+    args: { size?: number; name?: string } = { size: bytes, name: 'spec.pdf' },
+  ) {
+    const url = await as(t, by).mutation(api.files.uploadUrl, {
+      org_id: fx.org.id,
+      issue_id: issue.id,
+      ...args,
+    })
+    const res = await postTo(t, url, new Uint8Array(bytes))
+    expect(res.status, res.json.error).toBe(200)
+    return res.json.storageId!
+  }
+  const attach = (
+    t: T,
+    fx: OrgFixture,
+    by: Doc<'profiles'>,
+    issue: Doc<'issues'>,
+    sid: Id<'_storage'>,
+    extra: { id?: string; inline?: boolean } = {},
+  ) =>
+    as(t, by).mutation(api.files.attach, {
+      org_id: fx.org.id,
+      id: extra.id ?? uuid(),
+      issue_id: issue.id,
+      storage_id: sid,
+      name: 'spec.pdf',
+      inline: extra.inline ?? false,
+    })
+
+  it('stores exactly the declared size on one ticket, which the attach spends, for a file and a description image', async () => {
+    const { t, fx, issue } = await setup()
+    for (const inline of [false, true]) {
+      const url = await as(t, fx.user).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 64,
+        name: ' spec.pdf ',
+      })
+      expect(url).toContain('/attachment-uploads/')
+      const [ticket] = await ticketRows(t)
+      expect(ticket).toMatchObject({
+        profile_id: fx.user.id,
+        issue_id: issue.id,
+        name: 'spec.pdf',
+        size_bytes: 64,
+      })
+      expect(ticket.up_to).toBeUndefined()
+      expect((await postTo(t, url, new Uint8Array(63))).status).toBe(400)
+      const res = await postTo(t, url, new Uint8Array(64))
+      expect(res.status).toBe(200)
+      // one file a ticket
+      expect((await postTo(t, url, new Uint8Array(64))).status).toBe(409)
+      const out = await attach(t, fx, fx.user, issue, res.json.storageId!, { inline })
+      if (!('attachment' in out)) throw new Error('the attach was refused')
+      expect(out.attachment).toMatchObject({ size_bytes: 64, inline, uploaded_by: fx.user.id })
+      expect(await ticketRows(t)).toEqual([])
+    }
+  })
+
+  it('takes a smaller body without a size, as an app loaded before this release sends, up to the organization limit', async () => {
+    const { t, fx, issue } = await setup()
+    await setOrgCap(t, fx, 1)
+    const sid = await uploaded(t, fx, fx.user, issue, 10, {})
+    const [ticket] = await ticketRows(t)
+    expect(ticket).toMatchObject({ up_to: true, size_bytes: 1 * MiB, name: '' })
+    const out = await attach(t, fx, fx.user, issue, sid)
+    if (!('attachment' in out)) throw new Error('the attach was refused')
+    expect(out.attachment.size_bytes).toBe(10)
+    // a longer body, declared or sent without a length, stores nothing
+    const sent: Record<string, string>[] = [
+      { 'Content-Type': 'application/pdf', 'Content-Length': String(MiB + 1) },
+      { 'Content-Type': 'application/pdf' },
+    ]
+    for (const headers of sent) {
+      const url = await as(t, fx.user).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+      })
+      const res = await postTo(t, url, new Uint8Array(MiB + 1), headers)
+      expect(res).toEqual({ status: 400, json: { error: UPLOAD_OVER_URL } })
+    }
+    expect(await storageExists(t, sid)).toBe(true)
+    expect((await t.run((ctx) => ctx.db.system.query('_storage').collect())).length).toBe(1)
+  })
+
+  it('refuses a file no live ticket of the caller for the task stored, with one sentence', async () => {
+    const { t, fx, issue } = await setup()
+    const other = await plantIssue(t, { org_id: fx.org.id, project_id: fx.sub.id })
+    const planted = await storeBlob(t, 8)
+    const theirs = await uploaded(t, fx, fx.admin, issue, 8)
+    const elsewhere = await uploaded(t, fx, fx.user, other, 8)
+    const late = await uploaded(t, fx, fx.user, issue, 8)
+    await t.run(async (ctx) => {
+      const ticket = await ctx.db
+        .query('attachment_uploads')
+        .withIndex('by_storage', (q) => q.eq('storage_id', late))
+        .unique()
+      await ctx.db.patch(ticket!._id, { expires_at: Date.now() })
+    })
+    for (const sid of [planted, theirs, elsewhere, late]) {
+      const refusal = await expectRefusal(attach(t, fx, fx.user, issue, sid), 'not_found')
+      expect(refusal.data.message).toBe(UPLOAD_NOT_STARTED)
+    }
+    expect(await attachmentRows(t)).toEqual([])
+    // the owners still attach theirs
+    expect(await attach(t, fx, fx.admin, issue, theirs)).toHaveProperty('attachment')
+    expect(await attach(t, fx, fx.user, other, elsewhere)).toHaveProperty('attachment')
+  })
+
+  it("attaches a file the caller's REST or MCP ticket stored, since a ticket is its person's", async () => {
+    const { t, fx, issue } = await setup()
+    const started = await t.mutation(internal.machine.records.mcpStartUpload, {
+      callerId: fx.user.id,
+      access: 'write',
+      ref: `QN-${issue.num}`,
+      name: 'report.pdf',
+      size: 12,
+    })
+    const { upload_url } = JSON.parse(started) as { upload_url: string }
+    const res = await postTo(t, upload_url, new Uint8Array(12))
+    expect(res.status).toBe(200)
+    // nobody else's attach takes it
+    await expectRefusal(attach(t, fx, fx.admin, issue, res.json.storageId!), 'not_found')
+    const out = await attach(t, fx, fx.user, issue, res.json.storageId!)
+    if (!('attachment' in out)) throw new Error('the attach was refused')
+    // the app's attach names the file, not the ticket
+    expect(out.attachment.name).toBe('spec.pdf')
+    expect(await ticketRows(t)).toEqual([])
+  })
+
+  it("refuses a size over the organization's limit, one that is not whole bytes and a name the attach would refuse, before any bytes", async () => {
+    const { t, fx, issue } = await setup()
+    await setOrgCap(t, fx, 1)
+    const start = (args: { size?: number; name?: string }) =>
+      as(t, fx.user).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        ...args,
+      })
+    const over = await expectRefusal(start({ size: MiB + 1 }), 'rule')
+    expect(over.data.message).toBe(attachmentTooLarge(1))
+    for (const size of [-1, 0.5]) {
+      const shape = await expectRefusal(start({ size }), 'bad_request')
+      expect(shape.data.message).toBe(UPLOAD_SIZE_SHAPE)
+    }
+    const long = await expectRefusal(start({ name: 'x'.repeat(256) }), 'rule')
+    expect(long.data.message).toBe(LIMITS.attachmentName.refusal)
+    const blank = await expectRefusal(start({ name: '  ' }), 'rule')
+    expect(blank.data.message).toBe('a file name cannot be blank')
+    expect(await ticketRows(t)).toEqual([])
+    // at the limit it starts
+    await start({ size: MiB, name: 'x'.repeat(255) })
+    expect(await ticketRows(t)).toHaveLength(1)
+  })
+
+  it('refuses a full task before any ticket, and a viewer and another organization as before', async () => {
+    const { t, fx, issue } = await setup()
+    await t.run(async (ctx) => {
+      for (let i = 0; i < LIMITS.attachments.max; i++)
+        await ctx.db.insert('issue_attachments', {
+          id: uuid(),
+          org_id: fx.org.id,
+          issue_id: issue.id,
+          name: `${i}.pdf`,
+          size_bytes: 1,
+          storage_id: await ctx.storage.store(new Blob([new Uint8Array(1)]) as never),
+          inline: false,
+          uploaded_by: fx.user.id,
+          created_at: NOW,
+        })
+    })
+    const full = await expectRefusal(
+      as(t, fx.user).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 5 * MiB * 100,
+        name: '',
+      }),
+      'rule',
+    )
+    expect(full.data.message).toBe(LIMITS.attachments.refusal)
+    await expectRefusal(
+      as(t, fx.viewer).mutation(api.files.uploadUrl, {
+        org_id: fx.org.id,
+        issue_id: issue.id,
+        size: 1,
+      }),
+      'forbidden',
+    )
+    expect(await ticketRows(t)).toEqual([])
   })
 })
 
@@ -284,7 +527,7 @@ describe('files.attach', () => {
     // The Other administrator is also a guest with write access in Testbed Labs.
     await t.run((ctx) => ctx.db.patch(fx.guest._id, { auth_user_id: fx.otherAdmin.auth_user_id }))
     const denied = await storeBlob(t, MiB + 1)
-    expect(await attachAs(t, fx, fx.otherAdmin, issue, denied)).toEqual({
+    expect(await attachAs(t, fx, fx.otherAdmin, issue, denied, { seat: fx.guest })).toEqual({
       refused: {
         code: 'rule',
         message: attachmentTooLarge(1),

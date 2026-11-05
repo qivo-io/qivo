@@ -24,6 +24,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -748,6 +749,8 @@ describe('private custom background uploads', () => {
     await upload(t, owner.caller)
     const [image] = await customRows(t)
     const issue = await plantIssue(t, { org_id: org.org.id, project_id: org.sub.id })
+    // a ticket of the caller holding the file, so the attach reaches the fence
+    await plantTicket(t, { profile: org.admin, issue, storageId: image.storage_id })
     await expectRefusal(
       other.caller.mutation(api.files.attach, {
         org_id: org.org.id,

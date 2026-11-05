@@ -7,6 +7,7 @@ import authSchema from '../betterAuth/schema'
 import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panoramaImage'
 import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -493,6 +494,7 @@ describe('manual background library uploads', () => {
     const avatar = await store(t, jpeg(1920, 1080, 2))
     const background = await store(t, jpeg(1920, 1080, 3))
     await upload(op, background)
+    await plantTicket(t, { profile: org.admin, issue, storageId: attached })
     await as(t, org.admin).mutation(api.files.attach, {
       org_id: org.org.id,
       id: uuid(),

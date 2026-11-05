@@ -4,11 +4,15 @@
  *
  * Ported rights (final SQL state):
  *   uploadUrl          attachments_objects_insert 0090:31-40 — bytes may only
- *                      enter under an issue you hold member on
+ *                      enter under an issue you hold member on; outside the
+ *                      demo through an upload ticket of the caller for that
+ *                      task, which stores one file of the declared size
  *   attach             ia_insert 0081:307-311 ('member'→'user' by 0098) +
  *                      attachments_check_size 0089 (size from storage
  *                      metadata, NEVER the client; binary MiB cap) +
- *                      storage_path unique 0018:22 (→ by_storage uniqueness)
+ *                      storage_path unique 0018:22 (→ by_storage uniqueness);
+ *                      outside the demo only a file the caller's own ticket
+ *                      for that task stored
  *   removeAttachment   ia_delete 0018:38-40 — ANY project member, not
  *                      uploader-only
  *   setAvatar/clear    set_avatar 0099:189-210 (self-or-admin, one sentence
@@ -68,7 +72,9 @@ import {
   type AttachResult,
   assertAttachmentRoom,
   attachFileCore,
+  attachUploadedFile,
   cleanAttachmentName,
+  openUploadTicket,
   removeAttachmentCore,
   storageIdInUse,
   uploadSize,
@@ -116,10 +122,16 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
 }
 
 /* ---------------------------------------------------------------- uploads
- * generateUploadUrl is a blank cheque for one POST, so the MINT is gated:
- * write level on the target issue's project (attachments) or the set_avatar
- * right (avatars). A minted URL can still park bytes without attaching —
- * that residual (unchanged from 0090:20-29) is what reapOrphans exists for. */
+ * Every URL is gated: write level on the target issue's project
+ * (attachments) or the set_avatar right (avatars). An attachment or
+ * description image goes on an upload ticket, as REST and MCP uploads do
+ * (model/attachments.ts openUploadTicket): its URL stores one file of the
+ * declared size, or up to the organization's limit for an app that sends no
+ * size, and only the caller's attach of that file to that task takes it. On
+ * the demo the upload reserves room in the demo's budget instead
+ * (model/demoUploads.ts). A picture outside the demo still gets
+ * generateUploadUrl, a blank cheque for one POST of any size, which can
+ * park bytes without a picture until reapOrphans erases them. */
 
 export const uploadUrl = orgMutation({
   args: {
@@ -135,10 +147,17 @@ export const uploadUrl = orgMutation({
     // a full task is refused before any bytes are sent
     await assertAttachmentRoom(ctx, issue.id)
     // the attach names the file; this only refuses a name it would refuse
-    if (name !== undefined) cleanAttachmentName(name)
+    const fileName = name === undefined ? '' : cleanAttachmentName(name)
     if (size !== undefined) uploadSize(size)
     if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, size)
-    return await ctx.storage.generateUploadUrl()
+    const { uploadUrl } = await openUploadTicket(ctx, {
+      me: ctx.me,
+      issue,
+      name: fileName,
+      size,
+      nowMs: Date.now(),
+    })
+    return uploadUrl
   },
 })
 
@@ -177,7 +196,11 @@ export const avatarUploadUrl = authedMutation({
  * oversize refusal-return happens before the row insert — the committed
  * transaction then carries exactly one effect, the byte delete. The name and
  * type limits, the cap, the byte fence, the row and the activity row are
- * model/attachments.ts attachFileCore, which REST and MCP uploads run too. */
+ * model/attachments.ts attachFileCore, which REST and MCP uploads run too.
+ * Outside the demo the file must be one the caller's own unexpired upload
+ * ticket for this task stored, which the attach then spends
+ * (model/attachments.ts attachUploadedFile); the demo checks its own
+ * ledger's ticket instead (assertDemoFileOwnership). */
 export const attach = orgMutation({
   args: {
     id: v.string(), // client-generated attachment uuid
@@ -188,10 +211,19 @@ export const attach = orgMutation({
     inline: v.boolean(),
   },
   handler: async (ctx, { id, issue_id, storage_id, name, mime, inline }): Promise<AttachResult> => {
-    const now = new Date().toISOString()
+    const nowMs = Date.now()
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
+    if (!isDemoDeployment())
+      return await attachUploadedFile(ctx, {
+        me: ctx.me,
+        issue,
+        storageId: storage_id,
+        row: { id, name, mime, inline },
+        nowMs,
+      })
     await assertDemoFileOwnership(ctx, ctx.authUserId, storage_id, 'attachment', issue_id)
+    const now = new Date(nowMs).toISOString()
     return await attachFileCore(ctx, { me: ctx.me, issue, id, storage_id, name, mime, inline, now })
   },
 })
@@ -508,7 +540,7 @@ export const gatewayAvatar = internalQuery({
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts.
- * Attachment upload tickets (REST and MCP) live exactly this long
+ * Attachment upload tickets (the app, REST and MCP) live exactly this long
  * (model/attachments.ts UPLOAD_TICKET_TTL_MS) and background upload tickets
  * at most 15 minutes (appearance.ts UPLOAD_TTL_SECONDS), so no sweep deletes
  * a file while the ticket it was uploaded for can still confirm it. */

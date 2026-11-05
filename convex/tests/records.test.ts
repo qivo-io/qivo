@@ -60,6 +60,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { keyOrg } from './nameKeys.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob and TextEncoder; convex/tsconfig's ESNext-only
  * lib does not declare them. */
@@ -492,7 +493,9 @@ describe('removing an attachment', () => {
     })
     expect((JSON.parse(viaMcp) as { attachments: unknown[] }).attachments).toEqual([])
     // the held bytes cannot come back under a new row, from the app or a
-    // machine upload, which share attachFileCore
+    // machine upload, which share attachFileCore, even with a ticket holding
+    // them
+    await plantTicket(fx.t, { profile: fx.user, issue, storageId: att.storage_id })
     await refused(
       as(fx.t, fx.user).mutation(api.files.attach, {
         org_id: fx.org.id,

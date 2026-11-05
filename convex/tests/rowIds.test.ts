@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import { ROW_ID_SHAPE } from '../lib/db'
 import { as, expectRefusal, newT, plantIssue, uuid, withOrg } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -83,6 +84,7 @@ async function fixture() {
       }),
     attachment: async (id) => {
       const storage_id = await t.run((ctx) => ctx.storage.store(new Blob(['x']) as never))
+      await plantTicket(t, { profile: f.admin, issue: a, storageId: storage_id })
       return admin.mutation(api.files.attach, {
         org_id,
         id,

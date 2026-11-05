@@ -28,17 +28,22 @@
  * media type stay within LIMITS.attachmentName and LIMITS.mediaType. That
  * keeps every row small, so a page of rows stays small too.
  *
- * REST and MCP upload in two steps. startAttachmentUpload checks the write
- * gate and the declared size, records a ticket naming the caller, the task
- * and an expiry, and answers an upload URL signed for that ticket. The
- * client sends the bytes to the URL, whose receiver (machine/uploads.ts)
- * stores exactly the declared number of bytes once per ticket
- * (beginTicketUpload, finishTicketUpload), and confirmAttachmentUpload
- * attaches that one file only for that caller and task before the ticket
- * expires, on either surface. Convex's own upload URLs are not used here,
- * because one of them stores any number of files until it expires.
- * Unconfirmed bytes are reaped with every other unreferenced file
- * (files.ts reapOrphans), which also deletes expired tickets.
+ * The app, REST and MCP upload on the same tickets. openUploadTicket checks
+ * the declared size against the organization's limit, records a ticket
+ * naming the caller, the task and an expiry, and answers an upload URL
+ * signed for that ticket; startAttachmentUpload, for REST and MCP, checks
+ * the write gate and the task's room first, as files.ts uploadUrl does for
+ * the app. The client sends the bytes to the URL, whose receiver
+ * (machine/uploads.ts) stores exactly the declared number of bytes once per
+ * ticket (beginTicketUpload, finishTicketUpload), or at most the
+ * organization's limit for an app that declared no size (`up_to`). The
+ * file then attaches only for that caller and task before the ticket
+ * expires, through completeUpload: files.ts attach finds the ticket by its
+ * file, and confirmAttachmentUpload, on either machine surface, by its id.
+ * Convex's own upload URLs are not used for task files, because one of them
+ * stores any number of files of any size until it expires. Unconfirmed
+ * bytes are reaped with every other unreferenced file (files.ts
+ * reapOrphans), which also deletes expired tickets.
  *
  * Downloads go through the /files gateway with a 10-minute token minted for
  * the reader (lib/fileTokens.ts), which the gateway re-checks on every fetch.
@@ -259,30 +264,34 @@ export const UPLOAD_TICKET_TTL_MS = 60 * 60 * 1000
  * that write bounded; reapOrphans deletes the rest. */
 const EXPIRED_TICKETS_PER_UPLOAD = 100
 
+/** A new upload ticket and its upload URL. */
+type OpenedUpload = { ticket: Doc<'attachment_uploads'>; uploadUrl: string }
+
 /**
- * Starts an upload of a file of `size` bytes to `issue` for `me`. Checks
- * the write gate, the task's room for one more attachment
- * (assertAttachmentRoom) and the organization's cap against the declared size,
- * records the ticket that confirmAttachmentUpload requires and answers its
- * upload URL, which stores one file. `nowMs` is the request's clock. Deletes
- * some of the caller's expired tickets on the way.
+ * Records a ticket for an upload of a file of `size` bytes to `issue` by
+ * `me` and answers its upload URL, which stores one file. The caller has
+ * checked the write gate and the task's room. Refuses a size over the
+ * organization's limit with that limit's `rule`. Without `size`, for an app
+ * loaded before uploads declared one, the ticket is `up_to` the
+ * organization's limit. `name` and `content_type` are what a REST or MCP
+ * confirm attaches the file as; the app's attach names the file itself.
+ * `nowMs` is the request's clock. Deletes some of the caller's expired
+ * tickets on the way.
  */
-export async function startAttachmentUpload(
+export async function openUploadTicket(
   ctx: MutationCtx,
   a: {
     me: Doc<'profiles'>
     issue: Doc<'issues'>
     name: string
     content_type?: string
-    size: number
+    size?: number
     nowMs: number
   },
-): Promise<{ ticket: Doc<'attachment_uploads'>; uploadUrl: string }> {
+): Promise<OpenedUpload> {
   const { me, issue } = a
-  await assertCanEdit(ctx, me, issue.project_id)
-  await assertAttachmentRoom(ctx, issue.id)
   const cap = await attachmentCapMb(ctx, issue.org_id)
-  if (a.size > cap * MIB) throw rule(attachmentTooLarge(cap))
+  if (a.size !== undefined && a.size > cap * MIB) throw rule(attachmentTooLarge(cap))
   const expired = await ctx.db
     .query('attachment_uploads')
     .withIndex('by_profile_expiry', (q) => q.eq('profile_id', me.id).lte('expires_at', a.nowMs))
@@ -298,7 +307,8 @@ export async function startAttachmentUpload(
     issue_id: issue.id,
     name: a.name,
     content_type: a.content_type,
-    size_bytes: a.size,
+    size_bytes: a.size ?? cap * MIB,
+    ...(a.size === undefined ? { up_to: true as const } : {}),
     expires_at: a.nowMs + UPLOAD_TICKET_TTL_MS,
   })
   const token = await mintFileToken({ kind: 'attachment_upload', id, minter: me.id, exp })
@@ -306,6 +316,28 @@ export async function startAttachmentUpload(
     ticket: (await ctx.db.get(rowId)) as Doc<'attachment_uploads'>,
     uploadUrl: attachmentUploadUrl({ id, minter: me.id, exp, token }),
   }
+}
+
+/**
+ * Starts a REST or MCP upload of a file of `size` bytes to `issue` for
+ * `me`. Checks the write gate and the task's room for one more attachment
+ * (assertAttachmentRoom), then opens the ticket that confirmAttachmentUpload
+ * requires (openUploadTicket).
+ */
+export async function startAttachmentUpload(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    issue: Doc<'issues'>
+    name: string
+    content_type?: string
+    size: number
+    nowMs: number
+  },
+): Promise<OpenedUpload> {
+  await assertCanEdit(ctx, a.me, a.issue.project_id)
+  await assertAttachmentRoom(ctx, a.issue.id)
+  return await openUploadTicket(ctx, a)
 }
 
 /** The one answer for a ticket that is unknown, expired, another caller's
@@ -319,6 +351,17 @@ export const UPLOAD_URL_USED = 'this upload URL has already been used; start a n
 /** The upload URL's answer for a body that is not the declared size. */
 export const uploadSizeWrong = (size: number): string =>
   `the upload must be exactly the ${size} bytes declared`
+
+/** The upload URL's answer for a body longer than an `up_to` ticket takes. */
+export const UPLOAD_OVER_URL =
+  'the file is larger than the most this upload URL takes; start a new upload'
+
+/** The app's attach answer for a file no live ticket of the caller for
+ * the task holds, the same whether there is no ticket, another person's,
+ * another task's or an expired one, so it says nothing about other
+ * uploads. */
+export const UPLOAD_NOT_STARTED =
+  'this upload expired or was not started for this task. Upload the file again.'
 
 /** How long a POST to an upload URL holds the URL. A POST that ended
  * without storing its file, or without freeing the URL, such as one whose
@@ -340,15 +383,16 @@ async function liveTicket(
 
 /**
  * Claims the upload URL of ticket `ticketId` for the POST `attempt`, and
- * answers the number of bytes the POST must carry. A ticket that is unknown,
- * expired or not `minter`'s is refused, and so is one that holds a file or
- * that another POST claimed less than UPLOAD_CLAIM_MS ago, so a URL stores
- * at most one file however often it is sent to.
+ * answers the number of bytes the POST must carry, or with `upTo` the most
+ * it may carry. A ticket that is unknown, expired or not `minter`'s is
+ * refused, and so is one that holds a file or that another POST claimed
+ * less than UPLOAD_CLAIM_MS ago, so a URL stores at most one file however
+ * often it is sent to.
  */
 export async function beginTicketUpload(
   ctx: MutationCtx,
   a: { ticketId: string; minter: string; attempt: string; nowMs: number },
-): Promise<{ size: number }> {
+): Promise<{ size: number; upTo: boolean }> {
   const ticket = await liveTicket(ctx, a)
   if (ticket === null) throw notFound(UPLOAD_TICKET_MISSING)
   const claimed =
@@ -357,7 +401,7 @@ export async function beginTicketUpload(
     throw conflict(UPLOAD_URL_USED, 'upload_url_used')
   }
   await ctx.db.patch(ticket._id, { upload_started_at: a.nowMs, upload_attempt: a.attempt })
-  return { size: ticket.size_bytes }
+  return { size: ticket.size_bytes, upTo: ticket.up_to === true }
 }
 
 /**
@@ -440,16 +484,90 @@ export const UPLOAD_NOT_SENT =
 export const UPLOAD_STORAGE_ID = 'storage_id must be the storageId the upload answered'
 
 /**
- * Confirms the upload `ticketId` of `me` to `issue` with the uploaded
- * file `storage_id`, then attaches it like the app does (attachFileCore,
- * with the declared size enforced and `provenance` signing the activity
- * row). The ticket must be this caller's, for this task and unexpired at
- * `nowMs`, and `storage_id` must be the file its upload URL stored
- * (finishTicketUpload), so a ticket cannot claim or delete any other file. A
- * confirmed ticket is spent, and so is one whose file was deleted for
- * exceeding the cap, which happens only when the organization lowered its
+ * Attaches the file of upload ticket `ticket` to `issue` as `me`, the core
+ * the app's attach and the REST and MCP confirm share. The ticket must be
+ * this caller's, for this task and unexpired at `nowMs`, or the answer is a
+ * not-found refusal with `missing`, the surface's sentence, the same for
+ * every such case. `storageId` must be the file its upload URL stored
+ * (finishTicketUpload), so a ticket cannot claim or delete any other file.
+ * The attachment is `row`, through attachFileCore with every one of its
+ * checks, the ticket's declared size enforced unless it was `up_to`, and
+ * `provenance` signing the activity row. A completed ticket is spent, and so
+ * is one whose file was deleted for exceeding the organization's limit,
+ * which for a declared size happens only when the organization lowered its
  * limit after the upload started. Any other refusal leaves the ticket for
  * another try.
+ */
+async function completeUpload(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    issue: Doc<'issues'>
+    ticket: Doc<'attachment_uploads'> | null
+    storageId: Id<'_storage'> | null
+    row: { id: string; name: string; mime?: string; inline: boolean }
+    nowMs: number
+    provenance?: string
+    missing: string
+  },
+): Promise<AttachResult> {
+  const { me, issue, ticket } = a
+  if (
+    ticket === null ||
+    ticket.profile_id !== me.id ||
+    ticket.issue_id !== issue.id ||
+    !(ticket.expires_at > a.nowMs)
+  ) {
+    throw notFound(a.missing)
+  }
+  if (ticket.storage_id === undefined) throw badRequest(UPLOAD_NOT_SENT)
+  if (a.storageId === null || a.storageId !== ticket.storage_id) throw badRequest(UPLOAD_STORAGE_ID)
+  const result = await attachFileCore(ctx, {
+    me,
+    issue,
+    ...a.row,
+    storage_id: a.storageId,
+    now: new Date(a.nowMs).toISOString(),
+    ...(ticket.up_to ? {} : { declaredSize: ticket.size_bytes }),
+    provenance: a.provenance,
+  })
+  await ctx.db.delete(ticket._id)
+  return result
+}
+
+/**
+ * Attaches file `storageId` to `issue` as `me` for the app (files.ts
+ * attach), as `row`, the attachment's id, name, media type and whether it
+ * is a description image. Only the file the caller's own unexpired ticket
+ * for this task stored attaches (completeUpload); any other file is refused
+ * with UPLOAD_NOT_STARTED, also one a REST or MCP ticket of another person
+ * stored. A REST or MCP ticket of the caller attaches, since a ticket
+ * belongs to its person on every surface. Reads the ticket by its file
+ * (attachment_uploads.by_storage).
+ */
+export async function attachUploadedFile(
+  ctx: MutationCtx,
+  a: {
+    me: Doc<'profiles'>
+    issue: Doc<'issues'>
+    storageId: Id<'_storage'>
+    row: { id: string; name: string; mime?: string; inline: boolean }
+    nowMs: number
+  },
+): Promise<AttachResult> {
+  const ticket = await ctx.db
+    .query('attachment_uploads')
+    .withIndex('by_storage', (q) => q.eq('storage_id', a.storageId))
+    .first()
+  return await completeUpload(ctx, { ...a, ticket, missing: UPLOAD_NOT_STARTED })
+}
+
+/**
+ * Confirms the upload `ticketId` of `me` to `issue` with the uploaded
+ * file `storage_id`, then attaches it like the app does (completeUpload),
+ * under the ticket's name and media type, with `provenance` signing the
+ * activity row. A ticket that is unknown, expired, another caller's or
+ * another task's is UPLOAD_TICKET_MISSING.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,
@@ -463,31 +581,21 @@ export async function confirmAttachmentUpload(
   },
 ): Promise<AttachResult> {
   const ticket = await byId(ctx, 'attachment_uploads', a.ticketId.toLowerCase())
-  if (
-    ticket === null ||
-    ticket.profile_id !== a.me.id ||
-    ticket.issue_id !== a.issue.id ||
-    !(ticket.expires_at > a.nowMs)
-  ) {
-    throw notFound(UPLOAD_TICKET_MISSING)
-  }
-  if (ticket.storage_id === undefined) throw badRequest(UPLOAD_NOT_SENT)
-  const storageId = ctx.db.system.normalizeId('_storage', a.storage_id)
-  if (storageId === null || storageId !== ticket.storage_id) throw badRequest(UPLOAD_STORAGE_ID)
-  const result = await attachFileCore(ctx, {
+  return await completeUpload(ctx, {
     me: a.me,
     issue: a.issue,
-    id: newUuid(),
-    storage_id: storageId,
-    name: ticket.name,
-    mime: ticket.content_type,
-    inline: false,
-    now: new Date(a.nowMs).toISOString(),
-    declaredSize: ticket.size_bytes,
+    ticket,
+    storageId: ctx.db.system.normalizeId('_storage', a.storage_id),
+    row: {
+      id: newUuid(),
+      name: ticket?.name ?? '',
+      mime: ticket?.content_type,
+      inline: false,
+    },
+    nowMs: a.nowMs,
     provenance: a.provenance,
+    missing: UPLOAD_TICKET_MISSING,
   })
-  await ctx.db.delete(ticket._id)
-  return result
 }
 
 /* ----------------------------------------------------------------- reads */
