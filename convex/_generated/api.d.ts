@@ -159,6 +159,7 @@ import type * as lib_taskEvents from "../lib/taskEvents.js";
 import type * as lib_taskRefs from "../lib/taskRefs.js";
 import type * as lib_taskWindow from "../lib/taskWindow.js";
 import type * as lib_teamSync from "../lib/teamSync.js";
+import type * as lib_teamSyncAgenda from "../lib/teamSyncAgenda.js";
 import type * as lib_usage from "../lib/usage.js";
 import type * as lib_viewFilters from "../lib/viewFilters.js";
 import type * as lib_viewLoads from "../lib/viewLoads.js";
@@ -433,6 +434,7 @@ declare const fullApi: ApiFromModules<{
   "lib/taskRefs": typeof lib_taskRefs;
   "lib/taskWindow": typeof lib_taskWindow;
   "lib/teamSync": typeof lib_teamSync;
+  "lib/teamSyncAgenda": typeof lib_teamSyncAgenda;
   "lib/usage": typeof lib_usage;
   "lib/viewFilters": typeof lib_viewFilters;
   "lib/viewLoads": typeof lib_viewLoads;

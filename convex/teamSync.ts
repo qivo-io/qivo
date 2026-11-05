@@ -1,13 +1,29 @@
-/* Team sync: the meeting page's two server facts. `stamp` records that a
- * change was made on a person through the sync page (the person's
- * sync_stamps row, model/syncStamps.ts, read through the sitting rule in
- * lib/teamSync.ts; the app's people part sends it on its profile rows as
- * sync_at and sync_since). `lastComments` is the one per-task fact
- * the workspace lacks: when each open task was last commented on, for the
- * page's "untouched" and "changed" marks. The page subscribes to it only
- * while it is open, and only for the people whose cards it shows, so neither
- * the workspace parts nor the page read a comment per task of the whole
- * organization.
+/* Team sync: the meeting page's server reads and its stamp. `agenda`
+ * answers one meeting for one scope (lib/teamSyncAgenda.ts): the tasks the
+ * page shows, the people it walks with their stamps and loads, within
+ * Team sync's budget and ceiling. No app reader calls it yet; the Team sync
+ * view moves onto it. `stamp` records that a change was made on a person
+ * through the sync page (the person's sync_stamps row, model/syncStamps.ts,
+ * read through the sitting rule in lib/teamSync.ts; the app's people part
+ * sends it on its profile rows as sync_at and sync_since). `lastComments`
+ * is the one per-task fact the workspace lacks: when each open task was
+ * last commented on, for the page's "untouched" and "changed" marks. The
+ * page subscribes to it only while it is open, and only for the people
+ * whose cards it shows, so neither the workspace parts nor the page read a
+ * comment per task of the whole organization.
+ *
+ * agenda is a live query: a change to a document its reads returned or
+ * would now return reruns it, such as an active task of the scope's
+ * sub-projects in an open, Backlog or Done status the reads reached, a
+ * subtask a check read, a link row of a row, a blocker or parent it read, a
+ * walker's profile or stamp, a team membership it asked about, a project,
+ * share or access row it asked about, a count row of the scope in a team
+ * or All projects, and through the loads any open task of an owner it read
+ * anywhere in the organization and that owner's plannable hours. Every
+ * Remaining, status or owner edit made in the meeting reruns it. A new
+ * scope or a new local day is a new subscription. authedQuery, not
+ * orgQuery, so a seat that goes away answers `unavailable` instead of
+ * throwing in a subscription.
  *
  * The stamp is meeting bookkeeping, not a task change: it writes no activity
  * row and notifies no one. */
@@ -17,12 +33,40 @@ import type { Doc } from './_generated/dataModel'
 import { isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { IssueStatus } from './lib/enums'
-import { badRequest, forbidden, notFound, orgMutation, orgQuery } from './lib/functions'
+import {
+  authedQuery,
+  badRequest,
+  forbidden,
+  notFound,
+  orgMutation,
+  orgQuery,
+} from './lib/functions'
 import { taskOwnerId } from './lib/review'
 import { nextSyncStamp, SYNC_OWNERS_MAX } from './lib/teamSync'
+import { readAgenda } from './lib/teamSyncAgenda'
+import { vClock } from './lib/viewLoads'
 import { orgProjectView } from './lib/visibility'
 import { DOCUMENT_MAX_BYTES, latestComment } from './model/comments'
 import { stampOf, writeStamp } from './model/syncStamps'
+
+/* One Team sync meeting of the organization `org_id` for `scope`, a
+ * project or sub-project, a team of that organization, or All projects
+ * asked for by name, on the client's day and weeks (lib/viewLoads.ts
+ * clockOf), as lib/teamSyncAgenda.ts readAgenda answers it: ok,
+ * over_ceiling, over_budget or unavailable, never part of a meeting. Any
+ * member but a guest reads it. */
+export const agenda = authedQuery({
+  args: {
+    org_id: v.string(),
+    scope: v.union(
+      v.object({ kind: v.literal('project'), project_id: v.string() }),
+      v.object({ kind: v.literal('team'), team_id: v.string() }),
+      v.object({ kind: v.literal('all') }),
+    ),
+    ...vClock,
+  },
+  handler: (ctx, args) => readAgenda(ctx, ctx.myProfiles, args),
+})
 
 /* A change made from a sync page stamps the owner of that page, who is often
  * not the caller. The sync is a home-organization page for staff: guests
