@@ -40,7 +40,9 @@
  * finds the other one in Link task by its ID, a search with no match there
  * that ends the list, a task of its second project only after Search all
  * your projects, and the subtask it made as a current subtask in Add
- * subtask, writing nothing (ui/relation-pickers). It makes a sub-project of its own
+ * subtask, with one task it makes over REST in its second project and
+ * nothing written through the pickers (ui/relation-pickers). It makes a
+ * sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary, risk, attention and paused),
  * whose figures, sentence and lists must count exactly those two, then
@@ -3745,7 +3747,7 @@ export const RELATION_EXPECTED = {
 }
 
 /** The task window's relation pickers on the deployment's batches
- *  (convex/taskWindow.ts relationCandidates): the window of run.t0 offers
+ *  (convex/taskWindow.ts relationCandidates). The window of run.t0 offers
  *  run.tz in Link task by its typed ID, a search with no match says so at
  *  the end of the project and once Search all your projects ended too, a
  *  task of the second project (N1, made here over REST and pushed to
@@ -3756,14 +3758,15 @@ export const RELATION_EXPECTED = {
  *  as subtaskRuleChecks makes both. It runs before the run archives M. */
 async function relationPickersCheck() {
   const w = run.creds.writeToken
-  const far = run.projects.N1
-    ? await restOk(w, 'POST', '/tasks', {
-        project: run.projects.N1.id,
-        title: `${run.tag} far link target`,
-      })
-    : null
-  if (far) run.created.push(far)
   await check(RELATION_STEP, async () => {
+    // made inside the step, so a refused POST fails this step alone
+    const far = run.projects.N1
+      ? await restOk(w, 'POST', '/tasks', {
+          project: run.projects.N1.id,
+          title: `${run.tag} far link target`,
+        })
+      : null
+    if (far) run.created.push(far)
     const at = (ref) => `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${ref.toLowerCase()}`
     const openWindow = async (t) => {
       await app.goto(at(t.key), { waitUntil: 'domcontentloaded' })
