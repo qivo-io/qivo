@@ -309,6 +309,17 @@
   .settings-content-scroll [data-project-access-new-role] {
     flex: 1;
   }
+  /* the invite form puts the address on a row of its own, over its level
+     and Invite */
+  .settings-project-invite div:has(> [data-invite-email]) {
+    flex-wrap: wrap;
+  }
+  .settings-content-scroll [data-invite-email] {
+    flex-basis: 100%;
+  }
+  .settings-content-scroll [data-invite-level] {
+    flex: 1;
+  }
   .settings-content-scroll :is([data-settings-team-member], [data-guest-row]) {
     flex-wrap: wrap;
   }
