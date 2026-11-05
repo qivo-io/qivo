@@ -950,6 +950,36 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(open('taskWindow:task')).toHaveLength(1)
   })
 
+  it('keeps a relation picker open with its rows and a pick on its way when the task arrives', async () => {
+    await load(true)
+    const held = holdRelations()
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    const handle = await noteTask(far())
+    await openWindow(handle)
+    await answer('taskWindow:task', okAnswer(far()))
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    // the picker reads once it mounts, a frame after the press
+    await act(async () => {
+      await vi.waitFor(() => expect(held).toHaveLength(1))
+    })
+    await held[0]?.answer(pickerBatch([pickerRow(task(PICKED, 44, { title: 'Wire it' }))]))
+    const row = () => document.querySelector<HTMLElement>(`[data-picker-row="${PICKED}"]`)
+    await act(async () => {
+      await vi.waitFor(() => expect(row()).not.toBeNull())
+    })
+    await click(row())
+    expect(row()?.dataset.pickerBusy).toBe('')
+    await arrive()
+    await act(async () => {
+      await vi.waitFor(() => expect(dialog()?.dataset.taskSource).toBe('workspace'))
+    })
+    // the same picker, its rows and its busy row, with no read again
+    expect(row()?.dataset.pickerBusy).toBe('')
+    expect(row()?.getAttribute('aria-pressed')).toBe('true')
+    expect(held).toHaveLength(1)
+  })
+
   it('opens a related task the workspace does not hold from its own read, and names its organization in the address', async () => {
     await load()
     await openWindow('QN-27')

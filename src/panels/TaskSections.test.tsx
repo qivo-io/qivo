@@ -623,6 +623,21 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(sentArgs('issues:removeLink')).toHaveLength(1)
   })
 
+  it('keeps a link’s × waiting while the links list failed, as its kind comes from that list', async () => {
+    await load()
+    await openTask()
+    await answerAll()
+    const remove = () =>
+      section('links').querySelector<HTMLButtonElement>(
+        '[data-related-task="QN-31"] .task-related-remove',
+      )
+    expect(remove()?.disabled).toBe(false)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await fail('taskWindow:links')
+    expect(remove()?.disabled).toBe(true)
+    expect(await hintOf(remove())).toBe('Available once Qivo can check this task for changes')
+  })
+
   it('keeps Read-only project access on a held row the person cannot edit', async () => {
     await load()
     await openTask()
