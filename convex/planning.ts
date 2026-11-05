@@ -41,7 +41,13 @@ import { accessOf, accessUnchecked, isOrgStaff } from './lib/access'
 import { byId } from './lib/db'
 import type { OrgRole, ProfileKind } from './lib/enums'
 import { authedQuery, badRequest, orgQuery, type Refusal, rule } from './lib/functions'
-import { CURSOR_REFUSAL, filtersKey, listCursorText, openListCursor } from './lib/listCursor'
+import {
+  CURSOR_REFUSAL,
+  filtersKey,
+  listCursorText,
+  NAMES_NOT_READY,
+  openListCursor,
+} from './lib/listCursor'
 import type { OrgLoadRow } from './lib/loadRows'
 import { indexAfter, type NamedAt, STOPPED } from './lib/namedPages'
 import {
@@ -54,7 +60,6 @@ import {
   weeklyHours,
 } from './lib/ownerLoads'
 import { weekGrid } from './lib/workload'
-import { NAMES_NOT_READY } from './machine/shared'
 import { type IdTie, nameKeysReady, profileIndex } from './model/nameKeys'
 
 /* plan_assignee_load's wire shape — the SQL column names exactly. The client

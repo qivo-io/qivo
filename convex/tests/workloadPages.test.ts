@@ -30,12 +30,11 @@ import { canSeeProject, isOrgStaff, OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
 import { DEFAULT_PAGE_SIZE, LIMITS } from '../lib/limits'
-import { CURSOR_REFUSAL, offsetRefusal } from '../lib/listCursor'
+import { CURSOR_REFUSAL, NAMES_NOT_READY, offsetRefusal } from '../lib/listCursor'
 import { nameKey } from '../lib/nameKey'
 import { OWNER_LOADS } from '../lib/ownerLoads'
 import { sha256hex } from '../machine/auth'
 import { PERSON_NO_CURSOR, restWorkload } from '../machine/records'
-import { NAMES_NOT_READY } from '../machine/shared'
 import type { WorkloadJson } from '../planning'
 import {
   expectRefusal,

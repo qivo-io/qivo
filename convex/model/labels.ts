@@ -7,7 +7,8 @@
  * (labels.remove), and its bounded cascade, deleteLabelCore, lives here with
  * the other writes. The app's label lists read the organization's labels a
  * batch at a time through labelBatch, in name order with search, under a
- * read budget (lib/namedPages.ts). */
+ * read budget (lib/namedPages.ts), and REST GET /v1/labels and MCP
+ * list_labels a page at a time through labelPage, in the same order. */
 
 import { type GenericDocument, makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
@@ -20,6 +21,7 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { type NamedListPage, namedListPage, namedScope } from '../lib/listCursor'
 import {
   compareNamed,
   indexAfter,
@@ -118,15 +120,6 @@ export const labelJson = (label: Doc<'labels'>): { id: string; name: string; col
   color: shownLabelColor(label.color),
 })
 
-/** The organization's labels, ordered by name. Every member may read them. */
-export async function listLabelsCore(ctx: QueryCtx, orgId: string): Promise<Doc<'labels'>[]> {
-  const rows = await ctx.db
-    .query('labels')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  return rows.sort((a, b) => a.name_lower.localeCompare(b.name_lower) || a.id.localeCompare(b.id))
-}
-
 /** A label's place in name order: its time and id after its name_lower. */
 export type LabelTie = readonly [created: number, id: string]
 
@@ -156,6 +149,72 @@ export function labelIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'labels
     ],
     at: (label) => ({ key: label.name_lower, tie: [label._creationTime, label._id] }),
   }
+}
+
+/* The tie of a label position, a creation time and an _id, or null for
+ * any other shape, so a cursor that does not hold one is refused. */
+const labelTieOf = ({ tie }: NamedAt): LabelTie | null => {
+  const [created, id] = tie
+  return tie.length === 2 && typeof created === 'number' && typeof id === 'string'
+    ? [created, id]
+    : null
+}
+
+/* The list name a REST or MCP labels cursor seals (lib/listCursor.ts). Both
+ * surfaces answer the same rows, so they share it, and a cursor of one
+ * continues on the other. */
+const LABELS_LIST = 'machine.labels'
+
+/** One page of the organization's labels, as REST GET /v1/labels and MCP
+ * list_labels answer it, the cursor first. */
+export type LabelsPageJson = { next_cursor: string | null; labels: ReturnType<typeof labelJson>[] }
+
+/**
+ * One page of the labels of `me`'s organization for REST GET /v1/labels
+ * and MCP list_labels, after `p.cursor`, the next_cursor of an earlier
+ * page, at most `p.limit` of them, each as labelJson. Every member of the
+ * organization reads them, guests and Viewers included, as the app's
+ * catalog sends every label to every seat.
+ *
+ * The labels come in the order Settings > Labels reads them (labelIndex):
+ * the name lowercased, compared by its UTF-8 bytes, so a name that starts
+ * with an accented letter comes after z, then the creation time and _id,
+ * which only labels stored with one name before names were unique share.
+ * With `p.search`, the rows are the labels whose name holds every
+ * whitespace-separated word of it in any order, ignoring case and accents,
+ * as labelBatch matches them, over the whole list before the limit. The
+ * page reads within the call's share (lib/listCursor.ts namedListPage), so
+ * a page can be short, or empty, while next_cursor is set, and next_cursor
+ * is null only once the labels ended.
+ *
+ * The cursor is sealed with the organization, `me` and the search's name
+ * key, so it opens only for that list, on either surface; any other
+ * cursor, or a changed one, is refused with CURSOR_REFUSAL. Pages are not a
+ * snapshot. Every label holds its name_lower, so the list needs no name
+ * keys and is read in any organization.
+ *
+ * Labels have no design-size figure. Measured in
+ * convex/tests/peopleLists.test.ts ("at the design size") with the call's
+ * own reads, 60 labels, the most a test case holds, take one page at
+ * limit 200 of 3 ranges, 61 documents and 0.02 MB, and a search that
+ * matches none of them reads the same.
+ */
+export async function labelPage(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  p: { limit: number; cursor: string | null; search: string },
+): Promise<LabelsPageJson> {
+  const matches = allWordsMatcher(nameKey(p.search))
+  const page: NamedListPage<ReturnType<typeof labelJson>> = await namedListPage(ctx, {
+    list: LABELS_LIST,
+    scope: await namedScope(me, p.search),
+    cursor: p.cursor,
+    tieOf: labelTieOf,
+    index: labelIndex(ctx, me.org_id),
+    keep: async (label) => (matches(nameKey(label.name)) ? labelJson(label) : null),
+    limit: p.limit,
+  })
+  return { next_cursor: page.next_cursor, labels: page.rows }
 }
 
 /** The app's label lists, which cursors name (lib/namedPages.ts): Settings >

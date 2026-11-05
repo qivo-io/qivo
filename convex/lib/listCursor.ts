@@ -1,25 +1,48 @@
-/* Continuation cursors of REST and MCP lists, and the refusal of an offset
- * on a list that pages with them.
+/* Continuation cursors of REST and MCP lists, the refusals of an offset and
+ * of a list in name order whose names are not ready, and the one page that
+ * every REST and MCP list in name order answers.
  *
  * REST GET /v1/tasks and MCP list_tasks page their active tasks with these
- * (lib/activeTaskPage.ts), and REST GET /v1/workload and MCP get_workload
- * their people (planning.ts workloadPage). REST GET /v1/inbox and MCP
- * list_inbox (t3/limits-machine-inbox) are to page with them too. A cursor
- * is a position in one list's order, sealed with the list's name and its
- * scope (lib/namedPages.ts namedCursor over lib/archiveCursorSeal.ts), so it
- * shows nothing and opens only for the list and scope it came from: another
- * list, organization, caller or filter, or a changed cursor, opens to null
- * and is refused with CURSOR_REFUSAL. A list names each surface apart where
- * the surfaces answer different rows, as the active tasks do, whose REST
- * search widens on `*`; the workload, whose surfaces answer the same rows,
- * names one list for both, so its cursor continues on the other surface. A
- * cursor never grants access by itself: every page checks the caller's
- * access again. Archived task lists keep their own `2~` cursors
+ * (lib/activeTaskPage.ts), REST GET /v1/workload and MCP get_workload their
+ * people (planning.ts workloadPage), and REST GET /v1/users, /v1/labels,
+ * /v1/teams and /v1/teams/{id}/members and MCP list_users, list_labels,
+ * list_teams and list_team_members their rows (namedListPage, from
+ * lib/core.ts userPage, model/labels.ts labelPage and model/teams.ts
+ * teamPage and memberPage). REST GET /v1/inbox and MCP list_inbox
+ * (t3/limits-machine-inbox) are to page with them too. A cursor is a
+ * position in one list's order, sealed with the list's name and its scope
+ * (lib/namedPages.ts namedCursor over lib/archiveCursorSeal.ts), so it shows
+ * nothing and opens only for the list and scope it came from. A cursor of
+ * another list, organization, caller or filter, or a changed cursor, opens
+ * to null and is refused with CURSOR_REFUSAL. A list names each surface
+ * apart where the surfaces answer different rows, as the active tasks do,
+ * whose REST search widens on `*`; the workload and the lists of
+ * namedListPage, whose surfaces answer the same rows, name one list for
+ * both, so a cursor continues on the other surface. These lists, and the
+ * later REST and MCP lists in name order, page through namedListPage after
+ * machine/shared.ts namedPaging, take a name in `machine.`, such as
+ * `machine.users`, so none reads like an app list's, seal their scope with
+ * namedScope and answer `{next_cursor, <rows>}`, the cursor first. A cursor
+ * never grants access by itself, since every page checks the caller's access
+ * again. Archived task lists keep their own `2~` cursors
  * (lib/archivedTasks.ts). */
 
+import type { GenericDocument } from 'convex/server'
+import type { QueryCtx } from '../_generated/server'
 import { digestText } from './archiveCursorSeal'
 import { badRequest } from './functions'
-import { type NamedAt, namedCursor, openNamedCursor } from './namedPages'
+import {
+  indexAfter,
+  listBatch,
+  type NamedAt,
+  type NamedIndex,
+  type NamedTie,
+  namedCeiling,
+  namedCursor,
+  openNamedCursor,
+  type ReadGuard,
+} from './namedPages'
+import { nameKey } from './nameKey'
 
 /** The refusal of a cursor that is not the next_cursor of an earlier page
  * of the same list, scope and caller. */
@@ -29,6 +52,15 @@ export const CURSOR_REFUSAL = 'cursor must be the next_cursor of an earlier page
  * with a cursor, such as `active tasks` or `archived tasks`. */
 export const offsetRefusal = (noun: string): string =>
   `offset does not apply to ${noun}; pass next_cursor as cursor`
+
+/** The refusal of a REST or MCP list in name order while its
+ * organization's name keys are not all written (model/nameKeys.ts
+ * nameKeysReady), so a page is never answered from rows without a key.
+ * Every organization holds them from its creation or since
+ * internal/nameKeysBackfill keyed it, so it is a fail-closed branch that no
+ * ordinary call meets. */
+export const NAMES_NOT_READY =
+  "this list cannot be read until this organization's names are ready; try again in a few minutes"
 
 /** A digest of a list's filters, as 64 hex characters, so a cursor's scope
  * keeps one length whatever the filters and search hold. `filters` must be
@@ -55,4 +87,70 @@ export async function openListCursor(
   const at = await openNamedCursor(text, list, scope)
   if (at === null || at.tie.length !== ties) throw badRequest(CURSOR_REFUSAL)
   return at
+}
+
+/** The scope a list of namedListPage seals its cursors with: the caller's
+ * organization and id, `more`, such as the team whose members a page
+ * lists, and a digest of the search's name key (lib/nameKey.ts), so
+ * "Café" and "cafe" share cursors and a long search never makes a cursor
+ * too long for a URL. */
+export const namedScope = async (
+  caller: { org_id: string; id: string },
+  search: string,
+  more: readonly string[] = [],
+): Promise<string[]> => [caller.org_id, caller.id, ...more, await filtersKey([nameKey(search)])]
+
+/** One page of a REST or MCP list in name order. */
+export type NamedListPage<Out> = {
+  /** the cursor of the next page, null only once the index ended */
+  next_cursor: string | null
+  rows: Out[]
+}
+
+/**
+ * One page of a REST or MCP list in name order, read through
+ * lib/namedPages.ts listBatch. It holds at most `limit` rows that `keep`
+ * answers, after `cursor`, the next_cursor of an earlier page of `list` with
+ * `scope`, or from the start for null, and the cursor of the next page,
+ * null only once the index ended. A cursor that does not open for `list`
+ * and `scope`, or whose tie `tieOf` refuses, is refused with
+ * CURSOR_REFUSAL. The page reads within NAMED_READ past what the call read
+ * before it (namedCeiling), always reads its first row, and stops early
+ * with a cursor once the read budget is spent, so a short or empty page is
+ * never the end. `keep` counts its own reads with the guard it is given.
+ *
+ * The caller checks its arguments (machine/shared.ts namedPaging), what
+ * the list names and the organization's name keys first, in that order, so
+ * a refusal never depends on a cursor it did not open yet.
+ */
+export async function namedListPage<Row extends GenericDocument, Tie extends NamedTie, Out>(
+  ctx: QueryCtx,
+  o: {
+    list: string
+    scope: readonly string[]
+    cursor: string | null
+    tieOf: (at: NamedAt) => Tie | null
+    index: NamedIndex<Row, Tie>
+    keep: (row: Row, guard: ReadGuard) => Promise<Out | null>
+    limit: number
+  },
+): Promise<NamedListPage<Out>> {
+  let after: NamedAt<Tie> | null = null
+  if (o.cursor !== null) {
+    const at = await openNamedCursor(o.cursor, o.list, o.scope)
+    const tie = at === null ? null : o.tieOf(at)
+    if (at === null || tie === null) throw badRequest(CURSOR_REFUSAL)
+    after = { key: at.key, tie }
+  }
+  const batch = await listBatch(
+    ctx,
+    { list: o.list, scope: o.scope, after, through: null },
+    {
+      stream: indexAfter(o.index, after),
+      keep: o.keep,
+      limit: o.limit,
+      ceiling: await namedCeiling(ctx),
+    },
+  )
+  return { next_cursor: batch.next, rows: batch.rows }
 }

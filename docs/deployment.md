@@ -180,7 +180,18 @@ with a fixed `from_week` to their ends, finds each of the run's agents
 once with one week of hours, the same people on both surfaces, and checks
 that a cursor of another window, an `offset` other than `0` and `limit=0`
 are refused with their sentences. Against a backend from before the
-workload pages, that step and the restore's `counting` fail. In the
+workload pages, that step and the restore's `counting` fail. Its
+`machine/people-lists` step pages `GET /v1/users` and `list_users` to their
+ends, finds each of the run's agents once and the same people on both
+surfaces, and finds exactly the run's agents by a search with the run's
+tag. It puts the run's two agents in the run's team, checks that the team's
+`member_count` is 2 and that its member pages over REST and MCP, one member
+a page, list both, and removes them again. It finds a label it makes by a
+search without the label's accent on both surfaces, deletes it again in the
+app, and checks that `offset=1`, `limit=0`, a cursor of another search and a
+users cursor sent to the teams list are refused with their sentences.
+Against a backend from before the paged people lists that step fails, and so
+do the run's other reads of those lists. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
@@ -874,6 +885,29 @@ keeps every item with its metadata and Delete now, and sees no task title,
 search hit or content without ordinary access. The release changes no
 table, field or index, and there is no backfill.
 
+REST `GET /v1/users`, `/v1/labels` and `/v1/teams` and MCP `list_users`,
+`list_labels` and `list_teams` page with a cursor and take a name search,
+every team answer is `{id, name, member_count}` without its members, and a
+team's members have their own list, REST `GET /v1/teams/{id}/members` and
+MCP `list_team_members`, from the release after v0.1.131, which makes the
+lists answer `{next_cursor, …}`. From that release `GET` and `PATCH
+/v1/users/{id}` read their one user by id. Returning the backend to a commit
+before it makes the three lists answer whole arrays again and every team
+answer, `GET /v1/teams/{id}`, `POST`, `PATCH` and `set_team`'s included,
+embed `members` again, without `member_count`. REST then refuses `search`,
+`limit`, `cursor` and `offset` on those lists as unknown parameters and
+answers `404` for `GET /v1/teams/{id}/members`, and MCP's three tools
+ignore every argument again and `list_team_members` is an unknown tool, so
+a caller that pages these lists or reads a team's members stops working
+until the backend rolls forward. Code written for the older answers breaks
+at once on the objects after the release, rather than reading a short list
+without any error as with the workload. This sets no floor for the app,
+which calls none of them. The lists read the name keys and team counts
+every deployment holds since their backfills, so the release changes no
+table, field or index and needs no step, and a list in name order answers
+`this list cannot be read until this organization's names are ready; try
+again in a few minutes` for an organization whose names are not ready.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -1237,12 +1271,15 @@ their threads again from the start.
 
 Each label has a `label_counts` row with the number of active tasks that
 carry it, and each team a `team_counts` row with its members, as the team
-lists show them. No reader uses them yet. Every write that changes either
-keeps the rows, and labels and teams created since the release that added
-them start with one. A label or team stored before has no row until the
-one-time `internal/labelCountsBackfill` and `internal/teamCountsBackfill`
-count it, and the readers to come show such a count as unavailable, never
-as zero. Run both on every hosted deployment once it serves that release,
+lists show them. Settings › Labels shows each label's row as its active
+tasks, and the REST and MCP team answers show each team's row as
+`member_count`, null for a team without a finished row, from the release
+that pages the people, label and team lists.
+Every write that changes either keeps the rows, and labels and teams created
+since the release that added them start with one. A label or team stored
+before has no row until the one-time `internal/labelCountsBackfill` and
+`internal/teamCountsBackfill` count it, and a reader shows such a count as
+unavailable, never as zero. Run both on every hosted deployment once it serves that release,
 as each module's header says: read the dry run first, then run it, calling
 again with the answered `cursor` until it answers `done`. A dry run lists
 the labels and teams a run would count, any stored count that its rows do

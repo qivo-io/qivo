@@ -1,15 +1,17 @@
 /* Team member counts (schema.ts team_counts): for each team, its
  * memberships whose profile exists in the team's organization and is not a
- * guest. Every write of a membership moves the count in its own transaction
- * (countMemberAdded, countMemberRemoved), given the organization whose
- * teams count the membership's profile, as the profile was before the write
- * (countingOrg). The profile writes that change that answer delete the
- * profile's memberships in the same transaction: becoming a guest and
- * leaving the guest role (profiles.update, model/orgs.ts leaveAllTeams). A
- * profile removal deletes the profile with as many memberships as its
- * budget allows; the rest keep counting through the removal row until its
- * background steps delete them (countingOrgOf). Creating a team adds its
- * row (insertTeamCount); deleting one deletes it (deleteTeamCount). The
+ * guest. REST and MCP answer them as each team's member_count
+ * (model/teams.ts teamSummary); Settings does not show them yet. Every write
+ * of a membership moves the count in its own transaction (countMemberAdded,
+ * countMemberRemoved), given the organization whose teams count the
+ * membership's profile, as the profile was before the write (countingOrg).
+ * The profile writes that change that answer delete the profile's
+ * memberships in the same transaction: becoming a guest and leaving the
+ * guest role (profiles.update, model/orgs.ts leaveAllTeams). A profile
+ * removal deletes the profile with as many memberships as its budget allows;
+ * the rest keep counting through the removal row until its background steps
+ * delete them (countingOrgOf). Creating a team adds its row
+ * (insertTeamCount); deleting one deletes it (deleteTeamCount). The
  * teardowns that delete an organization's work over many steps delete its
  * counts before the memberships (model/orgDeletion.ts,
  * internal/demoCleanup.ts), so none reads wrong meanwhile.
@@ -32,16 +34,23 @@ export const teamCountRow = (ctx: QueryCtx, teamId: string) =>
     .withIndex('by_team', (q) => q.eq('team_id', teamId))
     .unique()
 
-/** The members of `team` as a reader may show them, which no reader does
- * yet: null while the team is not counted or is being counted. */
+/** The members of `team` as a reader may show them, from its team_counts
+ * `row` (teamCountRow), or null while the team is not counted, its row
+ * names another organization or the backfill is counting it, never 0 for a
+ * count it does not have. REST and MCP answer it as a team's member_count
+ * (model/teams.ts teamSummary). */
+export const shownCount = (
+  row: Doc<'team_counts'> | null,
+  team: Pick<Doc<'teams'>, 'org_id'>,
+): number | null =>
+  row === null || row.org_id !== team.org_id || row.through !== undefined ? null : row.members
+
+/** shownCount for one team, reading its row. */
 export async function memberCount(
   ctx: QueryCtx,
   team: Pick<Doc<'teams'>, 'id' | 'org_id'>,
 ): Promise<number | null> {
-  const row = await teamCountRow(ctx, team.id)
-  return row === null || row.org_id !== team.org_id || row.through !== undefined
-    ? null
-    : row.members
+  return shownCount(await teamCountRow(ctx, team.id), team)
 }
 
 /** The organization whose team counts count a membership of `profile`: its

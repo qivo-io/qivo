@@ -406,6 +406,10 @@ into the range.
 | Comments per list page | 1 to 50 comments | limit must be a whole number of comments from 1 to 50. |
 | People per workload page | 1 to 200 people | limit must be a whole number of people from 1 to 200. |
 | Workload weeks | 1 to 52 weeks | weeks must be a whole number from 1 to 52. |
+| Users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
+| Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
+| Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -871,23 +875,81 @@ changing an existing milestone`.
 ### Teams
 
 ```
-GET    /v1/teams                      → every team, with its members
-GET    /v1/teams/{id}                 → one team
-POST   /v1/teams                      {"name": "…"}
-PATCH  /v1/teams/{id}                 {"name": "…", "expected"?: {"name": "…"}}
-PUT    /v1/teams/{id}/members/{user}  [{"leader": true | false}]
-DELETE /v1/teams/{id}/members/{user}  [{"on_held_tasks": …}]
+GET    /v1/teams?search=&limit=&cursor=               → one page of teams, with member counts
+GET    /v1/teams/{id}                                 → one team
+GET    /v1/teams/{id}/members?search=&limit=&cursor=  → one page of the team's members
+POST   /v1/teams                                      {"name": "…"}
+PATCH  /v1/teams/{id}                                 {"name": "…", "expected"?: {"name": "…"}}
+PUT    /v1/teams/{id}/members/{user}                  [{"leader": true | false}]
+DELETE /v1/teams/{id}/members/{user}                  [{"on_held_tasks": …}]
 ```
 
-A team is `{"id", "name", "members"}`, and `members` lists `{"id", "name",
-"leader"}` by name. Everyone in the organization reads every team and its
-members, as in the app. `leader` is `true` for a person who leads the team.
-Only people with the organization admin or Standard user role lead teams, so
-an agent or a Viewer never reads `true`. A guest is never a member, so an old
-membership a guest still holds is not listed. Teams are named by uuid
-only, because two teams may share a name. An unknown uuid, or one from
-another organization, answers `404` `team not found`, and a `{user}` outside
-the organization answers `404` `user not found`.
+A team is `{"id", "name", "member_count"}` in the list, in `GET
+/v1/teams/{id}` and in the answers of `POST` and `PATCH`, and no answer
+embeds its members. `member_count` is the number of its members, as the
+member list counts them: people and agents, inactive ones included. It is
+`null` for a moment while Qivo counts the team, never `0` for a count it
+does not have, so do not read `null` as an empty team. Right after someone
+is removed from the organization, the count can still include them for a
+moment while the member list no longer does, until Qivo has finished
+removing their memberships. Everyone in the organization reads every team
+and its members, guests and Viewers included, as in the app. Teams are
+named by uuid only, because two teams may share a name. An unknown uuid,
+one from another organization or text that is no uuid answers `404` `team
+not found`, and a `{user}` outside the organization answers `404` `user not
+found`.
+
+```json
+{
+  "next_cursor": "…",
+  "teams": [{ "id": "…uuid…", "name": "Hardware", "member_count": 4 }]
+}
+```
+
+`GET /v1/teams` answers one page of teams at a time, in name order,
+ignoring case and accents, then by id. Paging, `search` and the refusals
+work as for [users](#users), with `limit must be a whole number of teams
+from 1 to 200.` and `offset does not apply to teams; pass next_cursor as
+cursor`.
+
+```json
+{
+  "next_cursor": "…",
+  "team": { "id": "…uuid…", "name": "Hardware", "member_count": 4 },
+  "members": [
+    { "id": "…uuid…", "name": "Leo Martins", "leader": true },
+    { "id": "…uuid…", "name": "Release Bot", "leader": false }
+  ]
+}
+```
+
+`GET /v1/teams/{id}/members` answers one page of the team's members at a
+time, each `{"id", "name", "leader"}`, with the team as `GET
+/v1/teams/{id}` answers it on every page. `leader` is `true` for a person
+who leads the team. Only people with the organization admin or Standard
+user role lead teams, so an agent or a Viewer never reads `true`. A guest
+is never a member, so an old membership a guest still holds is neither
+listed nor counted. Members come in name order, ignoring case and accents,
+then by id. `search` keeps the members whose name holds every word of it,
+within this team only, and `member_count` stays the whole team's. A member
+renamed a moment ago can sort and match by the earlier name for a moment,
+so a search by the new name can miss them until then; their `name` is
+always the current one. Paging and the refusals work as for
+[users](#users), with `limit must be a whole number of members from 1 to
+200.` and `offset does not apply to team members; pass next_cursor as
+cursor`, and a cursor works only for the team it came from. The paging is
+checked before the team, so a wrong `limit` is a `400` even for a team that
+does not exist. A member missing from one page you hold is not removed from
+the team; follow `next_cursor` until it is `null`.
+
+Until November 2026 `GET /v1/teams` answered every team at once, as an
+array, and every team answer, `GET /v1/teams/{id}`, `POST` and `PATCH`
+included, embedded the team's whole `members` array and no `member_count`.
+`search`, `limit`, `cursor` and `offset` were unknown parameters, and `GET
+/v1/teams/{id}/members` was an unknown route. Code that read the array now
+finds an object, and code that read a team's `members` finds them missing;
+read `teams` and `GET /v1/teams/{id}/members`, and follow `next_cursor`
+until it is `null`.
 
 Only organization admins create teams; anyone else gets `only organization
 admins can create teams`. An organization admin or a leader of the team
@@ -902,7 +964,9 @@ Any other field is a `400` (`unknown field "nmae"; this request takes name,
 expected`), and a body without `name`, such as `{}`, is a `400` (`no
 recognized fields to update`). Deleting a team stays in
 the app ([Stays in the app](#stays-in-the-app)). `POST` answers `201` and
-`PATCH` `200` with the team. Neither writes an activity row, as in the app.
+`PATCH` `200` with the team as `{"id", "name", "member_count"}`, and a new
+team's `member_count` is `0`. Neither writes an activity row, as in the
+app.
 
 Members decide who sees the projects shared with the team, so changing them
 needs a person who is an organization admin or a leader of the team. An agent
@@ -959,21 +1023,79 @@ curl -X DELETE -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: applicatio
 ### Users
 
 ```
-GET   /v1/users       → the organization's users, people and agents alike
-GET   /v1/users/{id}  → one of them
-PATCH /v1/users/{id}  → set that person's plannable_hours (write)
+GET   /v1/users?search=&limit=&cursor=  → one page of the organization's users, people and agents alike
+GET   /v1/users/{id}                    → one of them, read directly
+PATCH /v1/users/{id}                    → set that person's plannable_hours (write)
 ```
 
-Two rows of that list — a person, and an agent:
+A page with two rows, a person and an agent:
 
 ```json
-[
-  { "id": "…uuid…", "name": "Priya Patel",
-    "org_role": "user", "kind": "person", "active": true, "plannable_hours": 31 },
-  { "id": "…uuid…", "name": "Release Bot",
-    "org_role": "viewer", "kind": "agent", "active": true, "plannable_hours": null }
-]
+{
+  "next_cursor": "…",
+  "users": [
+    { "id": "…uuid…", "name": "Priya Patel",
+      "org_role": "user", "kind": "person", "active": true, "plannable_hours": 31 },
+    { "id": "…uuid…", "name": "Release Bot",
+      "org_role": "viewer", "kind": "agent", "active": true, "plannable_hours": null }
+  ]
+}
 ```
+
+`GET /v1/users` answers one page of users at a time, `limit` of them at
+most, 50 by default and 1 to 200. Every user of the organization is on it:
+people and agents, inactive people, Viewers, guests and seats not yet
+claimed. Users come in name order, ignoring case and accents, then by id,
+and that order compares names by their UTF-8 bytes, so it differs from a
+browser's sort for some scripts. Pass `next_cursor` unchanged, URL-encoded,
+as `cursor` for the next page, with the same `search`, and stop when it is
+`null`. A page can hold fewer than `limit` users, or none, while
+`next_cursor` is set, because each page reads a bounded amount however large
+the organization is. A short or empty page is never the end of the list.
+Only a `null` `next_cursor` is. `limit` may change from one page to the
+next.
+
+`search` keeps the users whose name holds every whitespace-separated word of
+it, in any order, ignoring case and accents, so `search=lee%20sam` finds Sam
+Lee and `search=zoe` finds Zoë. It runs over the whole list on the server
+before `limit`, so a search that matches few users can answer short or
+empty pages with a `next_cursor` before it reaches them. An empty `search`
+lists everyone, and a `search` holds at most 200 characters.
+
+A cursor works only for the organization, caller and search it came from,
+on REST and MCP alike, so a `next_cursor` from `GET /v1/users` continues
+`list_users` on MCP. A changed search starts a new list, from the first
+page, but two searches that differ only in case or accents, such as `Café`
+and `cafe`, share their cursors. Pages are not a snapshot. A user added or
+renamed while you page lands where their name puts them, so a page may miss
+them or show them again. A user missing from the pages you have read is not
+gone until `next_cursor` is `null`; to check one user, read `GET
+/v1/users/{id}`.
+
+These requests are a `400`, checked in this order after any unknown query
+parameter:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of users from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to users; pass
+  next_cursor as cursor`
+- a `search` longer than 200 characters: `a search must be at most 200
+  characters. Search for fewer words.`
+- a page before Qivo has prepared the organization's names for name order:
+  `this list cannot be read until this organization's names are ready; try
+  again in a few minutes`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+
+`GET /v1/users/{id}` reads that one user directly, by a uuid in any case,
+however large the organization is. An unknown id, one from another
+organization and text that is no uuid all answer `404` `user not found`.
+
+Until November 2026 `GET /v1/users` answered every user at once, as an
+array sorted with a locale-aware comparison, and `search`, `limit`,
+`cursor` and `offset` were unknown parameters. Code that read the array now
+finds an object; read its `users` and follow `next_cursor` until it is
+`null`.
 
 `kind` is `"person"` or `"agent"`; an agent finds *itself* in this list,
 and `GET /v1/me` answers its own row directly. `org_role` is the
@@ -1820,13 +1942,26 @@ provenance; removing one writes none, as in the app.
 The organization's labels, which any member may read:
 
 ```
-GET   /v1/labels         every label, ordered by name
-POST  /v1/labels         { "name": "Hardware", "color": "#4C9AFF" }
-PATCH /v1/labels/{id}    { "name": "…", "color": "…", "expected"?: {…} };
-                         {id} is an id or name
+GET   /v1/labels?search=&limit=&cursor=  one page of labels, in name order
+POST  /v1/labels                         { "name": "Hardware", "color": "#4C9AFF" }
+PATCH /v1/labels/{id}                    { "name": "…", "color": "…", "expected"?: {…} };
+                                         {id} is an id or name
 ```
 
 A label is `{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }`.
+`GET /v1/labels` answers one page of labels at a time,
+`{"next_cursor": "…", "labels": […]}`, in the order of the app's Labels
+settings page, by name in any case and compared by UTF-8 bytes, so a name
+that starts with an accented letter comes after z. Labels stored with one
+name before names were unique come in the order they were created. `search`
+keeps the labels whose name holds every word of it, in any order, ignoring
+case and accents. Paging, `search` and the refusals work as for
+[users](#users), with `limit must be a whole number of labels from 1 to
+200.` and `offset does not apply to labels; pass next_cursor as cursor`,
+except that the labels list needs no prepared names, so it is never refused
+for them. Until November 2026 `GET /v1/labels` answered every label at
+once, as an array, and took no query parameters, so code that read the
+array must now read `labels` and follow `next_cursor` until it is `null`.
 Names are trimmed, at most 40 characters (`a label name must be at most 40
 characters. Shorten it.`) and unique in the organization in any case. A
 color is `#` followed by six hex digits; a label stored before that rule
@@ -2710,8 +2845,10 @@ curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/me"
 # readable projects
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects"
 
-# who can be assigned work, and how many hours a week each of them has
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/users"
+# the organization's users and how many hours a week each of them has, a
+# page at a time; repeat with the answer's next_cursor as cursor until it is
+# null. Who may be assigned work in a project is /projects/{ref}/users.
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/users?limit=200"
 
 # valid reporters and assignees for Enclosure
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/projects/ENC/users"

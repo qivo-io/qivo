@@ -1,9 +1,9 @@
 /* Team member counts (schema.ts team_counts): every write keeps each
- * team's count equal to the members model/teams.ts teamJson lists
- * (model/teamCounts.ts), apart from the memberships a profile removal
- * leaves to its steps, a team's count goes with the team, and the backfill
- * (internal/teamCountsBackfill.ts) counts a team exactly while writes go on
- * between its steps. */
+ * team's count equal to the members the whole-team reader lists
+ * (teamMembers.setup.ts teamJson, model/teamCounts.ts), apart from the
+ * memberships a profile removal leaves to its steps, a team's count goes
+ * with the team, and the backfill (internal/teamCountsBackfill.ts) counts a
+ * team exactly while writes go on between its steps. */
 
 import {
   type FunctionArgs,
@@ -19,7 +19,6 @@ import { COUNT_PAGE, dryCount, RUN } from '../internal/teamCountsBackfill'
 import { ACCESS_FIRST_PASS } from '../model/cascade'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { memberCount, teamCountRow } from '../model/teamCounts'
-import { teamJson } from '../model/teams'
 import {
   as,
   expectListCounts,
@@ -33,6 +32,7 @@ import {
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
 import { assertNoDanglingRefs } from './refs.setup'
+import { teamJson } from './teamMembers.setup'
 import { installTrashTimers, runSteps } from './trash.setup'
 
 installTrashTimers()

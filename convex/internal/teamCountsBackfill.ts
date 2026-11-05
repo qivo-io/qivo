@@ -1,9 +1,10 @@
 /* One-time migration that counts every team's members (schema.ts
- * team_counts), which Settings > Teams, the team page and the REST and MCP
- * team summaries are to show. No reader uses the counts yet. Until a team
- * is counted it has no row, and a reader is to show its count as
- * unavailable (model/teamCounts.ts memberCount). Teams created since this
- * release start with a row, and every write keeps the rows that exist.
+ * team_counts), which Settings > Teams and the team page are to show and
+ * the REST and MCP team summaries show as member_count (model/teams.ts
+ * teamSummary). Until a team is counted it has no row, and a reader shows
+ * its count as unavailable (model/teamCounts.ts memberCount), null in a
+ * team summary. Teams created since this release start with a row, and
+ * every write keeps the rows that exist.
  *
  * A team's count runs in steps, each its own transaction. The first step
  * gives the team its row at zero with `through` below every membership.

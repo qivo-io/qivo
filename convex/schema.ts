@@ -1320,19 +1320,21 @@ export default defineSchema({
   // team page and the REST and MCP team summaries, kept off the team row,
   // which every member's catalog and many permission reads load. `members`
   // counts the team's team_members rows whose profile exists in the team's
-  // organization and is not a guest, as model/teams.ts teamJson lists them:
-  // inactive people, agents and viewers count, and a guest's membership
-  // left from before the guest rule does not. A membership a profile
-  // removal left for its background steps still counts until a step deletes
-  // it (profile_removals.counted_org_id). Every write of a membership moves
-  // the count in its own transaction. A team has no row until
-  // internal/teamCountsBackfill counts it, and teams created since this
-  // release start with one. While the backfill counts a team, `through`
-  // holds the _creationTime of the last membership it counted, and a write
-  // moves the count only for a membership at or below it. `revision` goes
-  // up with every write of the row, so a dry run sees a change that ends
-  // where it began. No reader uses the count yet; one is to show it only
-  // for a row without `through` (memberCount), never a missing row as zero.
+  // organization and is not a guest, as the REST and MCP member list
+  // (model/teams.ts memberPage) lists them: inactive people, agents and
+  // viewers count, and a guest's membership left from before the guest rule
+  // does not. A membership a profile removal left for its background steps
+  // still counts until a step deletes it (profile_removals.counted_org_id),
+  // though the member list, which finds its profile gone, leaves it out.
+  // Every write of a membership moves the count in its own transaction. A
+  // team has no row until internal/teamCountsBackfill counts it, and teams
+  // created since this release start with one. While the backfill counts a
+  // team, `through` holds the _creationTime of the last membership it
+  // counted, and a write moves the count only for a membership at or below
+  // it. `revision` goes up with every write of the row, so a dry run sees a
+  // change that ends where it began. REST and MCP read it as a team's
+  // member_count, only for a row without `through` (model/teamCounts.ts
+  // shownCount), never a missing row as zero.
   team_counts: defineTable({
     team_id: v.string(),
     org_id: v.string(),

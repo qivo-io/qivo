@@ -62,9 +62,15 @@ own comments need only read access to the task.
   allows at most 200, and refuses a `limit` outside 1 to 200 as REST does.
   It answers `{next_cursor, tasks}` for active and archived lists; pass
   `next_cursor` back as `cursor` until it is null, even after an empty page.
-  `offset` is refused unless 0. Archived tasks need `project`. A tool
-  refuses an argument it does not know and names it. Refresh the tool list
-  and retry with current names.
+  `offset` is refused unless 0. Archived tasks need `project`.
+  `list_users`, `list_labels`, `list_teams` and `list_team_members` page
+  the same way, in name order, as `{next_cursor, users}`,
+  `{next_cursor, labels}`, `{next_cursor, teams}` and
+  `{next_cursor, team, members}`, and take `search`, every word of it in
+  the name, ignoring case and accents. A user missing from the pages read
+  so far is not gone until `next_cursor` is null. A tool refuses an
+  argument it does not know and names it. Refresh the tool list and retry
+  with current names.
 - **REST:** Use `https://api.qivo.io/v1` with an agent key or a personal
   token for scripts, large paginated reads or setting someone's plannable
   hours (`PATCH /v1/users/{id}`, an organization admin or team leader's
@@ -75,7 +81,9 @@ own comments need only read access to the task.
   at most 50 tasks a page when `limit` is left out, for active and archived
   lists; pass `next_cursor` back as `cursor` until it is null, even after a
   short or empty page. `offset` is refused unless 0. `archived=true` needs
-  `project`.
+  `project`. `GET /v1/users`, `/v1/labels`, `/v1/teams` and
+  `/v1/teams/{id}/members` page the same way and take `search`;
+  `GET /v1/users/{id}` reads one user.
 - **Browser:** Use it for the actions under
   [Stays in the app](#stays-in-the-app), which no MCP tool or REST route
   offers. Enter at `https://qivo.io/app` and use the user's signed-in
@@ -93,7 +101,7 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | Delete a task | `delete_task` | `DELETE /v1/tasks/{ref}` |
 | Link two tasks | `set_task_link` | `POST /v1/tasks/{ref}/links` |
 | Remove a link | `set_task_link` with `linked: false` | `DELETE /v1/tasks/{ref}/links/{kind}/{other}` |
-| List labels | `list_labels` | `GET /v1/labels` |
+| List labels, a page at a time | `list_labels` | `GET /v1/labels` |
 | Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
 | List a task's files | `get_task` (`attachments`) | `GET /v1/tasks/{ref}/attachments` |
 | Attach a file | `start_attachment_upload`, then the upload and `confirm_attachment_upload` | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
@@ -299,9 +307,9 @@ Useful field rules:
   attachments; past each the request is a `400` saying which task is full.
   `get_task` lists `links`.
 - **Label:** find label ids or names with `list_labels` or `GET /v1/labels`,
-  then send `add_labels` and `remove_labels` on `update_task` or PATCH.
-  `set_label` or `POST /v1/labels` creates a label (`#rrggbb` color); only
-  organization admins rename or recolor one.
+  a page at a time or by `search`, then send `add_labels` and `remove_labels`
+  on `update_task` or PATCH. `set_label` or `POST /v1/labels` creates a label
+  (`#rrggbb` color); only organization admins rename or recolor one.
 - **Archive with a reason:** send `archived: true` with `archive_reason`; the
   reason becomes a comment, as in the app's archive dialog, and holds at most
   500 characters. The comment limits apply to it, and a refused reason
@@ -447,7 +455,8 @@ Useful field rules:
 
 | Operation | MCP tool | REST request |
 | --- | --- | --- |
-| List teams with their members and leaders | `list_teams` | `GET /v1/teams`, `GET /v1/teams/{id}` |
+| List teams with their member counts | `list_teams` | `GET /v1/teams`, `GET /v1/teams/{id}` |
+| List a team's members | `list_team_members` | `GET /v1/teams/{id}/members` |
 | Create or rename a team | `set_team` | `POST /v1/teams`, `PATCH /v1/teams/{id}` |
 | Add a member, make or unmake a leader | `set_team_member` with `member: true` | `PUT /v1/teams/{id}/members/{user}` |
 | Remove a member | `set_team_member` with `member: false` | `DELETE /v1/teams/{id}/members/{user}` |

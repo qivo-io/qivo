@@ -126,9 +126,10 @@ longer mention it, and a client holding the older catalogue reads the old
 sentence until it refreshes its tool list. A misspelled `on_held_tasks`
 therefore no longer removes access with the default. `arguments` that is not
 an object, such as a string, is refused too, rather than read as no
-arguments. A tool that takes no arguments (`get_me`, `list_teams`,
-`list_users` and `list_labels`) still ignores what it is sent, because some
-clients send a placeholder argument to such tools.
+arguments. A tool that takes no arguments (then `get_me`, `list_teams`,
+`list_users` and `list_labels`, and since November 2026 `get_me` alone)
+still ignores what it is sent, because some clients send a placeholder
+argument to such tools.
 
 The per-task limits changed the `create_task` and `update_task`
 descriptions. `create_task` now says a task has at most 100 active
@@ -314,6 +315,23 @@ person from one answer now reads the first page, at most 50 people, as if
 it were the whole organization, without any error. Such code must follow
 `next_cursor` until it is `null`. Its model learns the new arguments and
 statuses only after the client refreshes its tool list.
+
+Later in November 2026 `list_users`, `list_labels` and `list_teams` began
+to answer one page at a time, as `{next_cursor, users}`, `{next_cursor,
+labels}` and `{next_cursor, teams}`, in name order, and took `search`,
+`limit`, `cursor` and `offset` (refused unless `0`). A team in `list_teams`
+and in `set_team`'s result is `{id, name, member_count}`, and the new
+`list_team_members` lists a team's members a page at a time (see
+[Teams](#teams) and [Lists of users, labels and
+teams](#lists-of-users-labels-and-teams)). A client holding the older
+catalogue gets the new answers too, so code that read these lists as
+arrays, or a team's `members`, must read the page's field and follow
+`next_cursor`, and its model learns the new arguments and tool only after
+the client refreshes its tool list. A call from such a client that sends a
+placeholder argument and no real one is still answered, as the first page.
+The people and teams come in name order, ignoring case and accents, and the
+labels by name in any case, compared by UTF-8 bytes, which differs from the
+earlier order for some names.
 
 ## Access model: the credential is a user
 
@@ -652,6 +670,10 @@ the range.
 | Comments per list page | 1 to 50 comments | limit must be a whole number of comments from 1 to 50. |
 | People per workload page | 1 to 200 people | limit must be a whole number of people from 1 to 200. |
 | Workload weeks | 1 to 52 weeks | weeks must be a whole number from 1 to 52. |
+| Users per list page | 1 to 200 users | limit must be a whole number of users from 1 to 200. |
+| Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
+| Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
+| Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -1238,9 +1260,9 @@ planned hours per person, `update_comment` and `delete_comment` for comments,
 `list_inbox` and `update_inbox` for your inbox, `set_following` to follow a
 task, `get_project`, `create_project`, `update_project`,
 `set_project_access`, `set_milestone` and `delete_milestone` for projects,
-and `set_team` and `set_team_member` for teams. This pre-launch rename
-replaces the former tool names; clients
-with a cached tool catalogue must refresh discovery or reconnect.
+and `list_team_members`, `set_team` and `set_team_member` for teams. This
+pre-launch rename replaces the former tool names; clients with a cached tool
+catalogue must refresh discovery or reconnect.
 
 A refused tool call answers its refusal sentence as the tool's error result
 (`isError: true`). A call whose change keeps conflicting with changes other
@@ -1280,18 +1302,25 @@ arguments read `Unrecognized keys: "a", "b"`. The list names at most 10
 arguments and then counts the rest, such as `and 5 more`. A name longer than
 100 characters is cut and ends with `…`. `arguments` must be a JSON
 object, or absent or `null` for none. Any other value is refused, for
-example `Invalid input: expected object, received string`. Only the
-tools that take no arguments, `get_me`, `list_teams`, `list_users` and
-`list_labels`, ignore what they are sent. The schema check covers each
-argument's type, its allowed values and the pattern of a uuid or a date. A
-text's length, a number's range and a list's size are the server's checks,
+example `Invalid input: expected object, received string`. Only `get_me`,
+the one tool that takes no arguments, ignores what it is sent. `list_users`,
+`list_labels` and `list_teams` took no arguments before November 2026. A
+call to one of them that sends none of its own arguments, such as a
+placeholder alone, is read as a call of the older catalogue, which drops
+the unknown arguments and answers the first page. A call that sends one of
+its own arguments refuses an unknown one beside it, and `next_cursor` is
+refused even alone, so a loop that passes the answer's `next_cursor` back
+under that name, instead of as `cursor`, is told so. The schema check covers
+each argument's type, its allowed values and the pattern of a uuid or a date.
+A text's length, a number's range and a list's size are the server's checks,
 which answer the limit's sentence from [Limits](#limits) as REST does, such
 as `a task title must be at most 255 characters. Shorten it.`
 
 | Tool | What it does |
 |---|---|
 | `get_me` | Who the credential acts as, as `user` (the `list_users` row plus `email`, `null` for an agent), `organization`, `billing` and `credential`. See [Who am I](#who-am-i). Call it first |
-| `list_teams` | Teams in your organization, as `id`, `name` and `members` (`id`, `name`, `leader`, by name). Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
+| `list_teams` | One page of the teams in your organization, as `{next_cursor, teams}`, each `{id, name, member_count}`, in name order, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)). `member_count` is `null` for a moment while Qivo counts the team, never `0` for a count it does not have. Teams group users for project sharing and administration. A team's project grants are in `get_project`, and `list_project_users` shows who has access through them. Neither project type has an owning team (renamed from `list_workspaces` by migration 0078). See [Teams](#teams) |
+| `list_team_members` | One page of the members of `team_id`, as `{next_cursor, team, members}`, each member `{id, name, leader}`, in name order, with `search`, `limit` (50 by default, at most 200) and `cursor`. `team` is the team as `list_teams` lists it, its `member_count` the whole team's whatever the search. See [Teams](#teams) |
 | `list_projects` | Projects (meta + sub) you can see, each with its durable `num`; both types have a lead and a nullable legacy `team_id` that is `null` for new rows, while team sharing remains explicit access; ACTIVE ones by default — `archived: true` lists the ones that have been put away instead (0106). Each row has `archived` and your `access` (`read`, `write`) on that project, as REST's rows do. See [Projects, access and milestones](#projects-access-and-milestones) |
 | `list_tasks` | Filter by `project` (number/key/uuid; metas include their subs), `status` (one status or a list of them), `priority`, `assignee_id`, `owner_id`, `search` (all word fragments across the fields the app's task filter searches: task ID, title, description, status name except on a task with subtasks, priority name, assignee name and label names; case-insensitive and in any order; `*` stays literal), `limit` (50 by default, at most 200) and `cursor`; every result includes reporter, assignee, reviewer and owner. `assignee_id` matches the stored assignee, also while a reviewer owns the task; `owner_id` matches whose work it is, the reviewer while the task is in review with one and the assignee otherwise. Every result also has `progress` (for a group, the done and total tasks without subtasks under it that you can see), `delay` (the app's projected delay when the task's project tracks it, `unavailable` when Qivo did not read the owner's other work) and `last_comment_at`. Answers `{next_cursor, tasks}`; pass `next_cursor` back as `cursor` until it is `null`, even after a short or empty page. `offset` is refused unless `0`. Active tasks only by default, oldest first by creation. `archived: true` lists archived tasks instead (0070), one `project` at a time with all its sub-projects you can read (see [Task results](#task-results)). Tasks in an ARCHIVED PROJECT are left out of active lists unless `project` names that project (0106). That is a different axis, and the one without a flag |
 | `get_project` | One readable `project` (number/key/uuid), as the `list_projects` row plus `lead_id`, `lead_name`, `review_hours` (its own, `null` when it uses its parent's or the default), `effective_review_hours`, `track_delay`, `completion` (the Overview's done and total tasks, `status: "counting"` for a moment after any project is archived or restored, or `status: "unavailable"` in a project with very many sub-projects), the top-level project's `milestones` and its own `grants`. See [Projects, access and milestones](#projects-access-and-milestones) |
@@ -1300,9 +1329,9 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `set_project_access` | Give one `user_id` or `team_id` `level` `user` or `viewer` on a `project`, or with `level: null` remove it, settling the open tasks it hides by `on_held_tasks`. People only, with Lead access. With a level, `expected` holds the `level` you last read in `get_project`'s `grants`, `null` for none; with `level: null` it is refused. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_milestone` | Add a milestone (`name` of at most 80 characters, `date`) to a `project`'s top-level project, or with `milestone` rename or move one; then `expected` holds the `name` and `date` you last read of the fields it changes. A top-level project holds at most one milestone a week. See [Projects, access and milestones](#projects-access-and-milestones) and [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_milestone` | Delete a `milestone` of a `project`. `expected` holds the `name` and `date` you last read, either or both. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the `list_teams` row with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
+| `set_team` | Without `team_id`, create a team called `name` (at most 80 characters, organization admins only); with `team_id`, rename it (an organization admin or a leader of the team), and then `expected` holds the `name` you last read. Answers the team as `list_teams` lists it, `{id, name, member_count}`, with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
-| `list_users` | Every Qivo user in the organization, for general roster discovery. The row is `id`, `name`, `org_role`, `kind`, `active`, `plannable_hours` — no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by: plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero |
+| `list_users` | One page of the Qivo users in the organization, for general roster discovery, as `{next_cursor, users}` in name order, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)). The row is `id`, `name`, `org_role`, `kind`, `active` and `plannable_hours`, with no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by, so plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero. A user missing from the pages you have read is not gone until `next_cursor` is `null` |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
 | `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks` (with `has_more_subtasks` when an archived task has more than one call lists), `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
@@ -1311,7 +1340,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
 | `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the links |
-| `list_labels` | The organization's labels as `id`, `name` and `color`, ordered by name |
+| `list_labels` | One page of the organization's labels as `{next_cursor, labels}`, each `id`, `name` and `color`, by name in any case, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)) |
 | `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. When the caller's own project access, teams and led projects are too many to read in one request, the create is refused with `you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label` and creates nothing. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
 | `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, an `upload_url` that stores one file and `expires_at`, an hour on. Send exactly `size` bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
@@ -1381,7 +1410,8 @@ Send each value as a read tool answered it:
 - `list_labels` gives a label's `color` as clients paint it, so a label
   stored before the `#rrggbb` rule compares as `#8A8F98`.
 - `list_comments`, `list_teams` and `list_users` give a comment's `body`, a
-  team's `name` and a person's `plannable_hours`.
+  team's `name` and a person's `plannable_hours`. A person or team on a page
+  you have not read yet is found by `search` on its name.
 
 A value also follows the rule of its field. `start_week`, `end_week` and
 `due_date` are real calendar dates written `YYYY-MM-DD`. `remaining_hours`
@@ -1711,26 +1741,121 @@ milestone's name nor its date writes none. Changes to the description, review ti
 tracking write none, as in the app. A call that renames a project and hands
 over its lead writes only `renamed`.
 
+### Lists of users, labels and teams
+
+`list_users`, `list_labels`, `list_teams` and `list_team_members` answer one
+page at a time, the cursor first, as `{next_cursor, users}`,
+`{next_cursor, labels}`, `{next_cursor, teams}` and `{next_cursor, team,
+members}`. `limit` is the most rows a page holds, 50 by default and 1 to
+200. Users, teams and members come in name order, ignoring case and
+accents, then by id, and that order compares names by their UTF-8 bytes, so
+it differs from a browser's sort for some scripts. Labels come in the order
+of the app's Labels settings page, by name in any case, compared by UTF-8
+bytes, so a name that starts with an accented letter comes after z.
+
+Pass `next_cursor` back unchanged as `cursor` for the next page, with the
+same `search` (and for members the same `team_id`), and stop when it is
+`null`. A page can hold fewer than `limit` rows, or none, while
+`next_cursor` is set, because each page reads a bounded amount however
+large the organization is. A short or empty page is never the end of the
+list. Only a `null` `next_cursor` is. `limit` may change from one page to
+the next. A cursor works only for the organization, caller and search it
+came from, on MCP and REST alike, so a `next_cursor` from `list_users`
+continues `GET /v1/users`. A changed search starts a new list, from the
+first page, but two searches that differ only in case or accents, such as
+`Café` and `cafe`, share their cursors. Pages are not a snapshot. A user or
+team added or renamed while you page lands where its name puts it, so a
+page may miss it or show it again. A user missing from the pages you have
+read is not gone until `next_cursor` is `null`.
+
+`search` keeps the rows whose name holds every whitespace-separated word of
+it, in any order, ignoring case and accents, so `"lee sam"` finds Sam Lee.
+It runs over the whole list on the server before `limit`, so a search that
+matches few rows can answer short or empty pages with a `next_cursor`
+before it reaches them. An empty `search` lists everything, and a `search`
+holds at most 200 characters.
+
+These calls are refused, checked in this order:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of users from 1 to 200.`, with `labels`, `teams` or `members` for
+  the other lists. A `limit` that is not a whole number is refused by the
+  schema first.
+- `offset` other than `0`: `offset does not apply to users; pass
+  next_cursor as cursor`, with `labels`, `teams` or `team members`.
+- a `search` longer than 200 characters: `a search must be at most 200
+  characters. Search for fewer words.`
+- for `list_team_members`, a team outside your organization: `team "<id>"
+  not found in your organization`.
+- for users, teams and members, a page before Qivo has prepared the
+  organization's names for name order: `this list cannot be read until this
+  organization's names are ready; try again in a few minutes`. The labels
+  list needs no prepared names.
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, an empty one included: `cursor must be the next_cursor of an
+  earlier page`.
+
+Until November 2026 `list_users`, `list_labels` and `list_teams` answered
+every row at once, as an array, and took no arguments.
+
 ### Teams
 
-`list_teams` answers every team of your organization, by name, as
-`{id, name, members}`. Everyone in the organization reads every team and its
-members, as in the app. `members` lists `{id, name, leader}` by name, where
+`list_teams` answers one page of your organization's teams, as
+`{next_cursor, teams}`, each team `{id, name, member_count}`, in name order,
+ignoring case and accents, then by id. `member_count` is the number of the
+team's members as `list_team_members` counts them, people and agents,
+inactive ones included. It is `null` for a moment while Qivo counts the
+team, never `0` for a count it does not have, so do not read `null` as an
+empty team. Right after someone is removed from the organization, the count
+can still include them for a moment while the member list no longer does.
+Everyone in the organization reads every team and its members, guests and
+Viewers included, as in the app. Paging, `search` and the refusals work as
+in [Lists of users, labels and teams](#lists-of-users-labels-and-teams),
+with `limit must be a whole number of teams from 1 to 200.`
+
+```json
+{
+  "next_cursor": "…",
+  "team": { "id": "…uuid…", "name": "Hardware", "member_count": 4 },
+  "members": [
+    { "id": "…uuid…", "name": "Leo Martins", "leader": true },
+    { "id": "…uuid…", "name": "Release Bot", "leader": false }
+  ]
+}
+```
+
+`list_team_members` answers one page of the members of `team_id`, each
+`{id, name, leader}`, with the team as `list_teams` lists it on every page.
 `leader` is `true` for a person who leads the team. Only people with the
 organization admin or Standard user role lead teams, so an agent or a Viewer
 never reads `true`. A guest is never a member, so an old membership a guest
-still holds is not listed. Teams are named by `team_id`, a uuid from
-`list_teams`, because two teams may share a name. One outside your
-organization answers `team "<id>" not found in your organization`.
+still holds is neither listed nor counted. Members come in name order,
+ignoring case and accents, then by id. `search` keeps the members whose name
+holds every word of it, within this team only, and `member_count` stays the
+whole team's. A member renamed a moment ago can sort and match by the
+earlier name for a moment, so a search by the new name can miss them until
+then; their `name` is always the current one. Paging and the refusals work
+as for the other lists, with `limit must be a whole number of members from
+1 to 200.` and `offset does not apply to team members; pass next_cursor as
+cursor`, and a cursor works only for the team it came from. A member missing
+from one page you hold is not removed from the team. Teams are named by
+`team_id`, a uuid from `list_teams`, because two teams may share a name. One
+outside your organization answers `team "<id>" not found in your
+organization`, checked after the paging arguments.
+
+Until November 2026 `list_teams` answered every team at once, as an array,
+and each team embedded its whole `members` array, as did `set_team`'s
+result.
 
 **Creating and renaming.** `set_team` without `team_id` creates a team from
 `name`, which only an organization admin may do (`only organization admins
 can create teams`). With `team_id` it renames that team, which an
 organization admin or a leader of the team may do (`requires an organization
 admin or a leader of this team` otherwise). `name` is trimmed, may not be
-blank and holds at most 80 characters. The result is the `list_teams` row
-plus `created`. Neither writes an activity row, as in the app. Deleting a
-team stays in the app ([Stays in the app](#stays-in-the-app)).
+blank and holds at most 80 characters. The result is the team as `list_teams`
+lists it, `{id, name, member_count}`, plus `created`, and a new team's
+`member_count` is `0`. Neither writes an activity row, as in the app.
+Deleting a team stays in the app ([Stays in the app](#stays-in-the-app)).
 
 **Members and leaders.** `set_team_member` changes one `user_id` in a team.
 Members decide who sees the projects shared with the team, so it needs a

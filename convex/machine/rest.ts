@@ -72,7 +72,6 @@ import {
   listCommentsCore,
   listProjectsCore,
   listProjectUsersCore,
-  listUsersCore,
   loadCatalogue,
   type MeJson,
   meCore,
@@ -86,8 +85,10 @@ import {
   taskListRequest,
   taskOut,
   taskRefOf,
+  type UsersPageJson,
   UUID,
   userJson,
+  userPage,
 } from '../lib/core'
 import {
   type CredentialAccess,
@@ -140,9 +141,10 @@ import {
   createLabelCore,
   findLabel,
   LABEL_FIELDS,
+  type LabelsPageJson,
   labelChanges,
   labelJson,
-  listLabelsCore,
+  labelPage,
   updateLabelCore,
 } from '../model/labels'
 import {
@@ -159,12 +161,13 @@ import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape, cleanTaskDate } from '../model/taskValues'
 import { authenticateSecret, goneWithDeletion, restAuth401, sha256hex } from './auth'
 import { DISCUSSION_ROUTES } from './discussion'
-import { PROJECT_ROUTES, projectDetailJson } from './projects'
+import { orgProfile, PROJECT_ROUTES, projectDetailJson } from './projects'
 import { RECORD_ROUTES } from './records'
 import { conflictRetrying, type MachineEntry, type Principal, runEntry } from './registry'
 import {
   REST_CALLER as CALLER,
   internalError,
+  namedPaging,
   needJson,
   offsetSent,
   optionalJson,
@@ -513,24 +516,39 @@ export const getMe = internalQuery({
 
 /* ---------------------------------------------------------------- users -- */
 
-/* GET /v1/users — the org's roster, people and agents alike, ordered by name.
- * Not gated on a project grant (rest:350-360). */
+/* GET /v1/users?search=&limit=&cursor= (lib/core.ts userPage), one page of
+ * the org's roster, people and agents alike, in name order. Not gated on a
+ * project grant. Query values arrive as raw strings; an empty cursor or
+ * search counts as absent. */
 export const listUsers = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, a): Promise<RestUserJson[]> => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    search: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<UsersPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return (await listUsersCore(ctx, me)).map(userJson)
+    const paging = namedPaging(LIMITS.listUsers, 'users', {
+      ...a,
+      cursor: a.cursor || undefined,
+      search: a.search || undefined,
+    })
+    return await userPage(ctx, me, paging)
   },
 })
 
-/* GET /v1/users/{id} — exact match on the lowercased id (rest:361-364). */
+/* GET /v1/users/{id}: one profile of the caller's organization by its id,
+ * in any case, read directly (machine/projects.ts orgProfile). An unknown
+ * id, another organization's and text that is no uuid answer the same 404. */
 export const getUser = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
   handler: async (ctx, a): Promise<RestUserJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const rows = await listUsersCore(ctx, me)
-    const one = rows.find((m) => m.id === a.ref.toLowerCase())
-    if (one === undefined) throw notFound('user not found')
+    const one = await orgProfile(ctx, me, a.ref)
+    if (one === null) throw notFound('user not found')
     return userJson(one)
   },
 })
@@ -545,8 +563,8 @@ export const updateUser = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
   handler: async (ctx, a): Promise<RestUserJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    const target = (await listUsersCore(ctx, me)).find((m) => m.id === a.ref.toLowerCase())
-    if (target === undefined) throw notFound('user not found')
+    const target = await orgProfile(ctx, me, a.ref)
+    if (target === null) throw notFound('user not found')
     const b = needJson(a.body)
     refuseUnknownFields(b, ['plannable_hours', 'expected'])
     const expected = parseExpected(PLANNABLE_FIELDS, b.expected, sentKeys(PLANNABLE_FIELDS, b))
@@ -1030,12 +1048,26 @@ export const removeLink = internalMutation({
 
 /* --------------------------------------------------------------- labels -- */
 
-/* GET /v1/labels — the organization's labels, ordered by name. */
+/* GET /v1/labels?search=&limit=&cursor= (model/labels.ts labelPage), one
+ * page of the organization's labels in name order. Query values arrive as
+ * raw strings; an empty cursor or search counts as absent. */
 export const listLabels = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, a): Promise<RestLabelJson[]> => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    search: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<LabelsPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return (await listLabelsCore(ctx, me.org_id)).map(labelJson)
+    const paging = namedPaging(LIMITS.listLabels, 'labels', {
+      ...a,
+      cursor: a.cursor || undefined,
+      search: a.search || undefined,
+    })
+    return await labelPage(ctx, me, paging)
   },
 })
 
@@ -1272,8 +1304,16 @@ export const ROUTES: RestRoute[] = [
     path: 'users',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.rest.listUsers, { callerId, access }),
+    query: ['search', 'limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, query }) =>
+      r.runQuery(internal.machine.rest.listUsers, {
+        callerId,
+        access,
+        search: query('search'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
   }),
   route({
     method: 'GET',
@@ -1442,8 +1482,16 @@ export const ROUTES: RestRoute[] = [
     path: 'labels',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.rest.listLabels, { callerId, access }),
+    query: ['search', 'limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, query }) =>
+      r.runQuery(internal.machine.rest.listLabels, {
+        callerId,
+        access,
+        search: query('search'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
   }),
   route({
     method: 'POST',

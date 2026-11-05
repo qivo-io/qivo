@@ -353,6 +353,7 @@ const REQUESTS: Record<
   }),
   'GET teams': () => ({ path: '/v1/teams' }),
   'GET teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}` }),
+  'GET teams/:ref/members': (fx) => ({ path: `/v1/teams/${fx.f.team.id}/members` }),
   'POST teams': () => ({ path: '/v1/teams', body: { name: 'Token team' } }),
   'PATCH teams/:ref': (fx) => ({ path: `/v1/teams/${fx.f.team.id}`, body: { name: 'Hardware' } }),
   'PUT teams/:ref/members/:user': (fx) => ({

@@ -1,5 +1,6 @@
 /* Teams and their members, the rules the app (teams.ts), REST and MCP
- * (machine/teams.ts) share, so each rule exists once.
+ * (machine/teams.ts) share, so each rule exists once, and the pages REST and
+ * MCP list teams and a team's members in (teamPage, memberPage).
  *
  * Who may do what:
  * - Creating a team: organization admins only. Agents are never admins, so
@@ -35,7 +36,10 @@ import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS } from '../lib/limits'
+import { NAMES_NOT_READY, type NamedListPage, namedListPage, namedScope } from '../lib/listCursor'
+import type { ReadGuard } from '../lib/namedPages'
 import { named, nameKey } from '../lib/nameKey'
+import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
 import { deleteTeamDeep } from './cascade'
 import {
@@ -47,7 +51,14 @@ import {
   filledText,
   type Next,
 } from './expected'
-import { copyNameKey, inlineBudget } from './nameKeys'
+import {
+  copyNameKey,
+  idTieOf,
+  inlineBudget,
+  nameKeysReady,
+  teamIndex,
+  teamMemberIndex,
+} from './nameKeys'
 import { assertNotLastTeam, newTeamDefaults } from './orgs'
 import {
   type AccessRemoval,
@@ -60,12 +71,15 @@ import {
   withinRoom,
 } from './projectAccess'
 import { grantee, reachOfGrantee } from './projectNav'
+import { UNKEYED_MOST } from './projectSettings'
 import {
   countingOrg,
   countingOrgOf,
   countMemberAdded,
   countMemberRemoved,
   insertTeamCount,
+  shownCount,
+  teamCountRow,
 } from './teamCounts'
 
 /** Refuses with LIMITS.teamDeleteRows' sentence a team deletion that changes
@@ -140,67 +154,193 @@ export const membershipOf = (ctx: QueryCtx, teamId: string, profileId: string) =
     .withIndex('by_team_profile', (q) => q.eq('team_id', teamId).eq('profile_id', profileId))
     .unique()
 
-/** One team as REST and MCP list it: its members by name, each with whether
- * they lead it. `leader` is effective leadership (lib/access.ts
- * canLeadTeams), so a leader row held by an agent or a viewer reads false. */
-export type TeamJson = {
-  id: string
-  name: string
-  members: { id: string; name: string; leader: boolean }[]
-}
+/* ------------------------------------------- REST and MCP team lists */
 
-/* Orders rows by name. Names may repeat, so id breaks ties for a stable order. */
-const byName = (a: { name: string; id: string }, b: { name: string; id: string }) =>
-  a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
+/** A team as REST and MCP answer it, in a list, a single-team read and a
+ * team write's answer. `member_count` is the number of its members as the
+ * member list counts them (model/teamCounts.ts shownCount), null while
+ * Qivo counts the team, never 0 for a count it does not have. It holds no
+ * member rows; memberPage lists a team's members. */
+export type TeamSummaryJson = { id: string; name: string; member_count: number | null }
 
-/* The organization's people and agents by id, read once. */
-async function orgProfiles(
-  ctx: QueryCtx,
-  orgId: string,
-): Promise<ReadonlyMap<string, Doc<'profiles'>>> {
-  const rows = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  return new Map(rows.map((p) => [p.id, p]))
-}
-
-/** A team with its members, as teamsJson lists it. A guest is never a team
- * member (lib/access.ts gives guests no team access), so an old row held by
- * one is left out, as on the app's Team settings. `profiles` holds the
- * organization's profiles by id; one read loads them when it is absent. */
-export async function teamJson(
+/** `team` as REST and MCP answer it (TeamSummaryJson), reading its count
+ * row with `lookup`, a batch's counted lookup (lib/namedPages.ts ReadGuard)
+ * or a plain read. A new team's row holds 0 (createTeamCore). */
+export async function teamSummary(
   ctx: QueryCtx,
   team: Doc<'teams'>,
-  profiles?: ReadonlyMap<string, Doc<'profiles'>>,
-): Promise<TeamJson> {
-  const people = profiles ?? (await orgProfiles(ctx, team.org_id))
-  const members: TeamJson['members'] = []
-  const rows = ctx.db.query('team_members').withIndex('by_team', (q) => q.eq('team_id', team.id))
-  for await (const row of rows) {
-    const profile = people.get(row.profile_id)
-    if (profile === undefined || profile.org_role === 'guest') continue
-    members.push({
-      id: profile.id,
-      name: profile.name,
-      leader: row.is_leader && canLeadTeams(profile),
-    })
-  }
-  return { id: team.id, name: team.name, members: members.sort(byName) }
+  lookup: ReadGuard['lookup'] = (read) => read(),
+): Promise<TeamSummaryJson> {
+  const row = await lookup(() => teamCountRow(ctx, team.id))
+  return { id: team.id, name: team.name, member_count: shownCount(row, team) }
 }
 
-/** Every team of the caller's organization with its members, by name. Every
- * member of an organization sees its teams and their membership, as in the
- * app's snapshot. The organization's profiles are read once for all teams. */
-export async function teamsJson(ctx: QueryCtx, me: Doc<'profiles'>): Promise<TeamJson[]> {
-  const teams = await ctx.db
-    .query('teams')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
-  const profiles = await orgProfiles(ctx, me.org_id)
-  const out: TeamJson[] = []
-  for (const team of teams.sort(byName)) out.push(await teamJson(ctx, team, profiles))
-  return out
+/* The list names a REST or MCP teams or members cursor seals
+ * (lib/listCursor.ts). REST and MCP answer the same rows, so each list
+ * shares its name across them, and a cursor of one continues on the other. */
+const TEAMS_LIST = 'machine.teams'
+const MEMBERS_LIST = 'machine.team_members'
+
+/** One page of the organization's teams, as REST GET /v1/teams and MCP
+ * list_teams answer it, the cursor first. */
+export type TeamsPageJson = { next_cursor: string | null; teams: TeamSummaryJson[] }
+
+/**
+ * One page of the teams of `me`'s organization for REST GET /v1/teams and
+ * MCP list_teams, after `p.cursor`, the next_cursor of an earlier page, at
+ * most `p.limit` of them, each as its summary (teamSummary) with its count
+ * read through the page's guard. Every member of the organization reads
+ * every team, guests and Viewers included, as in the app's catalog.
+ *
+ * The teams come in name order (teams.by_org_name, by the name key, which
+ * ignores case and accents, in Convex's byte order, then the id). With
+ * `p.search`, the rows are the teams whose name holds every word of it in
+ * any order, ignoring case and accents, matched over every team before the
+ * limit, and a team the search leaves out reads no count. The page reads
+ * within the call's share (lib/listCursor.ts namedListPage), so a page can
+ * be short, or empty, while next_cursor is set, and next_cursor is null only
+ * once the teams ended. The cursor is sealed with the organization, `me`
+ * and the search's name key, and any other cursor is refused with
+ * CURSOR_REFUSAL. Pages are not a snapshot. A page refuses with
+ * NAMES_NOT_READY until the organization's name keys are all written.
+ *
+ * A team reads its row from the index and its count row, one lookup.
+ * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
+ * the call's own reads, the 50 teams take one page at limit 200, of
+ * 54 ranges, 102 documents and 0.02 MB, and a search that matches no team
+ * reads no count row, 4 ranges, 52 documents and 0.01 MB.
+ */
+export async function teamPage(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  p: { limit: number; cursor: string | null; search: string },
+): Promise<TeamsPageJson> {
+  if (!(await nameKeysReady(ctx, me.org_id))) throw rule(NAMES_NOT_READY)
+  const matches = allWordsMatcher(nameKey(p.search))
+  const page: NamedListPage<TeamSummaryJson> = await namedListPage(ctx, {
+    list: TEAMS_LIST,
+    scope: await namedScope(me, p.search),
+    cursor: p.cursor,
+    tieOf: idTieOf,
+    index: teamIndex(ctx, me.org_id),
+    keep: async (team, guard) =>
+      matches(nameKey(team.name)) ? await teamSummary(ctx, team, guard.lookup) : null,
+    limit: p.limit,
+  })
+  return { next_cursor: page.next_cursor, teams: page.rows }
+}
+
+/** A member of a team as REST and MCP list them. `leader` is effective
+ * leadership (lib/access.ts canLeadTeams), so a leader row an agent or a
+ * Viewer holds reads false. */
+export type TeamMemberJson = { id: string; name: string; leader: boolean }
+
+/** One page of a team's members, as REST GET /v1/teams/{id}/members and
+ * MCP list_team_members answer it, the cursor first, then the team's
+ * summary, whose count is the whole team's whatever the search. */
+export type TeamMembersPageJson = {
+  next_cursor: string | null
+  team: TeamSummaryJson
+  members: TeamMemberJson[]
+}
+
+/* Whether every membership of `team` without a copy of its person's name
+ * key belongs to a profile that is gone or in another organization, which
+ * the member list leaves out anyway. The walk in name order does not read
+ * such rows (model/nameKeys.ts teamMemberIndex), and they are only those a
+ * removed person left before the backfill keyed the organization, until
+ * their removal's background steps delete them. Reads at most
+ * UNKEYED_MOST.rows of them in one range, and one profile each. Answers
+ * false for a row whose profile is in the organization, a guest's
+ * included, and past UNKEYED_MOST.rows, so the list fails closed rather
+ * than leave such a row out unseen, the rule model/projectSettings.ts
+ * applies to a project's grants. */
+async function unkeyedMembersGone(ctx: QueryCtx, team: Doc<'teams'>): Promise<boolean> {
+  const most = UNKEYED_MOST.rows + 1
+  const rows = await ctx.db
+    .query('team_members')
+    .withIndex('by_team_name', (q) => q.eq('team_id', team.id).eq('name_key', undefined))
+    .take(most)
+  if (rows.length === most) return false
+  for (const row of rows)
+    if ((await byId(ctx, 'profiles', row.profile_id))?.org_id === team.org_id) return false
+  return true
+}
+
+/**
+ * One page of the members of `team`, a team of `me`'s organization the
+ * caller resolved, for REST GET /v1/teams/{id}/members and MCP
+ * list_team_members, after `p.cursor`, the next_cursor of an earlier page
+ * of this team, at most `p.limit` of them, with the team's summary
+ * (teamSummary) on every page. Every member of the organization reads
+ * every team's members, guests and Viewers included, as in the app.
+ *
+ * The members are the team's memberships whose profile exists in the
+ * team's organization and is not a guest, as team_counts counts them, so
+ * a guest's stale membership and a profile of another organization are
+ * left out. A membership that a removal from the organization left to its
+ * background steps counts in `member_count` until a step deletes it, but
+ * its profile is gone, so it is not listed and the count can be higher than
+ * the members listed for a moment. Each member is `{id, name, leader}`,
+ * the name read from the profile, so it is always current.
+ *
+ * The members come in the order of their memberships' copies of the
+ * person's name key (model/nameKeys.ts teamMemberIndex), then the profile
+ * id, and a search matches the copy before the profile is read, so a
+ * membership the search leaves out reads no profile. A copy can trail a
+ * rename for a moment, which sorts and matches that member by the earlier
+ * name, so a search by the new name can miss them until the copy is in
+ * line. The page reads within the call's share (lib/listCursor.ts
+ * namedListPage), so a page can be short, or empty, while next_cursor is
+ * set, and next_cursor is null only once the memberships ended. The cursor
+ * is sealed with the organization, `me`, the team and the search's name
+ * key, and any other cursor is refused with CURSOR_REFUSAL. Pages are not
+ * a snapshot.
+ *
+ * A page refuses with NAMES_NOT_READY until the organization's name keys
+ * are all written, and while a membership without a copy may be one of a
+ * profile in the organization or there are more such memberships than the
+ * check reads (unkeyedMembersGone), so a page is never answered from rows a
+ * read in key order could skip.
+ *
+ * A member reads their membership from the index and their profile by id.
+ * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
+ * the call's own reads, a team of 1,000 members, everyone in an
+ * organization of 1,000 people, takes 5 pages at limit 200, the heaviest
+ * 208 ranges, 405 documents and 0.11 MB, and a search that matches nobody
+ * reads the 1,000 memberships and no profile, 7 ranges, 1,004 documents
+ * and 0.20 MB.
+ */
+export async function memberPage(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  team: Doc<'teams'>,
+  p: { limit: number; cursor: string | null; search: string },
+): Promise<TeamMembersPageJson> {
+  if (!(await nameKeysReady(ctx, team.org_id)) || !(await unkeyedMembersGone(ctx, team)))
+    throw rule(NAMES_NOT_READY)
+  const summary = await teamSummary(ctx, team)
+  const matches = allWordsMatcher(nameKey(p.search))
+  const page: NamedListPage<TeamMemberJson> = await namedListPage(ctx, {
+    list: MEMBERS_LIST,
+    scope: await namedScope(me, p.search, [team.id]),
+    cursor: p.cursor,
+    tieOf: idTieOf,
+    index: teamMemberIndex(ctx, team.id),
+    keep: async (membership, guard) => {
+      if (!matches(membership.name_key ?? '')) return null
+      const profile = await guard.lookup(() => byId(ctx, 'profiles', membership.profile_id))
+      if (profile === null || profile.org_id !== team.org_id || profile.org_role === 'guest')
+        return null
+      return {
+        id: profile.id,
+        name: profile.name,
+        leader: membership.is_leader && canLeadTeams(profile),
+      }
+    },
+    limit: p.limit,
+  })
+  return { next_cursor: page.next_cursor, team: summary, members: page.rows }
 }
 
 /** Creates a team with the standard settings (newTeamDefaults). Organization

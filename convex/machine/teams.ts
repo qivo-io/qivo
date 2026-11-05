@@ -1,14 +1,17 @@
-/* Teams over REST and MCP: listing teams with their members, creating and
- * renaming teams, and adding, removing, making and unmaking members and
- * leaders.
+/* Teams over REST and MCP: listing teams with their member counts and a
+ * team's members a page at a time, creating and renaming teams, and adding,
+ * removing, making and unmaking members and leaders.
  *
  * TEAM_TOOLS and TEAM_ROUTES are registry entries (machine/registry.ts) that
  * machine/mcp.ts TOOLS and machine/rest.ts ROUTES spread in, like
  * machine/projects.ts. This module imports only types from those two, so
  * neither is loaded through it. The provenance, key name validator, body
- * parsers and MCP text it shares with them come from machine/shared.ts.
- * MCP's list_teams keeps its internal function in machine/mcp.ts and answers
- * model/teams.ts teamsJson like GET /v1/teams.
+ * parsers, paging check and MCP text it shares with them come from
+ * machine/shared.ts. MCP's list_teams and list_team_members keep their
+ * internal functions in machine/mcp.ts, after list_teams' place in the
+ * catalogue, and answer model/teams.ts teamPage and memberPage like
+ * GET /v1/teams and GET /v1/teams/{id}/members. Every team answer is a
+ * summary, `{id, name, member_count}`, with no member rows.
  *
  * Each action is one shared model function the app runs too (model/teams.ts
  * createTeamCore, updateTeamCore, addTeamMemberCore, setTeamLeaderCore and
@@ -57,11 +60,15 @@ import {
 import {
   addTeamMemberCore,
   createTeamCore,
+  memberPage,
   removeTeamMemberCore,
   setTeamLeaderCore,
   TEAM_MACHINE_FIELDS,
-  teamJson,
-  teamsJson,
+  type TeamMembersPageJson,
+  type TeamSummaryJson,
+  type TeamsPageJson,
+  teamPage,
+  teamSummary,
   updateTeamCore,
 } from '../model/teams'
 import { HELD_TASKS_FIELDS, MEMBER_PUT_FIELDS } from './bodyFields'
@@ -70,6 +77,7 @@ import { orgProfile, orgTeam, removalJson } from './projects'
 import type { ROUTES, route as restRoute } from './rest'
 import {
   MCP_PROVENANCE,
+  namedPaging,
   needJson,
   optionalJson,
   pretty,
@@ -138,13 +146,17 @@ const named = (row: { id: string; name: string }) => ({ id: row.id, name: row.na
 
 /* --------------------------------------------------------- MCP internals */
 
-/* MCP's sentences for a team or user ref that matches nothing in the caller's organization. */
-const mcpTeamMissing = (ref: string): ConvexError<Refusal> =>
+/** MCP's sentence for a team ref that matches nothing in the caller's
+ * organization, which list_team_members (machine/mcp.ts) answers too. */
+export const mcpTeamMissing = (ref: string): ConvexError<Refusal> =>
   notFound(`team "${ref}" not found in your organization`)
+/* MCP's sentence for a user ref that matches nothing in the caller's
+ * organization. */
 const mcpUserMissing = (ref: string): ConvexError<Refusal> =>
   badRequest(`user "${ref}" not found in your organization`)
 
-/* set_team: create a team, or rename one. */
+/* set_team: create a team, or rename one. It answers the team's summary
+ * (model/teams.ts teamSummary) and `created`. */
 export const mcpSetTeam = internalMutation({
   args: {
     callerId: v.string(),
@@ -161,7 +173,7 @@ export const mcpSetTeam = internalMutation({
     if (a.team_id === undefined) {
       const now = new Date().toISOString()
       const team = await createTeamCore(ctx, { me, id: newUuid(), name: a.name, now })
-      return pretty({ ...(await teamJson(ctx, team)), created: true })
+      return pretty({ ...(await teamSummary(ctx, team)), created: true })
     }
     const found = await orgTeam(ctx, me, a.team_id)
     if (found === null) throw mcpTeamMissing(a.team_id)
@@ -171,7 +183,7 @@ export const mcpSetTeam = internalMutation({
       patch: { name: a.name },
       expected: a.expected,
     })
-    return pretty({ ...(await teamJson(ctx, team)), created: false })
+    return pretty({ ...(await teamSummary(ctx, team)), created: false })
   },
 })
 
@@ -252,28 +264,67 @@ function restName(b: Record<string, unknown>): string | undefined {
   return b.name
 }
 
-/* GET /v1/teams: every team with its members. */
+/* GET /v1/teams?search=&limit=&cursor= (model/teams.ts teamPage), one
+ * page of the organization's teams as summaries. Query values arrive as
+ * raw strings; an empty cursor or search counts as absent. */
 export const restListTeams = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, a) => {
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    search: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<TeamsPageJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return await teamsJson(ctx, me)
+    const paging = namedPaging(LIMITS.listTeams, 'teams', {
+      ...a,
+      cursor: a.cursor || undefined,
+      search: a.search || undefined,
+    })
+    return await teamPage(ctx, me, paging)
   },
 })
 
-/* GET /v1/teams/{ref}: one team with its members. */
+/* GET /v1/teams/{ref}: one team's summary, with no member rows. */
 export const restGetTeam = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a) => {
+  handler: async (ctx, a): Promise<TeamSummaryJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
-    return await teamJson(ctx, await restTeam(ctx, me, a.ref))
+    return await teamSummary(ctx, await restTeam(ctx, me, a.ref))
   },
 })
 
-/* POST /v1/teams {name}. */
+/* GET /v1/teams/{ref}/members?search=&limit=&cursor= (model/teams.ts
+ * memberPage), one page of a team's members with the team's summary. The
+ * paging is checked before the team, as on MCP; an empty cursor or search
+ * counts as absent. */
+export const restListTeamMembers = internalQuery({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    search: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<TeamMembersPageJson> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = namedPaging(LIMITS.listTeamMembers, 'team members', {
+      ...a,
+      cursor: a.cursor || undefined,
+      search: a.search || undefined,
+    })
+    return await memberPage(ctx, me, await restTeam(ctx, me, a.ref), paging)
+  },
+})
+
+/* POST /v1/teams {name}, answering the new team's summary. */
 export const restCreateTeam = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, body: v.string() },
-  handler: async (ctx, a) => {
+  handler: async (ctx, a): Promise<TeamSummaryJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const b = needJson(a.body)
     refuseCreateExpected(b, 'team')
@@ -281,14 +332,15 @@ export const restCreateTeam = internalMutation({
     const name = restName(b)
     if (name === undefined) throw badRequest('name is required')
     const now = new Date().toISOString()
-    return await teamJson(ctx, await createTeamCore(ctx, { me, id: newUuid(), name, now }))
+    return await teamSummary(ctx, await createTeamCore(ctx, { me, id: newUuid(), name, now }))
   },
 })
 
-/* PATCH /v1/teams/{ref} {name}. Any other field is refused. */
+/* PATCH /v1/teams/{ref} {name}, answering the team's summary. Any other
+ * field is refused. */
 export const restUpdateTeam = internalMutation({
   args: { callerId: v.string(), access: vCredentialAccess, ref: v.string(), body: v.string() },
-  handler: async (ctx, a) => {
+  handler: async (ctx, a): Promise<TeamSummaryJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const team = await restTeam(ctx, me, a.ref)
     const b = needJson(a.body)
@@ -300,7 +352,10 @@ export const restUpdateTeam = internalMutation({
       sentKeys(TEAM_MACHINE_FIELDS, b),
     )
     if (name === undefined) throw badRequest('no recognized fields to update')
-    return await teamJson(ctx, await updateTeamCore(ctx, { me, team, patch: { name }, expected }))
+    return await teamSummary(
+      ctx,
+      await updateTeamCore(ctx, { me, team, patch: { name }, expected }),
+    )
   },
 })
 
@@ -468,8 +523,16 @@ export const TEAM_ROUTES: RestRoute[] = [
     path: 'teams',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.teams.restListTeams, { callerId, access }),
+    query: ['search', 'limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, query }) =>
+      r.runQuery(internal.machine.teams.restListTeams, {
+        callerId,
+        access,
+        search: query('search'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
   }),
   route({
     method: 'GET',
@@ -498,6 +561,23 @@ export const TEAM_ROUTES: RestRoute[] = [
         access,
         ref: param('ref'),
         body,
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'teams/:ref/members',
+    access: 'read',
+    status: 200,
+    query: ['search', 'limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.teams.restListTeamMembers, {
+        callerId,
+        access,
+        ref: param('ref'),
+        search: query('search'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
       }),
   }),
   route({

@@ -70,13 +70,13 @@ import {
   listCommentsCore,
   listProjectsCore,
   listProjectUsersCore,
-  listUsersCore,
   loadCatalogue,
   meCore,
   projectJson,
   taskListRequest,
   taskOut,
   userJson,
+  userPage,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
@@ -139,7 +139,7 @@ import {
   LABEL_FIELDS,
   labelChanges,
   labelJson,
-  listLabelsCore,
+  labelPage,
   updateLabelCore,
 } from '../model/labels'
 import {
@@ -152,10 +152,10 @@ import {
 import { newUuid, setPlannableHoursCore } from '../model/orgs'
 import { PLANNABLE_FIELDS } from '../model/people'
 import { assertRemainingShape } from '../model/taskValues'
-import { teamsJson } from '../model/teams'
+import { memberPage, teamPage } from '../model/teams'
 import { authenticateSecret, goneWithDeletion, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
-import { PROJECT_TOOLS } from './projects'
+import { orgTeam, PROJECT_TOOLS } from './projects'
 import { RECORD_TOOLS } from './records'
 import {
   conflictRetrying,
@@ -170,6 +170,7 @@ import {
   LONE_SURROGATE,
   MCP_NO_WRITE,
   NAMES_LISTED,
+  namedPaging,
   offsetSent,
   MCP_PROVENANCE as PROVENANCE,
   pageLimit,
@@ -180,7 +181,7 @@ import {
   WRITE_CONFLICT,
   WRITE_CONFLICT_RETRY_AFTER,
 } from './shared'
-import { TEAM_TOOLS } from './teams'
+import { mcpTeamMissing, TEAM_TOOLS } from './teams'
 
 /* --------------------------------------------------------------- the tools
  * Each tool is ONE registry entry (machine/registry.ts): its required
@@ -190,8 +191,10 @@ import { TEAM_TOOLS } from './teams'
  * behavior-load-bearing), with key order preserved and hashes pinned by the
  * transport tests. `run` receives validated wire arguments, so its casts are
  * honest. validateArgs already enforced the shapes and, for a tool that takes
- * arguments, refused any the schema does not know. pickArgs then passes only
- * the arguments the schema names, so a tool that takes none gets none. */
+ * arguments, refused any the schema does not know, except a call of the
+ * older catalogue to a tool that took none then (FORMERLY_BARE). pickArgs
+ * then passes only the arguments the schema names, so a tool that takes
+ * none gets none. */
 
 type SchemaProp = {
   type?: string
@@ -264,16 +267,91 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_teams',
       title: 'List teams',
-      description:
-        'Teams in your organization, each with `id`, `name` and its `members` (`id`, `name`, `leader`). Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.',
+      description: `Teams in your organization, each as \`id\`, \`name\` and \`member_count\`, the number of its members, null for a moment while Qivo counts them. One page of teams in name order, ignoring case and accents. \`search\` keeps teams whose name holds every word of it, in any order. The answer is \`{next_cursor, teams}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`search\`, until it is null, because a page may hold fewer than \`limit\` teams (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTeams.max}), even none. \`offset\` is refused unless 0. \`list_team_members\` lists a team's members. Teams group users for sharing and administration. Projects have no owning team; membership grants access only when a team is explicitly assigned permission.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
-        properties: {},
+        properties: {
+          search: {
+            type: 'string',
+            maxLength: LIMITS.search.max,
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listTeams.min,
+            maximum: LIMITS.listTeams.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
       },
     },
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.mcp.listTeams, { callerId, access }),
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.listTeams, {
+        callerId,
+        access,
+        ...(args as {
+          search?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
+      }),
+  },
+  {
+    access: 'read',
+    def: {
+      name: 'list_team_members',
+      title: 'List team members',
+      description: `The members of team \`team_id\` (from list_teams), each as \`id\`, \`name\` and \`leader\`, one page in name order, ignoring case and accents, with the team as \`{id, name, member_count}\`. \`leader\` is true for a member who leads the team; only organization admins and Standard users do. \`search\` keeps members whose name holds every word of it, in any order; \`member_count\` stays the whole team's. A member renamed a moment ago can sort and match by the earlier name for a moment, so a search by the new name can miss them until then. Right after someone is removed from the organization, \`member_count\` can count them for a moment while the members listed no longer do. The answer is \`{next_cursor, team, members}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`team_id\` and \`search\`, until it is null, because a page may hold fewer than \`limit\` members (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listTeamMembers.max}), even none. \`offset\` is refused unless 0.`,
+      inputSchema: {
+        type: 'object',
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        properties: {
+          team_id: {
+            type: 'string',
+          },
+          search: {
+            type: 'string',
+            maxLength: LIMITS.search.max,
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listTeamMembers.min,
+            maximum: LIMITS.listTeamMembers.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
+        required: ['team_id'],
+      },
+    },
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.listTeamMembers, {
+        callerId,
+        access,
+        ...(args as {
+          team_id: string
+          search?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
+      }),
   },
   {
     access: 'read',
@@ -304,16 +382,43 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_users',
       title: 'List users',
-      description:
-        'Users of the organization (use their id as assignee_id, reviewer_id or reporter_id). A roster entry is not proof of assignment eligibility: use `list_project_users` for the destination project and select an assignee or reviewer only from rows with `assignable: true`. `kind` is "person" or "agent", and an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. `plannable_hours` is that user\'s own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by, so plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent\'s work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.',
+      description: `Users of the organization (use their id as assignee_id, reviewer_id or reporter_id), one page in name order, ignoring case and accents. \`search\` keeps users whose name holds every word of it, in any order. The answer is \`{next_cursor, users}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`search\`, until it is null, because a page may hold fewer than \`limit\` users (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listUsers.max}), even none. \`offset\` is refused unless 0. A user missing from the pages you have read is not gone until \`next_cursor\` is null. A roster entry is not proof of assignment eligibility: use \`list_project_users\` for the destination project and select an assignee or reviewer only from rows with \`assignable: true\`. \`kind\` is "person" or "agent", and an agent is a user like you, reachable through the API rather than a login. An assignee must be active and have effective Edit or Lead permission on the destination project; View-only users cannot be assigned work, including when their organization role is "user" or "guest". Reporters may be inactive or viewers when they can see the project. \`plannable_hours\` is that user's own capacity: the whole hours per week they have for planned project work, the work week minus meetings and other overhead (0092). It is what the planner divides by, so plan someone at most that many hours in a week, and remember the week is shared across every project they work on, not just yours. It is null for an agent, which has no weekly capacity at all: an agent's work is never stretched to fit a calendar and an agent is never over capacity, so do not treat null as zero.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
-        properties: {},
+        properties: {
+          search: {
+            type: 'string',
+            maxLength: LIMITS.search.max,
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listUsers.min,
+            maximum: LIMITS.listUsers.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
       },
     },
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.mcp.listUsers, { callerId, access }),
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.listUsers, {
+        callerId,
+        access,
+        ...(args as {
+          search?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
+      }),
   },
   {
     access: 'read',
@@ -890,16 +995,43 @@ export const TOOLS: McpTool[] = [
     def: {
       name: 'list_labels',
       title: 'List labels',
-      description:
-        "Your organization's labels, as id, name and color. update_task adds and removes them by id or name.",
+      description: `Your organization's labels, as id, name and color, one page in name order, ignoring case, compared by UTF-8 bytes, so a name that starts with an accented letter comes after z. \`search\` keeps labels whose name holds every word of it, in any order, ignoring case and accents. The answer is \`{next_cursor, labels}\`; pass \`next_cursor\` back as \`cursor\`, with the same \`search\`, until it is null, because a page may hold fewer than \`limit\` labels (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listLabels.max}), even none. \`offset\` is refused unless 0. update_task adds and removes them by id or name.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
-        properties: {},
+        properties: {
+          search: {
+            type: 'string',
+            maxLength: LIMITS.search.max,
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listLabels.min,
+            maximum: LIMITS.listLabels.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
+        },
       },
     },
-    run: (r, { callerId, access }) =>
-      r.runQuery(internal.machine.mcp.listLabels, { callerId, access }),
+    run: (r, { callerId, access, args }) =>
+      r.runQuery(internal.machine.mcp.listLabels, {
+        callerId,
+        access,
+        ...(args as {
+          search?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
+      }),
   },
   {
     access: 'write',
@@ -1163,6 +1295,20 @@ function createExpectedRefusal(tool: ToolDef, raw: unknown): string | null {
   return record !== undefined && sends ? createExpectedSentence(record) : null
 }
 
+/* The tools that took no arguments until November 2026, when they began to
+ * page (list_users, list_labels and list_teams). Some clients send a
+ * placeholder argument, such as `random_string`, to a tool whose schema has
+ * no properties, and a client can hold the older catalogue for a while. So
+ * a call to one of these that sends none of the tool's own arguments is
+ * read as a call of that catalogue, whose unknown arguments are dropped, as
+ * they were then, and logged by name. A call that sends any of the tool's
+ * own arguments refuses unknown ones as every other tool does, and so does
+ * a call that sends `next_cursor`, the answer's own field, which a client
+ * paging with the wrong name would otherwise loop on, answered the first
+ * page each time. The exception can go once the dropped-argument logs show
+ * no placeholders. */
+const FORMERLY_BARE: ReadonlySet<string> = new Set(['list_users', 'list_labels', 'list_teams'])
+
 /* null = valid; else the joined issue list for the isError text. `raw` is the
  * call's `arguments`, where absent and null both mean none. */
 function validateArgs(tool: ToolDef, raw: unknown): string | null {
@@ -1196,11 +1342,23 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
     const msg = checkValue(prop, value)
     if (msg !== null) problems.push(`${key}: ${msg}`)
   }
-  // Arguments the schema does not know are refused rather than dropped.
+  // Arguments the schema does not know are refused rather than dropped,
+  // except in a call of the older catalogue to a FORMERLY_BARE tool.
   const unknown = Object.keys(args).filter(
     (key) => !Object.hasOwn(props, key) && !(tool.name === 'update_task' && key === 'reporter_id'),
   )
-  if (unknown.length > 0) {
+  const olderCatalogue =
+    FORMERLY_BARE.has(tool.name) &&
+    unknown.length === Object.keys(args).length &&
+    !unknown.includes('next_cursor')
+  if (unknown.length > 0 && olderCatalogue) {
+    // names only, never values, so the log shows whether placeholders still arrive
+    console.info('MCP call dropped unknown arguments', {
+      tool: tool.name,
+      keys: unknown.slice(0, NAMES_LISTED).map(shownName),
+      count: unknown.length,
+    })
+  } else if (unknown.length > 0) {
     // names only, never values, so the log shows whether clients send them routinely
     console.info('MCP call refused unknown arguments', {
       tool: tool.name,
@@ -1213,9 +1371,10 @@ function validateArgs(tool: ToolDef, raw: unknown): string | null {
 }
 
 /* The arguments the schema names, with defined values only. For a tool that
- * takes arguments, validateArgs refused unknown keys already. For one that
- * takes none, this is what drops whatever it was sent, such as a placeholder
- * argument, so the internal fns' validators never see it. */
+ * takes arguments, validateArgs refused unknown keys already, except a call
+ * of the older catalogue to a FORMERLY_BARE tool. For that call, and for a
+ * tool that takes none, this is what drops whatever it was sent, such as a
+ * placeholder argument, so the internal fns' validators never see it. */
 function pickArgs(tool: ToolDef, raw: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   if (typeof raw !== 'object' || raw === null) return out
@@ -1636,12 +1795,37 @@ export const getMe = internalQuery({
   },
 })
 
-/* list_teams runs model/teams.ts teamsJson, shared with REST's GET /v1/teams. */
+/* The paging arguments of MCP's lists in name order (shared.ts
+ * namedPaging), as the tool schemas publish them. */
+const vNamedPaging = {
+  search: v.optional(v.string()),
+  limit: v.optional(v.number()),
+  offset: v.optional(v.number()),
+  cursor: v.optional(v.string()),
+}
+
+/* list_teams runs model/teams.ts teamPage, shared with REST's GET /v1/teams.
+ * The answer's cursor comes first, so a truncated tool result still shows
+ * it. */
 export const listTeams = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, { callerId, access }): Promise<string> => {
-    const me = await asMachineCaller(ctx, callerId, access)
-    return pretty(await teamsJson(ctx, me))
+  args: { callerId: v.string(), access: vCredentialAccess, ...vNamedPaging },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    return pretty(await teamPage(ctx, me, namedPaging(LIMITS.listTeams, 'teams', a)))
+  },
+})
+
+/* list_team_members runs model/teams.ts memberPage, shared with REST's
+ * GET /v1/teams/{id}/members, for a team of the caller's organization by
+ * uuid, checked after the paging, as on REST. */
+export const listTeamMembers = internalQuery({
+  args: { callerId: v.string(), access: vCredentialAccess, team_id: v.string(), ...vNamedPaging },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = namedPaging(LIMITS.listTeamMembers, 'team members', a)
+    const team = await orgTeam(ctx, me, a.team_id)
+    if (team === null) throw mcpTeamMissing(a.team_id)
+    return pretty(await memberPage(ctx, me, team, paging))
   },
 })
 
@@ -1659,11 +1843,13 @@ export const listProjects = internalQuery({
   },
 })
 
+/* list_users runs lib/core.ts userPage, shared with REST's GET /v1/users,
+ * the cursor first. */
 export const listUsers = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, { callerId, access }) => {
-    const me = await asMachineCaller(ctx, callerId, access)
-    return pretty((await listUsersCore(ctx, me)).map(userJson))
+  args: { callerId: v.string(), access: vCredentialAccess, ...vNamedPaging },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    return pretty(await userPage(ctx, me, namedPaging(LIMITS.listUsers, 'users', a)))
   },
 })
 
@@ -2176,13 +2362,14 @@ export const setTaskLink = internalMutation({
   },
 })
 
-/** list_labels answers the organization's labels ordered by name, the same
- * rows as REST's GET /v1/labels (model/labels.ts listLabelsCore). */
+/** list_labels answers one page of the organization's labels in name
+ * order, the same pages as REST's GET /v1/labels (model/labels.ts
+ * labelPage), the cursor first. */
 export const listLabels = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess },
-  handler: async (ctx, { callerId, access }) => {
-    const me = await asMachineCaller(ctx, callerId, access)
-    return pretty((await listLabelsCore(ctx, me.org_id)).map(labelJson))
+  args: { callerId: v.string(), access: vCredentialAccess, ...vNamedPaging },
+  handler: async (ctx, a): Promise<string> => {
+    const me = await asMachineCaller(ctx, a.callerId, a.access)
+    return pretty(await labelPage(ctx, me, namedPaging(LIMITS.listLabels, 'labels', a)))
   },
 })
 
