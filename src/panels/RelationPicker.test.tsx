@@ -37,7 +37,7 @@ type Read = {
 }
 
 const AT = '2026-09-14T08:00:00.000Z'
-const TASK = { uuid: 'open-task', org: '' }
+const TASK = { uuid: 'open-task', org: '', project: 'work' }
 
 let container: HTMLDivElement
 let root: Root
@@ -120,6 +120,7 @@ async function load() {
 
 type Options = {
   kind?: RelationKind
+  task?: typeof TASK
   current?: (RelatedTaskVM & { type?: string })[]
   note?: string | null
   toggle?: (...args: unknown[]) => Promise<boolean> | boolean
@@ -135,7 +136,7 @@ async function show(o: Options = {}) {
       <TooltipProvider>
         <RelationPicker
           kind={o.kind ?? 'subtask'}
-          task={TASK}
+          task={o.task ?? TASK}
           anchor={{ x: 100, y: 100 }}
           onDone={vi.fn()}
           placeholder="Add subtasks: ID or title…"
@@ -369,6 +370,21 @@ describe('the relation picker', { timeout: 20_000 }, () => {
     expect(reads[2].args).toMatchObject({ kind: 'link', search: 'rare', cursor: 'all-1' })
     await reads[2].answer(batch([row(70, { title: 'A rare part' })]))
     expect(rowIds()).toEqual(['task-70'])
+  })
+
+  it('reads the list again from its start once the task moves to another project', async () => {
+    await load()
+    await show({ kind: 'link' })
+    await reads[0].answer(batch([row(1)], 'cursor-1'))
+    expect(rowIds()).toEqual(['task-1'])
+    // the server refuses a cursor read before the move, so the list starts
+    // again rather than asking with it
+    await show({ kind: 'link', task: { ...TASK, project: 'bench' } })
+    expect(reads).toHaveLength(2)
+    expect(reads[1].args).toEqual({ org_id: TASK.org, issue_id: TASK.uuid, kind: 'link' })
+    expect(state()).toBe('loading')
+    await reads[1].answer(batch([row(2)]))
+    expect(rowIds()).toEqual(['task-2'])
   })
 
   it('shows the search limit’s sentence and reads nothing for a longer text, and the create rules', async () => {

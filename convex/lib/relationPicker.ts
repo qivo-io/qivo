@@ -36,9 +36,16 @@
  * time and ids of the last tasks the batch looked at. The cursor seals the
  * position with the reader, the opened task, the picker and the search
  * (lib/archiveCursorSeal.ts), so it opens for nothing else. A place names
- * its project by fields that never change, so a project that leaves the
- * scope between batches costs no row, and no row comes twice while the data
- * stays the same. Every task the scan reads is in the reader's working set.
+ * another sub-project or another top-level project by fields that never
+ * change, so a project that leaves the scope between batches costs no row,
+ * and no row comes twice while the data stays the same. The places of the
+ * opened task's own sub-project and its top-level project follow the task,
+ * so the cursor also holds those two projects' ids as its batch read them,
+ * and a batch refuses a cursor once either differs, as after the task moved
+ * to another project, with the cursor's refusal, rather than skip rows and
+ * end the list as complete. The app's list names the task's project, so it
+ * reads the list again from its start once it sees the move. Every task
+ * the scan reads is in the reader's working set.
  *
  * A task matches when every fragment of the search occurs in its ID or its
  * title (lib/search.ts allWordsMatcher), the rule the app's pickers apply.
@@ -406,8 +413,10 @@ type BatchCount = ReturnType<typeof batchCount>
  * is the opened task's sub-project, [1, created, id] another sub-project of
  * its family, [2] its top-level project, [3, created, id, 0, created, id] a
  * sub-project of another top-level project and [3, created, id, 1] that
- * project itself. A place names its project by fields that never change,
- * so it holds while projects come and go. */
+ * project itself. Places [1] and [3] name their projects by fields that
+ * never change, so they hold while projects come and go. Places [0] and [2]
+ * follow the opened task, so a cursor holds the ids they named (Cursor
+ * `home`). */
 type Place = readonly (number | string)[]
 
 /* -1, 0 or 1 as place `a` comes before, at or after `b`, a prefix first. */
@@ -430,11 +439,13 @@ const OTHERS: Place = [3]
  * at the start of that place's project when `time` is null. */
 type Position = { place: Place; time: number | null; ids: string[] }
 
-/** What a cursor carries, where the next batch starts and whether the
+/** What a cursor carries, where the next batch starts, whether the
  * first batch answered a typed task ID's task as its `exact` row, which
- * every later scan then leaves out. Without that row a later scan offers
- * the task where it meets it. */
-type Cursor = { at: Position; typedTaken: boolean }
+ * every later scan then leaves out, and the ids of the opened task's
+ * sub-project and top-level project as its batch read them, which places
+ * [0] and [2] named. Without the `exact` row a later scan offers the task
+ * where it meets it. */
+type Cursor = { at: Position; typedTaken: boolean; home: { project: string; top: string } }
 
 /* The version a cursor carries outside and inside its sealed text. Every
  * sealed cursor shares one key (lib/archiveCursorSeal.ts), so the version
@@ -447,7 +458,8 @@ const CURSOR_VERSION = 'relation-picker-2'
 const CURSOR_MAX = 64 << 10
 
 /** The refusal of a cursor that is not the `next` or `all_projects` of an
- * earlier batch of the same picker, task and search for the same person. */
+ * earlier batch of the same picker, task and search for the same person,
+ * or that such a batch wrote while the task stood in another project. */
 export const RELATION_CURSOR_REFUSAL =
   'cursor must come from an earlier batch of this picker for this task and search'
 
@@ -459,7 +471,16 @@ const scopeKey = (me: Doc<'profiles'>, issueId: string, kind: RelationKind, sear
 /** Cursor `c` as the text of a cursor of the batches of `key`. */
 const cursorOf = async (key: string, c: Cursor): Promise<string> =>
   `${CURSOR_PREFIX}${await sealCursorText(
-    JSON.stringify([CURSOR_VERSION, key, c.at.place, c.at.time, c.at.ids, c.typedTaken]),
+    JSON.stringify([
+      CURSOR_VERSION,
+      key,
+      c.at.place,
+      c.at.time,
+      c.at.ids,
+      c.typedTaken,
+      c.home.project,
+      c.home.top,
+    ]),
   )}`
 
 /** The cursor `text` names for the batches of `key`, or a refusal when it
@@ -475,8 +496,8 @@ async function cursorFrom(text: string, key: string): Promise<Cursor> {
   } catch {
     throw refuse()
   }
-  if (!Array.isArray(body) || body.length !== 6) throw refuse()
-  const [version, from, place, time, ids, typedTaken] = body as unknown[]
+  if (!Array.isArray(body) || body.length !== 8) throw refuse()
+  const [version, from, place, time, ids, typedTaken, project, top] = body as unknown[]
   if (version !== CURSOR_VERSION || from !== key) throw refuse()
   const field = (x: unknown) =>
     typeof x === 'string' || (typeof x === 'number' && Number.isFinite(x))
@@ -487,7 +508,12 @@ async function cursorFrom(text: string, key: string): Promise<Cursor> {
   if (time !== null && at === null) throw refuse()
   if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) throw refuse()
   if (typedTaken !== true && typedTaken !== false) throw refuse()
-  return { at: { place: place as Place, time: at, ids: ids as string[] }, typedTaken }
+  if (typeof project !== 'string' || typeof top !== 'string') throw refuse()
+  return {
+    at: { place: place as Place, time: at, ids: ids as string[] },
+    typedTaken,
+    home: { project, top },
+  }
 }
 
 // --- the opened task and its family ---------------------------------------------
@@ -747,7 +773,9 @@ type Pair = { parent_id?: string; has_hidden_parent: boolean }
  *
  * A search past LIMITS.search is refused with that limit's sentence, and a
  * cursor that is not an earlier batch's of the same reader, task, picker
- * and search with RELATION_CURSOR_REFUSAL, before anything is read.
+ * and search with RELATION_CURSOR_REFUSAL, before anything is read. A
+ * cursor such a batch wrote while the task stood in another project is
+ * refused with the same sentence once the opened task is read.
  * `o.measured` hears the batch's own count once a batch is read, for the
  * measurements at the design size. The query passes none.
  */
@@ -790,6 +818,11 @@ async function batchOf(
   const opened = await openedTask(ctx, guard, seat, issueId)
   if (opened === null) return UNAVAILABLE
   const open = opened.task
+  // places [0] and [2] follow the task, so a cursor its batch wrote while
+  // the task stood elsewhere would skip rows (see the header)
+  const stands = { project: opened.project.id, top: opened.top.id }
+  if (from !== null && (from.home.project !== stands.project || from.home.top !== stands.top))
+    throw badRequest(RELATION_CURSOR_REFUSAL)
   const editsOpen = levelRank(opened.level) >= levelRank('user')
   if (kind !== 'link' && !editsOpen) return { state: 'refused', message: NO_WRITE_ACCESS }
   const { blocked, linked } = await blockOf(ctx, guard, open, kind)
@@ -951,14 +984,14 @@ async function batchOf(
   )
   rows.push(...scan.rows)
   measured?.(count.used)
-  const next = scan.end ? null : await cursorOf(key, { at: scan.at, typedTaken })
+  const next = scan.end ? null : await cursorOf(key, { at: scan.at, typedTaken, home: stands })
   const familyEnd = kind === 'link' && !others && next === null
   const allAt: Position = { place: OTHERS, time: null, ids: [] }
   return {
     state: 'ok',
     rows,
     next,
-    all_projects: familyEnd ? await cursorOf(key, { at: allAt, typedTaken }) : null,
+    all_projects: familyEnd ? await cursorOf(key, { at: allAt, typedTaken, home: stands }) : null,
     stopped: scan.stopped,
     blocked: null,
   }

@@ -893,6 +893,42 @@ describe('order and continuation', () => {
     const third = okOf(await pick(t, f.user, open.id, 'link', { cursor: second.next as string }))
     expect(third.rows.map((r) => r.id)).toEqual([c1?.id, c2?.id])
   })
+
+  it('refuses a cursor read before the opened task moved, so no row is skipped as if the list ended', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const open = await task(t, f, f.sub)
+    const inFw = await plantTasks(t, f.sub, 2)
+    const inPcb = await plantTasks(t, f.sub2, 3)
+    RELATION_PICKER.rows = 3
+    const first = okOf(await pick(t, f.user, open.id, 'link'))
+    // FW's two tasks, then PCB's first: the batch stands inside PCB
+    expect(first.rows.map((r) => r.id)).toEqual([...inFw, inPcb[0]].map((x) => x?.id))
+    const cursor = first.next as string
+    // the same cursor goes on while the task stays, and the family's end
+    // offers Search all your projects
+    const second = okOf(await pick(t, f.user, open.id, 'link', { cursor }))
+    expect(second.rows.map((r) => r.id)).toEqual(inPcb.slice(1).map((x) => x.id))
+    const all = second.all_projects as string
+    expect(all).toEqual(expect.any(String))
+    // someone moves the opened task into PCB, so the cursors' places no
+    // longer name the projects they read: read on, the first would skip
+    // PCB's last tasks and FW and end the list
+    await t.run((ctx) => ctx.db.patch(open._id, { project_id: f.sub2.id }))
+    for (const [why, at] of [
+      ['Load more', cursor],
+      ['Search all your projects', all],
+    ] as const)
+      await expectRefusal(
+        pick(t, f.user, open.id, 'link', { cursor: at }),
+        'bad_request',
+        new RegExp(RELATION_CURSOR_REFUSAL),
+      ).catch((e) => {
+        throw new Error(`${why}: ${String(e)}`)
+      })
+    // the list read again from its start reaches every task, PCB's first
+    expect(await allIds(t, f.user, open.id, 'link')).toEqual([...inPcb, ...inFw].map((x) => x.id))
+  })
 })
 
 describe('the budget', () => {

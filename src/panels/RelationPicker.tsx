@@ -172,7 +172,10 @@ export function RelationPicker({
   linkKind,
 }: {
   kind: RelationKind
-  task: { uuid: string; org: string }
+  /** the window's task, with the project it stands in, which names the
+      list, so a task that moves reads its list again from the start, as
+      the server refuses a cursor read before the move */
+  task: { uuid: string; org: string; project: string }
   anchor: { x: number; y: number }
   onDone: () => void
   placeholder: string
@@ -197,7 +200,7 @@ export function RelationPicker({
   const search = useSettledSearch(text, LIMITS.search)
   const query = search.settled
   const typed = search.typed
-  const listKey = `${task.org}\n${task.uuid}\n${kind}\n${query}`
+  const listKey = `${task.org}\n${task.uuid}\n${task.project}\n${kind}\n${query}`
   const list = usePagedList<RelationCandidates, RelationCandidate>({
     key: listKey,
     source: {

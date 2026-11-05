@@ -135,8 +135,10 @@ loaded into the workspace yet, and finds a task when every word you type
 occurs in its ID or title. The task's current parent, subtasks and links
 show first, checked, so you can take them off. The pickers list the task's
 own sub-project first, then the other sub-projects of its project, each in
-the order its tasks were created. **Linked tasks** stops at the end of the
-task's own project, and **Search all your projects** goes on into your other
+the order its tasks were created. If the task moves to another project
+meanwhile, the picker lists them again from the start. **Linked tasks**
+stops at the end of the task's own project, and
+**Search all your projects** goes on into your other
 projects. A typed task ID, such as QN-12, finds that task first, anywhere
 you could link it. In a large organization a picker can say **Qivo checked
 part of the tasks. Load more continues.**, and **Load more** goes on from
