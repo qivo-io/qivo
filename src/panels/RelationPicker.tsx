@@ -1,7 +1,7 @@
 /* The task window's Parent, Subtasks and Linked tasks pickers. Each reads
    the tasks it offers from the server a batch at a time
    (taskWindow.relationCandidates, through P.relationCandidates), never
-   from the workspace's tasks: the server applies ordinary access, the
+   from the workspace's tasks. The server applies ordinary access, the
    picker's scope, the write's own rules and the search, and answers the
    next 25 tasks of its order, with Load more for the next batch. The rules
    are the other pickers' (the limits plan's picker sections, by the
@@ -9,7 +9,7 @@
 
    - A typed search rests for SEARCH_DELAY_MS and starts a list with one
      read, an empty one at once, through the shared paged list
-     (lib/pagedList.ts, read once): an older text's answer, and any answer
+     (lib/pagedList.ts, read once). An older text's answer, and any answer
      after the picker closed, is dropped, and one read runs at a time.
      Rows clear on a new text, and "Loading tasks…" shows until its answer.
    - A list never says it found nothing or ended before the server said so.
@@ -28,7 +28,7 @@
      keeps what the person now sees, its parent or its link, for the next
      press, also across a new text.
    - Enter picks or creates only when the rows answer the typed text and
-     the list has ended: one row on screen picks it, none creates. A text
+     the list has ended. One row on screen picks it, none creates. A text
      that is exactly one task ID picks the row the server found by its
      number (`exact`), whatever the list's end. An Enter pressed while the
      answer for the typed text is on its way acts once it arrives.
@@ -121,8 +121,8 @@ function blockSentence(kind: RelationKind, block: RelationBlock): string {
 }
 
 /* The batch an answer holds, with Search all your projects as the cursor
-   after the family's end, or null for an answer that lists nothing: a
-   block, unavailable, refused or over budget, which the picker words. */
+   after the family's end. Null for an answer that lists nothing, a block,
+   unavailable, refused or over budget, which the picker words. */
 const batchOf = (answer: RelationCandidates): ListBatch<RelationCandidate> | null =>
   answer.state === 'ok' && answer.blocked === null
     ? { rows: answer.rows, next: answer.next ?? answer.all_projects, stopped: answer.stopped }

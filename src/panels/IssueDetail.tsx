@@ -2512,15 +2512,15 @@ function IssueDetail({
   const noSubtask = it ? subtaskBlock({ ...it, children: P.capInputs(it).children }) : undefined
   const noParent = it ? parentBlock(it) : undefined
   const hasParent = !!it && (!!it.parent || it.hasHiddenParent || !!parentRow)
-  // the per-task cap on links: a full task takes no new link, and the
-  // server's Linked tasks picker says so (convex/lib/relationPicker.ts)
+  // The per-task cap on links. A full task takes no new link, and the
+  // server's Linked tasks picker says so (convex/lib/relationPicker.ts).
   const noLink = it ? linkBlock(P.capInputs(it).links) : undefined
   // The Parent, Subtasks and Linked tasks changes of the window's task take
-  // the window's rule for its fields (canEdit): a held task the person can
-  // edit, or one shown from a current answer that both the answer and the
-  // workspace give them Edit on. A related row's change also reads that
-  // row's level together with the workspace's, so a stale source only
-  // takes a control away, and waits for a current read of the window's
+  // the window's rule for its fields (canEdit). That is a held task the
+  // person can edit, or one shown from a current answer that both the
+  // answer and the workspace give them Edit on. A related row's change also
+  // reads that row's level together with the workspace's, so a stale source
+  // only takes a control away, and waits for a current read of the window's
   // task, as a task shown from the read of its reference takes no change.
   const current = !!held || (!!it && P.editsFromAnswer(it.id))
   const canRelate = canEdit

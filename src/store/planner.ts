@@ -3989,12 +3989,12 @@ function withClockAhead(paint: () => void): number {
   return ahead
 }
 
-/** Test builds only: breaks the layer rules on purpose, so a test sees
-    checkLayers catch it (layerGuard.test.ts). */
 /* In tests, the writes sent with the mark of a write from a server answer
    (WriteAbout.answer), by name, in order, for __layerProbe. */
 const answerMarked: string[] = []
 
+/** Test builds only: breaks the layer rules on purpose, so a test sees
+    checkLayers catch it (layerGuard.test.ts). */
 export const __layerProbe = STRICT_LAYERS
   ? {
       /** The writes sent since the last call with the mark of a write
@@ -6357,13 +6357,13 @@ function mapIssuePatch(patch: IssuePatch, parentRow?: { id: string }): IssueWire
   return db
 }
 /* What a write says when the parent it names is a task Qivo cannot find
-   here: a handle the workspace does not hold, which a picker's row did not
-   name either. It sends nothing, rather than a detach or a top-level task. */
+   here, a handle the workspace does not hold that no picker row named
+   either. It sends nothing, rather than a detach or a top-level task. */
 const PARENT_UNKNOWN = "Couldn't set the parent task, because Qivo cannot find it here."
 
-/** The uuid of the task `parent` names, a handle or a uuid: a task the
-    workspace holds by either, `row`, the task a relation picker showed, by
-    its uuid, or the task the window shows from a current answer
+/** The uuid of the task `parent` names, a handle or a uuid. That is a
+    task the workspace holds by either, `row`, the task a relation picker
+    showed, by its uuid, or the task the window shows from a current answer
     (answerTaskOf). Undefined for anything else, which the write refuses
     (PARENT_UNKNOWN). */
 function parentUuidOf(parent: string, row?: { id: string }): string | undefined {
@@ -6489,9 +6489,9 @@ type UpdateOptions = {
   keepDraft?: (shown: unknown) => boolean
   keepUnsaved?: () => void
   /** for a `parent` the workspace may not hold, the row the Parent picker
-      showed for it (convex/lib/relationPicker.ts RelationCandidate): it
+      showed for it (convex/lib/relationPicker.ts RelationCandidate). It
       names the parent by its uuid, and the window paints its Parent row
-      from it at once */
+      from it at once. */
   parentRow?: RelationCandidate
 }
 
