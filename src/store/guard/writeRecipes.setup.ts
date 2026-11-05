@@ -1365,6 +1365,56 @@ export const recipes: Recipe[] = [
       snap.access = [{ project_id: 'plan', profile_id: ME, level: 'user' }]
     },
   },
+  /* the writes of a project's Settings page, which send what the page
+     showed (store/planner.ts ProjectShown and GrantShown) and paint the
+     workspace where it holds the project */
+  {
+    mutation: 'projects:update',
+    mutator: 'updateProject',
+    what: "a project's delay tracking as its settings page showed it",
+    pause: 'P',
+    act: (P) =>
+      P.updateProject(
+        'plan',
+        { trackDelay: false },
+        { seen: { track_delay: true } },
+        { orgId: ORG },
+      ),
+    truth: (snap) => {
+      snap.projects[0].track_delay = false
+    },
+  },
+  {
+    mutation: 'projects:update',
+    mutator: 'updateProject',
+    what: "a project's lead as its settings page showed it",
+    pause: 'P',
+    act: (P) => P.updateProject('plan', { lead: PAT }, { seen: { lead_id: ME } }, { orgId: ORG }),
+    truth: (snap) => {
+      snap.projects[0].lead_id = PAT
+      snap.access = [{ project_id: 'plan', profile_id: ME, level: 'user' }]
+    },
+  },
+  {
+    mutation: 'projects:setAccess',
+    mutator: 'setProjectAccess',
+    what: "a person's access level as the settings page's list showed it",
+    pause: 'P',
+    act: (P) =>
+      P.setProjectAccess('plan', PAT, 'viewer', { orgId: ORG, level: 'user', leadId: ME }),
+    truth: (snap) => {
+      snap.access[0].level = 'viewer'
+    },
+  },
+  {
+    mutation: 'projects:setAccess',
+    mutator: 'setProjectTeamAccess',
+    what: "a team added through the settings page's picker",
+    pause: 'P',
+    act: (P) => P.setProjectTeamAccess('plan', 'team-b', 'viewer', { orgId: ORG, level: null }),
+    truth: (snap) =>
+      snap.teamAccess.push({ project_id: 'plan', team_id: 'team-b', level: 'viewer' }),
+  },
   {
     mutation: 'projects:archive',
     mutator: 'archiveProject',
@@ -1416,7 +1466,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'projects:removeAccess',
-    mutator: 'removeAtOnce',
+    mutator: 'sendRemoval',
     what: "a person's access removed",
     pause: 'P',
     act: (P) =>
@@ -1426,8 +1476,22 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    mutation: 'projects:removeAccess',
+    mutator: 'sendRemoval',
+    what: "a person's access removed from the settings page, which names its organization",
+    pause: 'P',
+    act: (P) =>
+      P.removeAccess(
+        { kind: 'userGrant', projectId: 'plan', userId: PAT, orgId: ORG },
+        { keep: true },
+      ),
+    truth: (snap) => {
+      snap.access = []
+    },
+  },
+  {
     mutation: 'teams:removeMember',
-    mutator: 'removeAtOnce',
+    mutator: 'sendRemoval',
     what: 'a member leaving a team',
     pause: 'P',
     act: (P) =>
@@ -1565,7 +1629,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'teams:deleteDeep',
-    mutator: 'removeAtOnce',
+    mutator: 'sendRemoval',
     what: 'a deleted team',
     pause: 'P',
     act: (P) => P.removeAccess({ kind: 'deleteTeam', teamId: 'team-b' }, { keep: true }),

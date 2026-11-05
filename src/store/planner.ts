@@ -6151,12 +6151,31 @@ const cleanTitle = (t: unknown) => String(t ?? '').trim()
    a widened enum needs no edit here. */
 /** Access about to be removed: a person's or a team's grant on one project
     (project settings), a member leaving a team, or a team being deleted
-    (Team settings). */
+    (Team settings). A grant's `orgId` is the project's organization as the
+    page that pressed showed it (projectSettings.get), which the removal's
+    reads and write take before the workspace's, so a project the workspace
+    does not hold previews, reassigns and removes; without it the
+    organization comes from the workspace (removalOrg). Build a grant's
+    change with grantRemoval, so a press and its `checking` name it alike. */
 export type AccessRemoval =
-  | { kind: 'userGrant'; projectId: string; userId: string }
-  | { kind: 'teamGrant'; projectId: string; teamId: string }
+  | { kind: 'userGrant'; projectId: string; userId: string; orgId?: string }
+  | { kind: 'teamGrant'; projectId: string; teamId: string; orgId?: string }
   | { kind: 'teamMember'; teamId: string; userId: string }
   | { kind: 'deleteTeam'; teamId: string }
+
+/** The removal of a person's (`user`) or a team's grant `id` on project
+    `projectId` of organization `orgId`, with its keys always in the same
+    order, as useAccessRemoval tells a press apart by the change's JSON. */
+export function grantRemoval(
+  kind: 'team' | 'user',
+  projectId: string,
+  id: string,
+  orgId: string,
+): Extract<AccessRemoval, { kind: 'userGrant' | 'teamGrant' }> {
+  return kind === 'team'
+    ? { kind: 'teamGrant', projectId, teamId: id, orgId }
+    : { kind: 'userGrant', projectId, userId: id, orgId }
+}
 
 /** The server's preview of a removal (accessRemovals.preview,
     convex/model/removalPreview.ts): unavailable, refused or too large to
@@ -6170,6 +6189,14 @@ export type RemovalAnswer = Extract<RemovalPreview, { state: 'ok' }>
 export type ReassignChoices = FunctionReturnType<typeof api.accessRemovals.reassignChoices>
 /** A person the Reassign picker lists. */
 export type ReassignChoice = Extract<ReassignChoices, { state: 'ready' }>['rows'][number]
+/** A project's settings as the server reads them (projectSettings.get). */
+export type ProjectSettingsAnswer = FunctionReturnType<typeof api.projectSettings.get>
+/** One answer of an Add team or user picker (projectSettings.candidates). */
+export type AccessChoices = FunctionReturnType<typeof api.projectSettings.candidates>
+/** One answer of a lead picker (projectSettings.leadCandidates). */
+export type LeadChoices = FunctionReturnType<typeof api.projectSettings.leadCandidates>
+/** The invite form's lookup of an address (projectSettings.inviteTarget). */
+export type InviteLookup = FunctionReturnType<typeof api.projectSettings.inviteTarget>
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -6239,11 +6266,26 @@ function grantsOn(projectId: string): Record<string, GrantLevel> {
   })
   return access
 }
-/* The organization whose project or team a removal changes. */
+/* The organization whose project or team a removal changes: the one the
+   page showed for a grant that names it (AccessRemoval orgId), else the
+   workspace's. */
 const removalOrg = (change: AccessRemoval) =>
   'projectId' in change
-    ? rows.projects.get(change.projectId)?.org_id
+    ? (change.orgId ?? rows.projects.get(change.projectId)?.org_id)
     : rows.teams.get(change.teamId)?.org_id
+
+/* The removals whose write is on its way, by removalKey, for
+   P.removingAccess. */
+const removing = new Set<string>()
+
+/* `change` as one key whatever organization it names, for `removing`. */
+const removalKey = (change: AccessRemoval): string =>
+  JSON.stringify([
+    change.kind,
+    'projectId' in change ? change.projectId : '',
+    'teamId' in change ? change.teamId : '',
+    'userId' in change ? change.userId : '',
+  ])
 /* Removes a person's or a team's grant on one project, a member from a team,
    or a whole team, in one server write that settles the tasks it hides by
    `held` (projects.removeAccess, teams.removeMember, teams.deleteDeep), and
@@ -6254,7 +6296,10 @@ const removalOrg = (change: AccessRemoval) =>
    with the same holder, and for a person's or a team's grant kept as
    Viewers a Viewer grant on its project for each of its people without a
    grant there. A team change paints no Viewer grant; the delivery brings
-   them. Resolves whether the server accepted it. */
+   them. While the write is on its way, P.removingAccess answers true for
+   it, so a page that lists the access from the server's answer, which the
+   paint does not reach, hides the row and shows it again on a refusal.
+   Resolves whether the server accepted it. */
 function removeAtOnce(
   change: AccessRemoval,
   held: 'leave' | 'keep_as_viewer' | { reassign_to: string | null },
@@ -6263,6 +6308,27 @@ function removeAtOnce(
 ): Promise<boolean> {
   const orgId = removalOrg(change)
   if (!orgId) return Promise.resolve(false)
+  const key = removalKey(change)
+  removing.add(key)
+  const sent = sendRemoval(change, held, shown, stays, orgId)
+  emit()
+  // a write's results reach the lists before its answer (lib/liveQueries.ts),
+  // so an accepted removal's row has left them by now
+  return sent.then((removed) => {
+    removing.delete(key)
+    emit()
+    return removed
+  })
+}
+
+/* removeAtOnce's paint and write, for organization `orgId`. */
+function sendRemoval(
+  change: AccessRemoval,
+  held: 'leave' | 'keep_as_viewer' | { reassign_to: string | null },
+  shown: RemovalAnswer | undefined,
+  stays: string,
+  orgId: string,
+): Promise<boolean> {
   // everything the paint needs, worked out now from the answer
   const at = new Date().toISOString()
   const patches =
@@ -7880,6 +7946,17 @@ export type FieldSave = {
   keepUnsaved?: () => void
 }
 
+/** A project as a page that read it from the server showed it
+    (projectSettings.get), for a write the workspace may not hold the
+    project for: its organization. */
+export type ProjectShown = { orgId: string }
+
+/** A grant as a page that read it from the server showed it: the
+    project's organization, the level the grant held there (null for none)
+    and, for a person's, the project's own lead (projects.lead_id, null for
+    none), which the write decides and checks from. */
+export type GrantShown = ProjectShown & { level: GrantLevel | null; leadId: string | null }
+
 /** The send() options of settings field save `save`: its callbacks, and for
     a field that keeps its draft the notice that asks for Keep mine. */
 const fieldSendOptions = (save: FieldSave) => ({
@@ -8381,9 +8458,10 @@ export const PLANNER = {
   usersIn: (orgId: string) => PLANNER.users.filter((u) => u.org === orgId),
   /* The active candidate roster for a project = its owning organization's
      profiles minus anyone switched off. This broad list deliberately does
-     not ask whether they already have project access: project settings uses
-     it to grant that access. `usersIn` stays the whole roster because a name
-     already on a task must keep rendering after the person is switched off. */
+     not ask whether they already have project access, which the task
+     pickers below narrow it by. `usersIn` stays the whole roster because a
+     name already on a task must keep rendering after the person is
+     switched off. */
   usersFor: (projectId: string) =>
     PLANNER.usersIn(PLANNER.orgOf(projectId)).filter((u) => u.active),
   /* Profiles with access to a task's project. The assignee roster below
@@ -8392,9 +8470,11 @@ export const PLANNER = {
     PLANNER.usersIn(PLANNER.orgOf(projectId)).filter(
       (u) => PLANNER.levelOn(projectId, u.id) !== null,
     ),
-  /* …and of those, the ones eligible for a project lead field. A viewer may
-     be given a read grant, so they stay in `usersFor`, but can never lead.
-     Task assignment requires project write access in `issueAssigneesFor`. */
+  /* …and of those, the ones eligible for the New sub-project dialog's Lead
+     field (a project's Settings page reads projectSettings.leadCandidates).
+     A viewer may be given a read grant, so they stay in `usersFor`, but can
+     never lead. Task assignment requires project write access in
+     `issueAssigneesFor`. */
   assigneesFor: (projectId: string) =>
     PLANNER.usersFor(projectId).filter((u) => u.orgRole !== 'viewer'),
   /* Active people and agents need effective Edit or Lead access to hold new
@@ -8589,6 +8669,77 @@ export const PLANNER = {
       })
     } catch (e) {
       console.error('[qivo] reassign choices failed:', e)
+      return null
+    }
+  },
+
+  /** Whether the removal of `change` is on its way to the server, so a
+      page that lists the access from the server's answer hides its row
+      until the answer no longer holds it, and shows it again on a refusal
+      (removeAtOnce). Its organization does not count. */
+  removingAccess: (change: AccessRemoval): boolean => removing.has(removalKey(change)),
+
+  /** One batch of a project's Add team or user picker, or of the New
+      project dialog's without `project_id` (projectSettings.candidates):
+      teams and then people in name order, matching `search`, after
+      `after`, an earlier batch's `next`, or from the start. Read once a
+      batch, never subscribed to; null when the read failed. */
+  accessChoices: async (
+    on: { org_id: string; project_id?: string; lead_id?: string },
+    search: string,
+    after: string | null,
+  ): Promise<AccessChoices | null> => {
+    try {
+      return await convex.query(api.projectSettings.candidates, {
+        ...on,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] access choices failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of a lead picker (projectSettings.leadCandidates): the
+      people a lead write accepts for project `project_id`'s Lead field, a
+      new sub-project under `parent_id` or, with neither, a new top-level
+      project, matching `search`, after `after` or from the start. Read once
+      a batch, never subscribed to; null when the read failed. */
+  leadChoices: async (
+    on: { org_id: string; project_id?: string; parent_id?: string },
+    search: string,
+    after: string | null,
+  ): Promise<LeadChoices | null> => {
+    try {
+      return await convex.query(api.projectSettings.leadCandidates, {
+        ...on,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] lead choices failed:', e)
+      return null
+    }
+  },
+
+  /** The seat `email` names in organization `orgId` and its grant on
+      project `projectId` (projectSettings.inviteTarget), which the invite
+      form sends as its `expected`. Read once, at the press; null when the
+      read failed. */
+  projectInviteTarget: async (
+    orgId: string,
+    projectId: string,
+    email: string,
+  ): Promise<InviteLookup | null> => {
+    try {
+      return await convex.query(api.projectSettings.inviteTarget, {
+        org_id: orgId,
+        project_id: projectId,
+        email: email.trim(),
+      })
+    } catch (e) {
+      console.error('[qivo] invite lookup failed:', e)
       return null
     }
   },
@@ -8883,24 +9034,35 @@ export const PLANNER = {
      sentence (capitalized, like createOrg's). The new grant/seat arrives
      with the snapshot delivery — no refetch. Null on a refusal; otherwise
      `emailed` is the new seat that an invitation email goes to, or null when
-     the server found a seat for the address and mailed nothing. */
+     the server found a seat for the address and mailed nothing. `shown`
+     is a page's lookup of the address on the server
+     (P.projectInviteTarget): the project's organization and the level the
+     address's seat holds there, null for none or no seat, which always goes
+     out as `expected`, so a seat or grant made since refuses. */
   inviteToProject: async (
     metaId: string,
     email: string,
     level = 'user',
+    shown?: Omit<GrantShown, 'leadId'>,
   ): Promise<{ emailed: string | null } | null> => {
-    const org = orgOfProject(metaId)
+    const org = shown?.orgId ?? orgOfProject(metaId)
     if (!org) return null
     // a seat the address already names: the level it holds on screen, so a
     // change made meanwhile is not overwritten unseen. Found by the stored
     // form, as the server finds it, so a seat whose address predates the
     // address rule is found too.
     const address = asciiEmail(email)
-    const seat = address
-      ? [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
-      : undefined
+    const seat =
+      address && !shown
+        ? [...rows.profiles.values()].find((p) => p.org_id === org && p.email === address)
+        : undefined
     const held =
       seat && rows.access.find((a) => a.project_id === metaId && a.profile_id === seat.id)
+    const expected = shown
+      ? { expected: { level: shown.level } }
+      : seat
+        ? { expected: { level: held?.level ?? null } }
+        : {}
     let invited: { id: string; emailed: boolean }
     try {
       invited = await sendAwaited(
@@ -8910,7 +9072,7 @@ export const PLANNER = {
           project_id: metaId,
           email: email.trim(),
           level,
-          ...(seat ? { expected: { level: held?.level ?? null } } : {}),
+          ...expected,
         },
         'none',
       )
@@ -12200,10 +12362,20 @@ export const PLANNER = {
      accepts it or nothing needed sending, false when it is missing here or
      refused by the server (toasted). Access changes one grant at a time
      (setProjectAccess, setProjectTeamAccess, removeAccess). `save` is a
-     settings field's draft (FieldSave). */
-  updateProject: (id: string, patch: ProjectPatch, save: FieldSave = {}): Promise<boolean> => {
+     settings field's draft (FieldSave). `shown` is the project as a page
+     that read it from the server showed it (ProjectShown): the write then
+     goes to its organization with `expected` from `save.seen`, which must
+     hold every field the patch changes, and paints only where the
+     workspace holds the project. Without it a project the workspace does
+     not hold is missing here. */
+  updateProject: (
+    id: string,
+    patch: ProjectPatch,
+    save: FieldSave = {},
+    shown?: ProjectShown,
+  ): Promise<boolean> => {
     const row = rows.projects.get(id)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
+    if ((!row && !shown) || refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.projectName, patch.name ?? ''))
       return Promise.resolve(false)
     if ('description' in patch && refuseOver(LIMITS.projectDescription, patch.description ?? ''))
@@ -12240,10 +12412,18 @@ export const PLANNER = {
         Object.assign(live, db)
       },
     }
-    return send(api.projects.update, { org_id: row.org_id, id, patch: wire }, view, {
-      over: overOf('projects', row, Object.keys(db), save.seen),
-      ...fieldSendOptions(save),
-    })
+    const fields = Object.keys(db)
+    // a project the workspace does not hold paints nothing, and checks the
+    // values the page showed
+    const over = row
+      ? overOf('projects', row, fields, save.seen)
+      : overOf('projects', { id }, fields, save.seen)
+    return send(
+      api.projects.update,
+      { org_id: shown?.orgId ?? row?.org_id ?? '', id, patch: wire },
+      row ? view : {},
+      { over, ...fieldSendOptions(save) },
+    )
   },
 
   /* Archive a project (0106). The row stays — that is the difference between
@@ -12251,8 +12431,14 @@ export const PLANNER = {
      snapshot on the spot. The server cascade carries the active subs on the
      parent's own stamp; painted here on one timestamp so the optimistic
      snapshot and the delivery agree about which of them came along. */
-  archiveProject: (id: string) => {
+  archiveProject: (id: string, shown?: ProjectShown) => {
     const row = rows.projects.get(id)
+    // a project the workspace does not hold goes to the organization the
+    // page showed, and paints nothing
+    if (!row && shown && !refusePausedEdit()) {
+      void send(api.projects.archive, { org_id: shown.orgId, id }, {})
+      return
+    }
     if (!row || row.archived_at || refusePausedEdit()) return
     const stamp = new Date().toISOString()
     const view: View = {
@@ -12312,12 +12498,16 @@ export const PLANNER = {
       of the whole tree, archived ones included (the server stops counting
       past 5,000 and says so with `more`). Asked only when the window opens,
       because only the project's lead may read it. Null when refused or
-      unreachable. */
-  projectRemovalSummary: async (id: string): Promise<ProjectRemovalSummary | null> => {
-    const row = rows.projects.get(id)
-    if (!row) return null
+      unreachable. `shown` names the organization of a project the
+      workspace does not hold (ProjectShown). */
+  projectRemovalSummary: async (
+    id: string,
+    shown?: ProjectShown,
+  ): Promise<ProjectRemovalSummary | null> => {
+    const org = rows.projects.get(id)?.org_id ?? shown?.orgId
+    if (!org) return null
     try {
-      return await convex.query(api.projects.removalSummary, { org_id: row.org_id, id })
+      return await convex.query(api.projects.removalSummary, { org_id: org, id })
     } catch (e) {
       console.error('[qivo] removal summary failed:', e)
       return null
@@ -12363,18 +12553,21 @@ export const PLANNER = {
      items. Awaited, as the Archive or delete window asks. Nothing changes
      here until the server accepts, so a refusal (toasted) leaves the project
      and the window in place. `reason` is shown in Deleted items. Resolves
-     whether the server deleted it. */
-  removeProject: (id: string, reason?: string): Promise<boolean> => {
+     whether the server deleted it. `shown` names the organization of a
+     project the workspace does not hold (ProjectShown), which then paints
+     nothing. */
+  removeProject: (id: string, reason?: string, shown?: ProjectShown): Promise<boolean> => {
     const row = rows.projects.get(id)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
+    const org = row?.org_id ?? shown?.orgId
+    if (!org || refusePausedEdit()) return Promise.resolve(false)
     const text = (reason || '').trim()
     const epoch = storeEpoch
     return sendAwaited(
       api.projects.deleteDeep,
-      { org_id: row.org_id, id, ...(text ? { reason: text } : {}) },
+      { org_id: org, id, ...(text ? { reason: text } : {}) },
       'none',
       // the delivery may already hold the result; nothing paints then
-      { keep: () => ({ workspace: () => dropProjectRows(id) }) },
+      row ? { keep: () => ({ workspace: () => dropProjectRows(id) }) } : {},
     ).then(
       () => true,
       (error) => {
@@ -12985,21 +13178,35 @@ export const PLANNER = {
      lead. Any other level is one grant, sent alone (projects.setAccess), so
      a page loaded before someone else changed access cannot undo that
      change. Removing access goes through the removal window
-     (PLANNER.removeAccess). */
-  setProjectAccess: (metaId: string, userId: string, role: AccessLevel): Promise<boolean> => {
+     (PLANNER.removeAccess). `shown` is what a page that read the project
+     from the server showed (GrantShown): the person's grant level there
+     and the project's own lead. The write then decides and checks from it,
+     never from the workspace, goes to its organization, and paints only
+     where the workspace holds the project. */
+  setProjectAccess: (
+    metaId: string,
+    userId: string,
+    role: AccessLevel,
+    shown?: GrantShown,
+  ): Promise<boolean> => {
     const m = PLANNER.projects.find((p) => p.id === metaId)
     const row = rows.projects.get(metaId)
-    if (!m || !row) return Promise.resolve(false)
+    if (!shown && (!m || !row)) return Promise.resolve(false)
+    const lead = shown ? shown.leadId : (m?.lead ?? null)
     // a handover: the server keeps the outgoing lead as User
     // (convex/lib/projectGrants.ts grantsAfterHandover)
     if (role === 'lead') {
-      if (m.lead === userId) return Promise.resolve(true)
-      return PLANNER.updateProject(metaId, { lead: userId })
+      if (lead === userId) return Promise.resolve(true)
+      return shown
+        ? PLANNER.updateProject(metaId, { lead: userId }, { seen: { lead_id: lead } }, shown)
+        : PLANNER.updateProject(metaId, { lead: userId })
     }
     // the lead's access is the Lead field: hand it over first
-    if (m.lead === userId || refusePausedEdit()) return Promise.resolve(false)
-    const held = rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)
-    if (held?.level === role) return Promise.resolve(true)
+    if (lead === userId || refusePausedEdit()) return Promise.resolve(false)
+    const level = shown
+      ? shown.level
+      : (rows.access.find((a) => a.project_id === metaId && a.profile_id === userId)?.level ?? null)
+    if (level === role) return Promise.resolve(true)
     const view: View = {
       workspace: () => {
         if (!rows.projects.has(metaId) || !rows.profiles.has(userId)) return
@@ -13012,26 +13219,31 @@ export const PLANNER = {
     return send(
       api.projects.setAccess,
       {
-        org_id: row.org_id,
+        org_id: shown?.orgId ?? row?.org_id ?? '',
         id: metaId,
         user_id: userId,
         level: role,
-        expected: { level: held?.level ?? null },
+        expected: { level },
       },
-      view,
+      row ? view : {},
     )
   },
 
-  /* One team's level on a project, sent alone like setProjectAccess. */
+  /* One team's level on a project, sent alone like setProjectAccess, with
+     `shown` as setProjectAccess takes it (its lead unread). */
   setProjectTeamAccess: (
     metaId: string,
     teamId: string,
     role: TeamAccessLevel,
+    shown?: Omit<GrantShown, 'leadId'>,
   ): Promise<boolean> => {
     const row = rows.projects.get(metaId)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
-    const held = rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)
-    if (held?.level === role) return Promise.resolve(true)
+    if ((!row && !shown) || refusePausedEdit()) return Promise.resolve(false)
+    const level = shown
+      ? shown.level
+      : (rows.teamAccess.find((a) => a.project_id === metaId && a.team_id === teamId)?.level ??
+        null)
+    if (level === role) return Promise.resolve(true)
     const view: View = {
       workspace: () => {
         if (!rows.projects.has(metaId) || !rows.teams.has(teamId)) return
@@ -13043,13 +13255,13 @@ export const PLANNER = {
     return send(
       api.projects.setAccess,
       {
-        org_id: row.org_id,
+        org_id: shown?.orgId ?? row?.org_id ?? '',
         id: metaId,
         team_id: teamId,
         level: role,
-        expected: { level: held?.level ?? null },
+        expected: { level },
       },
-      view,
+      row ? view : {},
     )
   },
 
