@@ -172,7 +172,8 @@ const projectsTable = defineTable({
   // Name search of main Search (search.ts, its seats searched whole),
   // Settings and Archived projects, within one organization and archive
   // state. The directory's name search reads the person's own reach and
-  // favorite rows in name order instead (model/projectNavReads.ts
+  // favorite rows, and the live sub-projects of the top-level projects they
+  // hold a source on, in name order instead (model/projectNavReads.ts
   // navSearchOf).
   .searchIndex('search_name', { searchField: 'name', filterFields: ['org_id', 'archive_state'] })
 
@@ -1423,10 +1424,11 @@ export default defineSchema({
   project_team_access: projectTeamAccessTable,
 
   // Which projects each seat and each team reaches through ordinary access,
-  // so a person's projects page and are searched by name across their seats
-  // and teams with reads bounded by the page, not by the grants
-  // (model/projectNav.ts writes them, model/projectNavReads.ts pages and
-  // searches them).
+  // so a person's projects page in name order across their seats and teams
+  // with reads bounded by the page, not by the grants, and the directory's
+  // name search reads the seats' and teams' live root rows whole, up to
+  // model/projectNavReads.ts PROJECT_NAV.rootRows (model/projectNav.ts
+  // writes them, model/projectNavReads.ts pages and searches them).
   // A row is a presence fact that finds candidates and grants nothing:
   // every permission check keeps using lib/access.ts, and a reader checks
   // the live project of each row it returns. Admin status alone writes no

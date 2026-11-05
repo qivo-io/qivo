@@ -18,9 +18,10 @@
  * child reach row of the seat or of one of its teams under it names a live
  * sub-project the seat sees (visible) (seatSight shows). A project the seat
  * sees only through an archived sub-project, which lib/access.ts counts for
- * navigation, has nothing live to lead to and stays out of all three reads
- * (coordinator, 4 November 2026). A sub-project shows when it and its
- * parent are live and the seat sees it, which shows its parent too.
+ * navigation, has nothing live to lead to and stays out of every read, the
+ * search included (coordinator, 4 November 2026). A sub-project shows when
+ * it and its parent are live and the seat sees it, which shows its parent
+ * too.
  *
  * Where candidates come from. The page reads each seat's live favorites
  * (project_favorites by_profile_list) and the live root reach rows of the
@@ -796,13 +797,13 @@ async function starred(
 
 /**
  * The project root reach row `row` of one of `sight`'s grantees names, when
- * it belongs in the page's list of the rest, else null: the row holds its
- * project's copies (organization, a root row of the project itself, its
- * name key, live), the project is a live top-level meta of the seat's
- * organization that the seat sees for navigation (seatSight shows), and it
- * is not one of the seat's favorites by the reader rule, which list it
- * first. Rejects with accessUnchecked where a check stopped. The search
- * stage asks it too.
+ * it belongs in the list of the rest of the page or of the search, else
+ * null: the row holds its project's copies (organization, a root row of
+ * the project itself, its name key, live), the project is a live top-level
+ * meta of the seat's organization that the seat sees for navigation
+ * (seatSight shows), and it is not one of the seat's favorites by the
+ * reader rule, which list it first. Rejects with accessUnchecked where a
+ * check stopped. navSearchOf asks it too.
  */
 export async function restShows(
   ctx: QueryCtx,

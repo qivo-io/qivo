@@ -799,6 +799,7 @@ type Held = { grantees: Grantee[]; onRoot: boolean }
  * and, without nav_at, a top-level project's sub-projects (projectLevelsOf
  * navigates). Main Search's seats searched whole ask it (lib/mainSearch.ts).
  * The directory's name search finds its candidates in the person's own rows
+ * and the live sub-projects of the top-level projects they hold a source on
  * instead (model/projectNavReads.ts navSearchOf). Each project is judged
  * once.
  *
