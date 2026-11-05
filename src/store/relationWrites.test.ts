@@ -319,15 +319,55 @@ describe('the Subtasks writes', { timeout: 30_000 }, () => {
     expect(P.sections?.subtasks.rows).toEqual([])
   })
 
-  it('sends a held child through the held path, with the workspace’s values', async () => {
+  it('sends a held child through the held path with the parent pair the picker showed, also once it became held with another parent', async () => {
     await load()
-    void P.setSubtaskParent('QN-1', { uuid: 'task-b', parent: 'stale', hiddenParent: true }, true)
+    void P.setSubtaskParent('QN-1', { uuid: 'task-b', parent: null, hiddenParent: false }, true)
     expect(last('issues:update').args).toMatchObject({
       id: 'task-b',
       patch: { parent_id: 'task-a' },
       expected: { parent_id: null, has_hidden_parent: false },
     })
     expect(marks()).toEqual([])
+    // the picker offered QN-45 under OLD_PARENT; someone moved it under
+    // QN-2 and the workspace holds it since, so its pick takes the held
+    // path, which sends what the picker showed and is refused
+    await load((next) => next.issues.push(task(PICK, 45, { parent_id: 'task-b' })))
+    const row = pickerRow(task(PICK, 45), { parent_id: OLD_PARENT })
+    void P.setSubtaskParent(
+      'QN-1',
+      { uuid: PICK, row, parent: OLD_PARENT, hiddenParent: false },
+      true,
+    )
+    expect(last('issues:update').args).toMatchObject({
+      id: PICK,
+      patch: { parent_id: 'task-a' },
+      expected: { parent_id: OLD_PARENT, has_hidden_parent: false },
+    })
+    // and a parent the person could not see, as they saw it
+    await load((next) => next.issues.push(task(PICK, 45, { parent_id: 'task-b' })))
+    const hidden = pickerRow(task(PICK, 45), { has_hidden_parent: true })
+    void P.setSubtaskParent(
+      'QN-1',
+      { uuid: PICK, row: hidden, parent: null, hiddenParent: true },
+      true,
+    )
+    expect(last('issues:update').args.expected).toEqual({
+      parent_id: null,
+      has_hidden_parent: true,
+    })
+  })
+
+  it('takes a held subtask off with the open task the window showed as its expected parent, not the workspace’s', async () => {
+    // the window of QN-1 still lists QN-45, which the workspace already
+    // holds under QN-2
+    await load((next) => next.issues.push(task(PICK, 45, { parent_id: 'task-b' })))
+    void P.setSubtaskParent('QN-1', { uuid: PICK, parent: 'task-a', hiddenParent: false }, false)
+    expect(last('issues:update').args).toEqual({
+      org_id: ORG,
+      id: PICK,
+      patch: { parent_id: null },
+      expected: { parent_id: 'task-a', has_hidden_parent: false },
+    })
   })
 
   it('creates a subtask under a task the window shows from its answer, and refuses a parent it cannot resolve', async () => {
@@ -404,7 +444,7 @@ describe('the Linked tasks writes', { timeout: 30_000 }, () => {
     expect(toasts()).toEqual([linkBlock(ends)])
   })
 
-  it('removes a link with the kind the window showed as expected, and two held tasks through the held path', async () => {
+  it('removes a link with the kind the window showed as expected, also between two held tasks whose link changed since', async () => {
     await load()
     await openFar()
     void P.unlinkTasks(H, { uuid: PICK }, 'blocked_by')
@@ -426,13 +466,18 @@ describe('the Linked tasks writes', { timeout: 30_000 }, () => {
         created_at: AT,
       }),
     )
+    // the window showed the two held tasks as related; the workspace holds
+    // a blocks link by now, which the removal must not take unseen
     void P.unlinkTasks('QN-1', { uuid: 'task-b' }, 'relates')
-    expect(last('issues:removeLink').args).toMatchObject({
+    expect(last('issues:removeLink').args).toEqual({
+      org_id: ORG,
       a: 'task-a',
       b: 'task-b',
-      expected: { kind: 'blocked_by' },
+      expected: { kind: 'relates' },
     })
     expect(marks()).toEqual([])
+    // the paint takes the workspace's link off at once
+    expect(P.issueById['QN-1'].links ?? []).toEqual([])
   })
 
   it('creates a linked task from the answer, painting the new task and no link', async () => {

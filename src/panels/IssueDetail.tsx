@@ -2529,12 +2529,14 @@ function IssueDetail({
   // a link needs Edit on either task (convex/model/issues.ts linkAccess),
   // so someone who only views this task links it to a task they can edit
   const canLinkAny = !!it && current && !archived && (canRelate || P.editsSomeProject(it.org))
+  // A row's removal sends what its list showed as the expected values (a
+  // link's kind, a subtask's parent), so it waits while that list failed
+  // or reads again.
+  const waits = (section: SectionVM<unknown>) =>
+    section.state === 'failed' || section.state === 'retrying'
   const canUnlink = (row: RelatedTaskVM) =>
-    current &&
-    linked.state !== 'failed' &&
-    linked.state !== 'retrying' &&
-    (canRelate || rowEditor(row))
-  const canDetach = (row: RelatedTaskVM) => current && rowEditor(row)
+    current && !waits(linked) && (canRelate || rowEditor(row))
+  const canDetach = (row: RelatedTaskVM) => current && !waits(subtasks) && rowEditor(row)
   // the removals on their way of rows the workspace does not hold, which
   // stay listed until their answer drops them
   const [removing, setRemoving] = useStateID<ReadonlySet<string>>(new Set())
@@ -4273,7 +4275,11 @@ function IssueDetail({
                                           ),
                                         ),
                                       disabled: !canDetach(row),
-                                      hint: current ? undefined : roTip,
+                                      hint: current
+                                        ? waits(subtasks)
+                                          ? WAITS_FOR_CHECK
+                                          : undefined
+                                        : roTip,
                                       busy: removing.has(row.uuid),
                                     }}
                                   />
@@ -4328,7 +4334,7 @@ function IssueDetail({
                                         ),
                                       disabled: !canUnlink(row),
                                       hint: current
-                                        ? linked.state === 'failed' || linked.state === 'retrying'
+                                        ? waits(linked)
                                           ? WAITS_FOR_CHECK
                                           : undefined
                                         : roTip,

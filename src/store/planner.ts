@@ -6486,6 +6486,10 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     refusal (SendOptions keepDraft and keepUnsaved). */
 type UpdateOptions = {
   seen?: Partial<Row<'issues'>>
+  /** with a `parent_id` in `seen`, whether the row the person saw had a
+      parent they cannot see, in place of the workspace's, so the write's
+      expected parent pair is the one they saw (P.setSubtaskParent) */
+  hiddenParent?: boolean
   keepDraft?: (shown: unknown) => boolean
   keepUnsaved?: () => void
   /** for a `parent` the workspace may not hold, the row the Parent picker
@@ -9675,6 +9679,7 @@ export const PLANNER = {
     const newParent = parentUuid ?? undefined
     const prevDesc = String(row.description || '') // pre-patch, for the image paint below
     const seenRow: Record<string, unknown> = { ...row, ...opts.seen }
+    const hiddenSeen = opts.hiddenParent ?? rows.hiddenParentTasks.has(uuid)
     const wire = mapIssuePatch(patch, opts.parentRow)
     if (!wire) {
       toast(PARENT_UNKNOWN, 'error')
@@ -9693,8 +9698,7 @@ export const PLANNER = {
           : key === 'description'
             ? (value || null) === (shown || null)
             : // a detach from a parent the person cannot see is a change
-              (key !== 'parent_id' || !rows.hiddenParentTasks.has(uuid)) &&
-              (value ?? null) === (shown ?? null)
+              (key !== 'parent_id' || !hiddenSeen) && (value ?? null) === (shown ?? null)
       if (same) delete wire[key]
     }
     if (!Object.keys(wire).length) return Promise.resolve(true)
@@ -9733,7 +9737,10 @@ export const PLANNER = {
     // takes the ordinary write like any other field, so a saved one ends
     // the history (isTaskContentWrite).
     const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
-    const over = overOf('issues', row, Object.keys(wire), opts.seen)
+    const over: Over = {
+      ...overOf('issues', row, Object.keys(wire), opts.seen),
+      ...(opts.hiddenParent === undefined ? {} : { hiddenParent: opts.hiddenParent }),
+    }
     const saved =
       (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||
       send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
@@ -10441,13 +10448,17 @@ export const PLANNER = {
       or takes it off `open`, for a pick in the Subtasks picker and a
       Subtasks row's ×. `open` is the window's handle of its task, held or
       shown from a current answer; for any other it sends nothing and says
-      why (P.refuseStaleEdit). A child the workspace holds goes through
-      P.updateIssue. Any other sends issues.update from what the window
-      showed of it, its parent pair as the expected values, marked as from
-      an answer; it paints the window's Subtasks list (subtaskListPaint)
-      and the views' copies of the child, and no workspace row but the
-      hours a held parent loses. Resolves whether the server accepted it,
-      false when refused here or there, with a toast that says why. */
+      why (P.refuseStaleEdit). Either way the write's expected values are
+      the child's parent pair as the window showed it (`child.parent` and
+      `child.hiddenParent`), so a change someone made meanwhile is refused
+      rather than overwritten, also once the workspace holds the child
+      with another parent. A child the workspace holds goes through
+      P.updateIssue with that pair. Any other sends issues.update from what
+      the window showed of it, marked as from an answer; it paints the
+      window's Subtasks list (subtaskListPaint) and the views' copies of
+      the child, and no workspace row but the hours a held parent loses.
+      Resolves whether the server accepted it, false when refused here or
+      there, with a toast that says why. */
   setSubtaskParent: (open: string, child: SubtaskEnd, on: boolean): Promise<boolean> => {
     if (refusePausedEdit()) return Promise.resolve(false)
     const heldOpen = PLANNER.issueById[open]
@@ -10460,7 +10471,11 @@ export const PLANNER = {
     }
     const handle = uuidToKey.get(child.uuid)
     if (handle !== undefined && rows.issues.has(child.uuid))
-      return PLANNER.updateIssue(handle, { parent: on ? openUuid : null })
+      return PLANNER.updateIssue(
+        handle,
+        { parent: on ? openUuid : null },
+        { seen: { parent_id: child.parent ?? undefined }, hiddenParent: child.hiddenParent },
+      )
     const parentId = on ? openUuid : null
     if (child.parent === parentId && !child.hiddenParent) return Promise.resolve(true)
     if (on && !child.row) return Promise.resolve(false)
@@ -10544,12 +10559,11 @@ export const PLANNER = {
       for a Linked tasks row's × and a pick of a linked task in the
       picker, with `shownKind`, the relation the window showed as seen from
       `open`, as the one expected, so a link someone changed meanwhile is
-      refused rather than removed unseen. A link row the workspace holds
-      goes through P.removeLink, whose kind is the one shown. Any other
-      link, as one only the links answer holds, sends `shownKind`, is
-      marked as from an answer unless the workspace holds both tasks, and
-      paints the workspace's link rows only where it holds both tasks.
-      Resolves whether the server accepted it. */
+      refused rather than removed unseen, also where the workspace holds
+      the link with another kind by now. It is marked as from an answer
+      unless the workspace holds both tasks, and paints the workspace's
+      link rows only where it holds both tasks. Resolves whether the
+      server accepted it. */
   unlinkTasks: (open: string, other: { uuid: string }, shownKind: string): Promise<boolean> => {
     if (refusePausedEdit()) return Promise.resolve(false)
     const heldOpen = PLANNER.issueById[open]
@@ -10560,13 +10574,9 @@ export const PLANNER = {
     }
     const a = it.uuid
     const b = other.uuid
-    const otherHandle = uuidToKey.get(b)
-    const bothHeld = !!heldOpen && otherHandle !== undefined && rows.issues.has(b)
+    const bothHeld = !!heldOpen && uuidToKey.get(b) !== undefined && rows.issues.has(b)
     const pair = (l: Row<'issue_links'>) =>
       (l.source_id === a && l.target_id === b) || (l.source_id === b && l.target_id === a)
-    // the workspace's own link row, whose kind is the one the row shows
-    if (bothHeld && rows.links.keysWhere(pair).length > 0)
-      return PLANNER.removeLink(open, otherHandle)
     const kind = shownKind === 'blocks' || shownKind === 'blocked_by' ? shownKind : 'relates'
     const view: View = {
       workspace: () => {

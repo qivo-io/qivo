@@ -638,6 +638,21 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(await hintOf(remove())).toBe('Available once Qivo can check this task for changes')
   })
 
+  it('keeps a subtask’s × waiting while the Subtasks list failed, as its expected parent comes from that list', async () => {
+    await load()
+    await openTask()
+    await answerAll()
+    const remove = () =>
+      section('subtasks').querySelector<HTMLButtonElement>(
+        '[data-related-task="QN-28"] .task-related-remove',
+      )
+    expect(remove()?.disabled).toBe(false)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await fail('taskWindow:task')
+    expect(remove()?.disabled).toBe(true)
+    expect(await hintOf(remove())).toBe('Available once Qivo can check this task for changes')
+  })
+
   it('keeps Read-only project access on a held row the person cannot edit', async () => {
     await load()
     await openTask()

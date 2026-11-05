@@ -186,7 +186,10 @@ until you open the task in its own window. On a phone they load when you
 choose **Details**. A file, a subtask and a linked task can be removed
 before every task has loaded. A file's or a linked task's row shows that it
 is being removed until the list no longer holds it, and a subtask leaves
-the list at once. A link you make to a task that has not loaded into the
+the list at once. A removal is checked against the list as it showed, so
+while **Subtasks** or **Linked tasks** could not load its latest list, the
+**×** of its rows waits with **Available once Qivo can check this task for
+changes**. A link you make to a task that has not loaded into the
 workspace yet shows in **Linked tasks** with the list's next answer.
 
 A task you open from these lists, from Search, from a link, a bookmark,
