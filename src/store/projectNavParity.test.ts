@@ -16,19 +16,30 @@
  * applies the admin rule, which gives an organization admin every project,
  * while the reads judge everyone by ordinary access (coordinator, 4
  * November 2026), so Nora and the fixture's admin are held to that rule,
- * and the projects the store shows them beyond it are asserted. */
+ * and the projects the store shows them beyond it are asserted.
+ *
+ * The stand-in the jsdom tests and the browser benchmark answer the four
+ * reads with (store/projectNavStandIn.setup.ts) is held to the real reads
+ * here too, batch by batch, rows and order, for the same people and
+ * shapes, the admins included, since it judges everyone by ordinary access
+ * as the reads do: the page, a batch kept live from the start, each
+ * top-level project's sub-projects, each project resolved by id and a few
+ * by number, the searches, and the server's refusals. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import {
+  BLANK_SEARCH,
+  EMPTY_ORG,
   type NavBatch,
   type NavRefusal,
   navChildrenOf,
   navPageOf,
   navResolveOf,
   navSearchOf,
+  RESOLVE_FORM,
 } from '../../convex/model/projectNavReads'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import {
@@ -52,6 +63,14 @@ import {
 } from '../../convex/tests/projectNav.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import type { Snapshot } from './plannerFixture.setup'
+import {
+  NAV_BLANK_SEARCH,
+  NAV_EMPTY_ORG,
+  NAV_RESOLVE_FORM,
+  type ProjectNavArgs,
+  type ProjectNavRead,
+  projectNavStandIn,
+} from './projectNavStandIn.setup'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -118,6 +137,144 @@ async function rowsOf<R>(read: (after?: string) => Promise<NavBatch<R> | NavRefu
   }
   throw new Error('the list did not end')
 }
+
+/** Every batch's rows of a list from its start, following `next`, without
+ * an empty last batch, which the real reads answer where a batch ends
+ * just before candidates that do not show and the stand-in does not hold. */
+async function batchesOf<R>(read: (after?: string) => Promise<NavBatch<R> | NavRefusal>) {
+  const batches: R[][] = []
+  let after: string | undefined
+  for (let round = 0; round < 60; round++) {
+    const batch = ok(await read(after))
+    batches.push([...batch.rows])
+    if (batch.next === null) return batches.filter((b, i) => b.length > 0 || i === 0)
+    after = batch.next
+  }
+  throw new Error('the list did not end')
+}
+
+/** The first batch's rows kept live from the start to its own end. */
+async function pinnedFirst<R>(read: (a: ProjectNavArgs) => Promise<NavBatch<R> | NavRefusal>) {
+  const first = ok(await read({}))
+  return first.next === null ? first.rows : ok(await read({ through: first.next })).rows
+}
+
+/** The message a refusal carries, or null when `run` does not refuse. */
+async function refusalOf(run: () => unknown): Promise<string | null> {
+  try {
+    await run()
+    return null
+  } catch (e) {
+    return String((e as { data?: { message?: string } }).data?.message ?? e)
+  }
+}
+
+/**
+ * Holds the stand-in to the four real reads for `profile`, whose workspace
+ * it answers from, with `favorites` the projects their seat stars, over
+ * every project of their organization and the search for each of `terms`.
+ */
+async function compareStandIn(
+  t: T,
+  profile: Doc<'profiles'>,
+  label: string,
+  terms: readonly string[],
+  favorites: readonly string[] = [],
+) {
+  const snap = await workspaceOf(as(t, profile))
+  if (snap === null) throw new Error(`no workspace for ${profile.name}`)
+  const seats = new Map([[profile.org_id, profile]])
+  const login = profile.auth_user_id ?? 'auth_nobody'
+  const mine = async (name: ProjectNavRead, args: ProjectNavArgs) =>
+    projectNavStandIn({ ...snap, auth_user_id: login }, name, args, { force: { favorites } })
+  const page = (a: ProjectNavArgs) =>
+    mine('projectNav:page', a) as Promise<NavBatch<unknown> | NavRefusal>
+  expect(await batchesOf((after) => page({ after })), `${label}: stand-in page`).toEqual(
+    await batchesOf((after) => t.run((ctx) => navPageOf(ctx, seats, { after }))),
+  )
+  expect(await pinnedFirst(page), `${label}: stand-in page kept live`).toEqual(
+    await pinnedFirst((a) => t.run((ctx) => navPageOf(ctx, seats, a))),
+  )
+  const projects = await t.run((ctx) =>
+    ctx.db
+      .query('projects')
+      .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
+      .collect(),
+  )
+  for (const p of projects) {
+    expect(
+      await mine('projectNav:resolve', { project_id: p.id }),
+      `${label}: resolve ${p.key}`,
+    ).toEqual(await t.run((ctx) => navResolveOf(ctx, seats, { project_id: p.id })))
+    if (p.parent_id !== undefined) continue
+    const real = await t.run((ctx) => navChildrenOf(ctx, seats, { project_id: p.id }))
+    if (real.state !== 'ok') {
+      expect(await mine('projectNav:children', { project_id: p.id }), label).toEqual(real)
+      continue
+    }
+    const children = (after?: string) =>
+      mine('projectNav:children', { project_id: p.id, after }) as Promise<
+        NavBatch<unknown> | NavRefusal
+      >
+    expect(await batchesOf(children), `${label}: stand-in children of ${p.key}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navChildrenOf(ctx, seats, { project_id: p.id, after })),
+      ),
+    )
+  }
+  for (const p of projects.slice(0, 3))
+    expect(
+      await mine('projectNav:resolve', { org_id: p.org_id, num: p.num }),
+      `${label}: resolve ${p.key} by number`,
+    ).toEqual(await t.run((ctx) => navResolveOf(ctx, seats, { org_id: p.org_id, num: p.num })))
+  for (const term of terms) {
+    const search = (after?: string) =>
+      mine('projectNav:search', { search: term, after }) as Promise<NavBatch<unknown> | NavRefusal>
+    expect(await batchesOf(search), `${label}: stand-in search ${term}`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) => navSearchOf(ctx, login, seats, { search: term, after })),
+      ),
+    )
+    const inOrg = (after?: string) =>
+      mine('projectNav:search', { search: term, org_id: profile.org_id, after }) as Promise<
+        NavBatch<unknown> | NavRefusal
+      >
+    expect(await batchesOf(inOrg), `${label}: stand-in search ${term} in the organization`).toEqual(
+      await batchesOf((after) =>
+        t.run((ctx) =>
+          navSearchOf(ctx, login, seats, { search: term, org_id: profile.org_id, after }),
+        ),
+      ),
+    )
+  }
+  // the server's refusals, with the server's sentences
+  expect(await refusalOf(() => mine('projectNav:search', { search: ' \u0301 ' }))).toBe(
+    BLANK_SEARCH,
+  )
+  expect(await refusalOf(() => mine('projectNav:search', { search: 'a', org_id: '' }))).toBe(
+    EMPTY_ORG,
+  )
+  expect(await refusalOf(() => mine('projectNav:resolve', { num: 2 }))).toBe(RESOLVE_FORM)
+  expect(
+    await refusalOf(() => t.run((ctx) => navSearchOf(ctx, login, seats, { search: ' \u0301 ' }))),
+  ).toBe(BLANK_SEARCH)
+  // a cursor of the page never opens the search
+  const first = ok(await page({}))
+  if (first.next !== null)
+    expect(
+      await refusalOf(() => mine('projectNav:search', { search: 'e', after: first.next ?? '' })),
+    ).not.toBeNull()
+}
+
+describe('the stand-in', () => {
+  it('words its refusals as the server does', () => {
+    expect([NAV_BLANK_SEARCH, NAV_EMPTY_ORG, NAV_RESOLVE_FORM]).toEqual([
+      BLANK_SEARCH,
+      EMPTY_ORG,
+      RESOLVE_FORM,
+    ])
+  })
+})
 
 /**
  * Compares the four reads for `profile` with the store booted from their
@@ -263,6 +420,10 @@ describe('Northstar', () => {
       beyond: 0,
       searchBeyond: 0,
     })
+    const ids = (ps: { id: string }[]) => ps.map((p) => p.id)
+    await compareStandIn(t, leo, 'Leo', NORTHSTAR_TERMS, ids(leos.slice(0, 2)))
+    await compareStandIn(t, ben, 'Ben', NORTHSTAR_TERMS, ids(leos.slice(-1)))
+    await compareStandIn(t, nora, 'Nora', NORTHSTAR_TERMS)
   })
 })
 
@@ -286,6 +447,7 @@ async function compareShape(
   await star(t, subject, f.meta)
   const label = `${role}, ${shape?.[0] ?? 'admin'}`
   const { beyond, searchBeyond } = await compare(t, subject, label, SHAPE_TERMS, role === 'admin')
+  await compareStandIn(t, subject, label, SHAPE_TERMS, [f.meta.id])
   const shown = (await expectedPage(t, [subject])).length
   return { beyond, searchBeyond, shown }
 }
