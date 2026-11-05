@@ -674,9 +674,11 @@ async function roadmapAnswer(
  * connected set of nodes. autoMoves over a part's tasks gives exactly the
  * moves it gives over every task the workspace holds within that part, as
  * parts share no task and the solver's pushes follow only edges. Parts with
- * no selected task are left out, so Auto-move no longer moves tasks with no tie
- * to the selection (an agent decision of 5 November 2026, which the Roadmap
- * view's guide states).
+ * no selected task are left out, so Auto-move no longer moves tasks with no
+ * tie to the selection, an agent decision of 5 November 2026. No guide says
+ * so yet, as the app's Auto-move still runs over every task the workspace
+ * holds. The Roadmap view stage, whose brief carries it, states it in the
+ * Roadmap guide when the view switches to this read.
  *
  * The selected tasks are a project selection's active tasks, every status,
  * or in My view those the person owns by the Reviewer rule, never the
