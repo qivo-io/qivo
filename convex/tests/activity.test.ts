@@ -1456,18 +1456,21 @@ describe("a member's history, checked against canAccessProject on each project i
     expect(await other.rest).toHaveLength(1)
   })
 
-  /* A task in a sub-project of TBED with 600 rows filed under it, a tenth
-   * naming PCB and a twentieth a task in FW, which the member reads
-   * neither of, and a tenth another task of the sub-project, the member
-   * reading it through `share`'s team, and the member's REST page of it
-   * with what it read, beside the newest HISTORY_PAGE_MAX rows the oracle
-   * keeps. */
+  /* A task in a sub-project of TBED with 600 rows filed under it by two
+   * people, a tenth naming PCB and a twentieth a task in FW, which the
+   * member reads neither of, and a tenth another task of the sub-project,
+   * which the member reads through the team share its caller plants, and
+   * the member's REST page of it with what it read, beside the newest
+   * HISTORY_PAGE_MAX rows the oracle keeps. The page reads its rows, and
+   * once a page each project, task and actor they name, never a read a
+   * row. */
   async function designPage(t: T, f: OrgFixture, member: Doc<'profiles'>, sub: Doc<'projects'>) {
     const task = await plantIssue(t, { org_id: f.org.id, project_id: sub.id })
     const sibling = await plantIssue(t, { org_id: f.org.id, project_id: sub.id })
     const firmware = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const planned: Row[] = Array.from({ length: 600 }, (_, i) => ({
       project_id: sub.id,
+      actor_id: i % 3 === 0 ? f.agent.id : f.user.id,
       ...(i % 10 === 0 ? { related_project_id: f.sub2.id } : {}),
       ...(i % 10 === 5 ? { named_task_nums: [sibling.num] } : {}),
       ...(i % 20 === 7 ? { named_task_nums: [firmware.num] } : {}),
@@ -1492,9 +1495,11 @@ describe("a member's history, checked against canAccessProject on each project i
         },
       }
     })
-    expect(page.figures.ranges).toBeLessThan(4096)
-    expect(page.figures.documents).toBeLessThan(32_000)
-    expect(page.figures.mib).toBeLessThan(16)
+    // about 620 documents and 30 to 45 ranges, where a read a row would add
+    // hundreds of each
+    expect(page.figures.ranges).toBeLessThan(128)
+    expect(page.figures.documents).toBeLessThan(1000)
+    expect(page.figures.mib).toBeLessThan(1)
     return { page, expected: kept.slice(-HISTORY_PAGE_MAX), kept }
   }
 
