@@ -165,7 +165,11 @@ the 100 images most recently taken out this way. At a limit the control is
 disabled with a sentence such as **This task already has 20 labels, the most
 a task can have. Remove one first.**,
 and the label picker only takes labels off. A file you drop or paste on a
-full task is refused before it uploads. A link also needs room on the other
+full task is refused before it uploads. Outside the private demo, one person
+can have at most 20 uploads in progress in an organization at once, in the
+app, over the REST API and over MCP together. An upload counts until its
+file is attached, and one never finished stops counting an hour after it
+started. A link also needs room on the other
 task, so picking a task that has 100 links is refused with a sentence that
 names it. The window counts only the links whose other task you can see, so
 Qivo can also refuse a link when you make it, naming the task that is full.

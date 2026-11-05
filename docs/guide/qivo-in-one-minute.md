@@ -68,12 +68,18 @@ deadline. Preparation that keeps moving can take longer than 30 seconds.
 
 Sample people are fictional and cannot sign in. Agent connections, API
 credentials and additional workspaces require a regular account. Demo
-attachments and background images have a 5 MiB file limit and share a
-50 MiB storage allowance. Files of deleted tasks count toward it until you
-delete them for good in **Settings → Projects → Deleted items**
-([Deleted items](./how-work-is-organized.md#deleted-items)). Profile pictures
-have a 2 MiB limit. **Sign up for
-Qivo** opens regular signup without transferring the demo's contents.
+attachments and background images have a 5 MiB file limit, and profile
+pictures 2 MiB. Everything you upload in the demo shares 5 MiB of storage:
+attachments, images in descriptions, profile pictures, your background and
+the preview Qivo makes of it, so one 5 MiB file can fill it. A file counts
+while it is stored, so a file of a deleted task counts until you delete it
+for good in **Settings → Projects → Deleted items**
+([Deleted items](./how-work-is-organized.md#deleted-items)), and a new
+background needs room until you remove the old one. When an upload does not
+fit, Qivo says how much is free and how to free space, and deletes nothing to
+make room. A background that leaves no room for its preview shows without
+one, and Settings says so. **Sign up for Qivo** opens regular signup without
+transferring the demo's contents.
 
 ## App updates
 
