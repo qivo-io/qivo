@@ -1143,13 +1143,16 @@ describe('stops', () => {
     expect(found.missing).toBe('matches')
     expect(found.too_wide).toBeUndefined()
     // and judges each candidate: the guest's own match only, without the
-    // one in Firmware hidden from them
+    // newer one in Firmware hidden from them, which would take the page's
+    // one place if the gathering kept it, as each row is judged again
     Object.assign(DELETED_PAGE, { searches: 0 })
     const guests = await page(t, f.guest, {
       scope: { org_id, project_ids: [f.meta.id] },
       search: 'spring',
+      limit: 1,
     })
     expect(guests.entries.map((e) => e.item_id)).toEqual([await id(a.id)])
+    expect(guests.next_cursor).toBeNull()
   })
 
   it('counts each sub-project a member leads without its top-level project toward the lowered sources', async () => {
