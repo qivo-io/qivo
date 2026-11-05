@@ -1001,6 +1001,46 @@ describe('stops', () => {
     expect(one.entries.map((e) => e.item_id)).toEqual([items[1]])
     expect(one.too_wide).toBeUndefined()
   })
+
+  it("merges each of a member's sources once in the assignee scan, so it answers wherever the browse does", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const sam = await person(t, org_id, 'Sam')
+    // the user leads Testbed platform and Skunkworks, and deletes a task
+    // and a sub-project that each hold one of Sam's tasks
+    const task = await plantIssue(t, { org_id, project_id: f.sub.id, assignee_id: sam.id })
+    await deleteTask(t, f.user, task.id)
+    later()
+    const leaving = await plantProject(t, { org_id, type: 'project', parent_id: f.meta.id })
+    const inProject = await plantIssue(t, { org_id, project_id: leaving.id, assignee_id: sam.id })
+    await deleteProject(t, f.user, leaving.id)
+    const expected = [
+      { item_id: (await itemFor(t, leaving.id)).id, key: `QN-${inProject.num}` },
+      { item_id: (await itemFor(t, task.id)).id, key: null },
+    ]
+    const scope = { org_id, all: true as const }
+    const browse = { scope, kind: 'task' as const }
+    const scan = { scope, assignee: sam.id }
+    const entries = async (args: PageArgs) =>
+      (await page(t, f.user, args)).entries.map((e) => ({
+        item_id: e.item_id,
+        key: e.task?.key ?? null,
+      }))
+    // their own deletes and the two top-level projects: three ranges for the
+    // browse and three for the scan, which reads both kinds in each
+    Object.assign(DELETED_PAGE, { sources: 3 })
+    expect(await entries(browse)).toEqual([expected[1]])
+    expect(await entries(scan)).toEqual(expected)
+    Object.assign(DELETED_PAGE, { sources: 2 })
+    for (const args of [browse, scan])
+      expect(await page(t, f.user, args)).toEqual({
+        entries: [],
+        items: [],
+        next_cursor: null,
+        too_wide: true,
+      })
+  })
 })
 
 describe('the assignee filter', () => {

@@ -106,9 +106,9 @@ type Profile = Doc<'profiles'>
  * project they lead, and that the range of no top-level project in the
  * scope covers. That is each such top-level project, and each sub-project
  * whose top-level project they do not lead or the scope leaves out, live
- * and archived alike. The assignee scan merges the ranges of both parts,
- * so there their own deletes and each led top-level project with
- * sub-projects count twice. Past the bound they get too_wide. For an
+ * and archived alike. The assignee scan reads both kinds in each of these
+ * ranges, so it counts each once, as the browse does. Past the bound they
+ * get too_wide. For an
  * admin's scope of some projects it counts the ordered and the
  * cross-project ranges together (taskPlan, searchPlan), and past it the
  * admin reads the organization's range of the kind and keeps the scope in
@@ -524,28 +524,43 @@ const kindRange =
       })
       .order('desc')
 
-/** One person's deletes of `kind`. */
+/** One person's deletes of `kind`, or of both kinds without one. */
 const deleterRange =
-  (org: string, by: string, kind: DeletedItemKind): Opener<Item> =>
+  (org: string, by: string, kind?: DeletedItemKind): Opener<Item> =>
   (ctx, at) =>
-    items(ctx)
-      .withIndex('by_org_deleter_kind_deleted', (q) => {
-        const r = q.eq('org_id', org).eq('deleted_by', by).eq('kind', kind)
-        return at === null ? r : r.lte('deleted_at', at)
-      })
-      .order('desc')
+    kind === undefined
+      ? items(ctx)
+          .withIndex('by_org_deleter', (q) => {
+            const r = q.eq('org_id', org).eq('deleted_by', by)
+            return at === null ? r : r.lte('deleted_at', at)
+          })
+          .order('desc')
+      : items(ctx)
+          .withIndex('by_org_deleter_kind_deleted', (q) => {
+            const r = q.eq('org_id', org).eq('deleted_by', by).eq('kind', kind)
+            return at === null ? r : r.lte('deleted_at', at)
+          })
+          .order('desc')
 
-/** The items of `kind` under top-level project `parent`: its deleted
- * sub-projects, or the task items rooted in its sub-projects. */
+/** The items of `kind` under top-level project `parent`, or of both kinds
+ * without one: its deleted sub-projects, and the task items rooted in its
+ * sub-projects. */
 const parentRange =
-  (org: string, parent: string, kind: DeletedItemKind): Opener<Item> =>
+  (org: string, parent: string, kind?: DeletedItemKind): Opener<Item> =>
   (ctx, at) =>
-    items(ctx)
-      .withIndex('by_org_parent_kind_deleted', (q) => {
-        const r = q.eq('org_id', org).eq('parent_project_id', parent).eq('kind', kind)
-        return at === null ? r : r.lte('deleted_at', at)
-      })
-      .order('desc')
+    kind === undefined
+      ? items(ctx)
+          .withIndex('by_org_parent', (q) => {
+            const r = q.eq('org_id', org).eq('parent_project_id', parent)
+            return at === null ? r : r.lte('deleted_at', at)
+          })
+          .order('desc')
+      : items(ctx)
+          .withIndex('by_org_parent_kind_deleted', (q) => {
+            const r = q.eq('org_id', org).eq('parent_project_id', parent).eq('kind', kind)
+            return at === null ? r : r.lte('deleted_at', at)
+          })
+          .order('desc')
 
 /** The items rooted in `project`, of either kind: the planner keeps task
  * items only, since a project item rooted there can be restoring. */
@@ -608,8 +623,14 @@ function projectPlan(run: Run, seat: Seat, scope: Scoped | null): Plan | 'too_wi
 }
 
 /** The task entries' sources of `seat` for `scope`: task items only, as a
- * browse lists them, or too_wide. */
-function taskPlan(run: Run, seat: Seat, scope: Scoped): Plan | 'too_wide' {
+ * browse lists them, or too_wide. With `projects`, for the assignee scan of
+ * anyone but an admin (an admin's goes through assigneeEntries), its own
+ * deletes and each led top-level project are one range of both kinds
+ * rather than a range for each part, so each source counts once toward
+ * DELETED_PAGE.sources, and the plan also reads the project items whose
+ * stored rows name the person as lead and keeps the project items the
+ * scope holds. */
+function taskPlan(run: Run, seat: Seat, scope: Scoped, projects = false): Plan | 'too_wide' {
   const { a } = run
   const org = seat.me.org_id
   const keeps = (item: Item) => item.kind === 'task' && holdsTasks(scope, item)
@@ -635,13 +656,14 @@ function taskPlan(run: Run, seat: Seat, scope: Scoped): Plan | 'too_wide' {
     if (ordered.length + cross.length > DELETED_PAGE.sources) return wide
     return { ordered, cross, storedLead: false, keeps }
   }
-  const ordered = [deleterRange(org, seat.me.id, 'task')]
+  const kind = projects ? undefined : 'task'
+  const ordered = [deleterRange(org, seat.me.id, kind)]
   const cross: string[] = []
   const inScope = (p: Doc<'projects'>) => scope.all || scope.ids.has(p.id)
   for (const p of seat.sight.projects.values()) {
     if (!inScope(p)) continue
     if (p.type === 'meta') {
-      if (leads(seat, p)) ordered.push(parentRange(org, p.id, 'task'))
+      if (leads(seat, p)) ordered.push(parentRange(org, p.id, kind))
       continue
     }
     const parent = p.parent_id === undefined ? undefined : seat.sight.projects.get(p.parent_id)
@@ -653,7 +675,8 @@ function taskPlan(run: Run, seat: Seat, scope: Scoped): Plan | 'too_wide' {
     cross.push(p.id)
   }
   if (ordered.length > DELETED_PAGE.sources) return 'too_wide'
-  return { ordered, cross, storedLead: false, keeps }
+  if (!projects) return { ordered, cross, storedLead: false, keeps }
+  return { ordered, cross, storedLead: true, keeps: (item) => holdsTasks(scope, item) }
 }
 
 /* ---------------------------------------------------- reading the items */
@@ -1484,27 +1507,8 @@ async function scoped(
   const from = cursor?.place ?? null
   // the sources every part needs, before any of them reads
   const project = projects ? projectPlan(run, seat, scope) : null
-  let scan: Plan | 'too_wide' | null = null
-  if (tasks && !search && !viaIndex) {
-    const taskItems = taskPlan(run, seat, scope)
-    if (a.assignee === undefined || taskItems === 'too_wide') scan = taskItems
-    else {
-      const projectItems = projectPlan(run, seat, scope)
-      if (projectItems === 'too_wide') scan = 'too_wide'
-      else {
-        const ordered = [...taskItems.ordered, ...projectItems.ordered]
-        scan =
-          ordered.length > DELETED_PAGE.sources
-            ? 'too_wide'
-            : {
-                ordered,
-                cross: taskItems.cross,
-                storedLead: projectItems.storedLead,
-                keeps: (item) => taskItems.keeps(item) || projectItems.keeps(item),
-              }
-      }
-    }
-  }
+  const scan =
+    tasks && !search && !viaIndex ? taskPlan(run, seat, scope, a.assignee !== undefined) : null
   if (project === 'too_wide' || scan === 'too_wide') return { ...EMPTY, too_wide: true }
   // whether the search and the assignee filter may miss older rows: the
   // probe's answer for an admin, always for anyone else
