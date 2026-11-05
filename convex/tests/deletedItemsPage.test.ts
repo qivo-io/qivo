@@ -480,6 +480,22 @@ describe('order and continuation', () => {
     expect(third).toMatchObject({ entries: [], next_cursor: null })
     expect((await page(t, f.admin, args)).entries.map((e) => e.item_id)).toEqual([newer, ids[4]])
   })
+
+  it("opens each of a member's sources as one range on a later page, as on the first", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ids = await plantItems(t, f, 3)
+    // the user's own deletes, Testbed platform and Skunkworks, and the
+    // cross-project rows of Firmware and Board rev: five ranges a page
+    Object.assign(DELETED_PAGE, { find: { bytes: 1 << 30, rows: 1e6, ranges: 6 } })
+    const walked = await walk(t, f.user, {
+      scope: { org_id: f.org.id, all: true },
+      kind: 'task',
+      limit: 1,
+    })
+    expect(walked.ids).toEqual([...ids].reverse())
+    expect(walked.pages.map((p) => p.missing ?? null)).toEqual([null, null, null, null])
+  })
 })
 
 describe('parts and scopes', () => {

@@ -487,26 +487,28 @@ async function seatOf(run: Run, me: Profile): Promise<Seat> {
 /* ----------------------------------------------------------- the ranges */
 
 /* A range of documents in an index's order, deleted_at then _creationTime
- * and _id, all descending: from the start (`bound` null), or around
- * `bound`, either its own deleted_at up to and including its _creationTime
- * or (`earlier`) everything deleted before it. */
-type Opener<D> = (ctx: QueryCtx, bound: At | null, earlier: boolean) => AsyncIterable<D>
+ * and _id, all descending: from the start (`at` null), or from deleted_at
+ * `at` down, one index range either way. */
+type Opener<D> = (ctx: QueryCtx, at: string | null) => AsyncIterable<D>
 
 /** The documents of `open` after `from`, in index order, read through
- * `ctx`, whose meter counts them. */
-async function* rangeAfter<D extends { _creationTime: number; _id: string }>(
+ * `ctx`, whose meter counts them. It reads one range from `from`'s
+ * deleted_at down and skips the documents of that deleted_at that sort at
+ * or before `from`, so a source costs one range on every page, as on the
+ * first. */
+async function* rangeAfter<D extends { deleted_at?: string; _creationTime: number; _id: string }>(
   ctx: QueryCtx,
   open: Opener<D>,
   from: At | null,
 ): AsyncGenerator<D> {
-  if (from === null) {
-    yield* open(ctx, null, false)
-    return
-  }
-  for await (const doc of open(ctx, from, false))
-    if (doc._creationTime < from.ct || (doc._creationTime === from.ct && doc._id < from.id))
+  for await (const doc of open(ctx, from?.at ?? null))
+    if (
+      from === null ||
+      doc.deleted_at !== from.at ||
+      doc._creationTime < from.ct ||
+      (doc._creationTime === from.ct && doc._id < from.id)
+    )
       yield doc
-  yield* open(ctx, from, true)
 }
 
 const items = (ctx: QueryCtx) => ctx.db.query('deleted_items')
@@ -514,28 +516,22 @@ const items = (ctx: QueryCtx) => ctx.db.query('deleted_items')
 /** An organization's items of `kind`. */
 const kindRange =
   (org: string, kind: DeletedItemKind): Opener<Item> =>
-  (ctx, b, earlier) =>
+  (ctx, at) =>
     items(ctx)
       .withIndex('by_org_kind_deleted', (q) => {
         const r = q.eq('org_id', org).eq('kind', kind)
-        if (b === null) return r
-        return earlier
-          ? r.lt('deleted_at', b.at)
-          : r.eq('deleted_at', b.at).lte('_creationTime', b.ct)
+        return at === null ? r : r.lte('deleted_at', at)
       })
       .order('desc')
 
 /** One person's deletes of `kind`. */
 const deleterRange =
   (org: string, by: string, kind: DeletedItemKind): Opener<Item> =>
-  (ctx, b, earlier) =>
+  (ctx, at) =>
     items(ctx)
       .withIndex('by_org_deleter_kind_deleted', (q) => {
         const r = q.eq('org_id', org).eq('deleted_by', by).eq('kind', kind)
-        if (b === null) return r
-        return earlier
-          ? r.lt('deleted_at', b.at)
-          : r.eq('deleted_at', b.at).lte('_creationTime', b.ct)
+        return at === null ? r : r.lte('deleted_at', at)
       })
       .order('desc')
 
@@ -543,14 +539,11 @@ const deleterRange =
  * sub-projects, or the task items rooted in its sub-projects. */
 const parentRange =
   (org: string, parent: string, kind: DeletedItemKind): Opener<Item> =>
-  (ctx, b, earlier) =>
+  (ctx, at) =>
     items(ctx)
       .withIndex('by_org_parent_kind_deleted', (q) => {
         const r = q.eq('org_id', org).eq('parent_project_id', parent).eq('kind', kind)
-        if (b === null) return r
-        return earlier
-          ? r.lt('deleted_at', b.at)
-          : r.eq('deleted_at', b.at).lte('_creationTime', b.ct)
+        return at === null ? r : r.lte('deleted_at', at)
       })
       .order('desc')
 
@@ -558,29 +551,23 @@ const parentRange =
  * items only, since a project item rooted there can be restoring. */
 const projectRange =
   (org: string, project: string): Opener<Item> =>
-  (ctx, b, earlier) =>
+  (ctx, at) =>
     items(ctx)
       .withIndex('by_org_project', (q) => {
         const r = q.eq('org_id', org).eq('project_id', project)
-        if (b === null) return r
-        return earlier
-          ? r.lt('deleted_at', b.at)
-          : r.eq('deleted_at', b.at).lte('_creationTime', b.ct)
+        return at === null ? r : r.lte('deleted_at', at)
       })
       .order('desc')
 
 /** The tasks of one assignee in an organization, by delete, newest first. */
 const assigneeRange =
   (org: string, person: string): Opener<Task> =>
-  (ctx, b, earlier) =>
+  (ctx, at) =>
     ctx.db
       .query('deleted_tasks')
       .withIndex('by_org_assignee', (q) => {
         const r = q.eq('org_id', org).eq('assignee_id', person)
-        if (b === null) return r
-        return earlier
-          ? r.lt('deleted_at', b.at)
-          : r.eq('deleted_at', b.at).lte('_creationTime', b.ct)
+        return at === null ? r : r.lte('deleted_at', at)
       })
       .order('desc')
 
