@@ -39,9 +39,7 @@ export const NOW_WEEK = '2025-12-29'
 
 /** NOW's day, Thursday 1 January 2026, in its Monday week, as the fixtures'
  * dates sit around it. A walker without a stamp reads Done since from
- * Wednesday's midnight, 2025-12-31T00:00Z, on these UTC weeks, and the
- * agenda loads their Done tasks from an hour before it (lib/teamSync.ts
- * readingBounds). */
+ * Wednesday's midnight, 2025-12-31T00:00Z, on these UTC weeks. */
 export const NOW_CLOCK = clockOn(NOW.slice(0, 10), NOW_WEEK)
 
 /** teamSync.agenda for `profile`'s login in its organization. */

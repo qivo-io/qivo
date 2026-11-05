@@ -122,9 +122,7 @@ const HOUR_MS = 60 * 60 * 1000
  * (lib/viewLoads.ts vClock and clockOf, which checks them): its day and the
  * first day of its week, YYYY-MM-DD, the instants (ms) its last local weeks
  * began at, oldest first, the last the local midnight of `week`, and the
- * instant its next week begins at. An app before the release after v0.1.126
- * may send each of them an hour late where a daylight-saving change skips a
- * midnight (GRID_SLACK_MS). */
+ * instant its next week begins at. */
 export type ReadingClock = {
   day: string
   week: string
@@ -146,30 +144,21 @@ function workingDayBefore(n: number, weekStart: number): number {
   return d
 }
 
-/* How far a week start the client sends may be from the local midnight it
- * stands for. The app's grid begins each week at its first local instant,
- * but an app before the release after v0.1.126 carried the wall time of a
- * day whose midnight a daylight-saving change skips (01:00 in Santiago,
- * Havana and Beirut) to every week of its grid, so sent each an hour late
- * in the weeks around such a day. */
-const GRID_SLACK_MS = HOUR_MS
-
 /* The earliest and latest instant (ms) the local midnight of day number
  * `n` can be at in the client's zone. In a week of the client's grid it is
  * the week's start plus whole days, moved by the week's daylight-saving
  * change once that is past (the difference between the week's length and 7
- * days), within GRID_SLACK_MS on each side, the week's first day included,
- * so an older app's grid reads whole; in the week after the grid, its
+ * days), so exact in a week without one; in the week after the grid, its
  * start plus whole days within three hours. Outside them the zone is
  * unknown, and UTC offsets run from minus 12 to plus 14 hours, so it is
  * the day's UTC midnight less 14 hours to the same plus 12. */
 function midnightOf(n: number, clock: ReadingClock): [number, number] {
   const { start, k, shift } = weekOf(n, clock)
   if (start === null) return [n * DAY_MS - 14 * HOUR_MS, n * DAY_MS + 12 * HOUR_MS]
-  if (k === 0) return [start - GRID_SLACK_MS, start + GRID_SLACK_MS]
+  if (k === 0) return [start, start]
   const at = start + k * DAY_MS
   if (shift === null) return [at - 3 * HOUR_MS, at + 3 * HOUR_MS]
-  return [at + Math.min(0, shift) - GRID_SLACK_MS, at + Math.max(0, shift) + GRID_SLACK_MS]
+  return [at + Math.min(0, shift), at + Math.max(0, shift)]
 }
 
 /* Day number `n`'s week on the client's grid: its start (ms), null outside
@@ -233,16 +222,15 @@ function workingDayBeforeInstant(
  * syncSince can answer for a person with `stamp` at any moment of the
  * client's day `clock.day`, with the organization's `weekStart`, in the
  * client's time zone, which a query does not know. The client's local weeks
- * (ReadingClock) place each local midnight inside them within an hour
- * (GRID_SLACK_MS), and within the week's daylight-saving change too in a
- * week with one; a midnight outside them is placed for any zone, from 14
- * hours before its UTC midnight to 12 after. The top also covers
- * previousWorkingDayStart's walk through a midnight a daylight-saving
- * change skips (walkDrift). teamSync.ts agenda reads each walker's Done
- * tasks from `floor`, and counts one toward Team sync's ceiling as certain
- * only from `top`. Outside a week with a daylight-saving change they are
- * within an hour of what syncSince can answer that day; in one, within
- * twice its change and an hour, at most five hours. They are looser where
+ * (ReadingClock) place each local midnight inside them exactly, or within
+ * the week's daylight-saving change, at most three hours; a midnight outside
+ * them is placed for any zone, from 14 hours before its UTC midnight to 12
+ * after. The top also covers previousWorkingDayStart's walk through a
+ * midnight a daylight-saving change skips (walkDrift). teamSync.ts agenda
+ * reads each walker's Done tasks from `floor`, and counts one toward Team
+ * sync's ceiling as certain only from `top`. Outside a week with a
+ * daylight-saving change they are what syncSince can answer that day; in
+ * one, within twice its change, at most four hours. They are looser where
  * the change leaves unclear whether the sitting covers the day's first or
  * last moments, or which local day the stamp's `at` fell on, that is where
  * either lies within a few hours of a midnight. They then span the

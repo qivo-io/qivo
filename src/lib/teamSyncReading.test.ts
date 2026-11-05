@@ -5,10 +5,9 @@
    across daylight-saving changes, those that skip a midnight included,
    with the clock the page sends, built as the app builds it from the
    store's grid (lib/dates.ts setWeekConfig and weekToDate,
-   views/overview/overviewArgs.ts overviewClock), and with the clock an
-   older app sent. It runs in the node project, where a change of
-   process.env.TZ moves every Date; the convex project's edge runtime keeps
-   the host's zone. */
+   views/overview/overviewArgs.ts overviewClock). It runs in the node
+   project, where a change of process.env.TZ moves every Date; the convex
+   project's edge runtime keeps the host's zone. */
 
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import {
@@ -65,11 +64,6 @@ const ZONES = [
   'Pacific/Kiritimati',
 ]
 
-/** The zones whose daylight-saving change skips a midnight, a Sunday's in
- * 2026: Havana's on 8 March, Beirut's on 29 March, Santiago's on 6
- * September. */
-const SKIPPING = ['America/Havana', 'America/Santiago', 'Asia/Beirut']
-
 /** Local days the cases read, by local noon: ordinary days, a Monday and a
  * Sunday, the days around this year's daylight-saving changes, and the
  * weeks that begin on a skipped midnight, through the Sunday after. */
@@ -108,29 +102,6 @@ const isoOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.
 function clockOf(day: Date, weekStart: number) {
   setWeekConfig(weekStart, null, day)
   return overviewClock()
-}
-
-/** The clock an app before the release after v0.1.126 sent on `day`. Its
- * grid moved from day to day by setDate, which keeps the wall time, so
- * where its anchor's day began at 01:00, as one whose midnight a
- * daylight-saving change skips does, every week of it began at 01:00. */
-function olderClockOf(day: Date, weekStart: number) {
-  const first = new Date(day)
-  first.setHours(0, 0, 0, 0)
-  first.setDate(first.getDate() - ((first.getDay() - weekStart + 7) % 7))
-  const anchor = new Date(first)
-  anchor.setDate(anchor.getDate() - 11 * 7)
-  const weekAt = (k: number) => {
-    const d = new Date(anchor)
-    d.setDate(d.getDate() + 7 * (11 + k))
-    return d
-  }
-  return {
-    day: isoOf(day),
-    week: isoOf(weekAt(0)),
-    week_starts: Array.from({ length: 53 }, (_, i) => weekAt(i - 52).getTime()),
-    week_end: weekAt(1).getTime(),
-  }
 }
 
 /** Every half hour of local day `day`, and its first and last instant. */
@@ -174,8 +145,7 @@ function stampsOf(day: Date): (SyncStamp | null)[] {
 }
 
 /** For every zone, day, week start and stamp, `check` of the bounds and the
- * reading points syncSince answers at every moment of the day, with the
- * clock `clockFor` builds (the page's, clockOf, by default). */
+ * reading points syncSince answers at every moment of the day. */
 function sweep(
   check: (
     bounds: { floor: number; top: number },
@@ -183,16 +153,14 @@ function sweep(
     label: string,
     edges: boolean,
   ) => void,
-  zones: readonly string[] = ZONES,
-  clockFor: (day: Date, weekStart: number) => ReturnType<typeof clockOf> = clockOf,
 ): number {
   let cases = 0
-  for (const tz of zones) {
+  for (const tz of ZONES) {
     process.env.TZ = tz
     for (const [y, m, d] of DAYS) {
       const day = new Date(y, m, d, 12)
       for (const weekStart of [1, 0]) {
-        const clock = clockFor(day, weekStart)
+        const clock = clockOf(day, weekStart)
         const moments = momentsOf(day)
         for (const stamp of stampsOf(day)) {
           const points = moments.map((now) => syncSince(stamp, now, weekStart))
@@ -231,7 +199,7 @@ describe('readingBounds', () => {
     expect(cases).toBeGreaterThan(5000)
   })
 
-  it("is at most five hours from the day's reading points, through the client's weeks", () => {
+  it("is at most four hours from the day's reading points, through the client's weeks", () => {
     let loose = 0
     sweep((bounds, points, label, edges) => {
       // where a sitting ends, or a stamp was made, within a few hours of a
@@ -240,30 +208,10 @@ describe('readingBounds', () => {
         loose++
         return
       }
-      expect(bounds.floor, label).toBeGreaterThanOrEqual(Math.min(...points) - 5 * HOUR)
-      expect(bounds.top, label).toBeLessThanOrEqual(Math.max(...points) + 5 * HOUR)
+      expect(bounds.floor, label).toBeGreaterThanOrEqual(Math.min(...points) - 4 * HOUR)
+      expect(bounds.top, label).toBeLessThanOrEqual(Math.max(...points) + 4 * HOUR)
     })
     expect(loose).toBeGreaterThan(0)
-  })
-
-  it('reads an older app’s clock whole, whose weeks began an hour late around a skipped midnight', () => {
-    // the older clock differs from the page's in some of these cases, or the
-    // case would not reach the older grid
-    let late = 0
-    const cases = sweep(
-      (bounds, points, label) => {
-        expect(bounds.floor, label).toBeLessThanOrEqual(Math.min(...points))
-        expect(bounds.top, label).toBeGreaterThanOrEqual(Math.max(...points))
-      },
-      SKIPPING,
-      (day, weekStart) => {
-        const older = olderClockOf(day, weekStart)
-        if (older.week_starts.some((s, i) => s !== clockOf(day, weekStart).week_starts[i])) late++
-        return older
-      },
-    )
-    expect(cases).toBeGreaterThan(1000)
-    expect(late).toBeGreaterThan(0)
   })
 
   it("keeps a sitting's reading point all day, after the sitting ends", () => {
@@ -287,15 +235,11 @@ describe('readingBounds', () => {
     })
   })
 
-  it('reads Monday from Friday, and Monday from Sunday where the week starts on Sunday, within the hour an older grid may be late', () => {
+  it('reads Monday from Friday, and Monday from Sunday where the week starts on Sunday', () => {
     process.env.TZ = 'America/New_York'
     const monday = new Date(2026, 8, 7, 12)
-    const around = (midnight: Date) => ({
-      floor: midnight.getTime() - HOUR,
-      top: midnight.getTime() + HOUR,
-    })
-    expect(readingBounds(null, clockOf(monday, 1), 1)).toEqual(around(new Date(2026, 8, 4)))
-    expect(readingBounds(null, clockOf(monday, 0), 0)).toEqual(around(new Date(2026, 8, 6)))
+    expect(readingBounds(null, clockOf(monday, 1), 1).floor).toBe(new Date(2026, 8, 4).getTime())
+    expect(readingBounds(null, clockOf(monday, 0), 0).floor).toBe(new Date(2026, 8, 6).getTime())
   })
 
   it('must fail for a floor without the zones’ margin: the UTC midnight of the working day before', () => {

@@ -494,10 +494,9 @@ describe('Done since', () => {
     const f = await withOrg(t)
     // the walkers, by a row each
     for (const p of [f.user, f.admin, f.agent]) await task(t, f.sub, { assignee_id: p.id })
-    // the user has no stamp, so the page reads from Wednesday's midnight
-    // and the agenda from an hour before it, the hour an older app's grid
-    // may start late (lib/teamSync.ts readingBounds); the admin's sitting
-    // was over before the day; the agent's runs into it, from its `since`
+    // the user has no stamp, so reads from Wednesday's midnight; the admin's
+    // sitting was over before the day; the agent's runs into it, from its
+    // `since`
     await plantStamp(t, f.admin, { at: '2025-12-31T10:00:00.000Z' })
     await plantStamp(t, f.agent, {
       at: '2026-01-01T00:30:00.000Z',
@@ -509,11 +508,7 @@ describe('Done since', () => {
       assignee_id: f.user.id,
       done_at: '2025-12-31T00:00:00.000Z',
     })
-    await done('User, in the hour before it', {
-      assignee_id: f.user.id,
-      done_at: '2025-12-30T23:30:00.000Z',
-    })
-    await done('User, before it', { assignee_id: f.user.id, done_at: '2025-12-30T22:59:59.999Z' })
+    await done('User, before it', { assignee_id: f.user.id, done_at: '2025-12-30T23:59:59.999Z' })
     await done('Reviewed by the admin', {
       assignee_id: f.viewer.id,
       reviewer_id: f.admin.id,
@@ -558,7 +553,6 @@ describe('Done since', () => {
     expect(titles(ok.done)).toEqual(
       sorted([
         'User, at the floor',
-        'User, in the hour before it',
         'Reviewed by the admin',
         'Agent, in the sitting',
         'Its Done subtask',
