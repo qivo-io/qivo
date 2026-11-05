@@ -1504,6 +1504,7 @@ describe('reads at the design size', () => {
       const oldSubs: Doc<'projects'>[] = []
       for (const p of old)
         oldSubs.push(...(await plantSubs(t, p, names(`${p.name} sub `, 3), { archived_at: NOW })))
+      await t.run((ctx) => ctx.db.delete(oldSubs[500]._id))
       await plantGrants(t, pia, inherited ? old : oldSubs.slice(0, 500))
     }
     await ready(t, f)
