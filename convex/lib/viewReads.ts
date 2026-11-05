@@ -586,7 +586,9 @@ export type Selection = {
  * follows archived_at, as P.projects and Access.live do. It reads the
  * project by id and, for a meta, its sub-projects in steps, each row a read
  * returns charged at PROJECT_ROW_MAX_BYTES, as the reader may not see them,
- * before it asks the reader's access about the meta and each of them.
+ * one it answers null for as another organization's or an archived one
+ * included, before it asks the reader's access about the meta and each of
+ * them.
  */
 export async function projectSelection(
   ctx: QueryCtx,
@@ -611,8 +613,10 @@ export async function selectionOf(
   seat: ViewAccess,
   project: Doc<'projects'>,
 ): Promise<Selection | null> {
-  if (project.org_id !== seat.me.org_id || project.archived_at !== undefined) return null
+  // charged before the checks, so another organization's or an archived
+  // project's name and description move no answer either
   seat.seen(project)
+  if (project.org_id !== seat.me.org_id || project.archived_at !== undefined) return null
   if (project.parent_id !== undefined)
     return (await seat.visible([project.id]))[0] ? { project, subProjects: [project] } : null
   if (!inMetaTree(project, project)) return null

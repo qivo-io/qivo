@@ -15,7 +15,7 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { accessOf, OWN_READS } from '../lib/access'
-import { TEAM_SYNC_TASKS } from '../lib/limits'
+import { NAME_MAX, TEAM_SYNC_TASKS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import { callRoom, OWNER_LOADS, ownerLoadReader, weeklyHours } from '../lib/ownerLoads'
 import { AGENDA, type AgendaAnswer, type AgendaScope, readAgenda } from '../lib/teamSyncAgenda'
@@ -956,6 +956,49 @@ describe('hidden data', () => {
       expect((await read(wide)()).state, label).toBe('over_budget')
       AGENDA.reads.bytes = DEFAULT_AGENDA.reads.bytes
     }
+  })
+
+  it("answers the same, and stops at the same budget, whatever a team's archived and foreign shared projects hold", async () => {
+    const answers: unknown[] = []
+    const least: number[] = []
+    for (const wide of [false, true]) {
+      const t = newT()
+      const f = await withOrg(t)
+      const text = (i: number) =>
+        wide
+          ? { name: ordinary(i).title.slice(0, NAME_MAX), description: ordinary(i).text }
+          : { name: `S${i}`, description: '' }
+      const unseen: Doc<'projects'>[] = []
+      for (let i = 0; i < 5; i++)
+        unseen.push(
+          await plantProject(t, {
+            org_id: f.org.id,
+            key: `S${i}`,
+            num: 500 + i,
+            archived_at: NOW,
+            ...text(i),
+          }),
+        )
+      unseen.push(await plantProject(t, { org_id: f.otherOrg.id, key: 'S9', num: 509, ...text(9) }))
+      // the viewer, no member of the team, reads the rows of its live share
+      const team = await plantTeam(t, f.org.id, 'Shares', [f.user], [...unseen, f.meta])
+      for (let n = 0; n < 3; n++)
+        await task(t, f.sub, {
+          title: ordinary(n).title,
+          num: 10 + n,
+          assignee_id: f.user.id,
+          status: 'todo',
+        })
+      await withReach(t)
+      await countOrg(t, f.org.id)
+      const read = () => agendaFor(t, f.viewer, { kind: 'team', team_id: team })
+      const answer = await read()
+      expect(okOf(answer).rows).toHaveLength(3)
+      answers.push(shape(answer))
+      least.push(await leastBytes(read))
+    }
+    expect(answers[1]).toEqual(answers[0])
+    expect(least[1]).toBe(least[0])
   })
 })
 
