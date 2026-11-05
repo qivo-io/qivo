@@ -27,6 +27,7 @@ import { nameKey } from '../lib/nameKey'
 import { ASSIGNEE_RULE, ASSIGNEE_SIGHT_RULE, NO_WRITE_ACCESS } from '../model/issues'
 import {
   type HeldTasks,
+  REASSIGN_ROOM,
   REMOVAL_FULL,
   reassignTooLarge,
   removeProjectGrantCore,
@@ -786,6 +787,74 @@ describe("the Reassign picker's states", () => {
     const tooLarge = { state: 'too_large', message: REMOVAL_FULL }
     expect(await preview(t, f.user, change)).toEqual(tooLarge)
     expect(await choices(t, f.user, change)).toEqual(tooLarge)
+  })
+
+  it('answers too_large when the check of who can take the tasks passes the room the preview left', async () => {
+    // Pia's grant on TBED goes. She holds 30 subtasks in Firmware whose
+    // parents, held by TBED's lead, sit in Board rev, so the check of a new
+    // holder (takerRule) reads the 30 parents and the levels of both
+    // sub-projects past the preview's own reads
+    const spread = async (t: T) => {
+      const b = await base(t)
+      const pia = await b.person('Pia')
+      await b.grant(b.f.meta, pia)
+      await b.t.run(async (ctx) => {
+        for (let i = 0; i < 30; i++) {
+          const task = { org_id: b.f.org.id, title: `Bring-up step ${i}`, description: '' }
+          const rest = { status: 'todo', priority: 'medium', paused: false } as const
+          const parent = uuid()
+          await ctx.db.insert('issues', {
+            ...task,
+            ...rest,
+            id: parent,
+            project_id: b.f.sub2.id,
+            num: 2000 + 2 * i,
+            assignee_id: b.f.user.id,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+          await ctx.db.insert('issues', {
+            ...task,
+            ...rest,
+            id: uuid(),
+            project_id: b.f.sub.id,
+            num: 2001 + 2 * i,
+            parent_id: parent,
+            assignee_id: pia.id,
+            created_at: NOW,
+            updated_at: NOW,
+          })
+        }
+      })
+      await b.keyed()
+      const change = { kind: 'user_grant', project_id: b.f.meta.id, user_id: pia.id } as const
+      return { ...b, change }
+    }
+    // at the deployment's limits the lead can take them, and the index
+    // ranges the preview alone reads
+    const whole = await spread(newT({ transactionLimits: true }))
+    const eligible = await previewOk(whole.t, whole.f.admin, whole.change, whole.f.user.id)
+    expect(eligible.reassign).toMatchObject({ allowed: true, holder_eligible: true })
+    const listed = ready(await choices(whole.t, whole.f.admin, whole.change)).rows
+    expect(listed.map((r) => r.id)).toContain(whole.f.user.id)
+    const alone = await whole.t.run(async (ctx) => {
+      await previewRemoval(ctx, whole.f.admin, whole.change)
+      return (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+    })
+    // a limit whose room holds the preview and 15 index ranges more, which
+    // the check of a new holder passes while it reads the parents
+    const b = await spread(
+      newT({ transactionLimits: { databaseQueries: Math.ceil((alone + 15) / REASSIGN_ROOM) } }),
+    )
+    expect(await preview(b.t, b.f.admin, b.change)).toMatchObject({
+      state: 'ok',
+      pending: true,
+      tasks: 30,
+      reassign: { allowed: true },
+    })
+    const tooLarge = { state: 'too_large', message: REMOVAL_FULL }
+    expect(await preview(b.t, b.f.admin, b.change, b.f.user.id)).toEqual(tooLarge)
+    expect(await choices(b.t, b.f.admin, b.change)).toEqual(tooLarge)
   })
 })
 
