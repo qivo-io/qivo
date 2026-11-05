@@ -413,10 +413,14 @@ async function candidatesOf(
 
 /**
  * `item` as `sight`'s person sees it, or null when it is hidden from them.
- * With `out`, the caller's check of its read budget, a redacted task item's
- * row checks it after each of the item's tasks it reads to find the one it
- * shows, and answers 'unread' when the budget ran out first, as each task's
- * row holds its searchable text, so the row is not built.
+ * An organization admin's row is the whole item, and once the admin access
+ * split lands a task item whose root's project they cannot read is a
+ * hidden row, with its key, path, counts and deleter and no title, status
+ * or reason (model/deletedItems.ts ItemView). With `out`, the caller's
+ * check of its read budget, a redacted task item's row checks it after
+ * each of the item's tasks it reads to find the one it shows, and answers
+ * 'unread' when the budget ran out first, as each task's row holds its
+ * searchable text, so the row is not built.
  */
 export async function rowOf(
   ctx: QueryCtx,
