@@ -854,7 +854,10 @@ function ProjectSettingsFields({
             disabled={!answer.can_change_lead || blocked}
             busy={leadChosen !== null}
             onPick={(person) => {
-              if (person.id === project.lead_id) return
+              // a pick of the lead shown changes nothing, a legacy
+              // sub-project's inherited lead included, which a write would
+              // pin to the sub-project, dropping that person's grant on it
+              if (person.id === project.lead_id || person.id === answer.lead?.id) return
               setLeadChosen(person)
               void P.updateProject(
                 project.id,

@@ -987,6 +987,24 @@ describe('changing access', () => {
     expect(rows('user')).toContain('Mira Holm')
   })
 
+  it("sends nothing for a pick of a legacy sub-project's lead from its project", async () => {
+    await open('work')
+    await click(find('[data-project-lead-picker]'))
+    const mira = find<HTMLButtonElement>('[data-lead-choice="mira"]')
+    // shown as the chosen lead, with its check, though the sub-project stores none
+    expect(mira.querySelector('svg')).not.toBeNull()
+    expect(find('[data-lead-choice="leo"]').querySelector('svg')).toBeNull()
+    await click(mira)
+    expect(sent('projects:update')).toEqual([])
+    expect(leadName()).toBe('Mira Holm (from the project)')
+    // another person still becomes its own lead
+    await click(find('[data-project-lead-picker]'))
+    await click(find('[data-lead-choice="leo"]'))
+    expect(sent('projects:update')).toEqual([
+      expect.objectContaining({ patch: { lead_id: 'leo' }, expected: { lead_id: null } }),
+    ])
+  })
+
   it("turns an open Lead picker's choices off once the page's read fails, and sends nothing", async () => {
     await open()
     await click(find('[data-project-lead-picker]'))
