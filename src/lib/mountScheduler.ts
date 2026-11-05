@@ -17,12 +17,11 @@ import { type IdleDeadline, whenIdle } from './idle'
 /** A list the scheduler mounts. `pending` is how many of its items still
     wait; `grow(n)` mounts the next `n` of them and `mountThrough(key)` the
     ones up to the item `key`. `spacer` is the element standing in for the
-    waiting items. While `holds` answers true, slices leave the list be. */
+    waiting items. */
 export type DeferredMount = {
   id: string
   spacer: () => Element | null
   pending: () => number
-  holds?: () => boolean
   grow: (n: number) => void
   mountThrough: (key: string) => void
 }
@@ -110,15 +109,14 @@ export function createMountScheduler({
   let warming = false
   let mountedSince = false
 
-  // the lists with items waiting, and those of them slices mount
-  const waitingLists = () => [...lists.values()].filter((list) => list.pending() > 0)
-  const pendingLists = () => waitingLists().filter((list) => !list.holds?.())
+  // the lists with items waiting, which slices mount
+  const pendingLists = () => [...lists.values()].filter((list) => list.pending() > 0)
 
-  /* The root's marks: pending with aria-busy while any list waits, held
-     ones included, then complete. */
+  /* The root's marks: pending with aria-busy while any list waits, then
+     complete. */
   const mark = () => {
     if (!root) return
-    const pending = waitingLists().length > 0
+    const pending = pendingLists().length > 0
     const state = pending ? 'pending' : 'complete'
     const was = root.getAttribute('data-board-mount')
     if (was === state || (!pending && was === null)) return
@@ -293,8 +291,8 @@ export function createMountScheduler({
     },
     changed,
     setRoot,
-    /** Whether any list still waits, held ones included. */
-    pending: () => waitingLists().length > 0,
+    /** Whether any list still waits. */
+    pending: () => pendingLists().length > 0,
     /** Mounts all of the list `id` now. */
     completeList(id: string) {
       const list = lists.get(id)
@@ -313,7 +311,7 @@ export function createMountScheduler({
     },
     /** Mounts every list now, for Find or printing. */
     completeAll() {
-      const waiting = disposed ? [] : waitingLists()
+      const waiting = disposed ? [] : pendingLists()
       if (!waiting.length) return
       flush(() => {
         for (const list of waiting) list.grow(list.pending())
