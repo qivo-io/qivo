@@ -84,8 +84,8 @@ export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], n
     To Do unless `statusOf` gives task number n another status: from 101 a
     sub-project, more cards than one Board mounts at once (SYNC_LIMIT).
     Keep within the design size: 300 open and 150 Done tasks a sub-project,
-    and 200 Done tasks in the project. The Board shows it with
-    `scope: 'plan'`. */
+    and 800 open and 200 Done tasks in the project, so at most 266 open
+    tasks a sub-project. The Board shows it with `scope: 'plan'`. */
 export const spread =
   (perSub: number, statusOf: (num: number) => Row['status'] = () => 'todo') =>
   (snap: Snapshot) => {
