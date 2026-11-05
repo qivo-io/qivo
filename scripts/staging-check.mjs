@@ -848,7 +848,7 @@ export const movingPages = (read, what, field, most) =>
 export const workloadPeople = (read, what) => movingPages(read, what, 'people', WORKLOAD_PAGES_MAX)
 
 /** The most pages a check reads of a user, label, team or member list at
- *  `limit` rows a page: the pages of an organization's people at the design
+ *  `limit` rows a page, the pages of an organization's people at the design
  *  size (WORKLOAD_PEOPLE) and two more. Each page reads its first row
  *  whatever its read budget says (convex/lib/listCursor.ts namedListPage),
  *  and these lists' rows are few beside that budget, so a correct
@@ -2044,7 +2044,7 @@ async function workloadPageChecks() {
 }
 
 /** The user, label, team and member lists page with a cursor and search by
- *  name on both surfaces (#users, #teams, #labels): pages of PEOPLE_PAGE
+ *  name on both surfaces (#users, #teams, #labels). Pages of PEOPLE_PAGE
  *  users hold every user once, the run's agents among them, the same over
  *  REST and MCP, and a search with the run's tag finds exactly those
  *  agents. The run's team, with the two agents put in it for the step, has

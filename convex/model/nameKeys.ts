@@ -302,7 +302,7 @@ export function teamIndex(ctx: QueryCtx, orgId: string): NamedIndex<Doc<'teams'>
 /** The memberships of team `teamId` in the order of their copies of the
  * person's name key (team_members.by_team_name): copied key, then profile
  * id. A copy can trail a rename for a moment, which places its row by the
- * earlier name. It holds only memberships with a copy: one without sorts
+ * earlier name. It holds only memberships with a copy. One without sorts
  * first, and is a membership a removed person left before the backfill
  * keyed the organization, which a reader checks apart (model/teams.ts
  * memberPage), as projectGrantIndex's readers check grants. */

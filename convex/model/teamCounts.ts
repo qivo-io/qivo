@@ -34,9 +34,9 @@ export const teamCountRow = (ctx: QueryCtx, teamId: string) =>
     .unique()
 
 /** The members of `team` as a reader may show them, from its team_counts
- * `row` (teamCountRow): null while the team is not counted, its row names
- * another organization or the backfill is counting it, never 0 for a count
- * it does not have. REST and MCP answer it as a team's member_count
+ * `row` (teamCountRow), or null while the team is not counted, its row
+ * names another organization or the backfill is counting it, never 0 for a
+ * count it does not have. REST and MCP answer it as a team's member_count
  * (model/teams.ts teamSummary). */
 export const shownCount = (
   row: Doc<'team_counts'> | null,

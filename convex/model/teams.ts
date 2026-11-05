@@ -157,7 +157,7 @@ export const membershipOf = (ctx: QueryCtx, teamId: string, profileId: string) =
 /* ------------------------------------------- REST and MCP team lists */
 
 /** A team as REST and MCP answer it, in a list, a single-team read and a
- * team write's answer: `member_count` is the number of its members as the
+ * team write's answer. `member_count` is the number of its members as the
  * member list counts them (model/teamCounts.ts shownCount), null while
  * Qivo counts the team, never 0 for a count it does not have. It holds no
  * member rows; memberPage lists a team's members. */
@@ -205,8 +205,8 @@ export type TeamsPageJson = { next_cursor: string | null; teams: TeamSummaryJson
  * NAMES_NOT_READY until the organization's name keys are all written.
  *
  * A team reads its row from the index and its count row, one lookup.
- * Measured in convex/tests/peopleLists.test.ts ("at the design size"), the
- * call's own reads included: the 50 teams take one page at limit 200, of
+ * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
+ * the call's own reads, the 50 teams take one page at limit 200, of
  * 54 ranges, 102 documents and 0.02 MB, and a search that matches no team
  * reads no count row, 4 ranges, 52 documents and 0.01 MB.
  */
@@ -230,13 +230,13 @@ export async function teamPage(
   return { next_cursor: page.next_cursor, teams: page.rows }
 }
 
-/** A member of a team as REST and MCP list them: `leader` is effective
+/** A member of a team as REST and MCP list them. `leader` is effective
  * leadership (lib/access.ts canLeadTeams), so a leader row an agent or a
  * Viewer holds reads false. */
 export type TeamMemberJson = { id: string; name: string; leader: boolean }
 
 /** One page of a team's members, as REST GET /v1/teams/{id}/members and
- * MCP list_team_members answer it: the cursor first, then the team's
+ * MCP list_team_members answer it, the cursor first, then the team's
  * summary, whose count is the whole team's whatever the search. */
 export type TeamMembersPageJson = {
   next_cursor: string | null
@@ -304,8 +304,8 @@ async function unkeyedMembersGone(ctx: QueryCtx, team: Doc<'teams'>): Promise<bo
  * read in key order could skip.
  *
  * A member reads their membership from the index and their profile by id.
- * Measured in convex/tests/peopleLists.test.ts ("at the design size"), the
- * call's own reads included: a team of 1,000 members, everyone in an
+ * Measured in convex/tests/peopleLists.test.ts ("at the design size") with
+ * the call's own reads, a team of 1,000 members, everyone in an
  * organization of 1,000 people, takes 5 pages at limit 200, the heaviest
  * 208 ranges, 405 documents and 0.11 MB, and a search that matches nobody
  * reads the 1,000 memberships and no profile, 7 ranges, 1,004 documents

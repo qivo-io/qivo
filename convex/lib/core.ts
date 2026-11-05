@@ -736,8 +736,8 @@ export async function taskListRequest(
 }
 
 /* The organization's whole roster, people and agents alike, ordered by
- * name. Not gated on a project grant: the roster belongs to the org the
- * credential authenticates. REST GET /v1/users and MCP list_users page it
+ * name. Not gated on a project grant, because the roster belongs to the org
+ * the credential authenticates. REST GET /v1/users and MCP list_users page it
  * with userPage instead; only listProjectUsersCore and the REST and MCP
  * inbox's actor names (machine/discussion.ts) read it whole, until
  * t3/limits-machine-project-details and t3/limits-machine-inbox replace
@@ -769,8 +769,8 @@ export type UsersPageJson = { next_cursor: string | null; users: ReturnType<type
  * no email, auth id or picture. Every seat reads the same pages, guests
  * and Viewers included, as the app's people window holds the whole roster
  * for every seat, and no row depends on what a caller may see, so every
- * caller's pages end at the same places. Not gated on a project grant: the
- * roster is how an agent learns its own id. A user on it is not proof of
+ * caller's pages end at the same places. Not gated on a project grant, since
+ * the roster is how an agent learns its own id. A user on it is not proof of
  * assignment eligibility (list_project_users answers that).
  *
  * The people come in name order (profiles.by_org_name, by the name key,
@@ -793,7 +793,7 @@ export type UsersPageJson = { next_cursor: string | null; users: ReturnType<type
  *
  * A page reads the readiness row, two index ranges and one profile past
  * the page. Measured in convex/tests/peopleLists.test.ts ("at the design
- * size"), the call's own reads included: 1,000 people take 5 pages at
+ * size") with the call's own reads, 1,000 people take 5 pages at
  * limit 200, the heaviest 5 ranges, 203 documents and 0.07 MB, and a search
  * that matches nobody reads all 1,000 in one page of 4 ranges, 1,002
  * documents and 0.33 MB.

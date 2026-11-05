@@ -12,9 +12,9 @@
  * (t3/limits-machine-inbox) are to page with them too. A cursor is a
  * position in one list's order, sealed with the list's name and its scope
  * (lib/namedPages.ts namedCursor over lib/archiveCursorSeal.ts), so it shows
- * nothing and opens only for the list and scope it came from: another list,
- * organization, caller or filter, or a changed cursor, opens to null and is
- * refused with CURSOR_REFUSAL. A list names each surface apart where the
+ * nothing and opens only for the list and scope it came from. A cursor of
+ * another list, organization, caller or filter, or a changed cursor, opens
+ * to null and is refused with CURSOR_REFUSAL. A list names each surface apart where the
  * surfaces answer different rows, as the active tasks do, whose REST search
  * widens on `*`; the workload and the lists of namedListPage, whose
  * surfaces answer the same rows, name one list for both, so a cursor
@@ -23,7 +23,7 @@
  * namedPaging, take a name in `machine.`, such as `machine.users`, so none
  * reads like an app list's, seal their scope with namedScope and answer
  * `{next_cursor, <rows>}`, the cursor first. A cursor never grants access
- * by itself: every page checks the caller's access again. Archived task
+ * by itself, since every page checks the caller's access again. Archived task
  * lists keep their own `2~` cursors (lib/archivedTasks.ts). */
 
 import type { GenericDocument } from 'convex/server'
@@ -108,8 +108,8 @@ export type NamedListPage<Out> = {
 
 /**
  * One page of a REST or MCP list in name order, read through
- * lib/namedPages.ts listBatch: at most `limit` rows that `keep` answers,
- * after `cursor`, the next_cursor of an earlier page of `list` with
+ * lib/namedPages.ts listBatch. It holds at most `limit` rows that `keep`
+ * answers, after `cursor`, the next_cursor of an earlier page of `list` with
  * `scope`, or from the start for null, and the cursor of the next page,
  * null only once the index ended. A cursor that does not open for `list`
  * and `scope`, or whose tie `tieOf` refuses, is refused with

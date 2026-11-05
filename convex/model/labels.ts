@@ -194,8 +194,8 @@ export type LabelsPageJson = { next_cursor: string | null; labels: ReturnType<ty
  * keys and is read in any organization.
  *
  * Labels have no design-size figure. Measured in
- * convex/tests/peopleLists.test.ts ("at the design size"), the call's own
- * reads included: 60 labels, the most a test case holds, take one page at
+ * convex/tests/peopleLists.test.ts ("at the design size") with the call's
+ * own reads, 60 labels, the most a test case holds, take one page at
  * limit 200 of 3 ranges, 61 documents and 0.02 MB, and a search that
  * matches none of them reads the same.
  */

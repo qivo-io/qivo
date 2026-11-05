@@ -1300,7 +1300,7 @@ function createExpectedRefusal(tool: ToolDef, raw: unknown): string | null {
  * placeholder argument, such as `random_string`, to a tool whose schema has
  * no properties, and a client can hold the older catalogue for a while. So
  * a call to one of these that sends none of the tool's own arguments is
- * read as a call of that catalogue: its unknown arguments are dropped, as
+ * read as a call of that catalogue, whose unknown arguments are dropped, as
  * they were then, and logged by name. A call that sends any of the tool's
  * own arguments refuses unknown ones as every other tool does, and so does
  * a call that sends `next_cursor`, the answer's own field, which a client

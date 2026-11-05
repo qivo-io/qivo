@@ -699,7 +699,7 @@ describe('the cursors', () => {
         await refused(list.rest(fx.admin, { cursor }), 'bad_request', CURSOR_REFUSAL)
       await refused(list.mcp(fx.admin, { cursor: 'junk' }), 'bad_request', CURSOR_REFUSAL)
     }
-    // another organization's: its admin pages its own roster
+    // another organization's, whose admin pages its own roster
     const foreign = await usersList(fx).rest(fx.otherAdmin, { limit: '1' })
     expect(foreign.rows.every((r) => [fx.otherAdmin, ...others].some((p) => p.id === r.id))).toBe(
       true,

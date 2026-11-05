@@ -1951,9 +1951,9 @@ PATCH /v1/labels/{id}                    { "name": "…", "color": "…", "expec
 A label is `{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }`.
 `GET /v1/labels` answers one page of labels at a time,
 `{"next_cursor": "…", "labels": […]}`, in the order of the app's Labels
-settings page: by name in any case, compared by UTF-8 bytes, so a name that
-starts with an accented letter comes after z, and labels stored with one
-name before names were unique by the order they were created. `search`
+settings page, by name in any case and compared by UTF-8 bytes, so a name
+that starts with an accented letter comes after z. Labels stored with one
+name before names were unique come in the order they were created. `search`
 keeps the labels whose name holds every word of it, in any order, ignoring
 case and accents. Paging, `search` and the refusals work as for
 [users](#users), with `limit must be a whole number of labels from 1 to
