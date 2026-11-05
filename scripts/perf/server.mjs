@@ -805,8 +805,11 @@ function readPart(name, args) {
 }
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
-/* The tasks whose own read answered once, for window=failed, which fails
-   every read of them after that. */
+/* The reads of a task, by their organization and ref, that answered
+   once, for window=failed, which fails every later answer of that read.
+   Keyed by the read, not the task, so a task opened by its number reads
+   it once by number and once by uuid, as the app does, and each answers
+   first. */
 const windowAnswered = new Set()
 /** What a read answers when it never answers (window=loading): nothing is
     sent for it. */
@@ -829,9 +832,9 @@ function taskByRef(byId, orgId, ref) {
     attachment rows. The signed-in person is shown every visible task, the
     unheld ones too, so every list is complete unless window=incomplete
     says otherwise, and a task it does not hold answers unavailable. With
-    window=failed, the task's read fails after its first answer, which a
-    transition soon after brings; with window=error it fails from the
-    first, and with window=loading it never answers. */
+    window=failed, each read of the task, by its arguments, fails after its
+    first answer, which a transition soon after brings; with window=error
+    it fails from the first, and with window=loading it never answers. */
 function readTaskWindow(name, args) {
   const byId = new Map(snapshot.issues.map((row) => [row.id, row]))
   if (name === 'taskWindow:task' && forcedWindow === 'loading') return NO_ANSWER
@@ -843,9 +846,10 @@ function readTaskWindow(name, args) {
       : byId.get(args.issue_id)
   if (!task) return { state: 'unavailable' }
   if (name === 'taskWindow:task' && forcedWindow === 'failed') {
-    if (windowAnswered.has(task.id))
+    const read = JSON.stringify([args.org_id ?? org, args.ref])
+    if (windowAnswered.has(read))
       throw new Error("the task window's read fails, as window=failed asks")
-    windowAnswered.add(task.id)
+    windowAnswered.add(read)
     setTimeout(() => void transition(), 2 * latency + 500)
   }
   // the person's grant on the visible program

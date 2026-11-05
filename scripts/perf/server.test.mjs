@@ -588,6 +588,22 @@ describe('the benchmark server', () => {
     expect(JSON.parse(results()[0].text)).toMatchObject({ state: 'ok' })
     await vi.waitFor(() => expect(results().some((r) => r.error)).toBe(true), 5000)
     expect(results().find((r) => r.error)?.error).toContain('window=failed')
+    // a task opened by its number reads it by number, then the window by
+    // uuid: each read answers first, and fails only after that
+    const byNumber = await server('tasks=40&latency=0&mbps=100000&window=failed')
+    const org = '00000000-0000-4000-8000-000000000001'
+    const ask = (id, ref) =>
+      byNumber.send({ type: 'query', id, name: 'taskWindow:task', args: { org_id: org, ref } })
+    await ask('number', 'QN-1')
+    const first = JSON.parse(byNumber.posted.find((m) => m.to === 'number').text)
+    expect(first).toMatchObject({ state: 'ok', task: { num: 1 } })
+    await ask('uuid', first.task.id)
+    expect(JSON.parse(byNumber.posted.find((m) => m.to === 'uuid').text)).toMatchObject({
+      state: 'ok',
+      task: { id: first.task.id },
+    })
+    await ask('again', 'QN-1')
+    expect(byNumber.posted.find((m) => m.to === 'again')?.error).toContain('window=failed')
     const cut = await server('tasks=40&latency=0&mbps=100000&subtasks=0.2&window=incomplete')
     await cut.send({ type: 'query', id: 'task', name: 'taskWindow:task', args: { ref: parent() } })
     const answer = JSON.parse(cut.posted.find((m) => m.to === 'task').text)
