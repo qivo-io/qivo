@@ -1334,13 +1334,13 @@ function ReassignPicker({
           aria-label={`New assignee: ${label}`}
           disabled={disabled}
           onClick={toggle}
-          className="h-control w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal"
+          // sized and drawn as the select it replaces (FieldSelect), taller
+          // with the chosen person's avatar
+          className="h-control max-w-full gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1 has-[[data-slot=avatar]]:h-auto has-[[data-slot=avatar]]:min-h-[46px] has-[[data-slot=avatar]]:py-2"
         >
-          <span className="flex min-w-0 items-center gap-2">
-            {to !== null && <Avatar id={to.id} size={20} />}
-            <span className="min-w-0 truncate">{label}</span>
-          </span>
-          <Icon name="chevronDown" size={14} />
+          {to !== null && <Avatar id={to.id} size={28} />}
+          <span className="min-w-0 truncate">{label}</span>
+          <Icon name="chevronDown" size={14} color="var(--text-2)" />
         </Button>
       )}
     >
