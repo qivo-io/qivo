@@ -50,9 +50,10 @@ allows it, and a **Viewer** agent never does. Only a person can change
 sharing or hand over a lead; an agent cannot, even for a project it leads. Removing someone's access takes a choice for the
 open tasks they would lose sight of, like the app's removal window.
 
-For teams, MCP offers `list_teams`, `set_team` and `set_team_member`, and
-REST uses `/v1/teams` and `/v1/teams/{id}/members`. Both list teams with their
-members and leaders, create and rename teams, and add or remove members and
+For teams, MCP offers `list_teams`, `list_team_members`, `set_team` and
+`set_team_member`, and REST uses `/v1/teams` and `/v1/teams/{id}/members`.
+Both list teams with their member counts, and a team's members and leaders
+a page at a time, create and rename teams, and add or remove members and
 leaders by the same rules as the app
 ([Planning hours and teams](./organization-and-team-settings.md#planning-hours-and-teams)).
 Only a person changes a team's members. Removing a member takes the same
@@ -61,7 +62,9 @@ choice for their open tasks.
 To learn who a credential acts as and find people, MCP offers `get_me`,
 `list_users` and `list_project_users`, and `update_user` sets a person's
 plannable weekly hours. REST reads with `/v1/me`, `/v1/users` and
-`/v1/projects/{ref}/users`, and `PATCH /v1/users/{id}` sets the hours.
+`/v1/projects/{ref}/users`, and `PATCH /v1/users/{id}` sets the hours. Both
+list the organization's people, labels and teams a page at a time in name
+order, and find them by a name search, every word of it in any order.
 
 Both APIs support `reviewer_id` with the same eligibility rules as
 `assignee_id`. Moving a task into `review` sets its remaining hours to the
