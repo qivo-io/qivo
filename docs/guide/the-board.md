@@ -141,10 +141,7 @@ it: **Board** on a Team sync row, **Open task in board** in the Inbox, the
 breadcrumb in a task window and an active task picked in Search while the
 Board is open. The first two open the Board of the task's sub-project, the
 breadcrumb opens the Board of the project or sub-project you click, and a
-task picked in Search stays on the Board you are on. A task picked in
-Search shows its card only once every task has loaded for a page that
-needs them; before that, its window opens over the Board without showing
-the card. The Board
+task picked in Search stays on the Board you are on. The Board
 scrolls the card to the middle of the screen once it has its tasks, and
 rings it until a moment after you close the window, following the task to
 its new card if a change in the window moved it. A subtask under a parent heading

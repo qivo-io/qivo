@@ -9416,6 +9416,17 @@ export const PLANNER = {
       opens, as a role change since a search answered can change it. */
   handleNow: (uuid: string, orgId: string, num: number): string =>
     uuidToKey.get(uuid) ?? handleFor(uuid, orgId, `${ISSUE_PREFIX}-${num}`),
+  /** The handle the views name the task that `open` opens by: a handle as
+      it is, and a reference that names a task's organization, number and
+      uuid (P.openTask) by the handle that task opens by now (P.handleNow),
+      as the Board names a card only its answer brings, so App reveals
+      that card. Any other reference as it is. */
+  handleOfOpen: (open: string): string => {
+    const named = refParts(open)
+    return named?.org && named.uuid && named.num !== undefined
+      ? PLANNER.handleNow(named.uuid, named.org, named.num)
+      : open
+  },
   /** Why the live snapshot is stale, or null while it is current. Observe
       it through the `health` channel. */
   snapshotTrouble: (): SnapshotTrouble | null => snapshotTrouble,

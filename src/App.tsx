@@ -1539,7 +1539,8 @@ function App() {
         setProjectsOpen(false)
       }
       setOpenIssue(k)
-      if (k && revealing) reveal(k)
+      // the views name a task by its handle, also one a reference opens
+      if (k && revealing) reveal(P.handleOfOpen(k))
     })
   const navOpenIssue = (k) => openNav(k, false)
   // another task in the open window, or none (the Inbox pane, Team sync)
@@ -2016,12 +2017,13 @@ function App() {
 
   // the palette searches on the server (Palette.tsx) and needs only the two
   // ways to open what it found, a project as the scope and a task by its
-  // handle, which may name a task the workspace does not hold, such as an
-  // archived one. A task picked while the Board shows opens over its
-  // revealed card when the workspace holds it, as only such a task has one.
+  // handle or a reference, which may name a task the workspace does not
+  // hold, such as an archived one. A task picked while the Board shows opens
+  // over its revealed card, which the Board shows from its answer; one the
+  // Board does not show reveals nothing, as a filtered task does.
   const paletteCtx = {
     setScope: navScope,
-    openIssue: (id: string) => openNav(id, boardActive && !!P.issueById[id]),
+    openIssue: (id: string) => openNav(id, boardActive),
   }
 
   /* An address that now names a DIFFERENT organization than the last time this
