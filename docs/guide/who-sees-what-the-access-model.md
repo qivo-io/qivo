@@ -10,9 +10,17 @@ to their tasks and sub-projects.
 - **Project Lead** manages that project, its settings, sharing and sub-projects.
 
 In project settings, **Project access** groups grants under **Teams** and
-**Users**. Use **Add team or user** to add individual people or teams. Team
-grants can be **User** or **Viewer**. New team members receive the grant;
-removing a member removes that source of access.
+**Users**. Each list shows 25 grants at a time in name order, with a search
+of its own and **Load more**. The lists show the grants on this project, so
+access through a team or the parent project shows on neither, and a person
+missing from **Users** may still have access that way. The project's lead
+shows first under **Users**. Use **Add team or user** to add individual
+people or teams: it lists 25 teams and people at a time, teams first, with a
+search over the whole organization and **Load more**, and offers
+organization admins like anyone else. The team or person you choose, and
+the role beside it, stay chosen while you search again. Team grants can be
+**User** or **Viewer**. New team members receive the grant; removing a
+member removes that source of access.
 
 The strongest applicable role wins. A Viewer team grant does not reduce an
 individual User grant. Removing one grant leaves access through other teams,
