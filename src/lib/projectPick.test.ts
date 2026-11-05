@@ -156,9 +156,10 @@ describe('the scopes', () => {
 
   it('caps a pick at the server scope’s own number of ids', () => {
     expect(PICK_MOST).toBe(ARCHIVED_SCOPE.ids)
-    const fifty = press(Array.from({ length: PICK_MOST }, (_, n) => sub(`s${n}`)))
+    // top-level projects, as no project holds more than 30 sub-projects
+    const fifty = press(Array.from({ length: PICK_MOST }, (_, n) => top(`p${n}`)))
     expect(ids(fifty)).toHaveLength(PICK_MOST)
-    expect(pickRow(fifty, sub('s50'), MANY)).toEqual({ refused: 'most' })
+    expect(pickRow(fifty, top('p50'), MANY)).toEqual({ refused: 'most' })
   })
 })
 
