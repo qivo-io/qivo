@@ -854,6 +854,26 @@ on, as from that one, never return the backend to a commit before v0.1.127;
 roll forward instead. Returning the app alone to an earlier release is safe
 against a later backend, because that app lists the workspace's projects.
 
+From the release after v0.1.128, `deletedItems.roles` answers each seat of
+the login its role in Deleted items and whether Delete now applies there,
+`deletedItems.people` answers the people of one organization 25 at a time
+in name order for Deleted by and the assignee filter, and
+`deletedItems.purgeSummary` answers an organization admin how many items
+Delete now deletes with a project item. `deletedItems.page` takes `someone`,
+the deletes of people no longer in the organization, and its `via` takes a
+credential kind, which matches every delete through that kind of
+credential, so an admin's `via: 'mcp_tokens'` now lists the deletes
+through personal tokens where it listed none. No app calls any of them yet,
+so that release sets no rollback floor and needs no step, and returning the
+backend to a commit before it stays safe until an app reads them. The
+release whose app first calls them makes this release the backend's floor
+for that app, and its own paragraph here says so. The same release has
+Deleted items judge an organization admin by what the admin's role reads,
+which changes no answer until the admin access split; after it an admin
+keeps every item with its metadata and Delete now, and sees no task title,
+search hit or content without ordinary access. The release changes no
+table, field or index, and there is no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
