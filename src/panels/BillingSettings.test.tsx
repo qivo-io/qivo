@@ -166,7 +166,7 @@ describe('Billing reads its usage once', () => {
     ).toBe(true)
   })
 
-  it('keeps the last figures when a Refresh fails, and Refresh starts Storage by project over with its search', async () => {
+  it('keeps the last figures when a Refresh fails, reads no usage for a search, and Refresh starts Storage by project over with its search', async () => {
     await open()
     await settle()
     const box = container.querySelector<HTMLInputElement>('[data-billing-storage-search]')
@@ -180,7 +180,10 @@ describe('Billing reads its usage once', () => {
       org_id: 'org-1',
       search: 'firm',
     })
+    // the search starts only Storage by project over, never the usage head
+    expect(named('billing:currentUsage')).toHaveLength(1)
 
+    const before = named('billing:storageProjects').length
     usageAnswer = async () => {
       throw new Error('Network down')
     }
@@ -191,6 +194,8 @@ describe('Billing reads its usage once', () => {
     expect(container.querySelector('[data-billing-storage-bytes]')?.textContent).toBe(
       '2.5 MB stored',
     )
+    // Refresh read Storage by project once more, with the search kept
+    expect(named('billing:storageProjects')).toHaveLength(before + 1)
     expect(named('billing:storageProjects').at(-1)?.args).toEqual({
       org_id: 'org-1',
       search: 'firm',

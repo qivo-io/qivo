@@ -147,7 +147,9 @@ describe('Storage by project', () => {
     expect(shown()).toEqual(['p3:3'])
 
     // Refresh reads the first batch again with the search kept
+    const before = reads.length
     await act(async () => setRefresh(1))
+    expect(reads).toHaveLength(before + 1)
     expect(reads.at(-1)?.args).toEqual({ org_id: 'org-1', search: 'cafe racer' })
     expect(searchBox().value).toBe('cafe racer')
     await answer(ready([row(3, { name: 'Café Racer' })]))
