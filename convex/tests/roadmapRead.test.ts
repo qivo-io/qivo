@@ -18,6 +18,7 @@ import { OWN_READS } from '../lib/access'
 import { LIMITS, ROADMAP_TASKS } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
 import {
+  type PlannedTask,
   ROADMAP,
   type RoadmapAnswer,
   type RoadmapFilters,
@@ -52,6 +53,7 @@ import {
   NO_ROADMAP_FILTERS,
   NOW_WEEK,
   ordinary,
+  plannedOf,
   roadmapFor,
   roadmapIds,
   roadmapRead,
@@ -486,7 +488,7 @@ describe('filters', () => {
 /* ------------------------------------------------------------ the planned task */
 
 describe('the planned task', () => {
-  it('keeps the planning session’s task past the filter row only, never a task the caller does not hold, one the window hides or an id of nothing', async () => {
+  it('keeps the planning session’s task past the filter row only, never a task the caller does not hold, one the window hides, one named with another sub-project or an id of nothing', async () => {
     const t = newT()
     const f = await withOrg(t)
     const sibling = await plantHiddenSibling(t, f, f.guest)
@@ -511,17 +513,92 @@ describe('the planned task', () => {
     const scope = projectScope(f.guest, f.meta.id)
     const plain = await roadmapFor(t, f.guest, scope, { mine: true })
     expect(titles(plain)).toEqual(['Mine'])
-    // My tasks hides Theirs, which the read takes by id as the session's
+    // My tasks hides Theirs, which the read finds among its sub-project's
+    // active tasks as the session's
     expect(
-      titles(await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, theirs.id)),
+      titles(
+        await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, plannedOf(theirs)),
+      ),
     ).toEqual(['Mine', 'Theirs'])
     // this must fail for a read that keeps a planned task outside the
-    // caller's working set, which shows the archived task
-    for (const id of [archived.id, hidden.id, elsewhere.id, backlog.id, uuid()])
+    // caller's working set, which shows the archived task, or one the
+    // caller names with a sub-project it is not in
+    const named: [string, PlannedTask][] = [
+      ['archived', plannedOf(archived)],
+      ['hidden', plannedOf(hidden)],
+      ['hidden, named with FW', { id: hidden.id, project_id: f.sub.id }],
+      ['elsewhere', plannedOf(elsewhere)],
+      ['elsewhere, named with FW', { id: elsewhere.id, project_id: f.sub.id }],
+      ['backlog', plannedOf(backlog)],
+      ['theirs, named with PCB', { id: theirs.id, project_id: f.sub2.id }],
+      ['nothing', { id: uuid(), project_id: f.sub.id }],
+    ]
+    for (const [label, planned] of named)
       expect(
-        await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, id),
-        id === archived.id ? 'archived' : id,
+        await roadmapFor(t, f.guest, scope, { mine: true }, DEFAULT_WINDOW, planned),
+        label,
       ).toEqual(plain)
+  })
+
+  it('reads nothing by the planned task’s id, so a task of another organization, one in a hidden project and an id of nothing answer and read the same, at a lowered document budget too', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const sibling = await plantHiddenSibling(t, f, f.guest)
+    await task(t, f.sub, { title: 'Mine', assignee_id: f.guest.id })
+    // other people's tasks, which the read of FW's active tasks takes
+    await plantTasks(t, f.sub, 20, ordinary)
+    const hidden = await task(t, sibling, { title: 'Hidden', assignee_id: f.user.id })
+    const elsewhere = await plantIssue(t, {
+      org_id: f.otherOrg.id,
+      project_id: f.otherProject.id,
+      title: 'Elsewhere',
+    })
+    const scope = projectScope(f.guest, f.meta.id)
+    const read = (planned?: PlannedTask) =>
+      roadmapRead(t, [f.guest], scope, { mine: true }, DEFAULT_WINDOW, planned)
+    /** The smallest ROADMAP.reads.documents at which `planned` answers ok. */
+    const leastDocuments = async (planned?: PlannedTask) => {
+      let low = 0
+      let high = DEFAULT_ROADMAP.reads.documents
+      while (high - low > 1) {
+        const mid = Math.floor((low + high) / 2)
+        ROADMAP.reads.documents = mid
+        if ((await read(planned)).answer.state === 'ok') high = mid
+        else low = mid
+      }
+      ROADMAP.reads.documents = DEFAULT_ROADMAP.reads.documents
+      return high
+    }
+    /** Expects each of `ids`, named with sub-project `project`, to answer
+     * and read as `planned` does, at the default budget, at the smallest
+     * document budget `planned` fits and one below it. */
+    const alike = async (ids: string[], project: string, planned?: PlannedTask) => {
+      const least = await leastDocuments(planned)
+      for (const [documents, state] of [
+        [DEFAULT_ROADMAP.reads.documents, 'ok'],
+        [least, 'ok'],
+        [least - 1, 'over_budget'],
+      ] as const) {
+        ROADMAP.reads.documents = documents
+        const expected = await read(planned)
+        expect(expected.answer.state, `${documents} documents`).toBe(state)
+        for (const id of ids)
+          expect(
+            await read({ id, project_id: project }),
+            `${id === hidden.id ? 'hidden' : id === elsewhere.id ? 'elsewhere' : 'nothing'}, ${documents} documents`,
+          ).toEqual(expected)
+      }
+      ROADMAP.reads.documents = DEFAULT_ROADMAP.reads.documents
+    }
+    const ids = [hidden.id, elsewhere.id, uuid()]
+    // named with a sub-project outside the selection, as the hidden task's
+    // and the other organization's are, it reads nothing at all
+    await alike(ids, sibling.id)
+    await alike(ids, f.otherProject.id)
+    // named with a selected sub-project, it reads FW's active tasks, and
+    // only those. This must fail for a read of the task by its id, which
+    // reads one more document for a task that exists anywhere
+    await alike(ids, f.sub.id, { id: uuid(), project_id: f.sub.id })
   })
 
   it('counts the planned task toward the ceiling', async () => {
@@ -535,13 +612,15 @@ describe('the planned task', () => {
     expect(stateOf(await roadmapFor(t, f.guest, scope, high))).toEqual({ state: 'ok', rows: 3 })
     // this must fail for a planned task that does not count, which answers
     // ok with 4 rows
-    expect(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, low.id)).toEqual({
+    expect(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, plannedOf(low))).toEqual({
       state: 'over_ceiling',
       ceiling: 3,
       projects: [f.sub.id],
     })
     ROADMAP.ceiling = 4
-    expect(stateOf(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, low.id))).toEqual({
+    expect(
+      stateOf(await roadmapFor(t, f.guest, scope, high, DEFAULT_WINDOW, plannedOf(low))),
+    ).toEqual({
       state: 'ok',
       rows: 4,
     })

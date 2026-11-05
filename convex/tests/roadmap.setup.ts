@@ -11,6 +11,7 @@ import type { QueryCtx } from '../_generated/server'
 import { MIB } from '../lib/limits'
 import {
   type DependencyAnswer,
+  type PlannedTask,
   type RoadmapAnswer,
   type RoadmapFilters,
   type RoadmapScope,
@@ -46,22 +47,29 @@ export const weeksFrom = (from: string, weeks: number): RoadmapWindow => ({
  * (src/lib/dates.ts DEFAULT_WIN), on Monday weeks. */
 export const DEFAULT_WINDOW: RoadmapWindow = weeksFrom(dayPlus(NOW_WEEK, -14), 9)
 
+/** `task` as a planning session names it to tasks.roadmap, by its id and
+ * its sub-project's. */
+export const plannedOf = (task: Pick<Doc<'issues'>, 'id' | 'project_id'>): PlannedTask => ({
+  id: task.id,
+  project_id: task.project_id,
+})
+
 /** tasks.roadmap for `profile`'s login, with `filters` over
- * NO_ROADMAP_FILTERS, and the task with id `planned` as the planning
- * session's where given. */
+ * NO_ROADMAP_FILTERS, and `planned` as the planning session's task where
+ * given. */
 export const roadmapFor = (
   t: T,
   profile: Doc<'profiles'>,
   scope: RoadmapScope,
   filters: Partial<RoadmapFilters> = {},
   window: RoadmapWindow = DEFAULT_WINDOW,
-  planned?: string,
+  planned?: PlannedTask,
 ): Promise<RoadmapAnswer> =>
   as(t, profile).query(api.tasks.roadmap, {
     scope,
     filters: { ...NO_ROADMAP_FILTERS, ...filters },
     window,
-    ...(planned === undefined ? {} : { planned_task_id: planned }),
+    ...(planned === undefined ? {} : { planned_task: planned }),
   })
 
 /** tasks.roadmapDependencies for `profile`'s login. */
@@ -82,15 +90,15 @@ async function figures(ctx: Pick<QueryCtx, 'meta'>): Promise<ReadFigures> {
 }
 
 /** The Roadmap for the login whose seats are `seats`, read in one t.run as
- * the query reads it, with what it read, and the task with id `planned` as
- * the planning session's where given. */
+ * the query reads it, with what it read, and `planned` as the planning
+ * session's task where given. */
 export const roadmapRead = (
   t: T,
   seats: readonly Doc<'profiles'>[],
   scope: RoadmapScope,
   filters: Partial<RoadmapFilters> = {},
   window: RoadmapWindow = DEFAULT_WINDOW,
-  planned?: string,
+  planned?: PlannedTask,
 ): Promise<{ answer: RoadmapAnswer; read: ReadFigures }> =>
   t.run(async (ctx) => {
     const profiles = new Map(seats.map((p) => [p.org_id, p]))
@@ -98,7 +106,7 @@ export const roadmapRead = (
       scope,
       filters: { ...NO_ROADMAP_FILTERS, ...filters },
       window,
-      ...(planned === undefined ? {} : { planned_task_id: planned }),
+      ...(planned === undefined ? {} : { planned_task: planned }),
     })
     return { answer, read: await figures(ctx) }
   })

@@ -35,14 +35,16 @@
  *   rule (lib/roadmapVisibility.ts), groups included and counted toward
  *   its ceiling, with the shown parents, the shown subtasks of its groups
  *   that are not rows, My view's sub-projects and the headings' Remaining.
- *   The task a planning session plans, named by `planned_task_id`, skips
- *   the filter row alone, as the app's Roadmap keeps it, and never the
- *   selection, the caller's access or the visibility rule. It reads what
- *   board reads with every status, each passing group's subtree for its
- *   facts, the counts (overview_counts by_project_owner_shard of each
- *   selected sub-project, or in My view the person's rows,
- *   by_owner_project, with the organization's readiness and regroups), and
- *   under My tasks the planned task by id.
+ *   The task a planning session plans, named by `planned_task` with its
+ *   sub-project, skips the filter row alone, as the app's Roadmap keeps it,
+ *   and never the selection, the caller's access or the visibility rule.
+ *   It reads what board reads with every status, each passing group's
+ *   subtree for its facts, the counts (overview_counts
+ *   by_project_owner_shard of each selected sub-project, or in My view the
+ *   person's rows, by_owner_project, with the organization's readiness and
+ *   regroups), and under My tasks, for a planned task the person's ranges
+ *   do not hold, the active tasks of its sub-project up to it, once that
+ *   sub-project is one of the selection's, never a task by the id.
  * - roadmapDependencies: a selection's dependency inputs, the blocks links
  *   between its own tasks for the arrows and the parts of the dependency
  *   graph Auto-move works on, inside the selection and outside it. It reads
@@ -111,7 +113,7 @@ export const roadmap = authedQuery({
       search: v.string(),
     }),
     window: v.object({ from: v.string(), to: v.string() }),
-    planned_task_id: v.optional(v.string()),
+    planned_task: v.optional(v.object({ id: v.string(), project_id: v.string() })),
   },
   handler: (ctx, args) => readRoadmap(ctx, ctx.myProfiles, args),
 })

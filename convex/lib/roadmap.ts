@@ -33,14 +33,12 @@
  * (lib/viewReads.ts mineCounts); the hidden sub-projects of a navigated
  * top-level project; and for the dependency read, how many links a task of
  * a part has to tasks the reader is not shown, archived tasks included,
- * each read by id and dropped; and under My tasks, whether the planned
- * task's id (readRoadmap) names a task at all, read by id. Each such task or
- * link counts at a fixed size, so its contents move no answer. A `counting`
- * Remaining also follows a regroup anywhere in the organization
- * (model/overviewCounts.ts countsReady), so a reader learns for a while
- * that some project, one they cannot see included, was archived, restored
- * or moved to Deleted items, as the Overview's figures do
- * (lib/overview.ts). */
+ * each read by id and dropped. Each such task or link counts at a fixed
+ * size, so its contents move no answer. A `counting` Remaining also
+ * follows a regroup anywhere in the organization (model/overviewCounts.ts
+ * countsReady), so a reader learns for a while that some project, one they
+ * cannot see included, was archived, restored or moved to Deleted items, as
+ * the Overview's figures do (lib/overview.ts). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -139,6 +137,9 @@ import {
  * group one more for its subtasks, as on the Board, and a group's facts
  * read nothing more. A search reads as the Board's does. The counts add 3
  * ranges and one a sub-project, or in My view the person's count rows.
+ * Under My tasks, a planned task the person's ranges do not hold reads the
+ * active tasks of its sub-project up to it (keepPlanned), no more than the
+ * read without My tasks takes of that sub-project.
  *
  * `context` caps the shown parents and the subtasks of group rows that are
  * not rows themselves, together, the rows a Roadmap holds beside its
@@ -241,6 +242,13 @@ export type RoadmapFilters = {
  * counted inclusively (src/lib/dates.ts resolveWin). */
 export type RoadmapWindow = { from: string; to: string }
 
+/** The task the caller's planning session plans, by its id and the id of
+ * the sub-project it is in now, as the task window shows it. The read
+ * looks for it in that sub-project only, so a task that moved answers as
+ * an id of nothing until the caller names its new sub-project
+ * (keepPlanned). */
+export type PlannedTask = { id: string; project_id: string }
+
 /** What tasks.ts roadmap answers. */
 export type RoadmapAnswer =
   | {
@@ -248,12 +256,12 @@ export type RoadmapAnswer =
       /** every task the Roadmap shows, groups included, by number, then
        * organization and id, the selection's tasks that pass the filter row
        * and isRoadmapTaskVisible in the window. The planned task, the one
-       * the caller's planning session plans (readRoadmap's
-       * `planned_task_id`), skips the filter row alone, as the app's Roadmap
-       * keeps the session's task (src/views/Roadmap.tsx passes): it is a row
-       * where it is in the selection, in the reader's working set and kept
-       * by isRoadmapTaskVisible, and it counts toward the ceiling like any
-       * other row */
+       * the caller's planning session plans (readRoadmap's `planned_task`),
+       * skips the filter row alone, as the app's Roadmap keeps the
+       * session's task (src/views/Roadmap.tsx passes): it is a row where it
+       * is in the sub-project the caller names and in the selection, in the
+       * reader's working set and kept by isRoadmapTaskVisible, and it
+       * counts toward the ceiling like any other row */
       rows: ViewRow[]
       /** the shown ancestors of rows that are not rows themselves, as the
        * Board's parents */
@@ -468,9 +476,9 @@ const selectionSeat = (at: Scoped): ViewAccess => {
  *   and its sentence where a bound of the reader's own access reads stopped
  *   a check (lib/access.ts accessUnchecked). Never a smaller Roadmap.
  *
- * `planned_task_id` names the task the caller's planning session plans,
- * which keeps its row past the filter row alone (keepPlanned). An id that
- * names no such task changes nothing.
+ * `planned_task` names the task the caller's planning session plans, with
+ * its sub-project, which keeps its row past the filter row alone
+ * (keepPlanned). One that names no such task changes nothing.
  *
  * Refuses more than ROADMAP.owners owners, a search past LIMITS.search
  * (lib/viewFilters.ts filtersOf) and a window windowOf refuses.
@@ -482,7 +490,7 @@ export async function readRoadmap(
     scope: RoadmapScope
     filters: RoadmapFilters
     window: RoadmapWindow
-    planned_task_id?: string
+    planned_task?: PlannedTask
   },
 ): Promise<RoadmapAnswer> {
   const f = filtersOf(args.filters, ROADMAP.owners)
@@ -490,7 +498,7 @@ export async function readRoadmap(
   // a project selection's sub-projects, once known
   const known: { projects?: string[] } = {}
   try {
-    return await roadmapOf(ctx, profiles, args.scope, f, win, args.planned_task_id, known)
+    return await roadmapOf(ctx, profiles, args.scope, f, win, args.planned_task, known)
   } catch (e) {
     const projects = known.projects === undefined ? {} : { projects: known.projects }
     if (e instanceof OverCeiling)
@@ -537,7 +545,7 @@ async function roadmapOf(
   scope: RoadmapScope,
   f: Filters,
   win: Window,
-  planned: string | undefined,
+  planned: PlannedTask | undefined,
   known: { projects?: string[] },
 ): Promise<RoadmapAnswer> {
   const guard = viewBudget(ctx, ROADMAP.reads)
@@ -610,19 +618,25 @@ async function* noting(
 }
 
 /**
- * Adds the planned task, the task with id `id` that the caller's planning
- * session plans, to `got`'s rows where the filter row alone hid it, as the
- * app's Roadmap keeps the session's task past the toolbar filters
- * (src/views/Roadmap.tsx passes). Never past the scope, the reader's
- * working set or isRoadmapTaskVisible in `win`: in a project selection it
- * must be an active task of a selected sub-project, and in My view a task
- * of the person's own ranges that they own by the Reviewer rule, as their
- * other rows. It counts toward ROADMAP.ceiling, so one row past it throws
- * OverCeiling. The read holds every task it could be, except under My tasks
- * in a project selection, which reads the person's own ranges, so there it
- * is read by id, counted at lib/limits.ts TASK_ROW_MAX_BYTES, and kept only
- * where the reader's working set holds it (lib/viewReads.ts viewAccess
- * holds).
+ * Adds the planned task, the task `planned` names that the caller's
+ * planning session plans, to `got`'s rows where the filter row alone hid
+ * it, as the app's Roadmap keeps the session's task past the toolbar
+ * filters (src/views/Roadmap.tsx passes). Never past the scope, the
+ * reader's working set or isRoadmapTaskVisible in `win`: in a project
+ * selection it must be an active task of a selected sub-project, and in My
+ * view a task of the person's own ranges that they own by the Reviewer
+ * rule, as their other rows, and in both it must be in the sub-project
+ * `planned` names. It counts toward ROADMAP.ceiling, so one row past it
+ * throws OverCeiling.
+ *
+ * It reads no task by its id, and nothing by an id the caller sends
+ * outside the selection. The read holds every task it could be, except
+ * under My tasks in a project selection, which reads the person's own
+ * ranges. There, once the named sub-project is one of the selection's, it
+ * looks for the task among that sub-project's active tasks (activeTaskIn),
+ * every one of them in the reader's working set. So a task of another
+ * organization, of a project the reader cannot see or outside the
+ * selection costs what an id of nothing does.
  */
 async function keepPlanned(
   ctx: QueryCtx,
@@ -631,28 +645,25 @@ async function keepPlanned(
   f: Filters,
   win: Window,
   got: FilterResult,
-  id: string,
+  planned: PlannedTask,
 ): Promise<void> {
-  if (got.rows.some((t) => t.id === id)) return
+  if (got.rows.some((t) => t.id === planned.id)) return
   const { seats, selection } = at
-  let t = got.read.get(id)
+  let t = got.read.get(planned.id)
   if (selection !== null) {
-    const ids = new Set(selection.subProjects.map((p) => p.id))
+    // a sub-project outside the selection names no task, before any read
+    const sub = selection.subProjects.find((p) => p.id === planned.project_id)
+    if (sub === undefined) return
     if (t === undefined && f.mine) {
-      await guard.take(BY_ID)
-      const found = await byId(ctx, 'issues', id)
-      if (found === null) return
-      guard.charge(found, TASK_ROW_MAX_BYTES)
-      const seat = selectionSeat(at)
-      if (found.org_id !== seat.me.org_id || !ids.has(found.project_id)) return
-      if (!(await seat.holds([found]))[0]) return
-      // an active task in a live project makes its parent a group
-      got.subtasks.shown.set(found.id, true)
-      if (found.parent_id !== undefined) got.subtasks.parents.add(found.parent_id)
-      t = found
+      t = await activeTaskIn(ctx, guard, sub, planned.id)
+      if (t === undefined) return
+      // an active task in a live project makes its parent a group, and the
+      // reader is shown it
+      got.subtasks.shown.set(t.id, true)
+      if (t.parent_id !== undefined) got.subtasks.parents.add(t.parent_id)
     }
-    if (t === undefined || !ids.has(t.project_id)) return
-  } else if (t === undefined) return
+  }
+  if (t === undefined || t.project_id !== planned.project_id) return
   await groupCheck(ctx, guard, seats, [t], got.subtasks)
   const group = isGroupIn(got.subtasks, t.id) === true
   if (selection === null && !ownedBy(t, group, seats.get(t.org_id)?.me.id ?? '')) return
@@ -660,6 +671,22 @@ async function keepPlanned(
   if (!visibleIn(win, t, group, got.facts.get(t.id))) return
   if (got.rows.length + 1 > ROADMAP.ceiling) throw new OverCeiling()
   got.rows.push(t)
+}
+
+/* The active task with id `id` of `sub`, a selected sub-project, found
+ * among its active tasks a step at a time (lib/viewReads.ts
+ * selectionTasks), which stop at it, or undefined. */
+async function activeTaskIn(
+  ctx: QueryCtx,
+  guard: ViewBudget,
+  sub: Doc<'projects'>,
+  id: string,
+): Promise<Doc<'issues'> | undefined> {
+  for await (const step of selectionTasks(ctx, guard, [sub])) {
+    const found = step.find((t) => t.id === id)
+    if (found !== undefined) return found
+  }
+  return undefined
 }
 
 /**

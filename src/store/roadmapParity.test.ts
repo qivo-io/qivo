@@ -681,7 +681,7 @@ describe('the planning session', () => {
         true,
       ],
       [
-        'a task My tasks hides, which the read takes by id',
+        "a task My tasks hides, which the read finds among its sub-project's tasks",
         meta,
         f.meta.id,
         { mine: true },
@@ -736,7 +736,7 @@ describe('the planning session', () => {
         false,
       ],
       [
-        'a task in another sub-project read by id',
+        'a task in another sub-project, named with its own',
         fw,
         f.sub.id,
         { mine: true },
@@ -770,7 +770,10 @@ describe('the planning session', () => {
       // hides the task
       const without = await roadmapFor(t, subject, scope, server, windowOf(P, weeks))
       expect(expectRows(P, without, storeScope, weeks, row, label).has(it.uuid), label).toBe(false)
-      const answer = await roadmapFor(t, subject, scope, server, windowOf(P, weeks), it.uuid)
+      const answer = await roadmapFor(t, subject, scope, server, windowOf(P, weeks), {
+        id: it.uuid,
+        project_id: it.project,
+      })
       const ids = expectRows(P, answer, storeScope, weeks, row, `${label}, planned`, it.id)
       expect(ids.has(it.uuid), `${label}, planned`).toBe(kept)
     }
