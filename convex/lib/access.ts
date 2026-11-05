@@ -179,9 +179,29 @@ async function directLevel(ctx: QueryCtx, me: Doc<'profiles'>, project: Doc<'pro
 }
 
 /* The effective level of `me` on a live project, the one rule behind
- * canSeeProject and hasProjectLevel. includeNavigation: whether a parent
- * visible only for navigation to one of its sub-projects counts (it then
- * answers 'viewer'). */
+ * canSeeProject, canAccessProject and hasProjectLevel. includeNavigation:
+ * whether a parent visible only for navigation to one of its sub-projects
+ * counts (it then answers 'viewer').
+ *
+ * With navigation, for a top-level project `me` holds no level on,
+ * navigates reads every sub-project of it through by_parent, live and
+ * archived, each with directLevel's grant and team share reads, until one
+ * gives a level. At the design size that is 70 sub-projects, about 143
+ * index ranges when only the last one answers (3 for the parent and 2 for
+ * each sub-project without shares of its own), a read accepted at the
+ * design size's sum and tested there (tests/accessFlags.test.ts, "the
+ * navigation walk"). Past the design size Convex's own read limit refuses
+ * the call with a generic server error, which widens nothing and shows
+ * nothing as complete (agent decision, 5 November 2026, closing
+ * t3/limits-reach-access-checks). The figure is per call: a request that
+ * asks about one parent twice walks it twice, as a REST or MCP sub-project
+ * create does (machine/projects.ts readableProject, then model/projects.ts
+ * subProjectParent). canSeeProject, profileCanSeeProject and
+ * subProjectParent's default level ask with navigation; canAccessProject
+ * and hasProjectLevel ask without it, since navigation only ever gives
+ * 'viewer'. The walk never runs for a sub-project, so a task in a
+ * sub-project never walks; a legacy task stored on a top-level project
+ * does (snapshot.ts threadTask, lib/core.ts findIssue). */
 export async function projectLevel(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1166,14 +1186,17 @@ export async function hasProjectLevel(
   return project !== null && (await hasLevelOn(ctx, me, project, min))
 }
 
-/** hasProjectLevel for a project the caller has already read. */
+/** hasProjectLevel for a project the caller has already read. It asks
+ * projectLevel without navigation, which only ever gives 'viewer', below
+ * every level it is asked for, so it answers as it would with navigation
+ * and never reads a top-level project's sub-projects. */
 export async function hasLevelOn(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
   project: Doc<'projects'>,
   min: 'user' | 'lead' | 'admin',
 ): Promise<boolean> {
-  return levelRank(await projectLevel(ctx, me, project)) >= levelRank(min)
+  return levelRank(await projectLevel(ctx, me, project, false)) >= levelRank(min)
 }
 
 /** The seat half of profileCanBeAssigned: an active profile whose role can
