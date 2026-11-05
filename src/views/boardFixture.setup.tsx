@@ -1,7 +1,7 @@
 import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
-import { vi } from 'vitest'
+import { afterEach, expect, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
@@ -45,6 +45,19 @@ const AT = '2026-09-14T08:00:00.000Z'
     On 2 November 2026 the Board cases that use it took 1.6 s at most each
     under a shard's load on a Boat sandbox. */
 export const BOARD_TEST_TIMEOUT = 20_000
+
+/* The test-build probe of the store the last loadBoard loaded. */
+let lastProbe: { faults(): unknown[] } | null = null
+
+/* After each case of a file that uses loadBoard: the store reported no
+   fault (store/planner.ts reportFault), so no write went out on a path that
+   needs every task before an ask and no paint threw. A case that expects a
+   fault reads it from `probe.faults()`, which forgets it. */
+afterEach(() => {
+  const probe = lastProbe
+  lastProbe = null
+  if (probe) expect(probe.faults()).toEqual([])
+})
 
 /** A task row in the fixture's one project, owned by its one person. */
 export function taskRow(snapshot: Snapshot, id: string, status: Row['status'], num: number): Row {
@@ -222,6 +235,7 @@ export async function loadBoard(
   )
   const store = await import('../store/planner')
   await store.initStore()
+  lastProbe = store.__layerProbe
   sees = (id) => store.P.canSee(id)
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')

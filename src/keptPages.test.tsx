@@ -539,6 +539,9 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
     answersTasks = false
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('./store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
   })
   /* The writes of a planning session, which gives an unscheduled task its
      starter bar. */
@@ -568,6 +571,11 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
         })
     }, 'fc000000')
     network.mutation.mockClear()
+    // the journal answers how many operations the visit holds, as the
+    // server's roadmap.change does
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'roadmap:change' ? { count: 1 } : null,
+    )
     await go(`/app/${org}/board/tasks/qn-5`)
     const plan = await waitFor(
       () => document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]'),
@@ -579,8 +587,10 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
     await act(async () => plan.click())
     const roadmap = await shownPage('roadmap')
     expect(roadmap.textContent).toContain('opens once every task has loaded')
-    // the Roadmap asked for every task as it mounted
+    // the Roadmap asked for every task as it mounted, and nothing else did
     expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    const { __layerProbe } = await import('./store/planner')
+    expect(__layerProbe?.asks()).toEqual(['roadmap'])
     return org
   }
 

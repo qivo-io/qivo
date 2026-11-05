@@ -649,6 +649,9 @@ describe('the Inbox of a session that never asked for every task', { timeout: 20
   afterEach(async () => {
     const { TASKS } = await import('../store/liveParts')
     TASKS.atBoot = true
+    // no write went out on a path that needs every task, and no paint threw
+    const { __layerProbe } = await import('../store/planner')
+    expect(__layerProbe?.faults()).toEqual([])
   })
 
   /** Types `text` into the Inbox's search, as a person does. */
