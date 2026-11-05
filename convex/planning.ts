@@ -221,13 +221,14 @@ export type OwnerLoadsJson = {
  * tell such a caller how much hidden work the owners before it hold.
  * Asking again for the `not_read` owners reads the next one. Staff keep
  * every owner the room holds. They receive each person's hidden busy time
- * without a task id (lib/loadRows.ts loadShown), but the room also spends
- * on what they never receive, every open row's document, hidden Backlog,
- * unscheduled and paused ones included, and the access questions about
- * live projects only hidden paused tasks name. So where `not_read` starts
- * in a staff call, and whether an owner passes `projects`, can follow how
- * much hidden open work the owners hold and how many projects hold their
- * hidden paused work, and nothing else of it.
+ * without a task id or project (lib/loadRows.ts loadShown), but the room
+ * also spends on what they never receive, every open row's document
+ * (hidden unscheduled, zero-hour and paused ones included) and the access
+ * questions about each live project named by the owners' hidden scheduled
+ * tasks with remaining hours or hidden paused tasks. So where `not_read`
+ * starts in a staff call, and whether an owner passes `projects`, can
+ * follow how much hidden open work the owners hold and how many live
+ * projects hold their hidden load and paused work, and nothing else of it.
  *
  * It reads each owner's profile and five open-task ranges, the project row
  * of each project their scheduled tasks that can carry load or are paused

@@ -110,7 +110,9 @@ import { canonicalLoad, committedByWeek, type LoadSpan, type WeekGrid } from './
  * with 30 planned tasks in 3 sub-projects and a paused task in each of the
  * 200 takes 578 ranges, 583 documents and 0.24 MB. Past `projects` live
  * projects named by tasks that can carry load and paused ones together,
- * past `checks` such tasks in projects the caller can see, or past `open`
+ * past `checks` checked tasks (the load tasks the caller receives by
+ * loadShown, hidden ones included for staff and a guest's or Viewer's own,
+ * and the paused ones in projects the caller can see), or past `open`
  * rows, an owner is unavailable in planning.ownerLoads, their paused weeks
  * with their hours, as for any figure that depends on people's workloads
  * (the owner's choice of 1 November 2026). Tests lower these. */
