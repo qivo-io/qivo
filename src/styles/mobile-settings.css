@@ -302,7 +302,8 @@
     grid-column: 3;
     grid-row: 1;
   }
-  .settings-content-scroll [data-project-access-picker] {
+  .settings-content-scroll [data-project-access-picker],
+  .settings-content-scroll [data-popover-wrap]:has(> [data-project-access-picker]) {
     flex-basis: 100%;
   }
   .settings-content-scroll [data-project-access-new-role] {

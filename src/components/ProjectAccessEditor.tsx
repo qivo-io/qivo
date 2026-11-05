@@ -911,7 +911,9 @@ function AddPicker({
       width={300}
       backLayer
       onEscapeKeyDown={escapeClearsFirst('data-project-access-picker-search')}
-      wrapStyle={{ minWidth: 160, flex: '1 1 160px' }}
+      // grows into the row; a phone gives it a row of its own
+      // (mobile-settings.css)
+      wrapStyle={{ minWidth: 160, flexGrow: 1 }}
       button={(toggle, open) => (
         <Button
           type="button"
