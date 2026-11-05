@@ -15,8 +15,8 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    message's organization (lib/taskReference.ts), and the pane's window
    stays the same window when the task arrives, or the home organization
    changes. The pane edits, moves and takes images for a task it shows
-   from its answer, and offers Open task in board only for a task the
-   workspace holds. Back or Forward to such a task (App pendingTask) shows
+   from its answer, names an archived one by its key, and offers Open
+   task in board only for a task the workspace holds. Back or Forward to such a task (App pendingTask) shows
    the pane that says it loads, on a phone too, and Escape closes a
    pop-out, then the pane. A related task the workspace does not hold,
    opened from the pop-out, keeps both windows. */
@@ -387,6 +387,39 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
         expected: { project_id: snap.projects[0].id },
       },
     ])
+  })
+
+  it('names an archived task it opens by its key, in its note and when Restore brings it back', async () => {
+    const { snap } = await loadingInbox()
+    network.mutation.mockImplementation(async (ref) =>
+      getFunctionName(ref) === 'issues:unarchive' ? {} : null,
+    )
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="fd000000-b"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    // the row names the task by its uuid alone, and the answer says archived
+    const {
+      description: _text,
+      has_hidden_subtasks: _h,
+      has_hidden_parent: _p,
+      ...row
+    } = snap.issues.find((it) => it.id === 'fd000000-b') ?? {}
+    await act(async () =>
+      windowReads[0]?.next({
+        state: 'archived',
+        task: { ...row, archived_at: '2026-09-14T09:30:00.000Z', is_group: false },
+        description: '',
+        labels: [],
+        level: 'user',
+      }),
+    )
+    // in the render the answer arrives in, the note names the task's key
+    const note = paneWindow()?.querySelector('[data-task-gone] [role="status"]')
+    expect(note?.textContent).toBe('QN-2 was archived. Restore it to bring it back to the board.')
+    const restore = buttonNamed('Restore', paneWindow() ?? document)
+    await act(async () => restore?.click())
+    await vi.waitFor(() => expect(window.showToast).toHaveBeenCalledWith('Restored QN-2'))
   })
 
   it("keeps the pane's window and the comment typed in it when the home organization changes", async () => {
