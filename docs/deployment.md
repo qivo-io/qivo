@@ -835,7 +835,7 @@ rows and name keys every deployment holds since v0.1.97, and answer
 `not_ready` for an organization without both of its `org_ready` stamps.
 
 The shared project picker, which **Search in** and **Settings → Projects →
-Archived tasks** open, first ships in the release after v0.1.127. While it
+Archived tasks** open, first ships in the release after v0.1.129. While it
 is open it keeps its batches of `projectNav.page`, `projectNav.children` and
 `projectNav.search` live, and Search and Archived tasks read
 `projectNav.resolve` once for the project they open on. v0.1.118
