@@ -2060,13 +2060,13 @@ async function peopleListChecks() {
     const agents = [run.agents.std, run.agents.viewer]
     const agentIds = agents.map((a) => a.id).sort()
     const ids = (rows) => rows.map((r) => r.id)
-    const rest = await restRows(w, '/users', 'users', { limit: PEOPLE_PAGE.rest })
-    expect(new Set(ids(rest)).size === rest.length, 'the REST pages list a user twice')
+    const users = await restRows(w, '/users', 'users', { limit: PEOPLE_PAGE.rest })
+    expect(new Set(ids(users)).size === users.length, 'the REST pages list a user twice')
     for (const agent of agents)
-      eq(rest.filter((u) => u.id === agent.id).length, 1, `${agent.name} in the REST pages`)
+      eq(users.filter((u) => u.id === agent.id).length, 1, `${agent.name} in the REST pages`)
     same(
       ids(await mcpRows(w, 'list_users', 'users', { limit: PEOPLE_PAGE.mcp })),
-      ids(rest),
+      ids(users),
       'the users of list_users pages',
     )
     same(
@@ -2151,8 +2151,8 @@ async function peopleListChecks() {
       PEOPLE_REFUSALS.cursor,
     )
     const second = await toolOk(w, 'list_users', { limit: 1, cursor: first.next_cursor })
-    eq(second.users[0]?.id, ids(rest)[1], 'list_users after a cursor of GET /v1/users')
-    return `${rest.length} users in REST pages of ${PEOPLE_PAGE.rest} and MCP pages of ${PEOPLE_PAGE.mcp}, the run's agents by its tag, its team's 2 members one a page and its label without the accent on both surfaces; offset, limit=0 and other lists' cursors refused`
+    eq(second.users[0]?.id, ids(users)[1], 'list_users after a cursor of GET /v1/users')
+    return `${users.length} users in REST pages of ${PEOPLE_PAGE.rest} and MCP pages of ${PEOPLE_PAGE.mcp}, the run's agents by its tag, its team's 2 members one a page and its label without the accent on both surfaces; offset, limit=0 and other lists' cursors refused`
   })
 }
 
