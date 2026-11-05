@@ -18,7 +18,8 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    task. An archived task's address shows it read-only, with Restore for
    an editor only. A task the server answers unavailable can't be opened,
    with Retry where no read follows that answer, as for a uuid every
-   organization answered. The Board behind it can be past its budget. The
+   organization answered. An address the router reads as no task stops
+   the boot's read. The Board behind it can be past its budget. The
    address-moved gate shows nothing of the task and reads no message. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -46,8 +47,9 @@ const SOAK = 'fd000000-0000-4000-8000-000000000002'
 
 let container: HTMLDivElement
 let root: Root
-/* The reads of taskWindow.task, which the test answers. */
-let reads: { args: Record<string, unknown>; next: (value: unknown) => void }[]
+/* The reads of taskWindow.task, which the test answers, and whether each
+   was unsubscribed. */
+let reads: { args: Record<string, unknown>; next: (value: unknown) => void; closed: boolean }[]
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -139,8 +141,13 @@ async function bootAt(
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
-    else if (name === 'taskWindow:task') reads.push({ args, next })
-    else if (name === 'tasks:board')
+    else if (name === 'taskWindow:task') {
+      const read = { args, next, closed: false }
+      reads.push(read)
+      return () => {
+        read.closed = true
+      }
+    } else if (name === 'tasks:board')
       next(boardStandIn(snap, args as BoardArgs, board ? { force: board } : {}))
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     return () => {}
@@ -304,6 +311,15 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
     await act(async () => reads[1]?.next(answerOf(booted.snap)))
     await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
     expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
+  })
+
+  it('stops the read of an address the router reads as no task, which opens no window', async () => {
+    const { snap } = await bootAt('/app/testbed/projects/tasks/qn-2')
+    // the boot read it with its first stage, as the address names a task
+    expect(reads.map((read) => read.args)).toEqual([{ org_id: snap.orgs[0].id, ref: 'QN-2' }])
+    // App shows the Projects page, with no task window to take the read
+    expect(dialog()).toBeNull()
+    expect(reads[0]?.closed).toBe(true)
   })
 
   it('opens the task when its Board is past its budget', async () => {
