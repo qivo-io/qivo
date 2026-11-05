@@ -144,8 +144,12 @@ type Profile = Doc<'profiles'>
  * whose rows hold their searchable text, so the page ends before the first
  * entry whose row it ran out of reads for (answerOf). The last eighth
  * holds what runs past the last checks: the sight of the seat the call
- * opened last, a document past each budget, and the reads authedQuery
- * makes for the login.
+ * opened last, a document past each other check, and the reads
+ * authedQuery makes for the login. The assignee filter reads one task
+ * item's assigned tasks whole past its check (scanEntry, assigneeEntries),
+ * at most LIMITS.subtasks.max + 1 rows, whose searchable text at the
+ * description cap in a three-byte script can pass that eighth; with
+ * ordinary text it is a few dozen KB.
  * `find` is the share of `call` the ranges that find items may spend:
  * 6 MiB, 12,000 documents and 1,600 ranges. Its ranges are the page's own
  * bound, set by the widest browse inside the design size: a member who
