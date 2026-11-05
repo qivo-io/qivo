@@ -1280,7 +1280,7 @@ describe('real limits', () => {
     await countOrg(c.t, c.f.org.id)
     const { answer, read } = await agendaRead(c.t, c.me, { kind: 'team', team_id: team })
     record('a team scope for a person in 5 teams', answer, read)
-    expect(answer.state).not.toBe('unavailable')
+    expect(okOf(answer).sub_projects).toHaveLength(20)
   })
 
   it('answers over_ceiling from the counts for a team that shares 50 live and 150 archived projects, and from the read while counting', async () => {
