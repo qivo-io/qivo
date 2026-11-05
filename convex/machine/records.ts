@@ -12,8 +12,9 @@
  * model/attachments.ts lists attachments with download links, removes them
  * and runs the REST upload's start and confirm, and the app's files.ts runs
  * the same attach and remove. lib/activityVisibility.ts taskHistoryPage is the
- * app's activity rule, and planning.ts workloadCore is the app's org load
- * with its anonymization. The internal functions below are thin per-surface
+ * app's activity rule, and planning.ts workloadPage pages the people with
+ * each one's load as planning.ownerLoads reads it for the app, its
+ * anonymization included. The internal functions below are thin per-surface
  * wrappers named `mcp*` and `rest*`. Each starts from asMachineCaller, which
  * refuses a read-only credential before anything resolves, then parses its
  * surface's input, calls the shared function and encodes the result. MCP
@@ -58,7 +59,8 @@ import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
 import { limitedText, limitedWhole } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { DEFAULT_PAGE_SIZE, LIMITS } from '../lib/limits'
+import { offsetRefusal } from '../lib/listCursor'
 import { utcToday } from '../lib/machineDelay'
 import {
   type AttachmentJson,
@@ -75,7 +77,7 @@ import {
 } from '../model/attachments'
 import { newUuid } from '../model/orgs'
 import { calendarDay } from '../model/taskValues'
-import { type WorkloadJson, workloadCore } from '../planning'
+import { type WorkloadJson, workloadPage } from '../planning'
 import type { TOOLS } from './mcp'
 import { conflictRetrying } from './registry'
 import type { ROUTES, route as restRoute } from './rest'
@@ -83,7 +85,9 @@ import {
   MCP_NO_WRITE,
   MCP_PROVENANCE,
   needJson,
+  offsetSent,
   optionalJson,
+  pageLimit,
   pretty,
   REST_CALLER,
   refuseUnknownFields,
@@ -597,8 +601,48 @@ async function workloadProject(
   return project
 }
 
-/* GET /v1/workload?from_week=&weeks=&project= (planning.ts workloadCore).
- * Query values arrive as raw strings. */
+/** The refusal of a workload `cursor` sent with `person`, whose answer is
+ * one person and no list. */
+export const PERSON_NO_CURSOR = 'cursor does not apply with person'
+
+/* The person a workload read names, a profile uuid of the caller's
+ * organization, inactive ones included, or undefined when it names none;
+ * `missing` words the refusal. */
+async function workloadPerson(
+  ctx: QueryCtx,
+  me: Caller,
+  ref: string | undefined,
+  missing: (ref: string) => ConvexError<Refusal>,
+): Promise<Doc<'profiles'> | undefined> {
+  if (ref === undefined || ref === '') return undefined
+  const person = UUID.test(ref) ? await byId(ctx, 'profiles', ref.toLowerCase()) : null
+  if (person === null || person.org_id !== me.org_id) throw missing(ref)
+  return person
+}
+
+/* A workload read's paging, by the rule REST and MCP share. With `person`
+ * the answer is one row, so a cursor is refused and `limit` and `offset`
+ * are not read. Otherwise `limit` is LIMITS.listWorkload's, 50 when absent,
+ * and any `offset` but 0 is refused with the sentence that says to pass the
+ * cursor. */
+function workloadPaging(a: {
+  person?: string
+  limit?: string | number
+  offset?: string | number
+  cursor?: string
+}): { limit: number; cursor: string | null } {
+  if (a.person !== undefined && a.person !== '') {
+    if (a.cursor !== undefined) throw badRequest(PERSON_NO_CURSOR)
+    return { limit: 1, cursor: null }
+  }
+  const limit = pageLimit(LIMITS.listWorkload, a.limit)
+  if (offsetSent(a.offset)) throw badRequest(offsetRefusal('workload'))
+  return { limit, cursor: a.cursor ?? null }
+}
+
+/* GET /v1/workload?from_week=&weeks=&project=&person=&limit=&cursor=
+ * (planning.ts workloadPage). Query values arrive as raw strings; an empty
+ * cursor, project or person counts as absent. */
 export const restWorkload = internalQuery({
   args: {
     callerId: v.string(),
@@ -607,6 +651,10 @@ export const restWorkload = internalQuery({
     from_week: v.optional(v.string()),
     weeks: v.optional(v.string()),
     project: v.optional(v.string()),
+    person: v.optional(v.string()),
+    limit: v.optional(v.string()),
+    offset: v.optional(v.string()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<WorkloadJson> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
@@ -617,12 +665,15 @@ export const restWorkload = internalQuery({
           ? Number(a.weeks)
           : Number.NaN
     const window = workloadWindow(a.today, a.from_week || undefined, weeks)
+    const paging = workloadPaging({ ...a, cursor: a.cursor || undefined })
     const project = await workloadProject(ctx, me, a.project, () => notFound('project not found'))
-    return await workloadCore(ctx, me, { ...window, project })
+    const person = await workloadPerson(ctx, me, a.person, () => notFound('person not found'))
+    return await workloadPage(ctx, me, { ...window, ...paging, project, person })
   },
 })
 
-/* get_workload (planning.ts workloadCore). */
+/* get_workload (planning.ts workloadPage). The answer's cursor comes first,
+ * so a truncated tool result still shows it. */
 export const mcpWorkload = internalQuery({
   args: {
     callerId: v.string(),
@@ -631,14 +682,22 @@ export const mcpWorkload = internalQuery({
     from_week: v.optional(v.string()),
     weeks: v.optional(v.number()),
     project: v.optional(v.string()),
+    person: v.optional(v.string()),
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
   },
   handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
     const window = workloadWindow(a.today, a.from_week, a.weeks)
+    const paging = workloadPaging(a)
     const project = await workloadProject(ctx, me, a.project, (ref) =>
       notFound(`project "${ref}" not found (or not visible to you)`),
     )
-    return pretty(await workloadCore(ctx, me, { ...window, project }))
+    const person = await workloadPerson(ctx, me, a.person, (ref) =>
+      notFound(`person "${ref}" not found`),
+    )
+    return pretty(await workloadPage(ctx, me, { ...window, ...paging, project, person }))
   },
 })
 
@@ -814,7 +873,7 @@ export const RECORD_TOOLS: McpTool[] = [
     def: {
       name: 'get_workload',
       title: 'Get workload',
-      description: `Each person's planned hours per week against their \`plannable_hours\`, from the week holding \`from_week\` (default this week) for \`weeks\` weeks (default ${WORKLOAD_WEEKS}). \`project\` limits it to one project. \`hours\` includes work in projects hidden from you; \`hidden_hours\` is that part, unnamed.`,
+      description: `Each person's planned hours per week against their \`plannable_hours\`, from the week holding \`from_week\` (default this week) for \`weeks\` weeks (default ${WORKLOAD_WEEKS}), one page of people in name order. \`project\` limits it to one project. \`hours\` includes work in projects hidden from you; \`hidden_hours\` is that part, unnamed, and \`hidden\` says whether other people's hidden work is counted (\`counted\`) or only your own (\`own_only\`, for guests and Viewers). A person whose open work is too large to read in one call has \`status: "unavailable"\` and null hours, never zero. The answer is \`{next_cursor, week_starts, project, hidden, people}\`; pass \`next_cursor\` back as \`cursor\` until it is null, because a page may hold fewer than \`limit\` people (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listWorkload.max}), even none; pass \`from_week\` too while you page, or a new week can refuse the cursor. \`offset\` is refused unless 0. \`person\`, a user id from \`list_users\`, answers that one person alone, without paging.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -831,6 +890,23 @@ export const RECORD_TOOLS: McpTool[] = [
           project: {
             type: 'string',
           },
+          person: {
+            type: 'string',
+          },
+          limit: {
+            type: 'integer',
+            minimum: LIMITS.listWorkload.min,
+            maximum: LIMITS.listWorkload.max,
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            maximum: 0,
+          },
+          cursor: {
+            type: 'string',
+            minLength: 1,
+          },
         },
       },
     },
@@ -839,7 +915,15 @@ export const RECORD_TOOLS: McpTool[] = [
         callerId,
         access,
         today: utcToday(),
-        ...(args as { from_week?: string; weeks?: number; project?: string }),
+        ...(args as {
+          from_week?: string
+          weeks?: number
+          project?: string
+          person?: string
+          limit?: number
+          offset?: number
+          cursor?: string
+        }),
       }),
   },
 ]
@@ -923,7 +1007,7 @@ export const RECORD_ROUTES: RestRoute[] = [
     path: 'workload',
     access: 'read',
     status: 200,
-    query: ['from_week', 'weeks', 'project'],
+    query: ['from_week', 'weeks', 'project', 'person', 'limit', 'cursor', 'offset'],
     run: (r, { callerId, access, query }) =>
       r.runQuery(internal.machine.records.restWorkload, {
         callerId,
@@ -932,6 +1016,10 @@ export const RECORD_ROUTES: RestRoute[] = [
         from_week: query('from_week'),
         weeks: query('weeks'),
         project: query('project'),
+        person: query('person'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
       }),
   }),
 ]

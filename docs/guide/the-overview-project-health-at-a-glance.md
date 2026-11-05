@@ -13,8 +13,9 @@ Qivo counts these figures on the server, so Overview shows them without
 waiting for your browser to load every task. Until the server's answer
 arrives the figures show **…**, which can take a moment or two in a busy
 organization. While Qivo is still counting an organization's tasks, as
-right after an update, each count reads **Counting…** and a line under the
-figures says so. A figure Qivo could not count in one request shows **—** with
+right after an update or for a moment after any project is archived or
+restored, each count reads **Counting…** and a line under the figures says
+so. A figure Qivo could not count in one request shows **—** with
 a line that says why, never a smaller number or zero
 ([Limits](./limits.md)). Overdue reads every task due before today,
 including Done tasks the nightly archive has not taken yet, 30 days after

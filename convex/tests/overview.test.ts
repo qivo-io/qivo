@@ -320,8 +320,9 @@ describe('counting', () => {
     expect(await counts()).toEqual(counting)
     await t.run((ctx) => ctx.db.delete(run))
     expect(await counts()).toEqual(counted)
-    // a regroup of a family where the person holds no row: My view waits
-    // for it, a project of another family does not
+    // a regroup of a family where the person holds no row: every scope
+    // waits for it, a project of another family too, because a regroup
+    // reconciles a parent there whose subtask older code stored in its own
     const regroup = (family: Doc<'projects'>) =>
       t.run((ctx) =>
         ctx.db.insert('overview_regroups', {
@@ -333,8 +334,9 @@ describe('counting', () => {
         }),
       )
     const elsewhere = await regroup(f.hidden)
-    expect(await counts()).toEqual({ ...counted, 'My view': 'unavailable' })
+    expect(await counts()).toEqual(counting)
     await t.run((ctx) => ctx.db.delete(elsewhere))
+    expect(await counts()).toEqual(counted)
     await regroup(f.meta)
     expect(await counts()).toEqual(counting)
   })

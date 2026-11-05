@@ -85,10 +85,10 @@ import type { QueryCtx } from '../_generated/server'
 import {
   addCounts,
   countsOfRows,
+  countsReady,
   familyCounts,
   type LeafCounts,
   noCounts,
-  orgCountState,
   ownerRows,
 } from '../model/overviewCounts'
 import {
@@ -505,8 +505,9 @@ const sumCounts = (parts: Iterable<LeafCounts>): LeafCounts => {
   return sum
 }
 
-/* A project scope's counts: its family's readiness once, then each
- * selected sub-project's rows (model/overviewCounts.ts familyCounts). */
+/* A project scope's counts: the organization's readiness once, which a
+ * regroup in any family holds back, then each selected sub-project's rows
+ * (model/overviewCounts.ts familyCounts). */
 async function projectCounts(
   ctx: QueryCtx,
   guard: ViewBudget,
@@ -521,9 +522,10 @@ async function projectCounts(
 /* The counts of each seat's person in the live sub-projects they can see,
  * by sub-project id, or null while any seat's organization is not counted,
  * a backfill counts it or a regroup runs in it: for each seat the
- * organization's readiness and its first regroup row (three ranges), every
- * count row of the person (model/overviewCounts.ts ownerRows, one range),
- * then whether each row's project is live, a sub-project and one they see.
+ * organization's readiness (model/overviewCounts.ts countsReady, three
+ * ranges), every count row of the person (model/overviewCounts.ts
+ * ownerRows, one range), then whether each row's project is live, a
+ * sub-project and one they see.
  * The rows of projects they cannot see are read too; they are alike in
  * size, so only how many there are can move an answer, at the budget's
  * margin. With `parents`, it also notes each answered sub-project's
@@ -540,13 +542,7 @@ async function mineCounts(
     // in it, before its rows say anything: a person may hold no row yet in
     // an organization still counting, or in a family a regroup is reading
     await guard.take(RANGE, 3)
-    const state = await orgCountState(ctx.db, seat.me.org_id)
-    if (!state.stamped || state.run !== null) return null
-    const regroup = await ctx.db
-      .query('overview_regroups')
-      .withIndex('by_org', (q) => q.eq('org_id', seat.me.org_id))
-      .first()
-    if (regroup !== null) return null
+    if (!(await countsReady(ctx.db, seat.me.org_id))) return null
     const rows: Doc<'overview_counts'>[] = []
     for await (const step of inSteps(guard, [ownerRange(ctx, seat.me.id)], COUNT_ROW))
       rows.push(...step)
@@ -2107,7 +2103,8 @@ async function healthItems(
 
 /* The counts of each of `items`, the scope `at`'s rows the search kept, by
  * project id, or null while they are not whole: a project scope's from its
- * family's readiness once and each kept sub-project's rows (projectCounts);
+ * organization's readiness once and each kept sub-project's rows
+ * (projectCounts);
  * My view's from every count row of each seat's person (mineCounts), each
  * row adding up those of its visible live sub-projects in whole tenths. */
 async function healthCounts(

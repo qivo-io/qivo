@@ -219,10 +219,7 @@ async function expectCountsSeeded(t: T, orgId: string, label: string) {
   )
   expect(metas.length, label).toBeGreaterThan(0)
   for (const meta of metas)
-    expect(
-      await t.run((ctx) => countsReady(ctx.db, orgId, meta.id)),
-      `${label}: ${meta.name}`,
-    ).toBe(true)
+    expect(await t.run((ctx) => countsReady(ctx.db, orgId)), `${label}: ${meta.name}`).toBe(true)
   await expectCountsExact(t, orgId, label)
 }
 

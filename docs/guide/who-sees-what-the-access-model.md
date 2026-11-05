@@ -102,7 +102,8 @@ that person can show as unavailable, even when most of that work is in
 projects they cannot see. In REST and MCP task lists, a guest's or Viewer's
 page reads the other work of only one person, so the delay of another
 person's task that depends on their other work says unavailable until the
-task itself is read. The Overview reads one person's other work at a time
+task itself is read. For the same reason a guest's or Viewer's REST and MCP
+workload reads one person a page. The Overview reads one person's other work at a time
 for them too, so where a scope's projected delays need more than one
 person's work, it says they are not available, and its Overdue & at risk
 list takes one person's projected tasks a **Load more** at a time. Where

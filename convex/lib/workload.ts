@@ -1,7 +1,7 @@
 /* How a task's remaining hours spread over the weeks and when an owner's
  * free capacity finishes them, the rules the app's capacity views and delay
  * projection (src/lib/workload.ts re-exports these) share with the REST and
- * MCP workload read (convex/planning.ts workloadCore) and delay verdicts
+ * MCP workload pages (lib/ownerLoads.ts weeklyHours) and delay verdicts
  * (lib/delay.ts, lib/machineDelay.ts). Weeks are integer indexes on one grid;
  * weekGrid maps a deployment's dates onto it. */
 

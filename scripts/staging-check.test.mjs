@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HISTORY_PAGE_MAX, WINDOW_HISTORY_PAGE } from '../convex/lib/activityVisibility'
+import { LIMITS } from '../convex/lib/limits'
 import { CURSOR_REFUSAL, offsetRefusal } from '../convex/lib/listCursor'
 import { FOCUS_STATUSES } from '../convex/lib/viewReads'
 import {
@@ -28,6 +29,7 @@ import {
   pace,
   parseArgs,
   RATE_BUDGET,
+  REGROUP_WAIT,
   REST_BODY_FIELDS,
   rateLimitWait,
   redact,
@@ -40,8 +42,13 @@ import {
   THREAD_PAGE,
   taskPages,
   WAITS,
+  WORKLOAD_PAGE,
+  WORKLOAD_PAGES_MAX,
+  WORKLOAD_PEOPLE,
+  WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  workloadPeople,
 } from './staging-check.mjs'
 
 describe('staging check REST contract', () => {
@@ -114,6 +121,21 @@ describe('staging check REST contract', () => {
       activeOffset: offsetRefusal('active tasks'),
       cursor: CURSOR_REFUSAL,
     })
+  })
+  it("expects the server's sentences for a workload page's offset, limit and cursor", () => {
+    expect(WORKLOAD_REFUSALS).toEqual({
+      offset: offsetRefusal('workload'),
+      limit: LIMITS.listWorkload.refusal,
+      cursor: CURSOR_REFUSAL,
+    })
+    // pages small enough to follow a cursor, within the server's range
+    for (const limit of Object.values(WORKLOAD_PAGE)) {
+      expect(limit).toBeGreaterThanOrEqual(LIMITS.listWorkload.min)
+      expect(limit).toBeLessThan(10)
+    }
+    expect(WORKLOAD_PAGE.rest).toBeGreaterThanOrEqual(2)
+    // a regroup's steps run in moments; the wait outlasts a busy deployment's
+    expect(REGROUP_WAIT).toBe(30_000)
   })
 })
 
@@ -601,5 +623,75 @@ describe('task list pages', () => {
     await expect(taskPages(endless, 'the list')).rejects.toThrow(
       `the list still had a next_cursor after ${TASK_PAGES_MAX} pages`,
     )
+  })
+  it('reads the workload’s people page by page, and refuses the array it answered before', async () => {
+    const pages = [
+      { next_cursor: 'p1', week_starts: [], people: [{ id: 'a' }] },
+      { next_cursor: 'p2', week_starts: [], people: [] },
+      { next_cursor: null, week_starts: [], people: [{ id: 'b' }] },
+    ]
+    const cursors = []
+    let at = 0
+    const read = async (cursor) => {
+      cursors.push(cursor)
+      return pages[at++]
+    }
+    expect((await workloadPeople(read, 'the workload')).map((p) => p.id)).toEqual(['a', 'b'])
+    expect(cursors).toEqual([null, 'p1', 'p2'])
+    await expect(
+      workloadPeople(async () => ({ week_starts: [], project: null, people: [] }), 'the workload'),
+    ).rejects.toThrow('the workload answered no {next_cursor, people} page')
+  })
+  it('reads every person of an organization at the design size at the pages each surface asks for', async () => {
+    expect(WORKLOAD_PEOPLE).toBe(1000)
+    for (const limit of Object.values(WORKLOAD_PAGE)) {
+      // a full organization in pages of `limit`, the last one short
+      const people = Array.from({ length: WORKLOAD_PEOPLE }, (_, i) => ({ id: `p${i}` }))
+      let at = 0
+      const read = async () => {
+        const page = people.slice(at, at + limit)
+        at += limit
+        return { next_cursor: at < people.length ? `c${at}` : null, people: page }
+      }
+      expect(await workloadPeople(read, 'the workload'), `limit ${limit}`).toHaveLength(
+        WORKLOAD_PEOPLE,
+      )
+    }
+  })
+  it('reads the design size when busy people end every page after one person, or none', async () => {
+    // whatever `limit` asks for, each page reads one person, as a page whose
+    // first person spends the call's room does, and every third page lists
+    // nobody, as a page whose one person read is inactive without hours does
+    const people = Array.from({ length: WORKLOAD_PEOPLE }, (_, i) => ({ id: `p${i}` }))
+    let at = 0
+    const read = async () => {
+      const person = people[at++]
+      return {
+        next_cursor: at < people.length ? `c${at}` : null,
+        people: at % 3 === 0 ? [] : [person],
+      }
+    }
+    const listed = await workloadPeople(read, 'the workload')
+    expect(at).toBe(WORKLOAD_PEOPLE)
+    expect(listed).toHaveLength(WORKLOAD_PEOPLE - Math.floor(WORKLOAD_PEOPLE / 3))
+  })
+  it('fails a workload next_cursor that never moves at once, and one that never ends after the bound', async () => {
+    let pages = 0
+    const stuck = async () => {
+      pages += 1
+      return { next_cursor: 'again', people: [] }
+    }
+    await expect(workloadPeople(stuck, 'the workload')).rejects.toThrow(
+      'the workload answered the cursor it was read with as its next_cursor',
+    )
+    expect(pages).toBe(2)
+    // a cursor that moves on each page, but past the design size forever
+    let n = 0
+    const endless = async () => ({ next_cursor: `c${++n}`, people: [] })
+    await expect(workloadPeople(endless, 'the workload')).rejects.toThrow(
+      `the workload still had a next_cursor after ${WORKLOAD_PEOPLE + 2} pages`,
+    )
+    expect(WORKLOAD_PAGES_MAX).toBe(1002)
+    expect(n).toBe(WORKLOAD_PAGES_MAX)
   })
 })

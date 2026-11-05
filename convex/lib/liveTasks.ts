@@ -14,10 +14,11 @@
  * restore can then leave that task a group with the own hours it took as a
  * leaf, which the restore's steps clear (regroup.ts).
  *
- * REST and MCP workload (planning.ts workloadCore), the one reader that
- * still needs the organization's live tasks, reads them per active project
- * (liveTasksOf), so tasks in archived projects are never read, until an
- * organization has more active projects than one read can take ranges for. */
+ * No reader needs the organization's live tasks any more. Each reads one
+ * owner's, one project's or one task's, and project completion reads the
+ * stored counts. The tests keep the walk over all of them, and the group
+ * rule over the rows it reads, as their oracle
+ * (convex/tests/orgLoad.setup.ts liveTasksOf and groupTest). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
@@ -71,81 +72,4 @@ export function projectLiveness(ctx: QueryCtx): (projectId: string) => Promise<b
     }
     return live
   }
-}
-
-/**
- * Which tasks are groups by the subtasks among `rows` (countsAsSubtask). An
- * active task needs its active subtasks in `rows` and an archived one all of
- * them, so a caller passing the organization's active tasks may ask only
- * about active tasks.
- */
-export function groupTest(
-  rows: Iterable<Pick<Doc<'issues'>, 'parent_id' | 'archived_at' | 'project_id'>>,
-  live: ProjectLive,
-): (task: Pick<Doc<'issues'>, 'id' | 'archived_at' | 'project_id'>) => boolean {
-  // parents with any child, with an active child, and with a live child
-  const any = new Set<string>()
-  const active = new Set<string>()
-  const liveKid = new Set<string>()
-  for (const row of rows) {
-    if (row.parent_id === undefined) continue
-    any.add(row.parent_id)
-    if (row.archived_at !== undefined) continue
-    active.add(row.parent_id)
-    if (live(row.project_id)) liveKid.add(row.parent_id)
-  }
-  return (task) => {
-    const parent = layerOf(task, live)
-    if (parent.archived) return any.has(task.id)
-    return parent.projectLive ? liveKid.has(task.id) : active.has(task.id)
-  }
-}
-
-/** How many active projects liveTasksOf reads one index range each before
- * it reads the organization's active tasks in one range instead, so an
- * organization with thousands of projects stays far below Convex's 4,096
- * ranges. That range also holds the active tasks archived projects keep,
- * so past it the documents read follow every active task of the
- * organization. Tests lower `reads`. */
-export const LIVE_PROJECT_READS = { reads: 1000 }
-
-/**
- * The active tasks of the active projects among `projects`, which belong to
- * one organization, oldest first by creation, the order the organization's
- * by_org_archived range gives. One by_project_archived range per project
- * read, or past LIVE_PROJECT_READS such projects one by_org_archived range,
- * which also holds the active tasks of archived projects, left out here.
- * Tasks live in sub-projects, and top-level projects are read too, so a row
- * older code stored under one is not lost. A project missing from
- * `projects` is never read, so tasks whose project no longer exists drop
- * out.
- */
-export async function liveTasksOf(
-  ctx: QueryCtx,
-  projects: readonly Doc<'projects'>[],
-): Promise<Doc<'issues'>[]> {
-  const live = projects.filter((p) => p.archived_at === undefined)
-  const first = live[0]
-  if (first === undefined) return []
-  if (live.length > LIVE_PROJECT_READS.reads) {
-    const ids = new Set(live.map((p) => p.id))
-    const active = await ctx.db
-      .query('issues')
-      .withIndex('by_org_archived', (q) =>
-        q.eq('org_id', first.org_id).eq('archived_at', undefined),
-      )
-      .collect()
-    return active.filter((task) => ids.has(task.project_id))
-  }
-  const reads = await Promise.all(
-    live.map((p) =>
-      ctx.db
-        .query('issues')
-        .withIndex('by_project_archived', (q) =>
-          q.eq('project_id', p.id).eq('archived_at', undefined),
-        )
-        .collect(),
-    ),
-  )
-  return reads.flat().sort((a, b) => a._creationTime - b._creationTime)
 }

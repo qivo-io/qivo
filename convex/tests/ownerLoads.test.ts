@@ -2,7 +2,7 @@
  * planning.ownerLoads and planning.assigneeLoad:
  *
  *   1. Each owner's spans are the organization-wide load rows of that owner
- *      (planning.ts orgLoadRows over the live tasks) and the app's rows
+ *      (orgLoad.setup.ts orgLoadRows over the live tasks) and the app's rows
  *      from the workspace, for random organizations, readers and owners,
  *      and on Northstar.
  *   2. Guests and Viewers get another person's visible work and none of
@@ -20,7 +20,7 @@ import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { isOrgStaff, OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
-import { groupTest, liveIn, liveTasksOf } from '../lib/liveTasks'
+import { liveIn } from '../lib/liveTasks'
 import type { OrgLoadRow } from '../lib/loadRows'
 import { UNAVAILABLE_DELAY } from '../lib/machineDelay'
 import { byLoadRow, OWNER_LOADS } from '../lib/ownerLoads'
@@ -33,7 +33,6 @@ import {
   LOAD_UNAVAILABLE,
   type OwnerLoadSpan,
   type OwnerLoadsJson,
-  orgLoadRows,
   ownerLoads,
 } from '../planning'
 import {
@@ -55,6 +54,7 @@ import {
   workspaceOf,
 } from './helpers.setup'
 import { plantNorthstar } from './northstar.setup'
+import { groupTest, liveTasksOf, orgLoadRows } from './orgLoad.setup'
 import { withReach } from './projectReach.setup'
 
 const DEFAULT_LOADS = structuredClone(OWNER_LOADS)

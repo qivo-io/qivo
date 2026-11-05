@@ -404,6 +404,7 @@ into the range.
 | Tasks per list page | 1 to 200 tasks | limit must be a whole number of tasks from 1 to 200. |
 | Inbox items per list page | 1 to 200 items | limit must be a whole number of items from 1 to 200. |
 | Comments per list page | 1 to 50 comments | limit must be a whole number of comments from 1 to 50. |
+| People per workload page | 1 to 200 people | limit must be a whole number of people from 1 to 200. |
 | Workload weeks | 1 to 52 weeks | weeks must be a whole number from 1 to 52. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
@@ -539,15 +540,29 @@ A row of the list:
 - `completion` is the project's **Completion** on the app's Overview. It
   counts the active tasks without subtasks in the project, or for a
   top-level project in its sub-projects you can read that are not archived,
-  and `done` counts those that are Done. A task whose only subtasks are
-  hidden from you still counts as a group and is left out, as in the app.
-  `percent` is rounded, and `0` when `total` is `0`. Its `status` is `ok`.
-  When the project's tasks are too many to count in one request, it is
-  `{"status": "unavailable", "done": null, "total": null, "percent": null}`
-  instead, which never fails the read or a `PATCH`. `completion` is `null`
-  for an archived project. A new project answers `ok` with zeros, because it
-  holds no tasks. `status` arrived in November 2026, so treat a `status` you
-  do not know as no completion.
+  and `done` counts those that are Done. A task with an active subtask in
+  any project that is not archived counts as a group and is left out, as in
+  the app, also when that subtask is hidden from you or sits in another
+  top-level project. `percent` is rounded, and `0` when `total` is `0`. Its
+  `status` is `ok`. Qivo keeps these counts as tasks change, so they hold
+  whatever the project's size. For a moment after any project of the
+  organization is archived, restored, moved to Deleted items or brought
+  back from it, and while Qivo counts an organization again, it is
+  `{"status": "counting", "done": null, "total": null, "percent": null}`,
+  so ask again later. That includes a project in another top-level
+  project, because older versions of Qivo let a subtask sit in another
+  top-level project than its parent. A `PATCH` that restores a project
+  answers its completion as `counting` too, unless it is a top-level
+  project with no live sub-project you can read, which answers `ok` with
+  zero counts, and one that archives a project answers `null`, as for any
+  archived project. In a project with so many sub-projects that the request
+  has no room left to read their counts, it is `{"status": "unavailable",
+  "done": null, "total": null, "percent": null}` instead. Neither ever
+  fails the read or a `PATCH`.
+  `completion` is `null` for an archived project. A new project answers `ok`
+  with zeros, because it holds no tasks. `status` arrived in November 2026,
+  and `counting` later that month, so treat a `status` you do not know as
+  no completion.
 - `milestones` are the milestones of the top-level project, ordered by date.
   A sub-project shows its parent's, because milestones live on the top-level
   project's roadmap.
@@ -2363,28 +2378,38 @@ wording.
 ### Workload
 
 ```
-GET /v1/workload?from_week=2026-10-12&weeks=8&project=ENC     (read)
+GET /v1/workload?from_week=2026-10-12&weeks=8&project=ENC&limit=50     (read)
+GET /v1/workload?from_week=2026-10-12&weeks=8&cursor=<next_cursor>     (read)
+GET /v1/workload?from_week=2026-10-12&person=<user uuid>               (read)
 ```
 
 Each person's planned hours per week, as the Roadmap's Team strip and the
-planning panel count them. `from_week` is any day of the first week, by
-default the current week; weeks begin on the organization's
-`week_start` (`GET /v1/me`). `weeks` is 1 to 52, 8 by default. A window
-with a week that starts before 0000-01-01 or after 9999-12-31 is a `400`
-(`the workload window must fall within the years 0000 to 9999`), because its
-`week_starts` could not be written as `YYYY-MM-DD`. `project` (uuid, number
-or key) limits the hours to that project and its sub-projects; one the
-caller cannot see is a `404`.
+planning panel count them, one page of people at a time. `from_week` is any
+day of the first week, by default the current week; weeks begin on the
+organization's `week_start` (`GET /v1/me`). `weeks` is 1 to 52, 8 by default.
+A window with a week that starts before 0000-01-01 or after 9999-12-31 is a
+`400` (`the workload window must fall within the years 0000 to 9999`),
+because its `week_starts` could not be written as `YYYY-MM-DD`. `project`
+(uuid, number or key) limits the hours to that project and its sub-projects;
+one the caller cannot see is a `404`. `limit` is the most people a page
+holds, 50 by default and 1 to 200.
 
 ```json
 {
+  "next_cursor": "…",
   "week_starts": ["2026-10-12", "2026-10-19"],
   "project": null,
+  "hidden": "counted",
   "people": [
     {
       "id": "…uuid…", "name": "Leo Martins", "org_role": "user", "kind": "person",
-      "active": true, "plannable_hours": 32,
+      "active": true, "plannable_hours": 32, "status": "ok",
       "hours": [30, 22], "hidden_hours": [4, 0]
+    },
+    {
+      "id": "…uuid…", "name": "Mia Chen", "org_role": "user", "kind": "person",
+      "active": true, "plannable_hours": 40, "status": "unavailable",
+      "hours": null, "hidden_hours": null
     }
   ]
 }
@@ -2402,14 +2427,81 @@ have no weekly limit.
 
 Hours from projects the caller cannot see are counted the way the app counts
 them. Organization admins and Standard users receive them, in both `hours`
-and `hidden_hours`, without the task or project. `hidden_hours` is the part
-of `hours` from those projects, so do not add the two. Viewers and guests
-receive only work in projects they can see and their own work. With
+and `hidden_hours`, without the task or project, and the answer's `hidden`
+is `counted`. `hidden_hours` is the part of `hours` from those projects, so
+do not add the two. Viewers and guests receive only work in projects they
+can see and their own work, so `hidden` is `own_only`, and another
+person's hours are a permission-limited figure, not their whole workload. With
 `project`, only that project's tasks count, so `hidden_hours` is all zeros.
-`people` lists every active user and agent of the organization, and any
-inactive one with hours in the window, ordered by name. Weeks are computed
-in UTC, so an estimate saved close to midnight can land one week away from
-what the app shows in another time zone.
+Weeks are computed in UTC, so an estimate saved close to midnight can land
+one week away from what the app shows in another time zone.
+
+A person's `status` is `ok` with their hours, or `unavailable` with `hours`
+and `hidden_hours` set to `null` when their open work is too large to read
+in one request. That is more than 2,000 open tasks, scheduled tasks in more
+than 200 live projects or more than 500 scheduled tasks to check for
+subtasks, the bounds the planning panel and task delays read a person's
+work within.
+It is also `unavailable` where checking which of those projects you can see
+would take more than one request, and for the first person of a page whose
+work alone does not fit in one. `unavailable` never means free time. With `project` a person can be
+unavailable because of open work outside that project, since their open
+work is read before the project's part of it is kept.
+
+`people` lists every active user and agent of the organization, any
+inactive one with hours in the window, and any inactive one whose hours
+are `unavailable`, since those cannot be judged. People come in name order,
+ignoring case and accents, then by id, and that order compares names by
+their UTF-8 bytes, so it differs from a browser's sort for some scripts.
+
+Pass `next_cursor` unchanged, URL-encoded, as `cursor` for the next page,
+and stop when it is `null`. A page can hold fewer than `limit` people, or
+none, while `next_cursor` is set, because each page reads a bounded amount
+of people's open work however large the organization is. A page ends
+before a person whose work does not fit beside the people before them, and
+that person opens the next page. A short or empty page is never the end of
+the list. Only a `null` `next_cursor` is. `limit` may change from one page
+to the next. A guest's or Viewer's page holds at most one person, so that
+where a page ends never depends on work they cannot see. Paging their
+whole organization takes one request a person, and an inactive person
+without hours costs them a request that lists nobody, so their pages can
+be empty while `next_cursor` is set. To read one person, pass `person`
+instead.
+
+A cursor works only for the organization, caller, project and window it
+came from, whether you name the project by uuid, number or key, and on
+either REST or MCP. Another `weeks`, or a `from_week` in another week,
+starts a new list. Without `from_week` the window is the request's week in
+UTC, so pass `from_week` while you page, or a page asked for after the week
+turns refuses the cursor. Pages are not a snapshot. A person added or
+renamed while you page lands where their name puts them, so a page may
+miss them or show them again.
+
+`person` (a user uuid from `GET /v1/users`) answers that person alone, with
+`next_cursor` `null`, also when they are inactive and have no hours. It
+takes `project` with the same rule, ignores `limit` and `offset`, and
+refuses `cursor`. An id that is not a user of the organization is a `404`
+(`person not found`).
+
+These requests are a `400`:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of people from 1 to 200.`
+- `offset` other than `0`: `offset does not apply to workload; pass
+  next_cursor as cursor`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list: `cursor must be the next_cursor of an earlier page`
+- `cursor` with `person`: `cursor does not apply with person`
+- a page before Qivo has prepared the organization's names for name order:
+  `this list cannot be read until this organization's names are ready; try
+  again in a few minutes`
+
+Until November 2026 the workload answered every person at once, without
+`next_cursor`, `hidden` or a person's `status`, and `limit`, `cursor`,
+`offset` and `person` were unknown parameters. The answer kept `people`, so
+code written for it reads the first page, at most 50 people, as if it were
+the whole organization without any error. Follow `next_cursor` until it is
+`null`.
 
 ### Stays in the app
 
@@ -2673,9 +2765,13 @@ curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<uplo
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"storage_id":"<storageId>"}' "$BASE/tasks/QN-26/attachments/<ticket>"
 
-# what changed on QN-26, and who has room in the next four weeks
+# what changed on QN-26, and who has room in the next four weeks, from
+# the first page of people and then each next one with the page's
+# next_cursor until it is null
 curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26/activity"
-curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/workload?weeks=4"
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/workload?weeks=4&from_week=2026-10-12"
+curl -H "Authorization: Bearer $QIVO_KEY" \
+  "$BASE/workload?weeks=4&from_week=2026-10-12&cursor=<next_cursor, URL-encoded>"
 
 # give someone 30 plannable hours a week (needs an organization admin's token)
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \

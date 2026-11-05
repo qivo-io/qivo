@@ -12,10 +12,12 @@ MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
 IDs, and both can create subtasks, move tasks between sub-projects, link
 tasks, add or remove labels, upload, list and delete attachments, read a
 task's history and read planned hours per person by the same rules as the
-app. Both also read a group's progress, a project's completion, a task's
-delay verdict and when it was last commented on, as the app shows them. A
-project with very many tasks can answer that its completion is unavailable.
-Images inside descriptions stay in the app.
+app. Planned hours come a page of people at a time, and say when a person's
+open work is too large to read in one request. Both also read a group's
+progress, a project's completion, a task's delay verdict and when it was
+last commented on, as the app shows them. For a moment after any project
+is archived or restored, a project's completion can say that it is still
+counting. Images inside descriptions stay in the app.
 
 Uploading a file takes three steps on either interface. The first answers a
 one-time upload link, the client sends the file there, and the last attaches

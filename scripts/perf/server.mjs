@@ -441,7 +441,7 @@ const allTasks = [...tasks, ...hiddenTasks]
 // visible tasks with a hidden subtask (workingSetOf's hidden subtask parents)
 const hiddenSubtaskParents = new Set(hiddenTasks.map((row) => row.parent_id).filter(Boolean))
 /** The tasks with a subtask, among every live task (lib/liveTasks.ts
-    groupTest; every project here is active). */
+    countsAsSubtask; every project here is active). */
 const parentsOf = () => new Set(allTasks.filter((row) => row.parent_id).map((row) => row.parent_id))
 let parents = parentsOf()
 /** Task `row` as the workspace sends it (convex/lib/workspaceParts.ts
@@ -454,7 +454,7 @@ const wireTask = (row) => {
   return out
 }
 /** The load row the snapshot sends for task `row`, or null:
-    convex/planning.ts orgLoadRows' fence for a staff reader, every owner in
+    convex/lib/loadRows.ts loadRowFor's fence for a staff reader, every owner in
     the organization, kept for tasks the reader is not shown only, as the
     tasks part sends them (the app derives the shown tasks' load from their
     rows), or

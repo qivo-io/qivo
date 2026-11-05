@@ -1684,7 +1684,7 @@ export default defineSchema({
   // counts for nothing. Readers answer `counting`, never zero, until the
   // organization's org_ready overview_counts_at is set, while
   // internal/overviewCountsBackfill counts it (overview_count_runs), while
-  // the top-level project has an overview_regroups row, or where a row went
+  // the organization has an overview_regroups row, or where a row went
   // negative, which no write may leave. `revision` goes up with every
   // write, so a dry run sees a change that ends where it began.
   overview_counts: defineTable({
@@ -1766,7 +1766,9 @@ export default defineSchema({
   // reconciles, read in order from `at`, a page at a time from `cursor`,
   // and within a page past `after`, the creation time of the last task a
   // step finished and the ids of those finished at that time. The counts of
-  // the top-level project's sub-projects answer `counting` while it exists.
+  // every top-level project of the organization answer `counting` while it
+  // exists, because a parent that older code left in another top-level
+  // project waits for it too (model/overviewCounts.ts countsReady).
   // `progress_at` is the last committed step, which recovery restarts a
   // stalled chain from (overviewRegroup.ts recover), and `scheduled_id` the
   // next step.

@@ -30,6 +30,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
 
 type FetchInit = { method?: string; headers?: Record<string, string>; body?: string }
 type Res = { status: number; body: Record<string, unknown> }
@@ -111,7 +112,9 @@ async function plantKey(t: T, agent: Doc<'profiles'>): Promise<string> {
 
 /* withOrg plus one credential of every shape. Both agents hold User on the
  * meta, so only the Viewer's role keeps it from writing; the Viewer person
- * holds User on the meta too (withOrg), capped to reading by their role. */
+ * holds User on the meta too (withOrg), capped to reading by their role.
+ * Every profile holds its name key (nameKeys.setup.ts keyOrg), as on every
+ * deployment, which the workload's name order needs. */
 async function fixture() {
   const t = newT()
   const f = await withOrg(t)
@@ -122,6 +125,7 @@ async function fixture() {
     kind: 'agent',
     plannable_hours: undefined,
   })
+  await keyOrg(t, f.org.id)
   for (const agent of [f.agent, viewerAgent]) {
     await t.run((ctx) =>
       ctx.db.insert('project_access', {

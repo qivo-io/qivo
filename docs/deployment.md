@@ -171,8 +171,18 @@ organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
 deployment takes a body that large. It also checks task progress, last
 comment times, delay and project completion, and the rule that a subtask in
-an archived project makes no group. In the browser it then opens the Board of
-the project it made, waits for the deployment's answer for it (`tasks.board`)
+an archived project makes no group. After it archives and restores a
+sub-project it waits, for up to 30 seconds, until the family's completion
+stops saying `counting`, and it checks that the restore's own answer says
+`counting`, as a regroup of the counts starts in that change. Its
+`machine/workload-pages` step pages `GET /v1/workload` and `get_workload`
+with a fixed `from_week` to their ends, finds each of the run's agents
+once with one week of hours, the same people on both surfaces, and checks
+that a cursor of another window, an `offset` other than `0` and `limit=0`
+are refused with their sentences. Against a backend from before the
+workload pages, that step and the restore's `counting` fail. In the
+browser it then opens the Board of the project it made, waits for the
+deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
 To Do so that they show with **Focus** on or off. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
@@ -542,6 +552,20 @@ working until the backend rolls forward. List rows' delays never say
 the index `issues.by_project_archived_created`, and the deploy forward
 builds it again, with no change to data. This sets no floor for the app,
 which calls neither route.
+
+REST `GET /v1/workload` and MCP `get_workload` page people with a cursor,
+and project completion over REST and MCP reads the stored counts, from the
+release that made the workload answer `{next_cursor, week_starts, project,
+hidden, people}`. Returning the backend to a commit before it makes the
+workload answer every person in one answer again, without `next_cursor`,
+`hidden` or a person's `status`, and refuse `limit`, `cursor`, `offset` and
+`person` as unknown parameters. A REST or MCP caller that pages the
+workload with `next_cursor` or asks for one `person` then stops working
+until the backend rolls forward. Code written for the older answer keeps
+reading `people` after the release, but sees only the first page, at most
+50 people, as if it were everyone, without any error, so callers must
+follow `next_cursor`. Completion then reads tasks again within a budget and
+never says `counting`. This sets no floor for the app, which calls neither.
 
 The app's Board, the phone's task list and My view's Board read which tasks
 they show from `tasks.board`, which v0.1.107 (`b7d2abac`) first shipped. An

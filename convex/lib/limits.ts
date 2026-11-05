@@ -628,6 +628,7 @@ export const LIMITS = {
   listTasks: whole('Tasks per list page', 1, 200, 'tasks', 'limit', MACHINE, 'machine'),
   listInbox: whole('Inbox items per list page', 1, 200, 'items', 'limit', MACHINE, 'machine'),
   listComments: whole('Comments per list page', 1, 50, 'comments', 'limit', MACHINE, 'machine'),
+  listWorkload: whole('People per workload page', 1, 200, 'people', 'limit', MACHINE, 'machine'),
   workloadWeeks: {
     label: 'Workload weeks',
     group: 'machine',

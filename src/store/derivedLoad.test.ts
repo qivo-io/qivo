@@ -4,15 +4,16 @@ import type { Doc } from '../../convex/_generated/dataModel'
 import { liveIn } from '../../convex/lib/liveTasks'
 import { parentLink, workingSetOf } from '../../convex/lib/workingSet'
 import { canonicalLoad, committedByWeek, type LoadSpan } from '../../convex/lib/workload'
-import { orgLoadRows } from '../../convex/planning'
+import { orgLoadRows } from '../../convex/tests/orgLoad.setup'
 import { isoToWeek, TODAY_WEEK, tsToWeek, weekToISO } from '../lib/dates'
 import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 
 /* The store derives the load of the tasks it shows from their rows with the
    server's fence (convex/lib/loadRows.ts), and takes only the load of tasks
    it is not shown from the snapshot. So a pending edit moves its owner's
-   load and delays at once, and the result is what the server's own load
-   rows (convex/planning.ts orgLoadRows) give. */
+   load and delays at once, and the result is what the organization-wide
+   load rows the tests keep as their oracle (convex/tests/orgLoad.setup.ts
+   orgLoadRows) give. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({

@@ -1058,7 +1058,7 @@ describe('public demo provisioning steps', () => {
     )
     expect(metas.length).toBeGreaterThan(0)
     for (const meta of metas)
-      expect(await limited.run((ctx) => countsReady(ctx.db, meta.org_id, meta.id))).toBe(true)
+      expect(await limited.run((ctx) => countsReady(ctx.db, meta.org_id))).toBe(true)
     await expectCountsExact(limited, org?.id ?? '', 'the public demo')
   })
 

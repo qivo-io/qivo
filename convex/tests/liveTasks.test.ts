@@ -1,11 +1,11 @@
 /* The live layer group rule (lib/liveTasks.ts countsAsSubtask): a task in
  * an active project is a group only through active subtasks in active
- * projects, on every surface, and the readers that need the organization's
- * live tasks never read the tasks of an archived project. The writes that
- * make a subtask count again (a project restore, a move out of an archived
- * project, a carried subtask) clear the parent's own hours, and those that
- * leave it uncounted (a task restore or an attach inside an archived
- * project) do not. */
+ * projects, on every surface, the lists never read the tasks of an
+ * archived project, and the workload reads no task its people do not own.
+ * The writes that make a subtask count again (a project restore, a move
+ * out of an archived project, a carried subtask) clear the parent's own
+ * hours, and those that leave it uncounted (a task restore or an attach
+ * inside an archived project) do not. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -13,14 +13,14 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { accessOf } from '../lib/access'
 import { ACTIVE_PAGE } from '../lib/activeTaskPage'
-import { ACCESS_POINT_CHECKS, COMPLETION_READS, COMPLETION_RESERVE, taskOut } from '../lib/core'
+import { ACCESS_POINT_CHECKS, COMPLETION_RESERVE, taskOut } from '../lib/core'
 import { byId } from '../lib/db'
-import { countsAsSubtask, groupTest, LIVE_PROJECT_READS } from '../lib/liveTasks'
+import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
 import { readTasks } from '../lib/workspaceParts'
 import { getProject } from '../machine/rest'
 import { MOVE_SUBTREE_HOLDER_RULE, REVIEWER_RULE } from '../model/issues'
-import { assigneeLoad, LOAD_UNAVAILABLE, workloadCore } from '../planning'
+import { assigneeLoad, LOAD_UNAVAILABLE, workloadPage } from '../planning'
 import { finishedBefore, positionAfter, RESTORE_REGROUP, restoredStep } from '../regroup'
 import {
   as,
@@ -40,6 +40,8 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { keyOrg } from './nameKeys.setup'
+import { countOrg } from './overviewCounts.setup'
 import { lowered, mcpPage, restPage } from './taskPages.setup'
 
 type Fx = OrgFixture & {
@@ -159,24 +161,6 @@ describe('the group rule', () => {
     // an archived parent: every subtask
     expect(countsAsSubtask(layer(true, true), layer(true, false))).toBe(true)
     expect(countsAsSubtask(layer(true, false), layer(false, true))).toBe(true)
-
-    const live = (id: string) => id === 'on'
-    const rows = [
-      { parent_id: 'a', archived_at: undefined, project_id: 'off' },
-      { parent_id: 'b', archived_at: undefined, project_id: 'on' },
-      { parent_id: 'c', archived_at: NOW, project_id: 'on' },
-    ]
-    const isGroup = groupTest(rows, live)
-    const at = (id: string, project_id: string, archived_at?: string) => ({
-      id,
-      project_id,
-      archived_at,
-    })
-    expect(isGroup(at('a', 'on'))).toBe(false)
-    expect(isGroup(at('a', 'off'))).toBe(true)
-    expect(isGroup(at('b', 'on'))).toBe(true)
-    expect(isGroup(at('c', 'on'))).toBe(false)
-    expect(isGroup(at('c', 'on', NOW))).toBe(true)
   })
 
   it('a task whose only subtask is in an archived sub-project is no group, on every surface', async () => {
@@ -333,34 +317,38 @@ describe('reading only live tasks', () => {
     // a parent left behind in the archived sub-project
     const stranded = await task(fx, { project_id: fx.shelf.id, title: 'Stranded parent' })
     const child = await task(fx, { parent_id: stranded.id, title: 'Child' })
+    // the organization is counted, as on a deployment, before the archived
+    // sub-project's tasks, which no live figure counts, are planted past
+    // the counts
+    await countOrg(fx.t, fx.org.id)
     await plantMany(fx, 2000, { project_id: fx.shelf.id })
     const expected = [group.id, kid.id, shelvedOnly.id, child.id]
-    // a page budget and a completion budget that fit this request's 400
-    // documents, either of which the archived project's tasks would pass
+    // a page budget that fits this request's 400 documents, which the
+    // archived project's tasks would pass
     const page = {
       page: { documents: 200, delays: { ...ACTIVE_PAGE.delays, documents: 30 } },
       reserve: { documents: 32 },
     }
-    const reads = structuredClone(COMPLETION_READS)
+    await lowered(page, async () => {
+      const rest = await restPage(fx.t, { callerId: fx.agent.id, access: 'read' })
+      expect(rest.tasks.map((r) => r.id)).toEqual(expected)
+      expect(rest.next_cursor).toBeNull()
+      expect(rest.tasks.map((r) => [r.is_group, r.parent_id])).toEqual([
+        [true, null],
+        [false, group.id],
+        [false, null],
+        [false, stranded.id],
+      ])
+      const mcp = await mcpPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
+      expect(mcp.tasks.map((r) => r.id)).toEqual(expected)
+      expect(mcp.next_cursor).toBeNull()
+    })
+    // the group's done subtask, the leaf without a group and the child,
+    // from the counts, which read no task, with what the project's detail
+    // keeps back lowered to fit this request's 400 documents
     const reserve = structuredClone(COMPLETION_RESERVE)
-    Object.assign(COMPLETION_READS, { documents: 150 })
     Object.assign(COMPLETION_RESERVE, { documents: 64 })
     try {
-      await lowered(page, async () => {
-        const rest = await restPage(fx.t, { callerId: fx.agent.id, access: 'read' })
-        expect(rest.tasks.map((r) => r.id)).toEqual(expected)
-        expect(rest.next_cursor).toBeNull()
-        expect(rest.tasks.map((r) => [r.is_group, r.parent_id])).toEqual([
-          [true, null],
-          [false, group.id],
-          [false, null],
-          [false, stranded.id],
-        ])
-        const mcp = await mcpPage(fx.t, { callerId: fx.agent.id, access: 'read', project: 'TBED' })
-        expect(mcp.tasks.map((r) => r.id)).toEqual(expected)
-        expect(mcp.next_cursor).toBeNull()
-      })
-      // the group's done subtask, the leaf without a group and the child
       const completion = { status: 'ok', done: 1, total: 3, percent: 33 }
       const project = await fx.t.query(internal.machine.rest.getProject, {
         callerId: fx.agent.id,
@@ -377,7 +365,6 @@ describe('reading only live tasks', () => {
       ) as { completion: unknown }
       expect(mcpProject.completion).toEqual(completion)
     } finally {
-      Object.assign(COMPLETION_READS, reads)
       Object.assign(COMPLETION_RESERVE, reserve)
     }
   })
@@ -456,8 +443,9 @@ describe('reading only live tasks', () => {
     expect(rows.map((row) => row.issue_id)).toEqual([leaf.id])
   })
 
-  it('the workload reads the live tasks of the organization, also when it is limited to a project', async () => {
+  it("the workload reads each person's own open tasks, not the organization's, also when it is limited to a project", async () => {
     const fx = await setup()
+    await keyOrg(fx.t, fx.org.id)
     const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
     await task(fx, { ...plan, remaining_hours: 3 })
     await task(fx, { ...plan, project_id: fx.away.id, remaining_hours: 4 })
@@ -465,61 +453,39 @@ describe('reading only live tasks', () => {
     // the hours it held as a leaf, as before a restore's steps clear them
     const stale = await task(fx, { ...plan, remaining_hours: 5 })
     await task(fx, { project_id: fx.away.id, parent_id: stale.id })
-    await plantMany(fx, 300, { project_id: fx.shelf.id, ...plan, remaining_hours: 1 })
-    await plantMany(fx, 300, { project_id: fx.away.id })
+    // open work in an archived sub-project carries no load
+    await plantMany(fx, 30, { project_id: fx.shelf.id, ...plan, remaining_hours: 1 })
     const workload = (project: Doc<'projects'> | null) =>
       fx.t.run(async (ctx) => {
         const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-        const out = await workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project })
-        const hours = out.people.find((p) => p.id === fx.user.id)?.hours
-        return { hours, documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used }
+        const out = await workloadPage(ctx, me, {
+          fromDay: '2026-09-07',
+          weeks: 1,
+          project,
+          limit: 50,
+          cursor: null,
+        })
+        const user = out.people.find((p) => p.id === fx.user.id)
+        return {
+          hours: user?.hours,
+          documents: (await ctx.meta.getTransactionMetrics()).documentsRead.used,
+        }
       })
     const all = await workload(null)
     expect(all.hours).toEqual([7])
-    // the group's hours count in neither, and no archived task is read
+    // the group's hours count in neither
     const scoped = await workload(fx.meta)
     expect(scoped.hours).toEqual([3])
-    for (const read of [all, scoped]) expect(read.documents).toBeLessThan(400)
-  })
-
-  it('the workload and snapshot reads past LIVE_PROJECT_READS read the active tasks in one range', async () => {
-    const fx = await setup()
-    const plan = { assignee_id: fx.user.id, start_week: '2026-09-07', end_week: '2026-09-07' }
-    await task(fx, { ...plan, remaining_hours: 3, remaining_set_at: NOW })
-    const group = await task(fx, { ...plan, remaining_hours: 5 })
-    await task(fx, { project_id: fx.away.id, parent_id: group.id })
-    const shelvedOnly = await task(fx, { ...plan, remaining_hours: 2 })
-    await task(fx, { project_id: fx.shelf.id, parent_id: shelvedOnly.id })
-    await task(fx, { ...plan, project_id: fx.shelf.id, remaining_hours: 11 })
-    // forty more active projects, each one more range per project read
-    for (let i = 0; i < 40; i++) {
-      await plantProject(fx.t, { org_id: fx.org.id, type: 'project', parent_id: fx.meta.id })
-    }
-    const read = () =>
-      as(fx.t, fx.admin).query(async (ctx) => {
-        const me = (await byId(ctx, 'profiles', fx.admin.id)) as Doc<'profiles'>
-        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
-        const out = await workloadCore(ctx, me, { fromDay: '2026-09-07', weeks: 1, project: null })
-        return {
-          out,
-          ranges: (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before,
-        }
-      })
-    const reads = LIVE_PROJECT_READS.reads
-    try {
-      const perProject = await read()
-      LIVE_PROJECT_READS.reads = 1
-      const oneRange = await read()
-      expect(oneRange.out).toEqual(perProject.out)
-      expect(oneRange.ranges).toBeLessThan(perProject.ranges - 40)
-    } finally {
-      LIVE_PROJECT_READS.reads = reads
-    }
+    // tasks nobody on the page owns are never read
+    await plantMany(fx, 30, { project_id: fx.away.id })
+    await plantMany(fx, 30, { project_id: fx.sub.id, status: 'done' })
+    expect(await workload(null)).toEqual(all)
+    expect(await workload(fx.meta)).toEqual(scoped)
   })
 })
 
 describe("a project's completion", () => {
-  it("reads only its family's tasks, and a subtask stored in another family changes only the counts", async () => {
+  it('reads no task, and a subtask in another top-level project makes its parent a group, as in the Overview', async () => {
     const fx = await setup()
     const group = await task(fx, { title: 'Group' })
     await task(fx, { project_id: fx.sub2.id, parent_id: group.id, status: 'done' })
@@ -527,8 +493,7 @@ describe("a project's completion", () => {
     // a subtask in another top-level project, as before the family rule
     const legacy = await task(fx, { title: 'Legacy parent' })
     await task(fx, { project_id: fx.away.id, parent_id: legacy.id })
-    // another family's tasks, which the completion never needs
-    await plantMany(fx, 300, { project_id: fx.away.id })
+    await countOrg(fx.t, fx.org.id)
     const read = (ref: string) =>
       as(fx.t, fx.admin).query(async (ctx) => {
         const before = (await ctx.meta.getTransactionMetrics()).documentsRead.used
@@ -537,16 +502,22 @@ describe("a project's completion", () => {
         return { completion: out.completion, documents }
       })
     const tbed = await read('TBED')
-    // Group's done subtask, Leaf and Legacy parent counted as a task without
-    // subtasks, since its subtask in SKNK is not read
-    expect(tbed.completion).toEqual({ status: 'ok', done: 1, total: 3, percent: 33 })
+    // Group's done subtask and Leaf count. Legacy parent is a group, as its
+    // subtask in SKNK is active in a live project, by the stored rule of the
+    // counts, the app's P.isGroup and the Overview's, where the bounded read
+    // of the family's tasks before the counts counted it as a leaf
+    expect(tbed.completion).toEqual({ status: 'ok', done: 1, total: 2, percent: 50 })
     expect(tbed.documents).toBeLessThan(150)
     expect((await read('FW')).completion).toEqual({
       status: 'ok',
       done: 0,
-      total: 2,
+      total: 1,
       percent: 0,
     })
+    // more tasks in the family and in another family are never read
+    await plantMany(fx, 30, { project_id: fx.sub2.id })
+    await plantMany(fx, 30, { project_id: fx.away.id })
+    expect((await read('TBED')).documents).toBe(tbed.documents)
   })
 })
 

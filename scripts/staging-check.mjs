@@ -12,9 +12,11 @@
  * name the credential. It uploads, downloads and deletes attachments, one of
  * them at the per-file limit, checks that an upload URL stores one file, checks
  * the text, name, list and request size limits, unknown arguments, comment
- * paging, cursor paging of the active and archived task lists, task
- * progress, last comment times, delay and project completion, and the live
- * group rule. It fills one task with a
+ * paging, cursor paging of the active and archived task lists and of the
+ * workload's people (machine/workload-pages), task progress, last comment
+ * times, delay and project completion, which it waits to read whole again
+ * after an archive or a restore regroups its counts, and the live group
+ * rule. It fills one task with a
  * little more than a page of comments and of history, pages that history
  * over REST and MCP, and in the browser presses Show earlier comments and
  * Show earlier activity in its task window. It opens the Settings page
@@ -128,6 +130,21 @@ export const LIST_REFUSALS = {
   activeOffset: 'offset does not apply to active tasks; pass next_cursor as cursor',
   cursor: 'cursor must be the next_cursor of an earlier page',
 }
+
+/** The sentences REST GET /v1/workload and MCP get_workload refuse a page's
+ *  `offset`, `limit` and `cursor` with (convex/lib/listCursor.ts and the
+ *  limits registry's listWorkload), which the script's tests pin. */
+export const WORKLOAD_REFUSALS = {
+  offset: 'offset does not apply to workload; pass next_cursor as cursor',
+  limit: LIMITS.listWorkload.refusal,
+  cursor: LIST_REFUSALS.cursor,
+}
+
+/** The people one page of the workload step asks for over each surface:
+ *  enough over REST that an organization with more people than the run's
+ *  agents takes few requests, and two over MCP, so its pages follow a
+ *  cursor however small the organization is. */
+export const WORKLOAD_PAGE = { rest: 5, mcp: 2 }
 
 /** Checks that need a condition the run cannot create everywhere, which
  *  report SKIP without it, or FAIL when --require names them. */
@@ -713,30 +730,67 @@ async function readList(cred, path) {
  *  never ends fails the check instead of holding up the run. */
 export const TASK_PAGES_MAX = 200
 
+/** The people of an organization at the design size, agents and
+ *  invitations included, which the workload checks page through. */
+export const WORKLOAD_PEOPLE = 1000
+
+/** The most pages a workload check reads, at any page size. A page can
+ *  end before `limit` people once busy people spend the call's room, or
+ *  list none, but it always reads the first person after its cursor
+ *  (convex/planning.ts workloadPage), so every page moves on by one person
+ *  at least. A page for each person of an organization at the design size,
+ *  and two more, so a correct deployment never fails it and a next_cursor
+ *  that never ends still fails the check. */
+export const WORKLOAD_PAGES_MAX = WORKLOAD_PEOPLE + 2
+
 /**
- * Every task of one REST or MCP task list, active or archived, read page by
+ * Every row of one REST or MCP list that pages with a cursor, read page by
  * page. `read(cursor)` answers the page after `cursor`, or the first page
- * for null. Each page must be `{next_cursor, tasks}`, and paging goes on
+ * for null. Each page must be `{next_cursor, <field>}`, and paging goes on
  * until next_cursor is null, because a page can hold fewer than `limit`
- * tasks, or none, while it is set. `what` names the list in a failure.
- * Fails on any other answer and past TASK_PAGES_MAX pages.
+ * rows, or none, while it is set. `what` names the list in a failure.
+ * Fails on any other answer and past `most` pages.
  */
-export async function taskPages(read, what) {
+export async function listPages(read, what, field, most = TASK_PAGES_MAX) {
   const rows = []
   let cursor = null
-  for (let n = 0; n < TASK_PAGES_MAX; n++) {
+  for (let n = 0; n < most; n++) {
     const page = await read(cursor)
     expect(
-      Array.isArray(page?.tasks) &&
+      Array.isArray(page?.[field]) &&
         (page.next_cursor === null || typeof page.next_cursor === 'string'),
-      `${what} answered no {next_cursor, tasks} page`,
+      `${what} answered no {next_cursor, ${field}} page`,
     )
-    rows.push(...page.tasks)
+    rows.push(...page[field])
     if (page.next_cursor === null) return rows
     cursor = page.next_cursor
   }
-  fail(`${what} still had a next_cursor after ${TASK_PAGES_MAX} pages`)
+  fail(`${what} still had a next_cursor after ${most} pages`)
 }
+
+/** Every task of one REST or MCP task list, active or archived
+ *  (listPages over `tasks`). */
+export const taskPages = (read, what) => listPages(read, what, 'tasks')
+
+/** Every person of the REST or MCP workload (listPages over `people`, at
+ *  most WORKLOAD_PAGES_MAX pages). A next_cursor equal to the cursor the
+ *  page was read with fails at once. Every page moves on, and a cursor
+ *  that names the same person seals to the same text
+ *  (convex/lib/archiveCursorSeal.ts), so that answer means a stuck list. */
+export const workloadPeople = (read, what) =>
+  listPages(
+    async (cursor) => {
+      const page = await read(cursor)
+      expect(
+        cursor === null || page?.next_cursor !== cursor,
+        `${what} answered the cursor it was read with as its next_cursor`,
+      )
+      return page
+    },
+    what,
+    'people',
+    WORKLOAD_PAGES_MAX,
+  )
 
 /** `path`, a REST task list query, with `cursor` added unless it is null. */
 const withCursor = (path, cursor) =>
@@ -1805,6 +1859,67 @@ async function checkReads(cred) {
     await toolOk(cred, 'list_teams')
     await toolOk(cred, 'get_workload', { weeks: 1 })
     return 'list_projects, get_project, list_tasks, get_task, list_comments, list_task_activity, list_users, list_teams, get_workload'
+  })
+}
+
+/** The workload pages people with a cursor on both surfaces (#workload):
+ *  pages of WORKLOAD_PAGE people hold every person once, the run's agents
+ *  among them with one week of hours, the same over REST and MCP, and a
+ *  cursor of another window, an offset and a limit out of range are
+ *  refused. Every page names from_week, so a run that crosses into a new
+ *  week keeps one window. */
+async function workloadPageChecks() {
+  const w = run.creds.writeToken
+  await check('machine/workload-pages', async () => {
+    const me = await restOk(w, 'GET', '/me')
+    const week = weekOf(todayUtc(), me.organization.week_start)
+    const q = `/workload?weeks=1&from_week=${week}`
+    const rest = await workloadPeople(
+      (cursor) => restOk(w, 'GET', withCursor(`${q}&limit=${WORKLOAD_PAGE.rest}`, cursor)),
+      'GET /v1/workload',
+    )
+    const ids = rest.map((p) => p.id)
+    expect(new Set(ids).size === ids.length, 'the REST pages list a person twice')
+    for (const agent of [run.agents.std, run.agents.viewer]) {
+      const rows = rest.filter((p) => p.id === agent.id)
+      eq(rows.length, 1, `${agent.name} in the REST pages`)
+      eq(rows[0].status, 'ok', `${agent.name}'s status`)
+      eq(rows[0].hours?.length, 1, `${agent.name}'s weeks of hours`)
+    }
+    const mcp = await workloadPeople(
+      (cursor) =>
+        toolOk(w, 'get_workload', {
+          weeks: 1,
+          from_week: week,
+          limit: WORKLOAD_PAGE.mcp,
+          ...(cursor === null ? {} : { cursor }),
+        }),
+      'get_workload',
+    )
+    same(
+      mcp.map((p) => p.id),
+      ids,
+      'the people of get_workload pages',
+    )
+    const first = await restOk(w, 'GET', `${q}&limit=1`)
+    expect(typeof first?.next_cursor === 'string', 'a workload page of one ended the list')
+    const cursor = encodeURIComponent(first.next_cursor)
+    await restRefusal(
+      w,
+      'GET',
+      `/workload?weeks=2&from_week=${week}&limit=1&cursor=${cursor}`,
+      undefined,
+      400,
+      WORKLOAD_REFUSALS.cursor,
+    )
+    await restRefusal(w, 'GET', `${q}&offset=5`, undefined, 400, WORKLOAD_REFUSALS.offset)
+    await restRefusal(w, 'GET', `${q}&limit=0`, undefined, 400, WORKLOAD_REFUSALS.limit)
+    eq(
+      await toolRefusal(w, 'get_workload', { weeks: 1, from_week: week, offset: 3 }),
+      WORKLOAD_REFUSALS.offset,
+      'get_workload offset 3',
+    )
+    return `${ids.length} people in REST pages of ${WORKLOAD_PAGE.rest} and MCP pages of ${WORKLOAD_PAGE.mcp}; another window's cursor, an offset and limit=0 refused`
   })
 }
 
@@ -4196,6 +4311,28 @@ const counts = (done, total) => ({
 })
 /** A project's `completion` whose tasks were counted, which says `ok`. */
 const completion = (done, total) => ({ status: 'ok', ...counts(done, total) })
+
+/** A project's `completion` while the organization's counts are not
+ *  whole, as for a moment after any project is archived or restored. */
+const COUNTING = { status: 'counting', done: null, total: null, percent: null }
+
+/** The milliseconds a check waits for the counts to be whole again after
+ *  an archive or a restore regroups them. */
+export const REGROUP_WAIT = 30_000
+
+/** Project `p`'s completion over REST once it no longer says `counting`,
+ *  which an archive or a restore of any project in the organization starts
+ *  (convex/model/overviewCounts.ts startRegroup and countsReady), or a
+ *  check failure after REGROUP_WAIT. */
+async function countedCompletion(cred, p) {
+  let got = null
+  const whole = await until(async () => {
+    got = (await restOk(cred, 'GET', `/projects/${p.id}`)).completion
+    return got?.status !== 'counting'
+  }, REGROUP_WAIT)
+  expect(whole, `${p.name} completion still said counting after ${REGROUP_WAIT / 1000} seconds`)
+  return got
+}
 /** A group's `progress`, which adds whether some of it is hidden. */
 const progress = (done, total, partial = false) => ({ ...counts(done, total), partial })
 
@@ -4520,7 +4657,7 @@ async function liveTaskChecks(f) {
     const leaves = [...f.leaves1, f.p]
     for (const p of [N, N1])
       same(
-        (await restOk(w, 'GET', `/projects/${p.id}`)).completion,
+        await countedCompletion(w, p),
         completion(doneIn(leaves), leaves.length),
         `${p.name} completion counts the parent as a task`,
       )
@@ -4540,7 +4677,8 @@ async function liveTaskChecks(f) {
   })
   await check('live-tasks/restore-regroups', async () => {
     const answer = await toolOk(w, 'update_project', { project: N2.id, archived: false })
-    same(answer.completion, completion(0, f.leaves2.length), 'the restore answer')
+    // the restore starts its family's regroup in the same transaction
+    same(answer.completion, COUNTING, 'the restore answer')
     const p = await read(f.p)
     eq(p.is_group, true, 'a group again')
     eq(p.start_week, null, 'group dates come from its unscheduled subtask')
@@ -4552,10 +4690,11 @@ async function liveTaskChecks(f) {
     )
     same((await read(f.g)).progress, progress(1, 3), 'the group counts its subtask again')
     const all = [...f.leaves1, ...f.leaves2]
+    same(await countedCompletion(w, N), completion(doneIn(all), all.length), 'completion')
     same(
-      (await restOk(w, 'GET', `/projects/${N.id}`)).completion,
-      completion(doneIn(all), all.length),
-      'completion',
+      await countedCompletion(w, N2),
+      completion(0, f.leaves2.length),
+      'the restored sub-project',
     )
   })
   await check('live-tasks/move-out-of-archived', async () => {
@@ -5203,6 +5342,7 @@ async function main() {
   await bodyCapChecks()
   await unknownArgumentChecks()
   await listOrderChecks()
+  await workloadPageChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()
