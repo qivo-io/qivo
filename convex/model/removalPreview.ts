@@ -630,19 +630,24 @@ async function effectOf(
  * another sub-project of its parent's top-level project, so the second
  * check can leave out someone the first lets in, and it answers about a
  * project the caller may not see, which the write's refusal answers for
- * one chosen person too.
+ * one chosen person too. The chain check also counts the sight a
+ * top-level project gives, read-only, to whoever reaches one of its
+ * sub-projects (lib/access.ts canSeeProject), and so does this rule. That
+ * sight decides only for a parent task that older code stored directly
+ * under a top-level project.
  *
  * It reads the tasks above each lost subtask (model/issues.ts
  * ancestorsFrom) and, once for each of those projects and each lost task's
- * project, every profile's level from the project's side
- * (lib/access.ts projectLevelsForProfiles with the removal's rows left
- * out), sharing the reads of a top-level project and of a team between
- * them, then answers each person without a read. Levels come only from
- * levelsFrom, so an organization admin can take every task while it gives
- * them Lead, and follows ordinary access after the admin access split. It
- * checks the room before each read, so call it within withinRoom. With
- * nothing lost it lets in everyone who can hold work, as the write then
- * checks no new holder.
+ * project, every profile's level from the project's side (lib/access.ts
+ * projectLevelsForProfiles with the removal's rows left out), and for such
+ * a parent's top-level project also each of its sub-projects, live and
+ * archived. It shares the reads of a top-level project and of a team
+ * between them, then answers each person without a read. Levels come only
+ * from levelsFrom, so an organization admin can take every task while it
+ * gives them Lead, and follows ordinary access after the admin access
+ * split. It checks the room before each read, so call it within
+ * withinRoom. With nothing lost it lets in everyone who can hold work, as
+ * the write then checks no new holder.
  */
 async function takerRule(
   ctx: QueryCtx,
@@ -677,12 +682,33 @@ async function takerRule(
     )
   }
   const levelOn = (id: string, profile: Doc<'profiles'>) => levels.get(id)?.(profile) ?? null
+  // A top-level project shows, read-only, to whoever holds a level on one
+  // of its sub-projects of their own or leads it (lib/access.ts
+  // projectLevel's navigation), and the chain check counts that. A level on
+  // a sub-project that comes from the top-level project itself shows it
+  // anyway, so any level on a sub-project counts here.
+  const reaches = new Map<string, ((profile: Doc<'profiles'>) => AccessLevel | null)[]>()
+  for (const id of sight) {
+    const top = projects.get(id)
+    if (top === undefined || top.parent_id !== undefined) continue
+    const subs: ((profile: Doc<'profiles'>) => AccessLevel | null)[] = []
+    for (const sub of taken.orgProjects) {
+      if (sub.parent_id !== id) continue
+      subs.push(
+        levels.get(sub.id) ?? (await projectLevelsForProfiles(ctx, sub, { without, guard, reads })),
+      )
+    }
+    reaches.set(id, subs)
+  }
+  const sees = (id: string, profile: Doc<'profiles'>) =>
+    levelOn(id, profile) !== null ||
+    (reaches.get(id) ?? []).some((level) => level(profile) !== null)
   return (profile) =>
     profile.org_id === me.org_id &&
     canHoldWork(profile) &&
     !losing.has(profile.id) &&
     [...edit.keys()].every((id) => levelRank(levelOn(id, profile)) >= levelRank('user')) &&
-    [...sight].every((id) => levelOn(id, profile) !== null)
+    [...sight].every((id) => sees(id, profile))
 }
 
 /** What the Reassign picker answers: one of Unanswered as the preview
@@ -754,10 +780,11 @@ function changeScope(change: RemovalChange): string[] {
  *
  * Its reads are the preview's (accessRemovals.preview), the tasks above
  * the lost subtasks, a few index ranges for each of their projects and
- * the lost tasks' projects and each team that shares them, and the
- * profiles it walks. Measured with convex-test at the design size on 5
- * November 2026 (tests/reassignChoices.test.ts "inside Convex's limits"),
- * one figure at a time, a first batch read:
+ * the lost tasks' projects (and for a parent stored directly under a
+ * top-level project, each of its sub-projects) and each team that shares
+ * them, and the profiles it walks. Measured with convex-test at the
+ * design size on 5 November 2026 (tests/reassignChoices.test.ts "inside
+ * Convex's limits"), one figure at a time, a first batch read:
  * - a member of a 995-member team who holds two tasks leaving, in an
  *   organization of 1,000 people: 37 index ranges, 1,091 documents and
  *   219 KB, and a search for the last name, which walks every person,

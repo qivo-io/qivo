@@ -493,6 +493,23 @@ describe('the Reassign picker against the write', () => {
     expect(outcomes.get('Quinn')).toBe(ASSIGNEE_SIGHT_RULE)
     expect(outcomes.get('Lena')).toBe(ASSIGNEE_SIGHT_RULE)
   })
+
+  it("lists who sees a legacy parent's top-level project only through one of its sub-projects, as the write accepts them", async () => {
+    const b = await base()
+    const pia = await b.person('Pia')
+    await b.grant(b.f.sub, pia)
+    // older code stored this parent directly under TBED
+    const parent = await b.task(b.f.meta, { title: 'Legacy plan', assignee_id: b.f.user.id })
+    await b.task(b.f.sub, { title: 'Flash it', parent_id: parent.id, assignee_id: pia.id })
+    // Edit on Firmware alone, so TBED shows to Xena only for navigation
+    const xena = await b.person('Xena')
+    await b.grant(b.f.sub, xena)
+    await b.keyed()
+    const change = { kind: 'user_grant', project_id: b.f.sub.id, user_id: pia.id } as const
+    const { listed, outcomes } = await expectAgainstWrite({ ...b, caller: b.f.user, change })
+    expect(outcomes.get('Xena')).toBe(true)
+    expect(sorted(listed)).toEqual(['Xena', 'admin', 'guest', 'user'])
+  })
 })
 
 describe("the Reassign picker's gate", () => {
