@@ -19,7 +19,9 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    task in board only for a task the workspace holds. Back or Forward to
    such a task (App pendingTask) shows the pane that says it loads, on a
    phone too, and Escape closes a pop-out, then the pane. A related task the workspace does not hold,
-   opened from the pop-out, keeps both windows. */
+   opened from the pop-out, keeps both windows. The pop-out over a task the
+   pane shows from its answer offers the relation pickers, which read the
+   server. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
@@ -448,6 +450,59 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     expect(paneWindow()).toBe(pane)
     expect(composer.isDestroyed).toBe(false)
     expect((await editorOf('Leave a comment')).getText()).toBe('Soak it twice')
+  })
+
+  it('offers the relation pickers in the pop-out over a task it shows from its answer, read from the server', async () => {
+    // a picker scrolls its section into view and follows its own size
+    Element.prototype.scrollIntoView = () => {}
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const { snap } = await loadingInbox()
+    // the pickers' reads, which stay on their way
+    const pickerReads: Record<string, unknown>[] = []
+    network.query.mockImplementation((ref, args) => {
+      if (getFunctionName(ref) !== 'taskWindow:relationCandidates') return Promise.resolve(null)
+      pickerReads.push(args)
+      return new Promise(() => {})
+    })
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="fd000000-b"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await act(async () => windowReads[0]?.next(answerOf(snap)))
+    await vi.waitFor(() => expect(paneWindow()?.dataset.taskSource).toBe('answer'))
+    const button = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLButtonElement>('[data-task-popout]')
+      if (!found) throw new Error('missing the pop-out button')
+      return found
+    })
+    await act(async () => button.click())
+    // the pop-out has the details column the pane has no room for
+    const popOut = await vi.waitFor(() => {
+      const windows = [...document.querySelectorAll<HTMLElement>('[aria-label="Task"]')]
+      const found = windows.find((w) => w.dataset.issueLayout === 'columns')
+      if (!found) throw new Error('missing the pop-out')
+      return found
+    })
+    const control = (label: string) =>
+      popOut.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+    for (const label of ['Set parent', 'Add subtask', 'Link task'])
+      expect(control(label)?.disabled, label).toBe(false)
+    await act(async () => control('Link task')?.click())
+    // the picker mounts a frame after the press, and reads once it has
+    await act(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    await act(async () => {
+      await vi.waitFor(() => expect(pickerReads).toHaveLength(1))
+    })
+    const org = snap.orgs[0].id
+    expect(pickerReads).toEqual([{ org_id: org, issue_id: 'fd000000-b', kind: 'link' }])
+    expect(document.querySelector('[data-relation-picker="link"]')).not.toBeNull()
   })
 
   it('keeps both windows when the pop-out opens a related task the workspace does not hold', async () => {

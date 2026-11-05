@@ -66,6 +66,7 @@ const FAR_KID_2 = 'fd000000-0000-4000-8000-000000000043'
 /* Tasks a relation picker offers, which the workspace does not hold. */
 const PICKED = 'fd000000-0000-4000-8000-000000000044'
 const PICKED_2 = 'fd000000-0000-4000-8000-000000000045'
+const PICKED_3 = 'fd000000-0000-4000-8000-000000000046'
 // a day as YYYY-MM-DD, `days` from today
 const day = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 
@@ -731,6 +732,61 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     })
   })
 
+  it('picks a subtask with the parent its row showed and takes off a link with the kind its list showed, for a task shown from its answer', async () => {
+    await load()
+    const held = holdRelations()
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    // a link that blocks this task, to a task the workspace does not hold
+    const blocker = task(PICKED_2, 45, { title: 'Wire it' })
+    await answer('taskWindow:links', {
+      state: 'ok',
+      links: [
+        { id: 'link-far', source_id: PICKED_2, target_id: FAR, type: 'blocks', created_at: AT },
+      ],
+      tasks: [short(blocker)],
+      complete: true,
+    })
+    const org = snap.orgs[0].id
+    // Add subtask offers a task that is another task's subtask today
+    await click(document.querySelector('[aria-label="Add subtask"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'subtask' })
+    const cable = pickerRow(task(PICKED_3, 46, { title: 'Coil the cable' }))
+    await held.at(-1)?.answer(pickerBatch([{ ...cable, parent_id: FAR_KID_2 }]))
+    await click(document.querySelector(`[data-picker-row="${PICKED_3}"]`))
+    // the move, with the parent the row showed as the one expected
+    expect(sentArgs('issues:update').at(-1)).toEqual({
+      org_id: org,
+      id: PICKED_3,
+      patch: { parent_id: FAR },
+      expected: { parent_id: FAR_KID_2, has_hidden_parent: false },
+    })
+    // the window's Subtasks list shows it at once
+    expect(
+      document.querySelector('[data-section="subtasks"] [data-related-task="QN-46"]'),
+    ).not.toBeNull()
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    expect(document.querySelector('[data-relation-picker]')).toBeNull()
+    // Link task lists the current link first, checked, and a press takes it off
+    await click(document.querySelector('[aria-label="Link task"]'))
+    await nextFrame()
+    expect(held.at(-1)?.args).toEqual({ org_id: org, issue_id: FAR, kind: 'link' })
+    await held.at(-1)?.answer(pickerBatch([]))
+    const current = document.querySelector<HTMLElement>(
+      `[data-picker-row="${PICKED_2}"][data-picker-current]`,
+    )
+    expect(current?.getAttribute('aria-pressed')).toBe('true')
+    await click(current)
+    // with the relation the list showed, seen from this task
+    expect(sentArgs('issues:removeLink')).toEqual([
+      { org_id: org, a: FAR, b: PICKED_2, expected: { kind: 'blocked_by' } },
+    ])
+  })
+
   it('offers a Viewer of a task shown from its answer only Link task, to a task they can edit', async () => {
     await load()
     holdRelations()
@@ -948,6 +1004,30 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     // the read stops with no section to read it for; the details column's
     // sections ask afresh
     expect(open('taskWindow:task')).toHaveLength(1)
+  })
+
+  it('offers no relation change over a number address until the task side answers, then offers them', async () => {
+    await load()
+    holdRelations()
+    const { taskRef } = await import('../lib/taskReference')
+    const org = snap.orgs[0].id
+    await openWindow(taskRef({ org, num: 40 }))
+    // the read of the reference by its number serves the window first
+    const byNumber = one('taskWindow:task')
+    expect(byNumber.args).toEqual({ org_id: org, ref: 'QN-40' })
+    await act(async () => byNumber.deliver(okAnswer(far())))
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Tune the antenna')
+    // the task side reads it by its uuid, and until it answers the window
+    // takes no relation change, Link task included
+    const side = open('taskWindow:task').find((s) => s.args.ref === FAR)
+    expect(side?.args).toEqual({ org_id: org, ref: FAR })
+    for (const control of relationButtons()) {
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(true)
+      expect(await hintOf(control)).toBe(WAITS_FOR_CHECK)
+    }
+    await act(async () => side?.deliver(okAnswer(far())))
+    for (const control of relationButtons())
+      expect(control?.disabled, control?.getAttribute('aria-label') ?? '').toBe(false)
   })
 
   it('keeps a relation picker open with its rows and a pick on its way when the task arrives', async () => {

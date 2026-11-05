@@ -650,6 +650,29 @@ describe("the task window's sections", { timeout: 20_000 }, () => {
     expect(held?.querySelector<HTMLButtonElement>('.task-related-remove')?.disabled).toBe(false)
   })
 
+  it('takes a subtask off only where its short row and the workspace both say Edit', async () => {
+    await load()
+    await openTask()
+    // rows the workspace does not hold, whose answer's level and the
+    // workspace's level disagree either way, beside one where both say Edit
+    const editable = short(task('far', 39, { title: 'Tune the filter' }))
+    const viewedHere = { ...short(task('far-2', 38, { title: 'Sand the case' })), level: 'viewer' }
+    const viewedThere = {
+      ...short(task('far-3', 37, { title: 'Proof the manual', project_id: 'manuals' })),
+      level: 'lead',
+    }
+    await answer('taskWindow:task', taskAnswer([editable, viewedHere, viewedThere]))
+    const removeOf = (handle: string) =>
+      section('subtasks').querySelector<HTMLButtonElement>(
+        `[data-related-task="${handle}"] .task-related-remove`,
+      )
+    expect(removeOf('QN-39')?.disabled).toBe(false)
+    for (const handle of ['QN-38', 'QN-37']) {
+      expect(removeOf(handle)?.disabled, handle).toBe(true)
+      expect(await hintOf(removeOf(handle)), handle).toBe('Read-only project access')
+    }
+  })
+
   it('reads each link from the open task, and in the past tense for a Done task', async () => {
     const next = fixture()
     next.issues.push(
