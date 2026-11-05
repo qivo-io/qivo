@@ -35,8 +35,11 @@
      never read missing work as free time (src/lib/delay.ts).
    - It keeps each `ok` answer's spans as sent, their `project_id` included
      and unread, and never keeps an answer's `paused` list, so a change to
-     an owner's paused tasks alone repaints nothing. The Roadmap view stage
-     adds what Team utilization reads. */
+     an owner's paused tasks alone repaints nothing while that owner stays
+     `ok` and the call's `not_read` start does not move. Paused work that
+     takes an owner past the reader's bounds makes them `unavailable`, as
+     other work does. The Roadmap view stage adds what Team utilization
+     reads. */
 
 import type { FunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
