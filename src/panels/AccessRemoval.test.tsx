@@ -392,16 +392,37 @@ describe('saving the removal window', () => {
     expect(P.levelOn(work, 'leo')).toBe('viewer')
   })
 
-  it('says Saving… from the press, while it checks', async () => {
+  it('says Saving… from the press, and keeps the choice on screen while it checks', async () => {
     let answered: (value: unknown) => void = () => {}
     preview = () => new Promise((resolve) => (answered = resolve))
     await open()
     await click(shellButton('Change to Viewer'))
     expect(shellButton('Saving…')).toBeDefined()
+    const radios = [
+      ...document.querySelectorAll<HTMLInputElement>('[data-access-removal] input[type="radio"]'),
+    ]
+    expect(radios.map((r) => r.disabled)).toEqual([true, true])
+    expect(pickerButton().disabled).toBe(true)
+    await click(radios[1])
+    expect(radios.map((r) => r.checked)).toEqual([true, false])
     expect(writes()).toEqual([])
     await act(async () => answered(answer()))
     await settle()
     expect(writes()).toEqual([['projects:removeAccess', 'keep_as_viewer']])
+  })
+
+  it('moves the choice to Reassign when the answer it shows again refuses Keep as Viewer', async () => {
+    await open()
+    preview = async () =>
+      answer({ keep: { allowed: false, refusal: 'no permission to manage users on this project' } })
+    await click(shellButton('Change to Viewer'))
+    expect(windowText()).toContain('Access or tasks changed while this window was open.')
+    const radios = [
+      ...document.querySelectorAll<HTMLInputElement>('[data-access-removal] input[type="radio"]'),
+    ]
+    expect(radios.map((r) => r.checked)).toEqual([false, true])
+    expect(shellButton('Reassign and remove')).toBeDefined()
+    expect(writes()).toEqual([])
   })
 
   it('removes nothing and stays open when the check fails or cannot be read', async () => {

@@ -1062,15 +1062,17 @@ function AccessRemovalModal({
         ? `Keep as Viewer${shown.people.length === 1 ? '' : 's'} and delete`
         : 'Change to Viewer'
   const choosing = keep ? keepOk : reassignOk
-  // what the window shows after a refused write or a changed answer
+  // what the window shows after a refused write or a changed answer, with
+  // the choice moved to the other one when the new answer refuses it
   const showAgain = (next: RemovalAnswer, eligible: boolean) => {
     askedAt.current = Date.now()
     setShown(next)
     setChanged(true)
     if (!eligible) setTo(null)
     const nextKeep = next.keep.offered && next.keep.allowed
-    if (keep && !nextKeep && next.reassign.allowed) setKeep(false)
-    if (!keep && !next.reassign.allowed && nextKeep) setKeep(true)
+    setKeep((chosen) =>
+      chosen ? nextKeep || !next.reassign.allowed : !next.reassign.allowed && nextKeep,
+    )
   }
   /* After a refused write, the window asks the server again: an answer it
      cannot read keeps the window with its lists, a refusal closes it, as the
@@ -1236,7 +1238,8 @@ function AccessRemovalModal({
                 type="radio"
                 name="access-removal"
                 checked={keep && keepOk}
-                disabled={!keepOk}
+                // as the picker, so the choice on screen stays the one saved
+                disabled={!keepOk || saving}
                 onChange={() => setKeep(true)}
                 className="mt-0.5"
               />
@@ -1263,7 +1266,7 @@ function AccessRemovalModal({
                 type="radio"
                 name="access-removal"
                 checked={!keep && reassignOk}
-                disabled={!reassignOk}
+                disabled={!reassignOk || saving}
                 onChange={() => setKeep(false)}
                 className="mt-0.5"
               />
