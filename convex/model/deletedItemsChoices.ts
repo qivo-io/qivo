@@ -70,8 +70,10 @@ export type DeletedRole = {
  * lead's id. A seat that reuses such an id therefore reads `user` when the
  * newest row is the earlier holder's, even if an older row names the new
  * seat, which needs a reused id and an item moved again after a failed
- * reveal. The role only words the page and decides whether Deleted by
- * shows; every item still goes through viewOf. A seat reads its
+ * reveal. A seat whose newest stored lead row belongs to an item being
+ * purged also reads `user` until that purge removes the row, even if an
+ * older row names it. The role only words the page and decides whether
+ * Deleted by shows; every item still goes through viewOf. A seat reads its
  * organization's row, at most two `first` reads and one item by id, and an
  * admin's whether the organization is read-only (model/deletedItems.ts
  * orgReadOnly), a fixed handful of documents whatever the organization's

@@ -1238,7 +1238,7 @@ async function assigneeEntries(run: Run, seat: Seat, scope: Scoped, from: At | n
 }
 
 /** The tasks of task item `item` assigned to `person` in projects `view`
- * holds, by number. */
+ * lets the seat read (ItemView readable), by number. */
 async function assignedOf(reader: QueryCtx, view: ItemView, item: Item, person: string) {
   const out: Task[] = []
   const rows = reader.db
@@ -1364,10 +1364,11 @@ async function searchPlan(run: Run, seat: Seat, scope: Scoped): Promise<SearchPl
  * is read only when `older` (olderRows), has an allowance of its own and
  * adds nothing to `missing`. A candidate counts when its item passes
  * viewOf, is not purging and meets the scope and filters, its project is
- * one the seat's view of the item holds, and its number, title and
- * readable description hold every term (matchesTerms). A stop of the
- * gathering sets `reads` only when every seat's role reads every task
- * (Seat readsAll); any other search page says `matches` whatever it read.
+ * one the seat may read in its view of the item (ItemView readable), and
+ * its number, title and readable description hold every term
+ * (matchesTerms). A stop of the gathering sets `reads` only when every
+ * seat's role reads every task (Seat readsAll); any other search page says
+ * `matches` whatever it read.
  */
 async function gatherTasks(
   run: Run,
