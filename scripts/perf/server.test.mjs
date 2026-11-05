@@ -353,6 +353,61 @@ describe('the benchmark server', () => {
     })
   })
 
+  it("decides each relation picker's exclusions by its own kind, and offers all your projects at every family end, as the reader does", async () => {
+    const { posted, send } = await server('tasks=40&latency=0&mbps=100000')
+    const org = '00000000-0000-4000-8000-000000000001'
+    const { issueKey } = await import('../../convex/lib/taskRefs')
+    let asks = 0
+    /* The rows of picker `kind` for task number `n`, searching the task
+       ID of task number `m`. */
+    const rowsOf = async (kind, n, m) => {
+      const to = `ask-${asks++}`
+      await send({
+        type: 'query',
+        id: to,
+        name: 'taskWindow:relationCandidates',
+        args: { org_id: org, issue_id: id('4', n), kind, search: issueKey(m + 1) },
+      })
+      return JSON.parse(posted.find((msg) => msg.to === to).text).rows.map((r) => r.id)
+    }
+    // task 5 is the parent of tasks 6 and 7 (server.mjs parentOf), and
+    // task 18 is linked to task 21 (the links share)
+    expect(await rowsOf('link', 5, 6)).toEqual([id('4', 6)])
+    expect(await rowsOf('link', 6, 5)).toEqual([id('4', 5)])
+    expect(await rowsOf('parent', 18, 21)).toEqual([id('4', 21)])
+    expect(await rowsOf('subtask', 18, 21)).toEqual([id('4', 21)])
+    // each kind still leaves out its own current relations
+    expect(await rowsOf('link', 18, 21)).toEqual([])
+    expect(await rowsOf('parent', 6, 5)).toEqual([])
+    // one program and no other project: Search all your projects still
+    // shows at the family's end, and goes on to an empty end
+    await send({
+      type: 'query',
+      id: 'end',
+      name: 'taskWindow:relationCandidates',
+      args: { org_id: org, issue_id: TASK_1, kind: 'link', search: 'nothing-matches' },
+    })
+    const end = JSON.parse(posted.find((msg) => msg.to === 'end').text)
+    expect(end).toMatchObject({ rows: [], next: null, all_projects: expect.any(String) })
+    await send({
+      type: 'query',
+      id: 'all',
+      name: 'taskWindow:relationCandidates',
+      args: {
+        org_id: org,
+        issue_id: TASK_1,
+        kind: 'link',
+        search: 'nothing-matches',
+        cursor: end.all_projects,
+      },
+    })
+    expect(JSON.parse(posted.find((msg) => msg.to === 'all').text)).toMatchObject({
+      rows: [],
+      next: null,
+      all_projects: null,
+    })
+  })
+
   it('answers the appearance mode the page asks for, dark unless it asks for light', async () => {
     const modeOf = async (params) => {
       const { posted, send } = await server(`tasks=20&latency=0&mbps=100000${params}`)

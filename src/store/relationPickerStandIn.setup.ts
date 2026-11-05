@@ -12,14 +12,18 @@
    sub-projects by creation and then its top-level project, and for
    Linked tasks after Search all your projects (`all_projects`) the
    organization's other live top-level projects, each with its live
-   sub-projects by creation and then itself; each project's tasks by
-   creation; never the opened task or its current parent, subtasks or
-   linked tasks; the Parent picker's tasks without a parent and with room
-   for one more subtask, and the Subtasks picker's tasks without
-   subtasks, with their parent pair; every fragment of the search in the
-   task's ID or title (convex/lib/search.ts allWordsMatcher); a search that
-   is one task ID answers that task first, marked `exact`, and every later
-   batch leaves it out; at most RELATION_PICKER.rows tasks a batch.
+   sub-projects by creation and then itself, offered at every family end
+   of Linked tasks whether or not the organization has another project;
+   each project's tasks by creation; never the opened task, nor the
+   current relations of the picker's own kind, decided per kind as the
+   reader's decide does: the Parent picker's tasks without a parent and
+   with room for one more subtask, never the current parent; the Subtasks
+   picker's tasks without subtasks, with their parent pair, never a
+   current subtask; and the Linked tasks picker's tasks it is not linked
+   to, its parent and subtasks included; every fragment of the search in
+   the task's ID or title (convex/lib/search.ts allWordsMatcher); a search
+   that is one task ID answers that task first, marked `exact`, and every
+   later batch leaves it out; at most RELATION_PICKER.rows tasks a batch.
 
    Its cursors are plain JSON of the picker, the task, the search, the
    phase and the place in the scope, and one of another picker, task or
@@ -158,13 +162,20 @@ export function relationPickerStandIn(
   const parents = new Set(snap.issues.flatMap((row) => (row.parent_id ? [row.parent_id] : [])))
   const activeKids = (id: string) => snap.issues.filter((row) => row.parent_id === id).length
 
+  // each kind leaves out only its own current relations, as the reader's
+  // decide does (convex/lib/relationPicker.ts)
   const eligible = (row: Task) => {
-    if (row.id === task.id || row.id === task.parent_id || row.parent_id === task.id) return false
-    if (linked.has(row.id)) return false
+    if (row.id === task.id) return false
     if (args.kind === 'parent')
-      return !row.parent_id && !row.has_hidden_parent && activeKids(row.id) < LIMITS.subtasks.max
-    if (args.kind === 'subtask') return !parents.has(row.id) && !row.has_hidden_subtasks
-    return true
+      return (
+        row.id !== task.parent_id &&
+        !row.parent_id &&
+        !row.has_hidden_parent &&
+        activeKids(row.id) < LIMITS.subtasks.max
+      )
+    if (args.kind === 'subtask')
+      return row.parent_id !== task.id && !parents.has(row.id) && !row.has_hidden_subtasks
+    return !linked.has(row.id)
   }
   const shortOf = (row: Task, exact?: boolean): RelationCandidate => {
     const {
@@ -223,8 +234,10 @@ export function relationPickerStandIn(
     state: 'ok',
     rows,
     next: more ? cursor({ phase: place.phase, at }) : null,
+    // at every family end, as the reader answers it, also where the
+    // organization has no other project
     all_projects:
-      !more && place.phase === 'family' && args.kind === 'link' && others.length > 0
+      !more && place.phase === 'family' && args.kind === 'link'
         ? cursor({ phase: 'all', at: 0 })
         : null,
     stopped,
