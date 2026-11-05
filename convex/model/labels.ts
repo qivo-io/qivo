@@ -192,6 +192,12 @@ export type LabelsPageJson = { next_cursor: string | null; labels: ReturnType<ty
  * cursor, or a changed one, is refused with CURSOR_REFUSAL. Pages are not a
  * snapshot. Every label holds its name_lower, so the list needs no name
  * keys and is read in any organization.
+ *
+ * Labels have no design-size figure. Measured in
+ * convex/tests/peopleLists.test.ts ("at the design size"), the call's own
+ * reads included: 60 labels, the most a test case holds, take one page at
+ * limit 200 of 3 ranges, 61 documents and 0.02 MB, and a search that
+ * matches none of them reads the same.
  */
 export async function labelPage(
   ctx: QueryCtx,

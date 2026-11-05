@@ -32,7 +32,7 @@ import { CURSOR_REFUSAL, NAMES_NOT_READY, namedScope, offsetRefusal } from '../l
 import { NAMED_READ, namedCursor } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { sha256hex } from '../machine/auth'
-import { getUser, listUsers as restListUsers } from '../machine/rest'
+import { getUser, listLabels as restListLabels, listUsers as restListUsers } from '../machine/rest'
 import { restListTeamMembers, restListTeams } from '../machine/teams'
 import { ACCESS_FIRST_PASS } from '../model/cascade'
 import type { LabelsPageJson } from '../model/labels'
@@ -1604,6 +1604,15 @@ async function plantBigTeam(fx: Fx) {
   return people
 }
 
+/* The labels of the timing's label case: 60 labels of ordinary names,
+ * the most a test case holds, since labels have no design-size figure. */
+const plantLabelsFigure = (fx: Fx) =>
+  plantLabels(
+    fx.t,
+    fx.org.id,
+    Array.from({ length: 60 }, (_, i) => `Label ${String(i).padStart(2, '0')} Review`),
+  )
+
 describe('at the design size', () => {
   it('pages 1,000 people at limit 200, and a search that matches nobody over them', async () => {
     const fx = await setup()
@@ -1690,6 +1699,29 @@ describe('at the design size', () => {
     expect(none.reads).toHaveLength(1)
     expect(none.rows).toEqual([])
   }, 60_000)
+
+  it('pages 60 labels, the most a case holds, and a search that matches none', async () => {
+    // labels have no design-size figure, so a case holds at most 60
+    const fx = await setup()
+    await plantLabelsFigure(fx)
+    const all = await measurePages(
+      fx.t,
+      restListLabels,
+      'labels',
+      { ...reader(fx.admin), limit: '200' },
+      '60 labels at limit 200',
+    )
+    expect(all.reads).toHaveLength(1)
+    expect(all.rows).toHaveLength(60)
+    const none = await measurePages(
+      fx.t,
+      restListLabels,
+      'labels',
+      { ...reader(fx.admin), limit: '200', search: 'nobody by this name' },
+      'a search that matches none of 60 labels',
+    )
+    expect(none.rows).toEqual([])
+  })
 
   it('finds a person in 5 teams in each team’s member pages', async () => {
     const fx = await setup()
