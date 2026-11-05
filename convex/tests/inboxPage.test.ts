@@ -6,7 +6,9 @@
  * bound stopped left a group out, and never answers an unfinished read as
  * an empty Inbox. The reads at the design size are logged as
  * inboxReads.test.ts logs the summary's. Every case that writes ends with
- * drift() empty. */
+ * drift() empty, except the seats case, which unbuilds a seat's state on
+ * purpose, and the design-size cases, which plant their groups through the
+ * item writer or as itemOf makes them and only measure reads. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
@@ -22,7 +24,7 @@ import { namedCursor } from '../lib/namedPages'
 import { issueKey } from '../lib/taskRefs'
 import { TRASH_BUDGET } from '../model/deletedItems'
 import { insertTask } from '../model/descriptions'
-import { itemEdits, itemOf, REKEY } from '../model/inboxItems'
+import { ensureInboxState, itemEdits, itemOf, REKEY } from '../model/inboxItems'
 import {
   INBOX_LIST,
   INBOX_PAGE,
@@ -175,6 +177,62 @@ async function plantGroups(
     out.push(...made)
   }
   return out
+}
+
+/** `n` groups of `to` planted raw, the `i`th about a new task in project
+ * `projectOf(i)` titled `title(i)`, with the one message `sent(i)` and its
+ * item row as model/inboxItems.ts itemOf makes it, `chunk` groups a
+ * transaction. It writes no description, used_ids or count row, which the
+ * page never reads, and runs no query, so the design size's 6,000 groups
+ * plant in seconds where plantGroups' writers take minutes. */
+async function plantRaw(
+  t: T,
+  to: Doc<'profiles'>,
+  n: number,
+  projectOf: (i: number) => string,
+  o: { sent: (i: number) => Sent; title: (i: number) => string; chunk?: number },
+) {
+  const chunk = o.chunk ?? 2000
+  await t.run((ctx) => ensureInboxState(ctx, to.id))
+  for (let from = 0; from < n; from += chunk)
+    await t.run(async (ctx) => {
+      for (let i = from; i < Math.min(n, from + chunk); i++) {
+        const task = {
+          id: uuid(),
+          org_id: to.org_id,
+          project_id: projectOf(i),
+          num: nums++,
+          title: o.title(i),
+          status: 'todo' as const,
+          priority: 'medium' as const,
+          paused: false,
+          created_at: NOW,
+          updated_at: NOW,
+          window_key: newWindowKey(),
+        }
+        await ctx.db.insert('issues', task)
+        const s = o.sent(i)
+        const message = {
+          id: uuid(),
+          org_id: to.org_id,
+          recipient_id: to.id,
+          actor_id: s.actor,
+          issue_id: task.id,
+          issue_title: task.title,
+          kind: s.kind ?? ('change' as const),
+          detail: s.body ?? `Status changed from Todo to In progress (${i})`,
+          created_at: at(s.minute),
+          ...(s.read === true ? { read_at: at(s.minute) } : {}),
+        }
+        const _id = await ctx.db.insert('messages', message)
+        const item = itemOf(
+          { recipient_id: to.id, issue_id: task.id },
+          [{ ...message, _id }],
+          task.project_id,
+        )
+        if (item !== null) await ctx.db.insert('inbox_items', item)
+      }
+    })
 }
 
 /** A seat in the fixture's organization with a login, `role` (guest by
@@ -676,6 +734,7 @@ describe('who sees what', () => {
         expect(page, how).toMatchObject({ next: null, stopped: false, unchecked: false })
         const summary = await as(t, me).query(api.inbox.summary, {})
         expect(summary.unread_count, how).toBe(shown.length)
+        expect(await drift(t), how).toEqual([])
       }
   })
 
@@ -915,6 +974,7 @@ describe('the filters and the order', () => {
       tasks[6].id,
       ...up,
     ])
+    expect(await drift(t)).toEqual([])
   })
 })
 
@@ -1191,6 +1251,7 @@ describe('the read budget', () => {
       next: null,
       checked_to: null,
     })
+    expect(await drift(t)).toEqual([])
   })
 })
 
@@ -1703,10 +1764,14 @@ describe('reads at the design size', () => {
 })
 
 /* Case 5 of the reads at the design size, the 200 sub-projects one person
- * can read with 30 groups each, plants 6,000 groups and takes about a
- * minute, so it runs on demand with QIVO_INBOX_PERSON_READS=1, outside the
- * normal suite (AGENTS.md). Its figures are in model/inboxPage.ts
- * INBOX_PAGE. */
+ * can read with 30 groups each. It plants its 6,000 groups in under a
+ * second (plantRaw) but takes 68 to 102 s on a large Boat sandbox, nearly
+ * all of it the 12 pages of the search that matches nothing, each about
+ * 2,000 index ranges, which convex-test serves by scanning every stored
+ * document. So it runs on demand with QIVO_INBOX_PERSON_READS=1, outside
+ * the normal suite (AGENTS.md), with a timeout of its own above vitest's
+ * 60 s, an exception to the test rule. Its figures are in
+ * model/inboxPage.ts INBOX_PAGE. */
 describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
   'reads at the design size, on demand',
   () => {
@@ -1717,17 +1782,14 @@ describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
       const { me, subs } = await everyday(t, f, 3, 46)
       const two = subs.slice(0, 200)
       expect(two).toHaveLength(200)
-      await plantGroups(t, me, 6000, (i) => two[i % 200].id, {
+      await plantRaw(t, me, 6000, (i) => two[i % 200].id, {
         title,
-        chunk: 500,
-        sent: (i) => [
-          {
-            minute: i,
-            kind: i < 60 ? ('mention' as const) : ('change' as const),
-            body: i < 60 ? MENTION_DETAILS.comment : 'Status changed from Todo to In progress',
-            actor: f.admin.id,
-          },
-        ],
+        sent: (i) => ({
+          minute: i,
+          kind: i < 60 ? ('mention' as const) : ('change' as const),
+          body: i < 60 ? MENTION_DETAILS.comment : 'Status changed from Todo to In progress',
+          actor: f.admin.id,
+        }),
       })
       const browse = await first(t, me, '6,000 over 200 sub-projects, browse')
       expect(browse.page.rows).toHaveLength(50)
@@ -1752,6 +1814,6 @@ describe.runIf(process.env.QIVO_INBOX_PERSON_READS === '1')(
       console.log(
         `6,000 over 200 sub-projects: a search that matches nothing takes ${missed.length} pages`,
       )
-    }, 600_000)
+    }, 180_000)
   },
 )
