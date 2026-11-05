@@ -155,8 +155,10 @@ export const TASK_ROW_MAX_BYTES = 2 * 1024
 export const BOARD_TASKS = 1000
 
 /** The rows one batch of an app list holds before Load more, such as the
- * labels of Settings > Labels and of the task label picker (labels.ts). A
- * batch size, not a limit on what the list holds. */
+ * labels of Settings > Labels and of the task label picker (labels.ts), a
+ * project's access lists (projectSettings.ts), and a person's projects and
+ * a project's sub-projects for navigation (projectNav.ts). A batch size,
+ * not a limit on what the list holds. */
 export const LIST_BATCH = 25
 
 /** The most ids one call that looks rows up by id may name, such as

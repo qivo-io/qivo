@@ -7,10 +7,11 @@
  * marketingDemo.test.ts and demo.test.ts, which hold those fixtures.
  *
  * expectFavoritesExact checks every row against the projects and profiles
- * themselves, and `shows` applies the rule every reader applies, with
- * lib/access.ts projectLevel as its access check, so neither leans on the
- * code under test. Fake timers keep every scheduled step from running until
- * a test releases it (trash.setup.ts installTrashTimers). */
+ * themselves, and `shows` (projectNav.setup.ts) applies the rule every
+ * reader applies, with lib/access.ts projectLevel as its access check, so
+ * neither leans on the code under test. The readers themselves are tested
+ * in projectNav.test.ts. Fake timers keep every scheduled step from running
+ * until a test releases it (trash.setup.ts installTrashTimers). */
 /// <reference types="vite/client" />
 
 import type { WithoutSystemFields } from 'convex/server'
@@ -19,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { ACCESS_UNCHECKED, OWN_READS, ordinaryOf, projectLevel } from '../lib/access'
+import { ACCESS_UNCHECKED, OWN_READS } from '../lib/access'
 import { BILLING_READ_ONLY, ORG_DELETING } from '../lib/billingAccess'
 import { byId } from '../lib/db'
 import type { Refusal } from '../lib/functions'
@@ -52,6 +53,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { shows } from './projectNav.setup'
 import { withReach } from './projectReach.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import { DAY, installTrashTimers, itemFor, jobFor, runSteps, step } from './trash.setup'
@@ -159,28 +161,6 @@ async function expectAll(t: T, label: string): Promise<void> {
   await expectFavoritesExact(t)
   await assertNoDanglingRefs(t, label)
 }
-
-/** Whether a reader shows `row`: its seat, organization and live top-level
- * meta agree, the row holds the project's copies, and the seat sees the
- * project through ordinary access (lib/access.ts projectLevel of
- * ordinaryOf). */
-const shows = (t: T, row: Favorite) =>
-  t.run(async (ctx) => {
-    const seat = await byId(ctx, 'profiles', row.profile_id)
-    const p = await byId(ctx, 'projects', row.project_id)
-    return (
-      seat !== null &&
-      p !== null &&
-      row.org_id === seat.org_id &&
-      row.org_id === p.org_id &&
-      p.parent_id === undefined &&
-      p.type === 'meta' &&
-      p.archived_at === undefined &&
-      row.live &&
-      row.name_key === nameKey(p.name) &&
-      (await projectLevel(ctx, ordinaryOf(seat), p)) !== null
-    )
-  })
 
 /** Plants `n` more seats of `p`'s organization, each with its favorite on
  * top-level project `p` with its copies, as a star writes it. */

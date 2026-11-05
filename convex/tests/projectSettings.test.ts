@@ -29,7 +29,7 @@ import { newWindowKey } from '../lib/db'
 import { DEMO_FEATURE_REFUSAL } from '../lib/demo'
 import { type GrantLevel, ORG_ROLES, PROFILE_KINDS } from '../lib/enums'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
-import { NAMED_READ } from '../lib/namedPages'
+import { type ListBatch, NAMED_READ } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { DEFAULT_REVIEW_HOURS } from '../lib/review'
 import { insertTask } from '../model/descriptions'
@@ -37,7 +37,6 @@ import { setProjectGrantCore } from '../model/projectAccess'
 import {
   candidatesOf,
   inviteTargetOf,
-  type ListBatch,
   leadCandidatesOf,
   type ProjectSettings,
   projectSettingsOf,

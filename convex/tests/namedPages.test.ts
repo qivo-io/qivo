@@ -1,5 +1,7 @@
 /* The shared name-ordered reader (lib/namedPages.ts): the comparator agrees
- * with the order of an index, mergeNamed merges ordered streams lazily, a
+ * with the order of an index, mergeNamed merges ordered streams lazily and
+ * refuses two at one position unless asked to hand out one of them, whose
+ * dropped twins it counts, a
  * batch always moves forward and never claims an end it did not reach, the
  * read guard looks at the metrics only a few times a batch, and a cursor
  * opens only for the list and scope it came from. */
@@ -480,6 +482,87 @@ describe('mergeNamed', () => {
     expect(await drain(first)).toEqual(['STOPPED'])
     expect(await drain(mergeNamed([]))).toEqual([])
   })
+
+  /** NamedReads that count every row dropped beside another in `dropped`,
+   * by its stream, and answer `room` for each. */
+  const counting = (dropped: string[], room: (n: number) => boolean = () => true) => ({
+    open: async () => true,
+    skip: async (row: Row) => {
+      dropped.push(row.from)
+      return room(dropped.length)
+    },
+  })
+
+  it("with ties 'first', hands out one row of the streams at one position and moves each of them on", async () => {
+    const dropped: string[] = []
+    const merged = mergeNamed(
+      [
+        memory(
+          'seat',
+          [
+            ['ann', 'id1'],
+            ['bo', 'id1'],
+            ['cy', 'id1'],
+          ],
+          {},
+        ),
+        memory(
+          'team',
+          [
+            ['bo', 'id1'],
+            ['cy', 'id1'],
+            ['dee', 'id1'],
+          ],
+          {},
+        ),
+        memory('other team', [['bo', 'id1']], {}),
+      ],
+      { ties: 'first', reads: counting(dropped) },
+    )
+    expect(await drain(merged)).toEqual([
+      'ann/id1@seat',
+      'bo/id1@seat',
+      'cy/id1@seat',
+      'dee/id1@team',
+    ])
+    // each row left out beside the one handed out counts as read
+    expect(dropped).toEqual(['team', 'other team', 'team'])
+    // equal keys with different ties are two rows, not one
+    const apart = mergeNamed(
+      [memory('seat', [['bo', 'id1']], {}), memory('team', [['bo', 'id2']], {})],
+      { ties: 'first', reads: counting([]) },
+    )
+    expect(await drain(apart)).toEqual(['bo/id1@seat', 'bo/id2@team'])
+  })
+
+  it("with ties 'first', stops after the row whose dropped twin fills the budget", async () => {
+    const dropped: string[] = []
+    const merged = mergeNamed(
+      [
+        memory(
+          'seat',
+          [
+            ['ann', 'id1'],
+            ['bo', 'id1'],
+            ['cy', 'id1'],
+          ],
+          {},
+        ),
+        memory(
+          'team',
+          [
+            ['bo', 'id1'],
+            ['cy', 'id1'],
+          ],
+          {},
+        ),
+      ],
+      { ties: 'first', reads: counting(dropped, () => false) },
+    )
+    // the row is handed out, then nothing more is known
+    expect(await drain(merged)).toEqual(['ann/id1@seat', 'bo/id1@seat', 'STOPPED'])
+    expect(dropped).toEqual(['team'])
+  })
 })
 
 /* ------------------------------------------------------------- the batch */
@@ -596,6 +679,68 @@ describe('readBatch', () => {
     // fourth row's reads find the ceiling reached, finish, and end the batch
     expect(batch.rows).toEqual(someKeys.slice(0, 4))
     expect(batch).toMatchObject({ ended: false, stopped: true })
+  })
+
+  it('passes each row to keep with its position', async () => {
+    const t = newT()
+    const positions = await t.run(async (ctx) => {
+      const seen: string[] = []
+      await readBatch(ctx, {
+        stream: () =>
+          memory(
+            'm',
+            [
+              ['a', 1],
+              ['b', 2],
+            ],
+            {},
+          ),
+        keep: async (row: Row, _guard, at) => {
+          seen.push(`${row.name}:${at.key}/${at.tie}`)
+          return row.name
+        },
+        limit: 25,
+        through: null,
+        ceiling: { ranges: 1e9, documents: 1e9, bytes: 1e12 },
+      })
+      return seen
+    })
+    expect(positions).toEqual(['a:a/1', 'b:b/2'])
+  })
+
+  it('counts the twins a merge with ties drops, so a batch of tied rows stops as early as their reads', async () => {
+    const t = newT()
+    const orgId = uuid()
+    await plantKeys(t, orgId, someKeys)
+    /* One batch of the labels under a ceiling ten documents past what the
+     * call read before it, read once, or twice as two streams at the same
+     * positions merged with ties 'first'. */
+    const batchOf = (twice: boolean) =>
+      t.run(async (ctx) => {
+        const m = await ctx.meta.getTransactionMetrics()
+        const one = () => indexAfter(labelIndex(ctx, orgId), null)
+        return await readBatch(ctx, {
+          stream: (reads) =>
+            twice
+              ? mergeNamed([one()(reads), one()(reads)], { ties: 'first', reads })
+              : one()(reads),
+          keep: async (label: Doc<'labels'>) => label.name_lower,
+          limit: 25,
+          through: null,
+          ceiling: { ranges: 1e9, documents: m.documentsRead.used + 10, bytes: 1e12 },
+        })
+      })
+    const single = await batchOf(false)
+    const tied = await batchOf(true)
+    // every label once, in order, and stopped by the budget, never an end
+    expect(tied.rows).toEqual(someKeys.slice(0, tied.rows.length))
+    expect(tied).toMatchObject({ ended: false, stopped: true })
+    expect(single).toMatchObject({ ended: false, stopped: true })
+    // each position read twice fills the budget in half as many rows; a
+    // merge that did not count the twins it drops would read as far as one
+    // stream does
+    expect(tied.rows.length).toBeLessThan(single.rows.length)
+    expect(tied.rows.length).toBeGreaterThan(0)
   })
 
   it('looks at the metrics a few times for a long scan of small rows', async () => {
