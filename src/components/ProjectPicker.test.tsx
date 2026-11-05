@@ -377,6 +377,41 @@ describe('the project picker', { timeout: 30_000 }, () => {
     expect(rowIds()).toHaveLength(2)
   })
 
+  it('says a project it can no longer open, never that it has no sub-projects', async () => {
+    const next = base()
+    const luma = top(next, 'Luma Sensor')
+    sub(next, luma, 'Firmware')
+    await load(next)
+    await panel()
+    holding = (s) => s.name === 'projectNav:children'
+    await click(find(`[data-project-expand="${luma}"]`))
+    // the person's grant goes while the read is on its way
+    snap.access = snap.access.filter((a) => a.project_id !== luma)
+    await deliver(asked('children')[0])
+    await settle()
+    expect(notes()).toContain('unavailable: You can no longer open this project.')
+    expect(pickerText()).not.toContain('No active sub-projects.')
+  })
+
+  it('tells equal names apart by their number, and leaves other names alone', async () => {
+    const next = base()
+    const first = top(next, 'Test')
+    const second = top(next, 'Test')
+    const other = top(next, 'Other')
+    for (const [id, n] of [
+      [first, 4],
+      [second, 7],
+    ] as const) {
+      const p = next.projects.find((x) => x.id === id)
+      if (p) p.num = n
+    }
+    await load(next)
+    await panel()
+    expect(find(`[data-project-pick="${first}"]`).textContent).toMatch(/Test#4$/)
+    expect(find(`[data-project-pick="${second}"]`).textContent).toMatch(/Test#7$/)
+    expect(find(`[data-project-pick="${other}"]`).textContent).toBe('Other')
+  })
+
   it('searches once typing rests, every word of a project’s own name, ignoring accents', async () => {
     const next = base()
     const cafe = top(next, 'Café Ordering')
