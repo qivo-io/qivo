@@ -735,6 +735,16 @@ release whose Roadmap view reads the fields makes this release the
 backend's floor for that app, and its own paragraph here says so. There is
 no schema change and no backfill.
 
+From the release after v0.1.125, a member's task history in the task
+window, over REST and over MCP checks each project its rows name instead of
+reading every project of the organization, and REST and MCP creates count a
+new top-level project's place from the organization's top-level projects.
+The answers do not change, so that release sets no rollback floor and needs
+no step, and returning the backend or the app to an earlier commit stays
+safe. A person whose access Qivo cannot finish checking within its fixed
+limits now gets that refusal on a task's history too, as on the workspace.
+There is no schema change and no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
