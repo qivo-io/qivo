@@ -123,7 +123,7 @@ export const storageNowPage = internalQuery({
 
 /**
  * @deprecated The app reads billing.currentUsage and billing.storageProjects
- * since the release after v0.1.131. This report stays, with its scan and its
+ * since the release after v0.1.134. This report stays, with its scan and its
  * answer, through that release, so tabs and desktop windows loaded before it
  * still load Billing, and a later release removes it with usageHead,
  * storageNowPage and the scan and adds it to the Instant Rollback list in
