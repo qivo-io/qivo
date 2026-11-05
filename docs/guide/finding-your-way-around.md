@@ -179,11 +179,11 @@ whatever page you are on, and **Search in** shows that as **All projects**.
 sub-project's tasks, opens Search with **Search in** set to that
 sub-project. An empty search shows nothing.
 
-**Search in** opens a list of your projects, your favorites first and then
-the rest by name, 25 at a time with **Load more**. Type in it to find any
-project or sub-project you can open by its own name, words in any order,
-ignoring case and accents; each sub-project shows with its project. A
-project's arrow shows its sub-projects. Choose **All projects**, an
+**Search in** opens a list of your projects by name, 25 at a time with
+**Load more**. Type in it to find any project or sub-project you can open
+by its own name, words in any order, ignoring case and accents; each
+sub-project shows with its project. A project's arrow shows its
+sub-projects. Choose **All projects**, an
 organization's **All projects** when you belong to more than one
 organization, a project with its sub-projects, or one sub-project, and
 Search asks again at once. The choice lasts while Search stays open. The
