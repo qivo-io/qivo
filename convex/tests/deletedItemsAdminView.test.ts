@@ -1183,7 +1183,9 @@ describe('reads at the design size, under the stand-in', () => {
     ]
     // each new team shares one live sub-project
     const shares = teams.map((team, i): [string, ProjectRow] => [team, subs[i]])
-    await plantProjectItem(t, f, { root, subs, perSub: 30, shares })
+    // 26 open tasks in each live sub-project, 780 in the project, inside the
+    // design size of 800 open tasks a project with all its sub-projects
+    await plantProjectItem(t, f, { root, subs, perSub: 26, shares })
     standInForTheSplit()
     const scope = { org_id: f.org.id, all: true as const }
     const browse = await readPage(t, f.admin, { scope })
@@ -1191,7 +1193,7 @@ describe('reads at the design size, under the stand-in', () => {
     expect(browse.figures).toMatchObject({ entries: 1, hidden: 0, missing: null })
     const searched = await readPage(t, f.admin, { scope, search: 'calibrate' })
     record('the same, searching a word every task holds', searched.figures)
-    // the 60 tasks of the two shared sub-projects count, wherever their
+    // the 52 tasks of the two shared sub-projects count, wherever their
     // results fall among the ones the search reads
     expect(searched.figures.missing).toBe('matches')
   })
