@@ -401,7 +401,7 @@ export const LIMITS = {
     label: 'Uploads in progress',
     group: 'files',
     max: 20,
-    unit: 'uploads per person in an organization',
+    unit: 'uploads in progress per person in an organization',
     refusal:
       'you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started.',
     on: ALL,

@@ -369,7 +369,7 @@ into the range.
 | Attachment file name | 255 characters | a file name must be at most 255 characters. Rename the file and attach it again. |
 | Attachment media type | 255 characters | a file's media type must be at most 255 characters. Send a media type such as application/pdf. |
 | Attachment size | 20 MiB per file | a file must be at most 20 MiB, this organization's attachment limit. Attach a smaller file. |
-| Uploads in progress | 20 uploads per person in an organization | you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
+| Uploads in progress | 20 uploads in progress per person in an organization | you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
 
 ### Tasks and organizations
 
@@ -3012,7 +3012,8 @@ authenticated request.
   the user that started it, the task, the declared name, type and size, its
   expiry, the `POST` to its upload URL that holds the URL and when it began,
   and the one file that URL stored, which the confirm must name. Confirming
-  deletes it; the weekly storage sweep deletes expired ones.
+  deletes it, and within an hour of an upload's expiry Qivo deletes it with
+  the file it holds unless something else uses that file.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through
