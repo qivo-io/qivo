@@ -537,41 +537,59 @@ async function everyday(t: T, f: OrgFixture, n: number, links = true) {
   return tasks
 }
 
-/** A project of 800 open tasks over 3 sub-projects at the everyday link
- * share, 5 percent of them, 40 tasks, hold a link, 20 to each other and 20
- * to tasks of 2 everyday projects elsewhere, which hold their own share.
- * Answers the fixture and the project's dated tasks. */
+/** A project of 800 open and 200 Done tasks not yet archived over 3
+ * sub-projects, its two figures at their sum as the read takes both, the
+ * Board's design-size shape, at the everyday link share: 5 percent of each
+ * hold a link, half of them to tasks of 2 everyday projects elsewhere,
+ * which hold their own share. Of the open tasks 40 hold one, 20 to each
+ * other and 20 blocked by tasks elsewhere; of the Done tasks, each dated in
+ * one of the 26 weeks before NOW's, 10 hold one, 5 blocking open tasks of
+ * the project and 5 blocked by tasks elsewhere. Answers the fixture and the
+ * project's dated open tasks. */
 async function eightHundred() {
   const t = newT({ transactionLimits: true })
   const f = await withOrg(t)
   const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 1))]
   const own: Doc<'issues'>[] = []
-  for (const [k, sub] of subs.entries())
+  const done: Doc<'issues'>[] = []
+  for (const [k, sub] of subs.entries()) {
     own.push(...(await plantOpen(t, sub, k === 2 ? 266 : 267, 3000 * k)))
+    done.push(
+      ...(await plantTasks(t, sub, k === 2 ? 66 : 67, (i) => ({
+        ...ordinary(3000 * k + 500 + i),
+        status: 'done',
+        done_at: NOW,
+        ...dated(-1 - (i % 26)),
+      }))),
+    )
+  }
   const elsewhere = scheduled(await everyday(t, f, 2))
   const ends = scheduled(own)
   for (let i = 0; i < 10; i++) await link(t, ends[2 * i], ends[2 * i + 1])
   for (let i = 0; i < 20; i++) await link(t, elsewhere[3 * i], ends[20 + i])
+  for (let i = 0; i < 5; i++) await link(t, done[i], ends[100 + i])
+  for (let i = 0; i < 5; i++) await link(t, elsewhere[61 + i], done[5 + i])
   return { t, f, ends, subs }
 }
 
-/** The tasks of a part outside the selection the parts may hold beside a
- * project of 800 open tasks at the everyday link share, below the size the
- * per-task cost gives (DEPENDENCIES' docstring), checked here. */
-const MEASURED_OUTSIDE = 350
+/** A chain of tasks outside the selection that the parts hold whole beside
+ * the project of 800 open and 200 Done tasks at the everyday link share,
+ * below the measured size in DEPENDENCIES' docstring, a chain of 230, so a
+ * small change in what the read takes leaves it inside. */
+const MEASURED_OUTSIDE = 200
 
 describe('real limits', () => {
-  it('reads a project of 800 open tasks at the everyday link share, half its links to everyday projects elsewhere', async () => {
+  it('reads a project of 800 open and 200 Done tasks at the everyday link share, half its links to everyday projects elsewhere', async () => {
     const { t, f } = await eightHundred()
     await withReach(t)
     const { answer, read } = await dependenciesRead(t, [f.guest], projectScope(f.guest, f.meta.id))
-    record('a project of 800 open tasks', answer, read)
+    record('a project of 800 open and 200 Done tasks', answer, read)
     expect(ok(answer).auto_move.state).toBe('ok')
   })
 
-  it(`answers Auto-move whole with a chain of ${MEASURED_OUTSIDE} tasks outside the project of 800 open tasks`, async () => {
+  it(`answers Auto-move whole with a chain of ${MEASURED_OUTSIDE} tasks outside the project of 800 open and 200 Done tasks`, async () => {
     const { t, f, ends, subs } = await eightHundred()
-    // a chain through every dated task of 6 everyday projects, to the
+    // a chain through dated tasks of 6 everyday projects, below the
     // measured size, into a dated task of the project
     const chain = scheduled(await everyday(t, f, 6, false)).slice(0, MEASURED_OUTSIDE)
     expect(chain).toHaveLength(MEASURED_OUTSIDE)
@@ -582,7 +600,11 @@ describe('real limits', () => {
       next = blocker
     }
     const { answer, read } = await dependenciesRead(t, [f.guest], projectScope(f.guest, f.meta.id))
-    record(`the project of 800 open tasks and a chain of ${MEASURED_OUTSIDE}`, answer, read)
+    record(
+      `the project of 800 open and 200 Done tasks and a chain of ${MEASURED_OUTSIDE}`,
+      answer,
+      read,
+    )
     const a = ok(answer)
     if (a.auto_move.state !== 'ok') throw new Error('Auto-move over_budget')
     // the chain's own families come along, so the parts hold more

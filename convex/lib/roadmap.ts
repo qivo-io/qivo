@@ -109,12 +109,15 @@ import {
  * convex-test's transaction limits with rows as the app writes them, in
  * ordinary text, data from before the rule of one level
  * (tests/roadmapRead.test.ts, real limits), in ranges, documents and MiB, on
- * 5 November 2026, each case one figure at its design size:
+ * 5 November 2026, each case one figure at its design size, or the figures
+ * one read takes together at their sum:
  *
- * - A project of 3 sub-projects with 800 open tasks, one in ten of them a
- *   group and two in ten subtasks, three in five dated, the default window:
- *   827, 992 and 0.58, 731 rows. A search of it that 7 rows match: 53,
- *   1,644 and 0.96.
+ * - A project of 800 open and 200 Done tasks not yet archived, its two
+ *   figures at their sum as the read takes both, over 3 sub-projects, one
+ *   in ten open tasks a group and two in ten subtasks, three in five dated,
+ *   the Done tasks dated over 26 weeks: 1,030, 1,195 and 0.71, in the
+ *   default window (758 rows) and in one that holds every Done task (931
+ *   rows). A search of it that 7 rows match: 61, 2,050 and 1.20.
  * - A project of 30 sub-projects with 20 open tasks each: 696, 873 and
  *   0.48, 570 rows.
  * - A sub-project of 300 open tasks beside two of 30: 313, 372 and 0.22
@@ -164,11 +167,14 @@ export const ROADMAP = {
  * organization, as the perf seed links its tasks (scripts/perf/server.mjs
  * `links`):
  *
- * - A project of 800 open tasks over 3 sub-projects, 40 of them linked, 20
- *   to each other and 20 to tasks of 2 everyday projects of 90 tasks
- *   elsewhere, which hold their own share: 1,960, 1,094 and 0.62, parts of
- *   95 tasks. The selection's group checks and the two link ranges of each
- *   of its tasks with a span take most of the ranges.
+ * - A project of 800 open and 200 Done tasks not yet archived over 3
+ *   sub-projects, its two figures at their sum, every Done task dated. 40
+ *   open tasks hold a link, 20 to each other and 20 to tasks of 2 everyday
+ *   projects of 90 tasks elsewhere, which hold their own share, and 10 Done
+ *   ones, 5 to open tasks of the project and 5 to tasks elsewhere: 2,597,
+ *   1,331 and 0.76, parts of 117 tasks. The selection's group checks and
+ *   the two link ranges of each of its tasks with a span, Done ones
+ *   included, take most of the ranges.
  * - My view of 400 of the reader's own tasks over 200 sub-projects, 20 of
  *   them linked, half to other people's tasks: 1,306, 871 and 0.41.
  * - Each task of a part outside the selection costs about 4.2 ranges, 3.3
@@ -176,12 +182,13 @@ export const ROADMAP = {
  *   link ranges and its project's access, measured over chains through 60
  *   and 120 tasks of everyday projects (470 and 721 ranges).
  *
- * So beside a project at its design size the parts may hold about 380
- * tasks outside the selection. A chain of 350 tasks through 6 everyday
- * projects, which brings 386 such tasks with their families, reads 3,442
- * ranges, 2,277 documents and 1.16 MiB whole. That is the measured size;
- * past it the ranges run out and Auto-move's inputs answer over_budget.
- * `tasks` comes after it inside the design size and bounds the bytes sent.
+ * So beside a project at its design size the parts may hold about 270
+ * tasks outside the selection. A chain of 230 tasks through 6 everyday
+ * projects, which brings 273 such tasks with their families, reads 3,577
+ * ranges, 2,105 documents and 1.12 MiB whole, and one of 240 answers
+ * over_budget. That is the measured size; past it the ranges run out and
+ * Auto-move's inputs answer over_budget. `tasks` comes after it inside the
+ * design size and bounds the bytes sent.
  *
  * The owner chose on 1 November 2026 that a figure that depends on the day
  * or on workloads may answer unavailable past a measured size inside the

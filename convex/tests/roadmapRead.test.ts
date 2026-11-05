@@ -6,7 +6,8 @@
  * the counts bound, the headings' Remaining, the sub-projects My view
  * holds, the parents and subtasks it sends, that data the caller cannot see
  * moves nothing, and real limits under Convex's transaction limits with
- * the figures they read, one figure at its design size a case.
+ * the figures they read, one figure at its design size a case, or the
+ * figures one read takes together at their sum.
  * src/store/roadmapParity.test.ts compares its answers with the app's own
  * rules. */
 
@@ -987,11 +988,22 @@ async function plantOpen(t: T, project: Doc<'projects'>, n: number, from = 0) {
 }
 
 describe('real limits', () => {
-  it('answers a project of 3 sub-projects with 800 open tasks, and a search of it', async () => {
+  it('answers a project of 800 open and 200 Done tasks over 3 sub-projects, and a search of it', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const subs = [f.sub, f.sub2, ...(await plantSubs(t, f.meta, 1))]
-    for (const [k, sub] of subs.entries()) await plantOpen(t, sub, k === 2 ? 266 : 267, 3000 * k)
+    // the project's open and Done tasks at their sum, as the read takes
+    // both, the Board's design-size shape over the everyday 3 sub-projects,
+    // so each holds 267 or 266 open tasks and 67 or 66 Done ones, within a
+    // sub-project's 300 and 150. The Done tasks are dated over the 26 weeks
+    // before NOW's week
+    for (const [k, sub] of subs.entries()) {
+      await plantOpen(t, sub, k === 2 ? 266 : 267, 3000 * k)
+      await plantTasks(t, sub, k === 2 ? 66 : 67, (i) => ({
+        ...ordinary(3000 * k + 500 + i),
+        ...doneIn(dayPlus(NOW_WEEK, -7 * (i % 26))),
+      }))
+    }
     // every 100th text holds a word no sentence has
     await t.run(async (ctx) => {
       let i = 0
@@ -1002,10 +1014,21 @@ describe('real limits', () => {
     await countOrg(t, f.org.id)
     const scope = projectScope(f.guest, f.meta.id)
     const whole = await roadmapRead(t, [f.guest], scope)
-    record('a project of 3 sub-projects with 800 open tasks', whole.answer, whole.read)
+    record('a project of 800 open and 200 Done tasks', whole.answer, whole.read)
     expect(whole.answer.state).toBe('ok')
+    const all = await roadmapRead(
+      t,
+      [f.guest],
+      scope,
+      {},
+      weeksFrom(dayPlus(NOW_WEEK, -7 * 30), 52),
+    )
+    record('the 800 open and 200 Done tasks, every Done one in the window', all.answer, all.read)
+    expect(all.answer.state).toBe('ok')
+    if (whole.answer.state === 'ok' && all.answer.state === 'ok')
+      expect(all.answer.rows.length - whole.answer.rows.length).toBeGreaterThan(150)
     const search = await roadmapRead(t, [f.guest], scope, { search: 'quokka' })
-    record('a search of the 800 open tasks', search.answer, search.read)
+    record('a search of the 800 open and 200 Done tasks', search.answer, search.read)
     expect(search.answer.state).toBe('ok')
   })
 
