@@ -82,7 +82,13 @@
  * (projectSettings.get, users, teams and candidates), sets the team's
  * level to Viewer, adds Nora, an admin who is not its lead, through the
  * Add team or user picker's search, and sets its Review time, each checked
- * over REST (ui/project-settings). Every task, comment,
+ * over REST (ui/project-settings). It makes a sub-project of its own under
+ * its project with one task, uploads a file there over REST and opens
+ * Billing, whose current storage must show a figure rather than Being
+ * counted (billing.currentUsage) and whose Storage by project, searched for
+ * its run tag, must list that sub-project alone with the file's size
+ * (billing.storageProjects), then deletes the file (ui/billing-storage).
+ * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
  * refused, and removes everything it made, also after a failure
