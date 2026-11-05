@@ -971,8 +971,9 @@ describe('tasks created at one time', () => {
     const f = await withOrg(t)
     const open = await task(t, f, f.sub)
     // one transaction's inserts, at one creation time, far more than the
-    // 128 tasks a batch's 8 MiB holds at ROW_BYTES each, then a later task
-    const group = await plantTasks(t, f.sub, 300, () => ({}), 300)
+    // 128 tasks a batch's 8 MiB holds at ROW_BYTES each, then a later task,
+    // so the sub-project holds 300 open tasks with the opened one
+    const group = await plantTasks(t, f.sub, 298, () => ({}), 298)
     const needle = await task(t, f, f.sub, { title: 'Needle' })
     shareCreationTime(
       group.map((x) => x._id),
