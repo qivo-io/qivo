@@ -4211,7 +4211,7 @@ async function tasksOnDemandCheck() {
 export const UPLOAD_STEP = 'ui/attachment-upload'
 
 /** A file sent through the task window of run.t0, as a person attaches one
- *  (src/panels/IssueDetail.tsx): its upload goes on a ticket, so the POST
+ *  (src/panels/IssueDetail.tsx). Its upload goes on a ticket, so the POST
  *  must go to /attachment-uploads/ on the API origin and answer 200, the
  *  window must list the file, and its download must match the bytes. It
  *  deletes the file again over REST. The app on the deployment must send

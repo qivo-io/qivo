@@ -1,4 +1,4 @@
-/* The private demo's shared 5 MiB (model/demoUploads.ts): reservations of
+/* The private demo's shared 5 MiB (model/demoUploads.ts), with reservations of
  * the declared size against the kind's per-file limit and the free space,
  * sizeless calls from an app loaded before sizes were declared, the
  * receivers' bound and the refusals, which say how much is free and delete

@@ -670,7 +670,7 @@ http.route({
             .runMutation(internal.demoUploads.abandon, { id, minter, storage_id: storageId })
             .catch(() => null)
         : null
-      // finish committed but its answer was lost: the file is the upload's
+      // finish committed but its answer was lost, so the file is the upload's
       if (stored !== null)
         return new Response(JSON.stringify({ storageId: stored }), { status: 200, headers })
       const data = error instanceof ConvexError ? (error.data as { message?: string }) : null

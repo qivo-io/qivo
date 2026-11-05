@@ -244,14 +244,14 @@ export const MIB = 1024 * 1024
  * before any bytes are sent. */
 export const DEMO_FILE_BYTES = 5 * MIB
 
-/** The most one private demo stores in total, 5 MiB: its attachments,
+/** The most one private demo stores in total, 5 MiB of its attachments,
  * description images, uploaded profile pictures, custom backgrounds and
  * the previews Qivo makes of them, counted as stored bytes plus pending
  * reservations (model/demoUploads.ts). It keeps the storage cost of the
  * free temporary demo small. It is one total for the demo, not a per-file
  * limit or an allowance per person, and regular organizations have no
- * total storage cap (owner, 24 October 2026). No LIMITS entry: only the
- * demo meets it, and its refusal says how much is free. */
+ * total storage cap (owner, 24 October 2026). It has no LIMITS entry,
+ * since only the demo meets it and its refusal says how much is free. */
 export const DEMO_STORAGE_BYTES = 5 * MIB
 
 /** The largest request body the sign-in endpoints under /api/auth take

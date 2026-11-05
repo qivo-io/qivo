@@ -7,7 +7,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import type { AppearancePreferences } from '../store/planner'
 import { AppearanceSettings } from './AppearanceSettings'
 
-/* Settings › Appearance: what it says for a custom background whose preview
+/* What Settings › Appearance says for a custom background whose preview
    the demo's storage left no room for, and how it shows a refusal. The
    store's appearance read and save are answered by hand. */
 

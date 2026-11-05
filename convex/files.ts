@@ -122,10 +122,10 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
 }
 
 /* ---------------------------------------------------------------- uploads
- * Every URL is gated: write level on the target issue's project
+ * Every URL is gated by write level on the target issue's project
  * (attachments) or the set_avatar right (avatars). An attachment or
  * description image goes on an upload ticket, as REST and MCP uploads do
- * (model/attachments.ts openUploadTicket): its URL stores one file of the
+ * (model/attachments.ts openUploadTicket). Its URL stores one file of the
  * declared size, or up to the organization's limit for an app that sends no
  * size, and only the caller's attach of that file to that task takes it. On
  * the demo the upload reserves room in the demo's budget instead

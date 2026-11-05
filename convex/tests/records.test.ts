@@ -635,7 +635,7 @@ describe('the REST upload', () => {
       verb: 'attached a file to',
       detail: 'wiring.pdf, via the REST API (CI key)',
     })
-    // the ticket is spent: the same confirm sent again answers its
+    // the ticket is spent, so the same confirm sent again answers its
     // attachment and changes nothing, and the upload URL is spent too
     expect(await confirm(fx, issue.id, started.ticket, { storage_id: stored })).toEqual(
       expect.objectContaining({ attachment: expect.objectContaining({ id: out.attachment.id }) }),

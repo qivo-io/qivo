@@ -5,7 +5,7 @@
  * pending reservations together (lib/limits.ts). A reservation is the size
  * the app declared, checked against the kind's per-file limit and the free
  * space, and the receivers store at most that many bytes. Nothing is ever
- * deleted to make room: a refusal says how much is free and how to free
+ * deleted to make room. A refusal says how much is free and how to free
  * more, and a demo above the budget admits nothing until enough is freed or
  * it ends. */
 
@@ -126,7 +126,7 @@ async function demoLedger(
   return { reserved, count }
 }
 
-/** A reservation: its ledger row's id, when it expires, in epoch
+/** A reservation, with its ledger row's id, when it expires in epoch
  * milliseconds, and the bytes it holds. */
 export type DemoReservation = { id: string; expiresAt: number; bytes: number }
 

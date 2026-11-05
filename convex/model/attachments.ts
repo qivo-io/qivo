@@ -38,7 +38,7 @@
  * ticket (beginTicketUpload, finishTicketUpload), or at most the
  * organization's limit for an app that declared no size (`up_to`). The
  * file then attaches only for that caller and task before the ticket
- * expires, through completeUpload: files.ts attach finds the ticket by its
+ * expires, through completeUpload. files.ts attach finds the ticket by its
  * file, and confirmAttachmentUpload, on either machine surface, by its id.
  * Convex's own upload URLs are not used for task files, because one of them
  * stores any number of files of any size until it expires. A person holds
@@ -614,8 +614,8 @@ export async function attachUploadedFile(
  * another task's is UPLOAD_TICKET_MISSING. A confirm sent again by the same
  * caller for the same task and file after the first one attached it, as
  * when its answer was lost, finds no ticket and answers that attachment,
- * changing nothing. So do two confirms of one ticket sent at once: the
- * second conflicts on the ticket, runs again and finds it spent.
+ * changing nothing. So do two confirms of one ticket sent at once, since
+ * the second conflicts on the ticket, runs again and finds it spent.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,
