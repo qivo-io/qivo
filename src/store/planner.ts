@@ -4067,6 +4067,17 @@ export const __layerProbe = STRICT_LAYERS
       },
       /** The faults the store caught and reported, and forgets them. */
       faults: () => faults.splice(0),
+      /** Runs the guard against task writes before the ask
+          (guardTaskWrite) on write `name` with mark `about`, as start()
+          does, and answers the faults it reported. */
+      guardWrite(name: string, about?: WriteAbout) {
+        const before = faults.length
+        guardTaskWrite(name, about)
+        return faults.splice(before)
+      },
+      /** The reasons P.askTasks was called with since the last call, in
+          order. */
+      asks: () => askReasons.splice(0),
       /** Changes a task's title outside any layer and emits. The title
           changes in a painted copy, since the server's rows are frozen
           (writeServerRow). */

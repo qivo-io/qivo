@@ -361,3 +361,35 @@ describe('a boot on a task address', { timeout: 30_000 }, () => {
     expect(marks).toEqual([])
   })
 })
+
+describe('a boot on a task address, as the app boots', { timeout: 30_000 }, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  it('shows the task from the read the boot started, editable from that answer, and asks for no task', async () => {
+    const { store, snap } = await bootAt('/app/testbed/board/all/tasks/qn-2')
+    const org = snap.orgs[0].id
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    // the read the boot subscribed with the first parts, the only ones
+    expect(reads.map((read) => read.args)).toEqual([{ org_id: org, ref: 'QN-2' }])
+    await act(async () => reads[0]?.next(answerOf(snap)))
+    await waitFor(() => dialog()?.dataset.taskSource === 'answer', 'the task from its answer')
+    expect(document.querySelector('[data-task-title]')?.textContent).toBe('Run the soak test')
+    // the window's own read by uuid makes the task's answer its own, and
+    // the editor edits from it with no ask
+    await waitFor(
+      () => reads.find((read) => read.args.ref === SOAK),
+      "the window's read of the task",
+    )
+    await act(async () => reads.find((read) => read.args.ref === SOAK)?.next(answerOf(snap)))
+    await waitFor(() => store.P.editsFromAnswer(SOAK), 'the window editable from its answer')
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.P.handleOf(SOAK)).toBeNull()
+  })
+})

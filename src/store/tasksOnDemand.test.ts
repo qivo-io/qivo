@@ -22,6 +22,12 @@ vi.mock('../lib/auth', () => ({
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
   signOut: vi.fn(),
 }))
+// the desktop notifications the store raises, by their tag (a message id)
+const notes = vi.hoisted(() => ({ tags: [] as string[] }))
+vi.mock('../lib/notify', async (original) => ({
+  ...(await original<typeof import('../lib/notify')>()),
+  desktopNotify: (tag: string) => notes.tags.push(tag),
+}))
 // a demo store, which disposeDemoStore clears, only where a test asks
 const demo = vi.hoisted(() => ({ on: false }))
 vi.mock('../lib/demoMode', async (original) => {
@@ -372,6 +378,36 @@ describe('tasks on demand', () => {
     expect(of('0a000000-due')).not.toBe(before)
   })
 
+  it('keeps a new task’s card from a verdict until every task is held', async () => {
+    snapshot.projects[0].track_delay = true
+    await boot()
+    double.live?.holdWindow('')
+    // a new task of the person's, past its due date, its create on its way
+    network.mutation.mockImplementation(() => new Promise(() => {}))
+    const key = store.P.addIssue({
+      project: snapshot.projects[0].id,
+      title: 'Ship the late part',
+      status: 'todo',
+      assignee: snapshot.profiles[0].id,
+      remaining: '4',
+      due: '2020-01-06',
+    })
+    await tick()
+    expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
+    const it = store.P.issueById[key ?? '']
+    // the card waits for every task, and the window, which judges a task
+    // the workspace cannot judge yet from its owner's load (P.windowDelay),
+    // is told to by tasksHeld
+    expect(store.P.delayOf(it)).toBeNull()
+    expect(store.P.delayColor(it)).toBeNull()
+    expect(store.P.tasksHeld()).toBe(false)
+    double.live?.holdWindow(null)
+    for (let i = 0; i < 3; i++) await tick()
+    expect(store.P.tasksHeld()).toBe(true)
+    // once every task is held the card shows the verdict too
+    expect(store.P.delayOf(store.P.issueById[key ?? ''])).toMatchObject({ status: 'late' })
+  })
+
   it('reads a new task’s family and sections from its own answers during the load', async () => {
     await boot()
     double.live?.holdWindow('')
@@ -384,6 +420,61 @@ describe('tasks on demand', () => {
     expect(store.P.familyOf(it)).toBeNull()
     expect(store.P.sectionsFor(it.uuid)).toBeNull()
     expect(store.P.delayOf(it)).toBeNull()
+  })
+
+  /** An unread message to the signed-in person about task `task`, made at
+      `at`, of `kind`. */
+  const message = (id: string, task: string, at: string, kind = 'change') => ({
+    id,
+    org_id: snapshot.orgs[0].id,
+    recipient_id: snapshot.profiles[0].id,
+    issue_id: task,
+    issue_title: `Task ${task}`,
+    kind: kind as 'change',
+    detail: 'Status changed',
+    created_at: at,
+  })
+
+  it('raises no notification for the stored messages of a task that comes back into view while not asked, and one for a new one', async () => {
+    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
+    await boot()
+    notes.tags.length = 0
+    // access to task x returns: the Inbox part brings its stored message,
+    // made before the previous delivery; no task enters the rows
+    snapshot.messages.push(message('stored', 'x', '2026-09-14T08:00:00.000Z'))
+    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    expect(store.P.messages.some((m) => m.id === 'stored')).toBe(true)
+    expect(notes.tags).toEqual([])
+    // a new mention on it, made after, notifies
+    snapshot.messages.push(message('mention', 'x', '2026-09-14T10:00:00.000Z', 'mention'))
+    snapshot.delivered_at = '2026-09-14T10:30:00.000Z'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(notes.tags).toEqual(['mention'])
+  })
+
+  it('raises no notification for the messages a restore brings back while not asked', async () => {
+    snapshot.delivered_at = '2026-09-14T09:00:00.000Z'
+    await boot()
+    notes.tags.length = 0
+    network.mutation.mockResolvedValue({})
+    expect(
+      await store.P.unarchiveIssue('y', 'Task y', snapshot.projects[0].id, snapshot.orgs[0].id),
+    ).toBe(true)
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    // its stored message, and the Restored notice written after the restore
+    snapshot.messages.push(
+      message('kept', 'y', '2026-09-14T08:00:00.000Z'),
+      message('restored', 'y', '2026-09-14T09:10:00.000Z'),
+    )
+    snapshot.delivered_at = '2026-09-14T09:30:00.000Z'
+    deliver(structuredClone(snapshot))
+    await tick()
+    expect(store.P.messages.filter((m) => m.issueUuid === 'y')).toHaveLength(2)
+    expect(notes.tags).toEqual([])
   })
 
   it('resets the ask when the demo store is disposed', async () => {

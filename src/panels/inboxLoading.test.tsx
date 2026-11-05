@@ -639,3 +639,56 @@ describe('the Inbox at a task still to arrive', { timeout: 20_000 }, () => {
     expect(document.querySelector('[data-task-scrim]')).toBeNull()
   })
 })
+
+describe('the Inbox of a session that never asked for every task', { timeout: 20_000 }, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('../store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  /** Types `text` into the Inbox's search, as a person does. */
+  const search = (text: string) =>
+    act(async () => {
+      const input = container.querySelector<HTMLInputElement>('[data-inbox-search]')
+      if (!input) throw new Error('missing the search')
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  const rows = () =>
+    [...container.querySelectorAll<HTMLElement>('[data-message]')].map((row) => row.dataset.message)
+
+  it('opens a row’s task in the pane from its own read, asking nothing', async () => {
+    const { store } = await loadingInbox()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const open = container.querySelector<HTMLButtonElement>(
+      '[data-message="00000000-a"] .inbox-message-open',
+    )
+    await act(async () => open?.click())
+    await vi.waitFor(() => expect(windowReads.length).toBeGreaterThan(0))
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+
+  it('searches every task once it has loaded, and never says nothing matches before', async () => {
+    const { store } = await loadingInbox()
+    expect(rows()).toHaveLength(2)
+    // QN-2 is the soak test's task ID, which only a task the workspace holds
+    // gives its row
+    await search('QN-2')
+    expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
+    expect(container.querySelector('[data-inbox-search-wait]')?.textContent).toBe(
+      'Searching every task once it has loaded…',
+    )
+    expect(rows()).toEqual([])
+    expect(container.querySelector('[data-inbox-empty]')).toBeNull()
+    expect(container.textContent).not.toContain('No messages match')
+    // every task arrives, and the search finds the row by its task ID
+    await arrive()
+    expect(store.P.tasksHeld()).toBe(true)
+    expect(container.querySelector('[data-inbox-search-wait]')).toBeNull()
+    expect(rows()).toEqual(['fd000000-b'])
+  })
+})

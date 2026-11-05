@@ -187,6 +187,32 @@ describe('a card only the answer brings', { timeout: BOARD_TEST_TIMEOUT }, () =>
     expect(cell('review')?.contains(board.card('far'))).toBe(true)
   })
 
+  it('drops a card of a session that never asked, marked as a write on the answer’s task', async () => {
+    // the app's state: no task held, every card the answer's row
+    const board = await loadBoard(network, (snap) => {
+      snap.issues.push(taskRow(snap, 'a', 'todo', 1), {
+        ...taskRow(snap, 'b', 'todo', 2),
+        assignee_id: undefined,
+      })
+    })
+    await board.render(root)
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+    board.probe?.faults()
+    board.probe?.answerMarks()
+    await drop(board, 'a', 'review')
+    // an owner change on the card too, from its row
+    const b = board.card('b')?.dataset.card ?? ''
+    await act(async () => void board.P.updateIssue(b, { assignee: board.snapshot.profiles[0].id }))
+    expect(writes().map((w) => w.patch)).toEqual([
+      { status: 'review' },
+      { assignee_id: board.snapshot.profiles[0].id },
+    ])
+    // the view write's mark lets both through the guard, with no ask
+    expect(board.probe?.answerMarks()).toEqual(['issues:update', 'issues:update'])
+    expect(board.probe?.faults()).toEqual([])
+    expect(board.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+
   it("changes its owner from the owner picker, with the roster's check", async () => {
     const board = await farBoard()
     const model = board.P.viewTask('board:desktop', 'far')
