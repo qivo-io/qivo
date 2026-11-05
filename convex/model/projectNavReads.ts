@@ -61,6 +61,7 @@
  * until the organization's reach rows and name keys are complete
  * (model/projectNav.ts navReady). */
 
+import { ConvexError } from 'convex/values'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
@@ -74,7 +75,7 @@ import {
   receivesTeamAccess,
 } from '../lib/access'
 import { byId } from '../lib/db'
-import { badRequest } from '../lib/functions'
+import { badRequest, type Refusal } from '../lib/functions'
 import { LIST_BATCH } from '../lib/limits'
 import {
   type BatchAsk,
@@ -431,6 +432,13 @@ function once<T>(cache: Map<string, Promise<T>>, key: string, read: () => Promis
   return known
 }
 
+/* accessUnchecked where the organization's reach rows are not complete
+ * (org_ready nav_at) and lib/access.ts visible shows a top-level project
+ * the seat sees for no reason of its own, which only a live sub-project
+ * may show and only those rows tell (seatSight shows). resolve answers it
+ * as the access_unchecked refusal and children as `not_ready`. */
+class Unproven extends ConvexError<Refusal> {}
+
 /** One seat's sight of its organization's projects for navigation, every
  * check of one call (seatSight). Beside the reader rule's questions
  * (model/projectFavorites.ts FavoriteSight) it holds the seat's access and
@@ -454,13 +462,17 @@ export type SeatSight = FavoriteSight & {
  * its own (accessible), or through the first PROJECT_NAV.children live
  * child reach rows of its teams and then its seat under it, one range a
  * grantee, each row's sub-project read and asked visible, past which with
- * none shown it rejects with accessUnchecked. It never asks lib/access.ts
- * visible of a top-level project, which would read every root row of the
- * person or, on its legacy path, the parent's sub-projects. Without
- * complete reach rows a missing row proves nothing, so a project the seat
- * sees for no reason of its own answers false where lib/access.ts visible
- * does and rejects with accessUnchecked where it shows the project, since
- * only a live sub-project may show it.
+ * none shown it rejects with accessUnchecked. With complete reach rows it
+ * never asks lib/access.ts visible of a top-level project, which would
+ * read every root row of the person. Without them a missing row proves
+ * nothing, so for a project the seat sees for no reason of its own it asks
+ * visible of the project, which takes lib/access.ts's bounded legacy path
+ * through the parent's sub-projects. It answers false where visible does,
+ * and where visible shows the project it rejects with Unproven, an
+ * accessUnchecked, since only a live sub-project may show it and only the
+ * rows tell which. projectNav.children, which waits for those rows anyway,
+ * answers that rejection `not_ready`, and resolve the access_unchecked
+ * refusal.
  *
  * `reached` answers whether the seat or one of its teams holds a reach row
  * on a project (project_reach by_project_grantee, one range a grantee, the
@@ -514,7 +526,7 @@ export function seatSight(
       if (await access.accessible(p.id)) return true
       if (!reach) {
         if (!(await access.visible(p.id))) return false
-        throw accessUnchecked()
+        throw new Unproven(accessUnchecked().data)
       }
       const [self, ...teams] = await grantees()
       let left = PROJECT_NAV.children
@@ -717,7 +729,11 @@ export type NavChildrenArgs = NavCursorArgs & { project_id: string }
  * under an archived parent and one the seat does not see (opened). A check
  * a bound stopped answers the access_unchecked refusal. A sub-project the
  * seat sees answers an empty last batch, since it has no sub-projects. Then
- * `not_ready` without the organization's reach rows and name keys.
+ * `not_ready` without the organization's reach rows and name keys, also for
+ * a parent the seat sees for no reason of its own that lib/access.ts
+ * visible shows before the reach rows are complete, which only those rows
+ * can tell apart from one shown through an archived sub-project (seatSight
+ * shows); one visible does not show answers unavailable as above.
  *
  * Where the seat sees the project for a reason of its own (accessible),
  * every live sub-project inherits that level, so the batch reads the
@@ -776,6 +792,8 @@ export async function navChildrenOf(
     const batch = await listBatch(ctx, ask, { stream, keep, limit: LIST_BATCH, ceiling })
     return { state: 'ok', ...batch }
   } catch (e) {
+    // a parent the seat may see for navigation, which the reach rows decide
+    if (e instanceof Unproven) return { state: 'not_ready' }
     if (!isAccessUnchecked(e)) throw e
     return unchecked(e.data.message)
   }

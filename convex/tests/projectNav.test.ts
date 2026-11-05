@@ -1063,6 +1063,21 @@ describe('budgets', () => {
 /* -------------------------------------------------------------- readiness */
 
 describe('readiness', () => {
+  /** Organization `orgId` without its `stamp` in org_ready, as before the
+   * backfill that writes it. */
+  const unstamp = (t: T, orgId: string, stamp: 'nav_at' | 'name_keys_at') =>
+    t.run(async (ctx) => {
+      const r = await ctx.db
+        .query('org_ready')
+        .withIndex('by_org', (q) => q.eq('org_id', orgId))
+        .unique()
+      if (r !== null)
+        await ctx.db.patch(
+          r._id,
+          stamp === 'nav_at' ? { nav_at: undefined } : { name_keys_at: undefined },
+        )
+    })
+
   for (const stamp of ['nav_at', 'name_keys_at'] as const)
     it(`answers not_ready without ${stamp} for the page of any seat and for children, while resolve answers`, async () => {
       const t = newT()
@@ -1077,17 +1092,7 @@ describe('readiness', () => {
       await plantGrants(t, elsewhere, [f.otherProject])
       await ready(t, f)
       expect(ok(await page(t, [ann, elsewhere])).rows).toHaveLength(2)
-      await t.run(async (ctx) => {
-        const r = await ctx.db
-          .query('org_ready')
-          .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
-          .unique()
-        if (r !== null)
-          await ctx.db.patch(
-            r._id,
-            stamp === 'nav_at' ? { nav_at: undefined } : { name_keys_at: undefined },
-          )
-      })
+      await unstamp(t, f.org.id, stamp)
       expect(await page(t, [ann])).toEqual({ state: 'not_ready' })
       expect(await page(t, [ann, elsewhere])).toEqual({ state: 'not_ready' })
       expect(ok(await page(t, [elsewhere])).rows).toHaveLength(1)
@@ -1104,6 +1109,33 @@ describe('readiness', () => {
         next: null,
         stopped: false,
       })
+    })
+
+  for (const stamp of ['nav_at', 'name_keys_at'] as const)
+    it(`answers not_ready without ${stamp} for children of a parent the seat sees only through a sub-project, and unavailable where it sees none`, async () => {
+      const t = newT()
+      const f = await withOrg(t)
+      const pia = await person(t, f.org.id, 'Pia')
+      const bo = await person(t, f.org.id, 'Bo')
+      await plantGrants(t, pia, [f.sub])
+      await ready(t, f)
+      expect(ok(await kids(t, [pia], f.meta.id)).rows).toEqual([
+        { ...row(f.sub), parent_id: f.meta.id },
+      ])
+      await unstamp(t, f.org.id, stamp)
+      expect(await kids(t, [pia], f.meta.id)).toEqual({ state: 'not_ready' })
+      // a project the seat does not see answers as it did with the stamps
+      expect(await kids(t, [bo], f.meta.id)).toEqual({ state: 'unavailable' })
+      expect(await kids(t, [pia], f.hidden.id)).toEqual({ state: 'unavailable' })
+      // resolve answers the sub-project, and its parent apart from a loss
+      // until the reach rows are complete
+      expect(await resolved(t, [pia], { project_id: f.sub.id })).toMatchObject({
+        state: 'ok',
+        project: { parent: row(f.meta) },
+      })
+      expect(await resolved(t, [pia], { project_id: f.meta.id })).toMatchObject(
+        stamp === 'nav_at' ? { reason: ACCESS_UNCHECKED } : { state: 'ok' },
+      )
     })
 
   it('answers a login without a seat an empty last batch', async () => {
