@@ -924,6 +924,17 @@ release step and no rollback floor. An older app works against its
 backend, and this app works against any backend from v0.1.127 on, the
 relation pickers' floor, which the floors above already hold.
 
+From the release after v0.1.133, a project's Settings page reads its
+project, its rights, its Teams and Users lists, its Add team or user
+picker, its Lead field and its invite form's lookup from
+`projectSettings.get`, `users`, `teams`, `candidates`, `leadCandidates`
+and `inviteTarget`, which v0.1.102 (PR #321, `584b3c07`) first shipped,
+and sends each write with the values the page showed as its `expected`.
+The release changes no server function, so it has no server change, no
+release step and no new rollback floor. An older app works against its
+backend, and this app works against any backend from v0.1.102 on, which
+the removal window's floor (the release after v0.1.120) already holds.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
