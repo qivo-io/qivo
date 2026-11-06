@@ -215,9 +215,11 @@ restored or deleted for good while the export ran. An item restored while
 the export ran can be in neither part. A restore can also move a subtask or
 a link to another item while the export runs; each record is under the item
 that held it when its table was read, and a link moved while
-deleted/task_links was read can appear twice or not at all. manifest.json
-counts the items of each kind and any record left out because it named
-another organization or nothing it belongs to (deleted_items.left_out).
+deleted/task_links was read can appear twice or not at all. An item that
+took such a record after the export began is partial, changed during
+export. manifest.json counts the items of each kind and any record left out
+because it named another organization or nothing it belongs to
+(deleted_items.left_out).
 
 A task whose project was moving to or back from Deleted items while the
 export read tasks is left out of tasks, and manifest.json counts such tasks

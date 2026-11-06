@@ -18,7 +18,7 @@ import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
 import { archiveRow, JOB_ORDER, LIVE_READ_WARNING, type OrgExportRow } from '../lib/orgExport'
 import { restoreItems, TRASH_BUDGET } from '../model/deletedItems'
-import { type BatchJob, exportRow, readBatch } from '../model/orgExportRead'
+import { type BatchJob, exportRow, JOINED_PAGE_SIZE, readBatch } from '../model/orgExportRead'
 import { EXPORT_LIMITS } from '../model/orgExports'
 import {
   as,
@@ -31,7 +31,15 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { archiveOf, exportAs, exportUntil, jobOf, partsOf, settle } from './orgExport.setup'
+import {
+  archiveOf,
+  exportAs,
+  exportUntil,
+  jobOf,
+  nextStep,
+  partsOf,
+  settle,
+} from './orgExport.setup'
 import {
   attach,
   comment,
@@ -43,6 +51,7 @@ import {
   jobFor,
   plantRows,
   step,
+  storedTasks,
 } from './trash.setup'
 
 installTrashTimers()
@@ -759,6 +768,126 @@ describe('Deleted items that change while the export runs', () => {
     expect(archive.tables['deleted/items'].map((row) => row.id)).not.toContain(item.id)
     expect(idsOf(archive.tables.tasks)).not.toContain(task.id)
     expect(archive.readme).toMatch(/whose deleted_item_id deleted\/items does not list/)
+  })
+
+  it('calls an item partial once a restore hands it a link behind the cursor of deleted/task_links, which the archive then lacks', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // B's task sorts before A's in deleted_rows' by_table_org_owner
+    const b = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      id: '00000000-0000-4000-8000-00000000000b',
+    })
+    const a = await plantIssue(t, {
+      org_id,
+      project_id: f.sub.id,
+      id: 'ffffffff-0000-4000-8000-00000000000a',
+    })
+    const link = (source: Doc<'issues'>, target: Doc<'issues'>) =>
+      t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('issue_links', {
+          org_id,
+          id,
+          source_id: source.id,
+          target_id: target.id,
+          type: 'relates',
+          pair_key: [source.id, target.id].sort().join(':'),
+          created_at: NOW,
+          task_key: source.window_key,
+        })
+        return id
+      })
+    // A's link to B, which A's item stores, and a page of B's links to live
+    // tasks, which B's item stores
+    const handed = await link(a, b)
+    for (let i = 0; i < JOINED_PAGE_SIZE; i++)
+      await link(b, await plantIssue(t, { org_id, project_id: f.sub.id }))
+    await deleteTask(t, f, a.id)
+    await deleteTask(t, f, b.id)
+    await settle(t)
+    const [itemA, itemB] = [await itemFor(t, a.id), await itemFor(t, b.id)]
+    later()
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id })
+    await exportUntil(t, export_id, sectionOf('deleted/task_links'))
+    // one read of deleted/task_links takes B's page and stops before A's link
+    EXPORT_LIMITS.reads = 1
+    await nextStep(t)
+    expect((await jobOf(t, export_id))?.step).toMatchObject({
+      section: sectionOf('deleted/task_links'),
+      cursor: expect.any(String),
+    })
+    EXPORT_LIMITS.reads = DEFAULT_LIMITS.reads
+    later()
+    // A's restore hands its link to B's item, owned by B, behind the cursor
+    await restore(t, f.user, [itemA.id])
+    for (let guard = 0; guard < 50 && (await itemById(t, itemA.id)) !== null; guard++) {
+      await hold(t, itemA.id)
+      await step(t, itemA.id)
+    }
+    expect(await itemById(t, itemA.id)).toBeNull()
+    const moved = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_rows')
+        .withIndex('by_row', (q) => q.eq('table', 'issue_links').eq('row_id', handed))
+        .unique(),
+    )
+    expect(moved).toMatchObject({ item_id: itemB.id, owner_id: b.id })
+    expect((await itemById(t, itemB.id))?.received_at).toBe(new Date(Date.now()).toISOString())
+    await settle(t)
+    const archive = await archiveOf(t, export_id)
+    // the link is in neither part, so B's item cannot be complete
+    expect(archive.tables['deleted/task_links'].map((row) => row.id)).not.toContain(handed)
+    expect(archive.tables.task_links.map((row) => row.id)).not.toContain(handed)
+    expect(archive.tables['deleted/task_links']).toHaveLength(JOINED_PAGE_SIZE)
+    expect(itemRow(archive, itemB.id)).toMatchObject({
+      state: 'ready',
+      export_rows: 'partial',
+      export_reason: 'changed_during_export',
+      deleted_during_export: false,
+    })
+    expect(itemRow(archive, itemB.id)).not.toHaveProperty('received_at')
+  })
+
+  it("calls an item partial once a restore's split hands it a subtask while the export runs", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const root = await plantIssue(t, { org_id, project_id: f.sub.id })
+    const sub = await plantIssue(t, { org_id, project_id: f.sub2.id, parent_id: root.id })
+    await comment(t, sub)
+    await deleteTask(t, f, root.id, { subtask_ids: [sub.id] })
+    await deleteProject(t, f, f.sub2.id)
+    await settle(t)
+    const [taskItem, projectItem] = [await itemFor(t, root.id), await itemFor(t, f.sub2.id)]
+    later()
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id })
+    // every stored table is read; the items come next
+    await exportUntil(t, export_id, sectionOf('deleted/items'))
+    later()
+    // the subtask's project is in Deleted items, so the restore moves the
+    // subtask with its rows to the item that holds it
+    await restore(t, f.user, [taskItem.id])
+    for (let guard = 0; guard < 50 && (await itemById(t, taskItem.id)) !== null; guard++) {
+      await hold(t, taskItem.id)
+      await step(t, taskItem.id)
+    }
+    expect(await itemById(t, taskItem.id)).toBeNull()
+    expect((await storedTasks(t, projectItem.id)).map((task) => task.task_id)).toEqual([sub.id])
+    await settle(t)
+    const archive = await archiveOf(t, export_id)
+    // read under the item that held it then, which deleted/items no longer lists
+    expect(archive.tables['deleted/tasks'].find((row) => row.id === sub.id)).toMatchObject({
+      deleted_item_id: taskItem.id,
+    })
+    expect(itemRow(archive, projectItem.id)).toMatchObject({
+      state: 'ready',
+      export_rows: 'partial',
+      export_reason: 'changed_during_export',
+      deleted_during_export: false,
+    })
   })
 
   it('fails with deleted_changing once more items change than EXPORT_LIMITS.unsettled names, erasing its parts', async () => {

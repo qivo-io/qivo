@@ -1671,6 +1671,10 @@ optional fields to `org_exports` and `org_export_requests`, which code from
 before it does not accept, so from the first export job or link after the
 deploy, for as long as such a row stays (30 days after its job ends), never
 return the backend to a commit before this release; roll forward instead.
+It also adds `deleted_items.received_at`, which a restore writes on the item
+it hands a subtask or a link to, so an export running then calls that item
+partial. The item keeps the field until it is restored or deleted for good,
+and a rollback is refused while one does.
 Returning the app alone, Vercel Instant Rollback included, is safe, because
 no app calls the new functions. A job writes this release's step fields
 when it ends a section after the deploy, so a rollback is refused from then
@@ -2367,9 +2371,12 @@ A rollback past the release of the download route and format 4 is refused
 by Convex once a job row holds `served_at`, a lease or the step's Deleted
 items state, or a request row holds `auto_download_at`, which the first job
 after the deploy writes; such rows stay until 30 days after their job ends,
-so roll forward instead. A job writes this release's step fields when it
-ends a section after the deploy, so a rollback is refused from then on; a
-job returned to the earlier backend before that finishes as format 3.
+so roll forward instead. It is refused too once a Deleted item holds
+`received_at`, which a restore writes when it hands a subtask or a link to
+another item, until that item is restored or deleted for good. A job
+writes this release's step fields when it ends a section after the deploy,
+so a rollback is refused from then on; a job returned to the earlier
+backend before that finishes as format 3.
 Returning the app alone changes nothing, because no app calls the link or
 the route.
 

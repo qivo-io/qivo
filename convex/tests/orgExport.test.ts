@@ -224,6 +224,7 @@ const DELETED_ITEMS_FIELDS: Record<string, string> = {
   via: "the credential's table, with an agent key's id and name; personal credentials stay out",
   purge_after: 'as purge_at, the same moment as an ISO time',
   restore_by: "left out, a restore's own state",
+  received_at: "left out, when another item's restore last handed it rows, which the export reads",
 }
 
 /* How the archive treats each field of deleted_rows' envelope. */

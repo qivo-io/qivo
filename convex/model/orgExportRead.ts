@@ -674,8 +674,10 @@ export async function readBatch(
  * rows to another item (model/deletedItems.ts splitOff) patches item_id
  * and leaves them where they are in that index. Only a link a reveal hands
  * to another item (placeLinkBy) changes owner_id, and can then be read
- * twice or missed, which the README says. The items come last
- * (`itemsBatch`), each with how much of it the archive holds. */
+ * twice or missed, which the README says. Both write the receiving item's
+ * received_at, so the items section calls an item that took rows after
+ * collection began partial. The items come last (`itemsBatch`), each with
+ * how much of it the archive holds. */
 
 /** What a Deleted items batch knows of its job: when collection started,
  * when each live section's read ended (step.ended), the live sections any
@@ -700,7 +702,7 @@ const STORED_JOINED: ReadonlySet<ExportedStoredTable> = new Set([
 /* The item fields the section's rules read. */
 type ItemView = Pick<
   Doc<'deleted_items'>,
-  'id' | 'org_id' | 'kind' | 'target_id' | 'state' | 'deleted_at'
+  'id' | 'org_id' | 'kind' | 'target_id' | 'state' | 'deleted_at' | 'received_at'
 >
 
 /** The Deleted items of organization `orgId` that are moving or restoring
@@ -939,13 +941,15 @@ type LeftOut = { items: ReadonlySet<string>; all: boolean }
 
 /** How much of `item` the archive holds: complete only when it is ready,
  * was deleted before collection began, is not among the job's unsettled
- * items and kept no record the stored sections left out, else partial with
- * the first reason that applies: purging, restored (a restoring project
- * item whose root project is live again, whose stored rows itemReads left
- * out), its state (moving, restoring, stuck), deleted during the export,
- * changed during the export, rows left out (`leftOut`). There is no third
- * value: rows of a purging or restored item read while it was still ready
- * stay in the archive, so none of them is "not included". */
+ * items, took no rows from another item's restore since collection began
+ * (received_at) and kept no record the stored sections left out, else
+ * partial with the first reason that applies: purging, restored (a
+ * restoring project item whose root project is live again, whose stored
+ * rows itemReads left out), its state (moving, restoring, stuck), deleted
+ * during the export, changed during the export (unsettled or received
+ * rows), rows left out (`leftOut`). There is no third value: rows of a
+ * purging or restored item read while it was still ready stay in the
+ * archive, so none of them is "not included". */
 async function itemStatus(
   item: ItemView,
   job: BatchJob,
@@ -963,7 +967,8 @@ async function itemStatus(
           ? item.state
           : during
             ? 'deleted_during_export'
-            : unsettled.has(item.id)
+            : unsettled.has(item.id) ||
+                (item.received_at !== undefined && item.received_at >= job.started_at)
               ? 'changed_during_export'
               : leftOut.all || leftOut.items.has(item.id)
                 ? 'rows_left_out'
@@ -974,7 +979,8 @@ async function itemStatus(
 /** One page of organization `orgId`'s Deleted items from `from`, newest
  * last (by_org_deleted), PAGE_SIZE within PAGE_BYTES, each as the archive
  * writes it: its stored fields with `purge_after` as `purge_at`, an ISO
- * time, without `restore_by`, a restore's own state, and with `via`
+ * time, without `restore_by`, a restore's own state, or `received_at`,
+ * the export's own bookkeeping, and with `via`
  * narrowed to the credential's table, keeping an agent key's id and name,
  * whose metadata the archive holds, and leaving out a personal token's or
  * connected app's, which the archive leaves out with the personal
@@ -1013,7 +1019,7 @@ async function itemsBatch(
   const rows: OrgExportRow[] = []
   for (const item of page.page) {
     const status = await itemStatus(item, job, unsettled, leftOut, projectLive)
-    const { _id, _creationTime, via, purge_after, restore_by, ...fields } = item
+    const { _id, _creationTime, via, purge_after, restore_by, received_at, ...fields } = item
     rows.push({
       ...fields,
       ...(via === undefined
