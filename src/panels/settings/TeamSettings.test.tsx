@@ -792,6 +792,53 @@ describe("a team's page", () => {
     expect(document.querySelector('[data-team-member-kept]')).toBeNull()
     expect(memberIds()).toEqual(['leo', 'off'])
   })
+  it('keeps a member added to a team whose whole list shows as Added until the server answers, then lets the list tell', async () => {
+    await load()
+    await teamPage()
+    // Crew fits one batch, so its list has ended
+    expect(memberIds()).toEqual(['leo', 'bot', 'vic'])
+    const add = async (id: string) => {
+      await click(find('[data-team-member-picker]'))
+      await click(document.querySelector(`[data-team-member-choice="${id}"]`))
+      await click(find('[data-team-member-add]'))
+    }
+    await add('off')
+    expect(requests.map((r) => [r.name, r.args.profile_id])).toEqual([['teams:addMember', 'off']])
+    // the ended list's answer is from before the add, so it tells nothing
+    expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    // the server reruns the list with the membership before it answers the add
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await rerun()
+    expect(document.querySelector('[data-team-member-kept]')).toBeNull()
+    expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+    await answer('teams:addMember', 'accept')
+    expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+    // once the server added Ina, the ended list tells that it no longer
+    // holds her, as when someone removed her meanwhile
+    await add('inv')
+    expect(memberIds()).toEqual(['inv', 'leo', 'off', 'bot', 'vic'])
+    await answer('teams:addMember', 'accept')
+    expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+  })
+
+  it('keeps an added member while the page is hidden, since the answers it holds are from before the add', async () => {
+    await load()
+    await teamPage()
+    await click(find('[data-team-member-picker]'))
+    await click(document.querySelector('[data-team-member-choice="off"]'))
+    await click(find('[data-team-member-add]'))
+    await setVisibility('hidden')
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await answer('teams:addMember', 'accept')
+    expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
+    // back on the page, the list reads again and holds Oli
+    await setVisibility('visible')
+    expect(document.querySelector('[data-team-member-kept]')).toBeNull()
+    expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+  })
 })
 
 /* -------------------------------------------------------- Add member */

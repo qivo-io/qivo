@@ -14149,10 +14149,17 @@ export const PLANNER = {
   },
 
   /* --- team membership (managed in Team settings) ------------------------- */
-  addTeamMember: (teamId: string, uid: string, _isLeader = false) => {
+  /** Paints the membership at once and resolves whether the server added
+      it. Resolves false without sending for a team the store does not hold,
+      a membership it holds already or a paused change (toasted), and false
+      after a refusal, which is toasted and taken back. A team's page keeps
+      the added member in view until its list holds them, and asks the list
+      whether it passed their place only once this resolved. */
+  addTeamMember: (teamId: string, uid: string, _isLeader = false): Promise<boolean> => {
     const team = rows.teams.get(teamId)
-    if (!team || rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid)) return
-    if (refusePausedEdit()) return
+    if (!team || rows.teamMembers.some((m) => m.team_id === teamId && m.profile_id === uid))
+      return Promise.resolve(false)
+    if (refusePausedEdit()) return Promise.resolve(false)
     // the server always inserts a plain member; leadership is its own verb
     const view: View = {
       workspace: () => {
@@ -14161,7 +14168,11 @@ export const PLANNER = {
         rows.teamMembers.push({ team_id: teamId, profile_id: uid, is_leader: false })
       },
     }
-    void send(api.teams.addMember, { org_id: team.org_id, team_id: teamId, profile_id: uid }, view)
+    return send(
+      api.teams.addMember,
+      { org_id: team.org_id, team_id: teamId, profile_id: uid },
+      view,
+    )
   },
 
   setTeamLeader: (teamId: string, uid: string, isLeader: boolean) => {

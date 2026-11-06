@@ -57,6 +57,7 @@ import {
 } from '../../lib/pagedList'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { useConfirmArm } from '../../lib/useConfirmArm'
+import { useViewVisibility } from '../../lib/viewVisibility'
 import {
   P,
   REMOVAL_CHECKING,
@@ -77,6 +78,10 @@ type MemberRowAnswer = Extract<TeamMembersAnswer, { state: 'ready' }>['rows'][nu
 type MemberChoice = Extract<TeamChoices, { state: 'ready' }>['rows'][number]
 
 const START: BatchAt = { after: null, through: null }
+
+/** A member a team's page added this visit: the name it chose them by, and
+    whether the server added them yet. */
+type Added = { name: string; saved: boolean }
 
 /** The arguments of one batch, in a fixed key order with empty fields left
     out, so equal batches share one subscription; `team` for a member
@@ -439,23 +444,38 @@ function TeamFields({
     most: TEAM_CAPS.members,
   })
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
-  // the members this visit added, by id with their names, and the rows
-  // holding unsaved hours or an hours save on its way (PlannableHoursInput)
-  const [added, setAdded] = useState<ReadonlyMap<string, string>>(() => new Map())
+  // the members this visit added, by id with their names and whether the
+  // server added them yet, and the rows holding unsaved hours or an hours
+  // save on its way (PlannableHoursInput)
+  const [added, setAdded] = useState<ReadonlyMap<string, Added>>(() => new Map())
   const [drafts, setDrafts] = useState<ReadonlySet<string>>(() => new Set())
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
+  // whether the list's answers are its current ones: the page shows, and
+  // showed at the last render too, as the list hears that it shows only
+  // after a render, and the list is not refreshing (as ProjectLists asks)
+  const { visible } = useViewVisibility()
+  const showed = useRef(visible)
+  useEffect(() => {
+    showed.current = visible
+  })
+  const current = visible && showed.current && !list.refreshing
   // an added member goes from the kept rows once a loaded batch holds them,
-  // the list tells that it does not, or the store holds no such membership
+  // or the store holds no such membership, as after a refusal. Until the
+  // server added them every answer is from before the add, so only once it
+  // did, and the answers are current, may the list tell that it does not
+  // hold them, as when someone removed them meanwhile.
   useEffect(() => {
     setAdded((m) =>
-      without(m, (id, named) => {
+      without(m, (id, entry) => {
         const person = storePerson(id)
         return (
           loaded.has(id) ||
           !person?.teams.includes(teamId) ||
-          listPassed(list, search.settled, person.name || named, id)
+          (entry.saved &&
+            current &&
+            listPassed(list, search.settled, person.name || entry.name, id))
         )
       }),
     )
@@ -518,8 +538,19 @@ function TeamFields({
   const shown = list.rows.some((r) => !removing(r.id)) || kept.length > 0
   const state = listState(list)
   const addMember = (person: { id: string; name: string }) => {
-    P.addTeamMember(teamId, person.id)
-    setAdded((m) => new Map(m).set(person.id, person.name))
+    setAdded((m) => new Map(m).set(person.id, { name: person.name, saved: false }))
+    void P.addTeamMember(teamId, person.id).then((saved) => {
+      // a refusal takes the store's membership back, which drops the row,
+      // and an add the store did not send keeps none
+      setAdded((m) => {
+        const entry = m.get(person.id)
+        if (!entry) return m
+        const next = new Map(m)
+        if (saved) next.set(person.id, { ...entry, saved })
+        else next.delete(person.id)
+        return next
+      })
+    })
   }
 
   return (
