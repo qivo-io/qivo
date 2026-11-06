@@ -29,10 +29,11 @@
  *
  * Settings › Users reads the keys of the agents it shows with agentKeys,
  * once for the key lines and once for a panel that opens, and again after
- * a key write, never as a subscription. Machine auth stamps last_used_at
- * on every call, so a live read of key rows would run again on each API
- * call of each agent on screen. listAgentKeys, which the app read before,
- * stays for one release, deprecated. */
+ * a key write and when the tab shows again, never as a subscription.
+ * Machine auth stamps last_used_at on every call, so a live read of key
+ * rows would run again on each API call of each agent on screen.
+ * listAgentKeys, which the app read before, stays for one release,
+ * deprecated. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'

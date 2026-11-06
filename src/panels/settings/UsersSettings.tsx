@@ -164,13 +164,18 @@ function KeyLineText({ line }: { line: KeyLine }) {
    is the closest thing the app has to a password field, and the secret is
    shown exactly once, at creation, because only its SHA-256 and safe display
    fingerprint are stored. The panel reads the agent's keys once when it
-   opens and again after each of its writes (P.agentKeys), and tells the
-   page to read its key lines again. */
+   opens, again after each of its writes (P.agentKeys), which it tells the
+   page so the key lines read again too, and again when the tab shows
+   again (`shownAt`), as the page's key lines do. A read keeps the typed
+   name and a fresh secret. */
 function AgentKeyPanel({
   agent,
+  shownAt,
   onKeysChanged,
 }: {
   agent: Pick<UserVM, 'id' | 'name'>
+  /** when the tab or window last showed (lib/viewVisibility.ts) */
+  shownAt: number
   onKeysChanged: () => void
 }) {
   const [name, setName] = useStateS('')
@@ -197,7 +202,7 @@ function AgentKeyPanel({
     return () => {
       live = false
     }
-  }, [agent.id, attempt])
+  }, [agent.id, attempt, shownAt])
   const reload = () => {
     setAttempt((n) => n + 1)
     onKeysChanged()
@@ -373,6 +378,9 @@ type RowContext = {
   rightColumn: boolean
   confirm: ReturnType<typeof useConfirmArm<string>>
   keyLine: (id: string) => KeyLine
+  /** when the tab last showed, after which an open key panel reads its
+      keys again, as the key lines do */
+  shownAt: number
   openKeys: string | null
   setOpenKeys: (id: string | null) => void
   onKeysChanged: () => void
@@ -513,7 +521,7 @@ function UserRow({
         </Button>
       </div>
       {u.isAgent && !DEMO_MODE && open && (
-        <AgentKeyPanel agent={u} onKeysChanged={ctx.onKeysChanged} />
+        <AgentKeyPanel agent={u} shownAt={ctx.shownAt} onKeysChanged={ctx.onKeysChanged} />
       )}
     </>
   )
@@ -811,7 +819,7 @@ export function OrgUsersPage({
     if (!onPage.has(id) && !keptIds.some((k) => k.id === id)) known.current.delete(id)
 
   /* ---- the key lines ---- */
-  const { visible } = useViewVisibility()
+  const { visible, shownAt } = useViewVisibility()
   const [keyEpoch, setKeyEpoch] = useStateS(0)
   const [keyLines, setKeyLines] = useStateS<ReadonlyMap<string, KeyLine>>(() => new Map())
   // the agents whose default key is being made, whose line waits for it
@@ -880,6 +888,7 @@ export function OrgUsersPage({
     rightColumn,
     confirm,
     keyLine: (id) => (minting.has(id) ? undefined : keyLines.get(id)),
+    shownAt,
     openKeys,
     setOpenKeys,
     onKeysChanged,

@@ -843,6 +843,29 @@ describe('key lines and the key panel', () => {
     expect(keyLine('a27')).not.toBe("Couldn't check keys.")
   })
 
+  it('reads an open panel again when the tab shows again, keeping its typed name and fresh secret', async () => {
+    await load()
+    extra.keys.push(keyOf('atlas', 1))
+    await openKeys()
+    await type(nameField(), 'CI runner')
+    await click(newKey())
+    const secret = find('[data-agent-keys="atlas"] [data-fresh-key]').textContent
+    await type(nameField(), 'Next key')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    // another admin revokes Key 1 while the tab is hidden
+    extra.keys[0].revokedAt = '2026-10-09T08:00:00.000Z'
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    const panel = find('[data-agent-keys="atlas"]')
+    expect(panel.textContent).toContain('Key 1revoked')
+    // the key line agrees, the new key alone active
+    expect(keyLine('atlas')).toMatch(/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}$/)
+    expect(find('[data-agent-keys="atlas"] [data-fresh-key]').textContent).toBe(secret)
+    expect(nameField().value).toBe('Next key')
+  })
+
   it('opens the panel on its own read, with Retry, the newest 50 and an agent that left', async () => {
     await load()
     force = { fail: ['agentKeys'] }
