@@ -20,7 +20,7 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LABEL_RIGHTS_UNCHECKED, LIMITS, LIST_BATCH } from '../lib/limits'
+import { LABEL_NOT_IN_TASK_ORG, LABEL_RIGHTS_UNCHECKED, LIMITS, LIST_BATCH } from '../lib/limits'
 import { type NamedListPage, namedListPage, namedScope } from '../lib/listCursor'
 import {
   compareNamed,
@@ -665,9 +665,7 @@ export async function setTaskLabel(
 ): Promise<boolean> {
   const { me, issue, label, now } = a
   await assertCanEdit(ctx, me, issue.project_id)
-  if (label.org_id !== issue.org_id) {
-    throw rule('label and task must belong to the same organization')
-  }
+  if (label.org_id !== issue.org_id) throw rule(LABEL_NOT_IN_TASK_ORG)
   const pair = await ctx.db
     .query('issue_labels')
     .withIndex('by_issue_label', (q) => q.eq('issue_id', issue.id).eq('label_id', label.id))

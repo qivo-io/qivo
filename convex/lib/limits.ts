@@ -220,6 +220,14 @@ export const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 export const LABEL_RIGHTS_UNCHECKED =
   'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
 
+/** The refusal of a label toggle whose label is not one of the task's
+ * organization. Another organization's label and an id no label holds, such
+ * as a label deleted since the person's label picker read its batch, answer
+ * alike, so a foreign id reveals nothing (tests/orgFence.test.ts). The app
+ * toggles only labels of the task's organization, so it reads this refusal
+ * as a label deleted since it was listed (src/store/planner.ts P.labelGone). */
+export const LABEL_NOT_IN_TASK_ORG = 'label and task must belong to the same organization'
+
 /** The refusal of a send again while the seat's newest invitation email is
  * still being sent. */
 export const INVITE_SENDING = 'this invitation email is being sent; wait for it to finish'

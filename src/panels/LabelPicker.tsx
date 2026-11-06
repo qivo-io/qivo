@@ -18,7 +18,8 @@
      whether or not a loaded batch holds them; one whose name has not
      loaded yet shows under an empty search only. Then the server's
      labels, each once, the server's `exact` label first when no other row
-     shows it.
+     shows it. A label whose toggle the server refused because it no
+     longer exists (P.labelGone) leaves the server's rows.
    - Create new label shows only once the answer for exactly the typed
      name has arrived and says no label of that name exists in any case
      (`exact` null) and the person may create labels (`can_create`), in
@@ -141,7 +142,8 @@ export function LabelPickerPopup({
   // a Load more's batch begin; a task label and `exact` show above them
   const inOrder = new Set<string>()
   for (const row of exact ? [exact, ...served] : served) {
-    if (shown.has(row.id)) continue
+    // a label a toggle found deleted since its batch was read goes
+    if (shown.has(row.id) || P.labelGone(row.id)) continue
     shown.add(row.id)
     if (row !== exact) inOrder.add(row.id)
     rows.push({ id: row.id, name: row.name, color: row.color, current: false })

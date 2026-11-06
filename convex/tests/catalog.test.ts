@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { PROJECT_CREATORS } from '../lib/enums'
-import { LIMITS } from '../lib/limits'
+import { LABEL_NOT_IN_TASK_ORG, LIMITS } from '../lib/limits'
 import { INBOX_BATCH } from '../model/messages'
 import {
   activityFor,
@@ -1084,6 +1084,29 @@ describe('labels — vocabulary + toggle', () => {
       }),
       'forbidden',
     )
+  })
+
+  it('toggle refuses a deleted label as it refuses a foreign one, which the app reads as deleted', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const label = await plantLabel(t, f.org.id, 'Bug')
+    const foreign = await plantLabel(t, f.otherOrg.id, 'Elsewhere')
+    // deleted since the person's label picker listed it
+    await as(t, f.admin).mutation(api.labels.remove, { org_id: f.org.id, id: label.id })
+    for (const label_id of [label.id, foreign.id])
+      for (const on of [true, false]) {
+        const refusal = await expectRefusal(
+          as(t, f.user).mutation(api.labels.toggle, {
+            org_id: f.org.id,
+            issue_id: issue.id,
+            label_id,
+            on,
+          }),
+          'rule',
+        )
+        expect(refusal.data.message).toBe(LABEL_NOT_IN_TASK_ORG)
+      }
   })
 
   it('remove cascades issue_labels in its own transaction and narrates the deletion', async () => {

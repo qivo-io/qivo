@@ -36,6 +36,7 @@ import {
   DEFAULT_MESSAGE_RETENTION_DAYS,
   DEMO_FILE_BYTES,
   grouped,
+  LABEL_NOT_IN_TASK_ORG,
   LIMITS,
   LIST_BATCH,
   type Limit,
@@ -8886,6 +8887,36 @@ const STALE_SAVE_TEXT =
    server accepts it. */
 const unsentText = new WeakMap<Paint, string>()
 
+/* Labels whose toggle the server refused as not of the task's
+   organization (convex/lib/limits.ts LABEL_NOT_IN_TASK_ORG). The app
+   toggles only labels of the task's organization, and the server answers
+   a label that no longer exists as it answers another organization's, so
+   such a label was deleted since it was listed, as in a label picker's
+   batch, which it reads only once. The picker drops them (P.labelGone). */
+const goneLabels = new Set<string>()
+
+/** What a toggle's refusal of a label deleted since it was listed says. */
+const LABEL_GONE_TEXT = 'This label no longer exists.'
+
+/** What the label toggles do on a refusal of label `labelId`: one that says
+    the label is not of the task's organization keeps it in goneLabels and
+    says it no longer exists, and any other is toasted as every refusal is.
+    A refusal that follows a create (`created`) the server refused too says
+    nothing, as the create's own toast says it all. */
+function labelToggleRefused(labelId: string, created?: Promise<boolean>) {
+  return (e: unknown) => {
+    const d = errData(e)
+    const gone = d.code === 'rule' && d.message === LABEL_NOT_IN_TASK_ORG
+    if (gone) goneLabels.add(labelId)
+    const say = () => (gone ? toast(`${LABEL_GONE_TEXT} Change reverted.`) : toastWriteError(e))
+    if (!created) say()
+    else
+      void created.then((saved) => {
+        if (saved) say()
+      })
+  }
+}
+
 /** P.toggleIssueLabel on the watched task the window shows from its own
     answer (answerTaskOf): whether the label goes on, and the cap, come
     from the painted answer's labels. It paints the answer and the
@@ -8929,15 +8960,7 @@ function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boo
     api.labels.toggle,
     { org_id: a.org, issue_id: uuid, label_id: labelId, on },
     view,
-    created
-      ? {
-          about: { task: uuid, answer: true },
-          onError: (e) =>
-            void created.then((saved) => {
-              if (saved) toastWriteError(e)
-            }),
-        }
-      : { about: { task: uuid, answer: true } },
+    { about: { task: uuid, answer: true }, onError: labelToggleRefused(labelId, created) },
   )
 }
 
@@ -15925,7 +15948,9 @@ export const PLANNER = {
       is toasted. The workspace need not hold the label, such as one the
       picker's batch or labels.byIds named: the server checks that it is
       one of the task's organization (labels.toggle), and a refusal takes
-      the paint back with its toast. */
+      the paint back with its toast. A label deleted meanwhile is refused
+      as another organization's is, which the toast says as "This label no
+      longer exists.", after which labelGone says so. */
   toggleIssueLabel: (issueId: string, labelId: string, created?: Promise<boolean>) => {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
@@ -15949,14 +15974,14 @@ export const PLANNER = {
       api.labels.toggle,
       { org_id: issue.org_id, issue_id: uuid, label_id: labelId, on },
       view,
-      created && {
-        onError: (e) =>
-          void created.then((saved) => {
-            if (saved) toastWriteError(e)
-          }),
-      },
+      { onError: labelToggleRefused(labelId, created) },
     )
   },
+
+  /** Whether the server refused a toggle of label `id` because the label
+      no longer exists in the task's organization (toggleIssueLabel), so a
+      label picker drops it from a batch it read before the delete. */
+  labelGone: (id: string) => goneLabels.has(id),
 
   /* Each open subscriber popover owns its reactive roster; the shared
      snapshot continues to own the current user's eye indicator. The

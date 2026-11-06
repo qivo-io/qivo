@@ -27,7 +27,7 @@ import type { MutationCtx } from './_generated/server'
 import { hasProjectLevel } from './lib/access'
 import { byId } from './lib/db'
 import { badRequest, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import { BY_IDS_MAX } from './lib/limits'
+import { BY_IDS_MAX, LABEL_NOT_IN_TASK_ORG } from './lib/limits'
 import {
   assertLabelManager,
   createLabelCore,
@@ -181,9 +181,12 @@ export const remove = orgMutation({
  * so a resent toggle cannot undo itself. `on` is required: every app since
  * v0.1.26 sends it, and the old flip without it is gone. Predicate is
  * has_project_level(project, 'user') (0010:65-69, member→user); the org
- * guard is issue_labels_check_org's sentence VERBATIM (0078:117) — in the
- * SQL a missing label read the same sentence as a foreign one, kept here.
- * The write is model/labels.ts setTaskLabel, which REST and MCP run too. */
+ * guard is issue_labels_check_org's sentence VERBATIM (0078:117,
+ * LABEL_NOT_IN_TASK_ORG). In the SQL a missing label read the same sentence
+ * as a foreign one, and it still does, as a foreign id answers as an unknown
+ * one (tests/orgFence.test.ts). The app, which toggles only labels of the
+ * task's organization, reads it as a label deleted since it was listed. The
+ * write is model/labels.ts setTaskLabel, which REST and MCP run too. */
 export const toggle = orgMutation({
   args: { issue_id: v.string(), label_id: v.string(), on: v.boolean() },
   handler: async (ctx, { issue_id, label_id, on }) => {
@@ -194,9 +197,7 @@ export const toggle = orgMutation({
       throw forbidden('no write access to this project')
     }
     const label = await byId(ctx, 'labels', label_id)
-    if (label === null || label.org_id !== issue.org_id) {
-      throw rule('label and task must belong to the same organization')
-    }
+    if (label === null || label.org_id !== issue.org_id) throw rule(LABEL_NOT_IN_TASK_ORG)
     await setTaskLabel(ctx, { me: ctx.me, issue, label, on, now })
     return null
   },
