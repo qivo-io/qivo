@@ -159,8 +159,8 @@ export const BOARD_TASKS = 1000
  * selection, every seat and sub-project together, each group and each
  * subtask counted, unlike the Board's count (BOARD_TASKS). Shown parents
  * and a group's subtasks that are not rows count toward the Roadmap's read
- * budgets, not here. LIMITS.roadmapTasks, the Limits guide's row, which
- * the app's Roadmap names when a selection passes it. */
+ * budgets, not here. LIMITS.roadmapTasks holds the Limits guide's row and
+ * the sentence the app's Roadmap shows when a selection passes it. */
 export const ROADMAP_TASKS = 1000
 
 /** The most tasks one Team sync agenda holds (teamSync.ts agenda), across
