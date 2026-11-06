@@ -167,6 +167,47 @@ describe('the thread budget', () => {
     expect(stuck).toBeNull()
   })
 
+  it('opens the gap above the changes of a write the live page starts among', () => {
+    // 17 label changes a write, as a PATCH of 17 labels logs them, each
+    // write at one minute, so changes 0-16 are at minute 100, 17-33 at
+    // minute 101 and so on. The live page, the newest 50 of 200, starts at
+    // change 150, inside the write of changes 136-152, and the comments are
+    // all older
+    const write = (n: number) => row('e', n, 100 + Math.floor(n / 17))
+    const changes = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => write(from + i))
+    const history = kind(changes(50, 150), changes(150, 200))
+    const comments = kind([], rows('c', 0, 50))
+    // Show earlier added changes 50-99, 34 rows over the budget. The writes
+    // of 102-118 and 119-135 go whole, and 136-149 stay below the gap with
+    // the rest of their write
+    const after = release(comments, ['down', 'up'], 166, {
+      history,
+      keep: [...ids(changes(50, 100)), 'c0'],
+    })
+    expect(after?.history).toMatchObject({
+      older: changes(50, 102),
+      gap: ids(changes(102, 136)),
+      newer: changes(136, 150),
+    })
+    expect(after?.comments.gap).toBeNull()
+    // a budget the whole writes cannot meet keeps the last place that
+    // splits none, over the budget, rather than nothing
+    const over = release(comments, ['down', 'up'], 150, {
+      history,
+      keep: [...ids(changes(50, 100)), 'c0'],
+    })
+    expect(over?.history?.gap).toEqual(ids(changes(102, 136)))
+    // the same changes at their own minutes open the gap right above the
+    // live page
+    const own = kind(rows('e', 50, 150), rows('e', 150, 200))
+    const plain = release(comments, ['down', 'up'], 166, {
+      history: own,
+      keep: [...ids(rows('e', 50, 100)), 'c0'],
+    })
+    expect(plain?.history).toMatchObject({ gap: ids(rows('e', 116, 150)), newer: [] })
+  })
+
   it('moves the cut past a comment and a change at one instant', () => {
     // comments 0-59 and changes 0-59, each at its own minute, both live
     // from 60; under All a press keeps the oldest rows of each kind

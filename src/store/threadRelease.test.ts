@@ -452,6 +452,39 @@ describe('the task window keeps a bounded thread', () => {
       expect(last('snapshot:historyBefore')?.before).toBe(oldest)
     })
 
+    it('lets changes go when the live page starts among the changes of one write', async () => {
+      const { P } = store
+      budget.THREAD_KEEP.rows = 150
+      // 17 label changes a write, each write at one instant, as a PATCH of
+      // 17 labels logs them, after the comments. The live page, the newest
+      // 50 of 300, starts at #250, inside the write of #238 to #254
+      const history = changes(0, 300).map((e, n) => ({
+        ...e,
+        ts: new Date(START + (1000 + Math.floor(n / 17)) * 60_000).toISOString(),
+      }))
+      serve = { comments: range(0, 30), history }
+      publish({ comments: range(0, 30), earlier: false })
+      showAll()
+      publishHistory({ events: history.slice(250), earlier: true, next: 'event-250' })
+      for (let i = 0; i < 2; i++) {
+        await P.loadEarlierHistory()
+        await settle()
+      }
+      // the writes of #204 to #220 and #221 to #237 went whole, and #238 to
+      // #249 stay below the gap with the rest of their write
+      expect(P.historyNewer).toBe('more')
+      expect(held()).toBe(146)
+      expect(shownChanges()).toEqual([...ids(150, 204, 'event'), ...ids(238, 300, 'event')])
+      // Show newer activity reads them back before the first change below
+      await P.loadNewerHistory()
+      await settle()
+      expect(last('snapshot:historyBefore')?.before).toBe('event-238')
+      expect(P.historyNewer).toBe('none')
+      expect(held()).toBeLessThanOrEqual(150)
+      const shown = shownChanges()
+      expect(shown).toEqual(ids(Number(shown[0].slice(6)), 300, 'event'))
+    })
+
     it('starts the history over below the gap when a page cannot be shown to meet the run above', async () => {
       const { P } = store
       budget.THREAD_KEEP.rows = 150

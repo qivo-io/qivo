@@ -15,10 +15,13 @@
    A release walks rows out one at a time on the side its trigger names
    (ReleaseMove), both kinds together in time order, so the two gaps run
    between the same kept instants as far as the rows allow. It stops at a
-   row it must keep, and it keeps the first state on its walk that holds at
-   most the budget and splits no instant: no kept row shares a time with a
-   row this release took, and every row kept above a gap is older than every
-   row kept below one, both kinds counted. Where no such state comes before
+   row it must keep, and at the rows at the end of a run that share an
+   instant with a live row, since the live rows stay. One write can log
+   several changes at one instant, and the live page can start among them.
+   It keeps the first state on its walk that holds at most the budget and
+   splits no instant: no kept row shares a time with a row this release
+   took, and every row kept above a gap is older than every row kept below
+   one, both kinds counted. Where no such state comes before
    a row it must keep, it keeps the last state on the walk that splits no
    instant, which holds more than the budget, and the next release tries
    again. A row the person edits (`pinned`) is passed over, not kept: it
@@ -83,11 +86,13 @@ export type HeldKind<R extends HeldRow = HeldRow> = {
 }
 
 /** Which side a release walks. `down` takes the newer run from the gap
-    down, toward the live rows, and a kind without a gap opens one where
-    the other kind's gap is. `up` takes the older run from its newest row
-    up, opening a gap just above the live rows where a kind has none. `top`
-    takes the older run from its oldest row down; once it empties, the gap
-    joins the start and the walk goes on into the newer run. */
+    down, toward the live rows. `up` takes the older run from its newest
+    row up. A kind without a gap opens one for either at the other kind's
+    gap, or just above its own live rows when neither kind has one, and
+    below it keeps the rows at the end of its run that share an instant
+    with a live row. `top` takes the older run from its oldest row down;
+    once it empties, the gap joins the start and the walk goes on into the
+    newer run. */
 export type ReleaseMove = 'down' | 'up' | 'top'
 
 /** One kind after a release: its runs and gap, whether rows went from its
@@ -219,12 +224,23 @@ export function releaseThread<C extends HeldRow, E extends HeldRow>(
     (max, k) => (k.gap === null ? max : k.older.reduce((m, r) => Math.max(m, r.ts), max)),
     Number.NEGATIVE_INFINITY,
   )
+  // The rows at the end of each kind's runs that share an instant with a
+  // live row of either kind, as the changes of one write that the live
+  // page starts among do. The live rows stay, so these stay with them. No
+  // move takes them, and a kind without a gap opens it above them.
+  const liveAt = new Set(kinds.flatMap((k) => k.live.map((r) => r.ts)))
+  const atLive = new Set<string>()
   const walks: Walk<HeldRow>[] = kinds.map((k) => {
     const seq = [...k.older, ...k.newer]
+    let end = seq.length
+    while (end > 0 && liveAt.has(seq[end - 1].ts)) atLive.add(seq[--end].id)
     let cut = k.older.length
-    if (k.gap === null && gapEnd > Number.NEGATIVE_INFINITY) {
-      const later = seq.findIndex((r) => r.ts > gapEnd)
-      cut = later === -1 ? seq.length : later
+    if (k.gap === null) {
+      if (gapEnd > Number.NEGATIVE_INFINITY) {
+        const later = seq.findIndex((r) => r.ts > gapEnd)
+        cut = later === -1 ? seq.length : later
+      }
+      cut = Math.min(cut, end)
     }
     return { seq, live: k.live, cut, gap: k.gap, t: 0, a: cut, b: cut, join: false }
   })
@@ -259,7 +275,7 @@ export function releaseThread<C extends HeldRow, E extends HeldRow>(
       }
       if (pick === -1) break
       const row = walks[pick].seq[at]
-      if (ask.keep.has(row.id)) break
+      if (ask.keep.has(row.id) || atLive.has(row.id)) break
       take(walks[pick], move, at)
       passed.push(places())
       done = held() <= ask.budget && fine()
