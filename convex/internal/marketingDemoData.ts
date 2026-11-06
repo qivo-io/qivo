@@ -12,7 +12,7 @@ declare class TextEncoder {
   encode(input: string): Uint8Array
 }
 
-export const MARKETING_DEMO_VERSION = 9
+export const MARKETING_DEMO_VERSION = 10
 
 export type DemoPerson = {
   key: string
@@ -26,6 +26,11 @@ export type DemoPerson = {
   // later could lie in the future. Absent = never synced: the page's default
   // reading.
   syncDay?: number
+  // Top-level projects (DemoProject keys) the person stars, which the All
+  // projects directory, Search in and the pickers list first. Every person
+  // sees every top-level project through the teams' shares, so the seed
+  // writes each row directly (model/demoSeed.ts).
+  favorites?: readonly string[]
 }
 
 export type DemoTeam = {
@@ -110,6 +115,8 @@ const people: DemoPerson[] = [
     color: '#0F766E',
     role: 'admin',
     kind: 'person',
+    // the last top-level project by name, so her list shows favorites first
+    favorites: ['launch'],
   },
   {
     key: 'leo',
@@ -119,6 +126,7 @@ const people: DemoPerson[] = [
     role: 'user',
     kind: 'person',
     syncDay: -6,
+    favorites: ['sensor'],
   },
   {
     key: 'aisha',
@@ -146,6 +154,7 @@ const people: DemoPerson[] = [
     role: 'user',
     kind: 'person',
     syncDay: -3,
+    favorites: ['cloud'],
   },
   {
     key: 'sofia',
@@ -164,6 +173,7 @@ const people: DemoPerson[] = [
     role: 'user',
     kind: 'person',
     syncDay: -3,
+    favorites: ['launch'],
   },
   { key: 'atlas', name: 'Atlas', initials: 'AT', color: '#475569', role: 'user', kind: 'agent' },
 ]

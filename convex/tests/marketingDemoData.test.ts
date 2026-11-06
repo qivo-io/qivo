@@ -66,7 +66,7 @@ function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {
 
 describe('the versioned Northstar marketing scenario', () => {
   it('keeps the agreed organization, project mix and sole administrator', () => {
-    expect(MARKETING_DEMO_VERSION).toBe(9)
+    expect(MARKETING_DEMO_VERSION).toBe(10)
     expect(people).toHaveLength(8)
     expect(people.filter((person) => person.role === 'admin').map((person) => person.key)).toEqual([
       'nora',
@@ -89,6 +89,26 @@ describe('the versioned Northstar marketing scenario', () => {
     expect(new Set(issues.map((issue) => issue.status))).toEqual(
       new Set(['backlog', 'todo', 'progress', 'review', 'done']),
     )
+  })
+
+  it('stars a few top-level projects, Pilot & Launch first for the demo login', () => {
+    expect(
+      Object.fromEntries(people.flatMap((p) => (p.favorites ? [[p.key, p.favorites]] : []))),
+    ).toEqual({ nora: ['launch'], leo: ['sensor'], daniel: ['cloud'], ben: ['launch'] })
+    const tops = projects.filter((project) => !project.parent)
+    for (const person of people)
+      for (const key of person.favorites ?? []) {
+        // a top-level project, starred once
+        expect(tops.map((p) => p.key)).toContain(key)
+        expect(person.favorites?.filter((k) => k === key)).toHaveLength(1)
+        // which the person sees through a team the project is shared with,
+        // as the seed writes every top-level project's shares
+        expect(teams.some((team) => team.members.includes(person.key))).toBe(true)
+      }
+    // Nora's star is the last top-level project by name, so her lists show
+    // favorites first
+    const byName = tops.map((p) => p.name).sort((a, b) => a.localeCompare(b))
+    expect(byName.at(-1)).toBe('Pilot & Launch')
   })
 
   it('stamps most humans with a past Team sync and leaves the demo login and the agent without one', () => {

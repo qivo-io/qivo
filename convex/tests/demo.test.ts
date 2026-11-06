@@ -664,11 +664,44 @@ describe('demo lifetime and capabilities', () => {
     })
   })
 
+  it("gives the visitor Nora's seeded star on Pilot & Launch, which projectNav.page lists first", async () => {
+    const a = await readyDemo()
+    const org_id = a.profile.org_id
+    const rows = await t.run(async (ctx) =>
+      (await ctx.db.query('project_favorites').collect()).filter((r) => r.org_id === org_id),
+    )
+    const named = await t.run(async (ctx) =>
+      Promise.all(
+        rows.map(async (r) => ({
+          person: (await byId(ctx, 'profiles', r.profile_id))?.name,
+          project: (await byId(ctx, 'projects', r.project_id))?.name,
+        })),
+      ),
+    )
+    // the dataset's four stars, the visitor's on Nora's seat
+    const starred = MARKETING_DEMO.people.flatMap((p) =>
+      (p.favorites ?? []).map((key) => ({
+        person: p.key === 'nora' ? a.profile.name : p.name,
+        project: MARKETING_DEMO.projects.find((x) => x.key === key)?.name,
+      })),
+    )
+    expect(new Set(named.map((n) => JSON.stringify(n)))).toEqual(
+      new Set(starred.map((n) => JSON.stringify(n))),
+    )
+    const page = await a.as.query(api.projectNav.page, {})
+    if (page.state !== 'ok') throw new Error(`no page: ${JSON.stringify(page)}`)
+    expect(page.rows.map((r) => [r.name, r.favorite])).toEqual([
+      ['Pilot & Launch', true],
+      ['Luma Cloud', false],
+      ['Luma Sensor', false],
+    ])
+  })
+
   it('counts a star as one write and its row as one record, and a refused star as nothing', async () => {
     const a = await readyDemo()
     const org_id = a.profile.org_id
-    // a top-level project the visitor sees through ordinary access, and
-    // one they do not
+    // a top-level project the visitor sees through ordinary access and has
+    // not starred, and one they do not see
     const { mine, other } = await t.run(async (ctx) => {
       const tops = (
         await ctx.db
@@ -678,8 +711,19 @@ describe('demo lifetime and capabilities', () => {
       ).filter((p) => p.parent_id === undefined && p.archived_at === undefined)
       const access = accessOf(ctx, ordinaryOf(a.profile), tops)
       const seen = await Promise.all(tops.map((p) => access.visible(p.id)))
+      const starred = await Promise.all(
+        tops.map(
+          async (p) =>
+            (await ctx.db
+              .query('project_favorites')
+              .withIndex('by_project_profile', (q) =>
+                q.eq('project_id', p.id).eq('profile_id', a.profile.id),
+              )
+              .first()) !== null,
+        ),
+      )
       return {
-        mine: tops.find((_, i) => seen[i]),
+        mine: tops.find((_, i) => seen[i] && !starred[i]),
         other: tops.find((_, i) => !seen[i]),
       }
     })
