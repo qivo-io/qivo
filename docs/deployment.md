@@ -1315,9 +1315,10 @@ read through `messages.readItem` with the item's `through`, which v0.1.97
 first shipped, and its tail note's change from the item's `unread_change`,
 which counts an unread mention in the description since v0.1.123
 (`a7239f99`). The window places the divider and sends the read only once
-the item answers. While the person's items are building or the read fails,
-it waits with no divider and no read, and it runs a failed read once more
-by itself. An app from this release, against a backend before v0.1.97,
+`inbox.item` answers ok and current. While the person's items are
+building or `inbox.item` fails, it waits with no divider and no
+read, and it runs a failed `inbox.item` once more by itself. An
+app from this release, against a backend before v0.1.97,
 shows **…** on the badge, draws no divider and marks no task read on
 opening it, also in a tab that was open when the backend went back, until
 the backend rolls forward. Against v0.1.97 to v0.1.122 its tail note under
