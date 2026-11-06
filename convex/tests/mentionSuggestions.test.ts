@@ -464,11 +464,11 @@ describe("the suggestions inside Convex's limits", () => {
     return out
   }
 
-  it('reads a first batch, a search that matches nobody and the last name among 1,000 people', async () => {
+  it('reads a first batch, a search that matches nobody and the last person in name order among 1,000 people', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     await keyOrg(t, f.org.id)
-    const crowd = await people(
+    await people(
       t,
       f,
       Array.from({ length: 995 }, (_, i) => `Member ${String(i).padStart(3, '0')}`),
@@ -492,15 +492,23 @@ describe("the suggestions inside Convex's limits", () => {
       true,
     )
     expect(none.batch.rows).toEqual([])
-    // the person whose name sorts last holds the only such email
-    const last = crowd.at(-1) as Doc<'profiles'>
-    const lastName = await whole(
-      'an email fragment only the last name holds, 1,000 people',
+    // withOrg's viewer seat sorts last in name order, after every member,
+    // the agent Relay and the user seat, and holds the only such email
+    const last = await t.run((ctx) =>
+      ctx.db
+        .query('profiles')
+        .withIndex('by_org_name', (q) => q.eq('org_id', f.org.id))
+        .order('desc')
+        .first(),
+    )
+    expect(last?.id).toBe(f.viewer.id)
+    const lastPerson = await whole(
+      'an email fragment only the last person in name order holds, 1,000 people',
       t,
-      (ctx) => mentionsOf(ctx, f.user, { search: 'member.994@' }),
+      (ctx) => mentionsOf(ctx, f.user, { search: 'viewer@' }),
       true,
     )
-    expect(lastName.batch.rows.map((r) => r.id)).toEqual([last.id])
+    expect(lastPerson.batch.rows.map((r) => r.id)).toEqual([f.viewer.id])
     // Load more near the end: the batch after a cursor past 990 names
     const near = await listAll((after) => mentions(t, f.user, { search: 'member 99', after }))
     const before = near.batches.at(-2)?.next as string
