@@ -18,8 +18,9 @@ import type { Row } from '../store/rows'
    the item alone. The read waits for the item's answer, takes the task's
    organization, uuid and the answer's `through`, goes once a `through`,
    and never for a snoozed item, a seat whose items are building, a failed
-   read or no item. The Inbox pane keeps the Inbox's frozen start, and the
-   pane and its pop-out send one read for one `through`. */
+   read or no item. An Inbox row's press only opens its task, whose pane
+   freezes the start from the item as any window does, and the pane and its
+   pop-out send one read for one `through`. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 type Double = ReturnType<typeof import('../store/guard/liveDouble.setup').liveOver>
@@ -465,19 +466,28 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
   }
   const popOut = () => document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')
 
-  it("keeps the Inbox's frozen start, and sends one read for one through from both", async () => {
-    // the row's loaded message at minute 8, and older ones beyond the cut
+  it("draws the pane's divider at the item's first unread, and sends one read for one through from both", async () => {
+    // the row's loaded message at minute 8, and an older unread one beyond
+    // the cut, which the list does not load
     await load([message('task-a', 3)], [message('task-a', 8, { kind: 'comment' })])
     await openInbox()
-    const row = document.querySelector<HTMLElement>('[data-message="task-a"] .inbox-message-open')
+    const rowOf = () => document.querySelector<HTMLElement>('[data-message="task-a"]')
+    const row = rowOf()?.querySelector<HTMLElement>('.inbox-message-open')
     if (!row) throw new Error('missing the row')
+    expect(rowOf()?.hasAttribute('data-unread')).toBe(true)
     await act(async () => row.click())
     await settle()
-    // the row's press read its loaded message, and the pane the whole item
-    expect(writes.map((w) => w.name).sort()).toEqual(['messages:markRead', 'messages:readItem'])
+    // the press only opened the task, and the pane read the whole item,
+    // whose paint turned the row read
+    expect(writes.map((w) => w.name)).toEqual(['messages:readItem'])
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(8)) },
+    ])
+    expect(rowOf()?.hasAttribute('data-unread')).toBe(false)
     await comments(range(1, 10))
-    // the Inbox froze its start from the message it loaded
-    expect(thread(pane()).slice(-4)).toEqual(['Check 7', 'New', 'Check 8', 'Check 9'])
+    // the divider sits at the item's first unread update, the one the
+    // list did not load
+    expect(thread(pane()).slice(0, 4)).toEqual(['Check 1', 'Check 2', 'New', 'Check 3'])
     const button = pane().querySelector<HTMLElement>('[data-task-popout]')
     if (!button) throw new Error('missing the pop-out button')
     await act(async () => button.click())

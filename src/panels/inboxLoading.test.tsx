@@ -11,9 +11,9 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
 
 /* An Inbox item whose task the workspace does not hold, while every task
    loads (store/liveParts.ts) or in a session that never asked for them:
-   picking it reads its messages at once
-   and opens its task in the pane from the server, by a reference with the
-   message's organization (lib/taskReference.ts), and the pane's window
+   picking it opens its task in the pane from the server, by a reference
+   with the message's organization (lib/taskReference.ts), whose window
+   reads the task's inbox item, and the pane's window
    stays the same window when the task arrives, or the home organization
    changes. The pane edits, moves and takes images for a task it shows
    from its answer, names an archived one by its key, and offers Open
@@ -154,7 +154,7 @@ async function loadingInbox(
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const reads = () =>
-    network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markRead')
+    network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:readItem')
   const store = await import('../store/planner')
   double.live?.holdWindow(LAST_WINDOW)
   await store.initStore()
@@ -274,14 +274,19 @@ async function paneActions() {
 }
 
 describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () => {
-  it('reads its messages when picked, opens its task in the pane from the server, and keeps the same window once it arrives', async () => {
+  it('opens its task in the pane from the server when picked, reads its inbox item, and keeps the same window once it arrives', async () => {
     const { store, snap, opened, reads, current } = await loadingInbox()
     const open = container.querySelector<HTMLButtonElement>(
       '[data-message="fd000000-b"] .inbox-message-open',
     )
     await act(async () => open?.click())
     const org = snap.orgs[0].id
-    expect(reads()[0]?.[1]).toEqual({ org_id: org, ids: ['message-a'] })
+    // the pane's window reads the task's whole item once the item answers
+    await vi.waitFor(() =>
+      expect(reads().map(([, args]) => args)).toEqual([
+        { org_id: org, issue_id: 'fd000000-b', through: Date.parse('2026-09-14T09:00:00.000Z') },
+      ]),
+    )
     // by a reference with the message's organization and the task's uuid
     const { refParts } = await import('../lib/taskReference')
     expect(refParts(opened.at(-1))).toEqual({ org, uuid: 'fd000000-b' })

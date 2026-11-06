@@ -1,6 +1,7 @@
 /* Inbox groups messages by task, displaying the newest message and unread
-   count beside an embedded IssueDetail. Capture the unread boundary before
-   marking the selection read so the task can retain its "New" divider.
+   count beside an embedded IssueDetail. Opening a row opens its task in the
+   pane, whose window freezes the "New" divider from the task's inbox item
+   before it reads the item, as every task window does (IssueDetail).
    Reading prunes the group to its latest message; retention or removal clears
    it. Row menus act on the whole group, with separate inbox-wide commands.
    Snoozed groups stay hidden until server wake unless "Show snoozed" is set.
@@ -47,7 +48,6 @@ import { notificationPermission, requestNotificationPermission } from '../lib/no
 import { sameTask, taskFacts } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { fmtSnoozeUntil, SNOOZE_UNIT_MS, type SnoozeUnit, snoozeStepMax } from '../lib/snooze'
-import { type UnreadStart, unreadStart } from '../lib/spine'
 import { taskRef } from '../lib/taskReference'
 import { useMobile } from '../lib/useMobile'
 import { OUT_OF_USE } from '../lib/viewHidden'
@@ -380,10 +380,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const listScrollRef = useRef<HTMLDivElement>(null)
   const queueScrollTop = useRef(0)
   const [sort, setSort] = useState('new') // "new" | "old"
-  // where this visit's unread part starts and whether it holds a change,
-  // frozen at select time — WITH the task it was asked about, so in-pane
-  // navigation can't inherit it
-  const [frozen, setFrozen] = useState(null as { uuid: string; unread: UnreadStart } | null)
   const [unreadOnly, setUnreadOnly] = useState(false)
   const [showSnoozed, setShowSnoozed] = useState(false) // sleeping items are hidden by default
   const [kinds, setKinds] = useState([] as string[]) // empty = all
@@ -487,7 +483,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
      opened, or couldn't be opened. */
   const paneId = openIssue ?? null
   // the pane's task's uuid once known, from the workspace, the reference or
-  // its answer, which lights its row and keeps the New mark frozen for it
+  // its answer, which lights its row
   const paneUuid = taskFacts(paneId)?.uuid ?? null
   // one key while the pane is on the same task, so neither a reference
   // turning into its handle nor a change of the home organization, which
@@ -502,14 +498,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   // A move with no task here ends it too, such as leaving the Inbox, which
   // stays loaded (components/KeptView): the next task opens in the pane.
   if (poppedOut && !openIssue) setPoppedOut(false)
-  // Leaving ends the unread part frozen for the pane, as the Inbox's
-  // unmount did: it shows again with an empty pane.
-  useEffect(
-    () => () => {
-      setFrozen(null)
-    },
-    [],
-  )
   // the text typed in the pane and its pop-out, and in the pop-out alone,
   // so closing either asks first (DiscardPrompt)
   const taskScope = useContext(UnsentScopeContext)
@@ -587,29 +575,23 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
 
   // which row is lit: the one whose task the pane holds
   const selected = paneUuid
-  // Freeze what this visit found BEFORE marking it read — the order of these
-  // lines is the feature. markMessagesRead is synchronous and reading closes
-  // the New mark (and prunes the item back to its last message, 0109), so a
-  // mark computed after it would show nothing at all. The task window is
-  // mounted by the render this click schedules — far too late to ask — so the
-  // answer is handed to it.
   // the task a row opens: its handle where the workspace holds it, else a
   // reference by the message's organization and the task's uuid
   const rowTask = (g: MessageGroupVM) =>
     g.issueKey ?? taskRef({ org: g.issueOrg, uuid: g.issueUuid })
   const select = (g: MessageGroupVM) =>
     closeOrAsk([!sameTask(rowTask(g), openIssue) && taskScope], () => selectNow(g))
+  // A press only opens the row's task. The pane's window freezes where the
+  // unread part starts from the task's inbox item and then reads the whole
+  // item, as any task window does, also for updates the list does not load,
+  // and that read's paint turns the row read. A snoozed row's item is not
+  // read, as it is a reminder that returns unread (P.readOnOpen).
   const selectNow = (g: MessageGroupVM) => {
     queueScrollTop.current = listScrollRef.current?.scrollTop || 0
     // the list as it shows now, which a read row leaves under Unread only
     paneRows.current = { id: g.id, ids: visible.map((x) => x.id) }
-    setFrozen({ uuid: g.issueUuid, unread: unreadStart(P.messages, g.issueUuid) })
-    // a sleeping row is a reminder that returns unread; looking does not read it
-    if (!g.snoozed) P.markMessagesRead(g.ids)
     showTask(rowTask(g))
   }
-  // …and only for the task it was frozen about
-  const unread = frozen && paneUuid && frozen.uuid === paneUuid ? frozen.unread : undefined
   const menuGroup = menu ? P.messageGroups.find((g) => g.id === menu.id) : null
   const filterCount = (unreadOnly ? 1 : 0) + (showSnoozed ? 1 : 0) + kinds.length
   const toggleKind = (k: string) =>
@@ -1021,7 +1003,6 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
             modalActive={!poppedOut}
             key={paneKey}
             issueId={paneId}
-            unread={unread}
             onClose={closeTask}
             closeLabel="Back to inbox"
             onOpen={showTask}
@@ -1202,7 +1183,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           <IssueDetail
             issueId={paneId}
             holdThread
-            unread={{ ts: null, change: false }} // the pane already showed this visit's New mark
+            // the pane behind it showed this visit's New mark already
+            unread={{ ts: null, change: false }}
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}

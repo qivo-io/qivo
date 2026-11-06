@@ -1522,11 +1522,9 @@ function CommentRow({
    the location in a breadcrumb over the title, and offers `onPopOut` — the
    same window, floating, with everything the pane left out.
    `unread` overrides where this visit's unread part starts, and whether it
-   holds a change (lib/spine.ts UnreadStart). The window normally freezes
-   that itself on open, from the task's inbox item (P.inboxItem), but the
-   inbox marks an item read the moment you click its row, before this
-   component has rendered at all, so the only surviving answer is the one
-   the inbox froze first. The Inbox's pop-out passes a start of nothing,
+   holds a change (lib/spine.ts UnreadStart). The window freezes that
+   itself on open, from the task's inbox item (P.inboxItem), also in the
+   Inbox's pane. Only the Inbox's pop-out passes one, a start of nothing,
    since the pane behind it showed this visit's New mark already.
    `holdThread` says somebody else owns the store's one comment cache — the
    pane behind a popped-out window, which is on the same task. Without it the
@@ -2070,9 +2068,9 @@ function IssueDetail({
   // while no mark shows and no read goes out. It stays pending through a
   // seat whose items are building and through a failure, which the store
   // runs once more, so a read that recovers still draws the divider.
-  // …unless the surface that opened us froze it first (the inbox,
-  // whose click marks the item read before this render): then that answer
-  // IS the frozen one, and asking again here would only ever find nothing.
+  // …unless the surface that opened us passed one (`unread`, the Inbox's
+  // pop-out over the pane that showed the mark already). Every other open,
+  // a press on an Inbox row included, takes the item's.
   // Frozen with it: whether the unread messages include a change, which the
   // tail note under Comments points at All for, since Comments loads no
   // history to look for it in.
