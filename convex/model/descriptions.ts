@@ -195,7 +195,9 @@ const textsLeft = (m: TransactionMetrics, limit: ReadCeiling): number =>
  * one text, never more than the reads left under `steps` could hold, so the
  * reads pass `room` by one task's text at most and never pass `steps`.
  * Each caller keeps its own answer once the room runs out: a cut window, a
- * refusal or a shorter page. */
+ * refusal or a shorter page, such as the organization export's tasks page,
+ * which reads the same cursor again six tasks a page
+ * (model/orgExportRead.ts TEXT_ROOM). */
 export async function descriptionsOf(
   ctx: QueryCtx,
   tasks: readonly TextOwner[],

@@ -10,29 +10,38 @@
 /// <reference types="vite/client" />
 
 import { makeFunctionReference } from 'convex/server'
-import { inflateSync, unzipSync } from 'fflate/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { crc32 } from '../lib/crc32'
+import type { QueryCtx } from '../_generated/server'
 import type { DeletedItemState } from '../lib/enums'
 import { TEXT_MAX } from '../lib/limits'
 import {
   archiveRow,
   exportName,
+  JOB_ORDER,
   LIVE_READ_WARNING,
   ORG_EXPORT_ORDER,
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   type OrgExportRow,
   type OrgExportSection,
+  partEntry,
   ZIP_END_BYTES,
   zipEntryBytes,
 } from '../lib/orgExport'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { checkStoredFiles } from '../model/demoUploads'
+import { descriptionOf } from '../model/descriptions'
 import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
-import { PAGE_BYTES, PAGE_SIZE, readBatch } from '../model/orgExportRead'
+import {
+  IN_FLIGHT_ISSUES_PAGE_SIZE,
+  ISSUES_PAGE_SIZE,
+  PAGE_BYTES,
+  PAGE_SIZE,
+  readBatch,
+  TEXT_ROOM,
+} from '../model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
   AUTHORITY_READS,
@@ -56,10 +65,23 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import {
+  archiveOf,
+  exists,
+  exportAs,
+  exportUntil,
+  jobOf,
+  nextStep,
+  partsOf,
+  requestsOf,
+  START,
+  settle,
+  storedFiles,
+} from './orgExport.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
-const START = Date.parse('2026-05-04T10:00:00.000Z')
 const DEFAULTS = { ...EXPORT_LIMITS }
+const DEFAULT_TEXT_ROOM = { ...TEXT_ROOM }
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -67,6 +89,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(EXPORT_LIMITS, DEFAULTS)
+  Object.assign(TEXT_ROOM, DEFAULT_TEXT_ROOM)
   vi.clearAllTimers()
   vi.useRealTimers()
 })
@@ -77,161 +100,10 @@ const page = makeFunctionReference<
   OrgExportPage
 >('orgExport:page')
 
-/** Runs every scheduled step, erase leg and expiry that is due now, until
- * none is left that is due. Later timers, such as an archive's expiry,
- * wait. */
-const settle = (t: T) => t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 5000)
-
-const jobOf = (t: T, id: string) =>
-  t.run(async (ctx) =>
-    ctx.db
-      .query('org_exports')
-      .withIndex('by_uuid', (q) => q.eq('id', id))
-      .unique(),
-  )
-
-const partsOf = (t: T, id: string) =>
-  t.run((ctx) =>
-    ctx.db
-      .query('org_export_parts')
-      .withIndex('by_export_seq', (q) => q.eq('export_id', id))
-      .collect(),
-  )
-
-const requestsOf = (t: T, id: string) =>
-  t.run((ctx) =>
-    ctx.db
-      .query('org_export_requests')
-      .withIndex('by_export_profile', (q) => q.eq('export_id', id))
-      .collect(),
-  )
-
-/** How many files storage holds. */
-const storedFiles = (t: T) =>
-  t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
-
-/** Whether stored file `id` is still there. */
-const exists = (t: T, id: Id<'_storage'>) =>
-  t.run(async (ctx) => (await ctx.db.system.get(id)) !== null)
-
-/** Asks for an export as `profile` and runs the job until nothing due is
- * left. */
-async function exportAs(t: T, profile: Doc<'profiles'>, orgId: string) {
-  const asked = await as(t, profile).mutation(api.orgExport.request, { org_id: orgId })
-  await settle(t)
-  return asked.export_id
-}
-
-/* A ZIP archive of `parts` in archive order, each with its stored file,
- * built as the delivery stage will: a local header and the file for each,
- * then the central directory and its end record. */
-function zipOf(parts: readonly Doc<'org_export_parts'>[], files: readonly Uint8Array[]) {
-  const encoder = new TextEncoder()
-  const chunks: Uint8Array[] = []
-  const directory: Uint8Array[] = []
-  let offset = 0
-  for (const [i, part] of parts.entries()) {
-    const name = encoder.encode(part.entry)
-    const data = files[i]
-    const local = new DataView(new ArrayBuffer(30))
-    const central = new DataView(new ArrayBuffer(46))
-    local.setUint32(0, 0x04034b50, true)
-    central.setUint32(0, 0x02014b50, true)
-    central.setUint16(4, 20, true)
-    // version needed, UTF-8 names, deflate, 1980-01-01, CRC and sizes, at
-    // the same offsets past each record's own first field
-    for (const [view, at] of [
-      [local, 4],
-      [central, 6],
-    ] as const) {
-      view.setUint16(at, 20, true)
-      view.setUint16(at + 2, 0x0800, true)
-      view.setUint16(at + 4, 8, true)
-      view.setUint16(at + 8, 0x21, true)
-      view.setUint32(at + 10, part.crc32, true)
-      view.setUint32(at + 14, data.length, true)
-      view.setUint32(at + 18, part.raw_bytes, true)
-      view.setUint16(at + 22, name.length, true)
-    }
-    central.setUint32(42, offset, true)
-    chunks.push(new Uint8Array(local.buffer), name, data)
-    directory.push(new Uint8Array(central.buffer), name)
-    offset += 30 + name.length + data.length
-  }
-  const size = directory.reduce((sum, chunk) => sum + chunk.length, 0)
-  const end = new DataView(new ArrayBuffer(22))
-  end.setUint32(0, 0x06054b50, true)
-  end.setUint16(8, parts.length, true)
-  end.setUint16(10, parts.length, true)
-  end.setUint32(12, size, true)
-  end.setUint32(16, offset, true)
-  const all = [...chunks, ...directory, new Uint8Array(end.buffer)]
-  const out = new Uint8Array(all.reduce((sum, chunk) => sum + chunk.length, 0))
-  let at = 0
-  for (const chunk of all) {
-    out.set(chunk, at)
-    at += chunk.length
-  }
-  return out
-}
-
-/** A ready job's archive: its parts, each inflated and checked against its
- * CRC and sizes, the ZIP they make and its entries, and each table's rows
- * joined from its files. */
-async function archiveOf(t: T, exportId: string) {
-  const parts = await partsOf(t, exportId)
-  // t.run answers Convex values, so the bytes come back as ArrayBuffers
-  const buffers = await t.run(async (ctx) => {
-    const out: ArrayBuffer[] = []
-    for (const part of parts) {
-      const blob = await ctx.storage.get(part.storage_id)
-      if (blob === null) throw new Error(`the file of ${part.entry} is gone`)
-      out.push(await blob.arrayBuffer())
-    }
-    return out
-  })
-  const files = buffers.map((buffer) => new Uint8Array(buffer))
-  const decoder = new TextDecoder()
-  const texts: Record<string, string> = {}
-  for (const [i, part] of parts.entries()) {
-    expect(files[i].length, part.entry).toBe(part.stored_bytes)
-    // each part is one complete raw DEFLATE stream of its own
-    const raw = inflateSync(files[i])
-    expect(raw.length, part.entry).toBe(part.raw_bytes)
-    expect(crc32(raw), part.entry).toBe(part.crc32)
-    texts[part.entry] = decoder.decode(raw)
-  }
-  const zip = zipOf(parts, files)
-  const entries = unzipSync(zip)
-  expect(Object.keys(entries)).toEqual(parts.map((part) => part.entry))
-  for (const part of parts) expect(decoder.decode(entries[part.entry])).toBe(texts[part.entry])
-  const tables: Record<string, OrgExportRow[]> = {}
-  for (const part of parts) {
-    if (part.kind !== 'data') continue
-    const rows = JSON.parse(texts[part.entry]) as OrgExportRow[]
-    expect(rows, part.entry).toHaveLength(part.records)
-    const name = part.entry.split('/')[1]
-    tables[name] = [...(tables[name] ?? []), ...rows]
-  }
-  return {
-    parts,
-    zip,
-    tables,
-    readme: texts['README.txt'],
-    manifest: JSON.parse(texts['manifest.json']) as {
-      version: number
-      consistency: string
-      consistency_note: string
-      file_contents_included: boolean
-      collection_started_at: string
-      collection_completed_at: string
-      organization: { id: string; name?: string; slug?: string }
-      tables: Record<string, { files: string[]; records: number }>
-      skipped: { tasks: number; reason: string }
-      exclusions: string[]
-    },
-  }
-}
+/** A task's text of about 600 characters, the `n`th, as people write
+ * ordinary descriptions. */
+const ordinaryText = (n: number) =>
+  `<p>Bench run ${n}: replaced the fan controller, logged the readings at idle and under load, and compared them with the last calibration. The intake temperature stayed within two degrees of the target, and the exhaust fan held its speed through the whole run.</p><p>Next: repeat the run with the lid closed, attach the log to this task and ask the review group to sign off before the rig goes back into the shared pool for the week.</p>`
 
 /** Every section as the browser export reads it through `page`, by archive
  * name, each row as the archive writes it (lib/orgExport.ts archiveRow). */
@@ -410,10 +282,23 @@ const plantExport = (t: T, orgId: string, profileId: string, parts = 3) =>
       progress_at: NOW,
       completed_at: NOW,
       expires_at: new Date(Date.now() + ARCHIVE_TTL_MS).toISOString(),
-      progress: { section: '', records: 0, sections_done: 16, sections_total: 16 },
-      step: { n: 1, section: 16, cursor: null, part: 1, seq: 2, bytes: 0, counts: {} },
+      progress: {
+        section: '',
+        records: 0,
+        sections_done: JOB_ORDER.length,
+        sections_total: JOB_ORDER.length,
+      },
+      step: {
+        n: 1,
+        section: JOB_ORDER.length,
+        cursor: null,
+        part: 1,
+        seq: 2,
+        bytes: 0,
+        counts: {},
+      },
       attempts: 0,
-      format_version: 3,
+      format_version: 4,
     })
     const files: Id<'_storage'>[] = []
     for (let seq = 0; seq < parts; seq++) {
@@ -458,12 +343,16 @@ describe('organization export job', () => {
     const planted = await plantWork(t, f)
     const exportId = await exportAs(t, f.admin, f.org.id)
     const job = await jobOf(t, exportId)
-    expect(job).toMatchObject({ state: 'ready', format_version: 3, attempts: 0, skipped: 0 })
+    expect(job).toMatchObject({ state: 'ready', format_version: 4, attempts: 0, skipped: 0 })
     if (job === null || job.archive === undefined) throw new Error('the job is not ready')
     expect(job.expires_at).toBe(
       new Date(Date.parse(job.completed_at ?? '') + ARCHIVE_TTL_MS).toISOString(),
     )
-    expect(job.progress).toMatchObject({ section: '', sections_done: 16, sections_total: 16 })
+    expect(job.progress).toMatchObject({
+      section: '',
+      sections_done: JOB_ORDER.length,
+      sections_total: JOB_ORDER.length,
+    })
 
     const archive = await archiveOf(t, exportId)
     // the README and the manifest first, then each table's files in order
@@ -476,9 +365,15 @@ describe('organization export job', () => {
     expect(archive.zip.length).toBe(job.archive.bytes)
     expect(job.archive.parts).toBe(archive.parts.length)
 
-    // exactly the rows the browser export reads, with the archive's names
+    // exactly the rows the browser export reads, with the archive's names,
+    // and an empty Deleted items section after them
     const expected = await pagedRows(t, f.admin, f.org.id)
-    expect(Object.keys(archive.tables)).toEqual(Object.keys(expected))
+    expect(Object.keys(archive.tables)).toEqual(JOB_ORDER.map((section) => section.key))
+    expect(Object.keys(archive.tables).filter((key) => !key.startsWith('deleted/'))).toEqual(
+      Object.keys(expected),
+    )
+    for (const key of Object.keys(archive.tables).filter((key) => key.startsWith('deleted/')))
+      expect(archive.tables[key], key).toEqual([])
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
     expect(archive.tables.tasks.find((row) => row.id === planted.task.id)).toMatchObject({
@@ -493,9 +388,20 @@ describe('organization export job', () => {
 
     // the manifest counts what the files hold and claims no file inside
     for (const [name, rows] of Object.entries(archive.tables))
-      expect(archive.manifest.tables[name].records, name).toBe(rows.length)
+      expect(
+        (name.startsWith('deleted/')
+          ? archive.manifest.deleted_items?.tables
+          : archive.manifest.tables)?.[name].records,
+        name,
+      ).toBe(rows.length)
+    expect(Object.keys(archive.manifest.tables)).toEqual(Object.keys(expected))
+    expect(archive.manifest.deleted_items).toMatchObject({
+      items: { complete: 0, partial: 0 },
+      left_out: {},
+      tables: { 'deleted/items': { files: ['deleted/items/0001.json'], records: 0 } },
+    })
     expect(archive.manifest).toMatchObject({
-      version: 3,
+      version: 4,
       consistency: 'live_read',
       consistency_note: LIVE_READ_WARNING,
       file_contents_included: false,
@@ -507,7 +413,10 @@ describe('organization export job', () => {
     expect(archive.manifest.exclusions.join(' ')).toMatch(/Attachment file contents/)
     expect(archive.readme).toContain(LIVE_READ_WARNING)
     expect(archive.readme).toMatch(/no import or restore/)
-    expect(archive.readme).toMatch(/Deleted items are not included yet/)
+    expect(archive.readme).toMatch(/^Qivo organization export, format version 4/)
+    expect(archive.readme).toMatch(/Deleted items are in their own folder, deleted\//)
+    expect(archive.readme).not.toMatch(/not included yet/)
+    expect(archive.manifest.exclusions.join(' ')).not.toMatch(/restore an item/)
     // each table is read on its own, so a related table may name a task
     // that tasks does not hold, and the archive says so
     expect(archive.readme).toMatch(/Each table is read live on its own/)
@@ -517,7 +426,11 @@ describe('organization export job', () => {
     })
     expect(archive.readme).toMatch(/no attachment contents/)
     // no uploaded file is in the archive
-    expect(archive.parts.filter((part) => !part.entry.startsWith('data/'))).toHaveLength(2)
+    expect(
+      archive.parts.filter(
+        (part) => !part.entry.startsWith('data/') && !part.entry.startsWith('deleted/'),
+      ),
+    ).toHaveLength(2)
 
     // the status names the requester and never sends read state or files
     const status = await as(t, f.admin).query(api.orgExport.status, { org_id: f.org.id })
@@ -1105,7 +1018,7 @@ describe('organization export job', () => {
           requested_by: f.admin.id,
           started_at: NOW,
           progress_at: NOW,
-          progress: { section: '', records: 0, sections_done: 0, sections_total: 16 },
+          progress: { section: '', records: 0, sections_done: 0, sections_total: JOB_ORDER.length },
           step: { n: 0, section: 0, cursor: null, part: 1, seq: 2, bytes: 0, counts: {}, ...step },
           attempts: 0,
           format_version: 3,
@@ -1124,7 +1037,7 @@ describe('organization export job', () => {
       stored_bytes: 3,
       crc32: 0,
     })
-    const last = ORG_EXPORT_ORDER.length - 1
+    const last = JOB_ORDER.length - 1
     const commit = async (exportId: string) =>
       t.mutation(internal.orgExport.commitPart, {
         export_id: exportId,
@@ -1143,14 +1056,13 @@ describe('organization export job', () => {
 
     // the finish of an archive with that many data parts stays within
     // Convex's 4,096 ranges: every table's first file, the rest tasks
-    const entries = ORG_EXPORT_ORDER.flatMap((section) =>
-      Array.from(
-        { length: section === 'issues' ? EXPORT_LIMITS.parts - last : 1 },
-        (_, i) => `data/${exportName(section)}/${String(i + 1).padStart(4, '0')}.json`,
+    const entries = JOB_ORDER.flatMap((section) =>
+      Array.from({ length: section.key === 'tasks' ? EXPORT_LIMITS.parts - last : 1 }, (_, i) =>
+        partEntry(section.name, i + 1, section.folder),
       ),
     )
     expect(entries).toHaveLength(EXPORT_LIMITS.parts)
-    const full = await plantJob({ n: 7, section: ORG_EXPORT_ORDER.length, seq: entries.length + 2 })
+    const full = await plantJob({ n: 7, section: JOB_ORDER.length, seq: entries.length + 2 })
     for (let from = 0; from < entries.length; from += 500)
       await t.run(async (ctx) => {
         for (const [i, entry] of entries.slice(from, from + 500).entries())
@@ -1248,21 +1160,30 @@ describe('organization export job', () => {
     }
     const issues = ORG_EXPORT_ORDER.indexOf('issues')
     let at: Parameters<typeof readBatch>[2] = { section: issues, cursor: null }
-    const reads: number[] = []
+    const reads: (number | 'narrow')[] = []
+    // as a step reads: wide until a page's texts do not fit, then narrow
+    let wide = true
     for (let guard = 0; guard < 20; guard++) {
       const read = await t.run(async (ctx) => {
-        const batch = await readBatch(ctx, f.org.id, at)
+        const batch = await readBatch(ctx, f.org.id, at, { wide })
         const m = await ctx.meta.getTransactionMetrics()
         return { batch, bytes: m.bytesRead.used }
       })
       expect(read.bytes).toBeLessThan(16 * 1024 * 1024)
       // what the step receives stays far under a query's 16 MiB answer
       expect(JSON.stringify(read.batch).length).toBeLessThan(8 * 1024 * 1024)
+      if (read.batch.retry === 'narrow') {
+        expect(read.batch).toMatchObject({ rows: [], done: false, at })
+        reads.push('narrow')
+        wide = false
+        continue
+      }
       reads.push(read.batch.rows.length)
       if (read.batch.done) break
       at = read.batch.at
     }
-    expect(reads).toEqual([6, 3])
+    // the wide page's nine texts of 900 KiB do not fit in TEXT_ROOM
+    expect(reads).toEqual(['narrow', 6, 3])
     // and the whole job runs within the limits, a texts part of about 8 MiB
     const exportId = await exportAs(t, f.admin, f.org.id)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
@@ -1270,6 +1191,124 @@ describe('organization export job', () => {
       part.entry.startsWith('data/tasks/'),
     )
     expect(tasks.reduce((sum, part) => sum + part.records, 0)).toBe(9)
+  })
+
+  it('reads 300 open tasks of ordinary text 100 a page with their texts, as page reads them', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // a sub-project's open tasks at their design size, everyday elsewhere
+    const planted: string[] = []
+    for (let i = 0; i < 300; i++)
+      planted.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: ordinaryText(i),
+          })
+        ).id,
+      )
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    let at: Parameters<typeof readBatch>[2] = { section: issues, cursor: null }
+    const reads: number[] = []
+    for (let guard = 0; guard < 10; guard++) {
+      const batch = await t.run((ctx) => readBatch(ctx, f.org.id, at))
+      expect(batch.retry).toBeUndefined()
+      reads.push(batch.rows.length)
+      if (batch.done) break
+      at = batch.at
+    }
+    // Convex's cursor learns that the range ended on the read after it
+    expect(reads).toEqual([100, 100, 100, 0])
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    const archive = await archiveOf(t, exportId)
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual(planted)
+    // each text is the one descriptionOf reads
+    const texts = await t.run(async (ctx) => {
+      const out: string[] = []
+      for (const id of planted) {
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', id))
+          .unique()
+        if (task === null) throw new Error('a planted task is gone')
+        out.push(await descriptionOf(ctx.db, task))
+      }
+      return out
+    })
+    expect(archive.tables.tasks.map((row) => row.description)).toEqual(texts)
+    expect(texts[7]).toBe(ordinaryText(7))
+    // and the browser export's page still reads the same tasks
+    const expected = await pagedRows(t, f.admin, f.org.id)
+    expect(archive.tables.tasks).toEqual(expected.tasks)
+  })
+
+  it("reads the same cursor six a page when a wide page's texts do not fit, losing no task", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const planted: string[] = []
+    for (let i = 0; i < 20; i++)
+      planted.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: ordinaryText(i),
+          })
+        ).id,
+      )
+    // room for the page and no text
+    TEXT_ROOM.bytes = 2 * 1024 * 1024
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const from = { section: issues, cursor: null }
+    const wide = await t.run((ctx) => readBatch(ctx, f.org.id, from))
+    expect(wide).toEqual({ rows: [], at: from, done: false, skipped: 0, retry: 'narrow' })
+    const narrow = await t.run((ctx) => readBatch(ctx, f.org.id, from, { wide: false }))
+    expect(narrow.rows.map((row) => row.id)).toEqual(planted.slice(0, ISSUES_PAGE_SIZE))
+    // a whole job reads every task once, in order, with its text
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    const archive = await archiveOf(t, exportId)
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual(planted)
+    expect(archive.tables.tasks.map((row) => row.description)).toEqual(
+      planted.map((_, i) => ordinaryText(i)),
+    )
+  })
+
+  it('stays narrow for the rest of a step once a wide page of texts does not fit', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a sub-project's everyday open tasks
+    for (let i = 0; i < 30; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    // room for a page and no text, and four reads a step
+    TEXT_ROOM.bytes = 2 * 1024 * 1024
+    EXPORT_LIMITS.reads = 4
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id: f.org.id })
+    const tasks = JOB_ORDER.findIndex((section) => section.key === 'tasks')
+    expect((await exportUntil(t, export_id, tasks))?.step).toMatchObject({ section: tasks })
+    await nextStep(t)
+    // one wide read that did not fit, then three narrow pages, not a wide
+    // read before each narrow one
+    expect((await jobOf(t, export_id))?.step.counts.tasks).toBe(3 * ISSUES_PAGE_SIZE)
+  })
+
+  it('keeps two tasks a page while a deleted item is in flight', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 5; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    await plantProjectItem(t, moving, 'moving')
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const batch = await t.run((ctx) => readBatch(ctx, f.org.id, { section: issues, cursor: null }))
+    expect(batch.retry).toBeUndefined()
+    expect(batch.rows).toHaveLength(IN_FLIGHT_ISSUES_PAGE_SIZE)
+    // and it says so, for the Deleted items section's rule (storedBatch)
+    expect(batch.in_flight).toBe(true)
   })
 
   it('reads the children of many parents in one query, paging a parent whose children do not fit', async () => {
@@ -1600,6 +1639,38 @@ describe('organization export teardowns', () => {
     vi.advanceTimersByTime(HISTORY_MS + 60_000)
     await t.mutation(internal.orgExport.sweep, {})
     expect(await exportRowsLeft(t, f.org.id)).toBe(0)
+  })
+})
+
+describe("the export's reads inside Convex's limits", () => {
+  /* What one transaction that runs `read` read, with what it answered. */
+  const measured = <R>(t: T, read: (ctx: QueryCtx) => Promise<R>) =>
+    t.run(async (ctx) => {
+      const answer = await read(ctx)
+      const m = await ctx.meta.getTransactionMetrics()
+      return {
+        answer,
+        ranges: m.databaseQueries.used,
+        documents: m.documentsRead.used,
+        mib: Math.round((m.bytesRead.used / 1024 / 1024) * 1000) / 1000,
+        answer_kib: Math.round(JSON.stringify(answer).length / 1024),
+      }
+    })
+
+  it('reads a wide tasks page among 300 open tasks of ordinary text whole', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    for (let i = 0; i < 300; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const read = await measured(t, (ctx) =>
+      readBatch(ctx, f.org.id, { section: issues, cursor: null }),
+    )
+    const { answer, ...reads } = read
+    console.info('export: a wide tasks page among 300 open tasks', reads)
+    expect(answer.retry).toBeUndefined()
+    expect(answer.rows).toHaveLength(PAGE_SIZE)
+    expect(read.mib).toBeLessThan(TEXT_ROOM.bytes / 1024 / 1024)
   })
 })
 

@@ -1108,8 +1108,13 @@ export default defineSchema({
         renewal_date: v.union(v.string(), v.null()),
       }),
     ),
-    // The last time an admin's browser finished an export. Qivo cannot see
-    // the file reach disk, so this only decides whether to remind admins.
+    // The last export an admin downloaded, set by the browser export when
+    // its download starts (orgRemovals.ts recordExport). An export job's
+    // archive does not set it, whether only prepared or served by the
+    // /exports/ route, since the backend cannot know that the client
+    // received it; a later app stage records it once the browser confirms
+    // the download. Qivo cannot see the file reach disk, so this only
+    // decides whether to remind admins.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1219,8 +1224,16 @@ export default defineSchema({
   // in bounded steps, keeps a ready archive four hours, then erases it. At
   // most one job per organization is collecting at a time (by_org_state);
   // every admin who asks while it collects joins it (org_export_requests).
-  // An ended job and its request rows stay 30 days as export history.
-  // organizations.last_export_at stays the lasting record of exports.
+  // Any active admin downloads a ready archive through a two-minute link
+  // (orgExport.ts claimDownload, the /exports/ route in http.ts). An ended
+  // job and its request rows stay 30 days as export history.
+  // completed_at says when an archive was prepared and served_at when the
+  // backend first read it whole into a download's response. Neither
+  // preparing nor serving an archive sets organizations.last_export_at, the
+  // record of exports an admin downloaded, which the deletion reminder
+  // reads. Code from before the release of served_at, streams and the
+  // step's Deleted items state does not accept a row that holds one
+  // (docs/deployment.md).
   org_exports: defineTable({
     id: v.string(), // a server uuid
     org_id: v.string(),
@@ -1238,7 +1251,8 @@ export default defineSchema({
     cancelled_by: v.optional(v.string()), // the admin profile that cancelled it
     progress: vExportProgress,
     // where collection stands (lib/orgExport.ts vExportStep), never sent to
-    // a client; one page of parent ids at most, so a few kilobytes
+    // a client; one page of parent ids and at most EXPORT_LIMITS.unsettled
+    // Deleted items ids (model/orgExports.ts), so about 15 KB at most
     step: vExportStep,
     attempts: v.number(), // restarts since the last committed step
     // the next step, erase leg or expiry
@@ -1252,6 +1266,17 @@ export default defineSchema({
     // the last erase leg found more; absent once none is left
     erasing_at: v.optional(v.string()),
     format_version: v.number(), // the archive format (lib/orgExport.ts ORG_EXPORT_FORMAT)
+    // the first time the route served the ready archive whole, its last
+    // byte read into the response by the runtime, which does not wait for
+    // the client (http.ts archiveStream); a refused or damaged download
+    // sets nothing
+    served_at: v.optional(v.string()),
+    // the leases of the downloads running now (model/orgExports.ts
+    // DELIVERY.streams), each until an action's longest run unless its
+    // download releases it first
+    streams: v.optional(v.array(v.object({ id: v.string(), until: v.number() }))),
+    // the last of `streams` to run out, epoch ms; absent with no lease
+    streams_until: v.optional(v.number()),
   })
     .index('by_uuid', ['id'])
     // the organization's collecting job, at most one, and its ready ones
@@ -1265,11 +1290,15 @@ export default defineSchema({
     // ended jobs past their 30 days of history
     .index('by_state_ended', ['state', 'ended_at'])
     // erase legs that stopped
-    .index('by_erasing', ['erasing_at']),
+    .index('by_erasing', ['erasing_at'])
+    // the downloads running on the whole deployment, which the public demo
+    // caps (DELIVERY.demoStreams)
+    .index('by_streaming', ['streams_until']),
 
   // One stored part of an export archive, a ZIP entry of its own: a JSON
-  // array of one table's rows (data/<table>/0001.json and on), the README or
-  // the manifest, each one complete raw DEFLATE stream. The row names its
+  // array of one table's rows (data/<table>/0001.json and on, or
+  // deleted/<table>/0001.json for Deleted items), the README or the
+  // manifest, each one complete raw DEFLATE stream. The row names its
   // file, so the orphan sweeps and attach fences treat it as in use
   // (model/fileHolds.ts storageIdReferenced). A part is a temporary copy,
   // not an upload, so it counts in no upload budget, and every teardown
@@ -1291,14 +1320,19 @@ export default defineSchema({
 
   // An admin who explicitly asked for an export job, one row per admin and
   // job (orgExport.ts request). The job goes on while one of them is still
-  // an active admin. Profile removal deletes the profile's rows
-  // (model/cascade.ts ACCESS_RANGES), so a later profile with a reused id
-  // never inherits one.
+  // an active admin, and each of them gets one automatic download of its
+  // archive (orgExport.ts claimDownload). Profile removal deletes the
+  // profile's rows (model/cascade.ts ACCESS_RANGES), so a later profile
+  // with a reused id never inherits one.
   org_export_requests: defineTable({
     export_id: v.string(),
     org_id: v.string(),
     profile_id: v.string(),
     requested_at: v.string(),
+    // when the admin's page claimed its one automatic download of the
+    // ready archive, however many tabs, devices or reconnects asked; a
+    // claim is a link, not proof of a saved file
+    auto_download_at: v.optional(v.string()),
   })
     .index('by_export_profile', ['export_id', 'profile_id'])
     .index('by_profile', ['profile_id']),
@@ -2156,6 +2190,13 @@ export default defineSchema({
     // rows may be back in the live tables under its stored tasks until then.
     restore_by: v.optional(v.string()),
     dropped_rows: v.optional(v.number()), // rows too large to store, deleted instead
+    // when another item's restore last handed this item stored rows: a
+    // subtask with its rows (model/deletedItems.ts splitOff) or a link
+    // (placeLinkBy). An organization export that began before then and
+    // reads the item later calls the item partial, since rows it read
+    // elsewhere or missed can be the item's now (model/orgExportRead.ts
+    // itemStatus). Bookkeeping, which the export leaves out.
+    received_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
     .index('by_target', ['target_id'])

@@ -106,7 +106,14 @@
  * Teardowns that delete an organization's work outright (deleteOrgDeep, an
  * organization's deletion in steps, the public demo's cleanup, the
  * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
- * state the items are in. */
+ * state the items are in.
+ *
+ * The organization export (model/orgExportRead.ts storedBatch) relies on a
+ * row being live or stored, never both, apart from a restoring project
+ * item's grants and team grants between restoreAccess and restoreGrants,
+ * and on a split moving stored rows to another item by item_id alone,
+ * leaving their table, organization and owner as they are; a change to the
+ * moves must keep both. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { compareValues } from 'convex/values'
@@ -2381,6 +2388,10 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
     holder !== null && holder.state !== 'purging' && holder.org_id === run.item.org_id
       ? holder
       : null
+  // the rows coming in may sit where an organization export already read,
+  // so one that began before now and reads `into` later calls it partial
+  // (received_at)
+  if (into !== null) await noteReceived(run, into)
   // a description row the move left, whose text the stored copy keeps
   if (!(await dropDescriptions(run, task.task_id))) return false
   for (const relation of TASK_ROWS) {
@@ -2434,6 +2445,19 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
   })
   await countInto(run.ctx, into, task)
   return true
+}
+
+/** Records on item `into` that `run`'s restore hands it stored rows now
+ * (received_at), once a step. An organization export that began before
+ * then and reads `into` later calls it partial (model/orgExportRead.ts
+ * itemStatus), because those rows keep their place in deleted_rows only
+ * when a split moves them (item_id), and a link that moves changes
+ * owner_id too, so the export can have read them under the item that held
+ * them, or not at all. */
+async function noteReceived(run: Run, into: Item): Promise<void> {
+  const fresh = await run.ctx.db.get(into._id)
+  if (fresh !== null && fresh.received_at !== run.now)
+    await run.ctx.db.patch(into._id, { received_at: run.now })
 }
 
 /** Takes subtask `task` out of the counts of the item restoring it: from
@@ -2725,8 +2749,12 @@ async function placeLinkBy(
     )
       away ??= { item: where.item, end }
   }
-  if (away !== null)
+  if (away !== null) {
+    // the link moves to another owner in deleted_rows' by_table_org_owner,
+    // possibly behind an organization export's cursor (received_at)
+    await noteReceived(run, away.item)
     return await run.ctx.db.patch(row._id, { item_id: away.item.id, owner_id: away.end })
+  }
   const taken = await run.ctx.db
     .query('issue_links')
     .withIndex('by_pair', (q) => q.eq('pair_key', link.pair_key))
