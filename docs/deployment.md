@@ -716,7 +716,7 @@ the rest.
 The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119
 (v0.1.120). No app of that release calls them, so it sets no floor of its
-own. The app reads them from the release after v0.1.135, whose paragraph
+own. The app reads them from the release after v0.1.136, whose paragraph
 below makes v0.1.125, which holds them, the backend's floor. The Board's filter read moved into
 `convex/lib/viewFilters.ts` with `tasks.board`'s answers unchanged. There
 is no schema change, no backfill and no release step.
@@ -784,7 +784,7 @@ spend the call's room, so an owner can come back `not_read` sooner and the
 cache asks for it again in a call of its own. `planning.assigneeLoad`, the
 REST and MCP workload pages and delays and the Overview ask nothing about
 paused tasks' projects or subtasks, and read and answer as before. The app
-reads the fields from the release after v0.1.135, whose paragraph below
+reads the fields from the release after v0.1.136, whose paragraph below
 makes this release (v0.1.125) the backend's floor. There is no schema
 change and no backfill.
 
@@ -1062,7 +1062,8 @@ task first, and `teamSync.lastComments` keeps its arguments. Such an app
 reads the older `syncScope` key, which this release no longer writes, so
 it opens the scope it last saved. The release changes no server function
 and needs no step.
-From the release after v0.1.135, the app's Roadmap, the phone's agenda and
+
+From the release after v0.1.136, the app's Roadmap, the phone's agenda and
 landscape timeline read which tasks they show from `tasks.roadmap` and their
 dependency arrows and Auto-move from `tasks.roadmapDependencies`, which
 v0.1.120 (`c9a0a748`) first shipped, and Team utilization and the planning
