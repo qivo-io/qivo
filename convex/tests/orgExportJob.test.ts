@@ -19,12 +19,14 @@ import { TEXT_MAX } from '../lib/limits'
 import {
   archiveRow,
   exportName,
+  JOB_ORDER,
   LIVE_READ_WARNING,
   ORG_EXPORT_ORDER,
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   type OrgExportRow,
   type OrgExportSection,
+  partEntry,
   ZIP_END_BYTES,
   zipEntryBytes,
 } from '../lib/orgExport'
@@ -278,10 +280,23 @@ const plantExport = (t: T, orgId: string, profileId: string, parts = 3) =>
       progress_at: NOW,
       completed_at: NOW,
       expires_at: new Date(Date.now() + ARCHIVE_TTL_MS).toISOString(),
-      progress: { section: '', records: 0, sections_done: 16, sections_total: 16 },
-      step: { n: 1, section: 16, cursor: null, part: 1, seq: 2, bytes: 0, counts: {} },
+      progress: {
+        section: '',
+        records: 0,
+        sections_done: JOB_ORDER.length,
+        sections_total: JOB_ORDER.length,
+      },
+      step: {
+        n: 1,
+        section: JOB_ORDER.length,
+        cursor: null,
+        part: 1,
+        seq: 2,
+        bytes: 0,
+        counts: {},
+      },
       attempts: 0,
-      format_version: 3,
+      format_version: 4,
     })
     const files: Id<'_storage'>[] = []
     for (let seq = 0; seq < parts; seq++) {
@@ -326,12 +341,16 @@ describe('organization export job', () => {
     const planted = await plantWork(t, f)
     const exportId = await exportAs(t, f.admin, f.org.id)
     const job = await jobOf(t, exportId)
-    expect(job).toMatchObject({ state: 'ready', format_version: 3, attempts: 0, skipped: 0 })
+    expect(job).toMatchObject({ state: 'ready', format_version: 4, attempts: 0, skipped: 0 })
     if (job === null || job.archive === undefined) throw new Error('the job is not ready')
     expect(job.expires_at).toBe(
       new Date(Date.parse(job.completed_at ?? '') + ARCHIVE_TTL_MS).toISOString(),
     )
-    expect(job.progress).toMatchObject({ section: '', sections_done: 16, sections_total: 16 })
+    expect(job.progress).toMatchObject({
+      section: '',
+      sections_done: JOB_ORDER.length,
+      sections_total: JOB_ORDER.length,
+    })
 
     const archive = await archiveOf(t, exportId)
     // the README and the manifest first, then each table's files in order
@@ -344,9 +363,15 @@ describe('organization export job', () => {
     expect(archive.zip.length).toBe(job.archive.bytes)
     expect(job.archive.parts).toBe(archive.parts.length)
 
-    // exactly the rows the browser export reads, with the archive's names
+    // exactly the rows the browser export reads, with the archive's names,
+    // and an empty Deleted items section after them
     const expected = await pagedRows(t, f.admin, f.org.id)
-    expect(Object.keys(archive.tables)).toEqual(Object.keys(expected))
+    expect(Object.keys(archive.tables)).toEqual(JOB_ORDER.map((section) => section.key))
+    expect(Object.keys(archive.tables).filter((key) => !key.startsWith('deleted/'))).toEqual(
+      Object.keys(expected),
+    )
+    for (const key of Object.keys(archive.tables).filter((key) => key.startsWith('deleted/')))
+      expect(archive.tables[key], key).toEqual([])
     for (const [name, rows] of Object.entries(expected))
       expect(archive.tables[name], name).toEqual(rows)
     expect(archive.tables.tasks.find((row) => row.id === planted.task.id)).toMatchObject({
@@ -361,9 +386,20 @@ describe('organization export job', () => {
 
     // the manifest counts what the files hold and claims no file inside
     for (const [name, rows] of Object.entries(archive.tables))
-      expect(archive.manifest.tables[name].records, name).toBe(rows.length)
+      expect(
+        (name.startsWith('deleted/')
+          ? archive.manifest.deleted_items?.tables
+          : archive.manifest.tables)?.[name].records,
+        name,
+      ).toBe(rows.length)
+    expect(Object.keys(archive.manifest.tables)).toEqual(Object.keys(expected))
+    expect(archive.manifest.deleted_items).toMatchObject({
+      items: { complete: 0, partial: 0 },
+      left_out: {},
+      tables: { 'deleted/items': { files: ['deleted/items/0001.json'], records: 0 } },
+    })
     expect(archive.manifest).toMatchObject({
-      version: 3,
+      version: 4,
       consistency: 'live_read',
       consistency_note: LIVE_READ_WARNING,
       file_contents_included: false,
@@ -375,7 +411,10 @@ describe('organization export job', () => {
     expect(archive.manifest.exclusions.join(' ')).toMatch(/Attachment file contents/)
     expect(archive.readme).toContain(LIVE_READ_WARNING)
     expect(archive.readme).toMatch(/no import or restore/)
-    expect(archive.readme).toMatch(/Deleted items are not included yet/)
+    expect(archive.readme).toMatch(/^Qivo organization export, format version 4/)
+    expect(archive.readme).toMatch(/Deleted items are in their own folder, deleted\//)
+    expect(archive.readme).not.toMatch(/not included yet/)
+    expect(archive.manifest.exclusions.join(' ')).not.toMatch(/restore an item/)
     // each table is read on its own, so a related table may name a task
     // that tasks does not hold, and the archive says so
     expect(archive.readme).toMatch(/Each table is read live on its own/)
@@ -385,7 +424,11 @@ describe('organization export job', () => {
     })
     expect(archive.readme).toMatch(/no attachment contents/)
     // no uploaded file is in the archive
-    expect(archive.parts.filter((part) => !part.entry.startsWith('data/'))).toHaveLength(2)
+    expect(
+      archive.parts.filter(
+        (part) => !part.entry.startsWith('data/') && !part.entry.startsWith('deleted/'),
+      ),
+    ).toHaveLength(2)
 
     // the status names the requester and never sends read state or files
     const status = await as(t, f.admin).query(api.orgExport.status, { org_id: f.org.id })
@@ -973,7 +1016,7 @@ describe('organization export job', () => {
           requested_by: f.admin.id,
           started_at: NOW,
           progress_at: NOW,
-          progress: { section: '', records: 0, sections_done: 0, sections_total: 16 },
+          progress: { section: '', records: 0, sections_done: 0, sections_total: JOB_ORDER.length },
           step: { n: 0, section: 0, cursor: null, part: 1, seq: 2, bytes: 0, counts: {}, ...step },
           attempts: 0,
           format_version: 3,
@@ -992,7 +1035,7 @@ describe('organization export job', () => {
       stored_bytes: 3,
       crc32: 0,
     })
-    const last = ORG_EXPORT_ORDER.length - 1
+    const last = JOB_ORDER.length - 1
     const commit = async (exportId: string) =>
       t.mutation(internal.orgExport.commitPart, {
         export_id: exportId,
@@ -1011,14 +1054,13 @@ describe('organization export job', () => {
 
     // the finish of an archive with that many data parts stays within
     // Convex's 4,096 ranges: every table's first file, the rest tasks
-    const entries = ORG_EXPORT_ORDER.flatMap((section) =>
-      Array.from(
-        { length: section === 'issues' ? EXPORT_LIMITS.parts - last : 1 },
-        (_, i) => `data/${exportName(section)}/${String(i + 1).padStart(4, '0')}.json`,
+    const entries = JOB_ORDER.flatMap((section) =>
+      Array.from({ length: section.key === 'tasks' ? EXPORT_LIMITS.parts - last : 1 }, (_, i) =>
+        partEntry(section.name, i + 1, section.folder),
       ),
     )
     expect(entries).toHaveLength(EXPORT_LIMITS.parts)
-    const full = await plantJob({ n: 7, section: ORG_EXPORT_ORDER.length, seq: entries.length + 2 })
+    const full = await plantJob({ n: 7, section: JOB_ORDER.length, seq: entries.length + 2 })
     for (let from = 0; from < entries.length; from += 500)
       await t.run(async (ctx) => {
         for (const [i, entry] of entries.slice(from, from + 500).entries())

@@ -106,7 +106,14 @@
  * Teardowns that delete an organization's work outright (deleteOrgDeep, an
  * organization's deletion in steps, the public demo's cleanup, the
  * Northstar wipe) empty its Deleted items with clearOrgTrash, whatever
- * state the items are in. */
+ * state the items are in.
+ *
+ * The organization export (model/orgExportRead.ts storedBatch) relies on a
+ * row being live or stored, never both, apart from a restoring project
+ * item's grants and team grants between restoreAccess and restoreGrants,
+ * and on a split moving stored rows to another item by item_id alone,
+ * leaving their table, organization and owner as they are; a change to the
+ * moves must keep both. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import { compareValues } from 'convex/values'

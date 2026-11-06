@@ -36,6 +36,16 @@
  * `commitFinish` checks every table's files and publishes the archive with
  * its four hours, scheduling `expire` at their end.
  *
+ * The archive is format 4 (lib/orgExport.ts): the live sections under data/,
+ * then the organization's retained Deleted items under deleted/, each
+ * stored table read on its own and the items last, each item marked
+ * complete or partial with the reason (model/orgExportRead.ts storedBatch,
+ * itemsBatch). The step keeps when each live section ended, the items seen
+ * changing (at most EXPORT_LIMITS.unsettled, past which the job fails with
+ * `deleted_changing`), the stored rows left out and the item tallies, for
+ * the manifest. A job collecting at the deploy of format 4 goes on into
+ * the Deleted items section and finishes as format 4.
+ *
  * The reads are live, not a snapshot of one moment (lib/orgExport.ts
  * LIVE_READ_WARNING). The archive is data only: no step reads an
  * attachment's or a picture's bytes. Any admin may cancel a collecting job;
@@ -101,13 +111,13 @@ import {
   archiveFileName,
   archiveRow,
   archiveTables,
+  type DeletedTally,
   type ExportCursor,
   type ExportStep,
-  exportName,
+  JOB_ORDER,
   JOB_README,
   jobManifest,
   ORG_EXPORT_FORMAT,
-  ORG_EXPORT_ORDER,
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   partEntry,
@@ -118,6 +128,7 @@ import {
 import { demoCanRead } from './model/demoUploads'
 import { eraseFile } from './model/fileHolds'
 import {
+  type BatchJob,
   type ExportBatch,
   exportDocs,
   hasItemInFlight,
@@ -228,10 +239,10 @@ const expireRef = makeFunctionReference<'mutation', { export_id: string }, null>
 /* The progress a job shows while it reads section number `section` (the
  * sections' count once every one is read), with `records` written. */
 const progressOf = (section: number, records: number) => ({
-  section: section < ORG_EXPORT_ORDER.length ? exportName(ORG_EXPORT_ORDER[section]) : '',
+  section: section < JOB_ORDER.length ? JOB_ORDER[section].key : '',
   records,
   sections_done: section,
-  sections_total: ORG_EXPORT_ORDER.length,
+  sections_total: JOB_ORDER.length,
 })
 
 /** Starts the organization's export job, or joins the one collecting, and
@@ -685,17 +696,30 @@ const stepStateRef = makeFunctionReference<
   { org_id: string; started_at: string; step: ExportStep } | null
 >('orgExport:stepState')
 
+/* What a Deleted items section needs of its job (model/orgExportRead.ts
+ * BatchJob). */
+const vBatchJob = v.object({
+  started_at: v.string(),
+  ended: v.record(v.string(), v.string()),
+  unsettled: v.array(v.string()),
+})
+
 /** One bounded read of a job's current section (model/orgExportRead.ts
  * readBatch), for its step; `wide: false` after a wide tasks page answered
- * `retry: 'narrow'`. */
+ * `retry: 'narrow'`, and `job` for a Deleted items section. */
 export const readBatch = internalQuery({
-  args: { org_id: v.string(), at: vExportCursor, wide: v.optional(v.boolean()) },
-  handler: (ctx, { org_id, at, wide }): Promise<ExportBatch> =>
-    readExportBatch(ctx, org_id, at, { wide }),
+  args: {
+    org_id: v.string(),
+    at: vExportCursor,
+    wide: v.optional(v.boolean()),
+    job: v.optional(vBatchJob),
+  },
+  handler: (ctx, { org_id, at, wide, job }): Promise<ExportBatch> =>
+    readExportBatch(ctx, org_id, at, { wide, job }),
 })
 const readBatchRef = makeFunctionReference<
   'query',
-  { org_id: string; at: ExportCursor; wide?: boolean },
+  { org_id: string; at: ExportCursor; wide?: boolean; job?: BatchJob },
   ExportBatch
 >('orgExport:readBatch')
 
@@ -708,6 +732,13 @@ const vStored = v.object({
 })
 type Stored = { storage_id: Id<'_storage'>; raw_bytes: number; stored_bytes: number; crc32: number }
 
+/* What a step of the Deleted items section tallied besides its rows. */
+const vDeletedStep = {
+  unsettled: v.optional(v.array(v.string())),
+  left_out: v.optional(v.number()),
+  items: v.optional(v.object({ complete: v.number(), partial: v.number() })),
+}
+
 const commitPartRef = makeFunctionReference<
   'mutation',
   {
@@ -718,12 +749,16 @@ const commitPartRef = makeFunctionReference<
     records: number
     skipped: number
     part?: Stored
+    unsettled?: string[]
+    left_out?: number
+    items?: { complete: number; partial: number }
   },
   boolean
 >('orgExport:commitPart')
 
 /** What the finish reads to write the manifest: the organization, the
- * skipped tasks and every part in archive order. */
+ * skipped tasks, the Deleted items tallies and every part in archive
+ * order. */
 export const finishInfo = internalQuery({
   args: { export_id: v.string() },
   handler: async (ctx, { export_id }) => {
@@ -731,10 +766,15 @@ export const finishInfo = internalQuery({
     if (job === null || job.state !== 'collecting') return null
     const org = await byId(ctx, 'organizations', job.org_id)
     const parts = await partsOf(ctx, export_id).take(EXPORT_LIMITS.parts + 1)
+    const deleted: DeletedTally = {
+      items: job.step.items ?? { complete: 0, partial: 0 },
+      left_out: job.step.left_out ?? {},
+    }
     return {
       organization:
         org === null ? { id: job.org_id } : { id: org.id, name: org.name, slug: org.slug },
       skipped: job.skipped ?? 0,
+      deleted,
       parts: parts.map(({ entry, kind, records }) => ({ entry, kind, records })),
     }
   },
@@ -745,6 +785,7 @@ const finishInfoRef = makeFunctionReference<
   {
     organization: { id: string; name?: string; slug?: string }
     skipped: number
+    deleted: DeletedTally
     parts: { entry: string; kind: string; records: number }[]
   } | null
 >('orgExport:finishInfo')
@@ -798,6 +839,7 @@ async function finish(
     completed_at: new Date().toISOString(),
     tables: archiveTables(info.parts) ?? {},
     skipped_tasks: info.skipped,
+    deleted: info.deleted,
   })
   const readme = await store(ctx, encoder.encode(JOB_README))
   const listed = await store(ctx, encoder.encode(manifest))
@@ -824,16 +866,33 @@ async function finish(
  * a page for the rest of the step, so a run of long texts costs one wasted
  * read a step rather than one every six tasks, and the next step tries
  * wide pages again. Whether to read narrow lives in the step's memory, not
- * in the stored read state. */
+ * in the stored read state.
+ *
+ * A Deleted items section's step passes each read the job's start, its
+ * live sections' ends and its unsettled items, and gathers the items each
+ * read saw changing, the stored rows it left out and the items it called
+ * complete or partial for its commit. It stops reading once the unsettled
+ * items pass EXPORT_LIMITS.unsettled, and the commit then fails the job. */
 export const step = internalAction({
   args: { export_id: v.string() },
   handler: async (ctx, { export_id }): Promise<null> => {
     const job = await ctx.runQuery(stepStateRef, { export_id })
     if (job === null) return null
-    if (job.step.section >= ORG_EXPORT_ORDER.length) {
+    if (job.step.section >= JOB_ORDER.length) {
       await finish(ctx, export_id, job)
       return null
     }
+    const deleted = JOB_ORDER[job.step.section].folder === 'deleted'
+    const known = job.step.unsettled ?? []
+    const batchJob: BatchJob = {
+      started_at: job.started_at,
+      ended: job.step.ended ?? {},
+      unsettled: known,
+    }
+    // the items this step saw changing that the job did not know yet
+    const unsettled = new Set<string>()
+    let leftOut = 0
+    const items = { complete: 0, partial: 0 }
     const encoder = new TextEncoder()
     let at: ExportCursor = {
       section: job.step.section,
@@ -851,11 +910,16 @@ export const step = internalAction({
         org_id: job.org_id,
         at,
         ...(wide ? {} : { wide: false }),
+        ...(deleted ? { job: batchJob } : {}),
       })
       if (batch.retry === 'narrow') {
         wide = false
         continue
       }
+      for (const id of batch.unsettled ?? []) if (!known.includes(id)) unsettled.add(id)
+      leftOut += batch.left_out ?? 0
+      items.complete += batch.items?.complete ?? 0
+      items.partial += batch.items?.partial ?? 0
       if (batch.rows.length > 0) {
         const text = batch.rows.map((row) => JSON.stringify(archiveRow(row))).join(',\n')
         const bytes = encoder.encode(records > 0 ? `,\n${text}` : text)
@@ -866,6 +930,8 @@ export const step = internalAction({
       at = batch.at
       done = batch.done
       skipped += batch.skipped
+      // the commit fails the job past the cap, so reading on is wasted
+      if (known.length + unsettled.size > EXPORT_LIMITS.unsettled) break
     }
     // A section's first file is written even when the section is empty.
     const part =
@@ -880,6 +946,7 @@ export const step = internalAction({
       records,
       skipped,
       ...(part === undefined ? {} : { part }),
+      ...(deleted ? { unsettled: [...unsettled], left_out: leftOut, items } : {}),
     })
     if (!committed && part !== undefined) await ctx.storage.delete(part.storage_id)
     return null
@@ -889,9 +956,13 @@ export const step = internalAction({
 /** Commits one step's part and read state, and schedules the next step.
  * Answers false, changing nothing, when the job is not collecting, another
  * commit took this step or the part's file is gone. Ends the job as failed
- * and answers false when it must stop (model/orgExports.ts stopReason) or
- * the part would take the archive past its cap (archiveCap) or its data
- * parts past EXPORT_LIMITS.parts. */
+ * and answers false when it must stop (model/orgExports.ts stopReason), the
+ * part would take the archive past its cap (archiveCap) or its data parts
+ * past EXPORT_LIMITS.parts, or the Deleted items seen changing pass
+ * EXPORT_LIMITS.unsettled (`deleted_changing`), since past that the items
+ * section could not tell which items to call partial. It records when a
+ * live section's read ended (step.ended), and adds a Deleted items step's
+ * unsettled items, left-out rows and item tallies to the step. */
 export const commitPart = internalMutation({
   args: {
     export_id: v.string(),
@@ -901,11 +972,12 @@ export const commitPart = internalMutation({
     records: v.number(),
     skipped: v.number(),
     part: v.optional(vStored),
+    ...vDeletedStep,
   },
   handler: async (ctx, a): Promise<boolean> => {
     const job = await exportOf(ctx, a.export_id)
     if (job === null || job.state !== 'collecting' || job.step.n !== a.n) return false
-    const section = ORG_EXPORT_ORDER[job.step.section]
+    const section = JOB_ORDER[job.step.section]
     if (section === undefined || a.at.section !== job.step.section) return false
     if (a.part !== undefined && (await ctx.db.system.get(a.part.storage_id)) === null) return false
     const stop = await stopReason(ctx, job)
@@ -913,10 +985,15 @@ export const commitPart = internalMutation({
       await endJob(ctx, job, { state: 'failed', code: stop })
       return false
     }
-    const name = exportName(section)
+    const unsettled = [...new Set([...(job.step.unsettled ?? []), ...(a.unsettled ?? [])])]
+    if (unsettled.length > EXPORT_LIMITS.unsettled) {
+      await endJob(ctx, job, { state: 'failed', code: 'deleted_changing' })
+      return false
+    }
+    const name = section.key
     let { part, seq, bytes } = job.step
     if (a.part !== undefined) {
-      const entry = partEntry(name, part)
+      const entry = partEntry(section.name, part, section.folder)
       bytes += a.part.stored_bytes + zipEntryBytes(entry)
       // data parts start at seq 2, so this is data part seq - 1
       if (bytes + ZIP_END_BYTES > archiveCap() || seq - 1 > EXPORT_LIMITS.parts) {
@@ -936,23 +1013,44 @@ export const commitPart = internalMutation({
       seq += 1
     }
     const counts = { ...job.step.counts, [name]: (job.step.counts[name] ?? 0) + a.records }
+    const now = new Date().toISOString()
+    const ended =
+      section.kind === 'live' && a.done ? { ...job.step.ended, [name]: now } : job.step.ended
+    const leftOut = a.left_out
+      ? { ...job.step.left_out, [name]: (job.step.left_out?.[name] ?? 0) + a.left_out }
+      : job.step.left_out
+    const items =
+      a.items === undefined
+        ? job.step.items
+        : {
+            complete: (job.step.items?.complete ?? 0) + a.items.complete,
+            partial: (job.step.items?.partial ?? 0) + a.items.partial,
+          }
+    // what every step after this one keeps
+    const kept = {
+      seq,
+      bytes,
+      counts,
+      ...(ended === undefined ? {} : { ended }),
+      ...(unsettled.length === 0 ? {} : { unsettled }),
+      ...(leftOut === undefined ? {} : { left_out: leftOut }),
+      ...(items === undefined ? {} : { items }),
+    }
     const next: ExportStep = a.done
-      ? { n: a.n + 1, section: job.step.section + 1, cursor: null, part: 1, seq, bytes, counts }
+      ? { n: a.n + 1, section: job.step.section + 1, cursor: null, part: 1, ...kept }
       : {
           n: a.n + 1,
           section: job.step.section,
           cursor: a.at.cursor,
           ...(a.at.parents === undefined ? {} : { parents: a.at.parents }),
           part,
-          seq,
-          bytes,
-          counts,
+          ...kept,
         }
     const scheduled_id = await ctx.scheduler.runAfter(0, stepRef, { export_id: job.id })
     await ctx.db.patch(job._id, {
       step: next,
       progress: progressOf(next.section, job.progress.records + a.records),
-      progress_at: new Date().toISOString(),
+      progress_at: now,
       attempts: 0,
       scheduled_id,
       skipped: (job.skipped ?? 0) + a.skipped,
@@ -979,7 +1077,7 @@ export const commitFinish = internalMutation({
       job === null ||
       job.state !== 'collecting' ||
       job.step.n !== a.n ||
-      job.step.section < ORG_EXPORT_ORDER.length
+      job.step.section < JOB_ORDER.length
     )
       return false
     for (const file of [a.readme, a.manifest])
@@ -1034,6 +1132,9 @@ export const commitFinish = internalMutation({
     const scheduled_id = await ctx.scheduler.runAt(expires, expireRef, { export_id: job.id })
     await ctx.db.patch(job._id, {
       state: 'ready',
+      // a job that was collecting at the deploy of format 4 read the
+      // Deleted items section too, so its archive is format 4
+      format_version: ORG_EXPORT_FORMAT,
       step: { ...job.step, n: a.n + 1 },
       progress_at: new Date(now).toISOString(),
       completed_at: new Date(now).toISOString(),

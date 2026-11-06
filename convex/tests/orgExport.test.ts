@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { DeletedItemState } from '../lib/enums'
+import { STORED_TABLES } from '../lib/enums'
 import {
+  DELETED_SECTIONS,
+  exportName,
   ORG_EXPORT_SECTIONS,
   type OrgExportPage,
   type OrgExportRow,
@@ -182,13 +185,79 @@ const EXCLUDED_TABLES = [
   'overview_tasks',
   'overview_count_runs',
   'overview_regroups',
-  // Deleted items are not exported: restore an item to include its work.
-  'deleted_items',
+  // Deleted items' own bookkeeping: the state of a move's, restore's or
+  // purge's steps, and the parents a restore waits for.
   'deleted_item_jobs',
   'deleted_item_parents',
-  'deleted_rows',
+  // One light row per stored task for search and counts: copies of the
+  // stored task in deleted/tasks and of its item in deleted/items, keys and
+  // search copies (DELETED_TASKS_FIELDS).
   'deleted_tasks',
 ] as const
+
+/* The tables the export job's Deleted items section reads under other
+ * names (lib/orgExport.ts DELETED_SECTIONS): the stored rows, table by
+ * table into deleted/<table>, and the items into deleted/items. */
+const DELETED_ITEMS_TABLES = ['deleted_items', 'deleted_rows'] as const
+
+/* How the archive treats each field of deleted_items (deleted/items). */
+const DELETED_ITEMS_FIELDS: Record<string, string> = {
+  id: 'as stored',
+  org_id: 'as stored',
+  kind: 'as stored',
+  target_id: 'as stored',
+  num: 'as stored',
+  name: 'as stored',
+  key: 'as stored',
+  status: 'as stored',
+  archived: 'as stored',
+  project_id: 'as stored',
+  parent_project_id: 'as stored',
+  path: 'as stored',
+  projects: 'as stored',
+  counts: 'as stored',
+  deleted_at: 'as stored',
+  deleted_by: 'as stored',
+  reason: 'as stored',
+  state: 'as stored',
+  dropped_rows: 'as stored',
+  via: "the credential's table, with an agent key's id and name; personal credentials stay out",
+  purge_after: 'as purge_at, the same moment as an ISO time',
+  restore_by: "left out, a restore's own state",
+}
+
+/* How the archive treats each field of deleted_rows' envelope. */
+const DELETED_ROWS_FIELDS: Record<string, string> = {
+  item_id: 'as deleted_item_id on the record',
+  org_id: "a copy of the organization's id, checked",
+  table: 'the folder under deleted/',
+  row: "the record, with its live table's fields left out",
+  owner_id: 'left out, an index copy',
+  row_id: "left out, a copy of the record's id",
+  created_ts: 'left out, a creation time',
+  storage_id: "left out, a copy of the attachment's file",
+  project_key: "left out, a copy of the project's key",
+  lead_id: "left out, a copy of the project's lead",
+  grantee: "left out, a copy of the grant's profile or team",
+}
+
+/* Why the archive leaves out each field of deleted_tasks. */
+const DELETED_TASKS_FIELDS: Record<string, string> = {
+  org_id: 'a key',
+  item_id: 'a key',
+  task_id: 'a key',
+  num: 'a copy of the stored task in deleted/tasks',
+  title: 'a copy of the stored task in deleted/tasks',
+  project_id: 'a copy of the stored task in deleted/tasks',
+  archived: 'a copy of the stored task in deleted/tasks',
+  assignee_id: 'a copy of the stored task in deleted/tasks',
+  deleted_at: 'a copy of the item in deleted/items',
+  deleted_by: 'a copy of the item in deleted/items',
+  item_project_id: 'a copy of the item in deleted/items',
+  item_parent_id: 'a copy of the item in deleted/items',
+  cross_project_id: "a lead's search shortcut",
+  search_text: 'a search copy, like a name key',
+}
 
 async function readAll(
   caller: ReturnType<T['withIdentity']>,
@@ -250,13 +319,32 @@ const plantProjectItem = (t: T, project: Doc<'projects'>, state: DeletedItemStat
 describe('organization export', () => {
   it('classifies every schema table, with parent tables visited first', () => {
     const sections = Object.keys(ORG_EXPORT_SECTIONS)
-    const classified = [...sections, ...EXCLUDED_TABLES]
+    const classified = [...sections, ...DELETED_ITEMS_TABLES, ...EXCLUDED_TABLES]
     expect(new Set(classified).size).toBe(classified.length)
     expect(classified.sort()).toEqual(Object.keys(schema.tables).sort())
     for (const [index, section] of sections.entries()) {
       const parent = ORG_EXPORT_SECTIONS[section as OrgExportSection]
       if (parent !== null) expect(sections.indexOf(parent)).toBeLessThan(index)
     }
+  })
+
+  it('classifies every field of the Deleted items tables, and puts each stored table in a folder or leaves it out', () => {
+    const fieldsOf = (table: 'deleted_items' | 'deleted_rows' | 'deleted_tasks') =>
+      Object.keys(schema.tables[table].validator.fields).sort()
+    expect(Object.keys(DELETED_ITEMS_FIELDS).sort()).toEqual(fieldsOf('deleted_items'))
+    expect(Object.keys(DELETED_ROWS_FIELDS).sort()).toEqual(fieldsOf('deleted_rows'))
+    expect(Object.keys(DELETED_TASKS_FIELDS).sort()).toEqual(fieldsOf('deleted_tasks'))
+    // every stored table has its folder, apart from personal follows
+    const read = DELETED_SECTIONS.map((section) => section.table as string)
+    for (const table of STORED_TABLES)
+      expect(read.includes(table) || table === 'issue_subscriptions', table).toBe(true)
+    expect(read).not.toContain('issue_subscriptions')
+    expect(read.filter((table) => !(STORED_TABLES as readonly string[]).includes(table))).toEqual([
+      'deleted_items',
+    ])
+    // each folder keeps the archive name of the live table it mirrors
+    for (const section of DELETED_SECTIONS)
+      if (section.table !== 'deleted_items') expect(section.name).toBe(exportName(section.table))
   })
 
   it('requires an active admin in the requested organization on every page', async () => {

@@ -2,11 +2,14 @@
  * and the export job's readBatch (orgExport.ts) share. Every read is
  * bounded and scoped to one organization; an export spanning many reads is
  * a live traversal, not an atomic database backup. Archived rows and the
- * entire retained activity history are included. Deleted items are not:
- * their rows left the live tables, and a task still in issues under a
- * project that is moving to or back from Deleted items (model/deletedItems.ts)
- * is skipped, with its comments, labels, links and attachments, and a live
- * task's reference to it as a parent is left out. Only a deleted item that
+ * entire retained activity history are included. The live sections leave
+ * Deleted items out: their rows left the live tables, and a task still in
+ * issues under a project that is moving to or back from Deleted items
+ * (model/deletedItems.ts) is skipped, with its comments, labels, links and
+ * attachments, and a live task's reference to it as a parent is left out.
+ * The job reads the retained Deleted items afterwards in a section of
+ * their own (storedBatch and itemsBatch at the end of this file); the
+ * browser export's `page` never does. Only a deleted item that
  * is not ready leaves tasks in issues under an absent project, so the
  * issues section reads each task's parent only while the organization has
  * one, on a smaller page still. Each task's text comes from its description
@@ -29,12 +32,16 @@ import { notFound } from '../lib/functions'
 import { MIB } from '../lib/limits'
 import {
   type ExportCursor,
+  type ExportedStoredTable,
+  exportName,
+  JOB_ORDER,
   ORG_EXPORT_ORDER,
   ORG_EXPORT_SECTIONS,
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
 import { descriptionOf, descriptionsOf } from './descriptions'
+import { EXPORT_LIMITS } from './orgExports'
 import { countersOf } from './orgs'
 import { stampRow } from './syncStamps'
 
@@ -273,10 +280,16 @@ export function liveChecks(ctx: QueryCtx): LiveChecks {
 }
 
 /** `doc` as an export sends it, without the fields that are not portable
- * organization data. */
-export function exportRow(doc: Doc<OrgExportSection>, section: OrgExportSection): OrgExportRow {
-  const { _id, _creationTime, ...fields } = doc
-  const row: OrgExportRow = { ...fields }
+ * organization data: a live document of `section`, or a stored one of the
+ * same table (Deleted items), which leaves out the same fields. */
+export function exportRow(
+  doc: Doc<OrgExportSection> | Doc<'deleted_rows'>['row']['doc'],
+  section: OrgExportSection,
+): OrgExportRow {
+  const row: OrgExportRow = { ...doc }
+  // Convex's document ids and creation times are not application data.
+  delete row._id
+  delete row._creationTime
   // Login identifiers and credential hashes are not portable organization data.
   delete row.auth_user_id
   delete row.message_retention_days
@@ -386,11 +399,17 @@ export type ExportBatch = {
   done: boolean
   skipped: number
   retry?: 'narrow'
+  // a Deleted items batch: the items seen changing (storedBatch), the
+  // stored rows it left out, and the items it called complete and partial
+  unsettled?: string[]
+  left_out?: number
+  items?: { complete: number; partial: number }
 }
 
 /** How readBatch reads: `wide: false` reads the tasks section six a page
- * (ISSUES_PAGE_SIZE) instead of 100 with their texts under TEXT_ROOM. */
-export type BatchOptions = { wide?: boolean }
+ * (ISSUES_PAGE_SIZE) instead of 100 with their texts under TEXT_ROOM, and
+ * `job` is what the Deleted items sections need of the job (BatchJob). */
+export type BatchOptions = { wide?: boolean; job?: BatchJob }
 
 /* Whether readBatch may start another read: under PAGE_BYTES read so far
  * and under half of each of Convex's other limits for one transaction. */
@@ -463,7 +482,9 @@ async function parentPage(
 
 /**
  * One bounded read of the export job's current section in organization
- * `orgId`, from `from` on. The organizations section is one row. A
+ * `orgId`, from `from` on. A Deleted items section reads one page of its
+ * stored table or of the items (storedBatch, itemsBatch), with what it
+ * needs of the job in `opts.job`. The organizations section is one row. A
  * top-level section reads one page. A child section reads the next page of
  * parent ids when it needs one, pages the first parent's children from the
  * cursor, and then reads the children of the next parents of the page
@@ -506,8 +527,15 @@ export async function readBatch(
   from: ExportCursor,
   opts: BatchOptions = {},
 ): Promise<ExportBatch> {
-  const section = ORG_EXPORT_ORDER[from.section]
-  if (section === undefined) throw new Error(`no export section ${from.section}`)
+  const entry = JOB_ORDER[from.section]
+  if (entry === undefined) throw new Error(`no export section ${from.section}`)
+  if (entry.kind !== 'live') {
+    if (opts.job === undefined) throw new Error(`export section ${entry.key} needs its job`)
+    return entry.kind === 'stored'
+      ? await storedBatch(ctx, orgId, entry.table, from, opts.job)
+      : await itemsBatch(ctx, orgId, from, opts.job)
+  }
+  const section = entry.section
   const at = (cursor: string | null, parents?: ExportCursor['parents']): ExportCursor => ({
     section: from.section,
     cursor,
@@ -609,4 +637,334 @@ export async function readBatch(
     cursor = null
   }
   return { rows, at: at(cursor, parents), done: false, skipped }
+}
+
+/* ---------------------------------------------- the Deleted items section
+ * The job's last ten sections (lib/orgExport.ts DELETED_SECTIONS) read the
+ * organization's retained Deleted items under the export's exception for
+ * the whole organization (owner, 25 October 2026), whatever an admin's
+ * role reads on the Deleted items page. Each stored table is read on its
+ * own from deleted_rows by table and organization (by_table_org_owner) with
+ * one cursor, every row's item read once a batch, so a row is read once
+ * whichever item holds it then: a restore's split that moves a subtask's
+ * rows to another item (model/deletedItems.ts splitOff) patches item_id
+ * and leaves them where they are in that index. Only a link a reveal hands
+ * to another item (placeLinkBy) changes owner_id, and can then be read
+ * twice or missed, which the README says. The items come last
+ * (`itemsBatch`), each with how much of it the archive holds. */
+
+/** What a Deleted items batch knows of its job: when collection started,
+ * when each live section's read ended (step.ended) and the items seen
+ * changing so far (step.unsettled). */
+export type BatchJob = { started_at: string; ended: Record<string, string>; unsettled: string[] }
+
+/* The stored tables whose check reads another document a row, read
+ * JOINED_PAGE_SIZE a page as the live joined sections are. */
+const STORED_JOINED: ReadonlySet<ExportedStoredTable> = new Set([
+  'issue_labels',
+  'issue_links',
+  'project_access',
+  'project_team_access',
+])
+
+/* The item fields the section's rules read. */
+type ItemView = Pick<
+  Doc<'deleted_items'>,
+  'id' | 'org_id' | 'kind' | 'target_id' | 'state' | 'deleted_at'
+>
+
+/** The Deleted items of organization `orgId` that are moving or restoring
+ * now, whose records are on both sides, at most EXPORT_LIMITS.unsettled + 1
+ * of them in two index ranges: the ids a batch adds to the job's unsettled
+ * items, so the items section never calls one complete, also when the
+ * batch finds none of its rows (D3). A stuck item is partial by its own
+ * state, and a purging one cannot come back. */
+export async function itemsInFlight(ctx: QueryCtx, orgId: string): Promise<string[]> {
+  const ids: string[] = []
+  for (const state of ['moving', 'restoring'] as const) {
+    const left = EXPORT_LIMITS.unsettled + 1 - ids.length
+    if (left <= 0) break
+    const items = await ctx.db
+      .query('deleted_items')
+      .withIndex('by_org_state', (q) => q.eq('org_id', orgId).eq('state', state))
+      .take(left)
+    for (const item of items) ids.push(item.id)
+  }
+  return ids
+}
+
+/** Whether the Deleted items section exports the stored rows of `item`,
+ * an item of the organization: one that is not purging (being deleted for
+ * good) and has not been restored. A row is in its live table
+ * or in deleted_rows, never both, apart from a restoring project item's
+ * grants and team grants, which go back to the live tables before its
+ * reveal (model/deletedItems.ts restoreAccess) and leave deleted_rows only
+ * after it (restoreGrants). Before the reveal the live copies name absent
+ * projects, which the live sections never reach; after it the projects are
+ * live and the stored copies are left, so a restoring project item whose
+ * root project is live again exports none of its stored rows (one project
+ * read, of at most lib/limits.ts PROJECT_ROW_MAX_BYTES). A task item's
+ * reveal writes its tasks back and moves or deletes every stored row of it
+ * in one transaction, so a restoring task item's stored rows are its own
+ * and are read without a root check. `projectLive` reads each project once
+ * a batch. */
+async function itemReads(
+  item: ItemView,
+  projectLive: (id: string) => Promise<boolean>,
+): Promise<boolean> {
+  if (item.state === 'purging') return false
+  return !(
+    item.state === 'restoring' &&
+    item.kind === 'project' &&
+    (await projectLive(item.target_id))
+  )
+}
+
+/** Whether task `id` belongs to organization `orgId`, live or stored: its
+ * issues row, else its deleted_tasks row (one light row per stored task,
+ * schema.ts), never its stored document, which can hold a text near
+ * Convex's document limit. */
+async function taskOfOrg(ctx: QueryCtx, id: string, orgId: string): Promise<boolean> {
+  const live = await byId(ctx, 'issues', id)
+  if (live !== null) return live.org_id === orgId
+  const stored = await ctx.db
+    .query('deleted_tasks')
+    .withIndex('by_task', (q) => q.eq('task_id', id))
+    .first()
+  return stored?.org_id === orgId
+}
+
+/* Whether stored row `stored` of `table` keeps its second endpoint in
+ * organization `orgId`, as the live sections check it (hasOwnedEndpoint).
+ * A stored link travels with the task that moved first (owner_id), so its
+ * other end is the one that is not the owner, a live or stored task of the
+ * organization (taskOfOrg); a link whose owner is neither end fails. One
+ * read a row, two for a link whose other end is stored. */
+async function storedEndOwned(
+  ctx: QueryCtx,
+  stored: Doc<'deleted_rows'>,
+  orgId: string,
+): Promise<boolean> {
+  const { row } = stored
+  switch (row.table) {
+    case 'issue_links': {
+      const other =
+        row.doc.source_id === stored.owner_id
+          ? row.doc.target_id
+          : row.doc.target_id === stored.owner_id
+            ? row.doc.source_id
+            : null
+      return other !== null && (await taskOfOrg(ctx, other, orgId))
+    }
+    case 'issue_labels':
+      return (await byId(ctx, 'labels', row.doc.label_id))?.org_id === orgId
+    case 'project_access':
+      return (await byId(ctx, 'profiles', row.doc.profile_id))?.org_id === orgId
+    case 'project_team_access':
+      return (await byId(ctx, 'teams', row.doc.team_id))?.org_id === orgId
+    default:
+      return true
+  }
+}
+
+/** One page of the stored rows of `table` in organization `orgId` from
+ * `from`, as the Deleted items section writes them: each document as its
+ * live table's section writes it (exportRow, the same fields left out) with
+ * `deleted_item_id`, a task's text from its stored copy. Per row it reads
+ * the row's item once a batch and skips the rows of an item itemReads
+ * leaves out. It leaves out, and counts in `left_out`, a row whose item is
+ * gone or another organization's, whose document names another
+ * organization, or whose second endpoint is not the organization's
+ * (storedEndOwned). It also leaves out the rows the live sections exported
+ * for certain: a row of an item deleted after its table's live section
+ * ended, which existed before that section began and was stored after it
+ * ended, so it sat in its live table for the whole read (`job.ended`). Every
+ * other row of an item deleted during the export goes out, and the items
+ * section flags that item.
+ *
+ * The answer's `unsettled` names the items whose records may be on both
+ * sides or were stored again while the export ran: every item moving or
+ * restoring now (itemsInFlight), and an item deleted before collection
+ * began with a row stored at or after it, which a failed restore and the
+ * move back leave. One query reads one batch atomically, so an item whose
+ * rows fit in one batch cannot change inside it; an item that left ready
+ * and came back between two batches without either seeing it either
+ * stored rows again, which a later batch counts, or kept the rows a batch
+ * read.
+ *
+ * It reads one page of PAGE_SIZE rows, JOINED_PAGE_SIZE for the joined
+ * tables, within PAGE_BYTES (a stored row is at most
+ * model/deletedItems.ts STORED_ROW_MAX_BYTES), so at most PAGE_BYTES and one
+ * row past them; each row's item, a fixed-size row of a few kilobytes, and
+ * a restoring project item's root project; for a joined table one second
+ * document a row of up to 1 MiB, and a link's stored end's deleted_tasks
+ * row; and the items in flight, at most EXPORT_LIMITS.unsettled + 1 rows
+ * of a few kilobytes. About 2 + 11 + 3 MiB for a page of ten links in the
+ * worst case, under the 16 MiB a query may read. */
+async function storedBatch(
+  ctx: QueryCtx,
+  orgId: string,
+  table: ExportedStoredTable,
+  from: ExportCursor,
+  job: BatchJob,
+): Promise<ExportBatch> {
+  const size = STORED_JOINED.has(table) ? JOINED_PAGE_SIZE : PAGE_SIZE
+  const page = await ctx.db
+    .query('deleted_rows')
+    .withIndex('by_table_org_owner', (q) => q.eq('table', table).eq('org_id', orgId))
+    .paginate({
+      numItems: size,
+      cursor: from.cursor,
+      maximumRowsRead: size,
+      maximumBytesRead: PAGE_BYTES,
+    })
+  const unsettled = new Set(await itemsInFlight(ctx, orgId))
+  const items = new Map<string, Promise<ItemView | null>>()
+  const projects = new Map<string, Promise<boolean>>()
+  const projectLive = (id: string) =>
+    once(projects, id, async () => (await byId(ctx, 'projects', id))?.org_id === orgId)
+  // the live section of this table: it began when the one before it ended
+  const live = ORG_EXPORT_ORDER.indexOf(table)
+  const ended = job.ended[exportName(table)]
+  const began = live === 0 ? job.started_at : job.ended[exportName(ORG_EXPORT_ORDER[live - 1])]
+  const startedMs = Date.parse(job.started_at)
+  const rows: OrgExportRow[] = []
+  let leftOut = 0
+  for (const stored of page.page) {
+    const item = await once(items, stored.item_id, () => byId(ctx, 'deleted_items', stored.item_id))
+    if (item === null || item.org_id !== orgId) {
+      leftOut += 1
+      continue
+    }
+    if (!(await itemReads(item, projectLive))) continue
+    if (item.deleted_at < job.started_at && stored._creationTime >= startedMs)
+      unsettled.add(item.id)
+    if (
+      ended !== undefined &&
+      began !== undefined &&
+      item.deleted_at > ended &&
+      stored.created_ts < Date.parse(began) &&
+      stored._creationTime > Date.parse(ended)
+    )
+      continue
+    const { doc } = stored.row
+    if ('org_id' in doc && doc.org_id !== undefined && doc.org_id !== orgId) {
+      leftOut += 1
+      continue
+    }
+    if (!(await storedEndOwned(ctx, stored, orgId))) {
+      leftOut += 1
+      continue
+    }
+    const row = exportRow(doc, table)
+    if (stored.row.table === 'issues') row.description = stored.row.doc.description ?? ''
+    rows.push({ ...row, deleted_item_id: item.id })
+  }
+  return {
+    rows,
+    at: { section: from.section, cursor: page.isDone ? null : page.continueCursor },
+    done: page.isDone,
+    skipped: 0,
+    unsettled: [...unsettled],
+    left_out: leftOut,
+  }
+}
+
+/** Why an item's records may be missing from the archive, in the order
+ * export_reason takes them when several apply. */
+type ItemReason =
+  | 'purging'
+  | 'restored'
+  | 'moving'
+  | 'restoring'
+  | 'stuck'
+  | 'deleted_during_export'
+  | 'changed_during_export'
+
+/** How much of `item` the archive holds: complete only when it is ready,
+ * was deleted before collection began and is not among the job's
+ * unsettled items, else partial with the first reason that applies:
+ * purging, restored (a restoring project item whose root project is live
+ * again, whose stored rows itemReads left out), its state (moving,
+ * restoring, stuck), deleted during the export, changed during the export.
+ * There is no third value: rows of a purging or restored item read while
+ * it was still ready stay in the archive, so none of them is "not
+ * included". */
+async function itemStatus(
+  item: ItemView,
+  job: BatchJob,
+  unsettled: ReadonlySet<string>,
+  projectLive: (id: string) => Promise<boolean>,
+): Promise<{ complete: boolean; reason?: ItemReason; during: boolean }> {
+  const during = item.deleted_at >= job.started_at
+  const reason: ItemReason | undefined =
+    item.state === 'purging'
+      ? 'purging'
+      : item.state === 'restoring' && item.kind === 'project' && (await projectLive(item.target_id))
+        ? 'restored'
+        : item.state !== 'ready'
+          ? item.state
+          : during
+            ? 'deleted_during_export'
+            : unsettled.has(item.id)
+              ? 'changed_during_export'
+              : undefined
+  return reason === undefined ? { complete: true, during } : { complete: false, reason, during }
+}
+
+/** One page of organization `orgId`'s Deleted items from `from`, newest
+ * last (by_org_deleted), PAGE_SIZE within PAGE_BYTES, each as the archive
+ * writes it: its stored fields with `purge_after` as `purge_at`, an ISO
+ * time, without `restore_by`, a restore's own state, and with `via`
+ * narrowed to the credential's table, keeping an agent key's id and name,
+ * whose metadata the archive holds, and leaving out a personal token's or
+ * connected app's, which the archive leaves out with the personal
+ * credentials (COMMON_EXCLUSIONS); then export_rows, export_reason and
+ * deleted_during_export (itemStatus). The answer tallies complete and
+ * partial items. Reads the page and a restoring project item's root
+ * project, under 3 MiB. */
+async function itemsBatch(
+  ctx: QueryCtx,
+  orgId: string,
+  from: ExportCursor,
+  job: BatchJob,
+): Promise<ExportBatch> {
+  const page = await ctx.db
+    .query('deleted_items')
+    .withIndex('by_org_deleted', (q) => q.eq('org_id', orgId))
+    .paginate({
+      numItems: PAGE_SIZE,
+      cursor: from.cursor,
+      maximumRowsRead: PAGE_SIZE,
+      maximumBytesRead: PAGE_BYTES,
+    })
+  const projects = new Map<string, Promise<boolean>>()
+  const projectLive = (id: string) =>
+    once(projects, id, async () => (await byId(ctx, 'projects', id))?.org_id === orgId)
+  const unsettled = new Set(job.unsettled)
+  const items = { complete: 0, partial: 0 }
+  const rows: OrgExportRow[] = []
+  for (const item of page.page) {
+    const status = await itemStatus(item, job, unsettled, projectLive)
+    const { _id, _creationTime, via, purge_after, restore_by, ...fields } = item
+    rows.push({
+      ...fields,
+      ...(via === undefined
+        ? {}
+        : { via: via.table === 'agent_keys' ? via : { table: via.table } }),
+      purge_at: new Date(purge_after).toISOString(),
+      export_rows: status.complete ? 'complete' : 'partial',
+      ...(status.reason === undefined ? {} : { export_reason: status.reason }),
+      deleted_during_export: status.during,
+    })
+    if (status.complete) items.complete += 1
+    else items.partial += 1
+  }
+  return {
+    rows,
+    at: { section: from.section, cursor: page.isDone ? null : page.continueCursor },
+    done: page.isDone,
+    skipped: 0,
+    items,
+  }
 }
