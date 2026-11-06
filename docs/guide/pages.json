@@ -31,7 +31,7 @@
       "slug": "finding-your-way-around",
       "title": "Finding your way around",
       "order": 4,
-      "description": "The sidebar shows your organization, Search, My view, All projects, Team sync, the Projects tree and Settings. The organization name is not a switcher. If…"
+      "description": "The sidebar shows your organization, Search, My view, All projects, Team sync, the Projects tree and Settings. All projects opens the project directory. The…"
     },
     {
       "file": "the-overview-project-health-at-a-glance.md",
