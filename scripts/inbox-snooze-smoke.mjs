@@ -151,8 +151,9 @@ try {
   list = await groups(A)
   if (list.find((g) => g.id === target.id).read) fail('opening a sleeping row marked it read')
   log('opening the sleeping row left it unread')
-  // the pane reads the task it holds the moment the row wakes (the app's
-  // rule for news arriving while you look at a task), so clear it first
+  // close the pane first, so the check below reads the row alone and not
+  // what the pane does with the task it holds (an open task's news is read
+  // as it arrives, unless this client marked it unread or snoozed it)
   await A.keyboard.press('Escape')
   await A.waitForFunction(() => !location.pathname.includes('/tasks/'))
   await A.click(`[data-message="${target.id}"]`, { button: 'right' })
