@@ -9,7 +9,8 @@
  * people for Deleted by and the assignee filter
  * (model/deletedItemsChoices.ts peopleBatch), the removal window's
  * Reassign picker (model/removalPreview.ts reassignChoicesOf), a task's
- * owner pickers and Team sync's mention recipients (model/pickers.ts),
+ * owner pickers, Team sync's mention recipients and the editor's mention
+ * suggestions (model/pickers.ts),
  * Settings › Teams, a team's members and its Add member picker
  * (model/teams.ts), Billing's Who counts toward your bill and Who does not
  * (model/billingLists.ts accountNamesBatch), the REST and MCP lists of
@@ -689,9 +690,9 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * `limit` stops there as if the read budget stopped it, and the app splits
  * it, as model/labels.ts labelBatch does. The project settings lists and
  * pickers (model/projectSettings.ts), the Reassign picker
- * (model/removalPreview.ts), a task's owner and recipient pickers
- * (model/pickers.ts), the team settings lists and picker
- * (model/teams.ts), the project navigation lists
+ * (model/removalPreview.ts), a task's owner and recipient pickers and the
+ * editor's mention suggestions (model/pickers.ts), the team settings lists
+ * and picker (model/teams.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
  * (model/projectSettingsLists.ts), Settings › Users
  * (model/peopleSettings.ts), the REST and MCP lists in name order
