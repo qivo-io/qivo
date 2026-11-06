@@ -223,6 +223,32 @@
 //                        role=admin the lists hold the hidden projects the
 //                        workspace leaves out, so opening one shows a
 //                        project page the workspace does not hold
+//   deleted (0)          that many of the visible tasks in Deleted items, by
+//                        number after the first sub-project of the first
+//                        program, which is deleted whole with its tasks, as
+//                        src/store/deletedItemsStandIn.setup.ts
+//                        deletedFixtureOf builds them: most deleted by the
+//                        signed-in person, every third by another person and
+//                        every seventh by an agent through its key; an
+//                        admin (role=admin) sees all of them and anyone else
+//                        their own. The Deleted items reads and writes answer
+//                        from that stand-in. The workspace keeps their tasks,
+//                        which only Deleted items treats as deleted, and a
+//                        restore takes items out of Deleted items without
+//                        bringing anything back into it
+//   deletedstate         states the Deleted items reads and writes answer
+//                        whatever the items say: too-wide, missing-reads,
+//                        missing-matches, legacy, stopped (each page stops
+//                        after ten entries), hidden (an admin's task rows
+//                        hidden), people-not-ready, people-stopped (each
+//                        batch stops after five people), error (every read
+//                        fails), slow (each restore or purge waits 1.5 s),
+//                        refuse-at-2 (the second write is refused whole),
+//                        pause-at-2 (the second meets the pause), deferred
+//                        (a task item restored with the project item it
+//                        waits for is deferred) and two-orgs (the person
+//                        holds a seat in Partner Co too, with a deleted
+//                        project there); several joined by commas
 //   archivedprojects (0) archives that many of the last programs, keeping
 //                        the first live: every other one after its first
 //                        sub-project was archived on its own a day before,
@@ -380,6 +406,14 @@ import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import {
+  DELETED_READS,
+  deletedFixtureOf,
+  deletedPurge,
+  deletedRestore,
+  deletedStandIn,
+  isDeletedRead,
+} from '../../src/store/deletedItemsStandIn.setup'
 import {
   INBOX_NO_ANSWER,
   inboxItemStandIn,
@@ -648,6 +682,29 @@ const forcedLists = (() => {
   }
   return force
 })()
+/* Deleted items' forced states (the `deletedstate` parameter), as the
+   stand-in's `force` takes them, and whether the person holds a second
+   seat there. */
+const deletedStates = new Set((parameters.get('deletedstate') ?? '').split(',').filter(Boolean))
+const forcedDeleted = (() => {
+  const force = {}
+  if (deletedStates.has('too-wide')) force.tooWide = true
+  if (deletedStates.has('missing-reads')) force.missing = 'reads'
+  if (deletedStates.has('missing-matches')) force.missing = 'matches'
+  if (deletedStates.has('legacy')) force.legacy = true
+  if (deletedStates.has('stopped')) force.stopped = 10
+  if (deletedStates.has('hidden')) force.hidden = true
+  if (deletedStates.has('people-not-ready')) force.peopleNotReady = true
+  if (deletedStates.has('people-stopped')) force.peopleStopped = 5
+  if (deletedStates.has('error'))
+    force.fail = DELETED_READS.map((n) => n.slice('deletedItems:'.length))
+  if (deletedStates.has('slow')) force.slow = 1500
+  if (deletedStates.has('refuse-at-2')) force.refuseAt = 2
+  if (deletedStates.has('pause-at-2')) force.pauseAt = 2
+  if (deletedStates.has('deferred')) force.deferred = true
+  return force
+})()
+const deletedCount = option('deleted', 0)
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
 const fixtureTime = new Date()
@@ -1122,6 +1179,51 @@ const snapshot = {
   readTruncated: false,
   delivered_at: now,
 }
+/* The Deleted items the page reads (`deleted`), built once from the
+   workspace as it stands when first asked, with a second organization
+   for deletedstate=two-orgs. */
+let deletedItems = null
+function deletedWorld() {
+  if (deletedItems !== null) return deletedItems
+  const partner = 'perf-partner-org'
+  const seat = 'perf-partner-seat'
+  const top = {
+    ...snapshot.projects[0],
+    id: 'perf-partner-top',
+    org_id: partner,
+    name: 'Partner launch',
+    key: 'PL',
+    parent_id: undefined,
+    type: 'meta',
+  }
+  const two = deletedStates.has('two-orgs')
+    ? {
+        ...snapshot,
+        orgs: [...snapshot.orgs, { ...snapshot.orgs[0], id: partner, name: 'Partner Co' }],
+        myProfileIds: [...snapshot.myProfileIds, seat],
+        profiles: [...snapshot.profiles, { ...me, id: seat, org_id: partner, org_role: 'user' }],
+        projects: [
+          ...snapshot.projects,
+          top,
+          {
+            ...top,
+            id: 'perf-partner-web',
+            name: 'Partner web',
+            key: 'PW',
+            parent_id: top.id,
+            type: 'project',
+          },
+        ],
+      }
+    : snapshot
+  // the deleted sub-project comes with the tasks, none of either by default
+  deletedItems = deletedFixtureOf(two, {
+    tasks: deletedCount,
+    at: now,
+    projectItem: deletedCount > 0,
+  })
+  return deletedItems
+}
 /* How many cards the Board shows: every visible task but the parents,
    whose subtasks are their cards, and of those how many the first program
    holds, the Board the app opens, and its tasks, the rows of the phone's
@@ -1554,6 +1656,8 @@ const read = (name, args = {}) => {
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
   if (name.startsWith('projectNav:'))
     return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+  // Deleted items (src/store/deletedItemsStandIn.setup.ts)
+  if (isDeletedRead(name)) return deletedStandIn(deletedWorld(), name, args, forcedDeleted)
   // Settings' project lists (src/store/projectSettingsListsStandIn.setup.ts)
   if (isProjectListRead(name))
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
@@ -1896,6 +2000,15 @@ function syncAgenda(args) {
 /** Runs mutation `name` with `args` and answers its result. */
 async function mutate(name, args) {
   if (name === 'identity:claimMySeats' || name === 'prefs:save') return null
+  // a restore or Delete now answers from the stand-in, after its reads
+  if (name === 'deletedItems:restore' || name === 'deletedItems:purge') {
+    if (forcedDeleted.slow) await new Promise((resolve) => setTimeout(resolve, forcedDeleted.slow))
+    const write = name === 'deletedItems:restore' ? deletedRestore : deletedPurge
+    const answer = write(deletedWorld(), args, forcedDeleted)
+    writes++
+    await Promise.all(DELETED_READS.map((read) => emit(read)))
+    return answer
+  }
   if (name === 'messages:markRead') {
     const ids = new Set(args.ids)
     const at = new Date().toISOString()
@@ -2284,7 +2397,14 @@ async function write(data, turn) {
     post({ type: 'answer', id: data.id, value })
   } catch (error) {
     await turn
-    post({ type: 'answer', id: data.id, failure: String(error?.message ?? error) })
+    // a Deleted items refusal comes with its data, as Convex sends a
+    // ConvexError's, so the app words it as the server's
+    const refusal = data.name.startsWith('deletedItems:') ? refusalOf(error).data : undefined
+    post(
+      refusal
+        ? { type: 'answer', id: data.id, error: refusal }
+        : { type: 'answer', id: data.id, failure: String(error?.message ?? error) },
+    )
   }
 }
 
