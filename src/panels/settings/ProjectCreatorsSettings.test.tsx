@@ -4,12 +4,21 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
+import { WHOLE } from '../../store/guard/liveDouble.setup'
+import {
+  type ForcedPeopleSettings,
+  isPeopleSettingsRead,
+  peopleSettingsServer,
+} from '../../store/peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* "Who can create new projects?" in Organization settings and the
    "Can create projects" column in Organization > Users, on the real store.
    Nora (me) is the org admin; the roster holds one member of every kind,
-   with Atlas a Standard user agent and Ledger a Viewer agent. */
+   with Atlas a Standard user agent and Ledger a Viewer agent. The creators
+   line and the Users rows come from the server's reads, which the people
+   stand-in answers from the workspace the server holds (`snap`), so a
+   setting saved on screen shows its creators once the server holds it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -37,6 +46,9 @@ let pages: {
 }
 let snap: Snapshot
 let requests: { name: string; args: Record<string, unknown> }[]
+let server: ReturnType<typeof peopleSettingsServer>
+let force: ForcedPeopleSettings
+let publish: (value: Snapshot) => void
 let container: HTMLDivElement
 let root: Root
 
@@ -72,11 +84,22 @@ async function load(setting: Setting) {
     }),
   )
   requests = []
-  // the Users page lists agent keys on mount
-  network.query.mockResolvedValue([])
-  // pending seats ask for their invitation emails (invites.deliveries)
-  network.onUpdate.mockImplementation((ref, _args, next) => {
-    next(getFunctionName(ref) === 'invites:deliveries' ? [] : structuredClone(snap))
+  force = {}
+  server = peopleSettingsServer(
+    () => snap,
+    () => force,
+  )
+  // the Users page reads its people and their keys, and the creators line
+  // its count, from the server
+  network.query.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    return isPeopleSettingsRead(name) ? server.query(name, args) : Promise.resolve([])
+  })
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    const name = getFunctionName(ref)
+    if (isPeopleSettingsRead(name)) return server.watch(name, args, next, fail)
+    if (name === WHOLE) publish = next
+    next(structuredClone(snap))
     return () => {}
   })
   network.mutation.mockImplementation((ref, args) => {
@@ -133,6 +156,18 @@ async function render(page: () => React.ReactNode) {
 
 const query = <T extends Element>(selector: string) => container.querySelector<T>(selector)
 const summary = () => query('[data-project-creators-summary]')?.textContent
+const creatorsState = () =>
+  query('[data-project-creators-summary]')?.getAttribute('data-creators-state')
+
+/* Saves `setting` on the server's side, as orgs.update would: the
+   workspace carries it, and the server runs its reads again. */
+async function saved(setting: Setting) {
+  snap.orgs[0].project_creators = setting
+  await act(async () => {
+    publish(structuredClone(snap))
+    server.rerun()
+  })
+}
 const segment = (label: string) =>
   [...container.querySelectorAll<HTMLButtonElement>('[data-project-creators] button')].find(
     (button) => button.textContent === label,
@@ -148,17 +183,42 @@ describe('Who can create new projects?', () => {
     )
 
     await act(async () => segment('Standard users')?.click())
-    // admins first, then standard users in roster order; Mira is invited, and
+    // the answer counted under Org admins, so the line checks until the
+    // server holds the new setting
+    expect(summary()).toBe('Checking who can create projects…')
+    expect(creatorsState()).toBe('checking')
+    await saved('users')
+    // admins first, then standard users in name order; Mira is invited, and
     // the count says the agent Atlas is one of the three it does not name
     expect(summary()).toBe(
-      'Nora Berg, Leo Martins and 3 more, including 1 agent, can create projects.',
+      'Nora Berg, Aisha Rahman and 3 more, including 1 agent, can create projects.',
     )
 
     await act(async () => segment('Selected users')?.click())
+    expect(summary()).toBe('Checking who can create projects… Choose who in Users.')
+    await saved('selected')
     expect(summary()).toBe(
       'Nora Berg, Leo Martins and Mira Lind can create projects. Choose who in Users.',
     )
     expect(query('[data-project-creators-summary] .text-text-1')?.textContent).toBe('Nora Berg')
+  })
+
+  it('says when it could not check or count, and checks again on Try again', async () => {
+    await load('users')
+    force = { fail: ['projectCreators'] }
+    await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
+    expect(summary()).toBe("Couldn't check who can create projects. Try again")
+    expect(creatorsState()).toBe('failed')
+    force = { creatorsUnavailable: true }
+    await act(async () => query<HTMLButtonElement>('[data-project-creators-retry]')?.click())
+    expect(summary()).toBe('Qivo could not count who can create projects right now.')
+    expect(creatorsState()).toBe('unavailable')
+    force = {}
+    await act(async () => server.rerun())
+    expect(creatorsState()).toBe('ok')
+    // the line is never read from the store's roster
+    const reads = network.onUpdate.mock.calls.map(([ref]) => getFunctionName(ref))
+    expect(reads).toContain('orgs:projectCreators')
   })
 
   it('saves the setting, says so, and links to Users under Selected users', async () => {
@@ -232,7 +292,8 @@ describe('Can create projects in Organization > Users', () => {
     await load('selected')
     await render(() => <pages.users.OrgUsersPage setPage={vi.fn()} />)
     expect(query('[data-project-creators-header]')?.textContent).toBe('Can create projects')
-    expect(boxes()).toEqual(['nora', 'leo', 'aisha', 'mira', 'atlas'])
+    // the server's name order
+    expect(boxes()).toEqual(['aisha', 'atlas', 'leo', 'mira', 'nora'])
     const disabled = [...container.querySelectorAll<HTMLInputElement>('[data-can-create-projects]')]
       .filter((box) => box.disabled)
       .map((box) => box.dataset.canCreateProjects)
@@ -287,9 +348,14 @@ describe('Can create projects in Organization > Users', () => {
     expect(P.canCreateProject('atlas')).toBe(true)
     await act(async () => query<HTMLInputElement>('[data-can-create-projects="leo"]')?.click())
 
+    // the server holds both rights once their writes land
+    for (const p of snap.profiles) {
+      if (p.id === 'atlas') p.can_create_projects = true
+      if (p.id === 'leo') p.can_create_projects = undefined
+    }
     await render(() => <pages.general.OrgGeneralPage setPage={vi.fn()} />)
     expect(summary()).toBe(
-      'Nora Berg, Mira Lind and Atlas (agent) can create projects. Choose who in Users.',
+      'Nora Berg, Atlas (agent) and Mira Lind can create projects. Choose who in Users.',
     )
   })
 
@@ -299,19 +365,25 @@ describe('Can create projects in Organization > Users', () => {
       'matchMedia',
       vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     )
-    await render(() => <pages.users.OrgUsersPage narrow userId="leo" setPage={vi.fn()} />)
+    // the phone's user page shows the person Settings read (people.get)
+    function PersonPage({ id }: { id: string }) {
+      const person = personHook.usePersonSettings(id)
+      return <pages.users.OrgUsersPage narrow person={person} setPage={vi.fn()} />
+    }
+    const personHook = await import('./usePersonSettings')
+    await render(() => <PersonPage id="leo" />)
     expect(query('[data-project-creators-header]')).toBeNull()
     expect(query('[data-project-right-cell="leo"]')?.textContent).toBe('Can create projects')
 
-    await render(() => <pages.users.OrgUsersPage narrow userId="nora" setPage={vi.fn()} />)
+    await render(() => <PersonPage id="nora" />)
     expect(query('[data-project-right-cell="nora"]')?.textContent).toBe('Can create projects')
     expect(query<HTMLInputElement>('[data-can-create-projects="nora"]')?.disabled).toBe(true)
 
-    await render(() => <pages.users.OrgUsersPage narrow userId="atlas" setPage={vi.fn()} />)
+    await render(() => <PersonPage id="atlas" />)
     expect(query('[data-project-right-cell="atlas"]')?.textContent).toBe('Can create projects')
 
     for (const userId of ['ingrid', 'ledger']) {
-      await render(() => <pages.users.OrgUsersPage narrow userId={userId} setPage={vi.fn()} />)
+      await render(() => <PersonPage id={userId} />)
       expect(query('[data-project-right-cell]')).toBeNull()
     }
   })

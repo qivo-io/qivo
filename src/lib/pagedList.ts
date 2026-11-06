@@ -9,11 +9,11 @@
    (components/ProjectPicker.tsx), the expanded sub-project lists and an
    archived project's sub-projects in Settings
    (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
-   and its Add member picker (panels/settings/TeamSettings.tsx), and later
-   Settings' people. Beside it, a page
+   and its Add member picker (panels/settings/TeamSettings.tsx), and
+   Settings › Users (panels/settings/UsersSettings.tsx). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
-   which Previous and Next replace, as Settings › Projects and Archived
-   projects read theirs, and useMoreOnScroll loads the next batch of a
+   which Previous and Next replace, as Settings › Projects, Archived
+   projects and Users read theirs, and useMoreOnScroll loads the next batch of a
    list as its end scrolls into view. It holds only what the page shows,
    in the page, and drops it when the page is left. It imports nothing
    from the store.

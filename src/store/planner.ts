@@ -37,6 +37,7 @@ import {
   DEMO_FILE_BYTES,
   grouped,
   LIMITS,
+  LIST_BATCH,
   type Limit,
   MIB,
   MILESTONE_READ_PROJECTS,
@@ -7082,6 +7083,18 @@ export type ReassignChoices = FunctionReturnType<typeof api.accessRemovals.reass
 export type ReassignChoice = Extract<ReassignChoices, { state: 'ready' }>['rows'][number]
 /** A project's settings as the server reads them (projectSettings.get). */
 export type ProjectSettingsAnswer = FunctionReturnType<typeof api.projectSettings.get>
+/** One page of Settings › Users as the server reads it (people.settingsPage). */
+export type PeoplePageAnswer = FunctionReturnType<typeof api.people.settingsPage>
+/** One person as Settings › Users shows them (people.get). */
+export type PersonSettingsAnswer = FunctionReturnType<typeof api.people.get>
+/** A person row of Settings › Users (people.settingsPage and people.get). */
+export type SettingsPersonRow = Extract<PersonSettingsAnswer, { state: 'ok' }>['person']
+/** The keys of some agents of one organization (tokens.agentKeys). */
+export type AgentKeysAnswer = FunctionReturnType<typeof api.tokens.agentKeys>
+/** One agent's keys (tokens.agentKeys). */
+export type AgentKeysRow = AgentKeysAnswer['agents'][number]
+/** Organization › General's creators line (orgs.projectCreators). */
+export type ProjectCreatorsAnswer = FunctionReturnType<typeof api.orgs.projectCreators>
 /** One answer of an Add team or user picker (projectSettings.candidates). */
 export type AccessChoices = FunctionReturnType<typeof api.projectSettings.candidates>
 /** One answer of a lead picker (projectSettings.leadCandidates). */
@@ -9989,14 +10002,6 @@ export const PLANNER = {
      page. Guests hold a seat in the org's `profiles` but are not part of it:
      they occupy no seat and belong to no team. */
   homeUsers: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole !== 'guest'),
-  /* …and the guests of my organization, listed apart (Settings › Users) */
-  homeGuests: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole === 'guest'),
-  /* every project of MINE this guest holds a grant on — what the Users
-     page shows under a guest's address, since that IS their whole access */
-  guestProjects: (profileId: string) =>
-    PLANNER.projects
-      .filter((p) => !!p.access?.[profileId])
-      .map((p) => ({ id: p.id, name: p.name, level: p.access?.[profileId] })),
   /* URL support (0081). An org-prefixed link names the organization by slug;
      these two turn that segment into the handle/project the app threads. */
   orgBySlug: (slug: string) =>
@@ -13396,24 +13401,40 @@ export const PLANNER = {
 
   /* ---- agent keys (Settings → Organization → Users) ----
      An agent's key is its login (0100). Keys live outside the snapshot, so
-     the family is fetched on demand and every mutator is AWAITED: the secret
-     exists only in createAgentKey's return value, minted in the browser —
-     the server keeps a SHA-256 and a display fingerprint, nothing more. */
-  listAgentKeys: async () => {
-    let keys: FunctionReturnType<typeof api.tokens.listAgentKeys>
+     they are read on demand, once, and every mutator is AWAITED: the secret
+     exists only in createAgentKey's return value, minted in the browser,
+     and the server keeps a SHA-256 and a display fingerprint, nothing more. */
+
+  /** The keys of the agents of organization `orgId` among `agentIds`
+      (tokens.agentKeys), each agent with its newest keys and `more`, or
+      null when a read failed. One read, never subscribed, because machine
+      auth stamps a key on every API call; ids go in calls of at most
+      LIST_BATCH, together, and one failed call fails the answer. Each
+      key's organization is recorded from `orgId`, so revoke and delete
+      reach the agent's organization whether or not the store holds the
+      agent. */
+  agentKeys: async (
+    orgId: string,
+    agentIds: readonly string[],
+  ): Promise<AgentKeysAnswer | null> => {
+    const ids = [...new Set(agentIds)]
+    if (ids.length === 0) return { agents: [] }
+    const calls: string[][] = []
+    for (let at = 0; at < ids.length; at += LIST_BATCH) calls.push(ids.slice(at, at + LIST_BATCH))
+    let answers: AgentKeysAnswer[]
     try {
-      keys = await convex.query(api.tokens.listAgentKeys, {})
+      answers = await Promise.all(
+        calls.map((agent_ids) => convex.query(api.tokens.agentKeys, { org_id: orgId, agent_ids })),
+      )
     } catch (e) {
       console.error('[qivo] agent key list failed:', e)
       return null
     }
-    // remember each key's org: revoke/delete take only the key id, and the
-    // wrapper needs the AGENT's organization to pick the caller's seat
-    keys.forEach((k) => {
-      const agent = rows.profiles.get(k.agentId)
-      if (agent) agentKeyOrg.set(k.id, agent.org_id)
-    })
-    return keys
+    const agents = answers.flatMap((a) => a.agents)
+    // revoke/delete take only the key id, and the wrapper needs the
+    // AGENT's organization to pick the caller's seat
+    for (const agent of agents) for (const k of agent.keys) agentKeyOrg.set(k.id, orgId)
+    return { agents }
   },
 
   /** Mints an agent's key in the browser and stores only its hash. Returns

@@ -21,6 +21,7 @@ import { ArchivedProjectsPage, OrgProjectsPage } from './settings/ProjectLists'
 import { ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
+import { usePersonSettings } from './settings/usePersonSettings'
 import { useProjectSettings } from './settings/useProjectSettings'
 import { useTeamSettings } from './settings/useTeamSettings'
 
@@ -84,6 +85,9 @@ function SettingsScreen({
   /* A team page's read of the team and the caller's rights, for the check
      below and the page itself, as the project page's. */
   const teamRead = useTeamSettings(page.startsWith('team:') ? page.slice(5) : null)
+  /* A user page's read of its person, for the check below and the phone's
+     user page, which takes it as a prop, as the project page's. */
+  const personRead = usePersonSettings(page.startsWith('user:') ? page.slice(5) : null)
 
   useEffectS(() => {
     const h = (e: KeyboardEvent) => {
@@ -157,8 +161,15 @@ function SettingsScreen({
         (teamRead.state === 'ok' && !teamRead.answer?.can_manage)
       if (gone) resetPage('account')
     } else if (page.startsWith('user:')) {
+      // the server's answer decides, whether or not the workspace holds the
+      // person; a guest has no person page; nothing moves while it loads,
+      // refreshes or failed
       if (!admin) resetPage('account')
-      else if (!P.homeUsers().some((user) => user.id === page.slice(5))) resetPage('org-users')
+      else if (
+        personRead.state === 'unavailable' ||
+        (personRead.state === 'ok' && personRead.answer?.person.org_role === 'guest')
+      )
+        resetPage('org-users')
     } else if (page === 'org-teams') {
       // the one org- page a team leader reaches without being an admin
       if (!admin && !myTeams.length) resetPage('account')
@@ -251,7 +262,7 @@ function SettingsScreen({
     content = (
       <OrgUsersPage
         narrow={narrow}
-        userId={page.slice(5)}
+        person={page.startsWith('user:') ? personRead : null}
         setPage={setPage}
         onBackPage={onBackPage}
       />

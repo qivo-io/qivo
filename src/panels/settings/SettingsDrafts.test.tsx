@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FieldChange } from '../../../convex/lib/functions'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { WHOLE } from '../../store/guard/liveDouble.setup'
+import { isPeopleSettingsRead, peopleSettingsServer } from '../../store/peopleSettingsStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import { isTeamSettingsRead, teamSettingsServer } from '../../store/teamSettingsStandIn.setup'
 
@@ -81,23 +82,29 @@ async function prepare() {
     snap.teams.push({ id, org_id: org, name, track_delay_default: false, created_at: NOW })
   snap.teamMembers.push({ team_id: 'crew', profile_id: LEO, is_leader: false })
   requests = []
-  network.query.mockResolvedValue([])
-  // a team's page reads the team and its members from the workspace last
-  // published, as the server would
+  // a team's page reads the team and its members, and the Users page its
+  // people and its agents' keys once, from the workspace last published,
+  // as the server would
   let server = snap
   const teams = teamSettingsServer(() => server)
+  const people = peopleSettingsServer(() => server)
+  network.query.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    return isPeopleSettingsRead(name) ? people.query(name, args) : Promise.resolve([])
+  })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
+    if (isPeopleSettingsRead(name)) return people.watch(name, args, next, fail)
     if (name === WHOLE)
       publish = (value) => {
         server = value
         next(value)
         teams.rerun()
+        people.rerun()
       }
     const answers: Record<string, unknown> = {
       [WHOLE]: structuredClone(snap),
-      'invites:deliveries': [],
       'billing:status': { writable: true },
     }
     next(answers[name] ?? null)
