@@ -4763,7 +4763,8 @@ async function inboxBadgeCheck() {
     await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
     const row = app.locator(`[data-message="${t0.id}"]`)
     await row.waitFor({ timeout: 60_000 })
-    await row.locator('.inbox-message-actions').click()
+    // a desktop row's menu opens on a right-click; its actions button is the phone's
+    await row.click({ button: 'right' })
     await app.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
     expect(
       await until(async () => (await row.count()) === 0, 30_000),
