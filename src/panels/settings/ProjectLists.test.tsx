@@ -691,9 +691,12 @@ describe('Settings › Projects', () => {
     await act(async () => onCreated('specs'))
     await settle()
     expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
-    expect(has('[data-subproject-row="specs"] button')).toBe(true)
+    const kept = find('[data-subproject-row="specs"] button')
+    kept.focus()
     await elsewhere((snap) => snap.projects.push(made))
     expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
+    // the row the server's list took in keeps its element and its focus
+    expect(document.activeElement).toBe(find('[data-subproject-row="specs"] button'))
   })
 
   it('reads nothing of the store’s catalogue and no task', async () => {

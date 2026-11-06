@@ -636,7 +636,9 @@ function SubProjectRow({
       onClick={(e) => {
         if (inRow(e)) setPage(`project:${id}`)
       }}
-      className={cn(navRowDiv, 'planner-subproject relative', within === undefined && 'pl-6')}
+      // under its open project it hangs from the project's tree line; a
+      // search hit stands on its own, naming its project instead
+      className={cn(navRowDiv, 'relative', within === undefined && 'planner-subproject pl-6')}
     >
       <Button
         variant="unstyled"
@@ -874,36 +876,34 @@ function SettingsSubProjects({
     (id) => document.querySelector<HTMLElement>(`[data-subproject-row="${id}"] button`),
     () => document.querySelector<HTMLElement>(`[data-project-row="${parent.id}"] button`),
   )
+  const row = (id: string, name: string) => (
+    <SubProjectRow
+      key={id}
+      id={id}
+      name={<TaggedName name={name} tag={tags.get(id)} />}
+      setPage={setPage}
+      onOpenArchivedTasks={onOpenArchivedTasks}
+    />
+  )
   return (
     <div data-subproject-list={parent.id}>
-      {keptRows.map((r) => (
-        <SubProjectRow
-          key={r.id}
-          id={r.id}
-          name={<TaggedName name={r.name} tag={tags.get(r.id)} />}
-          setPage={setPage}
-          onOpenArchivedTasks={onOpenArchivedTasks}
-        />
-      ))}
-      {list.batches.map((batch, i) => (
-        <React.Fragment key={batch.id}>
-          {batch.rows.map((r) => (
-            <SubProjectRow
-              key={r.id}
-              id={r.id}
-              name={<TaggedName name={r.name} tag={tags.get(r.id)} />}
-              setPage={setPage}
-              onOpenArchivedTasks={onOpenArchivedTasks}
-            />
-          ))}
-          <BatchNotes
-            list={list}
-            batch={batch}
-            last={i === list.batches.length - 1}
-            what="sub-projects"
-          />
-        </React.Fragment>
-      ))}
+      {/* one keyed list, so a kept row the server's list takes in keeps
+          its element and its focus, and the last row ends the tree line */}
+      <div>
+        {[
+          ...keptRows.map((r) => row(r.id, r.name)),
+          ...list.batches.flatMap((batch, i) => [
+            ...batch.rows.map((r) => row(r.id, r.name)),
+            <BatchNotes
+              key={`note:${batch.id}`}
+              list={list}
+              batch={batch}
+              last={i === list.batches.length - 1}
+              what="sub-projects"
+            />,
+          ]),
+        ]}
+      </div>
       <div ref={marker} aria-hidden="true" className="h-px" />
       <div className="pl-6">
         <SubProjectsEnd
