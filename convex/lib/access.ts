@@ -1146,6 +1146,9 @@ function byProjectId<R extends { project_id: string }>(rows: readonly R[]): Map<
   return out
 }
 
+/** Whether `me` sees `project`, which takes any level on it, navigation
+ * included (projectLevel). canSeeProjectFor answers it for every profile of
+ * the project's organization at once, from the project's side. */
 export async function canSeeProject(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1212,7 +1215,9 @@ export const canHoldWork = (profile: Pick<Doc<'profiles'>, 'active' | 'org_role'
   profile.active && (isOrgStaff(profile) || profile.org_role === 'guest')
 
 /* Assignment is new work: the recipient must be active and hold effective
- * Edit access, including inherited individual/team grants and leadership. */
+ * Edit access, including inherited individual/team grants and leadership.
+ * canBeAssignedFor answers it for every profile of the project's
+ * organization at once. */
 export async function profileCanBeAssigned(
   ctx: QueryCtx,
   profile: Doc<'profiles'>,
@@ -1643,7 +1648,12 @@ export const projectLevelReads = (): ProjectLevelReads => ({ rows: new Map(), me
  * runs before each read and after every LEVELS_READ.guardRows rows of one,
  * so the picker stops before the reads fill the transaction, and `reads`
  * keeps what one call read for the next (ProjectLevelReads). Without them
- * it reads as it always has. */
+ * it reads as it always has.
+ *
+ * canBeAssignedFor and canSeeProjectFor answer from it whether each
+ * profile could take work on a project and whether each sees it, for the
+ * task owner pickers and Team sync's mention recipients
+ * (model/pickers.ts), with a guard and shared `reads` of their own. */
 export async function projectLevelsForProfiles(
   ctx: QueryCtx,
   project: Doc<'projects'>,
@@ -1708,6 +1718,71 @@ export async function projectLevelsForProfiles(
     )
     return navigationOnly(project.id) ? null : levelOf(project)
   }
+}
+
+/** profileCanBeAssigned for every profile of `project`'s organization at
+ * once, which is whether the profile can hold work (canHoldWork, an active
+ * admin, user or guest) and holds User or Lead on `project`, with its
+ * level from projectLevelsForProfiles. It reads what that reads, a few
+ * index ranges for the project, its top-level project and each team
+ * sharing them, and then answers each profile without a read. `guard` and
+ * `reads` go to projectLevelsForProfiles, so a caller stops it before its
+ * reads fill the transaction and shares its reads with later calls. A
+ * profile of another organization answers false. The task owner pickers
+ * ask it for a new assignee or reviewer (model/pickers.ts ownerRule), the
+ * rule the task writes ask one person at a time (model/issues.ts
+ * assertAssigneeRule), and REST and MCP project users compute `assignable`
+ * the same way (lib/core.ts listProjectUsersCore). Levels come only from
+ * levelsFrom, so an organization admin passes while it gives admins Lead. */
+export async function canBeAssignedFor(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  o: { guard?: () => Promise<void>; reads?: ProjectLevelReads } = {},
+): Promise<(profile: Doc<'profiles'>) => boolean> {
+  const levelOf = await projectLevelsForProfiles(ctx, project, o)
+  return (profile) => canHoldWork(profile) && levelRank(levelOf(profile)) >= LEVEL_RANK.user
+}
+
+/** canSeeProject for every profile of `project`'s organization at once,
+ * from the project's side. A profile sees the project with a level from
+ * projectLevelsForProfiles. A top-level meta project also shows, read-only,
+ * to whoever holds a level on one of its sub-projects, live or archived,
+ * which is projectLevel's navigation. It reads the sub-projects by
+ * by_parent in one range, and each one's levels through the same `reads`,
+ * a few index ranges a sub-project, about 210 for the design size's 30 live
+ * and 40 archived ones. A level on a sub-project that comes from the
+ * top-level project itself shows it anyway, and a sub-project's lead holds
+ * Lead there, so any level on a sub-project counts. It then answers each
+ * profile without a read. `guard` runs before each read and after every
+ * LEVELS_READ.guardRows rows of one, the sub-projects' range included, and
+ * `reads` keeps what one call read for the next (ProjectLevelReads). It
+ * adds no budget or refusal of its own; a caller stops it with its guard.
+ * A profile of another organization answers false, and a missing parent or
+ * a cycle throws not found, as rootMetaOf does. Team sync's mention
+ * recipients (model/pickers.ts recipientRule) and the task owner pickers'
+ * sight of the tasks above a subtask (ownerRule) ask it; notice fan-outs
+ * ask projectSightForProfiles, which reads what it needs for each follower
+ * it is asked about. */
+export async function canSeeProjectFor(
+  ctx: QueryCtx,
+  project: Doc<'projects'>,
+  o: { guard?: () => Promise<void>; reads?: ProjectLevelReads } = {},
+): Promise<(profile: Doc<'profiles'>) => boolean> {
+  const { guard = async () => {}, reads = projectLevelReads() } = o
+  const own = await projectLevelsForProfiles(ctx, project, { guard, reads })
+  const subs: ((profile: Doc<'profiles'>) => AccessLevel | null)[] = []
+  // projectLevel's navigation, which levelUnder asks only inside a meta tree
+  if (project.parent_id === undefined && project.type === 'meta') {
+    const children = await guardedRows(
+      ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', project.id)),
+      guard,
+    )
+    for (const child of children) {
+      if (child.org_id !== project.org_id) continue
+      subs.push(await projectLevelsForProfiles(ctx, child, { guard, reads }))
+    }
+  }
+  return (profile) => own(profile) !== null || subs.some((level) => level(profile) !== null)
 }
 
 /** How many grant and team membership rows projectSightForProfiles reads
