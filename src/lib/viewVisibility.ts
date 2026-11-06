@@ -1,11 +1,14 @@
 /* The one gate that pauses a view's live reads (lib/liveView.ts, and the
-   reads the store owns: the Board's, views/board/useBoardView.ts, and the
-   Overview's, views/Overview.tsx) while the tab or the desktop window is
-   hidden. It follows document.visibilityState, not focus. A window people
-   can see keeps updating while another one has focus, side by side or on
-   another monitor, and a minimized or hidden one pauses (the limits plan's
-   "Hidden tabs and minimized windows"). The workspace's parts, the unread
-   count and notifications do not use it.
+   reads the store owns: the Board's, views/board/useBoardView.ts, the
+   Overview's, views/Overview.tsx, and the milestone reads,
+   P.watchMilestones, of the Milestones window opened on a milestone,
+   panels/Modals.tsx useOpenedMilestone, and of Team sync's opening,
+   views/teamSync/TeamOpening.tsx useSyncMilestoneReads) while the tab or
+   the desktop window is hidden. It follows document.visibilityState, not
+   focus. A window people can see keeps updating while another one has
+   focus, side by side or on another monitor, and a minimized or hidden one
+   pauses (the limits plan's "Hidden tabs and minimized windows"). The
+   workspace's parts, the unread count and notifications do not use it.
    Views read it through useViewVisibility; the store's owner-load cache
    (store/ownerLoadCache.ts) through watchVisibility. */
 
