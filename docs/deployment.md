@@ -1632,7 +1632,7 @@ mention popup 8 people of the editor's organization at a time in name
 order, with the popup's match over names, initials and email, for any seat
 of that organization. The task label picker reads `labels.picker` and the
 window's labels the workspace does not hold `labels.byIds`, which v0.1.97
-(PR #304, `92434062`) first shipped. The app of that release reads
+(PR #304, `81acac46`) first shipped. The app of that release reads
 `pickers.mentions`, so that release is the backend's floor for its app.
 An app from it, against a backend before it, says **Couldn't load
 people.** in every mention popup, also in a tab that was open when the
