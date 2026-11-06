@@ -1,6 +1,7 @@
 /* Helpers shared by the organization export job's suites
- * (orgExportJob.test.ts, orgExportDelivery.test.ts): running a job to the
- * end, reading its rows and parts, and unzipping its archive with a ZIP
+ * (orgExportJob.test.ts, orgExportDeleted.test.ts,
+ * orgExportDelivery.test.ts): running a job to the end or a step at a
+ * time, reading its rows and parts, and unzipping its archive with a ZIP
  * builder of the tests' own, the independent reference for the one the
  * /exports/ route streams (lib/orgExport.ts).
  *
@@ -32,6 +33,24 @@ export const jobOf = (t: T, id: string) =>
       .withIndex('by_uuid', (q) => q.eq('id', id))
       .unique(),
   )
+
+/** Runs the export step that is due now, and none that it schedules. */
+export async function nextStep(t: T) {
+  vi.advanceTimersByTime(0)
+  await t.finishInProgressScheduledFunctions()
+}
+
+/** Runs export job `exportId`'s steps one at a time until it reads section
+ * `section` (an index into lib/orgExport.ts JOB_ORDER) or ends, and
+ * answers its row then. */
+export async function exportUntil(t: T, exportId: string, section: number) {
+  for (let guard = 0; guard < 500; guard++) {
+    const job = await jobOf(t, exportId)
+    if (job?.state !== 'collecting' || job.step.section >= section) return job
+    await nextStep(t)
+  }
+  throw new Error(`the export did not reach section ${section}`)
+}
 
 /** Export job `id`'s parts in archive order. */
 export const partsOf = (t: T, id: string) =>

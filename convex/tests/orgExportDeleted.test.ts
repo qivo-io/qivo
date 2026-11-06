@@ -31,7 +31,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
-import { archiveOf, exportAs, jobOf, partsOf, settle } from './orgExport.setup'
+import { archiveOf, exportAs, exportUntil, jobOf, partsOf, settle } from './orgExport.setup'
 import {
   attach,
   comment,
@@ -65,18 +65,6 @@ async function hold(t: T, itemId: string) {
   const job = await jobFor(t, itemId)
   const scheduled = job?.scheduled_id
   if (scheduled !== undefined) await t.run((ctx) => ctx.scheduler.cancel(scheduled))
-}
-
-/** Runs the export's steps one at a time until it reads section
- * `section` or ends. */
-async function exportUntil(t: T, exportId: string, section: number) {
-  for (let guard = 0; guard < 500; guard++) {
-    const job = await jobOf(t, exportId)
-    if (job?.state !== 'collecting' || job.step.section >= section) return job
-    vi.advanceTimersByTime(0)
-    await t.finishInProgressScheduledFunctions()
-  }
-  throw new Error(`the export did not reach section ${section}`)
 }
 
 /** Restores the items `ids` as `who`, as deletedItems.restore does after
@@ -550,6 +538,137 @@ describe('Deleted items that change while the export runs', () => {
     })
   })
 
+  it('keeps in deleted/ a link the live read dropped while an item was in flight, once its task is deleted after the read', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const { tasks } = await projectFamily(t, f)
+    // a task outside the family, linked to each of its tasks
+    const source = await plantIssue(t, { org_id: f.org.id, project_id: f.hidden.id })
+    await t.run(async (ctx) => {
+      for (const target of tasks)
+        await ctx.db.insert('issue_links', {
+          org_id: f.org.id,
+          id: uuid(),
+          source_id: source.id,
+          target_id: target.id,
+          type: 'blocks',
+          pair_key: [source.id, target.id].sort().join(':'),
+          created_at: NOW,
+          task_key: source.window_key,
+        })
+    })
+    // a move held part way, some tasks still in issues under its absent
+    // projects, so the live read drops the links to them
+    Object.assign(TRASH_BUDGET, { rows: 2, tasks: 1, ranges: 60 })
+    await deleteProject(t, f, f.meta.id)
+    const item = await itemFor(t, f.meta.id)
+    await hold(t, item.id)
+    const stillLive = await t.run(async (ctx) => {
+      const out: string[] = []
+      for (const task of tasks) if ((await byId(ctx, 'issues', task.id)) !== null) out.push(task.id)
+      return out
+    })
+    expect(stillLive.length).toBeGreaterThan(0)
+    later()
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id: f.org.id })
+    // the live sections of a task's rows have all ended, and agent_keys is next
+    const read = await exportUntil(t, export_id, sectionOf('agent_keys'))
+    // each live read of a table Deleted items stores found the item moving
+    expect([...(read?.step.in_flight ?? [])].sort()).toEqual(
+      JOB_ORDER.flatMap((section) => (section.kind === 'stored' ? [section.name] : [])).sort(),
+    )
+    later()
+    // the source's delete stores its links to the tasks still in issues
+    Object.assign(TRASH_BUDGET, { rows: 300, tasks: 100, ranges: 2500 })
+    await deleteTask(t, f, source.id)
+    await hold(t, item.id)
+    await settle(t)
+    const archive = await archiveOf(t, export_id)
+    const targets = (rows: readonly OrgExportRow[]) =>
+      rows.filter((row) => row.source_id === source.id).map((row) => row.target_id as string)
+    expect(targets(archive.tables.task_links)).toEqual([])
+    // every link once, none lost
+    expect(targets(archive.tables['deleted/task_links']).sort()).toEqual(
+      tasks.map((task) => task.id).sort(),
+    )
+    const deleted = await itemFor(t, source.id)
+    expect(
+      archive.tables['deleted/task_links']
+        .filter((row) => stillLive.includes(row.target_id as string))
+        .map((row) => row.deleted_item_id),
+    ).toEqual(stillLive.map(() => deleted.id))
+    expect(itemRow(archive, deleted.id)).toMatchObject({
+      export_rows: 'partial',
+      export_reason: 'deleted_during_export',
+    })
+  })
+
+  it('leaves out a stored row only when the live read held it for certain', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await comment(t, task)
+    await deleteTask(t, f, task.id)
+    await settle(t)
+    const item = await itemFor(t, task.id)
+    const stored = await t.run((ctx) =>
+      ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_owner', (q) => q.eq('item_id', item.id).eq('table', 'comments'))
+        .unique(),
+    )
+    if (stored === null) throw new Error('no stored comment')
+    // the live comments read began at B and ended at E, around the moment
+    // C the comment was stored
+    const c = stored._creationTime
+    const b = c - 20_000
+    const e = c - 10_000
+    const iso = (ms: number) => new Date(ms).toISOString()
+    /** The comment ids one read of deleted/comments gives, with the item
+     * deleted at `deleted`, the comment created at `created` and the live
+     * read ending at `ended`, which found an item in flight in `inFlight`. */
+    const read = async (a: {
+      deleted?: number
+      created?: number
+      ended?: number
+      inFlight?: string[]
+    }) => {
+      await t.run(async (ctx) => {
+        await ctx.db.patch(item._id, { deleted_at: iso(a.deleted ?? e + 5_000) })
+        await ctx.db.patch(stored._id, { created_ts: a.created ?? b - 1_000 })
+      })
+      const batch = await t.run((ctx) =>
+        readBatch(
+          ctx,
+          f.org.id,
+          { section: sectionOf('deleted/comments'), cursor: null },
+          {
+            job: {
+              started_at: iso(b - 30_000),
+              ended: { task_attachments: iso(b), comments: iso(a.ended ?? e) },
+              in_flight: a.inFlight ?? [],
+              unsettled: [],
+            },
+          },
+        ),
+      )
+      return batch.rows.map((row) => row.id)
+    }
+    const kept = [stored.row_id]
+    // deleted after the read ended, created before it began and stored
+    // after it ended, so data/comments holds it
+    expect(await read({})).toEqual([])
+    // created once the read began
+    expect(await read({ created: b })).toEqual(kept)
+    // stored by the time the read ended (a creation time holds fractions
+    // of a millisecond, an ISO time none)
+    expect(await read({ ended: Math.ceil(c), deleted: c + 5_000 })).toEqual(kept)
+    // deleted by the time the read ended
+    expect(await read({ deleted: e })).toEqual(kept)
+    // a read of comments that found an item in flight
+    expect(await read({ inFlight: ['comments'] })).toEqual(kept)
+  })
+
   it('calls an item moving while deleted/tasks reads it and ready by the items partial, changed during the export', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -669,7 +788,12 @@ describe('Deleted items that change while the export runs', () => {
 })
 
 describe('the Deleted items section pages', () => {
-  const job = (startedAt: string): BatchJob => ({ started_at: startedAt, ended: {}, unsettled: [] })
+  const job = (startedAt: string): BatchJob => ({
+    started_at: startedAt,
+    ended: {},
+    in_flight: [],
+    unsettled: [],
+  })
 
   /** The rows each read of section `key` gives, in order. */
   async function pages(t: T, orgId: string, key: string) {
@@ -910,7 +1034,7 @@ describe("the Deleted items section inside Convex's limits", () => {
     for (let guard = 0; guard < 20; guard++) {
       const m = await t.run(async (ctx: QueryCtx) => {
         const batch = await readBatch(ctx, f.org.id, at, {
-          job: { started_at: started, ended: {}, unsettled: [] },
+          job: { started_at: started, ended: {}, in_flight: [], unsettled: [] },
         })
         const metrics = await ctx.meta.getTransactionMetrics()
         return {

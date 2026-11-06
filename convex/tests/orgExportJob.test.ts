@@ -69,7 +69,9 @@ import {
   archiveOf,
   exists,
   exportAs,
+  exportUntil,
   jobOf,
+  nextStep,
   partsOf,
   requestsOf,
   START,
@@ -1272,6 +1274,24 @@ describe('organization export job', () => {
     )
   })
 
+  it('stays narrow for the rest of a step once a wide page of texts does not fit', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a sub-project's everyday open tasks
+    for (let i = 0; i < 30; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    // room for a page and no text, and four reads a step
+    TEXT_ROOM.bytes = 2 * 1024 * 1024
+    EXPORT_LIMITS.reads = 4
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id: f.org.id })
+    const tasks = JOB_ORDER.findIndex((section) => section.key === 'tasks')
+    expect((await exportUntil(t, export_id, tasks))?.step).toMatchObject({ section: tasks })
+    await nextStep(t)
+    // one wide read that did not fit, then three narrow pages, not a wide
+    // read before each narrow one
+    expect((await jobOf(t, export_id))?.step.counts.tasks).toBe(3 * ISSUES_PAGE_SIZE)
+  })
+
   it('keeps two tasks a page while a deleted item is in flight', async () => {
     const t = newT()
     const f = await withOrg(t)
@@ -1287,6 +1307,8 @@ describe('organization export job', () => {
     const batch = await t.run((ctx) => readBatch(ctx, f.org.id, { section: issues, cursor: null }))
     expect(batch.retry).toBeUndefined()
     expect(batch.rows).toHaveLength(IN_FLIGHT_ISSUES_PAGE_SIZE)
+    // and it says so, for the Deleted items section's rule (storedBatch)
+    expect(batch.in_flight).toBe(true)
   })
 
   it('reads the children of many parents in one query, paging a parent whose children do not fit', async () => {
