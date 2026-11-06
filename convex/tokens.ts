@@ -204,7 +204,7 @@ export async function agentKeysOf(
 
 /**
  * @deprecated The app reads tokens.agentKeys since the release after
- * v0.1.141. This query stays, with its arguments and its answer, through
+ * v0.1.146. This query stays, with its arguments and its answer, through
  * that release, so tabs and desktop windows loaded before it still list
  * keys on Settings › Users, and a later release removes it and adds it to
  * the Instant Rollback list in docs/deployment.md.

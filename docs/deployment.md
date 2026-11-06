@@ -1273,7 +1273,7 @@ past 16 projects, as a member's task history already does. This sets no
 floor for the app, which calls none of them, needs no step and has no
 backfill.
 
-From the release after v0.1.141, **Settings → Organization → Users** lists
+From the release after v0.1.146, **Settings → Organization → Users** lists
 its people, agents and guests from `people.settingsPage`, 25 a page with a
 search, reads one person for the phone's page from `people.get`, reads an
 agent's keys and the key lines from `tokens.agentKeys` once, never
