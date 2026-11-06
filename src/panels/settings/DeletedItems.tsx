@@ -659,10 +659,12 @@ export function DeletedItemsPage() {
             {deletedAtLabel(time, now)}
           </span>
         </HoverTooltip>
+        {/* at least the width of Restore and the menu, so the times line up,
+            and wider while a row says Restoring…, which never runs into its time */}
         <div
           className={cn(
             'deleted-row-actions flex shrink-0 items-center justify-end gap-0.5',
-            wide ? 'w-[128px]' : 'w-[96px]',
+            wide ? 'min-w-[128px]' : 'min-w-[96px]',
           )}
         >
           {canRestore && (

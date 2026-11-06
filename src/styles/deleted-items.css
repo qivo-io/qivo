@@ -143,6 +143,7 @@
   .deleted-row-actions {
     align-self: start;
     width: auto;
+    min-width: 0;
   }
   .deleted-restore-label {
     display: none;
@@ -210,6 +211,7 @@
   .deleted-row-actions {
     align-self: start;
     width: auto;
+    min-width: 0;
   }
   .deleted-restore-label {
     display: none;
