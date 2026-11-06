@@ -821,10 +821,11 @@ export function OrgUsersPage({
     const vm = held(id)
     return vm ? vm.isAgent : known.current.get(id)?.kind === 'agent'
   }
+  // the phone's list shows no key line, so only its person page reads keys
   if (personPage) {
     const id = person?.answer?.person.id
     if (id && isAgentRow(id)) shownAgents.add(id)
-  } else {
+  } else if (!narrow) {
     for (const row of pageRows)
       if (row.kind === 'agent' && !removed.has(row.id)) shownAgents.add(row.id)
     for (const k of keptIds) if (isAgentRow(k.id)) shownAgents.add(k.id)

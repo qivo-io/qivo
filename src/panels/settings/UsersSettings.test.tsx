@@ -921,6 +921,19 @@ describe("the phone's user page and Settings' check", () => {
     expect(reset).not.toHaveBeenCalled()
   })
 
+  it("reads no keys for the phone's list, which shows no key line, and an agent's on its page", async () => {
+    await load()
+    extra.keys.push(keyOf('atlas', 1))
+    narrowScreen(true)
+    await render(() => <Screen initial="org-users" reset={vi.fn()} />)
+    expect(find('[data-settings-open-user="atlas"]').textContent).toContain('Agent')
+    expect(has('[data-agent-keyline]')).toBe(false)
+    expect(keyReads()).toEqual([])
+    await click(find('[data-settings-open-user="atlas"]'))
+    expect(keyReads()).toEqual([['atlas']])
+    expect(keyLine('atlas')).toBe('qva_001...abcd1')
+  })
+
   it('sends an unknown person and a guest back to Users, a non-admin to their account, and moves nothing while loading or failed', async () => {
     await load((s) => s.profiles.push(person('gail', 'Gail Guest', { org_role: 'guest' })))
     narrowScreen(true)
