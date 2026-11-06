@@ -172,9 +172,15 @@ beforeEach(async () => {
       receive(structuredClone(answer))
       return () => open.delete(key)
     } else if (name === 'tasks:board') receive(structuredClone(boardAnswer))
-    else if (name === 'planning:ownerLoads')
-      loads.set((args.owner_ids as string[]).join(), receive as (v: OwnerLoadsJson) => void)
-    else if (name === 'teamSync:lastComments') {
+    else if (name === 'planning:ownerLoads') {
+      // open while subscribed, so a case can tell a call ended
+      const key = (args.owner_ids as string[]).join()
+      const call = receive as (v: OwnerLoadsJson) => void
+      loads.set(key, call)
+      return () => {
+        if (loads.get(key) === call) loads.delete(key)
+      }
+    } else if (name === 'teamSync:lastComments') {
       const unsub = vi.fn()
       lastComments.push({ args, unsub })
       return unsub
@@ -281,7 +287,7 @@ describe("Team sync's read", () => {
     ] as const) {
       await serve(refusal)
       expect(store.P.syncRead()).toMatchObject({ key, value: refusal })
-      expect(store.P.syncRead().fitted).toEqual({ key, value: fitted })
+      expect(store.P.syncRead().fitted).toEqual({ key, value: fitted, until: expect.any(Number) })
       expect(store.P.syncTask('far')).toBeDefined()
     }
     // a failure after ok keeps them too
@@ -297,6 +303,48 @@ describe("Team sync's read", () => {
     await serve({ state: 'unavailable' })
     expect(store.P.syncTask('far')).toBeUndefined()
     expect(store.P.syncRead().fitted).toBeNull()
+  })
+
+  it('says when the meeting it kept stopped being current, the earliest of the read stopping, a reconnect and a refusal', async () => {
+    answer = ok([row('far', 9)])
+    const key = await keyOf({ kind: 'all' })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const day = new Date()
+      const at = (hours: number) => new Date(day).setHours(hours, 0, 0, 0)
+      vi.setSystemTime(at(8))
+      await watch(key)
+      expect(store.P.syncRead().fitted?.until).toBeNull()
+      // a refusal while current stops it when it arrives
+      vi.setSystemTime(at(9))
+      await serve({ state: 'over_ceiling', ceiling: 1000 })
+      expect(store.P.syncRead().fitted?.until).toBe(at(9))
+      // a later refusal of another kind keeps the earlier time
+      vi.setSystemTime(at(10))
+      await serve({ state: 'over_budget' })
+      expect(store.P.syncRead().fitted?.until).toBe(at(9))
+      // an ok answer is current again; a hidden tab stops it from then
+      await serve(ok([row('far', 9)]))
+      expect(store.P.syncRead().fitted?.until).toBeNull()
+      vi.setSystemTime(at(11))
+      store.P.watchSync(null, 1)
+      expect(store.P.syncRead().fitted?.until).toBe(at(11))
+      // the refusal that greets the return leaves the hide's time
+      vi.setSystemTime(at(15))
+      answer = { state: 'over_ceiling', ceiling: 1000 }
+      await watch(key)
+      expect(store.P.syncRead()).toMatchObject({ value: answer, fitted: { until: at(11) } })
+      // a reconnect stops it the moment the answer is no longer current
+      answer = ok([row('far', 9)])
+      await serve(answer)
+      expect(store.P.syncRead().fitted?.until).toBeNull()
+      vi.setSystemTime(at(16))
+      double.live?.reconnect(['workspace:root'])
+      expect(store.P.syncRead().current).toBe(false)
+      expect(store.P.syncRead().fitted?.until).toBe(at(16))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('holds the meeting across a new day for the same scope until the new day answers, never as current', async () => {
@@ -333,6 +381,48 @@ describe("Team sync's read", () => {
     expect(asked).toEqual([])
   })
 
+  it("moves a store that lags behind midnight to the new day, holding yesterday's meeting until today's answers", async () => {
+    answer = ok([row('far', 9)])
+    const yesterday = await keyOf({ kind: 'all' })
+    await watch(yesterday)
+    const was = store.P.TODAY_ISO
+    // the next local day, before the store's day watch ran, as after sleep
+    const next = new Date()
+    next.setDate(next.getDate() + 1)
+    next.setHours(12, 0, 0, 0)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(next)
+      // a kept page shown again asks with the day it held
+      store.P.watchSync(yesterday, 1)
+      expect(store.P.TODAY_ISO).toBe(isoFromDate(next))
+      expect(store.P.TODAY_ISO).not.toBe(was)
+      // nothing asked for yesterday, and its meeting stays, not current
+      expect(asked).toEqual([yesterday])
+      expect(store.P.syncTask('far')).toBeDefined()
+      expect(store.P.syncRead()).toMatchObject({ key: yesterday, current: false })
+      // the page asks again with the store's new day, which the server holds
+      // back, and yesterday's meeting stands in
+      network.onUpdate.mockImplementationOnce((_ref, args, receive, fail) => {
+        open.set(JSON.stringify(args), { next: receive, fail })
+        asked.push(JSON.stringify(args))
+        return () => open.delete(JSON.stringify(args))
+      })
+      const today = await keyOf({ kind: 'all' })
+      expect(JSON.parse(today).day).toBe(isoFromDate(next))
+      store.P.watchSync(today, 1)
+      expect(asked).toEqual([yesterday, today])
+      expect(store.P.syncTask('far')).toBeDefined()
+      expect(store.P.syncRead()).toMatchObject({ key: yesterday, current: false })
+      open.get(today)?.next(ok([row('near', 10)]))
+      await turn()
+      expect(store.P.syncTask('far')).toBeUndefined()
+      expect(store.P.syncRead()).toMatchObject({ key: today, current: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("lets its rows, a Viewer's people and the last comments' marks go on release", async () => {
     answer = ok([row('far', 9)])
     await watch(await keyOf({ kind: 'all' }))
@@ -342,6 +432,8 @@ describe("Team sync's read", () => {
     store.P.releaseSync()
     expect(store.P.syncTask('far')).toBeUndefined()
     expect(store.P.syncRead().key).toBeNull()
+    // the people's call (sync:people) ends with it
+    expect(loads.size).toBe(0)
     expect(lastComments[0]?.unsub).toHaveBeenCalledOnce()
     expect(store.P.lastComments.size).toBe(0)
     expect(probe().layerCount()).toBe(0)
@@ -405,7 +497,22 @@ describe("a stopped meeting's rows", () => {
 })
 
 describe("an organization Viewer's people", () => {
-  it('reads one owner a call, live only while shown, and the week from the visible share', async () => {
+  it('reads one owner a call for an organization Viewer', async () => {
+    const leo = crypto.randomUUID()
+    snapshot.profiles[0].org_role = 'viewer'
+    snapshot.profiles.push({
+      ...snapshot.profiles[0],
+      id: leo,
+      name: 'Leo',
+      auth_user_id: undefined,
+    })
+    await store.initStore()
+    store.P.watchSyncPeople([me(), leo], true)
+    // one call each, never one that names both
+    expect([...loads.keys()].sort()).toEqual([me(), leo].sort())
+  })
+
+  it('reads the people of staff in one call, live only while shown, and the week from the visible share', async () => {
     const leo = crypto.randomUUID()
     snapshot.profiles.push({
       ...snapshot.profiles[0],
@@ -525,7 +632,7 @@ describe('the week a person’s pending edits move', () => {
     const delta = store.P.syncLoadChanges(saved(rows), week()).get(me()) ?? 0
     expect(roundTenths(0 + delta)).toBe(1)
     // rounding each third first would say 0.9, which must fail
-    expect(3 * roundTenths(1 / 3)).not.toBe(roundTenths(delta))
+    expect(roundTenths(delta)).not.toBe(roundTenths(3 * roundTenths(1 / 3)))
   })
 
   it('re-counts a held task’s pending edit from the workspace’s row, after an ask', async () => {

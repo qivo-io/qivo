@@ -3067,8 +3067,12 @@ type ViewRead = {
   behind: boolean
   /** the last result whose rows it took, for the arguments `key`, which a
       view that keeps its rows past a refusal or a failure shows under it
-      (Team sync's stale meeting); null once its rows went */
-  fitted: { key: string; value: unknown } | null
+      (Team sync's stale meeting), and `until`, when it stopped being the
+      live subscription's current result, the earliest of when its
+      subscription stopped, when a reconnect left it to arrive again and
+      when a refusal or a failure that kept its rows took its place, null
+      while it is current; null once its rows went */
+  fitted: { key: string; value: unknown; until: number | null } | null
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -3152,6 +3156,13 @@ function settleOverview() {
   })
 }
 
+/** Marks view read `read`'s last result whose rows it took as no longer
+    the current one from now (ViewRead fitted `until`), keeping an earlier
+    mark, so a view that shows it later says when it stopped updating. */
+function fittedStops(read: ViewRead) {
+  if (read.fitted && read.fitted.until === null) read.fitted = { ...read.fitted, until: Date.now() }
+}
+
 /** Takes view `slot`'s result of its live subscription `token`: its rows
     become the view's anchor, a delivery that brings rows holds the writes
     it changed (dropHeldViewParts), the Overview's lists take it in once the
@@ -3178,11 +3189,14 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
         : next.error !== undefined && read.query.keepsOnError
           ? KEEP_ROWS
           : null
-    if (take && rows === KEEP_ROWS) read.behind = true
-    else if (take && rows !== KEEP_ROWS) {
+    if (take && rows === KEEP_ROWS) {
+      read.behind = true
+      // a refusal or a failure that keeps the rows ends their result's run
+      fittedStops(read)
+    } else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
-      read.fitted = rows ? { key, value: next.value } : null
+      read.fitted = rows ? { key, value: next.value, until: null } : null
       read.delivered = ++viewDeliveries
       read.behind = false
       dropHeldViewParts()
@@ -3211,6 +3225,7 @@ function syncViewRead(slot: ViewSlot) {
     read.stop = null
     read.live = null
     read.current = false
+    fittedStops(read)
   }
   if (read.want === null || read.live !== null) return
   const key = read.want
@@ -3220,6 +3235,9 @@ function syncViewRead(slot: ViewSlot) {
   const stopTransitions = live.onTransition(
     (transition) => {
       latestConnection = Math.max(latestConnection, transition.connection)
+      // a reconnect leaves the read's result to arrive again, so from now
+      // it is not current (viewRead)
+      if (read.live === key && read.current && read.connection < latestConnection) fittedStops(read)
       if (read.live === key && transition.tokens.has(watch.token))
         takeViewResult(slot, read, key, watch.token)
     },
@@ -10265,13 +10283,21 @@ export const PLANNER = {
       (null for none), its value or error, whether it is the live
       subscription's on the current connection, whether the read held a
       value before, and `fitted`, the last ok answer whose rows it holds,
-      which the page shows under a refusal or a failure that kept them. */
+      which the page shows under a refusal or a failure that kept them,
+      with `until`, when it stopped being the current answer (ms), the
+      earliest of the read stopping, as in a hidden tab or on a new day, a
+      reconnect leaving it to arrive again and the refusal or failure
+      arriving, null while it is current. */
   syncRead: () => {
     const { value, fitted, ...read } = viewRead(SYNC_SLOT)
     return {
       ...read,
       ...(value === undefined ? {} : { value: value as AgendaAnswer }),
-      fitted: fitted as { key: string; value: Extract<AgendaAnswer, { state: 'ok' }> } | null,
+      fitted: fitted as {
+        key: string
+        value: Extract<AgendaAnswer, { state: 'ok' }>
+        until: number | null
+      } | null,
     }
   },
   /** Forgets Team sync's read and rows, an organization Viewer's people's
