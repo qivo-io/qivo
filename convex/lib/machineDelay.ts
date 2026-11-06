@@ -211,29 +211,36 @@ const STEP_READS: ReadCeiling = {
 }
 
 /* The room of the owner reader of a single-task read that starts at
- * `start`: OWNER_LOADS.call from there, past the access instance's shared
- * reads, and within the request's limits less DELAY_READ_RESERVE, and less
- * STEP_READS where a round may read the caller's own rows at once, as those
- * reads count against the request's limits like any other. */
+ * `start`, when the access instance had counted `from` as shared:
+ * OWNER_LOADS.call from there, past the shared reads the instance makes
+ * from then on, as lib/core.ts relatedRoom leaves them out, and within the
+ * request's limits less DELAY_READ_RESERVE, and less STEP_READS where a
+ * round may read the caller's own rows at once, as those reads count
+ * against the request's limits like any other. The shared reads made
+ * before `start` were read by the rest of the task's read, so they give
+ * the owner reader no room. */
 const delayRoom =
-  (start: TransactionMetrics): ReadRoom =>
+  (start: TransactionMetrics, from: ReadCeiling): ReadRoom =>
   (m, shared, wide) => {
     const room = roomOf(m, DELAY_READ_RESERVE)
     const hold = wide ? STEP_READS : { ranges: 0, documents: 0, bytes: 0 }
-    const since = (now: number, then: number, own: number) => now - then - own
+    // what the reader read since `start`, less the shared reads since then
+    const since = (now: number, then: number, own: number, ownThen: number) =>
+      now - then - (own - ownThen)
     return {
       ranges: Math.min(
         OWNER_LOADS.call.ranges -
-          since(m.databaseQueries.used, start.databaseQueries.used, shared.ranges),
+          since(m.databaseQueries.used, start.databaseQueries.used, shared.ranges, from.ranges),
         room.ranges - hold.ranges - m.databaseQueries.used,
       ),
       documents: Math.min(
         OWNER_LOADS.call.documents -
-          since(m.documentsRead.used, start.documentsRead.used, shared.documents),
+          since(m.documentsRead.used, start.documentsRead.used, shared.documents, from.documents),
         room.documents - hold.documents - m.documentsRead.used,
       ),
       bytes: Math.min(
-        OWNER_LOADS.call.bytes - since(m.bytesRead.used, start.bytesRead.used, shared.bytes),
+        OWNER_LOADS.call.bytes -
+          since(m.bytesRead.used, start.bytesRead.used, shared.bytes, from.bytes),
         room.bytes - hold.bytes - m.bytesRead.used,
       ),
     }
@@ -282,7 +289,9 @@ function loadVerdict(
  * own open tasks as `me` may see them (lib/ownerLoads.ts ownerLoadReader,
  * through `access`, the single-task read's own accessOf instance, so the
  * caller's own grants, memberships and team shares are read once a read),
- * within the reader's bounds and the room the request has left (delayRoom).
+ * within the reader's bounds and the room the request has left (delayRoom),
+ * OWNER_LOADS.call counted from the verdict's start, so the caller's own
+ * rows the rest of the read counted as shared give it no more room.
  * Where it does not fit, or a check of `me`'s access a bound stopped, the
  * verdict is UNAVAILABLE_DELAY, also when the due date has passed, because
  * the projected finish rests on the load.
@@ -302,7 +311,7 @@ export function taskForecaster(
     if (profile === null || !needsLoad(issue, facts, it, capacity)) {
       return delayJson(delayOf(it, [], clock.todayWeek), clock.grid)
     }
-    const room = delayRoom(await ctx.meta.getTransactionMetrics())
+    const room = delayRoom(await ctx.meta.getTransactionMetrics(), { ...access.shared })
     const load = await ownerLoadReader(ctx, { me, access, room }).read(profile.id)
     return loadVerdict(me, it, profile.id, load, clock)
   }
