@@ -134,10 +134,14 @@ const sameRow = (a: MilestoneRow, b: MilestoneRow) =>
 
 /** Creates an empty registry. `topOf` names the top-level project a project
     stands for in a read (a sub-project its parent), as the server folds the
-    projects a read names; `live` says whether a slot's read is subscribed. */
+    projects a read names; `live` says whether a slot's read is subscribed;
+    `known` gives the milestones the store holds outside the reads, such as
+    the workspace's copy, which tell where a batch's own last row may move
+    (coversRow). */
 export function createMilestoneRows(o: {
   topOf: (projectId: string) => string
   live: (slot: string) => boolean
+  known?: () => Iterable<MilestoneRow>
 }) {
   const anchors = new Map<string, Anchor>()
   // the rows on screen, live reads first
@@ -150,14 +154,11 @@ export function createMilestoneRows(o: {
   const before = (ask: MilestoneAsk, pos: MilestonePosition, other: MilestonePosition) =>
     descending(ask) ? comparePositions(pos, other) > 0 : comparePositions(pos, other) < 0
 
-  /** Whether the read of `anchor` would answer `row`, by the server's rules
-      (convex/model/milestones.ts readMilestones): one of the projects it
-      names, folded to their top-level projects, a day it lists (shownDay),
-      its search, after its `after` and up to its answer's `next`. A `get`
-      read covers its own milestone only. */
-  function coversRow(anchor: Anchor, row: MilestoneRow): boolean {
-    const { ask, take } = anchor
-    if (ask.kind === 'get') return row.id === ask.id
+  /** Whether a section or range ask would list `row` with no end, by the
+      server's rules (convex/model/milestones.ts readMilestones): one of
+      the projects it names, folded to their top-level projects, a day it
+      lists (shownDay), its search and after its `after`. */
+  function reaches(ask: Exclude<MilestoneAsk, { kind: 'get' }>, row: MilestoneRow): boolean {
     if (!ask.projects.some((id) => o.topOf(id) === o.topOf(row.project_id))) return false
     const shown = shownDay(row.week)
     if (shown === null) return false
@@ -167,9 +168,37 @@ export function createMilestoneRows(o: {
       const search = (ask.search ?? '').trim()
       if (search !== '' && !allWordsMatcher(nameKey(search))(nameKey(row.name))) return false
     }
+    return ask.after === undefined || before(ask, ask.after, positionOf(row))
+  }
+
+  /** Whether `anchor`'s read is known to lack a milestone other than `id`
+      that it would list (reaches) before position `pos`: one the store
+      holds (`known`) or another read's answer holds, which this answer
+      does not. */
+  function lacksBefore(anchor: Anchor, id: string, pos: MilestonePosition): boolean {
+    const { ask, take } = anchor
+    if (ask.kind === 'get') return false
+    const held = new Set(take.rows.map((row) => row.id))
+    const lacked = (row: MilestoneRow) =>
+      row.id !== id && !held.has(row.id) && reaches(ask, row) && before(ask, positionOf(row), pos)
+    for (const row of o.known?.() ?? []) if (lacked(row)) return true
+    for (const other of anchors.values()) if (other.take.rows.some(lacked)) return true
+    return false
+  }
+
+  /** Whether the read of `anchor` would answer `row`: a section or a range
+      lists it (reaches) up to its answer's `next`. The batch's own last
+      row, whose position `next` is, stays when a write moves it later,
+      while it still comes before every milestone the read is known to lack
+      (lacksBefore), since the following batch starts after it. A `get`
+      read covers its own milestone only. */
+  function coversRow(anchor: Anchor, row: MilestoneRow): boolean {
+    const { ask, take } = anchor
+    if (ask.kind === 'get') return row.id === ask.id
+    if (!reaches(ask, row)) return false
     const pos = positionOf(row)
-    if (ask.after !== undefined && !before(ask, ask.after, pos)) return false
-    return take.next === null || !before(ask, take.next, pos)
+    if (take.next === null || !before(ask, take.next, pos)) return true
+    return take.next.id === row.id && !lacksBefore(anchor, row.id, pos)
   }
 
   /** `rows` with `row` in its place in `ask`'s order. */

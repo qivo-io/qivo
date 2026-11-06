@@ -29,11 +29,13 @@ const ms = (id: string, week: string, name = id, project = 'plan'): MilestoneRow
   created_at: AT,
 })
 
-/** A registry whose reads in `stopped` are not subscribed. */
-function registry(stopped: readonly string[] = []) {
+/** A registry whose reads in `stopped` are not subscribed, with the
+    milestones the store holds outside the reads, `known`. */
+function registry(stopped: readonly string[] = [], known: readonly MilestoneRow[] = []) {
   return createMilestoneRows({
     topOf: (id) => TOP[id] ?? id,
     live: (slot) => !stopped.includes(slot),
+    known: () => known,
   })
 }
 
@@ -179,6 +181,46 @@ describe('the paints', () => {
     r.update('x', { week: '2026-09-16' }, ms('x', '2026-12-01'))
     expect(ids(r.shownOf('range')?.rows)).toEqual(['x'])
     expect(r.shownOf('range')?.rows[0].week).toBe('2026-09-16')
+  })
+})
+
+describe("a batch's own last row", () => {
+  it('stays when a rename or a move keeps it before every milestone the read lacks', () => {
+    const a = ms('a', '2026-09-15', 'Alpha')
+    const b = ms('b', '2026-09-22', 'Beta')
+    const r = registry([], [a, b])
+    // a one-row section: the following batch starts after Alpha
+    r.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    r.beginPaint()
+    r.update('a', { name: 'Zed' })
+    expect(r.shownOf('next')?.rows.map((row) => row.name)).toEqual(['Zed'])
+    r.beginPaint()
+    r.update('a', { week: '2026-09-21' })
+    expect(ids(r.shownOf('next')?.rows)).toEqual(['a'])
+  })
+
+  it('must fail: leaves the batch once it moves past a milestone the read lacks', () => {
+    const a = ms('a', '2026-09-15', 'Alpha')
+    const b = ms('b', '2026-09-22', 'Beta')
+    const r = registry([], [a, b])
+    r.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    r.beginPaint()
+    r.update('a', { week: '2026-09-29' })
+    expect(ids(r.shownOf('next')?.rows)).toEqual([])
+    // another read's answer tells of a milestone the batch lacks too
+    const other = registry()
+    other.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    other.take('range', 'r', range, answer([a, b]))
+    other.beginPaint()
+    other.update('a', { name: 'Zed', week: '2026-09-22' })
+    expect(ids(other.shownOf('next')?.rows)).toEqual([])
+    // a row that is not the batch's last still leaves past `next`
+    const c = ms('c', '2026-09-16', 'Gamma')
+    const third = registry()
+    third.take('next', 'k', upcoming({ limit: 1 }), answer([a], positionOf(a)))
+    third.beginPaint()
+    third.insert({ ...c, week: '2026-09-20' })
+    expect(ids(third.shownOf('next')?.rows)).toEqual(['a'])
   })
 })
 

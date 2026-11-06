@@ -416,6 +416,18 @@ describe('the writes', () => {
     expect(names('next')).toEqual(['Alpha'])
   })
 
+  it('keeps a renamed next milestone in its one-row section until it moves past one the read lacks', async () => {
+    await boot()
+    await watch('next', upcoming(['plan'], { limit: 1 }))
+    expect(names('next')).toEqual(['Alpha'])
+    const P = store.P
+    void P.updateMilestone('alpha', { name: 'Zulu' })
+    expect(names('next')).toEqual(['Zulu'])
+    // past Beta, which the workspace holds and the section does not
+    void P.updateMilestone('alpha', { week: P.isoToWeek('2026-09-29') })
+    expect(names('next')).toEqual([])
+  })
+
   it('sends nothing for a milestone neither the workspace nor a read holds', async () => {
     await boot(false)
     await expect(store.P.updateMilestone('alpha', { name: 'X' })).resolves.toBe(false)

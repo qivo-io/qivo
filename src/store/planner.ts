@@ -3375,10 +3375,12 @@ function milestonePaint(marks: MilestoneMarks, paint: Paint): Paint {
 }
 
 /* The milestone reads' rows: a sub-project stands for its top-level
-   project, as the server folds the projects a read names. */
+   project, as the server folds the projects a read names, and the
+   workspace's milestones tell which rows a read is known to lack. */
 const milestoneRows = createMilestoneRows({
   topOf: (id) => rows.projects.get(id)?.parent_id ?? id,
   live: viewLive,
+  known: () => rows.milestones.peekValues(),
 })
 
 /** Whether read `slot`'s answer holds what `marks` changes: a copy of one
