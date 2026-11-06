@@ -29,8 +29,6 @@ import type {
   ApiAccounts,
   BillingDetails,
   BillingPlan,
-  BillingSummary,
-  BillingUsage,
   BillingUsageFigures,
   StorageProjects,
 } from '../lib/billingTypes'
@@ -44,12 +42,6 @@ import { deleteTask } from './trash.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
-const summary = makeFunctionReference<'query', { org_id: string }, BillingSummary>(
-  'billing:summary',
-)
-const currentUsage = makeFunctionReference<'query', { org_id: string }, BillingUsage>(
-  'billing:currentUsage',
-)
 const storageProjects = makeFunctionReference<'query', { org_id: string }, StorageProjects>(
   'billing:storageProjects',
 )
@@ -392,14 +384,13 @@ async function createTask(t: T, f: Awaited<ReturnType<typeof withOrg>>, title = 
 describe('billing authority and plan versions', () => {
   it('keeps billing terms/admin actions fenced while all members can read their write status', async () => {
     const { t, f } = await fixture()
-    expect(await as(t, f.admin).query(summary, { org_id: f.org.id })).toMatchObject({
+    expect(await as(t, f.admin).query(details, { org_id: f.org.id })).toMatchObject({
       status: 'pending',
       writable: false,
     })
     for (const profile of [f.user, f.viewer, f.guest]) {
       const caller = as(t, profile)
-      await expectRefusal(caller.query(summary, { org_id: f.org.id }), 'forbidden', /admin only/)
-      for (const read of [currentUsage, storageProjects, details, usageFigures])
+      for (const read of [storageProjects, details, usageFigures])
         await expectRefusal(caller.query(read, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(
         caller.query(apiAccounts, { org_id: f.org.id, period: 'month:2026-01' }),
@@ -415,11 +406,10 @@ describe('billing authority and plan versions', () => {
       await expectRefusal(caller.action(portal, { org_id: f.org.id }), 'forbidden', /admin only/)
       expect(await caller.query(status, { org_id: f.org.id })).toMatchObject({ writable: false })
     }
-    await expectRefusal(t.query(summary, { org_id: f.org.id }), 'forbidden', /not signed in/)
     for (const read of [details, usageFigures])
       await expectRefusal(t.query(read, { org_id: f.org.id }), 'forbidden', /not signed in/)
     await expectRefusal(t.action(checkout, { org_id: f.org.id }), 'forbidden', /not signed in/)
-    for (const read of [summary, details, usageFigures])
+    for (const read of [details, usageFigures])
       await expectRefusal(
         as(t, f.otherAdmin).query(read, { org_id: f.org.id }),
         'forbidden',
@@ -453,12 +443,8 @@ describe('billing authority and plan versions', () => {
     await t.run((ctx) => enrollOrganization(ctx, f.otherOrg.id))
     expect(await stored(t, f.org.id)).toMatchObject({ plan_id: planId })
     expect(await stored(t, f.otherOrg.id)).toMatchObject({ plan_id: newerId })
-    const oldSummary = await as(t, f.admin).query(summary, { org_id: f.org.id })
-    expect(oldSummary.plan).toMatchObject({ name: 'Founding', seat_price_cents: 100 })
-    expect(oldSummary.plan).not.toHaveProperty('polar_product_id')
-    expect(oldSummary.plan).not.toHaveProperty('api_meter_id')
-    // the details and the operator console's answer leave the provider ids
-    // out the same way
+    // the details and the operator console's answer keep the old terms and
+    // leave the provider ids out
     for (const shown of [
       await as(t, f.admin).query(details, { org_id: f.org.id }),
       await operator.query(orgBilling, { org_id: f.org.id }),
@@ -674,7 +660,7 @@ describe('complimentary access and paid expiry', () => {
     await createTask(t, f, 'Last millisecond of grant')
     vi.setSystemTime('2027-02-28T10:30:00.000Z')
     await expectRefusal(createTask(t, f, 'Must not write'), 'forbidden', /read-only/)
-    expect(await as(t, f.admin).query(summary, { org_id: f.org.id })).toMatchObject({
+    expect(await as(t, f.admin).query(details, { org_id: f.org.id })).toMatchObject({
       writable: false,
       checkout_available: true,
     })
@@ -717,7 +703,8 @@ describe('complimentary access and paid expiry', () => {
     const { t, f } = await fixture()
     await t.mutation(apply, { payload: remote(f.org.id, { status: 'canceled', ended_at: NOW }) })
     await expectRefusal(createTask(t, f), 'forbidden', /read-only/)
-    expect(await as(t, f.admin).query(currentUsage, { org_id: f.org.id })).toHaveProperty(
+    // the admin still reads Billing's usage
+    expect(await as(t, f.admin).query(usageFigures, { org_id: f.org.id })).toHaveProperty(
       'calls',
       0,
     )

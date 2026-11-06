@@ -12,10 +12,7 @@ import type {
   BillingDetails,
   BillingPeriodHead,
   BillingPlan,
-  BillingSummary,
-  BillingUsage,
   BillingUsageFigures,
-  BillingUsageHead,
 } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
@@ -230,46 +227,6 @@ export async function billingDetailsOf(ctx: QueryCtx, orgId: string): Promise<Bi
   return await detailsWith(ctx, orgId, await rosterCounts(ctx, orgId))
 }
 
-/** @deprecated The answer of the deprecated billing.summary, kept one
- * release for tabs loaded before billing.details shipped: Billing's
- * details (billingDetailsOf) with the name of every billable account in
- * profile id order and of every non-billable one in name order. It walks
- * the roster twice, once in getBillableUsers and once by by_org. The
- * release that removes billing.summary removes it. */
-export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<BillingSummary> {
-  const count = await getBillableUsers(ctx, orgId)
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const billableIds = new Set(count.users.map((user) => user.profile_id))
-  const excluded: BillingSummary['non_billable_accounts'] = []
-  for (const profile of profiles) {
-    // Inactive guests belong to the inactive count, even if a home membership
-    // would also exempt them. The counters and lists therefore partition the roster.
-    if (!profile.active)
-      excluded.push({ profile_id: profile.id, name: profile.name, reason: 'inactive' })
-    else if (profile.org_role === 'guest' && !billableIds.has(profile.id))
-      excluded.push({ profile_id: profile.id, name: profile.name, reason: 'guest_with_home' })
-  }
-  excluded.sort((a, b) => a.name.localeCompare(b.name) || a.profile_id.localeCompare(b.profile_id))
-  const details = await detailsWith(ctx, orgId, {
-    billable: count.total,
-    active: profiles.filter((p) => p.active).length,
-    inactive: excluded.filter((account) => account.reason === 'inactive').length,
-    ownBilling: excluded.filter((account) => account.reason === 'guest_with_home').length,
-  })
-  return {
-    ...details,
-    billable_accounts: count.users.map(({ profile_id, name, reason }) => ({
-      profile_id,
-      name,
-      reason,
-    })),
-    non_billable_accounts: excluded,
-  }
-}
-
 /** The plan usage allowances follow (the subscription's, else the default
  * plan before enrollment, else none), the seats they are sized by and the API
  * calls they include. The Billing and API access pages both use it, so their
@@ -350,47 +307,6 @@ export async function periodHead(
   }
 }
 
-/** @deprecated The head of the deprecated billing.currentUsage: periodHead
- * with the bucket's calls summed
- * from every one of its usage rows and every account with calls in
- * `users`, read with one profile each, named "Removed user" when it is
- * gone or of another organization. billing.usageFigures answers the calls
- * from the bucket's aggregates and billing.apiAccounts the accounts 25 at
- * a time; the release that removes the deprecated reads removes it.
- * `subscription` is the organization's subscription when the caller has
- * read it already, else it reads it. */
-export async function billingUsageHead(
-  ctx: QueryCtx,
-  orgId: string,
-  subscription?: Doc<'billing_subscriptions'> | null,
-): Promise<BillingUsageHead> {
-  const sub = subscription === undefined ? await subscriptionFor(ctx, orgId) : subscription
-  const head = await periodHead(ctx, orgId, sub)
-  const rows = await ctx.db
-    .query('billing_usage')
-    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', head.period_key))
-    .collect()
-  const users = new Map<string, BillingUsageHead['users'][number]>()
-  for (const row of rows) {
-    let user = users.get(row.profile_id)
-    if (!user) {
-      const profile = await byId(ctx, 'profiles', row.profile_id)
-      user = {
-        profile_id: row.profile_id,
-        name: profile?.org_id === orgId ? profile.name : 'Removed user',
-        calls: 0,
-      }
-      users.set(row.profile_id, user)
-    }
-    user.calls += row.calls
-  }
-  return {
-    ...head,
-    calls: rows.reduce((total, row) => total + row.calls, 0),
-    users: [...users.values()].sort((a, b) => b.calls - a.calls),
-  }
-}
-
 /** What the sample at the start of the paid period `head` shows measured
  * for organization `orgId`, whose subscription is `sub`: the bytes of its
  * billing_periods row (billingSync.ts storageStep), the organization's
@@ -434,23 +350,6 @@ export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<Bill
   return {
     ...head,
     calls: await periodCalls(ctx, orgId, head.period_key),
-    storage_bytes: totals?.bytes ?? null,
-    sampled_storage_bytes: await sampledStorage(ctx, orgId, sub, head),
-  }
-}
-
-/** @deprecated Billing's usage for organization `orgId` as the deprecated
- * billing.currentUsage answers it, kept one release for tabs loaded before
- * billing.usageFigures shipped: the deprecated head (billingUsageHead),
- * current storage and the paid period's sample as usageFiguresOf answers
- * them. It reads every usage row of the bucket and one profile per
- * account, and no attachment row. */
-export async function currentUsageOf(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
-  const sub = await subscriptionFor(ctx, orgId)
-  const head = await billingUsageHead(ctx, orgId, sub)
-  const totals = await storageTotalsOf(ctx, orgId)
-  return {
-    ...head,
     storage_bytes: totals?.bytes ?? null,
     sampled_storage_bytes: await sampledStorage(ctx, orgId, sub, head),
   }

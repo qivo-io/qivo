@@ -16,9 +16,9 @@ import { BillingSettings } from './BillingSettings'
    while the usage figures (billing.usageFigures), API calls by account
    (billing.apiAccounts) and Storage by project (billing.storageProjects)
    are read once on opening and again on each Refresh, never subscribed
-   and never through an action. The deprecated billing.summary and
-   billing.currentUsage are never read. The demo's static page reads
-   nothing. */
+   and never through an action. Neither billing.summary nor
+   billing.currentUsage, which the release after v0.1.145 removed, is
+   read. The demo's static page reads nothing. */
 
 const network = vi.hoisted(() => ({ query: vi.fn(), onUpdate: vi.fn(), action: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
@@ -203,7 +203,7 @@ describe('Billing reads its usage once', () => {
     expect(
       network.onUpdate.mock.calls.every(([ref]) => getFunctionName(ref) === 'billing:details'),
     ).toBe(true)
-    // the deprecated reads, kept for tabs loaded before this page, are never read
+    // nor the reads the release after v0.1.145 removed
     expect(reads.map((r) => r.name)).not.toContain('billing:summary')
     expect(reads.map((r) => r.name)).not.toContain('billing:currentUsage')
   })

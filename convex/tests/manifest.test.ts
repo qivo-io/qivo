@@ -181,11 +181,9 @@ backgroundPreviews:source query internal {"type":"object","value":{"kind":{"fiel
 billing:accountList query public {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"billable"},{"type":"literal","value":"non_billable"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:adminContext query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:apiAccounts query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:currentUsage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:details query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:status query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:storageProjects query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:summary query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usageFigures query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:cancelSubscription action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:checkout action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -856,17 +854,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Billing details/usage require an org admin; status reveals only the
   // caller's org entitlement. details, usageFigures, apiAccounts,
   // accountList and storageProjects check the admin and refuse the demo in
-  // their handlers, as apiAccess.people does; summary and currentUsage,
-  // kept one release for tabs loaded before details and usageFigures, do
-  // the same. Checkout and portal re-check admin identity in orgAction and
-  // remain available during billing recovery/read-only access.
+  // their handlers, as apiAccess.people does. Checkout and portal re-check
+  // admin identity in orgAction and remain available during billing
+  // recovery/read-only access.
   billing: {
     details: 'orgQuery',
     usageFigures: 'orgQuery',
     apiAccounts: 'orgQuery',
     accountList: 'orgQuery',
-    summary: 'orgQuery',
-    currentUsage: 'orgQuery',
     storageProjects: 'orgQuery',
     status: 'orgQuery',
   },
@@ -1330,7 +1325,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 251
+const PUBLIC_COUNT = 249
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

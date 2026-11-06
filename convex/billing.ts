@@ -11,14 +11,13 @@ import type {
   AccountNames,
   ApiAccounts,
   BillingDetails,
-  BillingUsage,
   BillingUsageFigures,
   StorageProjects,
 } from './lib/billingTypes'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { forbidden, orgQuery, require } from './lib/functions'
-import { billingDetailsOf, billingSummary, currentUsageOf, usageFiguresOf } from './model/billing'
+import { billingDetailsOf, usageFiguresOf } from './model/billing'
 import { accountNamesBatch, apiAccountsBatch } from './model/billingLists'
 import { storageProjectsBatch } from './model/billingStorage'
 import { checkoutDeadline } from './model/orgRetention'
@@ -50,26 +49,6 @@ export const details = orgQuery({
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await billingDetailsOf(ctx, ctx.me.org_id)
-  },
-})
-
-/**
- * @deprecated The app reads billing.details and billing.accountList since
- * the release after v0.1.144. This query stays, with its reads and its
- * answer, through that release, so tabs and desktop windows loaded before
- * it still load Billing, and a later release removes it and adds it to the
- * Instant Rollback list in docs/deployment.md.
- *
- * Billing's details with the name of every billable and non-billable
- * account (model/billing.ts billingSummary), which walks the roster twice.
- * Admin only, refused in the demo and while the deletion runs.
- */
-export const summary = orgQuery({
-  args: {},
-  handler: async (ctx) => {
-    refuseDemoFeature()
-    require(ctx.me.org_role === 'admin', forbidden('admin only'))
-    return await billingSummary(ctx, ctx.me.org_id)
   },
 })
 
@@ -118,35 +97,6 @@ export const usageFigures = orgQuery({
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await usageFiguresOf(ctx, ctx.me.org_id)
-  },
-})
-
-/**
- * @deprecated The app reads billing.usageFigures and billing.apiAccounts
- * since the release after v0.1.144. This query stays, with its answer,
- * through that release, so tabs and desktop windows loaded before it
- * still load Billing, and a later release removes it and adds it to the
- * Instant Rollback list in docs/deployment.md.
- *
- * Billing's usage as the app read it from v0.1.135: the period's API calls
- * summed from every usage row of the bucket, with each account's total in
- * `users` and the allowances (model/billing.ts billingUsageHead), current
- * storage and the period's storage sample (currentUsageOf). Admin only,
- * refused in the demo and while the deletion runs. It picks the bucket by
- * the clock, as billing.usageFigures does. It reads the head's rows, the
- * roster only when the subscription has no billed seats (usageAllowance),
- * one profile per account with usage, and two single reads, the totals row
- * and the period row. At 1,000 people with 15 accounts of usage over 30
- * usage rows and no subscription it read 1,047 documents, 22 index ranges
- * and about 384 KB in convex/tests/billingStorage.test.ts ("reads at the
- * design size"), without the caller's seat check.
- */
-export const currentUsage = orgQuery({
-  args: {},
-  handler: async (ctx): Promise<BillingUsage> => {
-    refuseDemoFeature()
-    require(ctx.me.org_role === 'admin', forbidden('admin only'))
-    return await currentUsageOf(ctx, ctx.me.org_id)
   },
 })
 

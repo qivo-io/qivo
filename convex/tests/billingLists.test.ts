@@ -6,9 +6,9 @@
  *
  *   1. The figures' calls come from the bucket's aggregates, equal to the
  *      usage rows' sum and to API access, or null while they are not
- *      complete, never 0; the rest equals the deprecated
- *      billing.currentUsage; the reads do not grow with the usage rows, and
- *      the roster is walked only when the subscription has no billed seats.
+ *      complete, never 0; the allowance equals API access's; the reads do
+ *      not grow with the usage rows, and the roster is walked only when the
+ *      subscription has no billed seats.
  *   2. API calls by account pages 25 at a time, most calls first, equal
  *      calls each once, without rows at 0 calls, adding up to the figures.
  *   3. It names a removed account or another organization's profile
@@ -286,15 +286,22 @@ async function accounts(t: T, f: OrgFixture, count: number, calls: (n: number) =
   return ids
 }
 
-/** `o` without the fields `keys` names, such as the figures without the
- * calls the deprecated billing.currentUsage sums otherwise. */
-const omit = (o: object, ...keys: string[]) =>
-  Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)))
+/** The calls of the usage rows of organization `orgId` in bucket `period`,
+ * summed, as the aggregates must answer them. */
+const rowCalls = (t: T, orgId: string, period: string) =>
+  t.run(async (ctx) =>
+    (
+      await ctx.db
+        .query('billing_usage')
+        .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', period))
+        .collect()
+    ).reduce((sum, row) => sum + row.calls, 0),
+  )
 
 /* ------------------------------------------------------------ the figures */
 
 describe('the usage figures', () => {
-  it("answer a month's calls from its shards, equal to the usage rows and API access, and the rest as currentUsage does", async () => {
+  it("answer a month's calls from its shards, equal to the usage rows and API access", async () => {
     const t = newT()
     const f = await withOrg(t)
     await t.run((ctx) => startOrgTotals(ctx, f.org.id))
@@ -315,15 +322,14 @@ describe('the usage figures', () => {
           }),
         )
     const figures = await figuresOf(t, f.admin)
-    const current = await as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
     const access = await as(t, f.admin).query(api.apiAccess.summary, { org_id: f.org.id })
     if (access.state !== 'ready') throw new Error('API access answered no period')
     expect(figures).toMatchObject({ period_kind: 'month', period_key: SEPTEMBER, calls: 11 })
-    expect(figures.calls).toBe(current.calls)
+    expect(figures.calls).toBe(await rowCalls(t, f.org.id, SEPTEMBER))
     expect(figures.calls).toBe(access.summary.calls)
+    expect(figures.included_calls).toBe(access.summary.included_calls)
     // the figures hold no account list
     expect(figures).not.toHaveProperty('users')
-    expect(omit(figures, 'calls')).toEqual(omit(current, 'calls', 'users'))
   })
 
   it("answer a paid bucket's calls from its totals row, and null, never 0, for a month with an unranked row or a paid bucket without its totals row", async () => {
@@ -346,10 +352,8 @@ describe('the usage figures', () => {
         await ctx.db.delete(row._id)
     })
     expect((await figuresOf(t, f.admin)).calls).toBeNull()
-    // the deprecated read sums the rows and so still says 3
-    expect((await as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })).calls).toBe(
-      3,
-    )
+    // the rows are still there and sum to 3
+    expect(await rowCalls(t, f.org.id, PERIOD)).toBe(3)
 
     // a month: ranked rows answer, one row stored before the ranks did not
     const g = await withOrg(t)
@@ -370,7 +374,7 @@ describe('the usage figures', () => {
     expect(counting.calls).not.toBe(0)
   })
 
-  it('size the allowance from billed seats without the roster, and from the roster without them, equal to currentUsage and API access', async () => {
+  it('size the allowance from billed seats without the roster, and from the roster without them, equal to API access', async () => {
     const t = newT()
     const f = await withOrg(t)
     const plan = await plantPlan(t)
@@ -384,10 +388,8 @@ describe('the usage figures', () => {
       )
     const compare = async () => {
       const figures = await figuresOf(t, f.admin)
-      const current = await as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
       const access = await as(t, f.admin).query(api.apiAccess.summary, { org_id: f.org.id })
       if (access.state !== 'ready') throw new Error('API access answered no period')
-      expect(omit(figures, 'calls')).toEqual(omit(current, 'calls', 'users'))
       expect(access.summary.included_calls).toBe(figures.included_calls)
       return figures
     }

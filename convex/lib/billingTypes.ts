@@ -98,20 +98,6 @@ export type BillingDetails = {
   sync_error: string | null
 }
 
-/** @deprecated The answer of the deprecated billing.summary, kept one
- * release for tabs loaded before billing.details shipped. billing.details
- * answers the same without the two name lists, which billing.accountList
- * reads 25 at a time; the release that removes billing.summary removes
- * this type. */
-export type BillingSummary = BillingDetails & {
-  billable_accounts: { profile_id: string; name: string; reason: 'member' | 'guest_without_home' }[]
-  non_billable_accounts: {
-    profile_id: string
-    name: string
-    reason: 'inactive' | 'guest_with_home'
-  }[]
-}
-
 /* The usage bucket Billing shows and what it has recorded, without its
  * calls. `period_kind` says which bucket it is: `paid` is the live
  * provider period, `pending` the interval after it while a renewal is
@@ -151,27 +137,6 @@ export type BillingPeriodHead = {
  * the bucket's accounts 25 at a time. */
 export type BillingUsageFigures = BillingPeriodHead & {
   calls: number | null
-  storage_bytes: number | null
-  sampled_storage_bytes: number | null
-}
-
-/** @deprecated The head of the deprecated billing.currentUsage: the
- * bucket's calls summed from its usage rows, and every account with calls
- * in `users`. billing.usageFigures
- * answers the calls from the aggregates and billing.apiAccounts the
- * accounts 25 at a time; the release that removes those reads removes
- * this type. */
-export type BillingUsageHead = BillingPeriodHead & {
-  calls: number
-  users: { profile_id: string; name: string; calls: number }[]
-}
-
-/** @deprecated The answer of the deprecated billing.currentUsage, kept one
- * release for tabs loaded before billing.usageFigures shipped, whose
- * answer (BillingUsageFigures) holds the same storage figures: current
- * storage, or null while the totals are not complete, and the paid
- * period's sample. */
-export type BillingUsage = BillingUsageHead & {
   storage_bytes: number | null
   sampled_storage_bytes: number | null
 }

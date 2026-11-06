@@ -1,8 +1,6 @@
 /* Billing's reads of stored task files from the stored-byte totals:
- * billing.usageFigures (model/billing.ts usageFiguresOf), the deprecated
- * billing.currentUsage (currentUsageOf), which answers the same storage
- * figures, and billing.storageProjects (model/billingStorage.ts
- * storageProjectsBatch).
+ * billing.usageFigures (model/billing.ts usageFiguresOf) and
+ * billing.storageProjects (model/billingStorage.ts storageProjectsBatch).
  *
  *   1. Current storage is the organization's totals. Files attached in
  *      several sub-projects add up, a task in Deleted items still counts
@@ -40,14 +38,12 @@ import type { StorageProjectRow, StorageProjects } from '../lib/billingTypes'
 import type { Refusal } from '../lib/functions'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { namedCursor } from '../lib/namedPages'
-import { currentUsageOf } from '../model/billing'
 import {
   NOT_STORAGE_CURSOR,
   STORAGE_PROJECTS,
   STORAGE_PROJECTS_LIST,
   storageProjectsBatch,
 } from '../model/billingStorage'
-import { recordApiCall } from '../model/billingUsage'
 import {
   type Amount,
   addToOrg,
@@ -780,7 +776,7 @@ describe('Billing storage reads, refusals', () => {
     // lands before its handler is attached
     const refusedBoth = async (by: Doc<'profiles'>, message: RegExp) => {
       await expectRefusal(
-        as(t, by).query(api.billing.currentUsage, { org_id: f.org.id }),
+        as(t, by).query(api.billing.usageFigures, { org_id: f.org.id }),
         'forbidden',
         message,
       )
@@ -1010,49 +1006,5 @@ describe('reads at the design size', () => {
       expect(read.documents).toBeLessThan(STORAGE_PROJECTS.reads.documents)
       expect(read.bytes).toBeLessThan(STORAGE_PROJECTS.reads.bytes)
     }
-  })
-
-  it('reads current usage at 1,000 people with the everyday usage rows', async () => {
-    const { t, f } = await counted()
-    // 1,000 people with withOrg's four and its agent: people, agents and
-    // invitations not yet accepted
-    const people = Array.from({ length: 995 }, (_, i) => ({
-      id: uuid(),
-      org_id: f.org.id,
-      name: `Person ${i} of the lab`,
-      initials: 'PL',
-      color: '#7a7ad0',
-      org_role: 'user' as const,
-      active: true,
-      kind: i % 50 === 0 ? ('agent' as const) : ('person' as const),
-      plannable_hours: 40,
-      created_at: NOW,
-      ...(i % 50 === 0 ? {} : { email: `person${i}@testbed.test` }),
-      ...(i % 25 === 1 ? {} : { accepted_at: NOW }),
-    }))
-    for (let i = 0; i < people.length; i += 250)
-      await t.run(async (ctx) => {
-        for (const p of people.slice(i, i + 250)) await ctx.db.insert('profiles', p)
-      })
-    // the everyday usage of a bucket: 15 accounts, each with two credentials
-    await t.run(async (ctx) => {
-      for (const p of people.slice(0, 15))
-        for (const credential of ['key', 'token'])
-          for (let n = 0; n < 3; n++)
-            await recordApiCall(ctx, {
-              profile_id: p.id,
-              credential_id: `${p.id}:${credential}`,
-              credential_name: credential,
-            })
-    })
-    await plantTotals(t, f.org.id, [
-      { project_id: f.sub.id, num: f.sub.num, name: 'Firmware', bytes: 5 },
-    ])
-    const { out, read } = await measured(t, (ctx) => currentUsageOf(ctx, f.org.id))
-    expect(out).toMatchObject({ calls: 90, storage_bytes: 5, sampled_storage_bytes: null })
-    expect(out.users).toHaveLength(15)
-    console.log('current usage at 1,000 people', JSON.stringify(read))
-    expect(read.documents).toBeLessThan(8000)
-    expect(read.ranges).toBeLessThan(4096)
   })
 })

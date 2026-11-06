@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import { getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
-import type { AccountNameRow, BillingSummary } from '../lib/billingTypes'
+import type { AccountNameRow } from '../lib/billingTypes'
 import { nameKey } from '../lib/nameKey'
 import { as, NOW, newT, type OrgFixture, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
@@ -45,32 +45,27 @@ async function namesOf(t: T, f: OrgFixture, kind: 'billable' | 'non_billable') {
   throw new Error('the list did not end')
 }
 
-/** Checks that billing.details answers what the deprecated `summary`
- * answers without its two lists, that the name lists name exactly its
- * lists' accounts, in name order, and that no answer holds anything of
- * the home profile `home` or the other organization. */
-async function sameAsSummary(
-  t: T,
-  f: OrgFixture,
-  summary: BillingSummary,
-  home: { id: string; name: string },
-) {
+/** Billing's details and the ids each name list names, as `f.admin`
+ * reads them, after checking that the details hold no name list, that
+ * each list is in name order, that the counters count the lists, and that
+ * no answer holds anything of the home profile `home` or the other
+ * organization. */
+async function billingOf(t: T, f: OrgFixture, home: { id: string; name: string }) {
   const details = await as(t, f.admin).query(api.billing.details, { org_id: f.org.id })
-  const { billable_accounts, non_billable_accounts, ...counters } = summary
-  expect(details).toEqual(counters)
   expect(details).not.toHaveProperty('billable_accounts')
   expect(details).not.toHaveProperty('non_billable_accounts')
   const billable = await namesOf(t, f, 'billable')
   const non = await namesOf(t, f, 'non_billable')
-  const ids = (rows: { profile_id: string }[]) => new Set(rows.map((row) => row.profile_id))
-  expect(ids(billable)).toEqual(ids(billable_accounts))
-  expect(ids(non)).toEqual(ids(non_billable_accounts))
   for (const rows of [billable, non]) {
     const keys = rows.map((row) => nameKey(row.name))
     expect(keys).toEqual([...keys].sort())
   }
+  expect(billable).toHaveLength(details.billable_users)
+  expect(non).toHaveLength(details.inactive_users + details.invited_users_with_own_billing)
   const shown = JSON.stringify([details, billable, non])
   for (const hidden of [home.id, home.name, f.otherOrg.id]) expect(shown).not.toContain(hidden)
+  const ids = (rows: { profile_id: string }[]) => new Set(rows.map((row) => row.profile_id))
+  return { details, billable: ids(billable), non: ids(non) }
 }
 
 describe('billable users', () => {
@@ -89,52 +84,36 @@ describe('billable users', () => {
       email: f.guest.email,
       name: 'Private home identity',
     })
-    const summary = () => as(t, f.admin).query(api.billing.summary, { org_id: f.org.id })
-    const initial = await summary()
-    expect(initial).toMatchObject({
+    await keyed(t, f.org.id)
+    const initial = await billingOf(t, f, home)
+    expect(initial.details).toMatchObject({
       billable_users: 4,
       inactive_users: 2,
       invited_users_with_own_billing: 1,
     })
-    expect(initial.non_billable_accounts).toEqual(
-      expect.arrayContaining([
-        { profile_id: inactivePerson.id, name: inactivePerson.name, reason: 'inactive' },
-        { profile_id: inactiveAgent.id, name: inactiveAgent.name, reason: 'inactive' },
-        { profile_id: f.guest.id, name: f.guest.name, reason: 'guest_with_home' },
-      ]),
-    )
-    expect(initial.non_billable_accounts).toHaveLength(3)
-    expect(JSON.stringify(initial)).not.toContain(home.id)
-    expect(JSON.stringify(initial)).not.toContain(home.name)
-    expect(JSON.stringify(initial)).not.toContain(f.otherOrg.id)
-    // the details and the name lists agree with it at every step
-    await keyed(t, f.org.id)
-    await sameAsSummary(t, f, initial, home)
+    expect(initial.non).toEqual(new Set([inactivePerson.id, inactiveAgent.id, f.guest.id]))
 
     // A guest's own billing is relevant only while that invited profile is active.
     await t.run((ctx) => ctx.db.patch(f.guest._id, { active: false }))
-    const inactiveGuest = await summary()
-    expect(inactiveGuest).toMatchObject({
+    const inactiveGuest = await billingOf(t, f, home)
+    expect(inactiveGuest.details).toMatchObject({
       billable_users: 4,
       inactive_users: 3,
       invited_users_with_own_billing: 0,
     })
-    await sameAsSummary(t, f, inactiveGuest, home)
+    expect(inactiveGuest.non).toContain(f.guest.id)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.guest._id, { active: true })
       await ctx.db.patch(home._id, { active: false })
     })
-    const changed = await summary()
-    expect(changed).toMatchObject({
+    const changed = await billingOf(t, f, home)
+    expect(changed.details).toMatchObject({
       billable_users: 5,
       inactive_users: 2,
       invited_users_with_own_billing: 0,
     })
-    expect(changed.non_billable_accounts.map((account) => account.profile_id)).not.toContain(
-      f.guest.id,
-    )
-    expect(changed.billable_accounts.map((account) => account.profile_id)).toContain(f.guest.id)
-    await sameAsSummary(t, f, changed, home)
+    expect(changed.non).not.toContain(f.guest.id)
+    expect(changed.billable).toContain(f.guest.id)
   })
 
   it('counts active people, viewers, agents and unclaimed invitations, excluding inactive profiles', async () => {
