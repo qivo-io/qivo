@@ -26,6 +26,7 @@ import {
   canBeAssignedFor,
   canSeeProject,
   canSeeProjectFor,
+  LEVELS_READ,
   orgProjects,
   profileCanBeAssigned,
   projectLevelReads,
@@ -477,6 +478,40 @@ describe('canSeeProjectFor and canBeAssignedFor', () => {
         })
         expect(stopped, `refused at run ${k}`).toBeLessThanOrEqual(k - 1)
       }
+    }
+  })
+
+  it("run the guard every LEVELS_READ.guardRows of a top-level project's sub-projects, so a refusal stops that read too", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 6; i++)
+      await plantProject(t, { org_id: f.org.id, type: 'project', parent_id: f.meta.id })
+    const rows = LEVELS_READ.guardRows
+    LEVELS_READ.guardRows = 1
+    try {
+      const read = await t.run(async (ctx) => {
+        const documents = async () => (await ctx.meta.getTransactionMetrics()).documentsRead.used
+        const start = await documents()
+        await projectLevelsForProfiles(ctx, f.meta)
+        // TBED's own reads, then one sub-project more than that at most
+        const own = (await documents()) - start
+        const before = await documents()
+        try {
+          await canSeeProjectFor(ctx, f.meta, {
+            guard: async () => {
+              if ((await documents()) - before > own + 1) throw new Error('full')
+            },
+          })
+        } catch (e) {
+          if (!(e instanceof Error) || e.message !== 'full') throw e
+          return { own, read: (await documents()) - before }
+        }
+        throw new Error('the guard did not stop it')
+      })
+      // eight sub-projects stand under TBED; the guard saw the second one
+      expect(read.read).toBeLessThanOrEqual(read.own + 2)
+    } finally {
+      LEVELS_READ.guardRows = rows
     }
   })
 
