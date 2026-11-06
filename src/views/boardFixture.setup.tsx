@@ -6,6 +6,11 @@ import type { BoardAnswer } from '../../convex/lib/board'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
+import {
+  answerMilestones,
+  type ForcedMilestones,
+  isMilestoneRead,
+} from '../store/milestoneStandIn.setup'
 import type { OverviewQuery } from '../store/overviewLists'
 import {
   type ForcedOverview,
@@ -37,7 +42,10 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    last comments with none, so renderView can show Team sync too. So do the
    Roadmap's two reads (tasks:roadmap and tasks:roadmapDependencies,
    store/roadmapStandIn.setup.ts, `server.roadmap`), so renderView shows the
-   Roadmap from the server's answer too. */
+   Roadmap from the server's answer too, and the milestone reads
+   (milestones:get, section and between, store/milestoneStandIn.setup.ts,
+   `server.milestones`), so the Roadmap shows its flags from its range
+   read. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -215,6 +223,21 @@ export async function loadBoard(
     }
     /** the last comments' subscriptions open now, each with its owners */
     comments: Set<{ owners: string[] }>
+    /** the milestone reads: `hold` keeps their answers back, `force`
+        answers states the workspace cannot reach, `asked` is every
+        subscription's query and arguments, newest last, and `open` those
+        open now, which a delivery answers again */
+    milestones: {
+      hold: boolean
+      force: ForcedMilestones
+      asked: { name: string; args: unknown }[]
+      open: Set<{
+        name: string
+        args: unknown
+        next: (value: unknown) => void
+        fail?: (e: unknown) => void
+      }>
+    }
   } = {
     hold: false,
     force: null,
@@ -245,6 +268,7 @@ export async function loadBoard(
     },
     sync: { hold: false, force: {}, fail: undefined, edit: null, asked: [], open: new Set() },
     comments: new Set(),
+    milestones: { hold: false, force: {}, asked: [], open: new Set() },
   }
   // the store's canSee and canWrite, once the store loaded
   let sees: (id: string) => boolean = () => true
@@ -313,8 +337,16 @@ export async function loadBoard(
     }
     sub.next(structuredClone(o.edit ? o.edit(sub.query, answer, sub.args) : answer))
   }
+  /** Answers milestone subscription `sub` from the snapshot as it is now,
+      with the states the test forces. */
+  const answerMilestoneSub = (sub: {
+    name: string
+    args: unknown
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) => answerMilestones(snapshot, sub.name, sub.args, sub.next, sub.fail, server.milestones.force)
   /** Answers every open subscription of the Board's query from the
-      snapshot as it is now, and the Overview's. */
+      snapshot as it is now, and the other views' reads. */
   const answerBoards = () => {
     for (const sub of server.open)
       if (server.fail !== undefined) sub.fail?.(server.fail)
@@ -323,6 +355,7 @@ export async function loadBoard(
     for (const sub of server.overview.open) answerOverview(sub)
     for (const sub of server.sync.open) answerSync(sub)
     for (const sub of server.roadmap.open) answerRoadmapSub(sub)
+    if (!server.milestones.hold) for (const sub of server.milestones.open) answerMilestoneSub(sub)
   }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -347,6 +380,13 @@ export async function loadBoard(
       const hold = server.roadmap.hold
       if (!(typeof hold === 'function' ? hold(name) : hold)) answerRoadmapSub(sub)
       return () => server.roadmap.open.delete(sub)
+    }
+    if (isMilestoneRead(name)) {
+      const sub = { name, args, next, fail }
+      server.milestones.asked.push({ name, args })
+      server.milestones.open.add(sub)
+      if (!server.milestones.hold) answerMilestoneSub(sub)
+      return () => server.milestones.open.delete(sub)
     }
     if (name === 'planning:ownerLoads') {
       const call = { args: args as OwnerLoadsArgs, next, fail }

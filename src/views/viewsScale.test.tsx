@@ -12,7 +12,8 @@ import { loadBoard, loadBoardWithTasks, spread, taskRow } from './boardFixture.s
    more, the Overview's group health shows the server's rows 10 at a time,
    the store's figures for many groups read them in one pass over the
    tasks, and the Roadmap holds its figures at the design size, one figure
-   a case, from its server answer. */
+   a case, from its server answer, with its milestone flags from the range
+   read of the weeks on screen. */
 
 /* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
    it from 300, so a list of LONG tasks in one sub-project, well inside the
@@ -251,6 +252,84 @@ describe('a delivery on the desktop Roadmap', () => {
     expect(
       board.P.issueById[board.P.issues.find((it) => it.uuid === 't150')?.id ?? '']?.start,
     ).toBe(board.P.TODAY_WEEK + 2)
+  })
+
+  it('renders the rows of one track on a drag of its flag in My view, and its flags alone on a rename', async () => {
+    // 20 top-level projects, each with a sub-project of 3 of the person's
+    // tasks due next week, so each task row draws its due mark when it
+    // renders, and a milestone next week
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        const base = snap.projects[0]
+        snap.projects = []
+        let n = 0
+        for (let i = 0; i < 20; i++) {
+          const top = `top-${String(i).padStart(2, '0')}`
+          snap.projects.push(
+            {
+              ...base,
+              id: top,
+              type: 'meta',
+              key: `T${i}`,
+              num: 2 * i + 1,
+              name: `Program ${top}`,
+            },
+            {
+              ...base,
+              id: `${top}-a`,
+              type: 'project',
+              key: `S${i}`,
+              num: 2 * i + 2,
+              name: `Work ${top}`,
+              parent_id: top,
+            },
+          )
+          for (let k = 0; k < 3; k++) {
+            n++
+            snap.issues.push({
+              ...taskRow(snap, `t${n}`, 'todo', n),
+              project_id: `${top}-a`,
+              title: titleOf(n),
+              due_date: week(1),
+            })
+          }
+          snap.milestones.push({
+            id: `ms-${top}`,
+            project_id: top,
+            name: `Release ${i}`,
+            week: week(1),
+            created_at: '2026-09-14T08:00:00.000Z',
+          })
+        }
+      },
+      { scope: 'mine' },
+    )
+    await renderRoadmap(board, { ...NO_FILTERS, mine: true })
+    expect(roadmapState()).toBe('ok')
+    const flag = (id: string) => document.querySelector<HTMLElement>(`[data-msflag="${id}"]`)
+    await vi.waitFor(() => expect(flag('ms-top-00')).not.toBeNull())
+    // a drag of the first track's flag, before it drops
+    const drawn = vi.spyOn(board.P, 'tracksDelay')
+    Element.prototype.setPointerCapture = () => {}
+    const pointer = (type: string, clientX: number) =>
+      new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId: 1 })
+    const handle = flag('ms-top-00') as HTMLElement
+    await act(async () => handle.dispatchEvent(pointer('pointerdown', 100)))
+    await act(async () => handle.dispatchEvent(pointer('pointermove', 136)))
+    const projects = new Set(drawn.mock.calls.map(([it]) => (it as { project: string }).project))
+    // that track's task rows render again with its guide, no other track's
+    expect([...projects]).toEqual(['top-00-a'])
+    await act(async () => handle.dispatchEvent(pointer('pointerup', 136)))
+    // another person's rename of a milestone reaches the read's answer alone
+    drawn.mockClear()
+    const renamed = board.snapshot.milestones.find((m) => m.id === 'ms-top-05')
+    if (!renamed) throw new Error('missing the milestone')
+    renamed.name = 'Release five renamed'
+    await board.answer()
+    expect(flag('ms-top-05')?.textContent).toBe('Release five renamed')
+    // its track's row draws the new name; no task row renders again
+    expect(drawn).not.toHaveBeenCalled()
   })
 
   it('keeps the rows that only shift when another task goes', async () => {
@@ -510,6 +589,133 @@ describe('the Roadmap at the design size', () => {
       (uuid) => !shown.has(board.P.viewTask('roadmap', uuid)?.id ?? uuid),
     )
     expect(missing).toEqual([])
+  })
+
+  it("reads the flags of My view's 200 top-level projects in one read, each on its own row", async () => {
+    // the projects figure at its design size: 200 top-level projects, each
+    // with one sub-project, so the person reads exactly 200 sub-projects,
+    // that figure's design size too. The Roadmap's answer and the range
+    // read over its tracks each cover both figures at their sum. Each
+    // sub-project holds one task of the person's, each project one
+    // milestone next week
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        const base = snap.projects[0]
+        snap.projects = []
+        for (let i = 0; i < 200; i++) {
+          const top = `top-${String(i).padStart(3, '0')}`
+          snap.projects.push(
+            {
+              ...base,
+              id: top,
+              type: 'meta',
+              key: `T${i}`,
+              num: 2 * i + 1,
+              name: `Program ${top}`,
+            },
+            {
+              ...base,
+              id: `${top}-a`,
+              type: 'project',
+              key: `S${i}`,
+              num: 2 * i + 2,
+              name: `Work ${top}`,
+              parent_id: top,
+            },
+          )
+          snap.issues.push({
+            ...taskRow(snap, `t${i}`, 'todo', i + 1),
+            project_id: `${top}-a`,
+            title: titleOf(i + 1),
+          })
+          snap.milestones.push({
+            id: `ms-${top}`,
+            project_id: top,
+            name: `Release ${i}`,
+            week: week(1),
+            created_at: '2026-09-14T08:00:00.000Z',
+          })
+        }
+      },
+      { scope: 'mine' },
+    )
+    await renderRoadmap(board, { ...NO_FILTERS, mine: true })
+    expect(roadmapState()).toBe('ok')
+    const reads = board.server.milestones.asked.filter((a) => a.name === 'milestones:between')
+    expect(reads).toHaveLength(1)
+    expect((reads[0].args as { projects: string[] }).projects).toHaveLength(200)
+    expect(
+      document.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-milestones'),
+    ).toBe('ok')
+    expect(count('[data-msband]')).toBe(0)
+    for (let i = 0; i < 200; i++) {
+      const top = `top-${String(i).padStart(3, '0')}`
+      expect(
+        document.querySelector(`[data-track="${top}"] [data-msflag="ms-${top}"]`),
+        top,
+      ).not.toBeNull()
+    }
+  })
+
+  /** One top-level project, Plan, over the fixture's sub-project with one
+      task of the person's, and a milestone in each of the 260 weeks of
+      the window's maximum from this week on, which the Roadmap shows. */
+  const weekly = (snap: Snapshot) => {
+    const base = snap.projects[0]
+    snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+    Object.assign(base, { parent_id: 'plan', name: 'One' })
+    snap.issues.push({ ...taskRow(snap, 't1', 'todo', 1), title: titleOf(1) })
+    for (let n = 0; n < 260; n++)
+      snap.milestones.push({
+        id: `ms-${n}`,
+        project_id: 'plan',
+        name: `Weekly check ${n + 1}`,
+        week: week(n),
+        created_at: '2026-09-14T08:00:00.000Z',
+      })
+  }
+  /** Where each flag's diamond stands, in pixels from the timeline's start. */
+  const diamondsAt = (flags: HTMLElement[]) =>
+    flags.map((flag) => {
+      if (flag.style.left) return Number.parseFloat(flag.style.left) + 4.5
+      const right = /calc\(100% - ([\d.]+)px\)/.exec(flag.style.right)
+      return Number(right?.[1]) - 4.5
+    })
+  /** Checks the window's 260 flags, each in its place within `within`,
+      apart from its neighbours and in the tab order. */
+  const checkWeekly = (within: string) => {
+    const flags = [...document.querySelectorAll<HTMLElement>('[data-msflag]')]
+    expect(flags).toHaveLength(260)
+    for (const flag of flags) {
+      expect(flag.closest(within), flag.dataset.msflag).not.toBeNull()
+      expect(flag.tabIndex).toBe(0)
+      expect(flag.getAttribute('role')).toBe('button')
+    }
+    const xs = diamondsAt(flags).sort((a, b) => a - b)
+    for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBeGreaterThanOrEqual(9)
+  }
+  const WINDOW_260 = {
+    start: { mode: 'weeks', value: 0 },
+    end: { mode: 'weeks', value: 259 },
+  } as const
+
+  it("draws 260 weeks of one project's milestones on its row in My view, each in its place", async () => {
+    const board = await loadBoard(network, weekly, { scope: 'mine' })
+    board.P.saveUINow({ roadmapWin: WINDOW_260 })
+    await renderRoadmap(board, { ...NO_FILTERS, mine: true })
+    expect(roadmapState()).toBe('ok')
+    await vi.waitFor(() => expect(count('[data-msflag]')).toBe(260))
+    checkWeekly('[data-track="plan"]')
+  })
+
+  it("draws 260 weeks of one project's milestones in its header, each in its place", async () => {
+    const board = await loadBoard(network, weekly, { scope: 'plan' })
+    board.P.saveUINow({ roadmapWin: WINDOW_260 })
+    await renderRoadmap(board)
+    expect(roadmapState()).toBe('ok')
+    await vi.waitFor(() => expect(count('[data-msflag]')).toBe(260))
+    checkWeekly('[data-msband]')
   })
 
   it('shows the ceiling note one row past a lowered ceiling, and the rows at it', async () => {
