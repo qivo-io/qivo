@@ -167,8 +167,9 @@ export const ROADMAP_TASKS = 1000
  * the whole meeting: its rows, the Backlog tasks Needs an owner lists and
  * the Done tasks a walker's Done since can show, each counted once however
  * many of the meeting's pages show it. Shown parents and blockers outside
- * the agenda count toward the agenda's read budgets, not here. The Team
- * sync view names it once it reads the server; no LIMITS entry yet. */
+ * the agenda count toward the agenda's read budgets, not here.
+ * LIMITS.teamSyncTasks names it, the Limits guide's row and the sentence
+ * the page shows past it. */
 export const TEAM_SYNC_TASKS = 1000
 
 /** The rows one batch of an app list holds before Load more, such as the
@@ -611,6 +612,14 @@ export const LIMITS = {
     max: MILESTONE_READ_PROJECTS,
     unit: 'top-level projects',
     refusal: `the app reads the milestones of at most ${grouped(MILESTONE_READ_PROJECTS)} projects at once. Choose fewer projects.`,
+    on: ['app'],
+  },
+  teamSyncTasks: {
+    label: 'Tasks one Team sync meeting holds',
+    group: 'tasks',
+    max: TEAM_SYNC_TASKS,
+    unit: "tasks across the meeting, each counted once, among its open tasks without subtasks in scope, the Backlog tasks Needs an owner lists and the recently done tasks each person's Done since can show",
+    refusal: `this selection exceeds Team sync's ${grouped(TEAM_SYNC_TASKS)}-task limit.`,
     on: ['app'],
   },
   restoreBatch: {
