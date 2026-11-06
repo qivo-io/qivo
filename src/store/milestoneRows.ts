@@ -83,7 +83,7 @@ export type MilestonesShown = { rows: readonly MilestoneRow[]; past?: boolean }
 
 type Anchor = { key: string; ask: MilestoneAsk; take: MilestoneTake }
 
-/* Text before the first day a stored date can name, and after the last. */
+/* `n` as decimal text, zero-padded to `width` digits. */
 const pad = (n: number, width: number) => String(n).padStart(width, '0')
 
 /** The YYYY-MM-DD day the app shows stored day `day` on: the day itself, or
