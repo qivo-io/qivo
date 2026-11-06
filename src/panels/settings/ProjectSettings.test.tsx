@@ -1408,10 +1408,9 @@ describe('Settings around a project page', () => {
   })
 
   it('holds one watch of the settings read with the page, which Try again starts afresh', async () => {
-    /* Convex gives equal watches one subscription, so a second watch by
-       the page would join the failed one Settings holds and read its error
-       back on Try again; the double gives each watch its own, so count
-       them. */
+    /* Settings hands its read to the page rather than the page watching
+       it a second time. The double gives each watch its own subscription,
+       so count them. */
     const gets = () =>
       network.onUpdate.mock.calls.filter(([ref]) => getFunctionName(ref) === 'projectSettings:get')
         .length

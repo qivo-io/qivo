@@ -13,8 +13,8 @@ export type SettingsOk = Extract<ProjectSettingsAnswer, { state: 'ok' }>
 type SettingsArchived = Extract<ProjectSettingsAnswer, { state: 'archived' }>
 
 /** What a project's Settings page reads now (useProjectSettings):
-    - `loading` before the first answer, and after a failure's Try again
-      until one comes;
+    - `loading` before the first answer, and after a failure's Try again,
+      in this call or another for the same project, until one comes;
     - `ok` with a current answer;
     - `refreshing` while the read has no current answer, as after the tab
       showed again, a reconnect or Try again after a failure, with the
@@ -35,7 +35,8 @@ export type ProjectSettingsRead = {
   answer: SettingsOk | null
   /** an archived answer's names */
   archived: SettingsArchived | null
-  /** Subscribes afresh, as Try again does. */
+  /** Subscribes afresh, as Try again does, and has the server run the
+      read again for every call for the same project. */
   retry: () => void
 }
 
@@ -45,13 +46,13 @@ export type ProjectSettingsRead = {
  * tab or the desktop window is hidden and when the page is left, and
  * keeps the last `ok` answer for the same project while the read has no
  * current answer, a failure included (ProjectSettingsRead). Call it once
- * per page or dialog for a project: Settings calls it and passes the read
+ * per page or dialog for a project. Settings calls it and passes the read
  * to ProjectPage, a ProjectPage rendered on its own calls it itself, and
- * the New sub-project dialog calls it for its parent, which no page under
- * it reads. A second call with equal arguments joins the first one's
- * subscription (lib/liveView.ts), so its `retry` reads back the result
- * Convex holds, a failure included, and asks the server nothing while the
- * first call still subscribes.
+ * the New sub-project dialog calls it for its parent, which the project
+ * page under the dialog may read as well. Calls for the same project
+ * share one subscription (lib/liveView.ts), and `retry` in any of them
+ * has the server run the read again for all of them, each of which then
+ * answers `loading` or `refreshing` until the new answer comes.
  */
 export function useProjectSettings(projectId: string | null): ProjectSettingsRead {
   const key = projectId === null ? null : JSON.stringify({ id: projectId })

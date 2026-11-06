@@ -2,6 +2,7 @@ import { ConvexClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createLiveQueries } from './liveQueries'
+import { ScriptedSocket, tick, u64 } from './scriptedSocket.setup'
 
 /* The store's optimistic layers (store/planner.ts send) rely on three things
    the Convex client does, pinned here against a real ConvexClient driving a
@@ -15,46 +16,6 @@ import { createLiveQueries } from './liveQueries'
       object the earlier listener got, on a 0 ms timer, also right after the
       only listener left, so the store can tell a replay from a delivery by
       identity. */
-
-type Sent = { type: string; requestId?: number; newVersion?: number; [key: string]: unknown }
-
-/** A WebSocket double that opens on the next task, records what the client
-    sends and lets the test answer as the server. */
-class ScriptedSocket {
-  static last: ScriptedSocket | null = null
-  onopen: ((event: unknown) => void) | null = null
-  onmessage: ((event: { data: string }) => void) | null = null
-  onclose: ((event: unknown) => void) | null = null
-  onerror: ((event: unknown) => void) | null = null
-  readyState = 0
-  sent: Sent[] = []
-  constructor(readonly url: string) {
-    ScriptedSocket.last = this
-    setTimeout(() => {
-      this.readyState = 1
-      this.onopen?.({})
-    }, 0)
-  }
-  send(data: string) {
-    this.sent.push(JSON.parse(data))
-  }
-  close() {
-    this.readyState = 3
-    setTimeout(() => this.onclose?.({ code: 1000, reason: '' }), 0)
-  }
-  receive(message: unknown) {
-    this.onmessage?.({ data: JSON.stringify(message) })
-  }
-}
-
-/** A server timestamp as the protocol carries it: a little-endian u64 in base64. */
-function u64(n: number) {
-  const bytes = new Uint8Array(8)
-  new DataView(bytes.buffer).setBigUint64(0, BigInt(n), true)
-  return btoa(String.fromCharCode(...bytes))
-}
-
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('Convex client ordering the store relies on', () => {
   let client: ConvexClient | null = null
@@ -364,5 +325,41 @@ describe('live queries over the base client', () => {
     expect(live.watch(anyApi.tasks.list, {}).joined).toBe(true)
     transition([{ queryId: 1, value: 5 }])
     expect(live.watch(anyApi.tasks.count, {})).toMatchObject({ token: count.token, joined: true })
+  })
+
+  it('starts a shared subscription again for every watch on a fresh watch, asking the server once', async () => {
+    const { live, list, socket, seen, transition } = await start()
+    const told: string[] = []
+    const beside = live.watch(anyApi.tasks.list, {}, { restarted: () => told.push('beside') })
+    expect(beside.joined).toBe(true)
+    const asked = () =>
+      socket.sent
+        .filter((m) => m.type === 'ModifyQuerySet')
+        .flatMap((m) => m.modifications as { type: string; queryId: number }[])
+    const before = asked().length
+    const fresh = live.watch(
+      anyApi.tasks.list,
+      {},
+      {
+        fresh: true,
+        restarted: () => told.push('fresh'),
+      },
+    )
+    // it joins nothing that answered, and the watch beside it hears that
+    // what it read answers the run that ended
+    expect(fresh).toMatchObject({ token: list.token, joined: false })
+    expect(told).toEqual(['beside'])
+    expect(asked().slice(before)).toEqual([
+      { type: 'Remove', queryId: 0 },
+      expect.objectContaining({ type: 'Add', queryId: 2 }),
+    ])
+    transition([
+      { queryId: 0, removed: true },
+      { queryId: 2, value: 'list 2' },
+    ])
+    expect(seen.at(-1)).toMatchObject({ tokens: [list.token], values: ['list 2'] })
+    // once every watch stops, the client drops the new run too
+    for (const w of [list, beside, fresh]) w.stop()
+    expect(asked().at(-1)).toEqual({ type: 'Remove', queryId: 2 })
   })
 })

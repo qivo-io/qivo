@@ -63,8 +63,8 @@ export function ProjectPage({
 }: {
   projectId: string
   /** the read of the project's settings that Settings holds for this page
-      (useProjectSettings), so Try again subscribes afresh; a page rendered
-      on its own reads its own */
+      (useProjectSettings), so Settings' check and the page follow one
+      read; a page rendered on its own reads its own */
   read?: ProjectSettingsRead
   setPage: (page: string) => void
   onBackPage?: (page: string) => void
@@ -81,10 +81,9 @@ export function ProjectPage({
 }) {
   /* The page reads its project, its parent, its lead and every right from
      the server, and shows nothing of the project until that answer comes
-     (useProjectSettings). It keeps one watch of that read: a second one
-     beside Settings' would join the subscription Settings holds, so its
-     Try again would read back the failure Convex stored and never ask the
-     server again. */
+     (useProjectSettings). It takes Settings' read when Settings passes
+     one and watches its own only when rendered on its own, so Settings'
+     check and the page follow one read. */
   const own = useProjectSettings(given ? null : projectId)
   const read = given ?? own
   /* The Archive or delete window, from the section at the end of the page.

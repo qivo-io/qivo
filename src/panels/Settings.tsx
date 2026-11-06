@@ -75,7 +75,7 @@ function SettingsScreen({
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
   /* A project page's read of its settings, for the check below, the
      phone's Back and the page itself, which takes it as a prop rather than
-     watching it a second time, so the page's Try again subscribes afresh. */
+     watching it a second time, so the check and the page follow one read. */
   const projectRead = useProjectSettings(page.startsWith('project:') ? page.slice(8) : null)
 
   useEffectS(() => {

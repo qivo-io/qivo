@@ -7,7 +7,12 @@
    afresh when it shows again. A result counts only for the subscription that
    brought it. After a pause, a kept page shown again, new arguments or Try
    again, the view has no current result until a transition brings one, so
-   it can say that it is refreshing.
+   it can say that it is refreshing. Views that read the same query with
+   equal arguments share one subscription, so Try again in any of them asks
+   the server again for all of them (lib/liveQueries.ts watch `fresh`), and
+   each has no current result until the new run's arrives. Otherwise one
+   view's Try again, such as a dialog's over a page that reads the same
+   project, would join the other's subscription and read its failure back.
 
    A known cost: a kept page shown again first shows what it held and
    renders its parent's new props a frame later (KeptView), and its effects
@@ -21,8 +26,9 @@
 
 import { type FunctionReference, getFunctionName } from 'convex/server'
 import type { Value } from 'convex/values'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { live } from './convex'
+import type { WatchSharing } from './liveQueries'
 import { useViewVisibility } from './viewVisibility'
 
 /** What a live view read holds now. */
@@ -34,7 +40,8 @@ export type LiveView<T> = {
   error?: unknown
   /** whether the read held a result before, so a wait is a refresh */
   answered: boolean
-  /** Subscribes afresh, as Try again does. */
+  /** Subscribes afresh, as Try again does, and has the server run the
+      query again for every view that reads it with equal arguments. */
   retry: () => void
 }
 
@@ -51,17 +58,26 @@ export type LiveResult<T> = { value: T } | { error: unknown }
  * (LiveQueries watch `joined`), with no count. A result Convex kept from an
  * earlier subscription is never taken as current. `seen`, when given,
  * hears the connection count of every transition, so a reader can tell a
- * result from before a reconnect. Answers the way to stop, after which
- * nothing is taken. useLiveView and lib/pagedList.ts read through it.
+ * result from before a reconnect. `sharing` goes to the transport's watch,
+ * where `fresh` has the server run the query again for every watch of
+ * equal arguments and `restarted` hears another watch's `fresh` until this
+ * watch stops. Answers the way to stop, after which nothing is taken.
+ * useLiveView and lib/pagedList.ts read through it.
  */
 export function watchLive<T>(
   ref: FunctionReference<'query'>,
   args: Record<string, Value>,
   take: (result: LiveResult<T>, connection: number | null) => void,
   seen?: (connection: number) => void,
+  sharing?: WatchSharing,
 ): () => void {
-  const watch = live.watch(ref, args)
   let stopped = false
+  const watch = live.watch(ref, args, {
+    fresh: sharing?.fresh,
+    restarted: () => {
+      if (!stopped) sharing?.restarted?.()
+    },
+  })
   const read = (connection: number | null) => {
     let result: LiveResult<T>
     try {
@@ -97,11 +113,17 @@ export function watchLive<T>(
  * arguments and when the view's effects stop. A result is taken as
  * watchLive takes one, so a result Convex kept from an earlier
  * subscription is never taken as current. A failed read holds its error
- * until a result replaces it.
+ * until a result replaces it. Try again (`retry`) subscribes afresh with
+ * `fresh`, so the server runs the query again also while another view
+ * shares the subscription, and every view of equal arguments then waits
+ * for the new run's result.
  */
 export function useLiveView<T>(ref: FunctionReference<'query'>, key: string | null): LiveView<T> {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useState(0)
+  // the attempt the open subscription started at, so one started for a
+  // newer attempt, Try again's, asks the server again
+  const opened = useRef(attempt)
   const [held, setHeld] = useState<Held<T> | null>(null)
   const [answered, setAnswered] = useState(false)
   const name = getFunctionName(ref)
@@ -111,10 +133,20 @@ export function useLiveView<T>(ref: FunctionReference<'query'>, key: string | nu
     // what came before answers an earlier subscription
     setHeld(null)
     if (key === null || !visible) return
-    return watchLive<T>(ref, JSON.parse(key) as Record<string, Value>, (result) => {
-      setHeld('value' in result ? { key, value: result.value } : { key, error: result.error })
-      if ('value' in result) setAnswered(true)
-    })
+    const fresh = attempt !== opened.current
+    opened.current = attempt
+    return watchLive<T>(
+      ref,
+      JSON.parse(key) as Record<string, Value>,
+      (result) => {
+        setHeld('value' in result ? { key, value: result.value } : { key, error: result.error })
+        if ('value' in result) setAnswered(true)
+      },
+      undefined,
+      // another view's Try again started the shared subscription again, so
+      // what this one holds answers the earlier run
+      { fresh, restarted: () => setHeld(null) },
+    )
   }, [name, key, visible, attempt])
   return {
     key: held?.key ?? null,

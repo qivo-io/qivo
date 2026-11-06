@@ -30,6 +30,17 @@ export type LiveTransition = {
   connection: number
 }
 
+/** How a watch meets the other watches of its query and arguments
+    (LiveQueries watch). */
+export type WatchSharing = {
+  /** asks the server to run the query again, also while other watches
+      share its subscription, as Try again does */
+  fresh?: boolean
+  /** hears that another watch's `fresh` started the shared subscription
+      again, so what this one read before answers the earlier run */
+  restarted?: () => void
+}
+
 /** The live query transport the store uses. Tests and the browser
     benchmark stand in for it (store/guard/liveDouble.setup.ts,
     scripts/perf/transport.mjs). */
@@ -41,10 +52,17 @@ export type LiveQueries = {
       transition that names the token. A result read before then may be
       one Convex kept from an earlier subscription to the same query and
       arguments, as it keeps a result by token until the next transition
-      after the last unsubscribe. */
+      after the last unsubscribe. A `fresh` watch that other watches share
+      stops the subscription and opens it again for all of them, so the
+      server runs the query once more for every one. That watch is not
+      `joined`, and each other watch hears `restarted` and gets the new
+      run's result with the transition that names the token. A `fresh`
+      watch alone subscribes afresh anyway, since the last stop ended the
+      subscription. */
   watch(
     ref: FunctionReference<'query'>,
     args: Record<string, Value>,
+    sharing?: WatchSharing,
   ): {
     token: string
     stop: () => void
@@ -75,21 +93,36 @@ export function createLiveQueries(
   client: BaseConvexClient,
   query: LiveQueries['query'],
 ): LiveQueries {
-  // what each watched token names, how many watch it, and whether a
-  // transition named it since its subscription started
+  // what each watched token names, its watches, each with the client
+  // subscription it holds, and whether a transition named it since its
+  // subscription started
+  type Watcher = { unsubscribe: () => void; restarted?: () => void }
   const watched = new Map<
     string,
-    { name: string; args: Record<string, Value>; count: number; answered: boolean }
+    { name: string; args: Record<string, Value>; watchers: Set<Watcher>; answered: boolean }
   >()
   let warned = false
   return {
-    watch(ref, args) {
+    watch(ref, args, sharing) {
       const name = getFunctionName(ref)
       const { queryToken, unsubscribe } = client.subscribe(name, args)
-      const entry = watched.get(queryToken)
-      const joined = entry?.answered === true
-      if (entry) entry.count++
-      else watched.set(queryToken, { name, args, count: 1, answered: false })
+      const self: Watcher = { unsubscribe, restarted: sharing?.restarted }
+      const known = watched.get(queryToken)
+      const entry = known ?? { name, args, watchers: new Set<Watcher>(), answered: false }
+      if (!known) watched.set(queryToken, entry)
+      entry.watchers.add(self)
+      if (known && sharing?.fresh) {
+        // Every watch's subscription stops, so the client drops the query,
+        // and starts again, so the client asks the server for it under a
+        // new query id. The client keeps the earlier run's result by token
+        // until the next transition, and a watch reads only what a
+        // transition names, so none takes it for the new run's.
+        for (const w of entry.watchers) w.unsubscribe()
+        for (const w of entry.watchers) w.unsubscribe = client.subscribe(name, args).unsubscribe
+        entry.answered = false
+        for (const w of entry.watchers) if (w !== self) w.restarted?.()
+      }
+      const joined = entry.answered
       let stopped = false
       return {
         token: queryToken,
@@ -97,9 +130,9 @@ export function createLiveQueries(
         stop: () => {
           if (stopped) return
           stopped = true
-          unsubscribe()
-          const left = watched.get(queryToken)
-          if (left && --left.count === 0) watched.delete(queryToken)
+          self.unsubscribe()
+          entry.watchers.delete(self)
+          if (entry.watchers.size === 0) watched.delete(queryToken)
         },
       }
     },

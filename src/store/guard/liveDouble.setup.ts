@@ -13,7 +13,9 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    the store of the parts whose answer changed in one transition, as Convex
    would. A test can hold back one task window (holdWindow). Any other
    query, such as a task's thread or the Board's, is watched through the
-   client's own onUpdate, each result a transition of its own. The task
+   client's own onUpdate, each result a transition of its own, and no
+   other watch shares its subscription, so a view's `fresh` watch
+   (lib/liveQueries.ts) has nothing more to start again. The task
    window's side queries (SHARED) share one subscription and one token per
    store between watches of the same arguments, as Convex does, and a watch
    that joins one whose answer arrived hears no transition for it
