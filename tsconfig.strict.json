@@ -48,6 +48,7 @@
     "src/store/projectSettingsListsStandIn.setup.ts",
     "src/store/projectSettingsStandIn.setup.ts",
     "src/store/relationPickerStandIn.setup.ts",
+    "src/store/teamSyncStandIn.setup.ts",
     "src/store/updates.ts"
   ]
 }
