@@ -256,10 +256,15 @@ export async function findIssue(
   return (await seesProject(ctx, me, project)) ? issue : null
 }
 
-/* canSeeProject, with a project whose parent is missing or that sits in a
+/** canSeeProject, with a project whose parent is missing or that sits in a
  * cycle (lib/access.ts rootMetaOf) not visible rather than refused, as
- * accessFlags gives such a project no read flag. */
-async function seesProject(ctx: QueryCtx, me: Caller, project: Doc<'projects'>): Promise<boolean> {
+ * accessFlags gives such a project no read flag. files.mintUrls asks it
+ * too, so one such project omits its own files and refuses no others. */
+export async function seesProject(
+  ctx: QueryCtx,
+  me: Caller,
+  project: Doc<'projects'>,
+): Promise<boolean> {
   try {
     return await canSeeProject(ctx, me, project)
   } catch (e) {
