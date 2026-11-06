@@ -2623,7 +2623,9 @@ function UnusedReason({
    sections, no add row, no editor. Then the milestone shows as its editor
    for someone who may write, else as its row, in its place in Upcoming
    where that answer holds it, else above the sections, a past one
-   included, without reading Past. A milestone the server does not answer,
+   included, without reading Past. Once the milestones showed, the loading
+   line never returns, also where the store holds the project only later.
+   A milestone the server does not answer,
    for every reason alike, or refuses, says so with Done only; a failure
    offers Retry; and once it showed, an answer of null that the person's
    own delete did not cause closes its editor and says it is no longer
@@ -2915,9 +2917,13 @@ function MilestoneModal({
   }
 
   // what the window says before the answer names its project and Upcoming
-  // answered, in place of its milestones
-  const waiting = !!init.id && !!project && !upcomingIn
+  // answered, in place of its milestones. Once its milestones showed it
+  // never says so again, so a project the store comes to hold only later
+  // starts Upcoming beside an open editor, which keeps its place and draft.
+  const [showed, setShowed] = useStateM(!init.id)
+  const waiting = !!init.id && !!project && !upcomingIn && !showed
   const before = !!init.id && (projectId === null || waiting)
+  if (!before && !showed) setShowed(true)
   const inUpcoming = (id: string) => upcoming.view.rows.some((m) => m.id === id)
   const inPast = (id: string) => pastOpen && past.view.rows.some((m) => m.id === id)
   // where an open editor stays: where its row showed as it opened, and for

@@ -1036,6 +1036,29 @@ describe('opened on a milestone', { timeout: 30_000 }, () => {
     expect(noteOf('upcoming')).toEqual(["failed: Couldn't load milestones.Retry"])
   })
 
+  it('keeps the opened editor and its draft where the store holds its project only after the answer', async () => {
+    fixture({ up: 2 })
+    force = { get: 'loading' }
+    await start()
+    await open({ id: 'u1' })
+    // the store drops the project before the milestone's answer comes
+    await act(async () => deliverWorkspace({ ...snap, projects: [], milestones: [] }))
+    force = {}
+    await rerun()
+    const editor = q('[data-milestone-top] [data-milestone-editor="u1"]')
+    expect(editor).not.toBeNull()
+    await typeInto(nameBox(), 'Kept draft')
+    // and holds it again, while Upcoming's first read for it loads
+    force = { upcoming: 'loading' }
+    await act(async () => deliverWorkspace(snap))
+    await settle()
+    expect(live(sectionSubs('upcoming'))).toHaveLength(1)
+    expect(q('[data-milestone-open="loading"]')).toBeNull()
+    expect(q('[data-milestone-editor="u1"]')).toBe(editor)
+    expect(nameBox()?.value).toBe('Kept draft')
+    expect(q('[data-milestone-window]')?.getAttribute('data-milestone-open-state')).toBe('ok')
+  })
+
   it('keeps the opened editor and its draft in Upcoming when its milestone moves into the past', async () => {
     fixture({ up: 2 })
     await start()
