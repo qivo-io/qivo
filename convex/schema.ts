@@ -2192,10 +2192,10 @@ export default defineSchema({
     dropped_rows: v.optional(v.number()), // rows too large to store, deleted instead
     // when another item's restore last handed this item stored rows: a
     // subtask with its rows (model/deletedItems.ts splitOff) or a link
-    // (placeLinkBy). An organization export that began before then calls
-    // the item partial, since rows it read elsewhere or missed can be the
-    // item's now (model/orgExportRead.ts itemStatus). Bookkeeping, which
-    // the export leaves out.
+    // (placeLinkBy). An organization export that began before then and
+    // reads the item later calls the item partial, since rows it read
+    // elsewhere or missed can be the item's now (model/orgExportRead.ts
+    // itemStatus). Bookkeeping, which the export leaves out.
     received_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])

@@ -675,9 +675,9 @@ export async function readBatch(
  * and leaves them where they are in that index. Only a link a reveal hands
  * to another item (placeLinkBy) changes owner_id, and can then be read
  * twice or missed, which the README says. Both write the receiving item's
- * received_at, so the items section calls an item that took rows after
- * collection began partial. The items come last (`itemsBatch`), each with
- * how much of it the archive holds. */
+ * received_at, so the items section calls an item partial that took rows
+ * after collection began and before the section read it. The items come
+ * last (`itemsBatch`), each with how much of it the archive holds. */
 
 /** What a Deleted items batch knows of its job: when collection started,
  * when each live section's read ended (step.ended), the live sections any

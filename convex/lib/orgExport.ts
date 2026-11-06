@@ -216,8 +216,9 @@ the export ran can be in neither part. A restore can also move a subtask or
 a link to another item while the export runs; each record is under the item
 that held it when its table was read, and a link moved while
 deleted/task_links was read can appear twice or not at all. An item that
-took such a record after the export began is partial, changed during
-export. manifest.json counts the items the archive holds completely and
+took such a record after the export began, and before the export read
+the item in deleted/items, is partial, changed during export.
+manifest.json counts the items the archive holds completely and
 partially (deleted_items.items) and the records left out because they named
 another organization or nothing they belong to (deleted_items.left_out).
 

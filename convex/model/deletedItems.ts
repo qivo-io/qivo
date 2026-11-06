@@ -2389,7 +2389,8 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
       ? holder
       : null
   // the rows coming in may sit where an organization export already read,
-  // so one that began before now calls `into` partial (received_at)
+  // so one that began before now and reads `into` later calls it partial
+  // (received_at)
   if (into !== null) await noteReceived(run, into)
   // a description row the move left, whose text the stored copy keeps
   if (!(await dropDescriptions(run, task.task_id))) return false
@@ -2448,10 +2449,11 @@ async function splitOff(run: Run, task: Doc<'deleted_tasks'>): Promise<boolean> 
 
 /** Records on item `into` that `run`'s restore hands it stored rows now
  * (received_at), once a step. An organization export that began before
- * then calls `into` partial (model/orgExportRead.ts itemStatus), because
- * those rows keep their place in deleted_rows only when a split moves them
- * (item_id), and a link that moves changes owner_id too, so the export can
- * have read them under the item that held them, or not at all. */
+ * then and reads `into` later calls it partial (model/orgExportRead.ts
+ * itemStatus), because those rows keep their place in deleted_rows only
+ * when a split moves them (item_id), and a link that moves changes
+ * owner_id too, so the export can have read them under the item that held
+ * them, or not at all. */
 async function noteReceived(run: Run, into: Item): Promise<void> {
   const fresh = await run.ctx.db.get(into._id)
   if (fresh !== null && fresh.received_at !== run.now)

@@ -1672,9 +1672,9 @@ before it does not accept, so from the first export job or link after the
 deploy, for as long as such a row stays (30 days after its job ends), never
 return the backend to a commit before this release; roll forward instead.
 It also adds `deleted_items.received_at`, which a restore writes on the item
-it hands a subtask or a link to, so an export running then calls that item
-partial. The item keeps the field until it is restored or deleted for good,
-and a rollback is refused while one does.
+it hands a subtask or a link to, so an export running then that reads the
+item later calls it partial. The item keeps the field until it is restored
+or deleted for good, and a rollback is refused while one does.
 Returning the app alone, Vercel Instant Rollback included, is safe, because
 no app calls the new functions. A job writes this release's step fields
 when it ends a section after the deploy, or earlier when a read of a live
