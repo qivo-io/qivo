@@ -446,6 +446,7 @@ describe('a restore in steps', () => {
     unsent: [],
     unknown: [],
     error: null,
+    paused: false,
     ...patch,
   })
   it('says a restore of one round as the page shows it, a deferred item as following', () => {

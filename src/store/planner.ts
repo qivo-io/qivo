@@ -6085,6 +6085,20 @@ export const DELETED_BUSY_TEXT =
    (watchDeferred), each with the way to stop its watch. */
 const deferredWatches = new Map<string, () => void>()
 
+/* What waits for edits to resume: a deferred item's second send that the
+   pause refused or stopped (watchDeferred). Each runs once, when neither
+   the save pause nor snapshot trouble holds any more. */
+const afterPause = new Set<() => void>()
+
+/** Runs what waits for edits to resume, once both pauses have ended. */
+function resumeAfterPause() {
+  // one pause can end while the other still holds
+  if (snapshotTrouble || savePause()) return
+  const waiting = [...afterPause]
+  afterPause.clear()
+  for (const run of waiting) run()
+}
+
 /** Sets P.deletedAction and shows it on the page. */
 function setDeletedAction(next: DeletedAction | null) {
   PLANNER.deletedAction = next
@@ -6102,6 +6116,7 @@ function stopDeferredWatches() {
   // a stop takes its own entry out, which a Map's walk allows
   for (const stop of deferredWatches.values()) stop()
   deferredWatches.clear()
+  afterPause.clear()
   PLANNER.deletedWaiting = new Set()
 }
 
@@ -6192,6 +6207,7 @@ async function runDeletedItems<Reason>(
     unsent: [],
     unknown: [],
     error: null,
+    paused: false,
   }
   const ids = [...new Set(items.map((item) => item.id))]
   if (ids.length === 0) return outcome
@@ -6199,7 +6215,7 @@ async function runDeletedItems<Reason>(
     return { ...outcome, failed: ids, error: DELETED_BUSY_TEXT }
   // the page says the pause in its own toast
   if (refusePausedWrite(calls.ref, true))
-    return { ...outcome, failed: ids, error: pausedText(getFunctionName(calls.ref)) }
+    return { ...outcome, failed: ids, error: pausedText(getFunctionName(calls.ref)), paused: true }
   const { kind } = calls
   const plan = planOf(items, calls.limit.max)
   const epoch = storeEpoch
@@ -6289,6 +6305,7 @@ async function runDeletedItems<Reason>(
         show({ done: outcome.done.length, refused: refusedCount(), lanesDone })
       },
       onStop: ({ lane, reason, paused }) => {
+        if (paused) outcome.paused = true
         const at = laneOf(lane)
         if (at.flying !== null) {
           // the call the refusal answered, refused whole
@@ -6404,18 +6421,24 @@ async function runDeletedItems<Reason>(
    to ready or stuck after its restore failed; `siblings`, the action's
    other deferred items, are watched for themselves, so one that waits for
    another waits without judging it. A re-send skips the busy rule, so a
-   new action may run beside the watches, and honors the pause. */
+   new action may run beside the watches, and honors the pause: when the
+   pause refuses it or stops its call, the watch goes on and judges the
+   last row it took again once edits resume (resumeAfterPause), or on the
+   row's next answer, whichever comes first. */
 function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet<string>) {
   if (deferredWatches.has(item.id)) return
   const epoch = storeEpoch
   let name = targetName(item)
   let ended = false
   let sending = false
+  // the row the watch took last, which the end of a pause judges again
+  let last: DeletedRow | null = null
   let holder: { id: string; stop: () => void } | null = null
   const stops: (() => void)[] = []
   const end = (reason?: string) => {
     if (ended) return
     ended = true
+    afterPause.delete(again)
     for (const stop of stops) stop()
     holder?.stop()
     if (deferredWatches.get(item.id) === stopAll) {
@@ -6426,6 +6449,10 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       toast(`Couldn't restore ${name}. ${reason}`, 'error')
   }
   const stopAll = () => end()
+  /** Judges the last row again, once edits resume after a paused send. */
+  const again = () => {
+    if (!ended && !sending && last !== null) judge(last)
+  }
   const resend = (row: DeletedRow) => {
     sending = true
     void runDeletedItems([row], RESTORE_CALLS(bulk), { bulk, resend: true }).then((outcome) => {
@@ -6433,6 +6460,11 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       if (ended || epoch !== storeEpoch) return
       const refused = outcome.refused.find((r) => r.id === row.id)
       if (refused) return end(refusalText(refused.reason))
+      // the pause is no refusal of the item: it waits for edits to resume
+      if (outcome.paused) {
+        afterPause.add(again)
+        return
+      }
       if (outcome.failed.includes(row.id) || outcome.unknown.includes(row.id))
         return end(outcome.error === null ? 'Try again.' : reasonAfter(outcome.error))
       end()
@@ -6451,16 +6483,8 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       }),
     }
   }
-  deferredWatches.set(item.id, stopAll)
-  showDeletedWaiting()
-  const stopRow = watchLive<DeletedRow | null>(api.deletedItems.item, { id: item.id }, (result) => {
-    if (ended) return
-    if (epoch !== storeEpoch) return end()
-    // a failed read keeps watching; the next answer decides
-    if (!('value' in result) || sending) return
-    const row = result.value
-    // the item left Deleted items
-    if (row === null) return end()
+  /** What the item's row says now: send it again, wait, or end. */
+  function judge(row: DeletedRow) {
     name = targetName(row)
     if (row.state === 'stuck') return end(refusalText('stuck'))
     if (row.state !== 'ready') return
@@ -6471,6 +6495,19 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       return
     }
     end((blocked ? blockedText(blocked) : null) ?? refusalText(blocked?.reason ?? 'no_access'))
+  }
+  deferredWatches.set(item.id, stopAll)
+  showDeletedWaiting()
+  const stopRow = watchLive<DeletedRow | null>(api.deletedItems.item, { id: item.id }, (result) => {
+    if (ended) return
+    if (epoch !== storeEpoch) return end()
+    // a failed read keeps watching; the next answer decides
+    if (!('value' in result) || sending) return
+    const row = result.value
+    // the item left Deleted items
+    if (row === null) return end()
+    last = row
+    judge(row)
   })
   // a watch that joined an answer can end before it hands back its stop
   if (ended) stopRow()
@@ -16142,12 +16179,14 @@ function snapshotRecovered() {
   toast('Qivo is up to date again.', 'success')
   emit('health')
   reapPausedUploads()
+  resumeAfterPause()
 }
 
 /* The pause while Qivo cannot save (lib/syncStatus) and its waiting count
    show in the snapshot notice. When it ends, the person hears so, and what
-   waited for it goes out: a deferred upload removal and the view
-   preferences a paused save kept. */
+   waited for it goes out: a deferred upload removal, a deferred item's
+   second send (resumeAfterPause) and the view preferences a paused save
+   kept. */
 let savePauseKind: SavePause['kind'] | null = null
 syncStatus.subscribe((ended) => {
   if (!PLANNER.loaded) return
@@ -16161,6 +16200,7 @@ syncStatus.subscribe((ended) => {
   const back = ended === 'offline' ? 'Back online.' : 'Saving caught up.'
   toast(snapshotTrouble ? back : `${back} Editing is on again.`, 'success')
   reapPausedUploads()
+  resumeAfterPause()
   // after the failed save's own handler, which runs once this one returns
   setTimeout(() => preferences.retry(), 0)
 })

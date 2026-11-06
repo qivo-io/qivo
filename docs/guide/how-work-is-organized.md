@@ -311,7 +311,7 @@ You can restore what you see when you can still edit where it goes back:
   that project. Only organization admins see it, and its **Restore**, also
   on a task that search finds inside it, brings the project back first.
   Qivo then restores the task once the project is back, also when you have
-  left the page.
+  left the page, and when edits are paused just then, once they resume.
 - While the organization is read-only, restoring is paused.
 
 **Delete now…** in a row's menu deletes an item for good at once, with its

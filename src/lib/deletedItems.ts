@@ -516,7 +516,9 @@ export function destinations(rows: readonly DeletedRow[]): Destination[] {
     steps; a purge has none. `unsent` are the ids a stop left unsent, and
     the deferred ids past the watches one action keeps (DEFERRED_MOST);
     `unknown` the ids of a call in flight when a fault ended the action,
-    whose answer nobody heard. */
+    whose answer nobody heard. `paused` says the pause refused the action
+    before it sent anything or stopped one of its lanes, so the ids it
+    left are worth sending again once edits resume. */
 export type DeletedItemsOutcome<Reason> = {
   done: string[]
   stepping: string[]
@@ -526,6 +528,7 @@ export type DeletedItemsOutcome<Reason> = {
   unsent: string[]
   unknown: string[]
   error: string | null
+  paused: boolean
 }
 
 /** An item a restore or Delete now sends, as the page knows it. Only `id`

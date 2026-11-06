@@ -47,6 +47,9 @@ let calls: Call[]
 let watches: Watch[]
 let showToast: ReturnType<typeof vi.fn>
 let dismissToast: ReturnType<typeof vi.fn>
+// the workspace's one read, which a case fails to pause edits and answers
+// again to end the pause
+let whole: { snap: Snapshot; next: (value: unknown) => void; fail: (error: unknown) => void }
 
 async function load() {
   vi.resetModules()
@@ -57,9 +60,12 @@ async function load() {
   watches = []
   const snap: Snapshot = plannerFixture()
   network.query.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((ref, args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
+    if (name === 'workspace:whole') {
+      whole = { snap, next, fail }
+      next(structuredClone(snap))
+    }
     if (name === 'deletedItems:item') {
       const watch: Watch = { id: args.id, next, open: true }
       watches.push(watch)
@@ -501,6 +507,28 @@ describe('items a restore deferred', () => {
       'error',
     )
     expect(watchOf(task.id)).toEqual([])
+  })
+
+  it('waits out the pause that refuses its second send, and sends it once edits resume', async () => {
+    const { task } = await deferOne()
+    // the workspace's read fails, so edits pause
+    whole.fail(new Error('[CONVEX Q(workspace:whole)] [Request ID: 1] Server Error'))
+    await settle()
+    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    await settle()
+    // nothing went out, nothing was refused, and the watch goes on
+    expect(calls).toEqual([])
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+    expect(watchOf(task.id)).toHaveLength(1)
+    expect(P.deletedWaiting.has(task.id)).toBe(true)
+    // the workspace answers again, edits resume, and the item goes
+    whole.next({ ...structuredClone(whole.snap), delivered_at: '2026-10-16T17:00:00.000Z' })
+    await settle()
+    expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
+    await answerNext()
+    expect(watchOf(task.id)).toEqual([])
+    expect(P.deletedWaiting.size).toBe(0)
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
   })
 
   it('lets a new action run beside the watch, whose second send skips the busy rule', async () => {
