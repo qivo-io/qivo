@@ -8,7 +8,8 @@ describe('storageSampleLine', () => {
       'active',
     )
     expect(line).toBe('1.20 GB measured at the start of this period.')
-    // the case that must fail: the sample counts files in Deleted items now
+    // the case that must fail, since the sample counts files in Deleted
+    // items now
     expect(line).not.toContain('Deleted items')
     expect(storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: 0 }, 'past_due')).toBe(
       '0 B measured at the start of this period.',

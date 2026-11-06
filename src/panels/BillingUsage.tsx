@@ -45,12 +45,12 @@ function sectionLine(usage: BillingUsageFigures | null, measuredAt: number): str
  * counted while they are not complete, never as 0, and so is current
  * storage, the server's stored-byte totals, files in Deleted items
  * included, with the paid period's sample of the same totals on a line of
- * its own. API calls
- * by account (BillingApiAccounts) mounts once the figures answered and
- * reads the bucket they name; View credentials hands `onViewCredentials`
- * the organization `orgId`, the account and that bucket. Storage by
- * project reads its own batches (BillingStorage) at once. Both lists start
- * over when `refresh`, the page's Refresh count, changes. */
+ * its own. API calls by account (BillingApiAccounts) mounts once the
+ * figures answered and reads the bucket they name; View credentials hands
+ * `onViewCredentials` the organization `orgId`, the account and that
+ * bucket. Storage by project reads its own batches (BillingStorage) at
+ * once. Both lists start over when `refresh`, the page's Refresh count,
+ * changes. */
 export function BillingUsage({
   usage,
   error,

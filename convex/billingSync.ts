@@ -696,11 +696,11 @@ export const restartStorage = internalMutation({
  * the renewal. They count every task file the organization stores, files
  * in Deleted items included until they are deleted for good, the figure
  * Billing shows as current storage. A file stored after that waits for the
- * next period. It records
- * the bytes and the blocks over the plan's allowance for the period's
- * seats. When there are blocks and the period starts after any
- * complimentary grant, it also adds the storage charge, which is collected
- * with the period's metered usage on its closing invoice and never recurs.
+ * next period. It records the bytes and the blocks over the plan's
+ * allowance for the period's seats. When there are blocks and the period
+ * starts after any complimentary grant, it also adds the storage charge,
+ * which is collected with the period's metered usage on its closing
+ * invoice and never recurs.
  *
  * While the totals are not complete, as while an operator's recount runs,
  * the step logs a warning and writes nothing, never 0, and the sample

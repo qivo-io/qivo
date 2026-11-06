@@ -378,8 +378,8 @@ describe('one sample per organization and day', () => {
     expect(warnings).toHaveBeenCalledTimes(1)
     await settle(t)
     expect((await allSamples(t)).map((s) => s.org_id).sort()).toEqual(ids)
-    // the old run's step stopped at its run check: three steps did the work
-    // and the fourth found the end
+    // the old run's step stopped at its run check, so three steps did the
+    // work and the fourth found the end
     expect(await runRow(t)).toMatchObject({
       run: resumed?.run,
       counts: { steps: 4, orgs: 3, written: 3, present: 0, restarts: 1 },
@@ -578,8 +578,8 @@ describe('expiry', () => {
     expect(
       (await t.run((ctx) => ctx.db.query('storage_sample_runs').collect())).map((r) => r.day),
     ).toEqual([dayAfter(-kept), TODAY])
-    // six samples and two run rows, two of each a page: three full pages,
-    // then one that found none
+    // six samples and two run rows, two of each a page, take three full
+    // pages and then one that found none
     expect(await runRow(t)).toMatchObject({ counts: { expired: 6, expiry_steps: 4 } })
   })
 })

@@ -42,8 +42,8 @@
  * organization all write its row and conflict with each other, and Convex
  * runs the one that lost again. A write that commits while a sample reads
  * the row reruns the sample, never the write, which reads nothing a sample
- * writes. Inserts go through uncountedWriter, so
- * they spend none of a public demo visitor's record limit (lib/demo.ts).
+ * writes. Inserts go through uncountedWriter, so they spend none of a
+ * public demo visitor's record limit (lib/demo.ts).
  *
  * It imports neither model/issues.ts nor model/attachments.ts, which import
  * it, as model/descriptionImages.ts does too. */

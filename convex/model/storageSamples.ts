@@ -41,9 +41,9 @@ export const SAMPLE_EXPIRY = { page: 200 }
 
 /** How many UTC days samples and run rows are kept, today included. That
  * is more than a year, so the owner can read a year of history and any
- * monthly period can fall back to a reading from the period before it. About 400
- * rows an organization at the retention, each about 230 bytes as Convex
- * sizes a document (storageSamples.test.ts), about 90 KB. */
+ * monthly period can fall back to a reading from the period before it.
+ * About 400 rows an organization at the retention, each about 230 bytes as
+ * Convex sizes a document (storageSamples.test.ts), about 90 KB. */
 export const SAMPLE_RETENTION_DAYS = 400
 
 /** A run's counters (schema.ts storage_sample_runs `counts`). */
