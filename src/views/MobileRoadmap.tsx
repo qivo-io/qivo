@@ -190,6 +190,7 @@ export function MobileRoadmap({
               scroller.current?.querySelector<HTMLElement>('[data-new-milestone]') ??
               scroller.current?.querySelector<HTMLElement>('[data-no-milestones]'),
           ),
+          m.project,
         )
       }
       aria-label={`${P.canWrite(m.project) ? 'Edit' : 'View'} milestone ${m.name}`}

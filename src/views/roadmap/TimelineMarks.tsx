@@ -349,7 +349,8 @@ export function MilestoneFlag({
   movable: boolean // edit access to the milestone's project; otherwise a click only opens it
   onLive: (id: string, week: number) => void
   onCommit: (id: string, epoch: number) => void
-  onEdit?: (id: string) => void
+  /** opens the milestone, naming the project it sits on */
+  onEdit?: (id: string, project: string) => void
 }) {
   const drag = useRefR<{
     x: number
@@ -381,7 +382,7 @@ export function MilestoneFlag({
   const onUp = () => {
     if (drag.current) {
       if (!drag.current.moved) {
-        onEdit?.(m.id)
+        onEdit?.(m.id, m.project)
       } else {
         onCommit(m.id, drag.current.epoch)
       }
@@ -391,7 +392,7 @@ export function MilestoneFlag({
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'Enter' && e.key !== ' ') return
     e.preventDefault()
-    onEdit?.(m.id)
+    onEdit?.(m.id, m.project)
   }
   const x = (week - w0) * weekW
   const left = place.side === 'left'

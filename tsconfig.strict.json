@@ -22,6 +22,7 @@
     "src/lib/localDay.ts",
     "src/lib/md.ts",
     "src/lib/mdSerialize.ts",
+    "src/lib/milestoneSection.ts",
     "src/lib/pageStarts.ts",
     "src/lib/projectPick.ts",
     "src/lib/relationCandidates.ts",

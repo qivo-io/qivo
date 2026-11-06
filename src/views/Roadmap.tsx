@@ -578,7 +578,7 @@ function Roadmap({
      the flag with it. Focus then goes to the next flag, the previous one,
      the toolbar's Milestone or its filter field, else, as on a phone, whose
      toolbar folds into a closed Filters & planning, that fold's summary. */
-  const editMilestone = (id: string) =>
+  const editMilestone = (id: string, project?: string) =>
     actions.editMilestone(
       id,
       focusAround(
@@ -597,6 +597,7 @@ function Roadmap({
           )
         },
       ),
+      project,
     )
   useEffectR(() => {
     if (!hlUser) return

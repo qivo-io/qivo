@@ -66,7 +66,7 @@ function weeksOf(i: (typeof issues)[number]): { start?: number; end?: number } {
 
 describe('the versioned Northstar marketing scenario', () => {
   it('keeps the agreed organization, project mix and sole administrator', () => {
-    expect(MARKETING_DEMO_VERSION).toBe(8)
+    expect(MARKETING_DEMO_VERSION).toBe(9)
     expect(people).toHaveLength(8)
     expect(people.filter((person) => person.role === 'admin').map((person) => person.key)).toEqual([
       'nora',
@@ -344,6 +344,7 @@ describe('the versioned Northstar marketing scenario', () => {
       expect(projectByKey.has(milestone.project)).toBe(true)
       expect(projectByKey.get(milestone.project)?.parent).toBeUndefined()
     }
+    expect(new Set(milestones.map((m) => m.key)).size).toBe(milestones.length)
     for (const comment of comments) {
       expect(issueByKey.has(comment.issue)).toBe(true)
       expect(peopleKeys.has(comment.author)).toBe(true)
@@ -688,6 +689,34 @@ describe('marketing text uses the application Markdown dialect', () => {
       expect(astToMd(blocks)).toBe(text)
       expect(text).not.toMatch(/<\/?p>/)
     }
+  })
+
+  it('gives each top-level project three past milestones, before the recorded Roadmap weeks', () => {
+    const tops = projects.filter((project) => project.parent === undefined).map((p) => p.key)
+    const past = milestones.filter((m) => m.week < 0)
+    expect(past).toHaveLength(9)
+    for (const top of tops) {
+      const weeks = past.filter((m) => m.project === top).map((m) => m.week)
+      expect(weeks, top).toHaveLength(3)
+      expect(new Set(weeks).size, top).toBe(3)
+      for (const week of weeks) {
+        expect(week, top).toBeGreaterThanOrEqual(-12)
+        expect(week, top).toBeLessThanOrEqual(-4)
+      }
+    }
+    // the recorded Roadmap shows weeks -3 to 6, which hold the seven upcoming
+    // milestones alone
+    const recorded = milestones.filter((m) => m.week >= -3 && m.week <= 6)
+    expect(recorded.map((m) => m.key)).toEqual([
+      'pcb-released',
+      'prototype-validated',
+      'batch-ready',
+      'dashboard-ready',
+      'cloud-beta-ready',
+      'pilot-installed',
+      'pilot-launch',
+    ])
+    expect(milestones).toHaveLength(16)
   })
 
   it('keeps every seed text trimmed and within its limit, counted as the server counts', () => {

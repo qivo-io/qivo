@@ -39,6 +39,14 @@ vi.mock('../../lib/auth', () => ({
 
 const NOW = '2026-09-14T08:00:00.000Z'
 
+/** The Monday `weeks` weeks after this week's, as a milestone's week. */
+function mondayIn(weeks: number) {
+  const day = new Date()
+  day.setDate(day.getDate() + 7 * weeks - ((day.getDay() + 6) % 7))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
+}
+
 type Pending = { name: string; resolve: (value: unknown) => void; reject: (e: unknown) => void }
 
 let pages: {
@@ -82,9 +90,11 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     track_delay: true,
     created_at: NOW,
   })
+  // a past one and one of this week, whatever the day the test runs on, so
+  // Gamma shows in the Milestones window's Upcoming
   snap.milestones.push(
-    { id: 'beta', project_id: 'sensor', name: betaName, week: '2026-10-05', created_at: NOW },
-    { id: 'gamma', project_id: 'sensor', name: 'Gamma', week: '2026-11-02', created_at: NOW },
+    { id: 'beta', project_id: 'sensor', name: betaName, week: mondayIn(-4), created_at: NOW },
+    { id: 'gamma', project_id: 'sensor', name: 'Gamma', week: mondayIn(0), created_at: NOW },
   )
   snap.issues.push({
     id: 'task',

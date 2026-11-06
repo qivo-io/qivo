@@ -521,13 +521,14 @@ describe('Milestones', { timeout: 30_000 }, () => {
       has_hidden_subtasks: false,
       has_hidden_parent: false,
     })
+    // a past one and one of this week, whatever the day the test runs on
     snap.milestones.push(
-      { id: 'alpha', project_id: 'plan', name: 'Alpha', week: '2026-10-05', created_at: AT },
-      { id: 'beta', project_id: 'plan', name: 'Beta', week: '2026-11-02', created_at: AT },
+      { id: 'alpha', project_id: 'plan', name: 'Alpha', week: mondayIn(-4), created_at: AT },
+      { id: 'beta', project_id: 'plan', name: 'Beta', week: mondayIn(0), created_at: AT },
     )
   }
   /** The Monday `weeks` weeks after this week's, as a milestone's week. */
-  const mondayIn = (weeks: number) => {
+  function mondayIn(weeks: number) {
     const day = new Date()
     day.setDate(day.getDate() + 7 * weeks - ((day.getDay() + 6) % 7))
     const pad = (n: number) => String(n).padStart(2, '0')

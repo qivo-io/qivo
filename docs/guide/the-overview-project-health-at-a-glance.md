@@ -103,6 +103,22 @@ top-level project. People with read-only access to it, including people
 whose access covers only a sub-project, can view milestones but cannot add,
 move or edit them.
 
+The window lists the project's milestones in two sections. **Upcoming**
+lists the milestones of the current week and later, nearest first. It shows
+the first 25, and 25 more each time you select **Load more**. **Past**,
+which is collapsed whenever the window opens, lists the earlier milestones,
+newest first, once you select it, 25 at a time in the same way. A milestone
+you add in an earlier week while Past is collapsed goes there, and the
+window says so. Once a section holds more than 25 milestones, it shows a
+search box, which searches every milestone of that section, not only the
+ones shown. Beyond 100 milestones, **Load more** moves on. The section then
+says which milestones are no longer shown and offers
+**Show from the start**. A section says when it is loading, and when Qivo
+could check only part of the list, in which case **Load more** continues. If
+loading fails, it says so with **Retry**, and if Qivo refuses to read the
+milestones, it gives the reason. A milestone you are editing keeps its place
+and your change while it moves, also into the other section.
+
 A project has at most one milestone in each calendar week, counting the
 milestones added from its sub-projects. Weeks begin on the organization's
 **Workdays start on** day ([Organization and team

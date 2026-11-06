@@ -137,6 +137,12 @@ export const DEFAULT_PAGE_SIZE = 50
  * one (src/store/planner.ts P.watchMilestones). */
 export const MILESTONE_READ_PROJECTS = 200
 
+/** The most rows one milestones.section answer holds. The app asks 25 at
+ * first and 25 more for each Load more, reading one section as one live
+ * read whose limit grows, and past this many it moves the read on rather
+ * than holding more (src/lib/milestoneSection.ts). */
+export const MILESTONE_READ_ROWS = 100
+
 /** The most a task row takes as Convex counts a document without the
  * description copy no writer sets since the third release of the
  * description move (model/descriptions.ts), with every other field set at

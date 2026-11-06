@@ -212,8 +212,23 @@
 //                        stop after their first row), sync-refused and
 //                        sync-too-many (the page lowers the store's cap of
 //                        projects one read names to none, scripts/perf/
-//                        entry.tsx, so the opening asks nothing); several
-//                        joined by commas
+//                        entry.tsx, so the opening asks nothing); for the
+//                        Milestones window's sections, window-loading,
+//                        window-error, window-refused and window-partial
+//                        (Upcoming stops after its first row),
+//                        past-loading and past-error (Past alone), and
+//                        more-error (a Load more fails while the read it
+//                        grows answers); several joined by commas
+//   milestoneweeks (0)   plants that many weekly milestones from this week
+//                        on and as many in the weeks before it on the
+//                        visible program, instead of four two weeks apart,
+//                        for the window's Load more, Past and search
+//   milestonecap         the window's sections read batches of that many
+//                        and hold at most twice that (the page lowers
+//                        src/lib/milestoneSection.ts MILESTONE_SECTION,
+//                        scripts/perf/entry.tsx), so milestoneweeks=5&
+//                        milestonecap=2 shows Load more and the moved-on
+//                        note with few rows
 //   sync                 states Team sync's agenda (teamSync:agenda)
 //                        answers whatever the workspace says
 //                        (src/store/teamSyncStandIn.setup.ts), for the
@@ -427,6 +442,16 @@ const forcedWindow = parameters.get('window') ?? undefined
 const forcedMilestones = (() => {
   const force = {}
   const sync = { 'sync-loading': 'loading', 'sync-error': 'error', 'sync-partial': 'stopped' }
+  // the window's sections: Upcoming, Past and a Load more, each alone
+  const sections = {
+    'window-loading': ['upcoming', 'loading'],
+    'window-error': ['upcoming', 'error'],
+    'window-refused': ['upcoming', 'refused'],
+    'window-partial': ['upcoming', 'stopped'],
+    'past-loading': ['past', 'loading'],
+    'past-error': ['past', 'error'],
+    'more-error': ['more', 'error'],
+  }
   for (const state of (parameters.get('milestones') ?? '').split(',').filter(Boolean)) {
     if (state === 'open-loading') force.get = 'loading'
     else if (state === 'open-error') force.get = 'error'
@@ -434,7 +459,11 @@ const forcedMilestones = (() => {
     else if (state === 'open-refused') force.get = 'refused'
     else if (state === 'sync-refused') force.section = force.between = 'refused'
     else if (state in sync) force.section = force.between = sync[state]
+    else if (state in sections) force[sections[state][0]] = sections[state][1]
   }
+  // a Load more is an ask above the page's first batch (milestonecap)
+  const cap = option('milestonecap', 0)
+  if (cap > 0) force.firstBatch = cap
   return force
 })()
 /* Team sync's forced states (the `sync` parameter). */
@@ -678,13 +707,30 @@ const labels = Array.from({ length: orgLabelCount }, (_, n) => ({
   color: '#557733',
   created_at: now,
 }))
-const milestones = Array.from({ length: 4 }, (_, n) => ({
-  id: id('9', n),
-  project_id: visible.meta.id,
-  name: `Milestone ${n + 1}`,
-  week: day(n * 14),
-  created_at: now,
-}))
+/* What the planted weekly milestones are called, by turns. */
+const MILESTONE_NAMES = ['Design review', 'Prototype build', 'Field test', 'Supplier audit']
+const milestoneWeeks = option('milestoneweeks', 0)
+const milestones =
+  milestoneWeeks > 0
+    ? Array.from({ length: 2 * milestoneWeeks }, (_, n) => {
+        // from this week on, then back from last week
+        const k = n % milestoneWeeks
+        const upcoming = n < milestoneWeeks
+        return {
+          id: id('9', n),
+          project_id: visible.meta.id,
+          name: `${MILESTONE_NAMES[k % MILESTONE_NAMES.length]} ${Math.floor(k / MILESTONE_NAMES.length) + 1}${upcoming ? '' : ' signed off'}`,
+          week: day(upcoming ? 7 * k : -7 * (k + 1)),
+          created_at: now,
+        }
+      })
+    : Array.from({ length: 4 }, (_, n) => ({
+        id: id('9', n),
+        project_id: visible.meta.id,
+        name: `Milestone ${n + 1}`,
+        week: day(n * 14),
+        created_at: now,
+      }))
 // no Backlog: the Roadmap leaves some of those out, and every phase wants them all
 const STATUSES = ['todo', 'todo', 'progress', 'progress', 'review', 'done']
 /* Ten tasks a block in one project. Inside a block the task at 5 is a

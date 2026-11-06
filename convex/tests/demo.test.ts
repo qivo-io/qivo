@@ -1066,6 +1066,17 @@ describe('public demo provisioning steps', () => {
     await expectCountsExact(limited, org?.id ?? '', 'the public demo')
   })
 
+  it('gives a public demo copy the 16 Northstar milestones, the 9 past ones before the anchor', async () => {
+    const login = await anonymousLogin()
+    await provision(login.as)
+    const receipt = await t.run((ctx) => ctx.db.query('demo_sessions').unique())
+    const anchor = receipt?.anchor
+    if (anchor === undefined) throw new Error('no demo session with an anchor')
+    const milestones = await t.run((ctx) => ctx.db.query('milestones').collect())
+    expect(milestones).toHaveLength(16)
+    expect(milestones.filter((m) => m.week < anchor)).toHaveLength(9)
+  })
+
   it('gives the public demo the notices and follows of a seed that asks person by person', async () => {
     const login = await anonymousLogin()
     await provision(login.as)

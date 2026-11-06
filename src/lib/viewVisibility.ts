@@ -1,8 +1,10 @@
 /* The one gate that pauses a view's live reads (lib/liveView.ts, and the
    reads the store owns: the Board's, views/board/useBoardView.ts, the
-   Overview's, views/Overview.tsx, the milestone reads, P.watchMilestones,
-   of the Milestones window opened on a milestone, panels/Modals.tsx
-   useOpenedMilestone, and of Team sync's opening,
+   Overview's, views/Overview.tsx, the Roadmap's,
+   views/roadmap/useRoadmapView.ts, the milestone reads, P.watchMilestones,
+   of the Milestones window, panels/Modals.tsx useMilestoneGet for the
+   milestone it opened on and a kept editor's, and its Upcoming and Past
+   sections, views/useMilestoneSection.ts, and of Team sync's opening,
    views/teamSync/TeamOpening.tsx useSyncMilestoneReads, and Team sync's
    agenda and last comments, views/teamSync/useSyncMeeting.ts and
    views/TeamSync.tsx) while the tab or the desktop window is hidden. It

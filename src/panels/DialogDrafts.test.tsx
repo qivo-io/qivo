@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
 import { act, type ReactNode, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Input } from '../components/ui/input'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { pastCloseTicks } from '../lib/discardQuestion.setup'
+import { answerMilestones, isMilestoneRead } from '../store/milestoneStandIn.setup'
 import { plannerFixture } from '../store/plannerFixture.setup'
 
 /* Closing a dialog while a field holds text the person typed: the close
@@ -53,8 +55,11 @@ beforeEach(async () => {
   })
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
-  network.onUpdate.mockImplementation((_ref, _args, next) => {
-    next(structuredClone(snap))
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
+    // the Milestones window's sections read the server's milestones
+    const name = getFunctionName(ref)
+    if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
+    else next(structuredClone(snap))
     return () => {}
   })
   const store = await import('../store/planner')

@@ -59,21 +59,13 @@
  * whose figures, sentence and lists must count exactly those two, then
  * opens its project's Overview, whose health table (overview.health) must
  * hold that sub-project's row with those two tasks' figures, and opens the
- * sub-project's Board from the row (ui/overview). It makes a milestone with
- * its run tag over REST on its project, presses its row on the project's
- * Overview, which opens the Milestones window on the deployment's answer
- * (milestones.get), and renames and deletes it there, each of which REST
- * then shows (ui/milestones). It records the frames the
+ * sub-project's Board from the row (ui/overview). It records the frames the
  * page sends on its sync socket and opens its project's Board, a fixture
  * task's address and its project's Roadmap in fresh loads, none of which may
  * subscribe the workspace's task windows (workspace.tasks), the Roadmap
  * subscribing its own read (tasks.roadmap) and showing the task's row with
  * no read of planning.assigneeLoad (ui/tasks-on-demand), so the
- * deployment's app loads every task only for a page that needs them. It
- * makes a task of the Standard agent's in Alpha over REST and opens Team
- * sync on its project in a fresh load, which must subscribe Team sync's
- * agenda (teamSync.agenda) and no task window, and show the task's
- * card on the agent's line from the rail (ui/team-sync). The
+ * deployment's app loads every task only for a page that needs them. The
  * relation pickers step waits for each window's Link task and Add subtask
  * to turn on, which they do once the window's own read of its task has
  * answered, since a task address loads no task window. It makes a label with
@@ -113,6 +105,17 @@
  * sub-projects (archivedSubProjects), one carried and one archived on its
  * own, and restores it there, which must bring back the project and the
  * carried sub-project only, each checked over REST (ui/settings-projects).
+ * It makes a milestone with its run tag over REST on its project, and
+ * another in a week before the run's own, presses the first one's row on
+ * the project's Overview, which opens the Milestones window on the
+ * deployment's answer (milestones.get) with the milestone in its place in
+ * Upcoming (milestones.section), expands Past, which must show the past
+ * milestone only once expanded and not after it was deleted over REST, and
+ * renames and deletes the first one there, each of which REST then shows
+ * (ui/milestones). It makes a task of the Standard agent's in Alpha over
+ * REST and opens Team sync on its project in a fresh load, which must
+ * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
+ * show the task's card on the agent's line from the rail (ui/team-sync).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -4480,8 +4483,8 @@ async function overviewCheck() {
   })
 }
 
-/** The step that checks the Milestones window opened on a milestone
- *  (milestoneWindowCheck). */
+/** The step that checks the Milestones window opened on a milestone, with
+ *  its Upcoming and Past sections (milestoneWindowCheck). */
 export const MILESTONE_STEP = 'ui/milestones'
 
 /** The first week, from three weeks after the run's own on, that
@@ -4495,15 +4498,35 @@ export function freeMilestoneWeek(milestones, today, weekStart) {
   return week
 }
 
-/** The Milestones window on the deployment's answer (milestones.get): the
- *  run makes `<tag> Milestone` over REST on its project M in a week M
- *  leaves free after the run's own, then in the app M's Overview reaches
- *  its ok state, a press on the milestone's row opens the window, which
- *  reads the milestone and shows its editor with its name, a rename there
+/** The first week before the run's own that `milestones` (YYYY-MM-DD days)
+ *  leaves free, going back from the week before last, in an organization
+ *  whose weeks start on `weekStart`, so a milestone made there shows in the
+ *  Milestones window's Past. `today` is the run's UTC day, while the
+ *  browser places weeks by the runner's local day, which can still be in
+ *  the week before the UTC one, so the UTC week before could be the
+ *  browser's current week. */
+export function freePastMilestoneWeek(milestones, today, weekStart) {
+  const taken = new Set(milestones.map((day) => weekOf(day, weekStart)))
+  let week = addDays(weekOf(today, weekStart), -14)
+  while (taken.has(week)) week = addDays(week, -7)
+  return week
+}
+
+/** The Milestones window on the deployment's answers (milestones.get and
+ *  section): the run makes `<tag> Milestone` over REST on its project M in
+ *  a week M leaves free after the run's own, and `<tag> Past milestone` in
+ *  the first week M leaves free from the week before last back
+ *  (freePastMilestoneWeek), then in the app M's Overview
+ *  reaches its ok state, a press on the first milestone's row opens the
+ *  window, which reads the milestone and shows its editor with its name in
+ *  its place in Upcoming once that section's read answered, so the
+ *  deployment's milestones.section answered. Past, collapsed, does not show
+ *  the past milestone until it is expanded, then shows it, and no longer
+ *  shows it once the run deleted it over REST. A rename of the first one
  *  saved with Save reaches GET /projects/M, and its Delete, pressed twice,
- *  leaves GET /projects/M without it. The milestone lives on M, so the
- *  cleanup that deletes M removes one a failure left. It runs while M is
- *  active, after ui/overview. */
+ *  leaves GET /projects/M without it. The milestones live on M, so the
+ *  cleanup that deletes M removes any a failure left. It runs while M is
+ *  active, after ui/settings-projects. */
 async function milestoneWindowCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -4519,6 +4542,14 @@ async function milestoneWindowCheck() {
       name: `${run.tag} Milestone`,
       date,
     })
+    const past = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+      name: `${run.tag} Past milestone`,
+      date: freePastMilestoneWeek(
+        held.map((m) => m.date),
+        todayUtc(),
+        me.organization.week_start,
+      ),
+    })
     const listed = async () => (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`, {
       waitUntil: 'domcontentloaded',
@@ -4531,10 +4562,27 @@ async function milestoneWindowCheck() {
     await row.click()
     const window = app.locator('[data-modal-shell] [data-milestone-window]')
     await window.waitFor({ timeout: 10_000 })
-    const editor = window.locator(`[data-milestone-editor="${made.id}"]`)
-    await editor.waitFor({ timeout: 60_000 })
+    const upcoming = window.locator(
+      '[data-milestone-section="upcoming"][data-milestone-section-state="ok"]',
+    )
+    await upcoming.waitFor({ timeout: 60_000 })
+    const editor = upcoming.locator(`[data-milestone-editor="${made.id}"]`)
+    await editor.waitFor({ timeout: 10_000 })
     const name = editor.locator('input[aria-label="Name"]')
     eq(await name.inputValue(), made.name, "the editor's name")
+    // Past reads nothing until it is expanded, then shows the past one
+    const pastRow = window.locator(
+      `[data-milestone-section="past"] [data-milestone-row="${past.id}"]`,
+    )
+    const toggle = window.locator('[data-milestone-past-toggle]')
+    await toggle.waitFor({ timeout: 10_000 })
+    eq(await toggle.getAttribute('aria-expanded'), 'false', "Past's disclosure")
+    eq(await pastRow.count(), 0, 'past milestones shown before Past was expanded')
+    await toggle.click()
+    await pastRow.waitFor({ timeout: 60_000 })
+    // and drops it once it is deleted over REST
+    await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${past.id}`)
+    await pastRow.waitFor({ state: 'detached', timeout: 60_000 })
     // rename it there
     const renamed = `${run.tag} Milestone renamed`
     await name.fill(renamed)
@@ -4564,7 +4612,7 @@ async function milestoneWindowCheck() {
       .locator('[data-modal-shell] button')
       .filter({ hasText: /^Done$/ })
       .click()
-    return `opened ${made.name} from ${M.key}'s Overview on the deployment's answer, renamed it and deleted it in its window`
+    return `opened ${made.name} from ${M.key}'s Overview in its place in Upcoming on the deployment's answers, showed ${past.name} in Past once expanded and dropped it once deleted over REST, renamed ${made.name} and deleted it in its window`
   })
 }
 

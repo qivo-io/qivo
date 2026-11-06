@@ -938,6 +938,117 @@ describe('a section', () => {
   })
 })
 
+describe('a section the app grows by Load more', () => {
+  it('answers 60 upcoming and 60 past weekly milestones of one project at limits of 100 and 50, each once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // one a week, the 60 before MONDAY past and the 60 from it upcoming
+    const rows = await plantMany(
+      t,
+      Array.from({ length: 120 }, (_, i) => ({
+        project: f.meta.id,
+        week: plus(MONDAY, 7 * (i - 60)),
+        name: `Review ${i}`,
+      })),
+    )
+    const upcomingRows = rows.filter((m) => m.week >= MONDAY)
+    const pastRows = rows.filter((m) => m.week < MONDAY)
+    const user = as(t, f.user)
+    const base = { projects: [f.meta.id], from: MONDAY }
+    const upcoming = await user.query(api.milestones.section, {
+      ...base,
+      side: 'upcoming',
+      limit: 100,
+    })
+    expect(upcoming.rows.map((r) => r.id)).toEqual(ascending(upcomingRows))
+    expect(upcoming).toMatchObject({ next: null, stopped: null, past: true })
+    const first = await user.query(api.milestones.section, { ...base, side: 'past', limit: 50 })
+    expect(first.rows.map((r) => r.id)).toEqual(descending(pastRows).slice(0, 50))
+    const fiftieth = first.rows[49]
+    expect(first.next).toEqual({
+      week: fiftieth.week,
+      key: nameKey(fiftieth.name),
+      id: fiftieth.id,
+    })
+    const rest = await user.query(api.milestones.section, {
+      ...base,
+      side: 'past',
+      limit: 50,
+      after: first.next ?? undefined,
+    })
+    expect(rest.rows.map((r) => r.id)).toEqual(descending(pastRows).slice(50))
+    expect(rest).toMatchObject({ next: null, stopped: null })
+    // a section moved on starts after a row of the answer it showed
+    const middle = upcoming.rows[20]
+    const after = { week: middle.week, key: nameKey(middle.name), id: middle.id }
+    const moved = await user.query(api.milestones.section, {
+      ...base,
+      side: 'upcoming',
+      limit: 100,
+      after,
+    })
+    expect(moved.rows.map((r) => r.id)).toEqual(ascending(upcomingRows).slice(21))
+    expect(moved.next).toBeNull()
+    expect(moved.past).toBeUndefined()
+  })
+
+  it('answers 100 rows in order with a next over 200 top-level projects, one upcoming milestone each', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // TBED, SKNK and 198 granted projects are the organization's 200
+    // top-level projects; TBED's two sub-projects are its only ones
+    await grantsOn(t, f, f.user, 198)
+    const projects = await t.run(async (ctx) =>
+      (await ctx.db.query('projects').collect())
+        .filter((p) => p.org_id === f.org.id && p.parent_id === undefined)
+        .map((p) => p.id),
+    )
+    expect(projects).toHaveLength(200)
+    const rows = await plantMany(
+      t,
+      projects.map((project, i) => ({
+        project,
+        week: plus(MONDAY, i % 60),
+        name: `Gate ${i}`,
+      })),
+    )
+    const user = as(t, f.user)
+    const answer = await user.query(api.milestones.section, {
+      projects,
+      from: MONDAY,
+      side: 'upcoming',
+      limit: 100,
+    })
+    const want = ascending(rows)
+    expect(answer.rows.map((r) => r.id)).toEqual(want.slice(0, 100))
+    expect(answer.stopped).toBeNull()
+    expect(answer.next?.id).toBe(want[99])
+  })
+
+  it('stops a 100-row read at a lowered budget with every match up to its frontier, and goes on to every milestone once', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const rows = await plantMany(
+      t,
+      Array.from({ length: 120 }, (_, i) => ({
+        project: f.meta.id,
+        week: plus(MONDAY, 7 * i),
+        name: `Check ${i}`,
+      })),
+    )
+    MILESTONE_READ.documents = 40
+    const user = as(t, f.user)
+    const base = { projects: [f.meta.id], from: MONDAY, side: 'upcoming' as const, limit: 100 }
+    const first = await user.query(api.milestones.section, base)
+    if (first.stopped === null || first.next === null) throw new Error('the read did not stop')
+    expect(first.rows.length).toBeLessThan(100)
+    expect(first.next.week).toBe(first.stopped)
+    expect(first.rows.map((r) => r.id)).toEqual(ascending(rows).slice(0, first.rows.length))
+    const { ids } = await walk(user, base)
+    expect(ids).toEqual(ascending(rows))
+  })
+})
+
 describe('a range of days', () => {
   it('answers the milestones shown in [from, to), in upcoming order', async () => {
     const t = newT()
@@ -1204,11 +1315,16 @@ describe('refusals', () => {
       'bad_request',
       /at most 200 projects/,
     )
-    for (const limit of [0, 26, 2.5])
+    // the app grows one section's read up to 100 rows (MILESTONE_READ_ROWS)
+    expect(await user.query(api.milestones.section, { ...base, limit: 100 })).toMatchObject({
+      rows: [],
+      next: null,
+    })
+    for (const limit of [0, 101, 1.5])
       await expectRefusal(
         user.query(api.milestones.section, { ...base, limit }),
         'bad_request',
-        /limit must be a whole number from 1 to 25/,
+        /^limit must be a whole number from 1 to 100$/,
       )
     await expectRefusal(
       user.query(api.milestones.section, { ...base, from: '2026-02-30' }),

@@ -786,6 +786,79 @@ describe('the benchmark server', () => {
     ).toBeUndefined()
   }, 60_000)
 
+  it("plants weekly milestones and forces the Milestones window's section states", async () => {
+    /** What milestones:section answers with `args` on a workspace with page
+        parameters `params`, and the workspace. */
+    const section = async (params, args) => {
+      const { posted, send } = await server(
+        `tasks=20&latency=0&mbps=100000&milestoneweeks=3&${params}`,
+      )
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const projects = snap.projects.filter((p) => !p.parent_id).map((p) => p.id)
+      // from this week's first planted day, the first upcoming milestone's
+      const from = snap.milestones[0].week
+      await send({
+        type: 'query',
+        id: 'ms',
+        name: 'milestones:section',
+        args: { projects, from, limit: 25, ...args },
+      })
+      const answer = posted.find((m) => m.to === 'ms')
+      if (!answer) return { snap, answer: undefined }
+      return {
+        snap,
+        answer: answer.error ? { error: answer.error, data: answer.data } : JSON.parse(answer.text),
+      }
+    }
+    const upcoming = await section('', { side: 'upcoming' })
+    expect(upcoming.snap.milestones).toHaveLength(6)
+    expect(upcoming.answer.rows.map((row) => row.name)).toEqual([
+      'Design review 1',
+      'Prototype build 1',
+      'Field test 1',
+    ])
+    expect(upcoming.answer).toMatchObject({ next: null, past: true })
+    const past = await section('', { side: 'past' })
+    expect(past.answer.rows.map((row) => row.name)).toEqual([
+      'Design review 1 signed off',
+      'Prototype build 1 signed off',
+      'Field test 1 signed off',
+    ])
+    // the window's states, each on its own side or ask
+    expect(
+      (await section('milestones=window-loading', { side: 'upcoming' })).answer,
+    ).toBeUndefined()
+    expect((await section('milestones=window-loading', { side: 'past' })).answer.rows).toHaveLength(
+      3,
+    )
+    const partial = await section('milestones=window-partial', { side: 'upcoming' })
+    expect(partial.answer.rows).toHaveLength(1)
+    expect(partial.answer.stopped).not.toBeNull()
+    expect(
+      (await section('milestones=window-refused', { side: 'upcoming' })).answer.data,
+    ).toMatchObject({ reason: 'milestone_read_too_large' })
+    expect((await section('milestones=window-error', { side: 'upcoming' })).answer.error).toContain(
+      'failed',
+    )
+    expect((await section('milestones=past-error', { side: 'past' })).answer.error).toContain(
+      'failed',
+    )
+    expect((await section('milestones=past-loading', { side: 'past' })).answer).toBeUndefined()
+    expect((await section('milestones=past-error', { side: 'upcoming' })).answer.rows).toHaveLength(
+      3,
+    )
+    // a Load more is an ask above the page's first batch
+    const grown = { side: 'upcoming', limit: 4 }
+    expect((await section('milestones=more-error&milestonecap=2', grown)).answer.error).toContain(
+      'failed',
+    )
+    expect(
+      (await section('milestones=more-error&milestonecap=2', { side: 'upcoming', limit: 2 })).answer
+        .rows,
+    ).toHaveLength(2)
+  }, 60_000)
+
   it("answers the project picker's navigation reads from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, each program with the everyday 3 sub-projects, so 45

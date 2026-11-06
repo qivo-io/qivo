@@ -12,7 +12,10 @@
  * a sub-project, the archived ones and one id twice. For every person,
  * each section walked in batches of two lists the same milestones in the
  * same order, the first upcoming batch says the same `past`, a search
- * finds the same rows, a range of 26 weeks answers the same rows, and
+ * finds the same rows, a section read at the cap of 100 rows and one of 50
+ * rows after a row of it (a Load more and a move on, src/lib/
+ * milestoneSection.ts) answer the same rows, a range of 26 weeks answers
+ * the same rows, and
  * every milestone of the organization opens the same way, `can_write`
  * included. The stand-in answers `next` null once no milestone follows,
  * where the real read can answer a `next` that leads to an empty batch, so
@@ -37,7 +40,7 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { NORTHSTAR_ANCHOR, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
-import type { MilestonePosition } from './milestoneRows'
+import { type MilestonePosition, positionOf } from './milestoneRows'
 import {
   MILESTONE_STAND_IN_NUMBERS,
   type MilestoneReadArgs,
@@ -58,7 +61,11 @@ const plant = (t: T, projectId: string, week: string, name: string) =>
   })
 
 type Caller = ReturnType<typeof as>
-type Batch = { rows: { id: string }[]; next: MilestonePosition | null; past?: boolean }
+type Batch = {
+  rows: { id: string; name: string; week: string }[]
+  next: MilestonePosition | null
+  past?: boolean
+}
 
 /** Every row of a section from its start, following `next`, from the real
     read or the stand-in, and the first batch's `past`. */
@@ -112,6 +119,27 @@ async function compare(
       expect(stand.past, `${side} "${search}" past`).toEqual(real.past)
       for (const id of real.ids) listed.add(id)
     }
+  // a section grown to the cap in one read, and one moved on after a row
+  // of it, as the window's Load more asks them
+  for (const side of ['upcoming', 'past'] as const) {
+    const grown = { projects, from, side, limit: 100 }
+    const real = (await caller.query(api.milestones.section, grown)) as Batch
+    const stand = standIn(snap, 'section', grown)
+    expect(
+      stand.rows.map((r) => r.id),
+      `${side} at 100`,
+    ).toEqual(real.rows.map((r) => r.id))
+    expect(stand.past, `${side} at 100 past`).toEqual(real.past)
+    const row = real.rows[0]
+    if (!row) continue
+    const moved = { ...grown, limit: 50, after: positionOf(row) }
+    const realMoved = (await caller.query(api.milestones.section, moved)) as Batch
+    expect(
+      standIn(snap, 'section', moved).rows.map((r) => r.id),
+      `${side} at 50 after a row`,
+    ).toEqual(realMoved.rows.map((r) => r.id))
+    expect(realMoved.rows.map((r) => r.id)).toEqual(real.rows.slice(1, 51).map((r) => r.id))
+  }
   // the whole list, and each id of `named` alone: a sub-project stands for
   // its top-level project, and an archived project for none
   for (const over of [projects, ...named.map((id) => [id])]) {

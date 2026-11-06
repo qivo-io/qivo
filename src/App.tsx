@@ -1892,8 +1892,11 @@ function App() {
     newIssue: openNewIssue,
     newProject: openNewProject,
     newMilestone: openNewMilestone,
-    editMilestone: (id, focusAfterClose?: () => HTMLElement | null) =>
-      setModal({ kind: 'milestone', init: { id }, focusAfterClose }),
+    // `project`, the project the opener shows the milestone on, lets the
+    // window read its Upcoming section beside the milestone; the window's
+    // read of the milestone alone fixes its project
+    editMilestone: (id, focusAfterClose?: () => HTMLElement | null, project?: string) =>
+      setModal({ kind: 'milestone', init: { id, project }, focusAfterClose }),
     // settings and the inbox each own the screen, one at a time
     openSettings: (page) => openSettingsOn(page || (mobile ? 'menu' : 'account'), null),
     // Settings › Archived tasks on one project (the project menus' entry)
