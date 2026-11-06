@@ -282,11 +282,12 @@
 // the server's place, one past the siblings' largest; a sub-project of the
 // hidden program joins that program, so the workspace never holds it, as
 // for a project an admin creates under one they only manage after the
-// admin access split (role=admin&hidden=N). So are the removal window's reads (accessRemovals:preview and
-// reassignChoices), through src/store/removalStandIn.setup.ts, which takes the
-// removed people's open tasks in the projects the change reaches as the lost
-// holdings and every person who can hold work as the choices, and answers a
-// chosen person's holder_eligible by that rule, without the server's rules.
+// admin access split (role=admin&hidden=N). So are the removal window's reads
+// (accessRemovals:preview and reassignChoices), through
+// src/store/removalStandIn.setup.ts, which takes the removed people's open
+// tasks in the projects the change reaches as the lost holdings and every
+// person who can hold work as the choices, and answers a chosen person's
+// holder_eligible by that rule, without the server's rules.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the

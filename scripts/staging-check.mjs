@@ -99,14 +99,13 @@
  * (projectSettings.get), a sub-project it picks the parent of from the
  * deployment's sub_project_parents list, led by the Standard agent and
  * without a starter task, each checked over REST (ui/project-dialogs). It
- * makes a sub-project of its own under
- * its project with one task, uploads a file there over REST and opens
- * Billing, whose current storage must show a figure rather than Being
- * counted (billing.currentUsage) and whose Storage by project, searched for
- * its run tag and the word storage, must list that sub-project alone with
- * the file's size (billing.storageProjects), then deletes the file
- * (ui/billing-storage). It makes a project of its own with two
- * sub-projects, finds it by its run tag in Settings › Projects from the
+ * makes a sub-project of its own under its project with one task, uploads a
+ * file there over REST and opens Billing, whose current storage must show a
+ * figure rather than Being counted (billing.currentUsage) and whose Storage
+ * by project, searched for its run tag and the word storage, must list that
+ * sub-project alone with the file's size (billing.storageProjects), then
+ * deletes the file (ui/billing-storage). It makes a project of its own with
+ * two sub-projects, finds it by its run tag in Settings › Projects from the
  * deployment's list (projectSettings.projects) and opens its sub-projects
  * (subProjects), archives one sub-project alone and then the project over
  * REST, finds the project in Archived projects (archived), shows its
