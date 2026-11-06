@@ -959,6 +959,55 @@ describe('restoring', () => {
     expect(toasts().some((t) => /Restored 2/.test(String(t)))).toBe(false)
   })
 
+  it('restores a subtask search found in a task deleted before its project, sending that project first', async () => {
+    const next = world({ tasks: 1 })
+    const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
+    const task = fixture.items.find((i) => i.row.kind === 'task')
+    if (!task) throw new Error('no task item')
+    // QN-10 was deleted with its subtask QN-99, then their project Firmware
+    task.row = {
+      ...task.row,
+      path: ['Luma Sensor', 'Firmware'],
+      counts: { ...task.row.counts, subtasks: 1 },
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
+    }
+    task.scope = [FW]
+    task.tasks.push({
+      num: 99,
+      title: 'Seal the enclosure gasket',
+      description: '',
+      project_id: FW,
+      archived: false,
+      path: ['Luma Sensor', 'Firmware'],
+    })
+    await load(next, fixture)
+    force.deferred = true
+    await open(undefined, undefined, true)
+    await choose(LUMA)
+    await type('[data-deleted-search]', 'gasket')
+    const hit = `${task.row.id}:QN-99`
+    expect(lineKeys()).toEqual([hit])
+    await click(find(`[data-line="${hit}"] [data-restore]`))
+    // the page holds no Firmware row, so the window reads it
+    expect(subs.filter((s) => s.open && s.name === 'deletedItems:item').map((s) => s.args)).toEqual(
+      [{ id: `deleted-${FW}` }],
+    )
+    expect(text('[role="dialog"]')).toContain('QN-99 is a subtask of a deleted task')
+    expect(text('[data-task-first]')).toContain(
+      'QN-10 was deleted before its project Firmware, which is in Deleted items too.',
+    )
+    expect(text('[data-task-first]')).toContain(
+      'QN-10 and its subtasks follow once the project is back.',
+    )
+    await click(button('Restore Firmware, QN-10 and QN-99'))
+    expect(restores().map((c) => c.args.ids)).toEqual([
+      [`deleted-${FW}`, task.row.id],
+      [task.row.id],
+    ])
+    expect(toasts()).toContain('Restored “Firmware”. QN-10 follows once its project is back.')
+  })
+
   it('keeps sending a deferred item after the page is left', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
