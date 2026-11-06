@@ -11,9 +11,11 @@
  * Reassign picker (model/removalPreview.ts reassignChoicesOf), a task's
  * owner pickers and Team sync's mention recipients (model/pickers.ts),
  * Settings › Teams, a team's members and its Add member picker
- * (model/teams.ts), the REST and MCP lists of people, labels, teams and a
- * team's members (lib/listCursor.ts namedListPage), and later the people
- * list of Settings and the other REST and MCP lists. A list is
+ * (model/teams.ts), Billing's Who counts toward your bill and Who does not
+ * (model/billingLists.ts accountNamesBatch), the REST and MCP lists of
+ * people, labels, teams and a team's members
+ * (lib/listCursor.ts namedListPage), and later the people list of Settings
+ * and the other REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -32,8 +34,9 @@
  * (model/inboxPage.ts) read a list keyed by time, newest or oldest first,
  * and Archived projects (model/projectSettingsLists.ts) one keyed by
  * archive time, newest first, through the same functions, and Billing's
- * Storage by project (model/billingStorage.ts) one with a constant key and
- * a tie of stored bytes, largest first. The direction is
+ * Storage by project (model/billingStorage.ts) and API calls by account
+ * (model/billingLists.ts apiAccountsBatch) one each with a constant key and
+ * a tie of stored bytes or of calls, largest first. The direction is
  * an option of indexAfter,
  * inGroup, mergeNamed, readBatch and listBatch, ascending by default, and
  * each compares positions with compareIn. readBatch throws when a stream
@@ -68,8 +71,8 @@
  * ceiling (namedCeiling). Most of these lists are subscription queries that
  * run again on every change of what they read, so one call keeps to
  * NAMED_READ. Lists the app reads once keep to a share of their own, API
- * access's person filter to its page's and Storage by project to
- * NAMED_READ's. Past it
+ * access's person filter to its page's, and Storage by project, API calls
+ * by account and Billing's name lists each to NAMED_READ's. Past it
  * the batch stops at the position it reached: a search that matches little
  * answers part of the list and goes on from there, and a batch never answers
  * an end of list it did not reach.
@@ -690,8 +693,9 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * (model/teams.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
  * (model/projectSettingsLists.ts), the REST and MCP lists in name order
- * (lib/listCursor.ts namedListPage) and Billing's Storage by project
- * (model/billingStorage.ts) answer through it. `o.order` is the direction
+ * (lib/listCursor.ts namedListPage), Billing's Storage by project
+ * (model/billingStorage.ts) and its API calls by account and name lists
+ * (model/billingLists.ts) answer through it. `o.order` is the direction
  * `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,

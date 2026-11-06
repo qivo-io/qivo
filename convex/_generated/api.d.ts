@@ -192,6 +192,7 @@ import type * as model_archiveMarks from "../model/archiveMarks.js";
 import type * as model_archiveRechecks from "../model/archiveRechecks.js";
 import type * as model_attachments from "../model/attachments.js";
 import type * as model_billing from "../model/billing.js";
+import type * as model_billingLists from "../model/billingLists.js";
 import type * as model_billingStorage from "../model/billingStorage.js";
 import type * as model_billingUsage from "../model/billingUsage.js";
 import type * as model_cascade from "../model/cascade.js";
@@ -471,6 +472,7 @@ declare const fullApi: ApiFromModules<{
   "model/archiveRechecks": typeof model_archiveRechecks;
   "model/attachments": typeof model_attachments;
   "model/billing": typeof model_billing;
+  "model/billingLists": typeof model_billingLists;
   "model/billingStorage": typeof model_billingStorage;
   "model/billingUsage": typeof model_billingUsage;
   "model/cascade": typeof model_cascade;
