@@ -317,6 +317,12 @@ const issuesTable = defineTable({
   // (lib/activeTaskPage.ts). Convex builds it at deploy; it needs no backfill.
   .index('by_project_archived_created', ['project_id', 'archived_at', 'created_at', 'num'])
   .index('by_parent', ['parent_id'])
+  // REST and MCP page a task's subtasks in number order from a cursor
+  // (lib/core.ts subtasksByNumber), which by_parent's creation order is not
+  // once Deleted items restores a task with its old number. An archived
+  // group has no subtask limit, so it pages to the end through this one.
+  // Convex builds it at deploy; it needs no backfill.
+  .index('by_parent_num', ['parent_id', 'num'])
   // The nightly leaf guard asks whether a parent has an unarchived child.
   .index('by_parent_archived', ['parent_id', 'archived_at'])
   // A project's move to Deleted items reads a task's children outside the
