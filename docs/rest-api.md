@@ -369,6 +369,7 @@ into the range.
 | Attachment file name | 255 characters | a file name must be at most 255 characters. Rename the file and attach it again. |
 | Attachment media type | 255 characters | a file's media type must be at most 255 characters. Send a media type such as application/pdf. |
 | Attachment size | 20 MiB per file | a file must be at most 20 MiB, this organization's attachment limit. Attach a smaller file. |
+| Uploads in progress | 20 uploads in progress per person in an organization | you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
 
 ### Tasks and organizations
 
@@ -2360,8 +2361,14 @@ Uploading takes three requests:
    `GET /v1/me`, at most 20 MiB) is a `400` (`a file must be at most 20 MiB,
    this organization's attachment limit. Attach a smaller file.`). The 20 MiB
    ceiling is Qivo's product rule: attachments are for images, PDF files and
-   similar documents, and Qivo is not a file store. It answers `201` with `{ "ticket": "…uuid…", "upload_url":
-   "…", "expires_at": "…" }`.
+   similar documents, and Qivo is not a file store. One user has at most 20
+   uploads in progress in an organization, here, over MCP and in the app
+   together, so a 21st start is a `400` (`you already have 20 uploads in
+   progress, the most one person can have at once. Try again once one has
+   finished. An upload that is never finished stops counting an hour after
+   it started.`). An upload counts from its start until it is confirmed, or
+   until its ticket expires, also when no file was sent. It answers `201`
+   with `{ "ticket": "…uuid…", "upload_url": "…", "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header. It
    answers `{ "storageId": "…" }`.
@@ -2379,8 +2386,9 @@ one file:
   exactly the 48213 bytes declared`), a `Content-Type` over 255 characters
   answers `400` (`a file's media type must be at most 255 characters. Send a
   media type such as application/pdf.`),
-  and a body that takes more than 5 minutes to arrive answers `400` (`the
-  upload took too long; send it again`). These store nothing, and the URL
+  and a body that takes longer than its time to arrive, 5 minutes plus a
+  second for every 32 KiB of `size` and at most 8 minutes, answers `400`
+  (`the upload took too long; send it again`). These store nothing, and the URL
   can be tried again, as after any other failed `POST`. A `POST` that ends
   without an answer and without storing a file, for example when the
   connection drops, holds the URL for at most 15 minutes. So does, rarely,
@@ -2405,7 +2413,9 @@ one file:
 
 Qivo reads the body of a `POST` to the upload URL in one of its own request
 handlers, which stays busy until the whole file has arrived, for at most the
-5 minutes above. A 20 MiB file therefore needs about 70 KB/s or more. Many
+time above. A 20 MiB file gets 8 minutes and therefore needs about 44 KB/s
+(350 kbit/s) or more, and a 1 MiB file gets 5 minutes and 32 seconds, about
+3 KB/s. Many
 large uploads at once from one organization share the deployment's handlers
 with every other request, so send them a few at a time. A refusal decided
 before the file is read, or while reading a body of another size, such as
@@ -2414,13 +2424,20 @@ of the body, but only 5 seconds more, 1 second without bytes and 32 MiB, as
 for [every request](#request-limits-and-billing). A slower upload that is
 refused can end with the connection closed, or with a `502` from the
 hosting front end, instead of the answer. The `400` for an upload that took
-more than 5 minutes stops the upload at once, so a client that slow usually
+too long stops the upload at once, so a client that slow usually
 sees the connection close. Treat either like a network error and start the
 upload again.
 
 Only the user that started the upload can confirm it, only for the same
-task, and only once. Any other ticket, including an expired one, answers
-`404` (`upload not found or expired; start a new upload`). A confirm before
+task, and the file attaches once. A confirm sent again by the same user for
+the same task with the same ticket and `storage_id` after the first one
+attached the file, for example because its answer was lost, answers `201`
+with that attachment and changes nothing. Any other ticket answers `404`
+(`upload not found or expired; start a new upload`), whatever file it
+names: an expired one, one that never existed, one Qivo deleted and
+another of the user's confirmed tickets. So does a confirm sent again by
+another user, for another task or with another file, or after the file was
+deleted. A confirm before
 the upload URL has stored a file answers `400` (`no file has been sent to
 this upload URL; send it there, or start a new upload`). `storage_id` must
 be the `storageId` the upload URL answered, and any other value answers
@@ -2429,7 +2446,10 @@ be the `storageId` the upload URL answered, and any other value answers
 If the organization lowered its per-file limit after the upload
 started and the file now exceeds it, Qivo deletes the file, answers `400` and
 spends the ticket.
-Bytes uploaded but never confirmed are deleted by the weekly storage sweep.
+Bytes uploaded but never confirmed are usually deleted within an hour after
+their ticket expires. After a restore of Qivo's database they are kept for up
+to 7 days first, in case a later restore needs them, and the rare file that
+a failed upload could not clean up waits for Qivo's weekly storage sweep.
 Attaching writes an `attached a file to` activity row with the file name and
 the provenance.
 
@@ -2999,7 +3019,9 @@ authenticated request.
   the user that started it, the task, the declared name, type and size, its
   expiry, the `POST` to its upload URL that holds the URL and when it began,
   and the one file that URL stored, which the confirm must name. Confirming
-  deletes it; the weekly storage sweep deletes expired ones.
+  deletes it, and usually within an hour of an upload's expiry Qivo deletes
+  it with the file it holds unless something else uses that file. After a
+  restore of the database the file is kept for up to 7 days first.
 - What a key or token may reach is **not** stored beside it. Direct grants live in
   `project_access`; team grants in `project_team_access` apply through current
   `team_members`. These are the same grants used for every person, read through

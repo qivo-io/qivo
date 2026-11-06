@@ -47,6 +47,7 @@ import {
 } from './helpers.setup'
 import { countOrg } from './overviewCounts.setup'
 import { deleteTask, itemFor } from './trash.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it. */
@@ -856,6 +857,8 @@ describe('the attachment, link and label limits', () => {
       LIMITS.attachments.refusal,
     )
     const stored = await fx.t.run((ctx) => ctx.storage.store(new Blob(['late']) as never))
+    // a ticket started before the task filled up still meets the room
+    await plantTicket(fx.t, { profile: fx.admin, issue, storageId: stored })
     await refused(
       as(fx.t, fx.admin).mutation(api.files.attach, {
         org_id: fx.org.id,

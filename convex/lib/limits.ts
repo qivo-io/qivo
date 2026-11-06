@@ -237,10 +237,22 @@ export const PLAN_CURRENCY = `a billing plan must be priced in ${PLAN_CURRENCIES
 /** Bytes in one MiB, for size checks written in MiB. */
 export const MIB = 1024 * 1024
 
-/** The largest file a public demo stores, a background image included
- * (model/demoUploads.ts). The demo app checks it before it uploads a
- * background image or an attachment. */
+/** The largest attachment, description image or background image a private
+ * demo stores (model/demoUploads.ts), within the demo's shared
+ * DEMO_STORAGE_BYTES. The demo app checks it before it uploads a background
+ * image or an attachment, and the server refuses a larger declared size
+ * before any bytes are sent. */
 export const DEMO_FILE_BYTES = 5 * MIB
+
+/** The most one private demo stores in total, 5 MiB of its attachments,
+ * description images, uploaded profile pictures, custom backgrounds and
+ * the previews Qivo makes of them, counted as stored bytes plus pending
+ * reservations (model/demoUploads.ts). It keeps the storage cost of the
+ * free temporary demo small. It is one total for the demo, not a per-file
+ * limit or an allowance per person, and regular organizations have no
+ * total storage cap (owner, 24 October 2026). It has no LIMITS entry,
+ * since only the demo meets it and its refusal says how much is free. */
+export const DEMO_STORAGE_BYTES = 5 * MIB
 
 /** The largest request body the sign-in endpoints under /api/auth take
  * (http.ts readAuthBody), 64 KiB. The largest any of them needs is an OAuth
@@ -371,6 +383,28 @@ export const LIMITS = {
     unit: 'KiB as UTF-8',
     refusal: `text must be at most 256 KiB (${grouped(256 * 1024)} bytes) as UTF-8. Split it into several files.`,
     on: ['mcp'],
+  },
+  // The upload tickets one person in an organization holds at once over the
+  // app, REST and MCP together (model/attachments.ts openUploadTicket), so
+  // pending upload work stays bounded apart from billing (limits plan, item
+  // 13, owner 24 October 2026). A ticket counts from its start until an
+  // attach or confirm spends it or its hour ends, whether or not bytes were
+  // sent. The app sends one file at a time from each task window and each
+  // description editor, and the REST and MCP docs ask for a few uploads at
+  // a time, so 20 leaves room for several windows and an agent. Within an
+  // hour of a ticket's end files.ts reapUploadTickets erases its file
+  // unless something names it, so one person holds at most about 40
+  // unattached files, 20 live and 20 waiting for that cleanup. Without it
+  // the weekly sweep alone would let one person keep about 3,380 such files
+  // at once at 20 MiB each. The private demo makes no tickets.
+  uploadsInProgress: {
+    label: 'Uploads in progress',
+    group: 'files',
+    max: 20,
+    unit: 'uploads in progress per person in an organization',
+    refusal:
+      'you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started.',
+    on: ALL,
   },
   subtasks: {
     label: 'Active subtasks per task',

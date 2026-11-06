@@ -52,6 +52,7 @@ import {
   watchRestores,
   withOrg,
 } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it. */
@@ -734,6 +735,8 @@ describe('a held file is out of reach', () => {
       'bad_request',
     )
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    // a ticket of the caller holding the file, so the attach reaches the fence
+    await plantTicket(t, { profile: f.user, issue, storageId: face })
     await expectRefusal(
       as(t, f.user).mutation(api.files.attach, {
         org_id: f.org.id,

@@ -15,6 +15,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -198,6 +199,8 @@ describe('preview identity, storage ownership and cleanup', () => {
       }),
     ).toBe(true)
     for (const storage_id of [libraryPreview, customPreview]) {
+      // a ticket of the caller holding the file, so the attach reaches the fence
+      await plantTicket(t, { profile: f.admin, issue, storageId: storage_id })
       await expectRefusal(
         as(t, f.admin).mutation(api.files.attach, {
           org_id: f.org.id,
@@ -220,6 +223,8 @@ describe('preview identity, storage ownership and cleanup', () => {
       await t.mutation(internal.panoramaImages.discardImport, { storage_id })
     }
     vi.setSystemTime(Date.now() + 61 * 60_000)
+    // the two tickets the refused attaches left expired with their hour, and
+    // hold files, so the weekly sweep leaves them to the hourly cleanup
     expect(await reap(t)).toEqual({
       deleted: 0,
       held: 0,
@@ -228,6 +233,9 @@ describe('preview identity, storage ownership and cleanup', () => {
       accounts: 0,
       skipped: 0,
     })
+    // which deletes them and keeps the previews they name
+    await t.mutation(internal.files.reapUploadTickets, {})
+    expect(await t.run((ctx) => ctx.db.query('attachment_uploads').collect())).toEqual([])
     expect(await exists(t, libraryPreview)).toBe(true)
     expect(await exists(t, customPreview)).toBe(true)
   })

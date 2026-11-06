@@ -364,7 +364,12 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
       } as unknown as ClipboardEvent)
     })
     await vi.waitFor(() => expect(sentArgs('files:uploadUrl')).toHaveLength(1))
-    expect(sentArgs('files:uploadUrl')[0]).toEqual({ org_id: org, issue_id: 'fd000000-b' })
+    expect(sentArgs('files:uploadUrl')[0]).toEqual({
+      org_id: org,
+      issue_id: 'fd000000-b',
+      size: 3,
+      name: 'photo.png',
+    })
     await vi.waitFor(() =>
       expect(window.showToast).toHaveBeenCalledWith(
         expect.stringContaining(

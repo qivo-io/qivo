@@ -250,7 +250,7 @@ a search of project names across the whole list, and labels archived
 projects, projects in Deleted items and removed ones. Usage can change while
 you browse. **Refresh** reads current usage and starts the list over,
 keeping its search. In the private demo, files in Deleted items also count
-toward its 50 MiB upload allowance until they are deleted for good with
+toward its 5 MiB of shared upload storage until they are deleted for good with
 **Delete now…** ([Private demo](./qivo-in-one-minute.md#private-demo)).
 
 API calls accumulate during each paid subscription period. Qivo samples storage

@@ -14,7 +14,7 @@ import { createAuth } from '../auth'
 import { overlapShare, spread } from '../lib/usage'
 import { deleteOrgDeep } from '../model/cascade'
 import { releaseFile } from '../model/fileHolds'
-import { pageReadBound, USAGE_PAGE } from '../model/usage'
+import { pageReadBound, STALE_DELETED_CURSOR, USAGE_PAGE } from '../model/usage'
 import { orgUsage, RUN_STALLED_MS, USAGE_EXPIRY } from '../usage'
 import {
   as,
@@ -263,6 +263,68 @@ describe('the spread of a column', () => {
     )
     expect(overlapShare(Date.parse('2026-03-02'), Date.parse('2026-03-09'), start, end)).toBe(1)
     expect(overlapShare(Date.parse('2026-04-02'), Date.parse('2026-04-09'), start, end)).toBe(0)
+  })
+})
+
+describe("Qivo Admin's Deleted items bytes", () => {
+  it('adds up only the attachment copies, reading none of the task copies beside them', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const tasks = []
+    for (let i = 0; i < 3; i++) {
+      const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+      await attach(t, task, 10 + i)
+      await deleteTask(t, f, task.id)
+      tasks.push(task)
+    }
+    await runSteps(t)
+    const copies = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+        .collect()
+      return {
+        all: rows.length,
+        files: rows.filter((row) => row.row.table === 'issue_attachments').length,
+      }
+    })
+    expect(copies.files).toBe(3)
+    expect(copies.all).toBeGreaterThan(copies.files)
+    const read = await t.run(async (ctx) => {
+      const page = await ctx.runQuery(internal.usage.deleted, { org_id: f.org.id, cursor: null })
+      return { page, read: (await ctx.meta.getTransactionMetrics()).documentsRead.used }
+    })
+    expect(read.page).toEqual({ deleted_file_bytes: 33, next: null })
+    expect(read.read).toBe(copies.files)
+    // a cursor of the earlier read of every copy fails the page
+    const stale = await t.run(
+      async (ctx) =>
+        (
+          await ctx.db
+            .query('deleted_rows')
+            .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+            .paginate({ cursor: null, numItems: 1 })
+        ).continueCursor,
+    )
+    await expect(
+      t.query(internal.usage.deleted, { org_id: f.org.id, cursor: stale }),
+    ).rejects.toThrow(STALE_DELETED_CURSOR)
+    // and its own cursors page through every copy
+    smallestPages()
+    let cursor: string | null = null
+    let bytes = 0
+    let pages = 0
+    do {
+      const page: { deleted_file_bytes: number; next: string | null } = await t.query(
+        internal.usage.deleted,
+        { org_id: f.org.id, cursor },
+      )
+      bytes += page.deleted_file_bytes
+      cursor = page.next
+      pages += 1
+    } while (cursor !== null)
+    expect(bytes).toBe(33)
+    expect(pages).toBeGreaterThanOrEqual(3)
   })
 })
 

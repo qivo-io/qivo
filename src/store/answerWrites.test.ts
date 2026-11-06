@@ -826,7 +826,13 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
       inline: true,
     })
     await turn()
-    expect(last('files:uploadUrl').args).toEqual({ org_id: ORG, issue_id: FAR })
+    // the size and name of the file the POST sends
+    expect(last('files:uploadUrl').args).toEqual({
+      org_id: ORG,
+      issue_id: FAR,
+      size: 5,
+      name: 'photo.png',
+    })
     await answerWith(last('files:uploadUrl'), 'https://convex.example/upload')
     await turn()
     expect(last('files:attach').args).toMatchObject({
@@ -894,7 +900,9 @@ describe('files from the window’s own answer', { timeout: 30_000 }, () => {
     expect(P.issueById[H]?.uuid).toBe('beta-40')
     release()
     await turn()
-    expect(sent('files:uploadUrl').map((w) => w.args)).toEqual([{ org_id: ORG, issue_id: FAR }])
+    expect(sent('files:uploadUrl').map((w) => w.args)).toEqual([
+      { org_id: ORG, issue_id: FAR, size: 5, name: 'photo.png' },
+    ])
     await answerWith(last('files:uploadUrl'), 'https://convex.example/upload')
     await turn()
     expect(last('files:attach').args).toMatchObject({ org_id: ORG, issue_id: FAR })

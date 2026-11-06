@@ -221,11 +221,13 @@ beforeEach(() => {
   vi.stubGlobal('window', { showToast: vi.fn(), setTimeout, clearTimeout })
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) =>
-      url.includes('refused')
+    vi.fn(async (url: string) => {
+      // a POST that ends without an answer, as when the connection drops
+      if (url.includes('lost')) throw new TypeError('Failed to fetch')
+      return url.includes('refused')
         ? { ok: false, status: 500, json: async () => ({ error: { message: 'refused' } }) }
-        : { ok: true, status: 200, json: async () => ({ storageId: 'storage-portrait' }) },
-    ),
+        : { ok: true, status: 200, json: async () => ({ storageId: 'storage-portrait' }) }
+    }),
   )
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})

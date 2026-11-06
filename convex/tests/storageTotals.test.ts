@@ -69,6 +69,7 @@ import {
   runSteps,
   step as trashStep,
 } from './trash.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it. */
@@ -338,6 +339,7 @@ async function attach(
 ) {
   const storage_id = await storeBlob(t, bytes, extra.inline ? 'image/png' : undefined)
   const by = extra.by ?? f.user
+  await plantTicket(t, { profile: by, issue, storageId: storage_id })
   const out = await as(t, by).mutation(api.files.attach, {
     org_id: by.org_id,
     id: uuid(),
@@ -499,6 +501,7 @@ describe('attaching', () => {
     expect(before.org).toMatchObject({ bytes: 2 * LIMITS.attachments.max })
 
     const extra = await storeBlob(t, 50)
+    await plantTicket(t, { profile: f.user, issue: full, storageId: extra })
     await expect(
       as(t, f.user).mutation(api.files.attach, {
         org_id: f.org.id,
@@ -511,6 +514,7 @@ describe('attaching', () => {
     ).rejects.toThrow(LIMITS.attachments.refusal)
     // the organization's cap of 10 MiB: the bytes are deleted and nothing counts
     const big = await storeBlob(t, 10 * MiB + 1)
+    await plantTicket(t, { profile: f.user, issue: other, storageId: big })
     const out = await as(t, f.user).mutation(api.files.attach, {
       org_id: f.org.id,
       id: uuid(),
@@ -523,6 +527,7 @@ describe('attaching', () => {
     expect(await fileState(t, big)).toBe('gone')
     // a file attached already cannot count twice
     const once = await attach(t, f, other, 7)
+    await plantTicket(t, { profile: f.user, issue: other, storageId: once.storage_id })
     await expect(
       as(t, f.user).mutation(api.files.attach, {
         org_id: f.org.id,

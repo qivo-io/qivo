@@ -207,6 +207,15 @@ same arguments and answers the same way. Its `upload_url` now points at
 Qivo and stores one file, where before it was a Convex URL that stored a
 file for every POST until it expired (see [Attachments](#attachments)).
 
+A confirm sent again after a lost answer changed the
+`confirm_attachment_upload` description, which now says that only the user
+that started the upload can confirm it, for the same task, that the file
+attaches once, that a confirm sent again with the same `ticket` and
+`storage_id` answers the same attachment and that any other ticket is
+refused. The tool takes the same arguments, and a client holding the older
+catalogue keeps working. Its model reads the old description until the
+client refreshes its tool list.
+
 In October 2026 `update_task`, `update_comment`, `delete_comment`,
 `update_project`, `set_project_access`, `set_milestone`, `delete_milestone`,
 `set_label`, `set_team` and `update_user` gained an optional `expected`
@@ -633,6 +642,7 @@ the range.
 | Attachment media type | 255 characters | a file's media type must be at most 255 characters. Send a media type such as application/pdf. |
 | Attachment size | 20 MiB per file | a file must be at most 20 MiB, this organization's attachment limit. Attach a smaller file. |
 | Text file from attach_text_file | 256 KiB as UTF-8 | text must be at most 256 KiB (262,144 bytes) as UTF-8. Split it into several files. |
+| Uploads in progress | 20 uploads in progress per person in an organization | you already have 20 uploads in progress, the most one person can have at once. Try again once one has finished. An upload that is never finished stops counting an hour after it started. |
 
 ### Tasks and organizations
 
@@ -1344,7 +1354,7 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. When the caller's own project access, teams and led projects are too many to read in one request, the create is refused with `you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label` and creates nothing. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
 | `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, an `upload_url` that stores one file and `expires_at`, an hour on. Send exactly `size` bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
-| `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Answers the attachment as `get_task` lists it |
+| `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Only the user that started the upload can confirm it, for the same task, and the file attaches once. A confirm sent again with the same `ticket` and `storage_id` answers the same attachment, and any other ticket is refused. Answers the attachment as `get_task` lists it |
 | `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
 | `list_task_activity` | The task's newest history, at most 500 rows, oldest first, as the task window's Activity shows it: `id`, `created_at`, `actor_id`, `actor_name`, `verb` and `detail`. `before` (a row's `id`) reads the rows before it. See [Task activity](#task-activity) |
 | `get_workload` | Each person's planned hours per week from the week holding `from_week` (default this week) for `weeks` weeks (1 to 52, default 8), optionally limited to one `project`, one page of people in name order (`limit` 1 to 200, 50 by default), paged with `cursor` until `next_cursor` is `null`, or one `person` alone. See [Workload](#workload) |
@@ -2280,8 +2290,14 @@ Uploading a file takes three steps, the same as on REST:
    at most 20 MiB) is refused with `a file must be at most 20 MiB, this
    organization's attachment limit. Attach a smaller file.` The 20 MiB
    ceiling is Qivo's product rule: attachments are for images, PDF files and
-   similar documents, and Qivo is not a file store. It answers `{ "ticket": "…uuid…", "upload_url": "…",
-   "expires_at": "…" }`.
+   similar documents, and Qivo is not a file store. One user has at most 20
+   uploads in progress in an organization, here, over REST and in the app
+   together, so a 21st start is refused with `you already have 20 uploads in
+   progress, the most one person can have at once. Try again once one has
+   finished. An upload that is never finished stops counting an hour after
+   it started.` An upload counts from its start until it is confirmed, or
+   until its ticket expires, also when no file was sent. It answers
+   `{ "ticket": "…uuid…", "upload_url": "…", "expires_at": "…" }`.
 2. `POST` the file's bytes, exactly `size` of them, to `upload_url`, with
    the file's type as `Content-Type` and no Authorization header, for example
    `curl -X POST -H "Content-Type: application/pdf" --data-binary @wiring.pdf "<upload_url>"`.
@@ -2304,7 +2320,9 @@ finishing in time, answers `503` with `Retry-After: 1` and stores nothing,
 so wait and send it again, or, rarely, `409` when Qivo could not free the
 URL either. Qivo reads the body in one of
 its own request handlers, which stays busy until the file has arrived, for
-at most 5 minutes, so send large files a few at a time. A refusal such as
+at most 5 minutes plus a second for every 32 KiB of `size`, and never more
+than 8 minutes, so a 20 MiB file needs about 44 KB/s or more. Send large
+files a few at a time. A refusal such as
 the `409` or the size `400` waits only 5 seconds more for the rest of the
 body, so a large upload that is refused can end with the connection closed,
 or with a `502` from the hosting front end, instead of the answer. Treat
@@ -2312,18 +2330,27 @@ either like a network error. Once the upload is confirmed,
 its URL answers
 `404` like an expired one (see [REST attachments](rest-api.md#attachments)
 for every answer). Only the user that started
-the upload can confirm it, only for the same task, and only once. A ticket
-belongs to the user, not the credential, so a ticket started over MCP can be
-confirmed over REST by the same user, and the reverse. The confirm follows
-REST's rules. Another ticket, including an expired one, answers `upload not
-found or expired; start a new upload`, and a `storage_id` that is not the
-`storageId` the upload URL answered is refused with `storage_id must be the
+the upload can confirm it, only for the same task, and the file attaches
+once. A confirm sent again by the same user for the same task with the same
+ticket and `storage_id` after the first one attached the file, for example
+because its answer was lost, answers that attachment and changes nothing. A
+ticket belongs to the user, not the credential, so a ticket started over MCP
+can be confirmed over REST by the same user, and the reverse, and a confirm
+sent again on the other surface answers the same attachment. The confirm
+follows REST's rules. Any other ticket answers `upload not found or expired;
+start a new upload`, whatever file it names, including an expired ticket,
+one that never existed, one Qivo deleted and another of the user's confirmed
+tickets. A `storage_id` that is not the `storageId` the upload URL answered
+is refused with `storage_id must be the
 storageId the upload answered`, or with `no file has been sent to this upload
 URL; send it there, or start a new upload` before the upload URL has stored
 one. If the organization lowered its per-file
 limit after the upload started and the file now exceeds it, Qivo deletes the
 file, refuses the confirm and spends the ticket. Bytes uploaded but never
-confirmed are deleted by the weekly storage sweep.
+confirmed are usually deleted within an hour after their ticket expires.
+After a restore of Qivo's database they are kept for up to 7 days first, in
+case a later restore needs them, and the rare file that a failed upload
+could not clean up waits for Qivo's weekly storage sweep.
 
 Uploading needs a client that can send an HTTP request with the file, such
 as a coding agent with a shell. Chat assistants that cannot make HTTP

@@ -19,6 +19,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -643,8 +644,10 @@ describe('storage ownership', () => {
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
     const user = as(t, f.admin)
     const p = await pending(t)
-    const attach = (storage_id: Id<'_storage'>) =>
-      user.mutation(api.files.attach, {
+    // with a ticket of the caller holding the file, so the attach reaches the fence
+    const attach = async (storage_id: Id<'_storage'>) => {
+      await plantTicket(t, { profile: f.admin, issue, storageId: storage_id })
+      return await user.mutation(api.files.attach, {
         org_id: f.org.id,
         id: uuid(),
         issue_id: issue.id,
@@ -653,6 +656,7 @@ describe('storage ownership', () => {
         mime: 'image/jpeg',
         inline: false,
       })
+    }
     await expectRefusal(attach(p.storage_id), 'bad_request', /already attached/)
     await expectRefusal(
       user.mutation(api.files.setAvatar, { profile_id: f.admin.id, storage_id: p.storage_id }),
@@ -691,6 +695,7 @@ describe('storage ownership', () => {
     const attached = await storage(t)
     const avatar = await storage(t)
     const loose = await storage(t)
+    await plantTicket(t, { profile: f.admin, issue, storageId: attached })
     await as(t, f.admin).mutation(api.files.attach, {
       org_id: f.org.id,
       id: uuid(),

@@ -541,6 +541,8 @@ export default defineSchema({
 
   // Demo uploads reserve capacity before bytes are accepted. Kept after
   // attachment so ownership is independent of editable planning records.
+  // One demo's live rows store and reserve at most DEMO_STORAGE_BYTES
+  // together (model/demoUploads.ts reserveDemoUpload).
   demo_uploads: defineTable({
     id: v.string(),
     demo_id: v.string(),
@@ -558,6 +560,11 @@ export default defineSchema({
     lease_until: v.optional(v.number()),
     started_at: v.optional(v.number()),
     storage_id: v.optional(v.id('_storage')),
+    // true when reserved_bytes is the size the app declared for the file,
+    // so the receiver refuses a longer body as one its upload did not
+    // declare; absent for a reservation an app without sizes asked for, and
+    // for a preview. Only the demo writes it.
+    declared: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
     .index('by_demo', ['demo_id'])
@@ -668,6 +675,15 @@ export default defineSchema({
     storage_id: v.id('_storage'),
     preview_storage_id: v.optional(v.id('_storage')),
     preview_version: v.optional(v.number()),
+    // When the private demo's storage last left no room for the preview,
+    // epoch milliseconds (backgroundPreviews.ts beginDemoWork and
+    // skipDemoPreview), so Settings says why there is none and the Canvas
+    // shows the full image, as whenever a preview is missing. The demo's
+    // minute sweep schedules the preview once 1 MiB is free, checking the
+    // backgrounds skipped longest ago first (model/demoUploads.ts
+    // retrySkippedPreview). Only the demo writes it, and a later stored
+    // preview clears it.
+    preview_skipped: v.optional(v.number()),
     name: v.string(),
     mime: v.string(),
     width: v.number(),
@@ -679,7 +695,9 @@ export default defineSchema({
     .index('by_uuid', ['id'])
     .index('by_auth_user', ['auth_user_id'])
     .index('by_storage', ['storage_id'])
-    .index('by_preview_storage', ['preview_storage_id']),
+    .index('by_preview_storage', ['preview_storage_id'])
+    // the demo backgrounds waiting for room for a preview, longest first
+    .index('by_preview_skipped', ['preview_skipped']),
 
   // The HTTP upload endpoint stores the request's bytes itself. A ticket
   // never lets a caller hand in an arbitrary existing Convex storage id.
@@ -1853,11 +1871,15 @@ export default defineSchema({
     restored_at: v.optional(v.number()),
   }),
 
-  // A REST upload in progress (model/attachments.ts). It names the caller
-  // that asked for the upload URL, the task it attaches to and when it
-  // expires. Only that caller may confirm it, once, for that task, with a
-  // file stored after the ticket's _creationTime. files.ts reapOrphans
-  // deletes expired tickets with the unreferenced bytes.
+  // An upload in progress from the app, REST or MCP (model/attachments.ts
+  // openUploadTicket). It names the caller that asked for the upload URL,
+  // the task it attaches to and when it expires, and holds the one file the
+  // URL stored. Only that caller may attach it (files.ts attach) or confirm
+  // it (REST and MCP), once, for that task, before it expires. A person
+  // holds at most LIMITS.uploadsInProgress unexpired tickets in an
+  // organization. Within an hour of a ticket's expiry files.ts
+  // reapUploadTickets erases its file unless something names it, and
+  // deletes it.
   attachment_uploads: defineTable({
     id: v.string(), // the ticket
     org_id: v.string(),
@@ -1866,6 +1888,11 @@ export default defineSchema({
     name: v.string(),
     content_type: v.optional(v.string()),
     size_bytes: v.number(), // declared by the client, checked against the stored file
+    // true when size_bytes is not a declared size but the most the upload
+    // URL takes, the organization's per-file limit, for an app loaded before
+    // uploads declared their size (files.ts uploadUrl). Absent, the file
+    // must have exactly size_bytes.
+    up_to: v.optional(v.literal(true)),
     expires_at: v.number(), // epoch milliseconds
     // epoch milliseconds when the upload URL's current POST began, and that
     // POST's own id, absent while the URL is unused (model/attachments.ts
@@ -1877,7 +1904,9 @@ export default defineSchema({
   })
     .index('by_uuid', ['id'])
     .index('by_profile_expiry', ['profile_id', 'expires_at'])
-    .index('by_expiry', ['expires_at']),
+    .index('by_expiry', ['expires_at'])
+    // the ticket that stored a file, which the app's attach reads
+    .index('by_storage', ['storage_id']),
 
   // At most one row, written by the last leg of each finished files.ts
   // reapOrphans run, and deleted by one that spans a restore. No row makes

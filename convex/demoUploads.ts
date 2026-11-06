@@ -1,5 +1,6 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
+import type { Id } from './_generated/dataModel'
 import { internalMutation } from './_generated/server'
 import { storageIdInUse } from './files'
 import {
@@ -14,8 +15,10 @@ import {
   beginDemoUpload,
   checkStoredFiles,
   demoCanRead,
+  demoReceipt,
   demoUploadFor,
   retainDemoUpload,
+  retrySkippedPreview,
 } from './model/demoUploads'
 import { eraseFile } from './model/fileHolds'
 
@@ -56,6 +59,9 @@ export const admit = internalMutation({
   },
 })
 
+/* The /demo-uploads/ receiver's claim of reservation `id` (http.ts). It
+ * answers the most bytes the POST may store and the refusal of a longer
+ * body (model/demoUploads.ts demoReceipt). */
 export const begin = internalMutation({
   args: { id: v.string(), minter: v.string(), exp: v.number() },
   handler: async (ctx, { id, minter, exp }) => {
@@ -67,7 +73,7 @@ export const begin = internalMutation({
     )
       throw forbidden('This demo upload has expired.')
     await beginDemoUpload(ctx, id, minter)
-    return { maxBytes: ticket.reserved_bytes }
+    return demoReceipt(ticket)
   },
 })
 
@@ -80,14 +86,22 @@ export const finish = internalMutation({
   },
 })
 
+/* Undoes the failed work of reservation `id` for its minter. It erases
+ * `storage_id` unless something holds it and deletes the reservation.
+ * A reservation that holds its file stays, as when the answer of finish was
+ * lost after it committed. Then it answers that file when it is
+ * `storage_id`, the one this receiver stored, so the receiver answers it as
+ * stored and the person does not upload it, and its bytes, twice. Else
+ * null. */
 export const abandon = internalMutation({
   args: { id: v.string(), minter: v.string(), storage_id: v.optional(v.id('_storage')) },
-  handler: async (ctx, { id, minter, storage_id }) => {
+  handler: async (ctx, { id, minter, storage_id }): Promise<Id<'_storage'> | null> => {
     const ticket = await demoUploadFor(ctx, id)
     if (ticket && ticket.auth_user_id !== minter) throw forbidden('Upload owner mismatch.')
     // A lost response can follow a successful finish. Preserve those bytes
-    // for the caller's retry or the demo's scheduled cleanup.
-    if (ticket?.state === 'stored') return null
+    // for the caller or the demo's scheduled cleanup.
+    if (ticket?.state === 'stored')
+      return storage_id !== undefined && ticket.storage_id === storage_id ? storage_id : null
     if (storage_id && !(await storageIdInUse(ctx, storage_id))) await eraseFile(ctx, storage_id)
     if (ticket) await ctx.db.delete(ticket._id)
     return null
@@ -129,6 +143,10 @@ export const sweep = internalMutation({
       if (ticket.storage_id) await eraseFile(ctx, ticket.storage_id)
       await ctx.db.delete(ticket._id)
     }
+    // a background the demo's storage left without a preview gets one once
+    // there is room, one a run, so only the cron's own call retries and the
+    // legs it chains for the file check below do not
+    if (after === undefined) await retrySkippedPreview(ctx, now)
     // Storage writes and metadata commits cross an action boundary. A crash
     // there leaves no id in the ledger (model/demoUploads.ts checkStoredFiles).
     const { checked, full } = await checkStoredFiles(ctx, progress)

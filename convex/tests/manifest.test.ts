@@ -153,7 +153,7 @@ apiAccess:summary query public {"type":"object","value":{"period":{"fieldType":{
 appearance:beginDemoUploadWork mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:cancelUpload mutation public {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:clearForDeletedLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
-appearance:createUpload mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false}}}
+appearance:createUpload mutation public {"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
 appearance:dailyImage query public {"type":"object","value":{"date":{"fieldType":{"type":"string"},"optional":false}}}
 appearance:discardUpload mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 appearance:finalizeUpload mutation internal {"type":"object","value":{"ticket_id":{"fieldType":{"type":"string"},"optional":false},"minter":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"width":{"fieldType":{"type":"number"},"optional":false},"height":{"fieldType":{"type":"number"},"optional":false}}}
@@ -176,6 +176,7 @@ backgroundPreviewProcessor:generate action internal {"type":"object","value":{"k
 backgroundPreviews:attach mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"preview_storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"preview_version":{"fieldType":{"type":"number"},"optional":false},"demo_ticket_id":{"fieldType":{"type":"string"},"optional":true}}}
 backgroundPreviews:backfill mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 backgroundPreviews:beginDemoWork mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
+backgroundPreviews:skipDemoPreview mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"bytes":{"fieldType":{"type":"number"},"optional":false}}}
 backgroundPreviews:source query internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"library"},{"type":"literal","value":"custom"}]},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 billing:adminContext query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:currentUsage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -255,7 +256,8 @@ demoUploads:finish mutation internal {"type":"object","value":{"id":{"fieldType"
 demoUploads:sweep mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"number"},"optional":true}}}
 demoVisitor:record mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false},"browser":{"fieldType":{"type":"string"},"optional":false},"os":{"fieldType":{"type":"string"},"optional":false}}}
 files:attach mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"mime":{"fieldType":{"type":"string"},"optional":true},"inline":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-files:avatarUploadUrl mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
+files:avatarUploadUrl mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
+files:cancelDemoUpload mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 files:clearAvatar mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
 files:eraseHeldFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false}}}
 files:eraseHeldFiles mutation internal {"type":"object","value":{"now":{"fieldType":{"type":"number"},"optional":true},"counts":{"fieldType":{"type":"object","value":{"erased":{"fieldType":{"type":"number"},"optional":false},"kept":{"fieldType":{"type":"number"},"optional":false}}},"optional":true}}}
@@ -264,10 +266,11 @@ files:gatewayAvatar query internal {"type":"object","value":{"id":{"fieldType":{
 files:mintUrls query public {"type":"object","value":{"attachment_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"profile_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 files:reapDroppedImage mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 files:reapOrphans mutation internal {"type":"object","value":{"phase":{"fieldType":{"type":"union","value":[{"type":"literal","value":"tickets"},{"type":"literal","value":"accounts"},{"type":"literal","value":"files"}]},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true},"counts":{"fieldType":{"type":"object","value":{"deleted":{"fieldType":{"type":"number"},"optional":false},"held":{"fieldType":{"type":"number"},"optional":true},"kept":{"fieldType":{"type":"number"},"optional":false},"tickets":{"fieldType":{"type":"number"},"optional":false},"accounts":{"fieldType":{"type":"number"},"optional":false},"skipped":{"fieldType":{"type":"number"},"optional":true}}},"optional":true},"restored":{"fieldType":{"type":"boolean"},"optional":true},"since":{"fieldType":{"type":"number"},"optional":true}}}
+files:reapUploadTickets mutation internal {"type":"object","value":{"now":{"fieldType":{"type":"number"},"optional":true},"counts":{"fieldType":{"type":"object","value":{"tickets":{"fieldType":{"type":"number"},"optional":false},"erased":{"fieldType":{"type":"number"},"optional":false},"held":{"fieldType":{"type":"number"},"optional":false}}},"optional":true}}}
 files:removeAttachment mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 files:restoreWitness mutation internal {"type":"object","value":{}}
 files:setAvatar mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"avatar_storage_id":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}},"optional":true}}}
-files:uploadUrl mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+files:uploadUrl mutation public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true},"name":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 identity:acceptInvitation mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false}}}
 identity:claimMySeats mutation public {"type":"object","value":{}}
 identity:claimSeatsInternal mutation internal {"type":"object","value":{"userId":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"emailVerified":{"fieldType":{"type":"boolean"},"optional":false}}}
@@ -982,6 +985,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   files: {
     uploadUrl: 'orgMutation',
     avatarUploadUrl: 'authedMutation',
+    // the caller's own demo reservation whose POST got no answer
+    cancelDemoUpload: 'authedMutation',
     attach: 'orgMutation',
     removeAttachment: 'orgMutation',
     setAvatar: 'authedMutation',
@@ -1278,7 +1283,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 235
+const PUBLIC_COUNT = 236
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

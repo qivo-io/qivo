@@ -66,6 +66,7 @@ import {
   withOrg,
 } from './helpers.setup'
 import { deleteProject, deleteTask, installTrashTimers, itemFor, runSteps } from './trash.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
  * declare it. */
@@ -102,9 +103,11 @@ const storeBlob = (t: T, bytes: number, type?: string): Promise<Id<'_storage'>> 
   })
 
 /** Attaches `bytes` new bytes to `issue` in the app as `f.user`, a
- * description image when `inline`. */
+ * description image when `inline`, on an upload ticket of their own, as
+ * the upload URL's receiver leaves one. */
 async function attach(t: T, f: OrgFixture, issue: Doc<'issues'>, bytes: number, inline = false) {
   const storage_id = await storeBlob(t, bytes, inline ? 'image/png' : undefined)
+  await plantTicket(t, { profile: f.user, issue, storageId: storage_id })
   const out = await as(t, f.user).mutation(api.files.attach, {
     org_id: f.org.id,
     id: uuid(),

@@ -17,9 +17,10 @@ export function notifyDemoEnded(cause?: unknown) {
  * outside the demo. */
 export const DEMO_FILE_MIB = DEMO_MODE ? DEMO_FILE_BYTES / MIB : undefined
 
-/** Refuses a file over the demo's per-file limit before it is uploaded, with
- * the sentence the demo backend answers (convex/http.ts readBackgroundBody),
- * so a large pick never ends in a failed upload. */
+/** Refuses a file over the demo's per-file limit before it is uploaded, so a
+ * large pick never reaches the demo backend, which refuses such a declared
+ * size before any bytes are sent (convex/model/demoUploads.ts
+ * reserveDemoUpload). */
 export function assertDemoFileSize(size: number, demo = DEMO_MODE): void {
   if (demo && size > DEMO_FILE_BYTES)
     throw new Error(`Choose a file no larger than ${DEMO_FILE_BYTES / MIB} MiB.`)

@@ -12,6 +12,7 @@ import {
   beginDemoUpload,
   demoUploadFor,
   drainDemoUploads,
+  reserveDemoPreview,
   reserveDemoUpload,
   retainDemoUpload,
 } from '../model/demoUploads'
@@ -197,7 +198,7 @@ describe('demo upload independent review regressions', () => {
         authId,
         kind: 'attachment',
         targetId: issue.id,
-        bytes: 100,
+        size: 100,
       })
       await beginDemoUpload(ctx, reserved.id, authId)
       return (await demoUploadFor(ctx, reserved.id))!
@@ -247,12 +248,7 @@ describe('demo upload independent review regressions', () => {
         created_at: NOW,
         expires_at: NOW + 86_400_000,
       })
-      const ticket = await reserveDemoUpload(ctx, {
-        authId: otherAuth,
-        kind: 'preview',
-        targetId: uuid(),
-        bytes: 100,
-      })
+      const ticket = (await reserveDemoPreview(ctx, { authId: otherAuth, targetId: uuid() }))!
       await beginDemoUpload(ctx, ticket.id, otherAuth, true)
       const file = await ctx.storage.store(new Blob(['another receiver output']) as never)
       return { owner, ticket, file }
@@ -318,7 +314,7 @@ describe('demo upload independent review regressions', () => {
         authId,
         kind: 'attachment',
         targetId: issue.id,
-        bytes: 100,
+        size: 100,
       })
       await beginDemoUpload(ctx, reserved.id, authId)
     })
@@ -348,7 +344,7 @@ describe('demo upload independent review regressions', () => {
         authId,
         kind: 'attachment',
         targetId: issue.id,
-        bytes: 100,
+        size: 100,
       })
       await beginDemoUpload(ctx, reserved.id, authId)
       const file = await ctx.storage.store(new Blob(['never attached']) as never)
@@ -461,7 +457,7 @@ describe('demo upload independent review regressions', () => {
         authId,
         kind: 'attachment',
         targetId: issue.id,
-        bytes: 100,
+        size: 100,
       })
       await beginDemoUpload(ctx, reserved.id, authId)
       const crashed = await ctx.storage.store(new Blob(['lost']) as never)

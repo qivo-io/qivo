@@ -36,7 +36,7 @@ export const generate = internalAction({
     { attempt = 0, ...args },
   ): Promise<'skipped' | 'ready' | 'discarded' | 'failed'> => {
     let previewId: Id<'_storage'> | undefined
-    let demoWork: { id: string; authId: string } | null = null
+    let demoWork: { id: string; authId: string; bytes: number } | null = null
     try {
       if (!(await ctx.runQuery(internal.backgroundPreviews.source, args))) return 'skipped'
       if (process.env.APP_MODE === 'demo' && args.kind === 'custom') {
@@ -58,6 +58,15 @@ export const generate = internalAction({
       } catch {
         console.warn('Background preview could not decode image', args.kind, args.id)
         return 'failed'
+      }
+      // a preview larger than the demo's reservation is not stored, and a
+      // retry would make the same one; the finally releases the reservation
+      if (demoWork && preview.byteLength > demoWork.bytes) {
+        await ctx.runMutation(internal.backgroundPreviews.skipDemoPreview, {
+          ...args,
+          bytes: demoWork.bytes,
+        })
+        return 'skipped'
       }
       previewId = await ctx.storage.store(new Blob([preview], { type: 'image/webp' }) as never)
       const retained = await ctx.runMutation(internal.backgroundPreviews.attach, {

@@ -126,6 +126,53 @@ describe('background preview action orchestration', () => {
     }
   })
 
+  it("skips a demo background's preview without retrying when no room was reserved", async () => {
+    vi.stubEnv('APP_MODE', 'demo')
+    try {
+      const ctx = await context()
+      ctx.runMutation.mockResolvedValueOnce(null as never)
+      expect(await invoke(ctx, { kind: 'custom' })).toBe('skipped')
+      expect(getFunctionName(ctx.runMutation.mock.calls[0][0] as never)).toBe(
+        'backgroundPreviews:beginDemoWork',
+      )
+      expect(ctx.storage.get).not.toHaveBeenCalled()
+      expect(ctx.scheduler.runAfter).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('stores no demo preview larger than its reservation, records the skip and releases it', async () => {
+    vi.stubEnv('APP_MODE', 'demo')
+    try {
+      const ctx = await context()
+      const work = { id: 'reservation', authId: 'login', bytes: 10 }
+      ctx.runMutation.mockResolvedValueOnce(work as never)
+      expect(await invoke(ctx, { kind: 'custom' })).toBe('skipped')
+      const names = ctx.runMutation.mock.calls.map(([ref]) => getFunctionName(ref as never))
+      expect(names).toEqual([
+        'backgroundPreviews:beginDemoWork',
+        'backgroundPreviews:skipDemoPreview',
+        'demoUploads:abandon',
+      ])
+      expect(ctx.runMutation.mock.calls[1][1]).toEqual({ ...args, kind: 'custom', bytes: 10 })
+      expect(ctx.runMutation.mock.calls[2][1]).toEqual({
+        id: 'reservation',
+        minter: 'login',
+        storage_id: undefined,
+      })
+      expect(ctx.storage.store).not.toHaveBeenCalled()
+      expect(ctx.scheduler.runAfter).not.toHaveBeenCalled()
+      // one that fits is stored and attached against the reservation
+      const fits = await context()
+      fits.runMutation.mockResolvedValueOnce({ ...work, bytes: 1024 * 1024 } as never)
+      expect(await invoke(fits, { kind: 'custom' })).toBe('ready')
+      expect(fits.runMutation.mock.calls[1][1]).toMatchObject({ demo_ticket_id: 'reservation' })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('does not retry a corrupt image or write any derivative bytes', async () => {
     const ctx = await context()
     ctx.storage.get.mockResolvedValue(new Blob(['invalid'], { type: 'image/png' }))

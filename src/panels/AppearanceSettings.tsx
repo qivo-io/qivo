@@ -68,13 +68,22 @@ function WeeklyPreview({ preferences }: { preferences: AppearancePreferences }) 
   )
 }
 
+/* The sentence of a failed appearance change, with its first letter
+   capitalized, since server refusals start lowercase. */
 function errorText(error: unknown): string {
+  let message = error instanceof Error ? error.message : 'Could not save appearance.'
   if (error instanceof ConvexError && typeof error.data === 'object' && error.data !== null) {
-    const message = (error.data as { message?: unknown }).message
-    if (typeof message === 'string') return message
+    const data = (error.data as { message?: unknown }).message
+    if (typeof data === 'string') message = data
   }
-  return error instanceof Error ? error.message : 'Could not save appearance.'
+  return message.charAt(0).toUpperCase() + message.slice(1)
 }
+
+/** What Settings says in place of a preview the demo's full storage left no
+    room for, which the demo makes once 1 MiB is free
+    (convex/schema.ts custom_backgrounds.preview_skipped). */
+const PREVIEW_SKIPPED =
+  "No preview yet, because the demo's file storage is full. Qivo makes one once 1 MiB is free, and your background still shows."
 
 async function inspectFile(file: File) {
   // the demo's smaller limit first, so a large pick names the one that applies
@@ -175,7 +184,12 @@ function PrivatePreview({ image }: { image: NonNullable<AppearancePreferences['c
         ) : (
           <span className="flex aspect-video items-center justify-center gap-2 p-4 text-sm text-text-2">
             <ImageIcon className="size-5 shrink-0" aria-hidden="true" />
-            {error || (image.preview_ready ? 'Loading preview…' : 'Preparing preview…')}
+            {error ||
+              (image.preview_ready
+                ? 'Loading preview…'
+                : image.preview_skipped
+                  ? PREVIEW_SKIPPED
+                  : 'Preparing preview…')}
           </span>
         )}
       </div>

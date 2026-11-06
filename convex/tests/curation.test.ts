@@ -10,6 +10,7 @@ import { LIMITS } from '../lib/limits'
 import { PANORAMA_MAX_BYTES } from '../lib/panorama'
 import { sha256hex } from '../machine/auth'
 import { as, expectRefusal, NOW, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
+import { plantTicket } from './uploadTickets.setup'
 
 declare class Blob {
   constructor(parts: unknown[], options?: { type?: string })
@@ -865,6 +866,7 @@ describe('licensed files and final human decisions', () => {
     const attached = await storage(t, jpeg(1))
     const avatar = await storage(t, jpeg(2))
     const image = await plantImage(t, { tag: 3 })
+    await plantTicket(t, { profile: org.admin, issue, storageId: attached })
     await as(t, org.admin).mutation(api.files.attach, {
       org_id: org.org.id,
       id: uuid(),

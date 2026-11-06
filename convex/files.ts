@@ -4,11 +4,15 @@
  *
  * Ported rights (final SQL state):
  *   uploadUrl          attachments_objects_insert 0090:31-40 — bytes may only
- *                      enter under an issue you hold member on
+ *                      enter under an issue you hold member on; outside the
+ *                      demo through an upload ticket of the caller for that
+ *                      task, which stores one file of the declared size
  *   attach             ia_insert 0081:307-311 ('member'→'user' by 0098) +
  *                      attachments_check_size 0089 (size from storage
  *                      metadata, NEVER the client; binary MiB cap) +
- *                      storage_path unique 0018:22 (→ by_storage uniqueness)
+ *                      storage_path unique 0018:22 (→ by_storage uniqueness);
+ *                      outside the demo only a file the caller's own ticket
+ *                      for that task stored
  *   removeAttachment   ia_delete 0018:38-40 — ANY project member, not
  *                      uploader-only
  *   setAvatar/clear    set_avatar 0099:189-210 (self-or-admin, one sentence
@@ -68,18 +72,23 @@ import {
   type AttachResult,
   assertAttachmentRoom,
   attachFileCore,
+  attachUploadedFile,
+  cleanAttachmentName,
+  openUploadTicket,
   removeAttachmentCore,
   storageIdInUse,
+  uploadSize,
 } from './model/attachments'
 import {
   assertDemoFileOwnership,
-  DEMO_FILE_BYTES,
   demoCanRead,
   demoFileExpiry,
+  demoUploadFor,
   reserveDemoUpload,
 } from './model/demoUploads'
 import { reapDroppedImage as reapDropped } from './model/descriptionImages'
 import {
+  dropTicketFile,
   type EraseCounts,
   eraseDueFiles,
   eraseFile,
@@ -115,21 +124,42 @@ async function assertWritable(ctx: MeCtx, projectId: string): Promise<void> {
 }
 
 /* ---------------------------------------------------------------- uploads
- * generateUploadUrl is a blank cheque for one POST, so the MINT is gated:
- * write level on the target issue's project (attachments) or the set_avatar
- * right (avatars). A minted URL can still park bytes without attaching —
- * that residual (unchanged from 0090:20-29) is what reapOrphans exists for. */
+ * Every URL is gated by write level on the target issue's project
+ * (attachments) or the set_avatar right (avatars). An attachment or
+ * description image goes on an upload ticket, as REST and MCP uploads do
+ * (model/attachments.ts openUploadTicket). Its URL stores one file of the
+ * declared size, or up to the organization's limit for an app that sends no
+ * size, and only the caller's attach of that file to that task takes it. On
+ * the demo the upload reserves room in the demo's budget instead
+ * (model/demoUploads.ts). A picture outside the demo still gets
+ * generateUploadUrl, a blank cheque for one POST of any size, which can
+ * park bytes without a picture until reapOrphans erases them. */
 
 export const uploadUrl = orgMutation({
-  args: { issue_id: v.string() },
-  handler: async (ctx, { issue_id }) => {
+  args: {
+    issue_id: v.string(),
+    // the file's size in bytes and its name, which an app loaded before this
+    // release does not send
+    size: v.optional(v.number()),
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, { issue_id, size, name }) => {
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
     // a full task is refused before any bytes are sent
     await assertAttachmentRoom(ctx, issue.id)
-    if (isDemoDeployment())
-      return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, DEMO_FILE_BYTES)
-    return await ctx.storage.generateUploadUrl()
+    // the attach names the file; this only refuses a name it would refuse
+    const fileName = name === undefined ? '' : cleanAttachmentName(name)
+    if (size !== undefined) uploadSize(size)
+    if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'attachment', issue_id, size)
+    const { uploadUrl } = await openUploadTicket(ctx, {
+      me: ctx.me,
+      issue,
+      name: fileName,
+      size,
+      nowMs: Date.now(),
+    })
+    return uploadUrl
   },
 })
 
@@ -152,12 +182,36 @@ async function avatarTarget(ctx: AuthedCtx, profileId: string): Promise<Doc<'pro
 }
 
 export const avatarUploadUrl = authedMutation({
-  args: { profile_id: v.string() },
-  handler: async (ctx, { profile_id }) => {
+  // the picture's size in bytes, which an app loaded before this release
+  // does not send. Outside the demo files.setAvatar checks the stored size.
+  args: { profile_id: v.string(), size: v.optional(v.number()) },
+  handler: async (ctx, { profile_id, size }) => {
     await avatarTarget(ctx, profile_id)
-    if (isDemoDeployment())
-      return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, AVATAR_MAX_BYTES)
+    if (size !== undefined) uploadSize(size)
+    if (isDemoDeployment()) return demoUploadUrl(ctx, ctx.authUserId, 'avatar', profile_id, size)
     return await ctx.storage.generateUploadUrl()
+  },
+})
+
+/* Cancels reservation `id` of the private demo, made for an attachment,
+ * description image or profile picture whose POST ended without an answer
+ * from the receiver, so its declared bytes stop counting at once instead of
+ * when it expires (model/demoUploads.ts). The app reads `id` from the
+ * /demo-uploads/ URL it was given. Only the caller's own reservation that no
+ * POST began goes, the rule appearance.cancelUpload keeps for a background.
+ * One the receiver began or stored stays for the receiver and the minute
+ * sweep, and another login's is refused as not found. An unknown id, and
+ * any call outside the demo, change nothing. */
+export const cancelDemoUpload = authedMutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    if (!isDemoDeployment()) return null
+    const row = await demoUploadFor(ctx, id)
+    if (row === null) return null
+    if (row.auth_user_id !== ctx.authUserId || (row.kind !== 'attachment' && row.kind !== 'avatar'))
+      throw notFound('upload not found')
+    if (row.state === 'pending') await ctx.db.delete(row._id)
+    return null
   },
 })
 
@@ -166,10 +220,16 @@ export const avatarUploadUrl = authedMutation({
  * oversize refusal-return happens before the row insert — the committed
  * transaction then carries exactly one effect, the byte delete. The name and
  * type limits, the cap, the byte fence, the row and the activity row are
- * model/attachments.ts attachFileCore, which REST and MCP uploads run too. */
+ * model/attachments.ts attachFileCore, which REST and MCP uploads run too.
+ * Outside the demo the file must be one the caller's own unexpired upload
+ * ticket for this task stored, which the attach then spends
+ * (model/attachments.ts attachUploadedFile); the demo checks its own
+ * ledger's ticket instead (assertDemoFileOwnership). */
 export const attach = orgMutation({
   args: {
-    id: v.string(), // client-generated attachment uuid
+    // the attachment's uuid, which the app takes from its upload ticket's
+    // URL outside the demo and makes itself in the demo
+    id: v.string(),
     issue_id: v.string(),
     storage_id: v.id('_storage'),
     name: v.string(),
@@ -177,10 +237,19 @@ export const attach = orgMutation({
     inline: v.boolean(),
   },
   handler: async (ctx, { id, issue_id, storage_id, name, mime, inline }): Promise<AttachResult> => {
-    const now = new Date().toISOString()
+    const nowMs = Date.now()
     const issue = await myIssue(ctx, issue_id)
     await assertWritable(ctx, issue.project_id)
+    if (!isDemoDeployment())
+      return await attachUploadedFile(ctx, {
+        me: ctx.me,
+        issue,
+        storageId: storage_id,
+        row: { id, name, mime, inline },
+        nowMs,
+      })
     await assertDemoFileOwnership(ctx, ctx.authUserId, storage_id, 'attachment', issue_id)
+    const now = new Date(nowMs).toISOString()
     return await attachFileCore(ctx, { me: ctx.me, issue, id, storage_id, name, mime, inline, now })
   },
 })
@@ -497,7 +566,7 @@ export const gatewayAvatar = internalQuery({
 export const REAP_PAGES = { tickets: 1000, accounts: 64, files: 256 }
 
 /* A sweep never deletes a file younger than this when its run starts.
- * Attachment upload tickets (REST and MCP) live exactly this long
+ * Attachment upload tickets (the app, REST and MCP) live exactly this long
  * (model/attachments.ts UPLOAD_TICKET_TTL_MS) and background upload tickets
  * at most 15 minutes (appearance.ts UPLOAD_TTL_SECONDS), so no sweep deletes
  * a file while the ticket it was uploaded for can still confirm it. */
@@ -562,17 +631,27 @@ export const reapOrphans = internalMutation({
     const since = a.now === undefined ? await reapSince(ctx, now) : a.since
     let next: Pick<ReapLeg, 'phase' | 'cursor'> | null = null
     if ((a.phase ?? 'tickets') === 'tickets') {
-      // Tickets own no bytes until the receiver commits the completed upload,
-      // and an expired upload ticket's unconfirmed bytes fall to the files phase.
+      // Tickets own no bytes until the receiver commits the completed upload.
+      // An expired attachment ticket that holds a file stays for
+      // reapUploadTickets, which erases the file with it within the hour.
+      // Nothing else finds that file before the next weekly run, since the
+      // files phase keeps one younger than the floor. That cleanup deletes
+      // the attachment tickets without a file every hour too.
       let more = false
       for (const table of ['background_uploads', 'attachment_uploads'] as const) {
         const expired = await ctx.db
           .query(table)
           .withIndex('by_expiry', (q) => q.lte('expires_at', now))
           .take(REAP_PAGES.tickets + 1)
-        for (const ticket of expired.slice(0, REAP_PAGES.tickets)) await ctx.db.delete(ticket._id)
-        counts.tickets += Math.min(expired.length, REAP_PAGES.tickets)
-        more ||= expired.length > REAP_PAGES.tickets
+        let deleted = 0
+        for (const ticket of expired.slice(0, REAP_PAGES.tickets)) {
+          if ('storage_id' in ticket && ticket.storage_id !== undefined) continue
+          await ctx.db.delete(ticket._id)
+          deleted += 1
+        }
+        counts.tickets += deleted
+        // a leg that deleted nothing would read the same page again
+        more ||= expired.length > REAP_PAGES.tickets && deleted > 0
       }
       next = { phase: more ? 'tickets' : 'accounts' }
     } else if (a.phase === 'accounts') {
@@ -665,6 +744,71 @@ export const reapOrphans = internalMutation({
   },
 })
 
+/* ----------------------------------------------------- reapUploadTickets
+ * Deletes the attachment upload tickets that have expired, and erases the
+ * file each one holds unless something names it, so an upload that never
+ * attaches stops taking storage within an hour of its ticket's end instead
+ * of waiting for the weekly reapOrphans (LIMITS.uploadsInProgress). Erasing
+ * at the expiry is safe, because neither the app's attach nor the REST and
+ * MCP confirm takes an expired ticket's file (model/attachments.ts
+ * completeUpload), and a POST still storing one deletes it when it finds
+ * the ticket expired or gone (finishTicketUpload). A file a row names, such
+ * as a picture set from it, stays. After a restore it holds the file
+ * instead, by the orphan sweep's rule (model/fileHolds.ts dropTicketFile),
+ * since a row written after the restored backup may have named it. The
+ * hourly cron (crons.ts) starts a run with empty arguments. Each leg
+ * handles one UPLOAD_TICKET_PAGE of the tickets expired at the run's start
+ * and schedules the next while more are left; the last leg logs its counts
+ * when it handled any. reapOrphans's tickets phase deletes only the
+ * expired tickets that hold no file, and leaves the others to this one. */
+
+/** How many expired tickets one reapUploadTickets leg handles. A ticket
+ * holding a file nothing names costs eleven index ranges (the file,
+ * storageIdInUse's nine and the erase), so a full leg reads about 1,100 of
+ * Convex's 4,096 index ranges with the page and the restore check, and its
+ * file erases keep a leg's whole execution well inside a second on a local
+ * backend (a leg of 200 reached 925 ms once). Tests lower it. */
+export const UPLOAD_TICKET_PAGE = { size: 100 }
+
+const vTicketCounts = v.object({
+  tickets: v.number(), // expired tickets deleted
+  erased: v.number(), // their files erased
+  held: v.number(), // their files held after a restore instead
+})
+
+const ticketArgs = {
+  now: v.optional(v.number()), // the run's start, epoch milliseconds
+  counts: v.optional(vTicketCounts),
+}
+
+const ticketLegRef = makeFunctionReference<'mutation', ObjectType<typeof ticketArgs>, null>(
+  'files:reapUploadTickets',
+)
+
+/* One leg of the ticket cleanup (header above). Empty arguments start a run. */
+export const reapUploadTickets = internalMutation({
+  args: ticketArgs,
+  handler: async (ctx, a): Promise<null> => {
+    const now = a.now ?? Date.now()
+    const counts = a.counts ?? { tickets: 0, erased: 0, held: 0 }
+    const restore = await restoreState(ctx)
+    const expired = await ctx.db
+      .query('attachment_uploads')
+      .withIndex('by_expiry', (q) => q.lte('expires_at', now))
+      .take(UPLOAD_TICKET_PAGE.size + 1)
+    for (const ticket of expired.slice(0, UPLOAD_TICKET_PAGE.size)) {
+      const dropped = await dropTicketFile(ctx, ticket.storage_id, restore, now)
+      if (dropped !== null) counts[dropped] += 1
+      await ctx.db.delete(ticket._id)
+      counts.tickets += 1
+    }
+    if (expired.length > UPLOAD_TICKET_PAGE.size)
+      await ctx.scheduler.runAfter(0, ticketLegRef, { now, counts })
+    else if (counts.tickets > 0) console.log('deleted expired upload tickets', counts)
+    return null
+  },
+})
+
 /* ---------------------------------------------------------- eraseHeldFiles
  * Erases the deleted files whose hold has ended and whose scheduled erase
  * (eraseHeldFile below) has not, as after a failed erase, an import into
@@ -726,19 +870,22 @@ export const restoreWitness = internalMutation({
   handler: async (): Promise<null> => null,
 })
 
+/* The /demo-uploads/ URL of a new reservation for an upload of `kind` to
+ * `targetId` with the declared `size`, or without one the kind's limit or
+ * the free space (model/demoUploads.ts reserveDemoUpload). */
 async function demoUploadUrl(
   ctx: MutationCtx,
   authId: string,
   kind: 'attachment' | 'avatar',
   targetId: string,
-  bytes: number,
+  size: number | undefined,
 ) {
   const requested = await demoFileExpiry(ctx, authId, Math.floor(Date.now() / 1000) + 600)
   const ticket = await reserveDemoUpload(ctx, {
     authId,
     kind,
     targetId,
-    bytes,
+    size,
     expiresAt: requested * 1000,
   })
   const exp = ticket.expiresAt / 1000

@@ -943,6 +943,15 @@ export const recipes: Recipe[] = [
     answers: { 'files:uploadUrl': () => 'https://files.test/refused' },
   },
   {
+    mutation: 'files:cancelDemoUpload',
+    mutator: 'cancelDemoReservation',
+    what: 'a cancelled demo upload',
+    pause: 'P',
+    act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
+    // the POST to the demo's upload address ends without an answer
+    answers: { 'files:uploadUrl': () => 'https://files.test/demo-uploads/lost-1?e=1&m=me&t=t' },
+  },
+  {
     mutation: 'files:attach',
     mutator: 'addAttachment',
     what: 'a new attachment',
@@ -950,7 +959,9 @@ export const recipes: Recipe[] = [
     pause: 'P',
     act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
     answers: {
-      'files:uploadUrl': () => 'https://files.test/upload',
+      // an upload ticket's address, whose id the attachment takes
+      'files:uploadUrl': () =>
+        'https://files.test/attachment-uploads/0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f?e=1&m=me&t=t',
       'files:attach': (args) => ({ attachment: attachmentOf(args) }),
     },
     truth: (snap, args) => snap.attachments.push(attachmentOf(args)),
@@ -986,6 +997,17 @@ export const recipes: Recipe[] = [
     act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
     // the address then refuses the bytes, so the upload ends there
     answers: { 'files:avatarUploadUrl': () => 'https://files.test/refused' },
+  },
+  {
+    mutation: 'files:cancelDemoUpload',
+    mutator: 'cancelDemoReservation',
+    what: 'a cancelled demo portrait upload',
+    pause: 'P',
+    act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),
+    // the POST to the demo's upload address ends without an answer
+    answers: {
+      'files:avatarUploadUrl': () => 'https://files.test/demo-uploads/lost-2?e=1&m=me&t=t',
+    },
   },
   {
     mutation: 'files:setAvatar',
