@@ -6,7 +6,8 @@
  * as every build does after Convex pushes (scripts/auth-probe.mjs), which
  * names a runtime that refuses the sign-in handlers' import of
  * convex/auth.ts, and checks the CORS answers the app's sign-in relies on
- * (auth/routes). That step sends no credential and creates nothing.
+ * (auth/routes). That step sends no credential and creates no session,
+ * OAuth client or token.
  *
  * One run signs in as Nora Berg, the Northstar fixture admin, in a real
  * browser. In the app it creates a personal token that can make changes, a
@@ -1157,10 +1158,10 @@ export function authCorsProblems(preflight, session, appOrigin) {
  *  routes as every build does after Convex pushes (auth-probe.mjs), which
  *  fail with a 5xx when the runtime refuses the handlers' import of
  *  convex/auth.ts, then checks the CORS answers the app's sign-in relies on
- *  (authCorsProblems). It sends no credential and creates nothing, so it may
- *  run before setup/target proves the API origin. Its failure names the
- *  origin it called, which before setup/target may lack the region label
- *  the app shows. */
+ *  (authCorsProblems). It sends no credential and creates no session, OAuth
+ *  client or token, so it may run before setup/target proves the API
+ *  origin. Its failure names the origin it called, which before
+ *  setup/target may lack the region label the app shows. */
 async function checkAuthRoutes() {
   const api = cfg.apiOrigin
   try {
@@ -8158,8 +8159,9 @@ async function start() {
     await must('setup/ui/sign-in', () => signIn(cfg.nora))
     await must('setup/target', verifyTarget, (note) => note)
     // Only now may a credential go to the API origin, the sweep's included.
-    // Nothing was created before this point: auth/routes sent no credential
-    // and created nothing, so it could run before the origin was proved.
+    // Nothing was created before this point. auth/routes sent no credential
+    // and created no session, OAuth client or token, so it could run before
+    // the origin was proved.
     verified = true
     // A local run killed while billing was paused left the organization
     // read-only, which would refuse this run's writes and its sweep.

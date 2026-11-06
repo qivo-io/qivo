@@ -4,9 +4,11 @@
  *
  * The HTTP router (convex/http.ts) imports convex/auth.ts, and with it
  * Better Auth, only inside the sign-in, OAuth machine and metadata handlers.
- * Convex's open-source runtime allows that import in an HTTP action, but
- * nothing public says every hosted runtime does, and a push analyzes the
- * modules without running a handler. So app-deploy.mjs and demo-deploy.mjs
+ * Convex's open-source runtime allows that import in an HTTP action, while
+ * Convex's Bundling documentation says the default runtime does not support
+ * dynamic imports and throws at run time, and nothing public shows which of
+ * the two hosted deployments follow. A push analyzes the modules without
+ * running a handler. So app-deploy.mjs and demo-deploy.mjs
  * run `convex deploy` and then this probe against the deployment's site
  * URL, which the build command (vercel-build.mjs, demo-build.mjs) records
  * for them, because `convex deploy` hands it only to the build command and
@@ -17,7 +19,7 @@
  * docs/deployment.md for what a failed check leaves and what to do.
  *
  * The probe sends no credential and nothing that creates a session, an
- * OAuth client or a token. It still reads the database: Better Auth runs
+ * OAuth client or a token. It still reads the database. Better Auth runs
  * the OAuth provider's init on every request outside the demo, which reads
  * the deployment's OAuth resource row and inserts it when it is missing, so
  * on a new preview backend the first request can insert that row. It logs
@@ -76,9 +78,9 @@ const json = async (response) => {
   }
 }
 
-/** The routes the probe calls, in order, and what each must answer: the
- * reason it is wrong, or null. `demo` false names the routes the demo does
- * not serve. */
+/** The routes the probe calls, in order. Each one's `check` returns the
+ * reason its answer is wrong, or null. `demo` false names the routes the
+ * demo does not serve. */
 export const AUTH_PROBES = [
   {
     route: 'GET /api/auth/get-session',

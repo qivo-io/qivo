@@ -6,7 +6,7 @@ import { probeAuthRoutes, probeSite, pushThenProbe, recordSiteUrl } from './auth
 
 const SITE = 'https://fixture-otter-12.convex.site'
 
-/* What each route answers on a deployment that runs the change: the
+/* What each route answers on a deployment that runs the change. The
  * session read clears the token cookie, as Better Auth does without a
  * session. */
 const ANSWERS = {
