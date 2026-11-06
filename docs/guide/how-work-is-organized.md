@@ -207,8 +207,18 @@ window asks first. Closing the window then leaves the page.
 ## Deleted items
 
 Deleting a task or a project moves it to **Settings → Projects → Deleted
-items**, newest first. A nightly job deletes each item for good 30 days after
-it was deleted, also while the organization is read-only.
+items**. The page lists 25 items at a time, deleted projects first and each
+part newest first, with **Previous** and **Next**. A nightly job deletes each
+item for good 30 days after it was deleted, also while the organization is
+read-only.
+
+Deleted tasks show once you choose projects in **Projects**, up to 50
+projects and sub-projects of one organization, or every project of one with a
+choice such as **All projects in Northstar Labs**, which also lists what was
+deleted from archived projects. A project you choose stands for its
+sub-projects, archived ones included.
+Without projects chosen, the page lists deleted projects and says that
+deleted tasks show once you choose projects.
 
 Who sees an item:
 
@@ -222,8 +232,9 @@ the project it was in. If you can now only view that project, your own delete
 shows without **Restore**, with a line such as **You can only view Luma
 Sensor now. Ask its lead, Mira Holm, to restore it.** A subtask deleted with
 a task in a project you cannot open shows only its key and title, without
-**Restore**. Items from every organization you belong to appear together,
-grouped by organization when there is more than one.
+**Restore**. Without projects chosen, the deleted projects of every
+organization you belong to appear together, and each row names its
+organization when the page holds more than one.
 
 Each row shows who deleted the item and when, where it was, and the reason
 when one was given. A delete through the REST API or MCP also names the
@@ -235,23 +246,38 @@ eleven or more tasks in a row were deleted by the same person in the same
 way, each within 10 minutes of the next, the list shows seven and folds the
 rest into one line with **Show all**.
 
-Filter the list by kind, by text and, for admins and leads, by **Deleted
-by**. The page shows up to the newest 2,000 items, and fewer when the trash
-is very large. The text filter also finds deleted tasks by key or title,
-including tasks inside deleted projects and items the list does not show. It
-lists up to 50 such tasks; when it finds more, the page says so, and typing
-more of the title or key narrows the search. A very broad search in a large
-trash can show fewer than it would find with a longer text. A
-task inside a deleted project can only come back with its project, and a
-subtask deleted with its task only with that task and its other subtasks.
-When the filter shows such a task on a line of its own, its **Restore** first
-says what comes back with it. **Deleted by** offers an admin everyone in the
-organization, so choosing a person reaches their older deletes too.
+Filter the list by kind, by search, by **Assigned to** and, for admins and
+leads, by **Deleted by**. Without projects chosen, search finds deleted
+projects by name or key and a task by its key, such as `QN-12`. With
+projects chosen, search finds tasks by the words of their title or
+description. Every word must match a whole word, the last one also by its
+start, and accents count. Search does not match who deleted an item, the
+credential, the reason or the organization, which **Deleted by** covers.
+**Deleted by** lists the organization's people 25 at a time with a search,
+with **Someone no longer in the organization**, and under a person the way
+they deleted, in the app, through a personal token or through a connected
+app. **Assigned to** lists the tasks assigned to one person and needs
+projects chosen. In a login with seats in several organizations, **Deleted
+by** needs projects chosen too. Some notes say that matching tasks might not
+be listed, or that tasks deleted before this version of Qivo are found by
+their key or title only. A task inside a deleted project can only come back
+with its project, and a subtask deleted with its task only with that task and
+its other subtasks. When search finds such a task, it shows on a line of its
+own, and its **Restore** first says what comes back with it.
 
 **Restore** on a row brings the item back at once, where it was, with its
 comments, attachments, links and labels. To restore several, select their
 rows and choose a button such as **Restore 3 selected**. A window lists where
-they go before anything changes. Restored work keeps its keys, such as
+they go before anything changes. The selection stays while you move between
+pages, up to 1,000 items, and is cleared when you change projects or a
+filter. Restoring more than 25 items of one organization, or items of more
+than two organizations, runs in steps. The window says to keep Qivo open, the
+page shows how many are done, you can switch to another view meanwhile, and
+Qivo tells you when it is done. Closing or reloading Qivo stops it. The items
+already restored stay restored, and the rest stay in Deleted items. When an
+organization refuses a step, such as while it is read-only, Qivo stops there,
+says how many were restored, refused and not sent, and goes on in the other
+organizations. Restored work keeps its keys, such as
 `QN-142`, because Qivo never reuses a number
 ([Permanent task IDs](#permanent-task-ids)). A task saved before the current
 length limits whose text was too large to keep in Deleted items, about 1 MB,
@@ -283,14 +309,16 @@ You can restore what you see when you can still edit where it goes back:
   needs its project to be active.
 - A task or sub-project deleted before its project can only come back with
   that project. Only organization admins see it, and its **Restore** brings
-  the project back first.
+  the project back first. Qivo then restores the task once the project is
+  back, also when you have left the page.
 - While the organization is read-only, restoring is paused.
 
 **Delete now…** in a row's menu deletes an item for good at once, with its
 comments, attachments and the change history of its tasks. Only organization admins have it, and only while
 the organization can make changes. It cannot be undone. Deleting a project
 for good also deletes the tasks and sub-projects that were deleted from it
-before it, and its window says so. An item that could not finish moving shows
+before it, and its window says how many items go with it before you can
+confirm. An item that could not finish moving shows
 **Couldn't finish moving this item.** to admins. It does not expire, so delete it with **Delete now…** or contact
 support.
 
