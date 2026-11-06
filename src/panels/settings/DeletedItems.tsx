@@ -786,8 +786,14 @@ export function DeletedItemsPage() {
     stoppedEmpty: 'Qivo checked part of Deleted items and found nothing there yet. Next continues.',
     stuck: 'Qivo could not check part of Deleted items.',
     none: `No deleted items match “${search.settled}”.`,
+    // without a scope the server reads no task entries, so the line never
+    // says there are no deleted projects when Tasks only left them out
     empty: scopeNeeded
-      ? 'No deleted projects. Choose projects to see deleted tasks.'
+      ? kind === 'task'
+        ? 'Deleted tasks show once you choose projects.'
+        : filtered
+          ? 'No deleted projects match the filters. Choose projects to see deleted tasks.'
+          : 'No deleted projects. Choose projects to see deleted tasks.'
       : filtered
         ? 'No deleted items match the filters.'
         : pick?.kind === 'projects'

@@ -449,6 +449,24 @@ describe('what the page reads', () => {
     expect(document.body.textContent).not.toContain('No deleted items.')
   })
 
+  it('says deleted tasks need projects, never that no project is deleted, for Tasks without a scope', async () => {
+    await open()
+    await click(button('Tasks'))
+    expect(pageReads()[0].args).toEqual({ kind: 'task' })
+    expect(lineKeys()).toEqual([])
+    expect(text('[data-deleted-page-end]')).toBe('Deleted tasks show once you choose projects.')
+    expect(document.body.textContent).not.toContain('No deleted projects')
+    // a filter that leaves the deleted project out says it was the filter
+    await click(button('All'))
+    await click(find('[data-deleted-by]'))
+    await click(find(`[data-deleted-person="${DANIEL}"]`))
+    expect(pageReads()[0].args).toEqual({ deleted_by: DANIEL })
+    expect(lineKeys()).toEqual([])
+    expect(text('[data-deleted-page-end]')).toBe(
+      'No deleted projects match the filters. Choose projects to see deleted tasks.',
+    )
+  })
+
   it('reads the task entries of a pick from its first page, and drops the pick with its chip', async () => {
     await open(world({ tasks: 3 }))
     await choose(LUMA)
