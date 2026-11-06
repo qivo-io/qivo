@@ -4289,9 +4289,11 @@ export const AGENDA_QUERY = 'teamSync:agenda'
  *  agent's, In Progress in Alpha, made over REST, shows on the agent's
  *  line of a fresh load of Team sync for the run project M by its address,
  *  on ui/task-link's fresh-load approach. The load's frames must add
- *  AGENDA_QUERY in one ModifyQuerySet and TASK_WINDOWS_QUERY in none, and
- *  the page must reach its ok state (data-sync-state). It writes nothing in
- *  the app: the address saves no scope and opening a step stamps no one.
+ *  AGENDA_QUERY at least once, as a reconnect or a new day or week grid
+ *  during the load adds it again on a correct app, and TASK_WINDOWS_QUERY
+ *  never, and the page must reach its ok state (data-sync-state). It
+ *  writes nothing in the app: the address saves no scope and opening a step
+ *  stamps no one.
  *  The cleanup, which deletes M, removes the task. It runs before the run
  *  archives M. */
 async function teamSyncCheck() {
@@ -4318,11 +4320,11 @@ async function teamSyncCheck() {
       const page = app.locator('[data-workspace-view] [data-sync-page][data-sync-state="ok"]')
       await page.waitFor({ timeout: 60_000 })
       const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
-      eq(adds(AGENDA_QUERY), 1, 'the load subscribed the agenda once')
+      expect(adds(AGENDA_QUERY) >= 1, 'the load did not subscribe the agenda')
       eq(adds(TASK_WINDOWS_QUERY), 0, 'Team sync subscribed task windows')
       await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
       await page.locator(`[data-sync-card="${t.key}"]`).waitFor({ timeout: 60_000 })
-      return `opened ${M.key}'s meeting on one agenda subscription without task windows, with ${t.key} on its agent's line`
+      return `opened ${M.key}'s meeting on the agenda without task windows, with ${t.key} on its agent's line`
     } finally {
       app.off('websocket', record)
     }
