@@ -17,6 +17,10 @@
      for a live read's: row() and orgOf() look in live reads first. Its
      copies of the milestones a live read's answer brings follow that
      answer (take), as store/viewRows.ts keeps a stopped view's tasks.
+   - A paint the server accepted runs only on the reads that have not
+     delivered its write yet (within), so a read that holds the write shows
+     its own answers, a later change by someone else among them, while a
+     stopped read keeps the paint until it reads again.
    - Rows are never changed in place: a paint replaces a row and its read's
      list, so an anchor stays as the server sent it and a list on screen
      keeps its object while no paint changed it.
@@ -138,6 +142,9 @@ export function createMilestoneRows(o: {
   const anchors = new Map<string, Anchor>()
   // the rows on screen, live reads first
   let painted = new Map<string, MilestonesShown>()
+  // the reads the paint that runs now may change, every read while null
+  let only: ReadonlySet<string> | null = null
+  const paints = (slot: string) => only === null || only.has(slot)
 
   /** Whether `pos` comes before `other` in `ask`'s order. */
   const before = (ask: MilestoneAsk, pos: MilestonePosition, other: MilestonePosition) =>
@@ -268,7 +275,7 @@ export function createMilestoneRows(o: {
       if (!base) return
       for (const [slot, shown] of painted) {
         const anchor = anchors.get(slot)
-        if (!anchor) continue
+        if (!anchor || !paints(slot)) continue
         const at = shown.rows.findIndex((row) => row.id === id)
         const row = { ...(at < 0 ? base : shown.rows[at]), ...fields }
         if (anchor.ask.kind === 'get') {
@@ -285,14 +292,14 @@ export function createMilestoneRows(o: {
     /** Takes milestone `id` out of every read. */
     hide(id: string) {
       for (const [slot, shown] of painted)
-        if (shown.rows.some((row) => row.id === id))
+        if (paints(slot) && shown.rows.some((row) => row.id === id))
           painted.set(slot, { ...shown, rows: shown.rows.filter((row) => row.id !== id) })
     },
     /** Takes every milestone of the top-level projects `projects` out of
         every read, as an archive or delete of the projects does. */
     hideProjects(projects: ReadonlySet<string>) {
       for (const [slot, shown] of painted)
-        if (shown.rows.some((row) => projects.has(row.project_id)))
+        if (paints(slot) && shown.rows.some((row) => projects.has(row.project_id)))
           painted.set(slot, {
             ...shown,
             rows: shown.rows.filter((row) => !projects.has(row.project_id)),
@@ -304,11 +311,30 @@ export function createMilestoneRows(o: {
     insert(row: MilestoneRow) {
       for (const [slot, shown] of painted) {
         const anchor = anchors.get(slot)
-        if (!anchor || anchor.ask.kind === 'get' || shown.rows.some((r) => r.id === row.id))
+        if (
+          !anchor ||
+          !paints(slot) ||
+          anchor.ask.kind === 'get' ||
+          shown.rows.some((r) => r.id === row.id)
+        )
           continue
         const rows = coversRow(anchor, row) ? placed(anchor.ask, shown.rows, row) : shown.rows
         const next = markPast(anchor, rows === shown.rows ? shown : { ...shown, rows }, row)
         if (next !== shown) painted.set(slot, next)
+      }
+    },
+    /** Runs `paint` on the reads `slots` names alone: update, hide,
+        hideProjects and insert leave every other read as it is, as a
+        write the server accepted paints only the reads that have not
+        delivered it (store/planner.ts milestoneNeeds). A copy on screen
+        in any read still gives an edit its row. */
+    within(slots: ReadonlySet<string>, paint: () => void) {
+      const was = only
+      only = slots
+      try {
+        paint()
+      } finally {
+        only = was
       }
     },
     /** Milestone `id` as a read shows it, a live read's first, or

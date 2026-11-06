@@ -2946,7 +2946,7 @@ const KEEP_ROWS = Symbol('keep the rows')
     A milestone read's `milestones` answers the ask its arguments `key`
     make and the milestones a value brings (store/milestoneRows.ts), which
     hold the milestone writes the read's deliveries hold
-    (milestonePartHeld). */
+    (milestoneNeeds). */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
@@ -3333,9 +3333,12 @@ function overviewStep(step: () => void) {
    and its answer's milestones are the read's anchor in milestoneRows. Every
    live layer's `milestones` part paints every copy of a milestone it
    changes there, and a delivery of each read that holds a copy holds the
-   write (milestonePartHeld), so a person's rename shows in every read at
-   once and stays until the reads show it. The answers repaint with the
-   views and never join the workspace's context (P.contextVersion). */
+   write, so a person's rename shows in every read at once and stays until
+   the reads show it. Once the server accepted it, a part paints only the
+   reads that have not delivered it yet (milestoneNeeds), so a read that
+   holds it shows its own deliveries while a hidden page's stopped read
+   keeps it. The answers repaint with the views and never join the
+   workspace's context (P.contextVersion). */
 
 /** The most projects one milestone read names, the store's copy of
     convex/lib/limits.ts MILESTONE_READ_PROJECTS, which tests lower. A read
@@ -3354,7 +3357,7 @@ const MILESTONE_REFUSALS = new Set(['milestone_read_too_large', 'access_unchecke
 const milestonesTooMany = new Set<ViewSlot>()
 
 /** What a milestone paint changes, for whether a read's delivery holds it
-    (milestonePartHeld): the milestones it edits or hides, the top-level
+    (milestoneNeeds): the milestones it edits or hides, the top-level
     projects whose milestones it hides, and the rows it puts in place, a
     create's or an edit's row as the write leaves it. */
 type MilestoneMarks = {
@@ -3365,7 +3368,7 @@ type MilestoneMarks = {
 const milestonePaintMarks = new WeakMap<Paint, MilestoneMarks>()
 
 /** A layer's `milestones` part, `paint`, which changes what `marks` names
-    (milestonePartHeld). */
+    (milestoneNeeds). */
 function milestonePaint(marks: MilestoneMarks, paint: Paint): Paint {
   milestonePaintMarks.set(paint, marks)
   return paint
@@ -3402,36 +3405,110 @@ function followsLive(slot: ViewSlot, marks: MilestoneMarks): boolean {
   )
 }
 
-/** Whether the milestone reads hold saved milestone part `paint` of a
-    write sent when their deliveries counted `seen`: each read whose answer
-    holds what the write changes (milestoneMarked) is live, and its newest
-    result is a delivery on the socket's current connection since the
-    send (readHolds), as viewPartHeld decides for the views' rows. A read
-    stopped with such an answer kept, as a hidden page's, holds nothing
-    until it reads again, except where its copies follow a live read's
-    deliveries (followsLive), so the live read decides. A part no read
-    holds anything of, as a create no read covers or a read released,
-    paints nothing, so nothing is left to hold: Convex delivers what a
-    write changed before the write resolves (lib/convexOrdering.test.ts). */
-function milestonePartHeld(paint: Paint, seen: number): boolean {
-  const marks = milestonePaintMarks.get(paint)
-  for (const [slot, read] of viewReads) {
-    if (!read.query.milestones || !milestoneRows.holds(slot)) continue
-    if (marks && !milestoneMarked(slot, marks)) continue
-    if (read.live === null && marks && followsLive(slot, marks)) continue
-    if (!readHolds(read, seen)) return false
-  }
-  return true
+/* The milestone reads each saved milestone part still paints, by part:
+   from the server's acceptance on, only the reads whose answers held what
+   its write changed and have not delivered it since (milestoneNeeds). A
+   read leaves its part's reads once it delivers the write, or its answer
+   goes, and none ever joins them, so a read whose answer came after the
+   write shows that answer as the server sent it. */
+const milestoneScopes = new WeakMap<Paint, Set<ViewSlot>>()
+
+/** A saved milestone part as milestoneNeeds weighs a later one against
+    it: what it changes, and the reads it still paints. */
+type SavedMilestones = { marks: MilestoneMarks | undefined; scope: ReadonlySet<ViewSlot> }
+
+/** Whether two milestone paints change one milestone, or one changes a
+    milestone of a project whose milestones the other takes out. */
+function sameMilestones(a: MilestoneMarks, b: MilestoneMarks): boolean {
+  const ids = (m: MilestoneMarks) => [...(m.ids ?? []), ...(m.rows ?? []).map((row) => row.id)]
+  const theirs = new Set(ids(b))
+  if (ids(a).some((id) => theirs.has(id))) return true
+  const hides = (m: MilestoneMarks, other: MilestoneMarks) =>
+    !!m.projects?.length &&
+    (other.projects?.some((id) => m.projects?.includes(id)) ||
+      other.rows?.some((row) => m.projects?.includes(row.project_id)))
+  return !!(hides(a, b) || hides(b, a))
 }
 
-/** Drops every saved milestone part the milestone reads hold now
-    (milestonePartHeld). */
-const dropHeldMilestoneParts = () =>
-  layers.dropSavedIf(
-    'milestones',
-    (layer) =>
-      !!layer.view.milestones && milestonePartHeld(layer.view.milestones, layer.seen.milestones),
-  )
+/** The saved milestone parts, in the order they paint, with the reads each
+    one still paints. */
+const savedMilestoneParts = (): SavedMilestones[] =>
+  layers.ordered().flatMap((layer) => {
+    const part = layer.view.milestones
+    const scope = part && milestoneScopes.get(part)
+    return layer.state === 'saved' && part && scope
+      ? [{ marks: milestonePaintMarks.get(part), scope }]
+      : []
+  })
+
+/** The milestone reads that still need saved milestone part `paint` of a
+    write sent when their deliveries counted `seen`, of those `scope` names
+    when the part has one: each read whose answer holds what the write
+    changes (milestoneMarked) and whose newest result is not yet a live
+    delivery on the socket's current connection since the send
+    (readHolds), as viewPartHeld decides for the views' rows. A read
+    stopped with such an answer kept, as a hidden page's, needs it until it
+    reads again, except where its copies follow a live read's deliveries
+    (followsLive): it then needs it only while one of the live reads does.
+    A read that holds nothing of the write, as one whose answer came later
+    or one released, needs none: Convex delivers what a write changed
+    before the write resolves (lib/convexOrdering.test.ts). Every read that
+    a part saved before it (`earlier`) on the same milestones still paints
+    needs it too, so the later change shows over the earlier one there, as
+    a move out of a hidden range after a move into it. */
+function milestoneNeeds(
+  paint: Paint,
+  seen: number,
+  earlier: readonly SavedMilestones[],
+  scope?: ReadonlySet<ViewSlot>,
+): Set<ViewSlot> {
+  const marks = milestonePaintMarks.get(paint)
+  const needs = new Set<ViewSlot>()
+  const following: ViewSlot[] = []
+  for (const [slot, read] of viewReads) {
+    if (scope && !scope.has(slot)) continue
+    if (!read.query.milestones || !milestoneRows.holds(slot)) continue
+    if (marks && !milestoneMarked(slot, marks)) continue
+    if (read.live === null && marks && followsLive(slot, marks)) following.push(slot)
+    else if (!readHolds(read, seen)) needs.add(slot)
+  }
+  if ([...needs].some(viewLive)) for (const slot of following) needs.add(slot)
+  for (const part of earlier)
+    if (!marks || !part.marks || sameMilestones(marks, part.marks))
+      for (const slot of part.scope)
+        if (milestoneRows.holds(slot) && (!scope || scope.has(slot))) needs.add(slot)
+  return needs
+}
+
+/** Saved milestone part `paint`, run on the reads `scope` names alone
+    (store/milestoneRows.ts within), which dropHeldMilestoneParts
+    narrows. */
+function scopedMilestonePaint(paint: Paint, scope: Set<ViewSlot>): Paint {
+  const scoped = () => milestoneRows.within(scope, paint)
+  const marks = milestonePaintMarks.get(paint)
+  if (marks) milestonePaintMarks.set(scoped, marks)
+  milestoneScopes.set(scoped, scope)
+  return scoped
+}
+
+/** Drops every saved milestone part that no milestone read needs any more
+    (milestoneNeeds), and takes the reads that no longer need one out of
+    the reads it paints, so they show their own answers from the next
+    repaint on. Answers whether it dropped any. */
+function dropHeldMilestoneParts(): boolean {
+  const held = new Set<Layer>()
+  const earlier: SavedMilestones[] = []
+  for (const layer of layers.ordered()) {
+    const part = layer.view.milestones
+    if (layer.state !== 'saved' || !part) continue
+    const scope = milestoneScopes.get(part)
+    const needs = milestoneNeeds(part, layer.seen.milestones, earlier, scope)
+    if (scope) for (const slot of scope) if (!needs.has(slot)) scope.delete(slot)
+    if (needs.size === 0) held.add(layer)
+    else earlier.push({ marks: milestonePaintMarks.get(part), scope: needs })
+  }
+  return held.size > 0 && layers.dropSavedIf('milestones', (layer) => held.has(layer))
+}
 
 /** Forgets milestone read `slot`'s answer, and the saved paints only it
     held. The caller repaints the views. */
@@ -4220,11 +4297,12 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
   const detail =
     view.detail && !detailPartHeld(view.detail.task, layer.seen.detail) ? view.detail : undefined
   // every milestone read whose answer holds what the write changed holds
-  // it, as the views' reads do (milestonePartHeld)
+  // it, as the views' reads do, and the part paints only the reads that
+  // have not (milestoneNeeds)
+  const needs =
+    view.milestones && milestoneNeeds(view.milestones, layer.seen.milestones, savedMilestoneParts())
   const milestones =
-    view.milestones && !milestonePartHeld(view.milestones, layer.seen.milestones)
-      ? view.milestones
-      : undefined
+    view.milestones && needs?.size ? scopedMilestonePaint(view.milestones, needs) : undefined
   layers.save(layer, { workspace, thread, view: viewPart, detail, milestones })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
@@ -4234,8 +4312,9 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
     if (unsentText.has(sent.view)) viewReadsChanged = true
   }
   if (sent.detail && !detail && sent.detail.task === watchedComments) owed.sections = true
-  // the milestone reads repaint with the views
-  if (sent.milestones && !milestones) {
+  // the milestone reads repaint with the views, the reads the part no
+  // longer paints from their own answers
+  if (sent.milestones) {
     owed.view = true
     viewReadsChanged = true
   }
@@ -4679,7 +4758,7 @@ function recordRoadmapChange(
 
 /** One paint that runs `before` and then `after`, for a Roadmap batch's
     layer, which holds the paints of all its operations. A milestone part
-    carries what both change (milestonePartHeld). */
+    carries what both change (milestoneNeeds). */
 function foldPaints(before: Paint | undefined, after: Paint | undefined): Paint {
   if (!before || !after) return (before ?? after) as Paint
   const paint = () => {

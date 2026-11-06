@@ -475,6 +475,63 @@ describe('the writes', () => {
     expect(names('sync')).toEqual(['Beta'])
   })
 
+  it("shows a live read's own answers once it holds a move that a hidden range still paints", async () => {
+    await boot()
+    // a kept, hidden page's range of the two weeks, and the window on Later,
+    // five weeks out
+    await watch('sync', range(), 3)
+    await watch('sync', null, 3)
+    await watch('open', { kind: 'get', id: 'later' })
+    const P = store.P
+    const later = server.milestones.find((m) => m.id === 'later')
+    if (!later) throw new Error('no later')
+    // the person moves it into the two weeks, which the hidden range shows
+    const first = P.updateMilestone('later', { week: P.isoToWeek('2026-09-21') })
+    writes[0].resolve(null)
+    await expect(first).resolves.toBe(true)
+    later.week = '2026-09-21'
+    await rerun()
+    expect(names('sync')).toEqual(['Alpha', 'Later', 'Beta'])
+    // and moves it again, out of them: the window shows the server's day
+    const second = P.updateMilestone('later', { week: P.isoToWeek('2026-10-05') })
+    writes[1].resolve(null)
+    await expect(second).resolves.toBe(true)
+    later.week = '2026-10-05'
+    await rerun()
+    const read = P.milestoneRead('open')
+    expect(read.state === 'ok' && read.answer.stored.get('later')?.week).toBe('2026-10-05')
+    // the hidden range shows the second move over the first
+    expect(names('sync')).toEqual(['Alpha', 'Beta'])
+    // someone else moves it: the window shows theirs too
+    later.week = '2026-10-12'
+    await rerun()
+    const theirs = P.milestoneRead('open')
+    expect(theirs.state === 'ok' && theirs.answer.stored.get('later')?.week).toBe('2026-10-12')
+    // the range, back, shows the server's answer
+    await watch('sync', range(), 3)
+    expect(names('sync')).toEqual(['Alpha', 'Beta'])
+  })
+
+  it("opens a restored project's milestone that a hidden read's archive paint still hides", async () => {
+    await boot()
+    await watch('sync', range(['plan', 'ship']), 3)
+    await watch('sync', null, 3)
+    const P = store.P
+    P.archiveProject('ship')
+    writes[0].resolve(null)
+    await turns()
+    expect(names('sync')).toEqual(['Alpha', 'Beta'])
+    const restored = P.unarchiveProject('ship')
+    writes[1].resolve(null)
+    await expect(restored).resolves.toBe(true)
+    // the window on Ship's milestone shows the server's answer
+    await watch('open', { kind: 'get', id: 'sail' })
+    expect(names('open')).toEqual(['Sail'])
+    // and the range, back, shows it again
+    await watch('sync', range(['plan', 'ship']), 3)
+    expect(names('sync')).toEqual(['Alpha', 'Sail', 'Beta'])
+  })
+
   it("hides a project's milestones in every read when it is archived or deleted", async () => {
     await boot()
     await watch('up', upcoming(['plan', 'ship']))
