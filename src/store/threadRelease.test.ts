@@ -478,6 +478,27 @@ describe('the task window keeps a bounded thread', () => {
       expect(shown()).toContain('comment-250')
       expect(held()).toBe(150)
     })
+
+    it('keeps the row a Show newer press joins under when an earlier page pressed before it lands first', async () => {
+      const { P } = store
+      openServed(300)
+      for (let i = 0; i < 3; i++) await earlier()
+      serve = null
+      void P.loadEarlierComments()
+      const earlierRead = last()
+      void P.loadNewerComments()
+      const newerRead = last()
+      expect(newerRead?.before).toBe('comment-219')
+      // the earlier page's release keeps #169, which the newer read meets
+      earlierRead?.answer.resolve({ comments: range(50, 100), earlier: true })
+      await settle()
+      expect(shown()).toContain('comment-169')
+      newerRead?.answer.resolve({ comments: range(169, 219), earlier: true })
+      await settle()
+      expect(shown()).toContain('comment-170')
+      expect(shown()).toContain('comment-218')
+      expect(P.commentsNewer).toBe('more')
+    })
   })
 
   describe('drafts and edits', () => {

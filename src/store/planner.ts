@@ -679,7 +679,8 @@ const threadPlaces = new Map<object, string | null>()
    release until the next press: the rows the window measures to keep the
    reader's place, each kind's oldest row for Show earlier and each kind's
    last row above the gap for Show newer, and the pages the press loaded,
-   of both kinds under All, where one press reads both (startPress). */
+   of both kinds under All, where one press reads both. A press made while
+   another still loads adds its own rows (startPress). */
 let pressKeep = new Set<string>()
 /* The windows that show the watched task's Subtasks, Linked tasks and
    Attachments (P.showSections): a floating window or pop-out, and on a
@@ -1218,12 +1219,14 @@ function heldThread(): { comments: HeldKind<HeldComment>; history: HeldKind<Held
 /* Starts the rows a press of Show earlier (`earlier`) or Show newer keeps
    (pressKeep): the rows the window measures to keep the reader's place,
    each kind's oldest row for Show earlier and each kind's last row above
-   the gap for Show newer. Under All one press reads both kinds one after
-   the other, so a load that starts while another is on its way belongs to
-   the same press and keeps what it started. */
+   the gap for Show newer. A load that starts while another is on its way
+   adds its rows to what that one keeps. Under All one press reads both
+   kinds one after the other, and a Show newer press made while Show
+   earlier still loads keeps the row above it, so the earlier page's
+   release cannot take the row its read joins under. */
 function startPress(direction: 'earlier' | 'newer') {
   const loading = [earlierLoad, historyLoad, newerLoad, historyNewerLoad].includes('loading')
-  if (loading) return
+  if (!loading) pressKeep = new Set()
   const ids =
     direction === 'earlier'
       ? [
@@ -1233,7 +1236,7 @@ function startPress(direction: 'earlier' | 'newer') {
             : (olderEvents[0] ?? newerEvents[0] ?? historySnap[0])?.id,
         ]
       : [olderComments.at(-1)?.id, olderEvents.at(-1)?.id]
-  pressKeep = new Set(ids.filter((id) => id !== undefined))
+  for (const id of ids) if (id !== undefined) pressKeep.add(id)
 }
 
 /* The rows on screen around each place a window reported (threadPlaces),
