@@ -13585,7 +13585,7 @@ export const PLANNER = {
       server has stored it. `onRefused` runs after the refusal toast, just
       before the refusal takes the project away. `shown` is the organization
       a dialog that read the parent from the server showed it in
-      (ProjectShown): the create then goes to that organization, with the
+      (ProjectShown). The create then goes to that organization, with the
       caller's seat there as lead when `p.lead` names none, and paints only
       where the workspace holds the parent. Without it the create goes to the
       organization of the parent the workspace holds, else the home

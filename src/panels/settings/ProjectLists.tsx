@@ -20,8 +20,9 @@
    only the organizations to choose from, the home organization and
    whether the login may create a project there (P.canCreateProject, for
    New project), the login's seats for the page memory, and a sub-project
-   created here until its open list holds it or tells that it does not. Each read stops while the tab is hidden and when the page is
-   left, and keeps no answer past it. */
+   created here until its open list holds it or tells that it does not.
+   Each read stops while the tab is hidden and when the page is left, and
+   keeps no answer past it. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'

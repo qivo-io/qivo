@@ -97,7 +97,7 @@ export function creatorNote({
 /** What follows a saved create: the toast, and whether to open the project.
  * A top-level project its creator cannot see is not opened; the toast says
  * so instead. A sub-project opens when `visible`, which App answers with
- * whether the workspace holds it once the create is answered: its creator
+ * whether the workspace holds it once the create is answered. Its creator
  * manages the parent, which before the admin access split means they see
  * it, and a sub-project under a parent the workspace does not hold stays
  * closed with the same toast. */

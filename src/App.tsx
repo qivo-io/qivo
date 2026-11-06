@@ -2059,9 +2059,9 @@ function App() {
       p,
       () => {
         answered(true)
-        // whether the workspace holds the new project now: the live
-        // transport delivers what the create made visible before it
-        // answers, and a paint under a held parent stays until then
+        // whether the workspace holds the new project now, which it does
+        // once the live transport has delivered what the create made
+        // visible, or while a paint under a held parent stays
         const held = !!id && !!P.project(id)
         if (withStarter && held) {
           P.addIssue({

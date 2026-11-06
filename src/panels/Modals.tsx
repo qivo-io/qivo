@@ -710,8 +710,8 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
 }
 
 /* New sub-project. Every opener names a parent, which the dialog checks on
-   the server while it is open (projectSettings.get, useProjectSettings):
-   the answer names the parent's organization and whether the caller may
+   the server while it is open (projectSettings.get, useProjectSettings),
+   whose answer names the parent's organization and whether the caller may
    create under it (can_create_sub_project, by management). For a parent
    that cannot take one the dialog says why and offers the Project list,
    the server's parents in that organization (projectSettings.projects with
