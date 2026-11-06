@@ -183,16 +183,16 @@ calls:
 It waits 15 seconds for each whole answer, body included. It sends a
 request again, up to 4 times, 1, 2 and 4 seconds apart, when it gets no
 answer, when its answer is cut off or has not arrived in full after those 15
-seconds, or when it answers a `5xx`. An answer that arrives whole and says
-something else fails at once. The build fails when a route still answers
-otherwise. Its log has one `[auth-probe]` line for each request with the
-route, the status and the time, which says `cut off` when the answer broke
-off after its status and `no answer` when none came. A runtime that refuses
-the import answers all three with a `5xx`, and so does a backend whose
-`SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT` or demo
-settings Better Auth refuses. The probe sends no credential and creates no
-session, OAuth client or token. Outside the demo Better Auth still reads the
-deployment's OAuth resource row on each call and creates it on a new
+seconds, or when it answers a `5xx`. An answer below `5xx` that arrives
+whole but says something else fails at once. The build fails when a route
+still answers otherwise. Its log has one `[auth-probe]` line for each
+request with the route, the status and the time, which says `cut off` when
+the answer broke off after its status and `no answer` when none came. A
+runtime that refuses the import answers all three with a `5xx`, and so does
+a backend whose `SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT` or
+demo settings Better Auth refuses. The probe sends no credential and creates
+no session, OAuth client or token. Outside the demo Better Auth still reads
+the deployment's OAuth resource row on each call and creates it on a new
 backend.
 
 The same calls by hand take the host of the deployment's Convex site URL as

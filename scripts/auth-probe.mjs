@@ -138,10 +138,10 @@ export const AUTH_PROBES = [
  * A request is sent again, up to PROBE_ATTEMPTS times, 1, 2 and 4 seconds
  * apart, when it gets no answer, when its body is cut off or does not
  * arrive in full within PROBE_TIMEOUT_MS of sending it, or when it answers
- * a 5xx. An answer that arrives whole is checked as it stands, so a body
- * that is not the JSON expected is a wrong answer and is not sent again. `site` must be an
- * https: origin, or with `local` a loopback http: one. `fetch`, `sleep` and
- * `log` are the tests' to replace.
+ * a 5xx. An answer below 500 that arrives whole is checked as it stands,
+ * so a body that is not the JSON expected is a wrong answer and is not
+ * sent again. `site` must be an https: origin, or with `local` a loopback
+ * http: one. `fetch`, `sleep` and `log` are the tests' to replace.
  */
 export async function probeAuthRoutes(
   site,
