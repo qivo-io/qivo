@@ -1119,6 +1119,24 @@ workspace's roster, teams and projects, the dialogs read
 and a sub-project's create goes to the organization its parent's check
 named. There is no schema change, no backfill and no release step.
 
+From the release after v0.1.141, `milestones.section` answers up to 100
+milestones a call (`MILESTONE_READ_ROWS`), up from 25, and the app's
+Milestones window lists a project's upcoming milestones and, once Past is
+expanded, its past ones from it, 25 at first and 25 more for each Load more,
+instead of the workspace's copy. An older app asks at most 25 and works
+against this backend. An app from this release against an older backend
+shows each section's first 25 and, at Load more, says it could not load
+more, and a section that already showed more than 25 when the backend went
+back keeps its rows and says it could not load the latest milestones, until
+the backend rolls forward. So this app needs a backend from this release on,
+which makes it the backend's rollback floor. From it on, never return the
+backend to a commit before it; roll forward instead. Returning the app alone
+to an earlier release is safe, because that app lists the workspace's
+milestones and asks at most 25. The release has no schema change, no
+backfill and no release step. Northstar's dataset becomes version 9 with
+nine past milestones, which a deployment gets only at its next seed or reset
+and the public demo in its new copies.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
