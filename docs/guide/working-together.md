@@ -265,8 +265,8 @@ does the same ([Showing a task on the Board](./the-board.md#showing-a-task-on-th
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the
 selected task, then the inbox. New updates on an open task are marked read as
-they arrive. Once you mark the task unread or snooze it, Qivo leaves it unread
-while it stays open. A **New** divider marks unread comments and stays in
+they arrive. Once you mark the task unread or unsnooze it, Qivo leaves it
+unread while it stays open. A **New** divider marks unread comments and stays in
 place while you read. It marks where the unread part starts also for updates
 the list does not load. Unread changes without comments show a note instead.
 
