@@ -217,8 +217,15 @@ export async function cleanupDemoArtifacts(browser, demo, artifacts) {
           }
         }
         if (agentKeyName) {
-          const keys = await window.PLANNER.listAgentKeys()
-          if (!keys) throw new Error('Cannot list temporary agent keys for cleanup')
+          // the organization's agents' keys, read once (tokens.agentKeys)
+          const agents = snapshot.profiles
+            .filter((p) => p.org_id === org.id && p.kind === 'agent')
+            .map((p) => p.id)
+          const answer = agents.length
+            ? await window.PLANNER.agentKeys(org.id, agents)
+            : { agents: [] }
+          if (!answer) throw new Error('Cannot list temporary agent keys for cleanup')
+          const keys = answer.agents.flatMap((agent) => agent.keys)
           for (const key of keys.filter((key) => key.name === agentKeyName)) {
             if (
               !(await window.PLANNER.revokeAgentKey(key.id)) ||

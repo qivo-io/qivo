@@ -110,6 +110,25 @@
 //                        third team not counted yet) and batch-N (batches
 //                        of N); several joined by commas. Open it with
 //                        role=admin, or as a user, who leads the first team
+//   userspage            a state Settings › Users' pages answer whatever the
+//                        people say (people:settingsPage and people:get,
+//                        src/store/peopleSettingsStandIn.setup.ts), for
+//                        screenshots of states a seeded backend cannot
+//                        reach: stopped (a page stops after ten people
+//                        looked at), not-ready (the list not ready), error
+//                        (every page fails), small (pages of five) and
+//                        last-admin (the server counts one active admin);
+//                        several joined by commas. Open it with role=admin,
+//                        and people=1000 for the design size
+//   agents (0)           Standard user agents in the organization, each with
+//                        three keys, the oldest revoked, which
+//                        tokens:agentKeys answers
+//   agentkeys            a state the agents' key reads answer: error (every
+//                        read fails) and capped (two keys an agent, with
+//                        more past them)
+//   creators             a state Organization › General's creators line
+//                        answers (orgs:projectCreators): unavailable (the
+//                        server could not count) and error (the read fails)
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -294,8 +313,15 @@
 // with its Add member picker (teams:settingsPage, get, members and
 // addable), through src/store/teamSettingsStandIn.setup.ts, which keeps the
 // server's audiences and counts by team_counts' rule; the team writes
-// those pages send are not answered here. So are the project picker's
-// navigation reads (projectNav:page, children, search and resolve), through
+// those pages send are not answered here. So are
+// Settings › Users' pages, a person's page,
+// people by id, the agents' keys, the creators line and the invitation rows
+// of the seats a page names (people:settingsPage, get and byIds,
+// tokens:agentKeys, orgs:projectCreators and invites:deliveries), through
+// src/store/peopleSettingsStandIn.setup.ts, which keeps the server's
+// audiences, order and search and reads no budget; the profile and key
+// writes those pages send are not answered here. So are the project picker's navigation reads
+// (projectNav:page, children, search and resolve), through
 // src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
 // ordinary access, reads no budget and has no favorites unless
 // projectnav=favorites asks. Archived tasks' own read (issues:archivedPage) has
@@ -339,6 +365,10 @@ import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
+import {
+  isPeopleSettingsRead,
+  peopleSettingsStandIn,
+} from '../../src/store/peopleSettingsStandIn.setup'
 import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
 import {
   isProjectListRead,
@@ -415,6 +445,30 @@ const forcedOverview = (() => {
     else if (state === 'health-cap') force.health = { ...force.health, most: 20 }
     else if (state === 'health-error') force.healthError = true
   }
+  return force
+})()
+/* Settings › Users' forced states (the `userspage`, `agentkeys` and
+   `creators` parameters), as the stand-in's `force` takes them. */
+const forcedPeople = (() => {
+  const force = {}
+  const fail = []
+  const states = (name) => (parameters.get(name) ?? '').split(',').filter(Boolean)
+  for (const state of states('userspage')) {
+    if (state === 'stopped') force.stop = 10
+    else if (state === 'not-ready') force.notReady = true
+    else if (state === 'error') fail.push('settingsPage', 'get')
+    else if (state === 'small') force.batch = 5
+    else if (state === 'last-admin') force.admins = 1
+  }
+  for (const state of states('agentkeys')) {
+    if (state === 'error') fail.push('agentKeys')
+    else if (state === 'capped') force.keysMost = 2
+  }
+  for (const state of states('creators')) {
+    if (state === 'unavailable') force.creatorsUnavailable = true
+    else if (state === 'error') fail.push('projectCreators')
+  }
+  if (fail.length) force.fail = fail
   return force
 })()
 /* Settings › Labels' forced states (the `labelpage` parameter), as the
@@ -635,6 +689,32 @@ const teamMembers = profiles.map((profile, n) => ({
   profile_id: profile.id,
   is_leader: n % 10 === 0,
 }))
+/* `agents`: Standard user agents, in no team, after the people. */
+const agentRows = Array.from({ length: Math.max(0, option('agents', 0)) }, (_, n) => ({
+  id: id('c', n),
+  org_id: org,
+  name: `Agent ${n + 1}`,
+  initials: 'AG',
+  color: '#475569',
+  org_role: 'user',
+  active: true,
+  kind: 'agent',
+  created_at: now,
+}))
+profiles.push(...agentRows)
+/* Each agent's keys as tokens:agentKeys lists them: three, the oldest
+   revoked, which the server holds outside the workspace. */
+const agentKeys = agentRows.flatMap((agent, n) =>
+  [1, 2, 3].map((k) => ({
+    id: id('d', n * 3 + k),
+    agentId: agent.id,
+    name: k === 1 ? 'Old key' : `Key ${k}`,
+    prefix: `qva_${String(n % 1000).padStart(3, '0')}...a${String(k).padStart(4, '0')}`,
+    createdAt: `2026-0${k}-01T08:00:00.000Z`,
+    lastUsedAt: null,
+    revokedAt: k === 1 ? '2026-04-01T08:00:00.000Z' : null,
+  })),
+)
 /** The key of project number `num`: unique, as no two projects share a
     number, and at most five characters, as the schema asks. */
 const projectKey = (num) => `P${num.toString(36).toUpperCase()}`
@@ -1430,6 +1510,11 @@ const read = (name, args = {}) => {
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
   if (name.startsWith('projectSettings:')) return readSettings(name, args)
   if (isTeamSettingsRead(name)) return readTeams(name, args)
+  // Settings › Users and the creators line (src/store/peopleSettingsStandIn.setup.ts)
+  if (isPeopleSettingsRead(name))
+    return peopleSettingsStandIn(snapshot, name, { org_id: org, ...args }, forcedPeople, {
+      keys: agentKeys,
+    })
   // the milestone reads (src/store/milestoneStandIn.setup.ts), which answer
   // nothing where a forced state holds them back
   if (name.startsWith('milestones:')) {
