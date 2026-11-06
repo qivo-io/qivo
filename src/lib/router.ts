@@ -681,9 +681,11 @@ export function syncPlaceOf(
 function syncPath(sync: { scope: string; step: string }, openIssue?: string | null): string {
   let org: string | null | undefined = P.homeOrg
   // no scope is the bare page; a project the app cannot resolve keeps the
-  // address it was typed as
+  // segment it was typed as, encoded as parsePath decodes it, so a '/', '?'
+  // or '#' in it stays inside the segment
   let rest = sync.scope === 'all' ? '/sync/all' : '/sync'
-  if (sync.scope.indexOf('unresolved:') === 0) rest = `/sync/p/${sync.scope.slice(11)}`
+  if (sync.scope.indexOf('unresolved:') === 0)
+    rest = `/sync/p/${encodeURIComponent(sync.scope.slice(11))}`
   else if (sync.scope.indexOf('project:') === 0) {
     const id = sync.scope.slice(8)
     const p = P.project(id)

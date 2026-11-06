@@ -1242,6 +1242,9 @@ describe('Team sync addresses', () => {
       { sync: { scope: `team:${TEAM}`, step: PERSON }, openIssue: 'QN-9' },
       { sync: { scope: 'all', step: 'team' }, openIssue: 'uuid-acme-5' },
       { sync: { scope: 'unresolved:99', step: 'team' } },
+      // a typed segment holding what an address reads as its own parts
+      { sync: { scope: 'unresolved:a/b', step: 'team' } },
+      { sync: { scope: 'unresolved:a?b#c', step: PERSON } },
     ] as UiState[]) {
       const r = parsePath(buildPath(s))!
       expect(r.sync?.scope).toBe(s.sync!.scope)
