@@ -3322,7 +3322,9 @@ function MilestoneSectionPart({
     () => root.current?.querySelector<HTMLElement>('[data-milestone-note] button') ?? root.current,
   )
   // where the section moved on, the first row left on screen keeps its
-  // place in the scroller, from where it stood before the commit
+  // place in the scroller, from where it stood before the commit. An open
+  // editor is passed over for the next row, which moves by as much, since
+  // an editor may stay at its last place or above the sections
   const first = view.rows[0]?.id
   const places = useRefM(new Map<string, number>())
   const lastFirst = useRefM(first)
@@ -3349,8 +3351,11 @@ function MilestoneSectionPart({
     }
     const now = measure()
     if (first !== lastFirst.current && first !== undefined && view.dropped) {
-      const was = places.current.get(first)
-      const is = now.get(first)
+      // the first of the answer's milestones that showed here as a row
+      // before and does now
+      const anchor = view.rows.find((m) => places.current.has(m.id) && now.has(m.id))?.id
+      const was = anchor === undefined ? undefined : places.current.get(anchor)
+      const is = anchor === undefined ? undefined : now.get(anchor)
       if (was !== undefined && is !== undefined && was !== is)
         pane.scrollTop = (scrolled.current ?? pane.scrollTop) + is - was
     }

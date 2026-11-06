@@ -922,6 +922,48 @@ describe("a kept editor's own read", { timeout: 30_000 }, () => {
   })
 })
 
+describe('the reading position', { timeout: 30_000 }, () => {
+  it('keeps the first milestone left in its place when Upcoming moves on, also while it is edited', async () => {
+    // jsdom has no scroll anchoring, as Safari has none, so the section
+    // keeps its place by hand
+    fixture({ up: 6 })
+    await start({ batch: 2, rows: 4 })
+    await open({ project: 'plan' })
+    const pane = q('[data-modal-scroll]')
+    if (!pane) throw new Error('no scroller')
+    let scrollTop = 0
+    Object.defineProperty(pane, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v
+      },
+    })
+    // each row or editor of Upcoming stands 50px below the one before
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: Element,
+    ) {
+      const items = [
+        ...(sectionOf('upcoming')?.querySelectorAll('[data-milestone-rows] > *') ?? []),
+      ]
+      const i = items.indexOf(this)
+      return new DOMRect(0, i < 0 ? 0 : 100 + i * 50 - pane.scrollTop, 100, 40)
+    })
+    await press(q('[data-milestone-more]'))
+    expect(shown('upcoming')).toEqual(['u1', 'u2', 'u3', 'u4'])
+    // u3, the first row once Upcoming moves on, is open in its editor
+    await press(q('[data-milestone-row="u3"] button[aria-label^="Edit"]'))
+    scrollTop = 200
+    await act(async () => pane.dispatchEvent(new Event('scroll')))
+    await press(q('[data-milestone-more]'))
+    expect(shown('upcoming')).toEqual(['u3', 'u4', 'u5', 'u6'])
+    expect(q('[data-milestone-editor="u3"]')).not.toBeNull()
+    // the editor and the rows after it moved up by the two rows that left,
+    // and the pane follows
+    expect(pane.scrollTop).toBe(200 - 100)
+  })
+})
+
 describe('opened on a milestone', { timeout: 30_000 }, () => {
   it('says it is loading until the milestone and Upcoming answered, then shows the editor in its place', async () => {
     fixture({ up: 3 })
