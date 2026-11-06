@@ -91,7 +91,11 @@ main. The deployment script verifies both `ci.yml` and `secrets.yml` succeeded
 for the exact main commit and refuses an older commit. It deploys that commit,
 checks the public manifest, the website pages and their assets, and then
 records a successful staging deployment ("receipt") naming the commit. A run
-that fails records nothing.
+that fails records nothing. The Vercel build itself calls the backend's
+sign-in routes after Convex pushes the functions and fails when one does not
+answer as expected, so staging then records no receipt and **Prepare
+release** refuses the commit (see
+[The auth routes check](#the-auth-routes-check)).
 
 The staging Vercel project protects all deployments, including its custom
 domain, so the website pages on `preview.qivo.io` need a Vercel sign-in too.
@@ -153,10 +157,86 @@ deployment itself, so the Vercel toolbar, whose script comes from
 have no such policy and keep the toolbar. Do not add `vercel.live` to the
 policy, because the same headers serve production.
 
+### The auth routes check
+
+The HTTP router loads Better Auth only in the sign-in, OAuth token,
+registration and revocation, and authorization server metadata handlers,
+which import `convex/auth.ts` inside the handler. Convex's open-source
+runtime allows that, but nothing public says every hosted runtime does, and
+a push analyzes the modules without running a handler. So every Vercel build
+of the app and of the demo (branch previews, staging, production and the
+public demo) checks the routes after the push.
+`scripts/app-deploy.mjs` and `scripts/demo-deploy.mjs` run `convex deploy`,
+whose build command records the deployment's Convex site URL in a private
+temporary file outside the checkout, and then `scripts/auth-probe.mjs`
+calls:
+
+- `GET /api/auth/get-session` without a cookie, which must answer `200`
+  with `null` and set no cookie;
+- outside the demo, `POST /api/auth/oauth2/token` with a JSON body, which
+  must answer `400` with `invalid_request` and public CORS;
+- outside the demo, `GET /.well-known/oauth-authorization-server`, which
+  must list `none` as the token endpoint's only method.
+
+It waits 15 seconds for each answer and sends a request that got no answer
+or a `5xx` again, up to 4 times, 1, 2 and 4 seconds apart. The build fails
+when a route still answers otherwise, and its log has one `[auth-probe]` line
+for each request with the route, the status and the time. A runtime that
+refuses the import answers all three with a `5xx`, and so does a backend
+whose `SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT` or demo
+settings Better Auth refuses. The probe sends no credential and creates no
+session, OAuth client or token. Outside the demo Better Auth still reads the
+deployment's OAuth resource row on each call and creates it on a new
+backend. The same calls by hand, with the deployment's Convex site origin
+as `SITE` (the app's Account › MCP address shows it), are:
+
+```sh
+curl -sS -w '\n%{http_code}\n' https://SITE/api/auth/get-session
+curl -sS -w '\n%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' https://SITE/api/auth/oauth2/token
+curl -sS -o /dev/null -w '%{http_code}\n' https://SITE/.well-known/oauth-authorization-server
+```
+
+They print `null` and `200`, an `invalid_request` error and `400` (`403` on
+the demo), and `200` (`404` on the demo).
+
+Convex pushes the functions before the check runs, so a failed check leaves
+that backend on the new functions while its Vercel domain keeps the earlier
+app, which a build that fails before the push never leaves. Act on it at
+once, because a later release that sets a backend floor would make that
+mismatch worse:
+
+1. Read the `[auth-probe]` lines of the failed build. A `5xx` on every
+   route it called means sign-in on that backend fails for everyone, from a
+   refused import or a deployment setting, which the backend's function logs
+   name. No answer, or one `5xx` while the other routes answered as
+   expected, can be a brief fault of the network or of Convex while sign-in
+   works.
+2. Call the routes by hand as above. When they answer as expected, run the
+   build again: **Deploy staging** from main for staging, and for production
+   and the demo the newest release's **Production release** run again, which
+   is allowed (see [Production release](#production-release)). A passing
+   build moves the domain and records success.
+3. When they still fail, fix a wrong setting, or follow
+   [Rollback and hotfixes](#rollback-and-hotfixes): fix forward, or publish
+   a new, higher version of the last commit whose build passed. A branch
+   preview's failure stops the branch before main, so report it instead of
+   merging.
+
 ### End-to-end API check
 
 `scripts/staging-check.mjs` checks the REST API, MCP and OAuth consent on
-staging with a real browser and real credentials. It signs in as the
+staging with a real browser and real credentials. Its first step,
+`auth/routes`, calls the sign-in, OAuth token and metadata routes as every
+build does ([The auth routes check](#the-auth-routes-check)), and then the
+CORS the app's sign-in relies on: a preflight of
+`/api/auth/sign-in/email` from the app's origin, asking for `POST` with
+`content-type` and `better-auth-cookie`, must answer `204`, echo the origin,
+allow credentials and both headers, and `GET /api/auth/get-session` from it
+must echo the origin and expose `Set-Better-Auth-Cookie`. The step sends no
+credential and creates nothing, so it runs before the check proves the API
+origin, and its failure names the origin it called, which until then may
+lack the region label the app shows. A failure is reported as
+`FAIL auth/routes` and the run goes on to the sign-in. It signs in as the
 Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the
 consent screen, one with **Allow changes** and one without. With each it
@@ -564,7 +644,10 @@ The workflow inspects the application and demo projects before writing
 anything. Repository bindings, custom domains and their existing environment
 identities must match. It then deploys the application and the demo, and
 verifies the manifest, the website's origin, public routes and their assets
-before recording success. These GET checks do not replace authenticated
+before recording success. Each Vercel build calls its backend's sign-in
+routes after Convex pushes the functions and fails when one does not answer
+as expected, which fails the release after that backend already runs the
+new functions (see [The auth routes check](#the-auth-routes-check)). These GET checks do not replace authenticated
 end-to-end review in staging. The public demo is not staged. It deploys from
 the same commit and does not include the website.
 
@@ -1377,6 +1460,27 @@ more than two organizations, as several `deletedItems.restore` calls one
 after another, and sends a deferred item again once its project is back,
 each with the arguments earlier apps sent. The release changes no server
 function, so it has no server change and no release step.
+
+From the release after v0.1.146, the backend's HTTP router no longer loads
+Better Auth when a request starts. It registers the `/api/auth/` routes with
+the same paths, methods, CORS headers and trusted origins, and imports
+`convex/auth.ts` only in the sign-in, OAuth token, registration and
+revocation, and authorization server metadata handlers, so REST, MCP, the
+file and image links, uploads, billing webhooks and demo reporting no longer
+pay for it. A wrong `SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT`
+or demo setting now fails the routes that read it, the sign-in routes and
+the CORS answers of the file and image links among them, rather than every
+HTTP action. Every app and demo build now calls the sign-in route, and
+outside the demo the OAuth token and metadata routes, after Convex pushes
+the functions, and fails the build if one does not answer as expected. No
+route's answer changes, so the release sets no rollback floor and needs no
+step, and returning the backend to a commit before it, within the floors
+above, only brings the load back. The Settings › Users release above stays
+the backend's newest floor. A failed check on staging or production comes
+after the push, so that backend may run the new functions while its domain
+keeps the earlier app; [The auth routes check](#the-auth-routes-check) says
+what a failure means and what to do. There is no schema change and no
+backfill.
 
 ## Node.js version
 

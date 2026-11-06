@@ -355,6 +355,24 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   `convex/tests/authRoutes.test.ts` fails when a listed route is no longer
   one Better Auth serves. List a new route only once Qivo calls it, and name
   the caller beside it.
+- The HTTP router (`convex/http.ts`) loads no Better Auth when a request
+  starts. It registers the `/api/auth/` routes and their CORS itself
+  (`registerAuthRoutes` in `convex/lib/authRoutes.ts`), and the sign-in,
+  OAuth token, registration and revocation, and metadata handlers import
+  `convex/auth.ts` inside the handler, after the refusals that need no
+  Better Auth. `convex/tests/authTriggers.test.ts` walks the router's static
+  imports and fails when one reaches Better Auth, `convex/auth.ts`,
+  `convex/lib/oauthProvider.ts` or this copy. `convex/tests/authHttp.test.ts`
+  pins the status, every header and the body of the sign-in, OAuth and
+  metadata answers, the router's table of those routes and a sweep of every
+  route `convex/lib/authRoutes.ts` lists, for a regular deployment and the
+  demo, so a release that changes an answer or a CORS header fails it.
+  `convex/tests/authLoadRefused.test.ts` shows that a refused import fails
+  those handlers with an error, never a cookie, while every refusal before
+  the import still answers. Every app and demo build calls the sign-in
+  route, and outside the demo the token and metadata routes, after Convex
+  pushes the functions, and fails when one does not answer as expected
+  (`scripts/auth-probe.mjs`; see [deployment](deployment.md)).
 - A validation error stays short (`convex/tests/authValidation.test.ts`).
   `convex/lib/authValidation.ts` relies on Better Call listing each problem
   as `[body.path] message` and joining them with `; `, on the router checking
@@ -412,7 +430,10 @@ diff -ru dev-temp/upstream/src vendor/convex-better-auth/src
 
 Formatting the upstream tree with this repository's Biome settings first
 leaves only real differences, such as the parts Qivo left out, its types and
-its changes. Going back to the published package makes sense once a release
+its changes. `registerRoutes` shows as left out: Qivo registers the routes
+in `convex/lib/authRoutes.ts` (`registerAuthRoutes`) so that the HTTP
+router loads no Better Auth, so compare a later release's `registerRoutes`
+paths, methods, CORS options and forwarded headers with that function. Going back to the published package makes sense once a release
 supports the latest Better Auth, covers every change the copy's README lists
 (or Qivo no longer needs one), and its maintainers keep it current. Then
 install it, switch the imports back, delete the copy and run the checks
