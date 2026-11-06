@@ -75,8 +75,8 @@
  * calls, for checking Billing's API calls by account and its two name
  * lists past their first batch of 25 (planApiAccounts). As Nora it makes
  * each agent through profiles:create (kind agent, role user, a palette
- * color), named as an agent is ("Build relay 03", "Telemetry bot 04" and
- * so on), the first with an accent ("Zoë relay 01") and the second with a
+ * color), named as an agent is ("Backup checker 03", "Support triage bot 04"
+ * and so on), the first with an accent ("Zoë relay 01") and the second with a
  * word no other name holds ("Quillon importer 02"), for the lists'
  * searches. It gives each one agent key through tokens:createAgentKey and
  * makes 1 to 7 GET /v1/me calls with it on the local backend's site
