@@ -24,6 +24,9 @@ import {
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
   creatorsLine,
+  DELETED_ITEMS_EXPECTED,
+  DELETED_ITEMS_MARKS,
+  DELETED_ITEMS_STEP,
   deleteOutcome,
   evaluate,
   FIXTURE_STATUS,
@@ -399,6 +402,42 @@ describe('staging check REST contract', () => {
         }
       expect(selectedCreatorsStarts([])).toEqual([])
     })
+  })
+  it("checks Deleted items on the page's own marks, after Settings › Projects, restoring 26 tasks in two calls", () => {
+    const page = readFileSync(
+      new URL('../src/panels/settings/DeletedItems.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(DELETED_ITEMS_STEP).toBe('ui/deleted-items')
+    // the page's end line names its marks after the page's hook
+    // (src/components/pageFold.tsx)
+    for (const mark of Object.values(DELETED_ITEMS_MARKS))
+      if (mark === DELETED_ITEMS_MARKS.next) expect(page).toContain('hook="deleted-page"')
+      else expect(page).toContain(mark)
+    expect(DELETED_ITEMS_MARKS.next).toBe('data-deleted-page-next')
+    // the window's paragraph is the shared runner's keep-open sentence
+    const runner = readFileSync(new URL('../src/lib/batchRunner.ts', import.meta.url), 'utf8')
+    expect(DELETED_ITEMS_EXPECTED.keepOpen).toBe(
+      `Restoring them runs in steps. ${/KEEP_OPEN =\s*'([^']+)'/.exec(runner)?.[1]}`,
+    )
+    // 26 tasks are one more than a call takes, so the restore takes two
+    expect(DELETED_ITEMS_EXPECTED.tasks).toBe(LIMITS.restoreBatch.max + 1)
+    expect(DELETED_ITEMS_EXPECTED.selected).toBe('26 selected, 25 on other pages')
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await deletedItemsCheck()')).toBeGreaterThan(
+      check.indexOf('await settingsProjectsCheck()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function deletedItemsCheck()'),
+      check.indexOf('/** The Settings page Archived tasks opens'),
+    )
+    // the tasks go in the cleanup, and the sub-project is deleted for good
+    // only after the restore, so the restore never takes it along
+    expect(step).toContain('run.created.push(...made)')
+    expect(step.indexOf('DELETED_ITEMS_EXPECTED.toast')).toBeLessThan(
+      step.indexOf('await deleteProjectInApp(w, sub)'),
+    )
+    expect(step).toContain("getByRole('radio', { name: 'Tasks', exact: true })")
   })
   it("opens task links in the window's own words, with the unknown number past every organization's", () => {
     const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
