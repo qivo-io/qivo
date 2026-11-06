@@ -414,7 +414,8 @@ export function createInlineImages(
       entry.controller = null
       retryLater(entry)
     } finally {
-      if (slotHeld) freeSlot()
+      // a clear let every slot go already
+      if (slotHeld && version === generation) freeSlot()
     }
   }
   /* What a near entry needs next: nothing while it loads or shows within
@@ -656,6 +657,7 @@ export function createInlineImages(
         (retain). */
     clear() {
       generation++
+      slotQueue.length = 0
       for (const entry of entries.values()) {
         stop(entry)
         forgetBytes(entry)
@@ -666,7 +668,6 @@ export function createInlineImages(
         publish(entry)
         tidy(entry)
       }
-      slotQueue.length = 0
       downloading = 0
       mostDownloading = 0
       unpinned.clear()

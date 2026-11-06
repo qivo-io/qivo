@@ -439,4 +439,19 @@ describe('the inline image loader', () => {
     expect(h.loader.stats()).toMatchObject({ cachedBytes: 0, downloading: 0 })
     expect(a.shown().state).toBe('waiting')
   })
+
+  it('keeps its four slots after a clear that downloads on their way outlive', async () => {
+    const h = harness({ hold: true })
+    for (const id of ['a', 'b', 'c', 'd']) h.view(id).near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledTimes(4)
+    h.loader.clear()
+    // the old downloads end after the clear, which let their slots go
+    for (const d of h.downloads) d.answer.resolve(image(KIB))
+    await settle()
+    for (const id of ['e', 'f', 'g', 'h', 'i', 'j']) h.view(id).near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledTimes(8)
+    expect(h.loader.stats().downloading).toBe(4)
+  })
 })
