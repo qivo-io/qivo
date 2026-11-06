@@ -1550,8 +1550,9 @@ paid period exists yet, so nobody sees it. This release's app reads nothing
 new and works against any backend from the floor above.
 
 The release adds two tables and no field to an existing table, so Convex
-deploys a commit before it and keeps the new tables' rows, as it leaves
-any table the schema does not list. That earlier code samples a new paid
+deploys a commit before it, keeps the new tables' rows and drops their
+indexes, which the deploy forward builds again; a disposable local backend
+showed both on 2026-11-06. That earlier code samples a new paid
 period by the scan again, which leaves out files in Deleted items, records
 no daily sample and leaves the samples of an organization it deletes
 behind. This release is therefore the backend's newest floor. From it on,
@@ -1575,6 +1576,8 @@ one) and the expiry steps (`counts.expiry_steps`, at least one). The reads
 and writes are `documents_read`, `documents_written`, `bytes_read`,
 `bytes_written` and `database_queries`, which Convex measured of the steps
 and expiry steps, plus one indexed read of at most one row for each tick.
+`database_queries` is Convex's own count, not the index ranges the code
+opens; a local backend counted 7 before a transaction's first read.
 Each sample written (`written`) is one row of about 230 bytes, and the rows
 retained are the samples written in the last 400 days less those expired
 (`expired`). Divide by `orgs` for a figure per organization and day.
