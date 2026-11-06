@@ -201,23 +201,37 @@ describe("the pickers' arguments", () => {
   })
 
   it('answers every match up to `through`, and refuses a `through` not after `after`', async () => {
-    const c = await crowded()
-    const first = ready(await owners(c.t, c.f.user, c.issue.id, 'assignee'))
-    expect(first.rows).toHaveLength(LIST_BATCH)
-    const next = first.next as string
-    const kept = ready(await owners(c.t, c.f.user, c.issue.id, 'assignee', { through: next }))
-    expect(kept.rows).toEqual(first.rows)
-    expect(kept.stopped).toBe(false)
-    await expectRefusal(
-      owners(c.t, c.f.user, c.issue.id, 'assignee', { after: next, through: next }),
-      'bad_request',
-      /through must be a cursor after the one in after/,
-    )
-    const recipientsFirst = ready(await recipients(c.t, c.f.user, c.issue.id))
-    const end = recipientsFirst.next as string
-    expect(ready(await recipients(c.t, c.f.user, c.issue.id, { through: end })).rows).toEqual(
-      recipientsFirst.rows,
-    )
+    const b = await base()
+    // 57 people who edit Firmware make 60 owners with the admin, the lead
+    // and the guest, and 60 recipients with the admin, the guest and the
+    // organization viewer, since the lead is the caller, so each list runs
+    // past two batches
+    for (let i = 0; i < 57; i++)
+      await b.grant(b.f.sub, await b.person(`Member ${String(i).padStart(2, '0')}`))
+    await b.keyed()
+    for (const read of [
+      (a: ListArgs) => owners(b.t, b.f.user, b.issue.id, 'assignee', a),
+      (a: ListArgs) => recipients(b.t, b.f.user, b.issue.id, a),
+    ]) {
+      const all = await listAll((after) => read({ after }))
+      expect(all.batches.map((x) => x.rows.length)).toEqual([25, 25, 10])
+      const [one, two] = all.batches
+      const second = two.next as string
+      // from the start up to the second batch's end, more rows than one
+      // batch holds, so only a reader that passes `through` on answers them
+      const kept = ready(await read({ through: second }))
+      expect(kept.rows).toEqual([...one.rows, ...two.rows])
+      expect(kept.stopped).toBe(false)
+      expect(kept.next).toBe(second)
+      // between the two cursors, the second batch alone
+      const between = ready(await read({ after: one.next as string, through: second }))
+      expect(between.rows).toEqual(two.rows)
+      await expectRefusal(
+        read({ after: second, through: second }),
+        'bad_request',
+        /through must be a cursor after the one in after/,
+      )
+    }
   })
 
   it('opens a cursor only for its list, organization, task, field and search', async () => {
