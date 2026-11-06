@@ -141,6 +141,45 @@ const signInAs = (id: string) => (snap: Snapshot) => {
   for (const p of snap.profiles) p.auth_user_id = p.id === id ? 'test-account' : `account-${p.id}`
 }
 
+/** Gives me a guest seat in a second organization, Acme, where a User
+    grant shows me Acme rollout, live, Acme pilot, archived, and `extra`
+    more live projects, Acme 0, Acme 1 and on. */
+function acmeSeat(snap: Snapshot, extra = 0) {
+  const acme = { ...snap.orgs[0], id: 'acme', name: 'Acme', slug: 'acme' }
+  snap.orgs.push(acme)
+  snap.profiles.push({ ...snap.profiles[0], id: 'me-acme', org_id: 'acme', org_role: 'guest' })
+  snap.myProfileIds.push('me-acme')
+  const top = {
+    ...snap.projects[0],
+    org_id: 'acme',
+    lead_id: undefined,
+    parent_id: undefined,
+    type: 'meta' as const,
+    archived_at: undefined,
+  }
+  const mine = [
+    { ...top, id: 'acme-p', num: 1, name: 'Acme rollout' },
+    { ...top, id: 'acme-old', num: 2, name: 'Acme pilot', archived_at: T1 },
+    ...Array.from({ length: extra }, (_, i) => ({
+      ...top,
+      id: `acme-${i}`,
+      num: 10 + i,
+      name: `Acme ${i}`,
+    })),
+  ]
+  snap.projects.push(...mine)
+  for (const p of mine) snap.access.push({ project_id: p.id, profile_id: 'me-acme', level: 'user' })
+}
+
+/** Takes my Acme seat away, as the workspace answers once it is removed. */
+function noAcmeSeat(snap: Snapshot) {
+  snap.orgs = snap.orgs.filter((o) => o.id !== 'acme')
+  snap.profiles = snap.profiles.filter((p) => p.id !== 'me-acme')
+  snap.myProfileIds = snap.myProfileIds.filter((id) => id !== 'me-acme')
+  snap.projects = snap.projects.filter((p) => p.org_id !== 'acme')
+  snap.access = snap.access.filter((a) => a.profile_id !== 'me-acme')
+}
+
 /** Loads the store from the fixture, which `shape` changes first; `held`
     changes the store's own copy after that, so it differs from the
     server's. */
@@ -572,24 +611,7 @@ describe('Settings › Projects', () => {
   })
 
   it('reads one organization at a time, the home one first, with New project only there', async () => {
-    await load((snap) => {
-      const acme = { ...snap.orgs[0], id: 'acme', name: 'Acme', slug: 'acme' }
-      snap.orgs.push(acme)
-      snap.profiles.push({ ...snap.profiles[0], id: 'me-acme', org_id: 'acme', org_role: 'guest' })
-      snap.myProfileIds.push('me-acme')
-      snap.projects.push({
-        ...snap.projects[0],
-        id: 'acme-p',
-        org_id: 'acme',
-        num: 1,
-        name: 'Acme rollout',
-        lead_id: undefined,
-        parent_id: undefined,
-        type: 'meta',
-        archived_at: undefined,
-      })
-      snap.access.push({ project_id: 'acme-p', profile_id: 'me-acme', level: 'user' })
-    })
+    await load(acmeSeat)
     await projects()
     const choice = find<HTMLSelectElement>('[data-settings-projects-org]')
     expect([...choice.options].map((o) => o.textContent)).toEqual(['Testbed Labs', 'Acme'])
@@ -598,6 +620,26 @@ describe('Settings › Projects', () => {
     expect(projectNames()).toEqual(['Acme rollout'])
     expect(openLists()).toEqual([{ name: 'projects', org_id: 'acme' }])
     expect(has('[data-new-settings-project]')).toBe(false)
+  })
+
+  it('lists the home organization from its first page once the chosen one’s seat goes while it shows', async () => {
+    await load((snap) => acmeSeat(snap, 3))
+    server.force = { batch: 2 }
+    await projects()
+    await select(find('[data-settings-projects-org]'), 'acme')
+    await click(find('[data-settings-projects-next]'))
+    expect(projectNames()).toEqual(['Acme 2', 'Acme rollout'])
+    await click(find('[data-project-row="acme-p"] button'))
+    expect(openLists()).toContainEqual({
+      name: 'subProjects',
+      org_id: 'acme',
+      project_id: 'acme-p',
+    })
+    await elsewhere(noAcmeSeat)
+    expect(openLists()).toEqual([{ name: 'projects', org_id: org }])
+    expect(projectNames()).toEqual(['Design #7', 'Design #8'])
+    expect(has('[data-settings-projects-previous]')).toBe(false)
+    expect(has('[data-settings-projects-org]')).toBe(false)
   })
 
   it('opens one project at a time, its sub-projects read only while open, and keeps it across a visit to a project page', async () => {
@@ -953,6 +995,17 @@ describe('Archived projects', () => {
     expect(text('[data-archived-project="old-api"]')).toContain(
       "only the project's lead can restore it",
     )
+  })
+
+  it('lists the home organization once the chosen one’s seat goes while it shows', async () => {
+    await load(acmeSeat)
+    await archived()
+    await select(find('[data-archived-projects-org]'), 'acme')
+    expect(entries()).toEqual(['acme-old'])
+    await elsewhere(noAcmeSeat)
+    expect(openLists()).toEqual([{ name: 'archived', org_id: org }])
+    expect(entries()).toEqual(['side', 'old'])
+    expect(has('[data-archived-projects-org]')).toBe(false)
   })
 
   it('says each state at the end of the page, and no archived project only at a real end', async () => {

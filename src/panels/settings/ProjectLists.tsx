@@ -95,6 +95,25 @@ function orgFor(kept: string | null | undefined): string {
   return choices[0]?.id ?? ''
 }
 
+/**
+ * The organization a page lists, first `initial` and then what the
+ * Organization select chose, held to the login's seats. Once the chosen
+ * one leaves P.orgs, as when its seat is removed or deactivated while the
+ * page shows, the page lists the home organization or the first at once,
+ * at its first page with the search kept, and `onGone` drops what the page
+ * kept for the old one. Answers the organization and the select's setter.
+ */
+function useChosenOrg(initial: () => string, onGone?: () => void) {
+  const [chosen, setChosen] = useStateS(initial)
+  const org = orgFor(chosen)
+  React.useEffect(() => {
+    if (org === chosen) return
+    setChosen(org)
+    onGone?.()
+  }, [org, chosen])
+  return [org, setChosen] as const
+}
+
 /** The Organization select of a login with seats in several
     organizations; nothing for one. `hook` is its data attribute. */
 function OrgChoice({
@@ -444,7 +463,11 @@ export function OrgProjectsPage({
   onOpenArchivedTasks: (projectId: string) => void
 }) {
   const kept = projectsKept?.login === loginNow() ? projectsKept : null
-  const [org, setOrg] = useStateS(() => orgFor(kept?.org))
+  const [open, setOpen] = useStateS<string | null>(kept?.open ?? null)
+  const [org, setOrg] = useChosenOrg(
+    () => orgFor(kept?.org),
+    () => setOpen(null),
+  )
   const [text, setText] = useStateS(kept?.search ?? '')
   const search = useSettledSearch(text, LIMITS.search)
   const searchBox = React.useRef<HTMLInputElement>(null)
@@ -455,7 +478,6 @@ export function OrgProjectsPage({
     batch: readyBatch<SettingsProjectRow>,
     starts: kept && kept.org === org && kept.search === search.settled ? kept.starts : undefined,
   })
-  const [open, setOpen] = useStateS<string | null>(kept?.open ?? null)
   // the sub-projects New sub-project made here, by project, which its open
   // list keeps until a loaded batch holds them
   const [made, setMade] = useStateS<ReadonlyMap<string, readonly string[]>>(() => new Map())
@@ -966,7 +988,8 @@ type ChipsInfo = { id: string; withParent: boolean; complete: boolean }
  * through that project's Restore.
  */
 export function ArchivedProjectsPage() {
-  const [org, setOrg] = useStateS(() => orgFor(null))
+  // an entry's open sub-projects close as the organization changes (pageAt)
+  const [org, setOrg] = useChosenOrg(() => orgFor(null))
   const [text, setText] = useStateS('')
   const search = useSettledSearch(text, LIMITS.search)
   const searchBox = React.useRef<HTMLInputElement>(null)
