@@ -10,8 +10,10 @@
    comes from the page (projectSettings.get), and every write names one
    grant with the level its row showed, so the server refuses a change
    made meanwhile. LeadPicker, the Lead field's popover over
-   projectSettings.leadCandidates, lives here too, as it shares the
-   picker's lines. */
+   projectSettings.leadCandidates, lives here too, beside the Add picker;
+   the New project and New sub-project dialogs use it as well. The search
+   box and the end lines both pickers share are in pickerParts.tsx, and
+   their words in pickerWords.ts. */
 import type { FunctionReference, FunctionReturnType } from 'convex/server'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -20,7 +22,7 @@ import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { DEMO_MODE } from '../lib/demoMode'
-import { limitSentence, sentence } from '../lib/fieldLimits'
+import { limitSentence } from '../lib/fieldLimits'
 import { useFocusWhenGone } from '../lib/focusWhenGone'
 import {
   type BatchAt,
@@ -41,6 +43,8 @@ import {
   REMOVAL_CHECKING,
 } from '../store/planner'
 import { LimitedInput } from './LimitedField'
+import { ChoiceEnd, PickerSearch } from './pickerParts'
+import { ACCESS_WORDS, escapeClearsFirst, LEAD_WORDS } from './pickerWords'
 import { Avatar, Icon, MenuItem, Popover } from './qivo'
 import { SettingsGroup } from './settingsPage'
 
@@ -762,136 +766,6 @@ export function ProjectAccessEditor({
 
 /* ------------------------------------------------------------- pickers */
 
-/** The answer of a picker's read with no rows, or of one that failed it. */
-type HeldPick = { state: string; message?: string }
-
-/** What a picker says of `held`, a read with no rows: the server's
-    sentence for a refusal, and its other states in the picker's words. */
-function heldLine(held: HeldPick | undefined, people: boolean) {
-  if (held?.state === 'refused' && held.message) return sentence(held.message)
-  if (held?.state === 'unavailable' || held?.state === 'archived')
-    return 'This project is no longer available.'
-  return people ? "People can't be listed yet." : "Teams and people can't be listed yet."
-}
-
-/* The end of a picker's list (lib/pagedList.ts listEnd), as the Reassign
-   picker ends its own (panels/Modals.tsx ReassignChoiceList). */
-function ChoiceEnd<A extends HeldPick, Row>({
-  end,
-  tooLong,
-  list,
-  people,
-}: {
-  end: ListEnd
-  tooLong: boolean
-  list: PagedList<A, Row>
-  /** whether the picker lists people only */
-  people: boolean
-}) {
-  const held = end === 'held' ? list.answers[0] : (list.failure ?? undefined)
-  if (tooLong)
-    return <p className="px-2 py-1 text-sm text-text-2">{limitSentence(LIMITS.search)}</p>
-  switch (end) {
-    case 'loading':
-      return (
-        <p role="status" className="px-2 py-1 text-sm text-text-2">
-          Loading…
-        </p>
-      )
-    case 'held':
-      return (
-        <p role="status" data-picker-held="" className="px-2 py-1 text-sm text-text-2">
-          {heldLine(held, people)}
-        </p>
-      )
-    case 'failed':
-      return list.failure !== null ? (
-        <p role="status" data-picker-held="" className="px-2 py-1 text-sm text-text-2">
-          {heldLine(held, people)}
-        </p>
-      ) : (
-        <div role="alert" className="flex items-center gap-2 px-2 py-1 text-sm text-danger">
-          {people ? "Couldn't load people." : "Couldn't load teams and people."}
-          <Button
-            type="button"
-            variant="ghost"
-            className="h-control-sm text-sm"
-            onClick={() => list.retry()}
-          >
-            Try again
-          </Button>
-        </div>
-      )
-    case 'full':
-      return <p className="px-2 py-1 text-sm text-text-2">Search to narrow the list.</p>
-    case 'more':
-      return (
-        <>
-          {list.stopped && (
-            <p className="px-2 py-1 text-sm text-text-2">
-              {people
-                ? 'Showing the people found so far.'
-                : 'Showing the teams and people found so far.'}
-            </p>
-          )}
-          <MenuItem data-picker-more="" disabled={list.phase === 'more'} onClick={list.more}>
-            {list.phase === 'more' ? 'Loading…' : 'Load more'}
-          </MenuItem>
-        </>
-      )
-    case 'none':
-      return <p className="px-2 py-1 text-sm text-text-2">Nothing matches.</p>
-    case 'end':
-      return list.rows.length === 0 ? (
-        <p className="px-2 py-1 text-sm text-text-2">
-          {people ? 'No one can lead it.' : 'No teams or people to add.'}
-        </p>
-      ) : null
-    case 'partial':
-      return null
-  }
-}
-
-/* A picker's search box, which clears its text on Escape first; the
-   popover closes on the Escape after that (escapeClearsFirst). */
-function PickerSearch({
-  text,
-  onText,
-  label,
-  probe,
-}: {
-  text: string
-  onText: (text: string) => void
-  label: string
-  probe: string
-}) {
-  return (
-    <LimitedInput
-      limit={LIMITS.search}
-      aria-label={label}
-      placeholder={label}
-      {...{ [probe]: '' }}
-      value={text}
-      onChange={(e) => onText(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && text) {
-          e.stopPropagation()
-          onText('')
-        }
-      }}
-      className="h-control text-sm"
-    />
-  )
-}
-
-/* Keeps a picker's popover open on an Escape in its search box while the
-   box holds text, which the box then clears. */
-const escapeClearsFirst = (probe: string) => (event: KeyboardEvent) => {
-  const field = event.target
-  if (field instanceof HTMLInputElement && field.matches(`[${probe}]`))
-    if (field.value !== '') event.preventDefault()
-}
-
 /* The Add team or user picker: a button naming the chosen team or person
    that opens the server's choices, read once a batch while it is open. */
 function AddPicker({
@@ -1043,14 +917,17 @@ function AccessChoiceList({
             {query ? 'No one matches.' : 'No one to add.'}
           </p>
         )}
-        <ChoiceEnd end={end} tooLong={tooLong} list={list} people={false} />
+        <ChoiceEnd end={end} tooLong={tooLong} list={list} words={ACCESS_WORDS} />
       </div>
     </div>
   )
 }
 
-/** Who a lead picker reads for: the Lead field of a project. */
-export type LeadPickerFor = { org_id: string; project_id: string }
+/** Who a lead picker reads for (projectSettings.leadCandidates): the Lead
+    field of project `project_id`, the lead of a new sub-project under
+    `parent_id`, or with neither the lead of a new top-level project, each
+    in organization `org_id`. */
+export type LeadPickerFor = { org_id: string; project_id?: string; parent_id?: string }
 
 /**
  * A Lead field: a button naming the lead that opens the people a lead
@@ -1164,7 +1041,7 @@ function LeadChoiceList({
             )}
           </MenuItem>
         ))}
-        <ChoiceEnd end={end} tooLong={tooLong} list={list} people />
+        <ChoiceEnd end={end} tooLong={tooLong} list={list} words={LEAD_WORDS} />
       </div>
     </div>
   )
