@@ -1647,6 +1647,33 @@ every function it calls. The reads answer `not_ready` for an organization
 whose names are not ready, and the release changes no table, field or
 index and has no backfill and no release step.
 
+From the release after v0.1.147, an organization admin can download a ready
+organization export from `/exports/<id>` through a link of two minutes that
+`orgExport.claimDownload` answers, which also records one automatic attempt
+for each admin who asked for the job. The route checks the admin's
+authority again on every request and before every part, and streams the
+archive as one ZIP, at most two downloads of an archive at once and 16 on
+the whole public demo, answering `429` past them. An archive served whole
+sets `organizations.last_export_at` and the job's `served_at`, so a
+deletion reminder counts a downloaded archive and not one that was only
+prepared; the browser export's `recordExport` still sets it as before.
+Archives are format 4, with the organization's Deleted items under
+`deleted/`, and the export reads 100 tasks a page. No app calls the link or
+the route yet. The release adds optional fields to `org_exports` and
+`org_export_requests`, which code from before it does not accept, so from
+the first export job or link after the deploy, for as long as such a row
+stays (30 days after its job ends), never return the backend to a commit
+before this release; roll forward instead. Returning the app alone,
+Vercel Instant Rollback included, is safe, because no app calls the new
+functions. Returned before any row holds a new field, the earlier backend
+deploys and fails a job it finds in the Deleted items section as
+incomplete when it finishes. A job collecting at the deploy goes on into
+the Deleted items section and finishes as format 4. The release adds the
+index `org_exports.by_streaming`, which Convex builds at deploy with no
+backfill, adds no table and needs no backfill. The release whose app first
+calls `claimDownload` makes this release that app's backend floor, and its
+own paragraph says so.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2279,7 +2306,16 @@ Organization exports can run as a server job (`convex/orgExport.ts`), which
 nothing in the app starts yet; the browser export still reads
 `orgExport.page`. A job keeps its state in `org_exports`, one row per admin
 who asked for it in `org_export_requests`, and its archive as compressed
-parts in storage, one `org_export_parts` row per part. A ready archive stays
+parts in storage, one `org_export_parts` row per part. The archive is
+format 4: the live tables under `data/`, then the organization's retained
+Deleted items under `deleted/`, each item marked complete or partial. Any
+active admin downloads a ready archive from the `/exports/` route through a
+two-minute link that `orgExport.claimDownload` answers; the route checks the
+admin on every request and before each part, holds a lease on the job row
+while it streams, and records an archive it served whole in the job's
+`served_at` and in `organizations.last_export_at`, which the browser
+export's `recordExport` also writes, so the deletion reminder counts a
+downloaded archive. A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the
 newer one is ready, so an organization holds at most one collecting job and
@@ -2292,8 +2328,9 @@ progress, and `organization export sweep` (every 15 minutes) expires ready
 archives whose timer was lost, restarts erase legs that stopped and deletes
 history older than 30 days. A branch preview registers neither, so there
 only the steps, the erase legs and the scheduled expiry run. The tables start
-empty, need no backfill, and `organizations.last_export_at` keeps its
-meaning.
+empty and need no backfill. `organizations.last_export_at` keeps its
+meaning, the last export an admin downloaded, never one that was only
+prepared.
 
 A rollback past the release that added the job deploys, because Convex
 leaves the rows of tables the schema does not list alone, but the earlier
@@ -2313,6 +2350,16 @@ A resumed job whose parts the earlier orphan sweep erased fails as
 incomplete when it finishes. `organization export sweep` expires the ready
 archives and erases their parts, and it alone deletes ended jobs with their
 request rows, 30 days after they ended. Nothing needs a manual step.
+
+A rollback past the release of the download route and format 4 is refused
+by Convex once a job row holds `served_at`, a lease or the step's Deleted
+items state, or a request row holds `auto_download_at`, which the first job
+after the deploy writes; such rows stay until 30 days after their job ends,
+so roll forward instead. Before any row holds them, the earlier backend
+deploys, its route is gone and a ready format 4 archive can no longer be
+downloaded, and it fails a job it finds in the Deleted items section as
+incomplete when that job finishes, which erases its parts. Returning the app
+alone changes nothing, because no app calls the link or the route.
 
 Each seat's favorite top-level projects are rows in `project_favorites`,
 which only `projectNav:setFavorite` writes; no app calls it yet. The table
