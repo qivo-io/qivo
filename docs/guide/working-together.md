@@ -298,11 +298,12 @@ The Inbox toolbar and context menu also offer:
 Each action is available while you have messages it would change in any of
 your organizations, also messages about archived tasks or tasks you lost
 access to, which the list does not show, and while Qivo is still counting
-them. Snoozed messages do not keep it available, because both actions skip
-them. So **Mark all as read** can be available while every row looks read,
-and pressing it then marks those hidden messages read without changing
-anything on screen. **Remove all read** stays available after an archive,
-which marks the messages about the archived tasks read.
+them or can't count them right now. Snoozed messages do not keep it
+available, because both actions skip them. So **Mark all as read** can be
+available while every row looks read, and pressing it then marks those
+hidden messages read without changing anything on screen.
+**Remove all read** stays available after an archive, which marks the
+messages about the archived tasks read.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
