@@ -511,6 +511,11 @@ let itemConnection = 0
    visit (itemNews), which it does once. Forgotten when the thread changes
    or stops. */
 let itemRerun = false
+/* Whether this client marked the open task unread this visit, with Mark
+   as unread or a snooze or its end (P.markMessagesUnread,
+   P.snoozeMessages), which holds off every further read on open of it
+   (P.readOnOpen). Forgotten when the thread changes or stops. */
+let itemHeldUnread = false
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer that came after its read went out
    (P.readOnOpen). */
@@ -1078,6 +1083,7 @@ function subscribeItem(issueUuid: string, orgId: string) {
     itemRead = null
     itemFresh = false
     itemRerun = false
+    itemHeldUnread = false
   }
   const args = parts.sideArgs('item')
   const watching = args?.org_id === orgId && args.issue_id === issueUuid
@@ -1087,13 +1093,26 @@ function subscribeItem(issueUuid: string, orgId: string) {
 }
 
 /* Stops the inbox item's side query, and forgets its answer, the
-   window's last read on open and its rerun. */
+   window's last read on open, its rerun and its hold. */
 function stopItem() {
   parts?.stopSide('item')
   PLANNER.inboxItem = null
   itemRead = null
   itemFresh = false
   itemRerun = false
+  itemHeldUnread = false
+}
+
+/* Holds off the read on open of the watched task for the rest of the
+   visit when the loaded messages `ids` name one of its messages, as the
+   person's own Mark as unread or snooze does (itemHeldUnread). */
+function holdUnreadOf(ids: readonly string[]) {
+  const watched = threadWatched
+  if (!watched) return
+  for (const id of ids) {
+    const row = rows.messages.get(id)
+    if (row?.issue_id === watched.task && row.org_id === watched.org) itemHeldUnread = true
+  }
 }
 
 /* Asks for the watched task's history, for a window that shows All. It
@@ -13467,21 +13486,26 @@ export const PLANNER = {
       item answer (P.inboxItem), once that answer is ok and current with
       unread messages and no snooze. Nothing goes out while the item loads,
       while the seat's items are building, after a failure, for no item, a
-      read item or a snoozed one, or for a task the store does not watch. It
-      sends each `through` once a visit of the watched task, so the Inbox
-      pane and its pop-out send one read, and once more when the server
-      confirmed that read and the item's answer, one that came after the
-      read went out, still holds unread messages at the same `through`, as
-      for a message whose mutation started before the read and committed
-      after it. It checks that at the confirmation too, since Convex brings
-      the answer that holds the read before the read's promise resolves, so
-      the answer that came with it may hold such a message, and no later
-      answer may come. A paused read is refused quietly and goes out once
-      the pause ends, and a refusal by the server is not sent again for its
-      `through`. Answers whether it sent one. */
+      read item or a snoozed one, or for a task the store does not watch.
+      Once the person marked the task unread from this client, with Mark as
+      unread, a snooze or its end, it sends nothing more until the thread
+      changes or stops, so their choice holds while the task stays open
+      (holdUnreadOf). It sends each `through` once a visit of the watched
+      task, so the Inbox pane and its pop-out send one read, and once more
+      when the server confirmed that read and the item's answer, one that
+      came after the read went out, still holds unread messages at the same
+      `through`, as for a message whose mutation started before the read
+      and committed after it. It checks that at the confirmation too, since
+      Convex brings the answer that holds the read before the read's
+      promise resolves, so the answer that came with it may hold such a
+      message, and no later answer may come. A paused read is refused
+      quietly and goes out once the pause ends, and a refusal by the server
+      is not sent again for its `through`. Answers whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
+    // the person chose unread for this visit
+    if (itemHeldUnread) return false
     const item = shown.item
     if (!item || item.unread_count === 0 || item.snoozed_until !== null) return false
     const last = itemRead?.task === task && itemRead.org === shown.org ? itemRead : null
@@ -13560,13 +13584,15 @@ export const PLANNER = {
   },
   /* Back to unread — the same column, the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
-     server's prune asks. */
+     server's prune asks. Marking the open task's messages unread holds off
+     its read on open for the rest of the visit (holdUnreadOf). */
   markMessagesUnread: (ids: string[]) => {
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r?.read_at
     })
     if (!hit.length || refusePausedWrite(api.messages.markUnread)) return
+    holdUnreadOf(hit)
     messagesByOrg(hit).forEach((list, org) => {
       const view: View = {
         workspace: () =>
@@ -13657,10 +13683,13 @@ export const PLANNER = {
      server stamps every row of the (recipient, task) pair, so the paint
      walks the loaded rows of the same pairs rather than just the ids. The
      timed return is the server's scheduled wake (messages.wake), never a
-     client timer — every device shows it at the same instant. */
+     client timer — every device shows it at the same instant. Since both
+     leave it unread, either on the open task holds off its read on open
+     for the rest of the visit (holdUnreadOf). */
   snoozeMessages: (ids: string[], until: string | null) => {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length || refusePausedWrite(api.messages.snooze)) return
+    holdUnreadOf(hit)
     const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
     messagesByOrg(hit).forEach((list, org) => {
       // the items, named before the paint
@@ -16034,6 +16063,7 @@ export function disposeDemoStore() {
   PLANNER.inboxItem = null
   itemRead = null
   itemRerun = false
+  itemHeldUnread = false
   summaryFresh = false
   summaryConnection = 0
   itemFresh = false

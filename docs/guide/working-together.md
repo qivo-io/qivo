@@ -265,9 +265,10 @@ does the same ([Showing a task on the Board](./the-board.md#showing-a-task-on-th
 The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the
 selected task, then the inbox. New updates on an open task are marked read as
-they arrive. A **New** divider marks unread comments and stays in place while
-you read. It marks where the unread part starts also for updates the list
-does not load. Unread changes without comments show a note instead.
+they arrive. Once you mark the task unread or snooze it, Qivo leaves it unread
+while it stays open. A **New** divider marks unread comments and stays in
+place while you read. It marks where the unread part starts also for updates
+the list does not load. Unread changes without comments show a note instead.
 
 On phones, use **Unread / Mentions / All** and **Filter**. Tap a row to open
 the full task, including **Details**. **Back to inbox** restores your list
