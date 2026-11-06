@@ -1178,14 +1178,21 @@ export const SUBTREE_WALK = { reads: 1000 }
  * lib/taskWindow.ts PROJECT works out), and the reads of the caller's own
  * grants, memberships and team shares that such a question can start past
  * OWN_READS.steps' first step, at most 258 ranges and 2,027 documents
- * (lib/archivedTasks.ts LEVEL_STEP_READS). The parent's and the subtasks'
- * questions after the walk, about projects the walk asked already but for
- * subtasks in archived projects under an active group, and the liveness
- * of the projects the walk named (indexLive) take one project read each.
- * What has no fixed count is read before the walk, within TASK_DETAILS: the
- * first pages of the followers, the links, the attachments and an archived
- * task's subtasks. So are the task's labels, the caller's follow and the
- * task's text (model/descriptions.ts descriptionOf). Tests lower these. */
+ * (lib/archivedTasks.ts LEVEL_STEP_READS). After the walk, the parent's
+ * question, and for an active group in an active project the questions
+ * about its subtasks in archived projects, which the walk's counter does
+ * not ask (groupCounter), can each be a whole question, so the reserve
+ * holds one beside the walk's own (2 × 266 ranges and 394 documents with
+ * LEVEL_STEP_READS, 790 ranges and 2,815 documents in all). Inside the
+ * design size an active walk has no ceiling, so an active group's
+ * questions, at most one for each of its project's 40 archived
+ * sub-projects, come after a walk without one, within the request's
+ * limits. The liveness of the projects the walk named (indexLive) takes
+ * one project read each. What has no fixed count is read before the walk,
+ * within TASK_DETAILS: the first pages of the followers, the links, the
+ * attachments and an archived task's subtasks. So are the task's labels,
+ * the caller's follow and the task's text (model/descriptions.ts
+ * descriptionOf). Tests lower these. */
 export const TASK_READ_RESERVE = {
   ranges: 1024,
   documents: 4096,
