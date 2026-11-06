@@ -12,10 +12,11 @@
    lock follows the server's count of active admins, never the rows on
    screen. An agent's key line and its key panel read tokens.agentKeys
    once, for the agents on screen, and again after a key write and when
-   the tab shows again, never as a subscription. A row whose name, address or
-   hours are being typed or wait for the server's answer to their save, an
-   agent whose key panel is open and a person added on this visit stay on
-   screen through a search or a page move.
+   the tab shows again, never as a subscription, and a key line says
+   Checking keys… while its read waits. A row whose name, address or hours
+   are being typed or wait for the server's answer to their save, an agent
+   whose key panel is open and a person added on this visit stay on screen
+   through a search or a page move.
    Leaving the page drops every answer; the page remembers only its search
    and page starts (usersKept). */
 import React, { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
@@ -842,7 +843,12 @@ export function OrgUsersPage({
   /* ---- the key lines ---- */
   const { visible, shownAt } = useViewVisibility()
   const [keyEpoch, setKeyEpoch] = useStateS(0)
-  const [keyLines, setKeyLines] = useStateS<ReadonlyMap<string, KeyLine>>(() => new Map())
+  // the answer of the last key read that landed, for the agents it named
+  // alone, with the read it answers (keyRead)
+  const [keyAnswer, setKeyAnswer] = useStateS<{
+    read: string
+    lines: ReadonlyMap<string, KeyLine>
+  } | null>(null)
   // the agents whose default key is being made, whose line waits for it
   const [minting, setMinting] = useStateS<ReadonlySet<string>>(() => new Set())
   const shownAgents = new Set<string>()
@@ -864,30 +870,35 @@ export function OrgUsersPage({
   }
   const agentIds = [...shownAgents].filter((id) => !minting.has(id)).sort()
   const agentsKey = agentIds.join(',')
+  const keyRead = `${keyEpoch}:${agentsKey}`
+  // a line shows only the answer of the read for the agents on screen now,
+  // so while a read waits its agents say Checking keys, never an earlier
+  // answer, from the first frame after a page move or a key write
+  const keyLines = keyAnswer?.read === keyRead ? keyAnswer.lines : null
   // one read each time the agents shown change, after a key write and when
   // the tab or window shows again, the list's and the phone's user page
-  // alike, since a key may have been revoked meanwhile. Nothing is kept
-  // between reads, so the same agents shown again after a page without
-  // agents, or after the tab hid, read afresh.
+  // alike, since a key may have been revoked meanwhile. Each run first
+  // drops the answer before it, so the same agents shown again after a
+  // page without agents, or after the tab hid, say Checking keys until
+  // their new answer lands, and no answer stays for an agent off screen.
   useEffectS(() => {
+    setKeyAnswer(null)
     if (DEMO_MODE || !visible || agentIds.length === 0) return
     let live = true
     void P.agentKeys(P.homeOrg, agentIds).then((answer) => {
       if (!live) return
-      setKeyLines((was) => {
-        const next = new Map(was)
-        for (const id of agentIds)
-          next.set(
-            id,
-            answer === null ? 'failed' : (answer.agents.find((a) => a.agent_id === id) ?? 'gone'),
-          )
-        return next
-      })
+      const lines = new Map<string, KeyLine>()
+      for (const id of agentIds)
+        lines.set(
+          id,
+          answer === null ? 'failed' : (answer.agents.find((a) => a.agent_id === id) ?? 'gone'),
+        )
+      setKeyAnswer({ read: keyRead, lines })
     })
     return () => {
       live = false
     }
-  }, [agentsKey, keyEpoch, visible])
+  }, [keyRead, visible])
   const onKeysChanged = React.useCallback(() => setKeyEpoch((n) => n + 1), [])
 
   /* ---- invitation labels, for the pending rows on screen ---- */
@@ -912,7 +923,7 @@ export function OrgUsersPage({
     admins,
     rightColumn,
     confirm,
-    keyLine: (id) => (minting.has(id) ? undefined : keyLines.get(id)),
+    keyLine: (id) => (minting.has(id) ? undefined : keyLines?.get(id)),
     shownAt,
     openKeys,
     setOpenKeys,

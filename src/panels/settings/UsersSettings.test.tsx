@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { getFunctionName } from 'convex/server'
 import { ConvexError } from 'convex/values'
-import { act, useState } from 'react'
+import { act, Profiler, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { NO_PASSWORD_LOGIN } from '../../../convex/lib/email'
@@ -289,6 +289,44 @@ const search = async (text: string) => {
   await act(async () => box.focus())
   await type(box, text)
   await rest()
+}
+
+/* Renders the Users page, recording Atlas's key line at every commit,
+   also one an effect replaces before a browser would paint it, beside
+   whether Zeta Bot's row was on screen. */
+async function showRecorded() {
+  const seen: { line: string | null; zbot: boolean }[] = []
+  const record = () =>
+    seen.push({
+      line: container.querySelector('[data-agent-keyline="atlas"]')?.textContent ?? null,
+      zbot: has('[data-user-row="zbot"]'),
+    })
+  await render(() => (
+    <Profiler id="users" onRender={record}>
+      <pages.users.OrgUsersPage setPage={vi.fn()} />
+    </Profiler>
+  ))
+  return seen
+}
+
+/* Holds every tokens.agentKeys read from now on. The answer it returns
+   lets them answer from the server as it stands then, and settles. */
+function holdKeyReads() {
+  const real = network.query.getMockImplementation()
+  if (!real) throw new Error('No query answers')
+  const held: (() => void)[] = []
+  network.query.mockImplementation((ref, args) =>
+    getFunctionName(ref) === 'tokens:agentKeys'
+      ? new Promise((resolve) => held.push(() => resolve(real(ref, args))))
+      : real(ref, args),
+  )
+  return async () => {
+    network.query.mockImplementation(real)
+    await act(async () => {
+      for (const answer of held) answer()
+    })
+    await settle()
+  }
 }
 
 /* Renders the Users page and opens Atlas's keys. */
@@ -788,6 +826,68 @@ describe('key lines and the key panel', () => {
     await settle()
     expect(keyReads()).toEqual([['atlas'], ['atlas']])
     expect(keyLine('atlas')).toBe('qva_002...abcd2, +1 more')
+  })
+
+  it('says Checking keys while the same agents are read again, after a page without agents and when the tab shows again, never the line before', async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    const seen = await showRecorded()
+    expect(keyLine('atlas')).toBe('no key, cannot sign in')
+    // the second page holds no agent
+    await click(find('[data-users-next]'))
+    expect(has('[data-agent-keyline]')).toBe(false)
+    // meanwhile another admin creates Atlas's first key
+    extra.keys.push(keyOf('atlas', 1))
+    let release = holdKeyReads()
+    seen.length = 0
+    await click(find('[data-users-previous]'))
+    expect(keyLine('atlas')).toBe('Checking keys…')
+    // in every commit since, also before an effect ran
+    expect(new Set(seen.map((s) => s.line).filter((line) => line !== null))).toEqual(
+      new Set(['Checking keys…']),
+    )
+    await release()
+    expect(keyLine('atlas')).toBe('qva_001...abcd1')
+
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    // another admin creates a second key while the tab is hidden
+    extra.keys.push(keyOf('atlas', 2))
+    release = holdKeyReads()
+    seen.length = 0
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    expect(keyLine('atlas')).toBe('Checking keys…')
+    expect(seen.map((s) => s.line)).not.toContain('qva_001...abcd1')
+    await release()
+    expect(keyLine('atlas')).toBe('qva_002...abcd2, +1 more')
+    expect(keyReads()).toEqual([['atlas'], ['atlas'], ['atlas']])
+  })
+
+  it("says Checking keys on a kept agent's line from the first frame of a page move until the new read answers", async () => {
+    await load((s) =>
+      s.profiles.push(
+        ...people(30),
+        person('zbot', 'Zeta Bot', { kind: 'agent', auth_user_id: undefined, email: undefined }),
+      ),
+    )
+    extra.keys.push(keyOf('atlas', 1))
+    const seen = await showRecorded()
+    await click(find('[data-user-row="atlas"] button[aria-label="Manage this agent\'s keys"]'))
+    expect(keyLine('atlas')).toBe('qva_001...abcd1')
+    // meanwhile another admin revokes Atlas's key
+    extra.keys[0].revokedAt = '2026-10-09T08:00:00.000Z'
+    const release = holdKeyReads()
+    await click(find('[data-users-next]'))
+    // the page holds Zeta Bot, and Atlas stays with its panel open
+    expect(keptRows()).toEqual([['atlas', 'kept']])
+    const moved = seen.filter((s) => s.zbot).map((s) => s.line)
+    expect(moved.length).toBeGreaterThan(0)
+    expect(new Set(moved)).toEqual(new Set(['Checking keys…']))
+    await release()
+    expect(keyReads().at(-1)).toEqual(['atlas', 'zbot'])
+    expect(keyLine('atlas')).toBe('no key, cannot sign in')
+    expect(keyLine('zbot')).toBe('no key, cannot sign in')
   })
 
   it('says it is checking, that it could not check, and no key only from a complete answer', async () => {
