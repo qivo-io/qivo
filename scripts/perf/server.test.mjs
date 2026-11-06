@@ -1733,6 +1733,41 @@ describe('Deleted items on the benchmark page', () => {
     expect((await none.read('deletedItems:page')).entries).toEqual([])
   }, 60_000)
 
+  it('holds the second organization of two-orgs in the workspace, its parts and the project picker', async () => {
+    const two = await deleted('deleted=5&role=admin&deletedstate=two-orgs')
+    // the root names both seats, so the page asks for projects before Deleted by
+    const root = await two.read('workspace:root')
+    expect(root.orgs.map((o) => o.name)).toEqual(['Testbed Labs', 'Partner Co'])
+    expect(root.myProfileIds).toHaveLength(2)
+    const partner = root.orgs[1]
+    // its parts hold its projects and its seat, and the first one's neither
+    const [projectWindow] = idWindows(startWindows(partner).projects)
+    const projects = await two.read('workspace:projects', { org_id: partner.id, ...projectWindow })
+    expect(projects.projects.map((p) => p.name)).toEqual(['Partner launch', 'Partner web'])
+    const [peopleWindow] = idWindows(1)
+    const people = await two.read('workspace:people', { org_id: partner.id, ...peopleWindow })
+    expect(people.profiles.map((p) => p.id)).toEqual(['perf-partner-seat'])
+    const [firstWindow] = idWindows(startWindows(root.orgs[0]).projects)
+    const first = await two.read('workspace:projects', { org_id: two.org, ...firstWindow })
+    expect(first.projects.length).toBeGreaterThan(0)
+    expect(first.projects.some((p) => p.org_id === partner.id)).toBe(false)
+    // the project picker offers its project, so its scope can be chosen
+    const nav = await two.read('projectNav:page')
+    expect(nav.rows.filter((row) => row.org_id === partner.id).map((row) => row.name)).toEqual([
+      'Partner launch',
+    ])
+    // Deleted items reads both, and the scope of Partner Co its own
+    const both = await two.read('deletedItems:page')
+    expect(new Set(both.items.map((row) => row.org_name))).toEqual(
+      new Set(['Testbed Labs', 'Partner Co']),
+    )
+    const scoped = await two.read('deletedItems:page', { scope: { org_id: partner.id, all: true } })
+    expect(scoped.items.map((row) => row.title)).toEqual(['Partner web'])
+    // without it the workspace holds one organization
+    const one = await deleted('deleted=5&role=admin')
+    expect((await one.read('workspace:root')).orgs).toHaveLength(1)
+  }, 60_000)
+
   it('answers the forced states the page asks for, and a restore that changes the page', async () => {
     const wide = await deleted('deleted=30&deletedstate=too-wide')
     expect(
@@ -1751,11 +1786,6 @@ describe('Deleted items on the benchmark page', () => {
     expect(task).toMatchObject({ title: '', hidden: true })
     const failing = await deleted('deleted=5&deletedstate=error')
     expect((await failing.read('deletedItems:page')).error).toContain('failed')
-    const two = await deleted('deleted=5&role=admin&deletedstate=two-orgs')
-    const both = await two.read('deletedItems:page')
-    expect(new Set(both.items.map((row) => row.org_name))).toEqual(
-      new Set(['Testbed Labs', 'Partner Co']),
-    )
     // the second write is refused whole, with its data
     const refusing = await deleted('deleted=30&role=admin&deletedstate=refuse-at-2')
     const page = await refusing.read('deletedItems:page', {

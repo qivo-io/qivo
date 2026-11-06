@@ -248,10 +248,11 @@
 //                        (a task item restored with the project item it
 //                        waits for is deferred), two-orgs (the person
 //                        holds a seat in Partner Co too, with a deleted
-//                        project there), purge-counting (Delete now's count
-//                        never answers), purge-at-least (it counts at least
-//                        1,000 items) and purge-failed (it fails); several
-//                        joined by commas
+//                        project there, which the workspace, its parts and
+//                        the project picker hold as well), purge-counting
+//                        (Delete now's count never answers), purge-at-least
+//                        (it counts at least 1,000 items) and purge-failed
+//                        (it fails); several joined by commas
 //   archivedprojects (0) archives that many of the last programs, keeping
 //                        the first live: every other one after its first
 //                        sub-project was archived on its own a day before,
@@ -1184,45 +1185,67 @@ const snapshot = {
   readTruncated: false,
   delivered_at: now,
 }
-/* The Deleted items the page reads (`deleted`), built once from the
-   workspace as it stands when first asked, with a second organization
-   for deletedstate=two-orgs. */
-let deletedItems = null
-function deletedWorld() {
-  if (deletedItems !== null) return deletedItems
+/* With deletedstate=two-orgs the person holds a seat in Partner Co too,
+   with a User grant on its top-level project Partner launch, which holds
+   the sub-project Partner web. It is part of the workspace itself, so the
+   root, the workspace's parts, the project picker and Deleted items all
+   read two organizations, and the page's rules for a login of several
+   seats apply, Deleted by needing projects chosen among them. */
+if (deletedStates.has('two-orgs')) {
   const partner = 'perf-partner-org'
   const seat = 'perf-partner-seat'
+  // a program's fields, without its lead, whom Partner Co does not hold
+  const { lead_id: _lead, ...program } = snapshot.projects[0]
   const top = {
-    ...snapshot.projects[0],
+    ...program,
     id: 'perf-partner-top',
     org_id: partner,
     name: 'Partner launch',
     key: 'PL',
-    parent_id: undefined,
+    num: 1,
     type: 'meta',
+    sort_order: 0,
   }
-  const two = deletedStates.has('two-orgs')
-    ? {
-        ...snapshot,
-        orgs: [...snapshot.orgs, { ...snapshot.orgs[0], id: partner, name: 'Partner Co' }],
-        myProfileIds: [...snapshot.myProfileIds, seat],
-        profiles: [...snapshot.profiles, { ...me, id: seat, org_id: partner, org_role: 'user' }],
-        projects: [
-          ...snapshot.projects,
-          top,
-          {
-            ...top,
-            id: 'perf-partner-web',
-            name: 'Partner web',
-            key: 'PW',
-            parent_id: top.id,
-            type: 'project',
-          },
-        ],
-      }
-    : snapshot
+  snapshot.orgs = [
+    ...snapshot.orgs,
+    {
+      ...snapshot.orgs[0],
+      id: partner,
+      name: 'Partner Co',
+      slug: 'partner',
+      next_issue_num: 1,
+      next_project_num: 3,
+      active_tasks: 0,
+      live_projects: 2,
+    },
+  ]
+  snapshot.myProfileIds = [...snapshot.myProfileIds, seat]
+  snapshot.profiles = [
+    ...snapshot.profiles,
+    { ...me, id: seat, org_id: partner, auth_user_id: 'perf-account', org_role: 'user' },
+  ]
+  snapshot.projects = [
+    ...snapshot.projects,
+    top,
+    {
+      ...top,
+      id: 'perf-partner-web',
+      name: 'Partner web',
+      key: 'PW',
+      num: 2,
+      parent_id: top.id,
+      type: 'project',
+    },
+  ]
+  snapshot.access = [...snapshot.access, { project_id: top.id, profile_id: seat, level: 'user' }]
+}
+/* The Deleted items the page reads (`deleted`), built once from the
+   workspace as it stands when first asked, Partner Co's too with
+   deletedstate=two-orgs. */
+let deletedItems = null
+function deletedWorld() {
   // the deleted sub-project comes with the tasks, none of either by default
-  deletedItems = deletedFixtureOf(two, {
+  deletedItems ??= deletedFixtureOf(snapshot, {
     tasks: deletedCount,
     at: now,
     projectItem: deletedCount > 0,
@@ -1413,23 +1436,30 @@ let messageCount = 0
   }))
 }
 const roadmapCounts = new Map()
-/* The windows of the workspace's parts, as the app chooses them from the
-   counts (src/store/liveParts.ts), kept from the first read, so a window
-   keeps its bounds while rows come and go. */
-let windowsOf = null
-/* The parts cut from the workspace as it is now, until the next change. */
+/* The windows of each organization's parts, as the app chooses them from
+   its counts (src/store/liveParts.ts), kept from the first read, so a
+   window keeps its bounds while rows come and go. */
+const windowsByOrg = new Map()
+/** The windows of organization `orgId`'s parts. */
+function windowsOf(orgId) {
+  let windows = windowsByOrg.get(orgId)
+  if (windows === undefined) {
+    const start = startWindows(snapshot.orgs.find((row) => row.id === orgId) ?? snapshot.orgs[0])
+    windows = {
+      tasks: idWindows(start.tasks),
+      people: idWindows(1),
+      projects: idWindows(start.projects),
+    }
+    windowsByOrg.set(orgId, windows)
+  }
+  return windows
+}
+/* The parts cut from the workspace as it is now, one set an organization,
+   until the next change. */
 let partsCache = null
 /** The parts of the workspace as convex/workspace.ts answers them. */
 function partsNow() {
-  if (partsCache) return partsCache
-  const [row] = snapshot.orgs
-  const start = startWindows(row)
-  windowsOf ??= {
-    tasks: idWindows(start.tasks),
-    people: idWindows(1),
-    projects: idWindows(start.projects),
-  }
-  partsCache = splitWorkspace(heldWorkspace(), (_org, kind) => windowsOf[kind])[0]
+  partsCache ??= splitWorkspace(heldWorkspace(), (orgId, kind) => windowsOf(orgId)[kind])
   return partsCache
 }
 const PART_KINDS = {
@@ -1439,7 +1469,9 @@ const PART_KINDS = {
 }
 /** What workspace part `name` answers for `args`. */
 function readPart(name, args) {
-  const part = partsNow()
+  const parts = partsNow()
+  // the organization's parts the read names, the first one's by default
+  const part = parts.find((p) => p.org_id === args.org_id) ?? parts[0]
   if (name === 'workspace:root')
     return {
       auth_user_id: snapshot.auth_user_id,
@@ -1452,7 +1484,7 @@ function readPart(name, args) {
   if (name === 'workspace:catalog') return { state: 'ok', ...chunkLists(part.catalog) }
   if (name === 'workspace:inbox') return { state: 'ok', ...part.inbox }
   const kind = PART_KINDS[name]
-  const at = windowsOf[kind].findIndex((w) => w.from === args.from)
+  const at = windowsOf(part.org_id)[kind].findIndex((w) => w.from === args.from)
   return { state: 'ok', ...chunkLists(part[kind][at]) }
 }
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
@@ -2166,7 +2198,7 @@ async function mutate(name, args) {
       track_delay: args.track_delay ?? true,
       created_at: new Date().toISOString(),
     }
-    snapshot.orgs = [{ ...orgRow, next_project_num: num + 1 }]
+    snapshot.orgs = [{ ...orgRow, next_project_num: num + 1 }, ...snapshot.orgs.slice(1)]
     if (unseen) hidden.children.push(row)
     else {
       snapshot.projects = [...snapshot.projects, row]
@@ -2302,6 +2334,7 @@ const scenarios = {
     const [org] = snapshot.orgs
     snapshot.orgs = [
       { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
+      ...snapshot.orgs.slice(1),
     ]
     settleTasks()
     return emitWorkspace()
@@ -2326,7 +2359,7 @@ const scenarios = {
     wireRows.delete(gone)
     loadRows.delete(gone)
     const [org] = snapshot.orgs
-    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }]
+    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }, ...snapshot.orgs.slice(1)]
     settleTasks()
     return emitWorkspace()
   },
