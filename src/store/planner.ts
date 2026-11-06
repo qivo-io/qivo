@@ -9421,13 +9421,6 @@ export const PLANNER = {
     PLANNER.usersIn(PLANNER.orgOf(projectId)).filter(
       (u) => PLANNER.levelOn(projectId, u.id) !== null,
     ),
-  /* …and of those, the ones eligible for the New sub-project dialog's Lead
-     field (a project's Settings page reads projectSettings.leadCandidates).
-     A viewer may be given a read grant, so they stay in `usersFor`, but can
-     never lead. Task assignment requires project write access in
-     `issueAssigneesFor`. */
-  assigneesFor: (projectId: string) =>
-    PLANNER.usersFor(projectId).filter((u) => u.orgRole !== 'viewer'),
   /* Active people and agents need effective Edit or Lead access to hold new
      work. Existing assignments still render through `user`; this list
      governs new choices only, for the reviewer as well as the assignee
@@ -9955,13 +9948,6 @@ export const PLANNER = {
      offers; `homeUsers` still lists everybody, because the Users page has to
      show you the person you switched off in order to switch them back on. */
   homeActiveUsers: () => PLANNER.homeUsers().filter((u) => u.active),
-  /* …and of THOSE, the ones who can be handed work or a lead role: the same
-     "not a viewer" narrowing as `assigneesFor`, one altitude up, for the
-     pickers that run before a project exists (New project's Lead). A viewer
-     still counts as a seat on the Billing page — being read-only is not being
-     free — which is why this is a separate selector and not a change to
-     `homeActiveUsers`. */
-  homeAssignees: () => PLANNER.homeActiveUsers().filter((u) => u.orgRole !== 'viewer'),
   /* …and the guests of my organization, listed apart (Settings › Users) */
   homeGuests: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole === 'guest'),
   /* every project of MINE this guest holds a grant on — what the Users
