@@ -114,9 +114,11 @@ export type DayCost = {
 
 /** What storageSamples.costReport answers for the UTC days `from` to `to`,
  * both included: `days_in_range`, the hourly ticks the range implies (24 a
- * day, each one indexed read of at most one run row and no write after the
- * day's first), the runs found and finished, each run's day and the sums of
- * their counters. It names no organization. */
+ * day, each one indexed read of at most one run row, none of it in the
+ * counters; the day's first also writes the run row, and each one that
+ * resumes the run, counted in `restarts`, reads and writes it again), the
+ * runs found and finished, each run's day and the sums of their counters.
+ * It names no organization. */
 export type CostReport = {
   from: string
   to: string
