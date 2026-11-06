@@ -6190,9 +6190,10 @@ const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
    unsent. An action of one round never toasts from here, as the page words
    its outcome. A long one ends with a toast wherever the person is, each
    organization a refusal stopped with a sticky toast, and the pause with
-   one that counts what each organization no refusal stopped did, finished
-   or paused; a later run that finishes in an organization takes its stop
-   toast away. */
+   one that counts what every organization did, finished, refused or
+   paused, while a refused organization's refusals and unsent calls stay in
+   its own toast; a later run that finishes in an organization takes its
+   stop toast away. */
 async function runDeletedItems<Reason>(
   items: readonly DeletedTarget[],
   calls: DeletedCalls<Reason>,
@@ -6369,26 +6370,26 @@ async function runDeletedItems<Reason>(
     if (!stop.paused) showStopToast(keyOf(stop.org_id), stopText(kind, stop, nounOf(stop.org_id)))
   const pauses = stops.filter((stop) => stop.paused)
   if (pauses.length > 0) {
-    // the pause's toast speaks for every organization no refusal stopped,
-    // the finished ones too, as the action's end; a refused one has its own
+    // the pause's toast is the action's end, so it counts what every
+    // organization did, the finished and the refused ones too; a refused
+    // one's refusals and unsent calls stay in its own toast
     const refusedIn = new Set(stops.filter((stop) => !stop.paused).map((stop) => stop.org_id))
     const watched = new Set(outcome.deferred)
-    const tallies = plan.lanes
-      .filter((lane) => !refusedIn.has(lane.org_id))
-      .map((lane) => {
-        const at = laneOf(lane)
-        const following = at.deferred.filter((id) => watched.has(id)).length
-        const unsent = pauses.find((stop) => stop.org_id === lane.org_id)?.unsent ?? 0
-        return {
-          org_name: orgName(lane.org_id),
-          done: at.done,
-          stepping: at.stepping,
-          following,
-          refused: at.refused,
-          // the deferred past what one action watches were not sent
-          unsent: unsent + at.deferred.length - following,
-        }
-      })
+    const tallies = plan.lanes.map((lane) => {
+      const at = laneOf(lane)
+      const following = at.deferred.filter((id) => watched.has(id)).length
+      // a refused organization has no paused stop, so it adds none here
+      const unsent = pauses.find((stop) => stop.org_id === lane.org_id)?.unsent ?? 0
+      return {
+        org_name: orgName(lane.org_id),
+        done: at.done,
+        stepping: at.stepping,
+        following,
+        refused: refusedIn.has(lane.org_id) ? 0 : at.refused,
+        // the deferred past what one action watches were not sent
+        unsent: unsent + at.deferred.length - following,
+      }
+    })
     showStopToast(
       keyOf('pause'),
       pauseText(kind, tallies, (n) => itemsNoun(items, n), pauses[0].reason),

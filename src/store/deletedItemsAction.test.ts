@@ -306,6 +306,37 @@ describe('a restore of more than one round', () => {
     expect(toastTexts().some((text) => text.includes('before it restored any item'))).toBe(false)
   })
 
+  it('counts an organization a refusal stopped in the pause toast, leaving its refusals to its own', async () => {
+    await load()
+    const done = P.restoreDeletedItems([...tasks(A, 30), ...tasks(B, 30)], { bulk: true })
+    await settle()
+    expect(calls.map((c) => c.args.org_id)).toEqual([A, B])
+    // A's first call restores, and its second goes out
+    await answerNext()
+    expect(calls.map((c) => c.args.org_id)).toEqual([B, A])
+    // a rule refuses A's second call whole, then the pause meets B's first
+    calls[1].reject(new ConvexError({ code: 'rule', message: 'the server said no' }))
+    calls.splice(1, 1)
+    await settle()
+    calls.shift()?.reject(new ConvexError({ code: 'paused', message: 'Qivo is offline.' }))
+    const outcome = await done
+    expect(outcome.done).toHaveLength(25)
+    const sticky = showToast.mock.calls.filter(([, , o]) => o?.sticky)
+    expect(sticky).toEqual([
+      [
+        "Restoring stopped after 25 of 30 tasks in Testbed Labs. 5 couldn't be restored. They stay in Deleted items. The server said no.",
+        'error',
+        expect.objectContaining({ key: `deleted-restore:${A}` }),
+      ],
+      [
+        "Restoring stopped after 25 tasks in Testbed Labs. 25 couldn't be restored and 5 were not sent. They stay in Deleted items. Qivo is offline.",
+        'error',
+        expect.objectContaining({ key: 'deleted-restore:pause' }),
+      ],
+    ])
+    expect(toastTexts().some((text) => text.includes('before it restored any item'))).toBe(false)
+  })
+
   it('says how many go on restoring in the background', async () => {
     await load()
     const items = tasks(A, 30)

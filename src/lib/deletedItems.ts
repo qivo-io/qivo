@@ -774,12 +774,14 @@ export type LaneTally = Readonly<{
 }>
 
 /**
- * The one toast of the pause, which stops every organization, from
- * `lanes`, every organization of the action that no refusal stopped,
- * whether it finished or the pause stopped it (a refused one has its own
- * toast): the organizations where something was done and how much, what
- * goes on in the background or follows, what was refused and what was
- * never sent, counted apart, then the pause's sentence `reason`.
+ * The one toast of the pause, which stops every organization. `lanes`
+ * holds every organization of the action, whether it finished, a refusal
+ * stopped it or the pause did. The toast names the organizations where
+ * something was done and how much, then counts apart what goes on in the
+ * background or follows, what was refused and what was never sent, and
+ * ends with the pause's sentence `reason`. A refused organization's lane
+ * leaves out the refusals and unsent calls that its own toast counts
+ * (stopText).
  * "Restoring stopped after 100 tasks in Northstar Labs and 25 in Partner
  * Co. 55 were not sent. They stay in Deleted items. Qivo is offline."
  */
