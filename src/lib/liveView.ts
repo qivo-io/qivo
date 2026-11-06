@@ -62,7 +62,7 @@ export type LiveResult<T> = { value: T } | { error: unknown }
  * where `fresh` has the server run the query again for every watch of
  * equal arguments and `restarted` hears another watch's `fresh` until this
  * watch stops. Answers the way to stop, after which nothing is taken.
- * useLiveView and lib/pagedList.ts read through it.
+ * useLiveView, useLiveViews and lib/pagedList.ts read through it.
  */
 export function watchLive<T>(
   ref: FunctionReference<'query'>,
