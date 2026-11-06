@@ -38,8 +38,9 @@
  * comments last, each as its poster, so the comments land on tasks that
  * stay active.
  *
- * `--archived <n>` archives the first n seeded tasks that are not parents,
- * which spread over the seeded sub-projects as the tasks do, as Nora through
+ * `--archived <n>` archives the first n seeded tasks that are neither
+ * parents nor in Deleted items, which spread over the seeded sub-projects
+ * as the tasks do, as Nora through
  * issues:archive without a reason, so every archive writer runs. A run
  * archives only those still active. The workspace leaves archived tasks out,
  * so the seed finds them in the issues table, as the Convex CLI reads a
@@ -59,10 +60,10 @@
  * sub-projects and deletes it whole as Nora through projects:deleteDeep, so
  * the list holds a project item and its tasks. A run deletes only what is
  * still live, read as the run left them, so a task it archived stays
- * archived. It reads the tasks Deleted items stores (deleted_tasks), which
- * also keeps the tasks seeding from making them again, and makes the
- * sub-project only while no row or used id holds its id. Northstar's own
- * tasks stay as they are.
+ * archived, and makes the sub-project only while no row or used id holds
+ * its id. Every run, with or without --deleted, reads the tasks Deleted
+ * items stores (deleted_tasks), so no later run seeds them again or
+ * archives them. Northstar's own tasks stay as they are.
  *
  * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
  * its bulk actions at scale: on each of the first n seeded tasks that are
@@ -1063,16 +1064,17 @@ export function seededTasks(issues) {
 }
 
 /** The ids of the seeded tasks to archive so that the first `count` seeded
-    tasks that are not parents are archived: `seeded` holds every seeded
-    task by number (seededTasks), and `parents` the ids of tasks with
-    subtasks. A task archived already needs nothing. */
+    tasks that are neither parents nor in Deleted items are archived:
+    `seeded` holds every seeded task by number (seededTasks), the ones
+    Deleted items stores among them with `deleted`, and `parents` the ids
+    of tasks with subtasks. A task archived already needs nothing. */
 export function planArchive(count, seeded, parents) {
   const ids = []
   let taken = 0
   for (const n of [...seeded.keys()].sort((a, b) => a - b)) {
     if (taken === count) break
     const { task } = seeded.get(n)
-    if (parents.has(task.id)) continue
+    if (parents.has(task.id) || task.deleted) continue
     taken++
     if (!task.archived_at) ids.push(task.id)
   }
@@ -1249,8 +1251,9 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
   const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id) : null
-  // what Deleted items holds, which --deleted neither seeds again nor deletes
-  const inTrash = options.deleted > 0 ? await deletedTasksOf(client, actor.org_id) : []
+  // what Deleted items holds, which no run seeds again, archives or
+  // deletes, whatever its flags
+  const inTrash = await deletedTasksOf(client, actor.org_id)
   const takenIds = options.deleted > 0 ? await storedIdsOf(client, actor.org_id) : null
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
@@ -1304,7 +1307,7 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       apiUrl: new URL(options.apiUrl).origin,
       log,
     })
-  // a task an earlier run archived is seeded already
+  // a task an earlier run archived or deleted is seeded already
   const seeded = seededTasks([...issues, ...archived, ...inTrash])
   const jobs = planSeed(options.tasks, seeded)
   log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)

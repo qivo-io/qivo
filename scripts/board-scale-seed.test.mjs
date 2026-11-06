@@ -1916,7 +1916,7 @@ describe('board-scale-seed --deleted', () => {
     }
   })
 
-  it('deletes as Nora and Leo, makes and deletes the sub-project, and a rerun deletes nothing more', async () => {
+  it('deletes as Nora and Leo, makes and deletes the sub-project, and no rerun makes, deletes or archives those tasks again', async () => {
     fake.projects = [
       { id: 'top', org_id: 'org', type: 'meta', key: 'LUMA', name: 'Luma Sensor', lead_id: 'leo' },
       { id: 'sub', org_id: 'org', type: 'project', parent_id: 'top', key: 'FW', name: 'Firmware' },
@@ -1974,6 +1974,22 @@ describe('board-scale-seed --deleted', () => {
       await runBoardScaleSeed([...local, '--tasks', '10', '--deleted', '4'], { env, log: () => {} })
       // nothing seeded again, nothing more deleted
       expect(fake.calls).toEqual([])
+      // a run without --deleted reads Deleted items too, so it makes none of
+      // those tasks again
+      await runBoardScaleSeed([...local, '--tasks', '10'], { env, log: () => {} })
+      expect(fake.calls).toEqual([])
+      // and --archived passes over them to the next live tasks
+      await runBoardScaleSeed([...local, '--tasks', '10', '--archived', '6'], {
+        env,
+        log: () => {},
+      })
+      expect(fake.calls).toEqual(
+        ['task0', 'task1', 'task2', 'task3', 'task8', 'task9'].map((id) => [
+          'issues:archive',
+          { id, org_id: 'org' },
+          'nora-login',
+        ]),
+      )
     } finally {
       fake.projects = null
       fake.people = []
