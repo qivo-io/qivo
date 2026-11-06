@@ -162,10 +162,12 @@ policy, because the same headers serve production.
 The HTTP router loads Better Auth only in the sign-in, OAuth token,
 registration and revocation, and authorization server metadata handlers,
 which import `convex/auth.ts` inside the handler. Convex's open-source
-runtime allows that, but nothing public says every hosted runtime does, and
-a push analyzes the modules without running a handler. So every Vercel build
-of the app and of the demo (branch previews, staging, production and the
-public demo) checks the routes after the push.
+runtime allows that import in an HTTP action, while Convex's Bundling
+documentation says the default runtime does not support dynamic imports and
+throws at run time, and nothing public shows which of the two hosted
+deployments follow. A push analyzes the modules without running a handler,
+so every Vercel build of the app and of the demo (branch previews, staging,
+production and the public demo) checks the routes after the push.
 `scripts/app-deploy.mjs` and `scripts/demo-deploy.mjs` run `convex deploy`,
 whose build command records the deployment's Convex site URL in a private
 temporary file outside the checkout, and then `scripts/auth-probe.mjs`
@@ -221,7 +223,7 @@ mismatch worse:
    instead (see [Rollback and hotfixes](#rollback-and-hotfixes)). A passing
    build moves the domain and records success.
 3. When they still fail, fix a wrong setting, or follow
-   [Rollback and hotfixes](#rollback-and-hotfixes): fix forward, or publish
+   [Rollback and hotfixes](#rollback-and-hotfixes). Fix forward, or publish
    a new, higher version of the last commit whose build passed. A branch
    preview's failure stops the branch before main, so report it instead of
    merging.
@@ -231,15 +233,15 @@ mismatch worse:
 `scripts/staging-check.mjs` checks the REST API, MCP and OAuth consent on
 staging with a real browser and real credentials. Its first step,
 `auth/routes`, calls the sign-in, OAuth token and metadata routes as every
-build does ([The auth routes check](#the-auth-routes-check)), and then the
-CORS the app's sign-in relies on: a preflight of
+build does ([The auth routes check](#the-auth-routes-check)), and then
+checks the CORS the app's sign-in relies on. A preflight of
 `/api/auth/sign-in/email` from the app's origin, asking for `POST` with
 `content-type` and `better-auth-cookie`, must answer `204`, echo the origin,
 allow credentials and both headers, and `GET /api/auth/get-session` from it
 must echo the origin and expose `Set-Better-Auth-Cookie`. The step sends no
-credential and creates nothing, so it runs before the check proves the API
-origin, and its failure names the origin it called, which until then may
-lack the region label the app shows. A failure is reported as
+credential and creates no session, OAuth client or token, so it runs before
+the check proves the API origin, and its failure names the origin it called,
+which may still lack the region label the app shows. A failure is reported as
 `FAIL auth/routes` and the run goes on to the sign-in. It signs in as the
 Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the

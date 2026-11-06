@@ -430,10 +430,11 @@ diff -ru dev-temp/upstream/src vendor/convex-better-auth/src
 
 Formatting the upstream tree with this repository's Biome settings first
 leaves only real differences, such as the parts Qivo left out, its types and
-its changes. `registerRoutes` shows as left out: Qivo registers the routes
-in `convex/lib/authRoutes.ts` (`registerAuthRoutes`) so that the HTTP
-router loads no Better Auth, so compare a later release's `registerRoutes`
-paths, methods, CORS options and forwarded headers with that function. Going back to the published package makes sense once a release
+its changes. `registerRoutes` shows as left out, because Qivo registers the
+routes in `convex/lib/authRoutes.ts` (`registerAuthRoutes`) so that the HTTP
+router loads no Better Auth. Compare a later release's `registerRoutes`
+paths, methods, CORS options and forwarded headers with that function.
+Going back to the published package makes sense once a release
 supports the latest Better Auth, covers every change the copy's README lists
 (or Qivo no longer needs one), and its maintainers keep it current. Then
 install it, switch the imports back, delete the copy and run the checks
