@@ -1733,8 +1733,8 @@ describe('board-scale-seed --api-accounts', () => {
     const id = (n) => apiAccountId('org', n)
     fake.calls = []
     fake.issues = []
-    // agents 1 and 2 were removed: 1's usage keeps its id, and 2's removal
-    // is still running; agent 3 was never made
+    // agents 1 and 2 were removed. Agent 1's usage keeps its id, and agent 2's
+    // removal is still running. Agent 3 was never made.
     fake.people = []
     fake.usage = [
       {
