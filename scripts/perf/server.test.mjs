@@ -1160,6 +1160,47 @@ describe('the benchmark server', () => {
     })
   })
 
+  it("gives a standard creator who names another lead the server's User grant, unless they declined it", async () => {
+    const at = await server('tasks=20&latency=0&mbps=100000')
+    const snap = async (tag) => {
+      await at.send({ type: 'query', id: tag, name: 'snapshot:forMe', args: {} })
+      return JSON.parse(at.posted.find((m) => m.to === tag).text)
+    }
+    const before = await snap('before')
+    const [me, , lead] = before.profiles
+    expect(me.org_role).toBe('user')
+    const create = async (id, access) => {
+      await at.send({
+        type: 'mutation',
+        id,
+        name: 'projects:create',
+        args: {
+          org_id: before.orgs[0].id,
+          id,
+          type: 'meta',
+          key: id.slice(0, 4).toUpperCase(),
+          name: id,
+          lead_id: lead.id,
+          access,
+        },
+      })
+      await vi.waitFor(() =>
+        expect(at.posted.some((m) => m.id === id && m.type === 'answer')).toBe(true),
+      )
+    }
+    // the dialog leaves out the creator's automatic entry, which the
+    // server adds, and sends null for one the creator removed
+    await create('kept', {})
+    await create('declined', { [me.id]: null })
+    const after = await snap('after')
+    const grantsOf = (project) =>
+      after.access
+        .filter((a) => a.project_id === project)
+        .map(({ profile_id, level }) => ({ profile_id, level }))
+    expect(grantsOf('kept')).toEqual([{ profile_id: me.id, level: 'user' }])
+    expect(grantsOf('declined')).toEqual([])
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open
