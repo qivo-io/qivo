@@ -252,6 +252,62 @@ describe('the benchmark server', () => {
     expect((await board('tasks=100&board=over_budget')).answer.state).toBe('over_budget')
   }, 60_000)
 
+  it("answers Team sync's agenda from its stand-in, with the states the page asks for", async () => {
+    /** What teamSync:agenda answers for the first program on a workspace
+        with page parameters `params`, and the server to read it again. */
+    const agenda = async (params) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      // a Monday-start week of the clock as the app sends it
+      const week = '2026-11-02'
+      const start = Date.parse('2026-11-02T00:00:00.000Z')
+      const args = {
+        org_id: snap.orgs[0].id,
+        scope: { kind: 'project', project_id: program.id },
+        day: '2026-11-04',
+        week,
+        week_starts: Array.from({ length: 53 }, (_, i) => start - (52 - i) * 7 * 86_400_000),
+        week_end: start + 7 * 86_400_000,
+      }
+      const read = async (at) => {
+        await send({ type: 'query', id: at, name: 'teamSync:agenda', args })
+        const answer = posted.find((m) => m.to === at)
+        return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+      }
+      return { answer: await read('agenda'), read, program }
+    }
+    const ok = await agenda('tasks=200')
+    expect(ok.answer.state).toBe('ok')
+    expect(ok.answer.rows.length).toBeGreaterThan(0)
+    expect(ok.answer.people.length).toBeGreaterThan(0)
+    expect(ok.answer.hidden).toBe('counted')
+    expect(ok.answer.people.every((p) => p.week.state === 'ok')).toBe(true)
+    for (const state of ['over_ceiling', 'over_budget', 'unavailable'])
+      expect((await agenda(`tasks=200&sync=${state}`)).answer.state).toBe(state)
+    expect((await agenda('tasks=200&sync=access_unchecked')).answer).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    const weeks = await agenda('tasks=200&sync=weeks-unknown')
+    expect(weeks.answer.people.every((p) => p.week.state === 'unavailable')).toBe(true)
+    const viewer = await agenda('tasks=200&sync=viewer')
+    expect(viewer.answer.hidden).toBe('own_only')
+    expect((await agenda('tasks=200&sync=error')).answer.error).toContain('sync=error')
+    // a meeting past the ceiling, and one that stops fitting while it is open
+    expect((await agenda('tasks=3000&programs=1')).answer.state).toBe('over_ceiling')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const stale = await agenda('tasks=200&sync=stale')
+      expect(stale.answer.state).toBe('ok')
+      vi.setSystemTime(Date.now() + 5000)
+      expect((await stale.read('later')).state).toBe('over_ceiling')
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 60_000)
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

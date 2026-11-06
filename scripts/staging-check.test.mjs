@@ -14,6 +14,7 @@ import {
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import {
+  AGENDA_QUERY,
   addDays,
   addsQuery,
   BILLING_STORAGE_EXPECTED,
@@ -65,6 +66,7 @@ import {
   TASK_LINK_UNKNOWN,
   TASK_PAGES_MAX,
   TASK_WINDOWS_QUERY,
+  TEAM_SYNC_STEP,
   THREAD_PAGE,
   taskPages,
   UPLOAD_STEP,
@@ -205,6 +207,18 @@ describe('staging check REST contract', () => {
     })
     // a number the server's ref grammar reads, which no organization reaches
     expect(Number(TASK_LINK_UNKNOWN.ref.slice(3))).toBeLessThanOrEqual(2147483647)
+  })
+  it("names Team sync's step and the agenda query its app subscribes", () => {
+    expect(TEAM_SYNC_STEP).toBe('ui/team-sync')
+    expect(AGENDA_QUERY).toBe('teamSync:agenda')
+    // the store reads the agenda by that name, and the page names its state
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain('ref: api.teamSync.agenda')
+    const page = readFileSync(new URL('../src/views/TeamSync.tsx', import.meta.url), 'utf8')
+    expect(page).toContain('data-sync-state={meeting.state}')
+    const add = (udfPath) => ({ type: 'ModifyQuerySet', modifications: [{ type: 'Add', udfPath }] })
+    expect(addsQuery(JSON.stringify(add(AGENDA_QUERY)), AGENDA_QUERY)).toBe(true)
+    expect(addsQuery(JSON.stringify(add('teamSync:lastComments')), AGENDA_QUERY)).toBe(false)
   })
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')

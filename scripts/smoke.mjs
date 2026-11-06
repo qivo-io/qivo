@@ -2572,23 +2572,29 @@ try {
     },
     { id: syncTaskId, agent: syncAgentId, name: SYNC_AGENT, title: TITLE, project: subProj },
   )
-  // The bare address opens the saved scope on the team opening and names
-  // that scope in place, with the sidebar row lit.
+  // The bare address opens the scope the user last picked on the team
+  // opening, naming it in place, or asks to choose one when none is saved,
+  // never All projects by default, with the sidebar row lit either way.
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/sync`, { waitUntil: 'domcontentloaded' })
-  await pageA.locator('[data-sync-opening]').waitFor({ timeout: 30000 })
-  await pageA.waitForURL(new RegExp(`/app/${demo.orgSlug}/sync/(all|p/\\d+|team/[0-9a-f-]+)$`))
+  await pageA
+    .locator('[data-sync-page]:is([data-sync-state="ok"], [data-sync-state="choose"])')
+    .waitFor({ timeout: 30000 })
+  await pageA.waitForURL(new RegExp(`/app/${demo.orgSlug}/sync(/(all|p/\\d+|team/[0-9a-f-]+))?$`))
   if (!(await pageA.locator('[data-sync-nav][aria-current="page"]').count()))
     await fail('The sidebar Team sync row is not lit on the page')
-  log('A: Team sync opened on the team opening at its saved scope')
+  log('A: Team sync opened on its saved scope, or asked to choose one')
   // All projects holds the task whatever scope is saved; opening it by
-  // address saves nothing, so the user's saved scope stays as it was.
+  // address saves nothing, so the user's saved scope stays as it was. The
+  // page reads its meeting from the server and asks for no task, so the
+  // task is the agenda's (P.syncTask), held or not.
   await pageA.goto(`${BASE}/app/${demo.orgSlug}/sync/all`, { waitUntil: 'domcontentloaded' })
+  await pageA.locator('[data-sync-page][data-sync-state="ok"]').waitFor({ timeout: 30000 })
   const syncKey = await pageA.evaluate(
     async ({ id, agent }) => {
       const P = window.PLANNER
       const deadline = Date.now() + 30000
       for (;;) {
-        const it = P.issues.find((row) => row.uuid === id)
+        const it = P.syncTask(id)
         if (it && P.users.some((u) => u.id === agent && u.isAgent)) return it.id
         if (Date.now() > deadline) return null
         await new Promise((resolve) => setTimeout(resolve, 250))
@@ -2653,7 +2659,9 @@ try {
   if (!/^1 of \d+ tasks? reviewed$/.test(syncProgress))
     await fail(`The sync footer reads "${syncProgress}" after one edited row`)
   log('A: the row saved Remaining 4 h, ticked itself and stamped only the agent')
-  // Delete the task, then remove the agent and its stamp with it.
+  // Delete the task, then remove the agent and its stamp with it. A delete
+  // writes a task the workspace holds, so the leg asks for every task first.
+  await everyTask(pageA)
   await pageA.evaluate((k) => window.PLANNER.deleteIssue(k), syncKey)
   await syncCard.waitFor({ state: 'detached', timeout: 15000 })
   const syncGone = await pageA.evaluate(
