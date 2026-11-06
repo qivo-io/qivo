@@ -1139,7 +1139,7 @@ them only at its next reset, and a seed refuses there until then. A seed of
 an absent or empty demo writes version 9, and the public demo's new copies
 have them.
 
-From the release after v0.1.141, `pickers.taskOwners`, `pickers.syncRecipients`
+From the release after v0.1.142, `pickers.taskOwners`, `pickers.syncRecipients`
 and `pickers.canOwn` answer a task's owner pickers and Team sync's mention
 recipients 25 at a time in name order, with a search, from the same rules as
 the writes. `taskOwners` lists the people `issues.update` accepts as the
