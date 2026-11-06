@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { createAuth } from '../auth'
+import { OWN_READS } from '../lib/access'
 import { CATCH_UP } from '../model/notificationCatchup'
 import { EXPIRY, NOTIFY } from '../model/notificationSessions'
 import * as notifications from '../notifications'
@@ -21,6 +22,7 @@ import {
   newT,
   type OrgFixture,
   plantIssue,
+  plantLogin,
   plantLogins,
   plantProject,
   plantSeat,
@@ -37,6 +39,7 @@ const START = Date.parse(NOW)
 const DEFAULT_NOTIFY = structuredClone(NOTIFY)
 const DEFAULT_EXPIRY = structuredClone(EXPIRY)
 const DEFAULT_CATCH_UP = structuredClone(CATCH_UP)
+const DEFAULT_OWN_READS = structuredClone(OWN_READS)
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -46,6 +49,7 @@ afterEach(() => {
   Object.assign(NOTIFY, structuredClone(DEFAULT_NOTIFY))
   Object.assign(EXPIRY, structuredClone(DEFAULT_EXPIRY))
   Object.assign(CATCH_UP, structuredClone(DEFAULT_CATCH_UP))
+  Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
   vi.useRealTimers()
   vi.unstubAllEnvs()
 })
@@ -989,6 +993,58 @@ describe('claimSummary', () => {
     expect(await resume(s)).toEqual({ state: 'summary' })
   })
 
+  it('answers unchecked when a check of a seat’s access stops, and summary when another seat holds new activity', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // a seat that sees PCB only through its team, as in the unread
+    // summary's case (tests/inboxReads.test.ts)
+    const me = await plantLogin(t, await plantSeat(t, { org_id: f.org.id, accepted_at: NOW }))
+    await t.run(async (ctx) => {
+      await ctx.db.insert('team_members', {
+        team_id: f.team.id,
+        profile_id: me.id,
+        is_leader: false,
+      })
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+    })
+    // the login's second seat, an admin of an organization the catch-up
+    // reads after the first, made ready by a message before the checkpoint
+    const later = await laterOrg(t, f.org.id)
+    const second = await plantSeat(t, {
+      org_id: later.id,
+      auth_user_id: me.auth_user_id,
+      org_role: 'admin',
+      accepted_at: NOW,
+    })
+    const elsewhere = await plantProject(t, { org_id: later.id })
+    const news = async (to: Doc<'profiles'>, minute: number) => {
+      const [org, project_id] = to === me ? [f.org, f.sub2.id] : [later, elsewhere.id]
+      const task = await plantIssue(t, { org_id: org.id, project_id })
+      expect(await post(t, { org, admin: f.admin }, { to, task, minute })).not.toBeNull()
+    }
+    await news(second, -1)
+    const s = await signIn(t, me.auth_user_id as string)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    await news(me, 1)
+    // no team share read project by project, at once or team by team
+    const stop = () =>
+      Object.assign(OWN_READS, { projectShares: 0, rows: 0, lookups: 0, teamReads: 0 })
+    clock(2)
+    stop()
+    expect(await resume(s)).toEqual({ state: 'unchecked' })
+    // new activity in both seats: the first still stops, the second finds
+    Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
+    await news(me, 3)
+    await news(second, 3)
+    clock(4)
+    stop()
+    expect(await resume(s)).toEqual({ state: 'summary' })
+  })
+
   it('leaves out a seat whose organization’s deletion began', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)
@@ -1101,6 +1157,27 @@ describe('claimSummary', () => {
     expect(await resume(s)).toEqual({ state: 'none' })
   })
 })
+
+/** A new organization whose id sorts after `than`, so a catch-up reads a
+ * seat of it after one of `than`'s. */
+async function laterOrg(t: T, than: string) {
+  let id = uuid()
+  while (id <= than) id = uuid()
+  return await t.run(async (ctx) => {
+    const _id = await ctx.db.insert('organizations', {
+      id,
+      name: 'Later',
+      slug: `later-${id.slice(0, 8)}`,
+      created_at: NOW,
+      date_format: 'iso',
+      week_start: 1,
+      week_one_rule: 'first4day',
+      default_plannable_hours: 40,
+    })
+    await ctx.db.insert('org_counters', { org_id: id, next_issue_num: 1, next_project_num: 2 })
+    return (await ctx.db.get(_id)) as Doc<'organizations'>
+  })
+}
 
 /** The wake time of the snooze-return test, minute 5. */
 const at5 = () => new Date(START + 5 * MINUTE).toISOString()
