@@ -11,10 +11,12 @@ import {
   isProjectListRead,
   LISTS_UNCHECKED,
   projectListsServer,
+  projectListsStandIn,
 } from '../../store/projectSettingsListsStandIn.setup'
 import {
   isProjectSettingsRead,
   projectSettingsServer,
+  readsServer,
 } from '../../store/projectSettingsStandIn.setup'
 
 /* Settings › Projects and Archived projects on the real store, their reads
@@ -535,6 +537,36 @@ describe('Settings › Projects', () => {
     await press(find('[data-settings-projects-previous]'))
     expect(projectNames()).toEqual(['Design #7', 'Design #8'])
     expect(document.activeElement).toBe(find('[data-project-row="design7"] button'))
+  })
+
+  it('keeps focus through Retry of a failed Next, on Retry while it fails and on the first new row once it answers', async () => {
+    // a later page's read fails while `later` says so
+    let later = true
+    server.lists = readsServer((name, args) => {
+      if (later && 'after' in args) throw new Error('offline')
+      return projectListsStandIn(server.snap, name, args, server.force)
+    })
+    server.force = { batch: 2 }
+    await projects()
+    await press(find('[data-settings-projects-next]'))
+    const retry = () => find('[data-settings-projects-end] [data-page-retry]')
+    expect(projectsEnd().textContent).toContain("Couldn't load the next page.")
+    expect(document.activeElement).toBe(retry())
+    // Retry leaves while Next reads again, and comes back with the focus
+    // when that fails too
+    server.lists.hold(true)
+    await press(retry())
+    expect(has('[data-page-retry]')).toBe(false)
+    server.lists.hold(false)
+    await rerun()
+    expect(document.activeElement).toBe(retry())
+    later = false
+    server.lists.hold(true)
+    await press(retry())
+    server.lists.hold(false)
+    await rerun()
+    expect(projectNames()).toEqual(['Ops', 'Plan'])
+    expect(document.activeElement).toBe(find('[data-project-row="ops"] button'))
   })
 
   it('offers Next beside a page the server stopped, which never ends the list', async () => {

@@ -252,21 +252,22 @@ type PageWords = {
    (lib/pagedList.ts pageEnd), with Previous and Next. `hook` names its
    data attributes. A move that runs keeps its button with static text and
    no action, so keyboard focus stays on it; a move that failed keeps the
-   page, says so with Retry, and keeps the other move beside it. */
+   page, says so with Retry, and keeps the other move beside it. `focus`
+   runs the moves and Retry, so focus follows them (useMoveFocus). */
 function PageFold({
   page,
   end,
   hook,
   words,
   tooLong,
-  onMove,
+  focus,
 }: {
   page: PagedPages<SettingsListAnswer<unknown>, unknown>
   end: PageEnd
   hook: string
   words: PageWords
   tooLong: boolean
-  onMove: (to: 'next' | 'previous') => void
+  focus: MoveFocus
 }) {
   const running = page.moving
   const button = (to: 'next' | 'previous') => (
@@ -278,7 +279,7 @@ function PageFold({
       {...{ [`data-${hook}-${to}`]: '' }}
       className={running === to ? 'pointer-events-none italic' : 'text-text-1'}
       aria-disabled={running !== null || undefined}
-      onClick={() => running === null && onMove(to)}
+      onClick={() => running === null && focus.move(to)}
     >
       {running === to ? 'Loading…' : to === 'next' ? 'Next' : 'Previous'}
     </Button>
@@ -290,7 +291,7 @@ function PageFold({
       variant="ghost"
       className="h-control-sm text-sm"
       data-page-retry=""
-      onClick={() => page.retry()}
+      onClick={focus.retry}
     >
       {end === 'failed' && page.failedMove === null ? 'Try again' : 'Retry'}
     </Button>
@@ -364,19 +365,23 @@ function PageFold({
   )
 }
 
+/** A page's Previous and Next, and its Retry, through useMoveFocus. */
+type MoveFocus = { move: (to: 'next' | 'previous') => void; retry: () => void }
+
 /**
  * Focus for a page shown a page at a time: after a move that replaced the
  * page, `first()`, the first row's button, else `rest()`, the search box;
  * after one that failed, its Retry. Only while focus is on the page's
  * fold or nowhere, so focus that moved on stays. Answers the move to call
- * for Previous and Next.
+ * for Previous and Next, and the page's Retry, which for a failed move
+ * counts as that move again, since Retry leaves as the move starts.
  */
 function useMoveFocus(
   page: PagedPages<unknown, unknown>,
   hook: string,
   first: () => HTMLElement | null,
   rest: () => HTMLElement | null,
-) {
+): MoveFocus {
   const moved = React.useRef(false)
   const at = `${page.starts.length}:${String(page.starts[page.starts.length - 1])}`
   React.useLayoutEffect(() => {
@@ -393,10 +398,16 @@ function useMoveFocus(
       restoreFocus(document.querySelector<HTMLElement>(`[data-${hook}-end] [data-page-retry]`))
     else restoreFocus(first() ?? rest())
   }, [at, page.moving, page.failedMove])
-  return (to: 'next' | 'previous') => {
-    moved.current = true
-    if (to === 'next') page.next()
-    else page.previous()
+  return {
+    move: (to) => {
+      moved.current = true
+      if (to === 'next') page.next()
+      else page.previous()
+    },
+    retry: () => {
+      if (page.failedMove !== null) moved.current = true
+      page.retry()
+    },
   }
 }
 
@@ -639,7 +650,7 @@ export function OrgProjectsPage({
               end={end}
               hook="settings-projects"
               tooLong={search.tooLong}
-              onMove={move}
+              focus={move}
               words={{
                 loading: 'Loading projects…',
                 notReady: "Projects can't be listed yet. Try again in a few minutes.",
@@ -1268,7 +1279,7 @@ export function ArchivedProjectsPage() {
             end={end}
             hook="archived-projects"
             tooLong={search.tooLong}
-            onMove={move}
+            focus={move}
             words={{
               loading: 'Loading archived projects…',
               notReady: "Archived projects can't be listed yet. Try again in a few minutes.",
