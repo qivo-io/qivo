@@ -1611,13 +1611,20 @@ function App() {
 
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
   // (sidebar header +, palette) opens the project one, everything else —
-  // always parented — opens the sub-project one
-  const openNewProject = (init, focusAfterClose?: () => HTMLElement | null) => {
+  // always parented — opens the sub-project one. `onCreated` hears the id
+  // of a sub-project the dialog creates, as Settings › Projects keeps it in
+  // its open list until the server's list holds it.
+  const openNewProject = (
+    init,
+    focusAfterClose?: () => HTMLElement | null,
+    onCreated?: (id: string) => void,
+  ) => {
     createdProject.current = null
     setModal({
       kind: init && init.kind === 'program' ? 'program' : 'subproject',
       init: { ...init },
       focusAfterClose,
+      onCreated,
     })
   }
   /* The control that stands for project `id` once App shows it: its row in
@@ -2025,6 +2032,7 @@ function App() {
       },
     )
     createdProject.current = id ?? null
+    if (id) modal?.onCreated?.(id)
     setModal(null)
   }
 
@@ -2174,8 +2182,8 @@ function App() {
                   }
                   onExit={exitSettings}
                   onNewProject={() => openNewProject({ kind: 'program' })}
-                  onNewSubProject={(parent, focusAfterClose) =>
-                    openNewProject({ parent }, focusAfterClose)
+                  onNewSubProject={(parent, focusAfterClose, onCreated) =>
+                    openNewProject({ parent }, focusAfterClose, onCreated)
                   }
                   archivedTasksProject={archiveProject || scopeMeta}
                   onOpenArchivedTask={(task) =>

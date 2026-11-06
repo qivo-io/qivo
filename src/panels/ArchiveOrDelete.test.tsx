@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import type { ProjectRemovalSummary } from '../store/planner'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
+import { isProjectListRead, projectListsServer } from '../store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
 
 /* The Archive or delete windows on the real store, fed one snapshot. Mira
@@ -115,17 +116,21 @@ async function load() {
   )
   windowRead = null
   windowFail = null
-  // a project's page reads its settings from the snapshot last delivered
+  // a project's page and Archived projects read the server from the
+  // snapshot last delivered
   let held = snap
   const settings = projectSettingsServer(() => held)
+  const lists = projectListsServer(() => held)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       deliver = (snapshot) => {
         held = structuredClone(snapshot)
         next(structuredClone(snapshot))
         settings.rerun()
+        lists.rerun()
       }
       deliver(snap)
     }
@@ -921,13 +926,14 @@ describe('Archive or delete a project', () => {
 
 describe('Archived projects', () => {
   /* Shows the page with Plan and Docs archived, with their sub-projects,
-     and Mira leading both. */
+     and Mira leading both, the page reading the server's list from the
+     snapshot last delivered. */
   async function show() {
     for (const p of snap.projects) p.archived_at = AT
     const docs = snap.projects.find((p) => p.id === 'docs')
     if (docs) docs.lead_id = 'mira'
     await act(async () => deliver(snap))
-    const settings = await import('./settings/ProjectSettings')
+    const settings = await import('./settings/ProjectLists')
     const version = await import('../store/usePlannerVersion')
     function Live() {
       version.usePlannerVersion()

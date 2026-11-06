@@ -9,6 +9,7 @@ import { answerLabelPages } from './store/labelPagesStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
+import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 
 /* Back or Forward to a task's address while every task loads
@@ -193,16 +194,20 @@ async function bootLoading(
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
-  // a project's Settings page reads from the workspace last published
+  // a project's Settings page and Settings' project lists read from the
+  // workspace last published
   const settings = projectSettingsServer(() => server)
+  const lists = projectListsServer(() => server)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
         settings.rerun()
+        lists.rerun()
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
@@ -639,7 +644,8 @@ describe.each([
     for (const [page, address, shows] of [
       ['org-teams', 'org-teams', '[data-org-teams] [data-team-row="crew"]'],
       ['team:crew', 'team:crew', '[data-settings-team-member="leo"]'],
-      ['projects', 'projects', '[data-settings-projects]'],
+      // the server's rows, which come without a task
+      ['projects', 'projects', '[data-settings-projects] [data-project-row]'],
       [undefined, 'project/1', '[data-project-access-user="leo"]'],
     ] as const) {
       await back(`/app/${org}/settings/${address}`)
