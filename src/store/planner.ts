@@ -3407,12 +3407,13 @@ function followsLive(slot: ViewSlot, marks: MilestoneMarks): boolean {
   )
 }
 
-/* The milestone reads each saved milestone part still paints, by part:
-   from the server's acceptance on, only the reads whose answers held what
-   its write changed and have not delivered it since (milestoneNeeds). A
-   read leaves its part's reads once it delivers the write, or its answer
-   goes, and none ever joins them, so a read whose answer came after the
-   write shows that answer as the server sent it. */
+/* The milestone reads each saved milestone part still paints, by part.
+   From the server's acceptance on, these are only the reads whose answers
+   held what its write changed and have not delivered it since, and the
+   reads an earlier saved part on the same milestones still paints
+   (milestoneNeeds). A read leaves its part's reads once it delivers the
+   write, or its answer goes, and none ever joins them, so a read whose
+   answer came after the write shows that answer as the server sent it. */
 const milestoneScopes = new WeakMap<Paint, Set<ViewSlot>>()
 
 /** A saved milestone part as milestoneNeeds weighs a later one against
