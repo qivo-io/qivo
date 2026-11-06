@@ -58,7 +58,8 @@
  * three tasks under the live top-level project that holds the fewest
  * sub-projects and deletes it whole as Nora through projects:deleteDeep, so
  * the list holds a project item and its tasks. A run deletes only what is
- * still live. It reads the tasks Deleted items stores (deleted_tasks), which
+ * still live, read as the run left them, so a task it archived stays
+ * archived. It reads the tasks Deleted items stores (deleted_tasks), which
  * also keeps the tasks seeding from making them again, and makes the
  * sub-project only while no row or used id holds its id. Northstar's own
  * tasks stay as they are.
@@ -1081,9 +1082,10 @@ export function planArchive(count, seeded, parents) {
 /** The seeded tasks to move to Deleted items so that the first `count`
     seeded tasks that are neither parents, in a family (every 25th task and
     the three after it, planSeed) nor archived are there: `seeded` holds
-    every seeded task by number (seededTasks), the ones Deleted items
-    stores among them with `deleted`, and `parents` the ids of tasks with
-    subtasks. A family stays whole, so a rerun's planSeed finds it as it
+    every seeded task by number (seededTasks) as it is now, with the tasks
+    this run made and archived, each with its project, the ones Deleted
+    items stores among them with `deleted`, and `parents` the ids of tasks
+    with subtasks. A family stays whole, so a rerun's planSeed finds it as it
     left it. Each comes with who deletes it: every seventh the agent
     (`agent`) when the run has its key, every third Leo where `leads` says
     he leads the task's top-level project, and Nora the rest. A task in
@@ -1367,7 +1369,11 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
         )
       }
       if (name !== 'issues:create') continue
-      seeded.set(number, { task: { id: fields.id }, parent: fields.parent_id ?? null })
+      // --deleted reads its project, as Leo deletes where he leads
+      seeded.set(number, {
+        task: { id: fields.id, project_id: fields.project_id },
+        parent: fields.parent_id ?? null,
+      })
       if (++made % 500 === 0) log(`${made} seeded tasks added`)
     }
   }
@@ -1389,7 +1395,10 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
-    await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
+    const ids = planArchive(options.archived, seeded, parents)
+    await seedArchive(ids, { client, org, target, log })
+    // --deleted plans from the tasks as they are now, so it leaves these
+    markArchived(seeded, ids)
   }
   if (options.deleted > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
@@ -1753,6 +1762,16 @@ async function seedRelations({
 export function windowKeyNote(key) {
   const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
   return `Its window key is ${key}, ${share}% into the key space. The app loads its task windows only when a page needs every task, all of them at once, so the key names the window that brings it then.`
+}
+
+/** Marks the seeded tasks `ids` archived in `seeded` (seededTasks), as a
+    run that just archived them finds them, so a later plan of the same run
+    reads them as they are now. */
+function markArchived(seeded, ids, at = new Date().toISOString()) {
+  const archivedNow = new Set(ids)
+  for (const [n, entry] of seeded)
+    if (archivedNow.has(entry.task.id))
+      seeded.set(n, { ...entry, task: { ...entry.task, archived_at: at } })
 }
 
 /* Archives the tasks `ids` (planArchive) through `client`, which acts as

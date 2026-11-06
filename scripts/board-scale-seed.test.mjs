@@ -1842,6 +1842,80 @@ describe('board-scale-seed --deleted', () => {
     ).toBeNull()
   })
 
+  it('leaves the tasks it archived in the same run and deletes as Leo where he leads, and a rerun does nothing', async () => {
+    fake.projects = [
+      { id: 'top', org_id: 'org', type: 'meta', key: 'LUMA', name: 'Luma Sensor', lead_id: 'leo' },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'top', key: 'FW', name: 'Firmware' },
+    ]
+    fake.people = [
+      {
+        email: 'leo@demo.qivo.io',
+        auth_user_id: 'leo-login',
+        id: 'leo',
+        name: 'Leo Martins',
+        org_id: 'org',
+        kind: 'person',
+        active: true,
+      },
+    ]
+    fake.issues = []
+    fake.archived = []
+    fake.deletedTasks = []
+    const args = [...local, '--tasks', '12', '--archived', '6', '--deleted', '4']
+    try {
+      fake.calls = []
+      await runBoardScaleSeed(args, { env, log: () => {} })
+      const of = (name) => fake.calls.filter(([call]) => call === name).map(([, fields]) => fields)
+      const made = of('issues:create').filter((f) => f.description?.startsWith('Seeded by'))
+      const idOf = (n) =>
+        made.find((f) => f.description === `Seeded by board-scale-seed as task ${n + 1}.`).id
+      expect(of('issues:archive').map((f) => f.id)).toEqual([0, 1, 2, 3, 4, 5].map(idOf))
+      // tasks 0 to 3 are a family and 4 and 5 archived now, so 6 to 9 go,
+      // the third as Leo, who leads their top-level project
+      const deletes = fake.calls.filter(([name]) => name === 'issues:deleteDeep')
+      expect(deletes.map(([, fields, login]) => [fields.id, login])).toEqual([
+        [idOf(6), 'nora-login'],
+        [idOf(7), 'nora-login'],
+        [idOf(8), 'leo-login'],
+        [idOf(9), 'nora-login'],
+      ])
+      // the backend as the run left it
+      const [parent] = of('issues:createParent')
+      const rows = made.map((f) => ({
+        ...f,
+        org_id: 'org',
+        parent_id: f.parent_id ?? (f.id === parent.id ? parent.parent_id : null),
+      }))
+      const archivedIds = new Set(of('issues:archive').map((f) => f.id))
+      const deletedIds = new Set(deletes.map(([, f]) => f.id))
+      fake.archived = rows
+        .filter((row) => archivedIds.has(row.id))
+        .map((row) => ({ ...row, archived_at: '2026-10-29T00:00:00.000Z' }))
+      fake.deletedTasks = rows
+        .filter((row) => deletedIds.has(row.id))
+        .map((row) => ({
+          org_id: 'org',
+          task_id: row.id,
+          title: row.title,
+          search_text: `${row.title}\n${row.description}`,
+          project_id: row.project_id,
+        }))
+      fake.issues = rows.filter((row) => !archivedIds.has(row.id) && !deletedIds.has(row.id))
+      const sub = of('projects:create')[0]
+      fake.usedRows = [{ org_id: 'org', table: 'projects', row_id: sub.id }]
+      fake.calls = []
+      await runBoardScaleSeed(args, { env, log: () => {} })
+      expect(fake.calls).toEqual([])
+    } finally {
+      fake.projects = null
+      fake.people = []
+      fake.issues = []
+      fake.archived = []
+      fake.deletedTasks = []
+      fake.usedRows = []
+    }
+  })
+
   it('deletes as Nora and Leo, makes and deletes the sub-project, and a rerun deletes nothing more', async () => {
     fake.projects = [
       { id: 'top', org_id: 'org', type: 'meta', key: 'LUMA', name: 'Luma Sensor', lead_id: 'leo' },
