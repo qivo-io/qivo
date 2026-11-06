@@ -580,16 +580,50 @@ describe('claimAlerts in the default mode', () => {
     })
     clock(21)
     expect(await summary(b)).toEqual({ state: 'none' })
-    // a switch to 'recent' names no session, so the first claim after it is
-    // not sent to summarize, whichever session is the target
+    // a switch to 'recent' names the switching session, so another target's
+    // first claim after it summarizes first
     clock(22)
     await setDelivery(b, 'all')
     await setDelivery(b, 'recent')
-    expect((await accountOf(t, a.authUserId))?.covered_by).toBeUndefined()
+    expect((await accountOf(t, a.authUserId))?.covered_by).toBe(b.sessionId)
     clock(23)
     await beat(a, { active: true })
+    expect(await claim(a, [], START + 22.5 * MINUTE)).toEqual({ state: 'summarize_first' })
+    expect(await summary(a)).toEqual({ state: 'none' })
     expect(await claim(a, [], START + 22.5 * MINUTE)).toMatchObject({ state: 'granted' })
     expect((await accountOf(t, a.authUserId))?.covered_by).toBe(a.sessionId)
+  })
+
+  it('sends another target to summarize first after a switch to recent by a session that then slept', async () => {
+    const t = newT()
+    const { f, s: x } = await guestFixture(t)
+    const b = await signIn(t, x.authUserId)
+    await beat(b)
+    await beat(x)
+    await setDelivery(x, 'all')
+    // x reports activity before the switch, so it is the target after it
+    clock(0.5)
+    await beat(x, { active: true })
+    clock(1)
+    await setDelivery(x, 'recent')
+    await beat(x)
+    // x sleeps; b, live and idle, sees E first
+    const e = eventOf((await newsAt(t, f, 1.5)).message)
+    clock(2)
+    await beat(b)
+    expect(await claim(b, [e], e.at)).toEqual({ state: 'not_target' })
+    // x lapses, so b is the target, and F arrives past E's live window
+    for (const minute of [3, 4, 5]) {
+      clock(minute)
+      await beat(b)
+    }
+    clock(20)
+    await beat(b)
+    const later = eventOf((await newsAt(t, f, 19.5)).message)
+    expect(await claim(b, [later], later.at)).toEqual({ state: 'summarize_first' })
+    // the summary covers E, which nobody alerted
+    expect(await summary(b)).toEqual({ state: 'summary' })
+    expect(await claim(b, [later], later.at)).toMatchObject({ state: 'granted', keys: [] })
   })
 
   it('sends the session that moved the checkpoint to summarize first when another was the target since', async () => {

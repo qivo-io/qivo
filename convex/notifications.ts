@@ -25,12 +25,12 @@
  *
  * - settings: the mode. It reads the account row only.
  * - setDelivery: writes the mode, counting one demo write. A change sets
- *   changed_at, NOTIFY.lag_ms before which no live alert is granted; a
- *   switch to 'all' keeps the account's checkpoint as every session's floor
- *   (all_from), and a switch to 'recent' takes the checkpoint and a
- *   baseline now and names no session as the one that moved it
- *   (covered_by), so a mode change replays nothing and the first claim
- *   after it is not sent to summarize.
+ *   changed_at, NOTIFY.lag_ms before which no live alert is granted; a switch
+ *   to 'all' keeps the account's checkpoint as every session's floor
+ *   (all_from), and a switch to 'recent' takes the checkpoint and a baseline
+ *   now and names the switching session as the one that moved it
+ *   (covered_by), so a mode change replays nothing and only another target's
+ *   first claim is sent to summarize.
  * - beat: registers the caller's session and keeps it live, with whether
  *   it can notify (`can_notify`) and whether the person used it since the
  *   last report (`active`, written at most every NOTIFY.active_ms; a first
@@ -45,27 +45,27 @@
  * - claimAlerts: which of the events the caller offers it may show. It
  *   answers `not_registered` without a row that can notify, and in 'recent'
  *   `not_target` unless the caller is the target, and `summarize_first`,
- *   writing nothing, when another session's claim or summary moved the
- *   checkpoint last (covered_by) or another session that can notify reported
- *   activity after the checkpoint, which made that session the target after
- *   it (model/notificationSessions.ts otherActiveSince). So a session that
- *   became the target summarizes before its claim can move the checkpoint
- *   past what arrived while it was not the target, even when it was the
- *   target before. It grants an event once in its scope, never one at or
- *   before the latest of the live window (NOTIFY.live_window_ms) and
- *   NOTIFY.lag_ms before the last mode change and before the scope's last
- *   summary, and records each grant for NOTIFY.keep_ms. Within that minute
- *   before a summary its records refuse what it announced, so a notice stored
- *   late with an earlier time that the summary never saw is still granted.
- *   Past the scope's rate window it grants no more and answers `limited`.
- *   `through` moves the scope's checkpoint, and in 'recent' names the
- *   caller's session as the one that moved it. It reads the account row, in
- *   'recent' the session rows up to the target and at most two rows that
- *   reported activity after the checkpoint, and one or two record ranges an
- *   event, and writes a record a grant and the account row ('recent') or the
- *   caller's row ('all'). It reads no message or item. The keys and times
- *   come from the feed the caller read under access, and a grant tells it
- *   nothing more.
+ *   writing nothing, when another session's claim, summary or switch to
+ *   'recent' moved the checkpoint last (covered_by) or another session that
+ *   can notify reported activity after the checkpoint, which made that
+ *   session the target after it (model/notificationSessions.ts
+ *   otherActiveSince). So a session that became the target summarizes before
+ *   its claim can move the checkpoint past what arrived while it was not the
+ *   target, even when it was the target before. It grants an event once in
+ *   its scope, never one at or before the latest of the live window
+ *   (NOTIFY.live_window_ms) and NOTIFY.lag_ms before the last mode change and
+ *   before the scope's last summary, and records each grant for
+ *   NOTIFY.keep_ms. Within that minute before a summary its records refuse
+ *   what it announced, so a notice stored late with an earlier time that the
+ *   summary never saw is still granted. Past the scope's rate window it
+ *   grants no more and answers `limited`. `through` moves the scope's
+ *   checkpoint, and in 'recent' names the caller's session as the one that
+ *   moved it. It reads the account row, in 'recent' the session rows up to
+ *   the target and at most two rows that reported activity after the
+ *   checkpoint, and one or two record ranges an event, and writes a record a
+ *   grant and the account row ('recent') or the caller's row ('all'). It
+ *   reads no message or item. The keys and times come from the feed the
+ *   caller read under access, and a grant tells it nothing more.
  * - claimSummary: whether eligible unread activity arrived since the
  *   scope's checkpoint, decided here from the caller's seats' inbox items
  *   under current access, read state and snooze (model/notificationCatchup.ts
@@ -111,8 +111,8 @@
  *   session moved the checkpoint or was the target, and the summary covers
  *   what arrived in between; its records refuse what it announced. No claim
  *   answers it before the login has a checkpoint. A switch to 'recent' names
- *   no session, so after it a claim answers it only once another session
- *   reported activity.
+ *   the switching session, so the first claim of any other target after it
+ *   answers it.
  * - It sends end when the last tab of its browser profile closes. A tab
  *   that took over beating sends it only after its first beat. End changes
  *   nothing unless that tab beat last, and a missed end leaves the session
@@ -163,7 +163,8 @@ type Checkpoint = Partial<
 /* Writes `patch` to the scope's row, the caller's session row in 'all' or
  * the account row in 'recent', which it adds when the login has none. On
  * the account row a move of covered_at also names the caller's session in
- * covered_by, which claimAlerts compares with the next target's. */
+ * covered_by, which claimAlerts compares with the next target's, as
+ * setDelivery does on a switch to 'recent'. */
 async function saveHolder(
   ctx: MutationCtx & { authUserId: string; sessionId: string },
   holder: Holder | null,
@@ -215,7 +216,15 @@ export const setDelivery = sessionMutation({
     const change =
       delivery === 'all'
         ? { delivery, changed_at: now, all_from: account?.covered_at ?? now }
-        : { delivery, changed_at: now, covered_at: now, baseline_at: now, covered_by: undefined }
+        : {
+            delivery,
+            changed_at: now,
+            covered_at: now,
+            baseline_at: now,
+            // so another target's first claim summarizes what arrived after
+            // the switch while it was not the target
+            covered_by: ctx.sessionId,
+          }
     if (account === null)
       await ctx.db.insert('account_notifications', { auth_user_id: ctx.authUserId, ...change })
     else await ctx.db.patch(account._id, change)
