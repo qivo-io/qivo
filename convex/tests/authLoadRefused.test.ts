@@ -6,9 +6,11 @@
  * demo's foreign or non-JSON anonymous sign-in, a body over the cap and the
  * OAuth machine routes on the demo. Every route that needs Better Auth fails
  * with an error, never with a 2xx or a cookie, and the demo's anonymous
- * sign-in takes no admission, because the import comes first. A last case lets the import
- * succeed with a recording stand-in for createAuth, to show what the
- * sign-in handler hands Better Auth. */
+ * sign-in takes no admission, because the import comes first. The last
+ * cases let the import succeed with a recording stand-in for createAuth, to
+ * show what the sign-in handler hands Better Auth, and that a misconfigured
+ * app origin fails the auth routes before that handler, with no CORS echo,
+ * while REST still answers. */
 /// <reference types="vite/client" />
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_BODY_MAX_BYTES } from '../lib/limits'
@@ -34,6 +36,7 @@ const fetchOf = (t: T, path: string, init?: Init): Promise<Response> =>
   (t as unknown as { fetch(path: string, init?: Init): Promise<Response> }).fetch(path, init)
 
 const APP = 'http://localhost:5199'
+const STAGING_APP = 'https://app.example.test'
 const DEMO_APP = 'https://demo.qivo.io'
 const FOREIGN = 'https://client.example'
 const json = (origin: string, body: string): Init => ({
@@ -242,5 +245,33 @@ describe('a router whose import of auth.ts succeeds', () => {
         request.headers.get('x-forwarded-proto'),
       ]),
     ).toEqual([['app.example.test', 'https']])
+  })
+
+  it('fails the auth routes with an error and no CORS echo when an app origin is misconfigured, while REST answers', async () => {
+    // Hosted deployments refuse an http: app origin (lib/deployment.ts appOrigins).
+    vi.stubEnv('QIVO_ENVIRONMENT', 'staging')
+    vi.stubEnv('SITE_URL', STAGING_APP)
+    vi.stubEnv('ADDITIONAL_APP_ORIGINS', 'http://x.test')
+    const t = newT()
+    const preflight = await settle(
+      fetchOf(t, '/api/auth/sign-in/email', {
+        method: 'OPTIONS',
+        headers: {
+          Origin: STAGING_APP,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'content-type,better-auth-cookie',
+        },
+      }),
+    )
+    const session = await settle(
+      fetchOf(t, '/api/auth/get-session', { headers: { Origin: STAGING_APP } }),
+    )
+    for (const outcome of [preflight, session]) {
+      expectFailedClosed(outcome, /requires HTTPS for every app origin/)
+      if (outcome instanceof Response)
+        expect(outcome.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    }
+    expect(auth.received).toEqual([])
+    expect((await fetchOf(t, '/v1/me')).status).toBe(401)
   })
 })
