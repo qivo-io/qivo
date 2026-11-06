@@ -20,7 +20,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { LIMITS, linksFull, MIB, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
+import {
+  DEFAULT_PAGE_SIZE,
+  LIMITS,
+  linksFull,
+  MIB,
+  PARENT_IS_SUBTASK,
+  SUBTASK_WITH_SUBTASKS,
+} from '../lib/limits'
 import { ARCHIVED_DETACH, STALLED_MS } from '../model/deletedItems'
 import { DROPPED_IMAGES_MAX, DROPPED_KEEP_MS, IMAGE_NOT_ATTACHED } from '../model/descriptionImages'
 import { insertTask, patchTask } from '../model/descriptions'
@@ -575,7 +582,7 @@ describe('a move that carries archived subtasks', () => {
     .repeat(6)
     .trim()
 
-  it(`moves ${LIMITS.moveSubtree.max} subtasks of ordinary text through REST, MCP and the app within the real limits, and REST answers in full`, async () => {
+  it(`moves ${LIMITS.moveSubtree.max} subtasks of ordinary text through REST, MCP and the app within the real limits, and REST answers its first pages`, async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     const parent = await task(fx, { title: 'Long family' })
     const kids = await plantFamily(
@@ -592,8 +599,11 @@ describe('a move that carries archived subtasks', () => {
     // REST, whose answer reads the active subtasks again
     const answer = await restMove(fx, parent, dest)
     expect(answer.project_id).toBe(dest.id)
-    // an active task's answer lists its active subtasks
-    expect(answer.subtasks).toHaveLength(LIMITS.subtasks.max)
+    // an active task's answer lists the first page of its active subtasks,
+    // with a cursor for the rest, and counts them all in its progress
+    expect(answer.subtasks).toHaveLength(DEFAULT_PAGE_SIZE)
+    expect(answer.subtasks_next_cursor).toEqual(expect.any(String))
+    expect(answer.progress).toMatchObject({ total: LIMITS.subtasks.max, partial: false })
     await allIn(dest.id)
     // MCP carries them back
     const mcp = JSON.parse(
