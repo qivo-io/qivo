@@ -241,8 +241,15 @@ the task from the deployment's preview (`accessRemovals.preview`), chooses
 Nora in the **Reassign** picker's search (`accessRemovals.reassignChoices`)
 and saves, then checks over REST that the task is Nora's and the agent's
 grant is gone (`ui/removal-window`). Against a backend from before the
-removal window's release that step fails. It then makes a sub-project of
-its own under its project, uploads one file of 2,048 bytes over REST to a
+removal window's release that step fails. In **New project** it then makes
+a project of its own with its run tag, led by the Standard agent and shared
+with the run's team as Viewer and with Nora as User from the deployment's
+pickers. It opens **New sub-project** from its first project's menu, picks
+the new project from the **Project** list and makes a sub-project there,
+and checks both over REST (`ui/project-dialogs`). The cleanup deletes both.
+Against a backend from before the release after v0.1.138, which still
+requires `sort_order`, that step fails. It then makes a sub-project of its
+own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
 1 file** by searching **Storage by project** for its run tag and the word
