@@ -80,8 +80,8 @@
     "reason": "shared timeline/panel geometry and data-derived heat intensity; weekly grid presentation is scoped in Resources.css"
   },
   "src/views/Roadmap.tsx": {
-    "count": 23,
-    "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, the milestone flag band's computed height, and persisted colors"
+    "count": 24,
+    "reason": "timeline coordinates, active utilization week geometry, transforms, measured widths, the milestone flag band's computed height, a track row's milestone box height, and persisted colors"
   },
   "src/views/overview/StatusBar.tsx": {
     "count": 1,
