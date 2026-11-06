@@ -828,7 +828,7 @@ function useTasksLoadingNews() {
   useEffect(() => {
     if (state === 'arriving') {
       said.current = true
-      announce('Loading every task. Pages that need them open once they are in.')
+      announce('Loading every task. What asked for them continues once they are in.')
     } else if (state === 'failed') {
       said.current = true
       announce(`${TASKS_FAILED_TEXT} ${reason}`)
