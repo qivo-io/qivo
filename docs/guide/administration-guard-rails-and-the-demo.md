@@ -49,11 +49,11 @@ seat. An active guest counts toward billing only without an active home membersh
 
 **Organization → Users** lists 25 people at a time in name order, people and
 agents first, then guests with their projects and roles, with **Previous**
-and **Next**. The search finds anyone by the words of their name or by their
-email address, ignoring case and accents, also people on other pages. A
-person you add shows at the top until their page is open. A name, address or
-hours you are typing stays on screen when you search or change page, and so
-does an agent whose keys are open. A guest row names up to ten projects and
+and **Next**. The search finds anyone by the words of their name, ignoring
+case and accents, or by their email address as it is stored, also people on
+other pages. A person you add shows at the top until their page is open. A
+name, address or hours you are typing or saving stays on screen when you
+search or change page, and so does an agent whose keys are open. A guest row names up to ten projects and
 says when there are more. The last admin's role and **Remove** stay locked
 while the organization has one active admin, counted across the whole
 organization, not just the page on screen.
