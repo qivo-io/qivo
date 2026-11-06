@@ -349,15 +349,22 @@ const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
 // with the range's sentence. The typed hours are a draft against the hours
 // they began from (lib/savedDraft.ts): hours changed elsewhere meanwhile show
 // under the field, and nothing saves until Use saved or Keep mine. Team
-// leaders may edit this field, not other profile data.
+// leaders may edit this field, not other profile data. `user` needs only the
+// fields the field shows, so a team's member list can pass a member the
+// store does not hold, read-only. The save goes through P.updateUser, which
+// needs the store's row, so pass `canEdit` only while the store holds it.
+// `onUnsaved` hears whether the field holds unsaved hours, so a list can
+// keep the row on screen while a search would hide it.
 export function PlannableHoursInput({
   user,
   canEdit,
   width = 48,
+  onUnsaved,
 }: {
-  user: UserVM
+  user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'plannableHours'>
   canEdit: boolean
   width?: number
+  onUnsaved?: (id: string, unsaved: boolean) => void
 }) {
   const draft = useSavedDraft(
     `${user.id}:plannable_hours`,
@@ -366,6 +373,9 @@ export function PlannableHoursInput({
     'plannable hours',
     !canEdit || user.isAgent,
   )
+  const id = user.id
+  useEffectS(() => onUnsaved?.(id, draft.unsaved), [id, draft.unsaved])
+  useEffectS(() => () => onUnsaved?.(id, false), [id])
   // a number refused on blur stays typed and marked until it changes, or
   // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)

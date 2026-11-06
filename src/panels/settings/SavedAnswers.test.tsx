@@ -12,6 +12,7 @@ import {
   isProjectSettingsRead,
   projectSettingsServer,
 } from '../../store/projectSettingsStandIn.setup'
+import { isTeamSettingsRead, teamSettingsServer } from '../../store/teamSettingsStandIn.setup'
 
 /* Create forms and rename toasts wait for the server's answer, on the real
    store. A create keeps the typed name until the server accepts it, and
@@ -57,11 +58,17 @@ let pages: {
   modals: typeof import('../Modals')
   detail: typeof import('../IssueDetail')
   version: typeof import('../../store/usePlannerVersion')
+  store: typeof import('../../store/planner')
 }
 let requests: Pending[]
 let toast: ReturnType<typeof vi.fn<(message: string, tone?: string) => void>>
 let container: HTMLDivElement
 let root: Root
+/* The workspace the store loads, the one the team reads answer from, and
+   those reads. */
+let fixture: Snapshot
+let server: Snapshot
+let teamReads: ReturnType<typeof teamSettingsServer>
 
 /* Loads the store and pages. `betaName` names the Beta milestone, so a test
    can store a name saved with spaces around it. `crewName` names the Crew
@@ -123,9 +130,16 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
   requests = []
   network.query.mockResolvedValue(null)
   const settings = projectSettingsServer(() => snap)
+  // Settings › Teams and a team's page read the teams the server holds,
+  // which a created team joins once the test answers its create
+  fixture = snap
+  server = snap
+  const teams = teamSettingsServer(() => server)
+  teamReads = teams
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
     if (name === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
     else next(structuredClone(snap))
@@ -146,6 +160,7 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     modals: await import('../Modals'),
     detail: await import('../IssueDetail'),
     version: await import('../../store/usePlannerVersion'),
+    store,
   }
 }
 
@@ -193,6 +208,10 @@ async function render(page: () => React.ReactNode) {
       </TooltipProvider>,
     ),
   )
+  // the pages' server reads answer on their subscriptions
+  await act(async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve()
+  })
 }
 
 const input = (selector: string) => document.querySelector<HTMLInputElement>(selector)
@@ -250,9 +269,29 @@ describe('create forms', () => {
     expect(field?.value).toBe('Field crew')
     expect(button('Add team')?.disabled).toBe(true)
     expect(toasts()).toEqual([])
+    // a create on its way shows nowhere, though the store painted it
+    const list = () => document.querySelector('[data-org-teams]')?.textContent ?? ''
+    expect(list()).not.toContain('Field crew')
+    // the server's batch holds the created team before the create's
+    // answer, as Convex delivers a write's results first
+    const created = pages.store.P.teams.find((t) => t.name === 'Field crew')
+    if (!created) throw new Error('the store painted no created team')
+    server = structuredClone(fixture)
+    server.teams.push({
+      id: created.id,
+      org_id: fixture.orgs[0].id,
+      name: 'Field crew',
+      track_delay_default: true,
+      created_at: NOW,
+    })
+    await act(async () => teamReads.rerun())
     await answer('teams:create', 'accept')
     expect(field?.value).toBe('')
     expect(toasts()).toEqual(['Team “Field crew” created'])
+    expect(
+      document.querySelector(`[data-team-row="${created.id}"] [data-team-count]`)?.textContent,
+    ).toBe('0 members')
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
   })
 
   it('keeps a refused team name for another try', async () => {
@@ -264,8 +303,9 @@ describe('create forms', () => {
     expect(field?.value).toBe('Field crew')
     expect(button('Add team')?.disabled).toBe(false)
     expect(toasts()).toEqual(['The server said no. Change reverted.'])
-    // the painted team left with the refusal
+    // a refused team never shows
     expect(document.querySelector('[data-org-teams]')?.textContent).not.toContain('Field crew')
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
   })
 
   it('keeps a new label name until the server creates the label', async () => {

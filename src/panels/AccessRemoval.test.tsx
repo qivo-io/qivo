@@ -9,6 +9,7 @@ import { CONFIRM_IGNORE_MS } from '../lib/useConfirmArm'
 import type { AccessRemoval, ReassignChoices, RemovalAnswer } from '../store/planner'
 import { plannerFixture } from '../store/plannerFixture.setup'
 import { isProjectSettingsRead, projectSettingsServer } from '../store/projectSettingsStandIn.setup'
+import { isTeamSettingsRead, teamSettingsServer } from '../store/teamSettingsStandIn.setup'
 
 /* The removal window and its press on the real store, fed one snapshot.
    The signed-in Planner is an organization admin; Leo edits the project and
@@ -173,14 +174,17 @@ async function load({ viaTeam = false, ada = false } = {}) {
   // what the server holds: the snapshot last delivered
   let held = snap
   const settings = projectSettingsServer(() => held)
+  const teams = teamSettingsServer(() => held)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
+    if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       deliver = (snapshot) => {
         held = structuredClone(snapshot)
         next(structuredClone(snapshot))
         settings.rerun()
+        teams.rerun()
       }
       deliver(snap)
     }
@@ -200,6 +204,23 @@ async function load({ viaTeam = false, ada = false } = {}) {
             : []
           : [a],
       )
+      next.delivered_at = '2026-09-15T09:00:00.000Z'
+      deliver(next)
+    }
+    // a member's removal and a team's deletion reach the workspace and the
+    // team pages' reads before their answers too
+    const team = getFunctionName(ref)
+    if (team === 'teams:removeMember' || team === 'teams:deleteDeep') {
+      const next = structuredClone(held)
+      const id = args.team_id ?? args.id
+      next.teamMembers = next.teamMembers.filter(
+        (m) =>
+          m.team_id !== id || (team === 'teams:removeMember' && m.profile_id !== args.profile_id),
+      )
+      if (team === 'teams:deleteDeep') {
+        next.teams = next.teams.filter((t) => t.id !== id)
+        next.teamAccess = next.teamAccess.filter((s) => s.team_id !== id)
+      }
       next.delivered_at = '2026-09-15T09:00:00.000Z'
       deliver(next)
     }

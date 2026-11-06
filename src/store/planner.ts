@@ -7091,6 +7091,14 @@ export type LeadChoices = FunctionReturnType<typeof api.projectSettings.leadCand
 export type SubProjectParents = FunctionReturnType<typeof api.projectSettings.projects>
 /** The invite form's lookup of an address (projectSettings.inviteTarget). */
 export type InviteLookup = FunctionReturnType<typeof api.projectSettings.inviteTarget>
+/** One answer of Settings › Teams (teams.settingsPage). */
+export type TeamListAnswer = FunctionReturnType<typeof api.teams.settingsPage>
+/** A team's Settings page as the server reads it (teams.get). */
+export type TeamSettingsAnswer = FunctionReturnType<typeof api.teams.get>
+/** One answer of a team's member list (teams.members). */
+export type TeamMembersAnswer = FunctionReturnType<typeof api.teams.members>
+/** One answer of a team's Add member picker (teams.addable). */
+export type TeamChoices = FunctionReturnType<typeof api.teams.addable>
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -9210,7 +9218,11 @@ export const PLANNER = {
   /* org admins lead every team — of THEIR OWN organization (0081). Being an
      admin at home says nothing about a team that shared a project with me,
      so the caller is resolved to the profile they hold in the team's org
-     (actorIn); with an explicit uid, that person must live there too. */
+     (actorIn); with an explicit uid, that person must live there too. It
+     reads the store's own memberships, which the Settings navigation's
+     Teams item and its org-teams check use until the roster stages give
+     them a server answer; a team's page decides from teams.get's
+     can_manage instead (panels/Settings.tsx). */
   isTeamLeader: (teamId: string, uid?: string) => {
     const t = PLANNER.teams.find((x) => x.id === teamId)
     const u = actorIn(t ? t.org : '', uid)
@@ -9669,6 +9681,28 @@ export const PLANNER = {
       })
     } catch (e) {
       console.error('[qivo] lead choices failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of a team's Add member picker (teams.addable): the people
+      of team `team_id`'s organization `org_id` who may join it, matching
+      `search`, after `after`, an earlier batch's `next`, or from the
+      start. Read once a batch while the picker is open, never subscribed
+      to; null when the read failed. */
+  teamMemberChoices: async (
+    on: { org_id: string; team_id: string },
+    search: string,
+    after: string | null,
+  ): Promise<TeamChoices | null> => {
+    try {
+      return await convex.query(api.teams.addable, {
+        ...on,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] team member choices failed:', e)
       return null
     }
   },
@@ -14061,11 +14095,12 @@ export const PLANNER = {
   /** Paints the new team at once and resolves whether the server created
       it. Resolves false without sending when it refused the change first
       (toasted), and false after a refusal, which is toasted and taken
-      back. */
-  addTeam: (name: string): Promise<boolean> => {
+      back. `uuid` is the new team's id, a fresh one unless the caller
+      passes its own, as Settings › Teams does to keep the team it created
+      in view until a batch lists it. */
+  addTeam: (name: string, uuid: string = crypto.randomUUID()): Promise<boolean> => {
     const org = homeRow()
     if (!org || !String(name || '').trim() || refusePausedEdit()) return Promise.resolve(false)
-    const uuid = crypto.randomUUID()
     const team: Row<'teams'> = {
       id: uuid,
       org_id: org.id,
@@ -14141,7 +14176,10 @@ export const PLANNER = {
   },
 
   /** Whether a team exists and is not the last one in its organization.
-      Other organizations' teams in this client do not count. */
+      Other organizations' teams in this client do not count. P.removeAccess
+      asks it before it sends a team's deletion, and the staging check's
+      cleanup waits on it; Settings › Teams turns Delete off from the
+      server's count of teams instead (teams.settingsPage). */
   canDeleteTeam: (id: string): boolean => {
     const team = rows.teams.get(id)
     return !!team && [...rows.teams.values()].filter((t) => t.org_id === team.org_id).length > 1
