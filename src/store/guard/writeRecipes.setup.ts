@@ -944,7 +944,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'files:cancelDemoUpload',
-    mutator: 'addAttachment',
+    mutator: 'cancelDemoReservation',
     what: 'a cancelled demo upload',
     pause: 'P',
     act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
@@ -998,7 +998,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'files:cancelDemoUpload',
-    mutator: 'setAvatar',
+    mutator: 'cancelDemoReservation',
     what: 'a cancelled demo portrait upload',
     pause: 'P',
     act: (P) => P.setAvatar(PAT, file('pat.png', 'image/png')),

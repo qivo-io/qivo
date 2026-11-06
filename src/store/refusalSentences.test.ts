@@ -264,6 +264,42 @@ describe('refusal sentences in restore and upload toasts', () => {
     expect(sentWith('files:cancelDemoUpload')).toBeUndefined()
   })
 
+  it("says the upload did not finish without waiting for the demo cancel's answer", async () => {
+    const demo = (id: string) => `https://demo.example.test/demo-uploads/${id}?e=1&m=login&t=token`
+    const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch')
+      }),
+    )
+    answers['files:uploadUrl'] = () => Promise.resolve(demo('reservation-1'))
+    answers['files:avatarUploadUrl'] = () => Promise.resolve(demo('reservation-2'))
+    // a write sent on a dropped connection waits until the connection returns
+    answers['files:cancelDemoUpload'] = () => new Promise(() => {})
+    /* `p`'s value, or a failure once a second passes without one. */
+    const soon = async <T>(p: Promise<T>) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('the upload waited for the cancel')), 1000)
+      })
+      try {
+        return await Promise.race([p, late])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    expect(await soon(P.addAttachment('task-1', file()))).toBeNull()
+    expect(showToast).toHaveBeenCalledExactlyOnceWith(
+      `Couldn't upload "notes.txt". ${LOST}`,
+      'error',
+    )
+    expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-1' })
+    // the picture control stops waiting at once too
+    expect(await soon(P.setAvatar(snap.profiles[0].id, picture))).toBe(LOST)
+    expect(sentWith('files:cancelDemoUpload')).toEqual({ id: 'reservation-2' })
+  })
+
   it('declares a picture’s size and answers the sentence its upload URL refused', async () => {
     answers['files:avatarUploadUrl'] = () => Promise.resolve('https://upload.example.test/a')
     receiverRefuses(BUDGET)

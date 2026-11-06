@@ -4985,7 +4985,7 @@ const UPLOAD_NOT_FINISHED =
 
 /* The private demo's reservation in upload URL `url`, a /demo-uploads/ URL
    (convex/files.ts demoUploadUrl), else null. An attachment's or picture's
-   upload whose POST got no answer cancels it (files.cancelDemoUpload), so
+   upload whose POST got no answer cancels it (cancelDemoReservation), so
    its declared bytes stop counting in the demo's 5 MiB at once. */
 function demoReservation(url: string): string | null {
   try {
@@ -4994,6 +4994,21 @@ function demoReservation(url: string): string | null {
   } catch {
     return null
   }
+}
+
+/* Cancels the private demo's reservation in upload URL `url`
+   (files.cancelDemoUpload), for an upload whose POST got no answer, and
+   does nothing for any other URL. It does not wait for the answer, since a
+   write sent on a dropped connection waits until the connection returns
+   (lib/syncStatus.ts) and the failed upload says so at once. The cancel
+   goes out then. One that fails is logged, and its reservation lapses at
+   its expiry. */
+function cancelDemoReservation(url: string) {
+  const reservation = demoReservation(url)
+  if (reservation === null) return
+  void sendAwaited(api.files.cancelDemoUpload, { id: reservation }, 'none').catch((e) =>
+    console.error('[qivo] the demo upload was not cancelled:', e),
+  )
 }
 
 /* How a POST of a file to an upload URL ended: the stored file, the
@@ -11051,8 +11066,9 @@ export const PLANNER = {
       in the demo it reserves that size in the demo's shared storage. A
       refusal from the URL's receiver is toasted in its own words, and a
       POST that ended without the receiver's answer with
-      UPLOAD_NOT_FINISHED, after it cancels a demo reservation, which would
-      otherwise hold its bytes until it expires.
+      UPLOAD_NOT_FINISHED, which then cancels a demo reservation that would
+      otherwise hold its bytes until it expires, without waiting for the
+      cancel's answer (cancelDemoReservation).
 
       No optimistic row until the server accepts it: three awaited hops make
       optimism pointless, and the server deletes oversize bytes inside attach
@@ -11118,13 +11134,9 @@ export const PLANNER = {
         )
         const posted = await postUpload(url, file)
         if (!('storageId' in posted)) {
-          const reservation = 'unanswered' in posted ? demoReservation(url) : null
-          if (reservation !== null)
-            await sendAwaited(api.files.cancelDemoUpload, { id: reservation }, 'none').catch(
-              () => {},
-            )
           const why = 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED
           toast(`Couldn't upload "${file.name}". ${why}`)
+          if ('unanswered' in posted) cancelDemoReservation(url)
           return null
         }
         const { storageId } = posted
@@ -13162,9 +13174,7 @@ export const PLANNER = {
       const posted = await postUpload(url, small)
       if ('refused' in posted) return asSentence(posted.refused)
       if ('unanswered' in posted) {
-        const reservation = demoReservation(url)
-        if (reservation !== null)
-          await sendAwaited(api.files.cancelDemoUpload, { id: reservation }, 'none').catch(() => {})
+        cancelDemoReservation(url)
         return UPLOAD_NOT_FINISHED
       }
       const stored = posted.storageId as Id<'_storage'>
