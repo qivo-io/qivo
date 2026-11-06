@@ -1,7 +1,7 @@
 /* One-time migration that counts every team's members (schema.ts
- * team_counts), which Settings > Teams and the team page are to show and
- * the REST and MCP team summaries show as member_count (model/teams.ts
- * teamSummary). Until a team is counted it has no row, and a reader shows
+ * team_counts), which Settings › Teams and a team's page show (model/teams.ts
+ * settingsTeamsOf and teamSettingsOf) and the REST and MCP team summaries
+ * show as member_count (model/teams.ts teamSummary). Until a team is counted it has no row, and a reader shows
  * its count as unavailable (model/teamCounts.ts memberCount), null in a
  * team summary. Teams created since this release start with a row, and
  * every write keeps the rows that exist.

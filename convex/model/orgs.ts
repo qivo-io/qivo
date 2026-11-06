@@ -632,11 +632,12 @@ export async function assertNotLastAdmin(
  * teams. A caller who cannot lead teams (lib/access.ts canLeadTeams) is
  * refused before any membership is read. The check walks the person's own
  * memberships, the teams that matter here, at most OWN_READS.teams of them
- * (5 at the design size), and asks of each whether the caller leads it
- * (isTeamLeader). A person in more teams than that is refused with
- * PLANNABLE_HOURS_UNCHECKED rather than judged from part of their teams,
- * since a check that cannot finish never lets a write through; every seat
- * reads every team's members, so the refusal tells nothing new. */
+ * (256; a person is in 5 teams at the design size), and asks of each
+ * whether the caller leads it (isTeamLeader). A person in more teams than
+ * that is refused with PLANNABLE_HOURS_UNCHECKED rather than judged from
+ * part of their teams, since a check that cannot finish never lets a write
+ * through; every seat reads every team's members, so the refusal tells
+ * nothing new. */
 
 /* The rights refusal. REST answers it 403; the app and MCP show the rule. */
 export const PLANNABLE_HOURS_RIGHTS =
