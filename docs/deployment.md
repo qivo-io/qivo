@@ -264,7 +264,13 @@ revocation, and the text, name, comment and request size limits. It fills
 one task with 60 comments and about 510 changes, one page and a little more
 of each, reads its history over REST and MCP back to the first change, and
 in the task window presses **Show earlier comments** and **Show earlier
-activity** until the first comment and the created row appear. Its uploads
+activity** until the first comment and the created row appear. Past the
+comments and changes the window keeps loaded (`threadRows`, 150), a press
+lets as many rows go as it loads, so each press must move the thread's first
+row rather than add rows. The step then presses **Show newer activity**
+until it goes (`thread-pages/ui/newer-activity`) and finds the newest comment
+and change with **Show earlier activity** back at the top; it skips that
+check when the thread fits the budget. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
@@ -1701,6 +1707,17 @@ and its own paragraph here says so. The release adds the tables
 trigger also deletes the session's notification row, a deleted login loses
 its notification rows, and an organization export lists the three tables
 among what it leaves out.
+
+From the release after v0.1.148, the task window keeps at most 150 comments
+and changes of the open task (`threadRows` in `convex/lib/limits.ts`), lets
+go of those farthest from where the person reads, and reads them again
+through `snapshot.commentsBefore` and `snapshot.historyBefore`, anchored at
+ids the server answered for that task, which every backend from v0.1.98
+(`c8691d3d`) answers as this app asks. The release changes no server
+function, so it has no server change, no release step and no new rollback
+floor. An older app works against its backend, and this app works against
+any backend the floors above already hold. Returning the app alone to an
+earlier release is safe.
 
 ## Node.js version
 
