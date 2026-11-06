@@ -10,7 +10,10 @@
  * the component lookups of a person's login and an OAuth token (betterAuth/
  * lookups.ts). This keeps Better Auth, auth.ts and the adapter's client out
  * of everything these modules load, and out of every module the REST and
- * MCP routes run in a nested call. */
+ * MCP routes run in a nested call. Convex loads the HTTP router (http.ts)
+ * with its static imports for every HTTP action, so this keeps them out of
+ * those too; only the sign-in, OAuth and metadata handlers import auth.ts,
+ * inside the handler. */
 /// <reference types="vite/client" />
 
 import { describe, expect, it } from 'vitest'
@@ -21,19 +24,29 @@ const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../**/_generat
   import: 'default',
 }) as Record<string, string>
 
+/** How a walk reads imports: `dynamic` false leaves out `import()`, for a
+ * module whose handlers may load more than the module does when it loads. */
+type Walk = { dynamic?: boolean }
+
 /** The modules a module imports or re-exports at run time, `import type`
  * and `export type` left out, as written: a relative path or a package
- * name. A dynamic `import()` counts too. */
-function runtimeImports(source: string): string[] {
+ * name. A dynamic `import()` counts too, unless `dynamic` is false. An
+ * inline `import { type X }` counts, because under verbatimModuleSyntax it
+ * still loads the module. */
+function runtimeImports(source: string, { dynamic = true }: Walk = {}): string[] {
   const out: string[] = []
   for (const match of source.matchAll(/^import\s+(type\s+)?[^'"]*?from\s+'([^']+)'/gms))
     if (!match[1]) out.push(match[2])
   for (const match of source.matchAll(/^import\s+'([^']+)'/gm)) out.push(match[1])
-  for (const match of source.matchAll(/\bimport\(\s*'([^']+)'\s*\)/g)) out.push(match[1])
+  if (dynamic) out.push(...dynamicImports(source))
   const reexport = /^export\s+(type\s+)?(?:\*(?:\s+as\s+\w+)?|\{[^}]*\})\s*from\s+'([^']+)'/gm
   for (const match of source.matchAll(reexport)) if (!match[1]) out.push(match[2])
   return out
 }
+
+/** The modules a module names in a dynamic `import()`, as written. */
+const dynamicImports = (source: string): string[] =>
+  [...source.matchAll(/\bimport\(\s*'([^']+)'\s*\)/g)].map((match) => match[1])
 
 /** The path of the module `spec` names from module `from`, as the glob keys
  * it, or null for a package. A `.js` name finds its `.ts` source, as the
@@ -50,13 +63,13 @@ function resolve(from: string, spec: string): string | null {
 }
 
 /** Every module `entry` loads at run time, and every package they name. */
-function loaded(entry: string) {
+function loaded(entry: string, walk: Walk = {}) {
   const modules = new Set<string>()
   const packages = new Set<string>()
   const visit = (path: string) => {
     if (modules.has(path)) return
     modules.add(path)
-    for (const spec of runtimeImports(sources[path] ?? '')) {
+    for (const spec of runtimeImports(sources[path] ?? '', walk)) {
       const local = resolve(path, spec)
       if (local === null) packages.add(spec)
       else visit(local)
@@ -236,5 +249,43 @@ describe('the auth triggers, the demo start, the boot claim and the machine call
     // demo.ts reaches lib/panoramaImage.ts only through lib/panorama.ts's
     // `export { ... } from './panoramaImage'`
     expect(loaded('../demo.ts').modules.has('../lib/panoramaImage.ts')).toBe(true)
+  })
+})
+
+describe('the HTTP router', () => {
+  const STATIC = { dynamic: false }
+
+  it('loads neither Better Auth nor auth.ts when a request starts', () => {
+    const found = loaded('../http.ts', STATIC)
+    for (const uses of [
+      '../lib/authRoutes.ts',
+      '../machine/rest.ts',
+      '../machine/mcp.ts',
+      '../machine/uploads.ts',
+    ])
+      expect(found.modules.has(uses), uses).toBe(true)
+    expect(
+      [...found.modules].filter((path) => ['../auth.ts', '../lib/oauthProvider.ts'].includes(path)),
+    ).toEqual([])
+    expect(betterAuthIn(found)).toEqual([])
+  })
+
+  it('imports auth.ts and nothing else inside its handlers', () => {
+    const source = sources['../http.ts']
+    // every import( is one the walk reads, so none hides in another form
+    expect(dynamicImports(source).length).toBe(source.match(/\bimport\(/g)?.length)
+    expect(new Set(dynamicImports(source))).toEqual(new Set(['./auth']))
+    // the default walk counts them, as it must for the machine calls
+    expect(loaded('../http.ts').modules.has('../auth.ts')).toBe(true)
+  })
+
+  it.each([
+    ["import { createAuth } from './auth'", ['./auth'], ['./auth']],
+    ["import { type AuthFunctions } from './auth'", ['./auth'], ['./auth']],
+    ["import type { AuthFunctions } from './auth'", [], []],
+    ["const { createAuth } = await import('./auth')", [], ['./auth']],
+  ])('read %s as the static walk and the default walk do', (source, statically, always) => {
+    expect(runtimeImports(source, STATIC)).toEqual(statically)
+    expect(runtimeImports(source)).toEqual(always)
   })
 })
