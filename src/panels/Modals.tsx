@@ -2477,6 +2477,9 @@ function MilestoneModal({
   // whether the opened milestone showed, and whether the person deleted it
   // here, after which its answer of null says nothing
   const [deletedHere, setDeletedHere] = useStateM(false)
+  // a delete the server refused brings the milestone back, and a later
+  // answer of null is news again
+  if (deletedHere && openedM) setDeletedHere(false)
   const gone = !!init.id && answered && !openedM && !deletedHere && read?.state === 'ok' && !!answer
   if (gone && editId === init.id) setEditId(null)
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))

@@ -384,6 +384,33 @@ describe('a milestone that goes away', () => {
     expect(q('[data-milestone-row="beta"]')).not.toBeNull()
     vi.useRealTimers()
   })
+
+  it('says so again once a delete the server refused brought it back and it then went', async () => {
+    fixture()
+    await start()
+    network.mutation.mockImplementation((ref) =>
+      getFunctionName(ref) === 'projects:removeMilestone'
+        ? Promise.reject(new Error('the server refused the delete'))
+        : Promise.resolve(null),
+    )
+    await open('alpha')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const del = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find(
+        (b) => b.textContent?.includes('elete'),
+      )
+    await act(async () => del()?.click())
+    vi.setSystemTime(Date.now() + 1_000)
+    await act(async () => del()?.click())
+    vi.useRealTimers()
+    await settle()
+    // the refusal took the paint back: the milestone shows again
+    expect(q('[data-milestone-row="alpha"]')).not.toBeNull()
+    expect(line()).toBeNull()
+    server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
+    await rerun()
+    expect(line()?.getAttribute('data-milestone-open')).toBe('gone')
+  })
 })
 
 describe('the hidden tab', () => {
