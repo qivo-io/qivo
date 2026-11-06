@@ -827,7 +827,7 @@ own paragraph here says so. The pages read the `inbox_items` and
 below, and the release changes no table, field or index. The same release
 makes `inbox.item` answer `unread_change` for an unread mention in the
 description too, as the app's task window counts it, which the task window
-reads from the release after v0.1.142 on.
+reads from the release after v0.1.147 on.
 
 From the release after v0.1.124, `planning.ownerLoads` answers each span's
 `project_id` where the span names its task, and each owner's paused tasks
@@ -1306,7 +1306,7 @@ The release adds the index `agent_keys.by_profile_created`, through which
 Convex builds at deploy with no backfill. There is no other schema change
 and no release step.
 
-From the release after v0.1.142, the app's Inbox badge, on the desktop top
+From the release after v0.1.147, the app's Inbox badge, on the desktop top
 bar and the phone's bottom Inbox tab, counts unread tasks from
 `inbox.summary`, and Mark all as read and Remove all read take their
 availability from its seat flags, which v0.1.97 (`92434062`) first shipped.
@@ -1323,10 +1323,10 @@ shows **…** on the badge, draws no divider and marks no task read on
 opening it, also in a tab that was open when the backend went back, until
 the backend rolls forward. Against v0.1.97 to v0.1.122 its tail note under
 Comments misses a mention in the description. So this app needs a backend
-from v0.1.123 on. The Milestones window's floor above, v0.1.142
-(`cf03a6e4`), already holds that, so this release sets no new floor. From it
-on, as from that one, never return the backend to a commit before v0.1.142;
-roll forward instead. Returning the app alone to an earlier release is safe
+from v0.1.123 on. The floors above, the Milestones window's v0.1.142
+(`cf03a6e4`) and the newer ones, already hold that, so this release sets no
+new floor. From it on, as from them, never return the backend to a commit
+before the newest floor above; roll forward instead. Returning the app alone to an earlier release is safe
 against a later backend, because that app counts the loaded groups and
 marks loaded messages read through `messages.markRead`, which stays. The
 release changes no server function and needs no step. It is the first whose
@@ -1773,7 +1773,7 @@ row that every message write keeps in step, and each person an
 `convex/inbox.ts` reads the rows for the capped unread summary, one task's
 item and the Inbox's pages of task groups, and answers that a person's Inbox
 is not ready while their `inbox_state` is not built, which a page says by
-naming the organization in `not_ready`. Since the release after v0.1.142
+naming the organization in `not_ready`. Since the release after v0.1.147
 the app's badge, its Mark all as read and Remove all read and its task
 window read the summary and the item. The Inbox list keeps the workspace
 inbox until a later release switches it, and REST and MCP still read the
