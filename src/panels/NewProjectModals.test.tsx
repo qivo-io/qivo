@@ -861,6 +861,32 @@ describe('New sub-project', () => {
     expect(create().disabled).toBe(true)
   })
 
+  it('says a picked parent that went is no longer available, by its name, and turns Create off', async () => {
+    await load('user')
+    await openSub('beam')
+    await click(parentButton())
+    await click('[data-new-subproject-parent-choice="test-b"]')
+    await type(nameField(), 'Docs')
+    expect(create().disabled).toBe(false)
+    server.snap.projects = server.snap.projects.filter((p) => p.id !== 'test-b')
+    await rerun()
+    expect(parentNote()).toBe('“Test” is no longer available.')
+    expect(parentButton().textContent).toBe('Choose a project…')
+    expect(create().disabled).toBe(true)
+  })
+
+  it('says the opener’s parent is no longer available once a check that answered turns unavailable, and turns Create off', async () => {
+    await load('user')
+    await openSub('sensor')
+    await type(nameField(), 'Docs')
+    expect(create().disabled).toBe(false)
+    server.snap.projects = server.snap.projects.filter((p) => p.id !== 'sensor')
+    await rerun()
+    expect(parentNote()).toBe('The project you opened this from is no longer available.')
+    expect(parentButton().textContent).toBe('Choose a project…')
+    expect(create().disabled).toBe(true)
+  })
+
   it('reads its parents only once the Project popover opens, in the parent’s organization, tagged by equal names', async () => {
     await load('user')
     const label = vi.spyOn(P, 'projectLabel')

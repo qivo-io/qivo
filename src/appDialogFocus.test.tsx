@@ -18,7 +18,9 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    from buttons that leave once the new sub-project shows, and from menu
    rows that leave with their menu; the server holds the create until the
    test answers it, and App then moves into the new sub-project. Milestones
-   opens on a milestone that it then deletes. */
+   opens on a milestone that it then deletes. A store that boots without
+   the tasks, as the app does, asks for every task only for a create with
+   a starter task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -195,6 +197,8 @@ async function boot(
         saved = () => resolve({ num: 2, key: 'DOCS' })
         refused = () => reject(new ConvexError({ message: 'Qivo cannot save changes right now.' }))
       })
+    // a starter task's create answers with its number, as the server's does
+    if (name === 'issues:create') return Promise.resolve({ num: 1 })
     return Promise.resolve(null)
   })
   const store = await import('./store/planner')
@@ -398,6 +402,39 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       expect(document.activeElement).toBe(trigger)
     },
   )
+})
+
+describe("New sub-project's starter task under tasks on demand", { timeout: 30_000 }, () => {
+  beforeEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+  })
+  afterEach(async () => {
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = true
+  })
+
+  it.each<[string, boolean, string[]]>([
+    ['with', true, ['create']],
+    ['without', false, []],
+  ])('asks for every task only for a create %s a starter task', async (_, starter, asks) => {
+    await boot()
+    const { __layerProbe } = await import('./store/planner')
+    // the boot asks for no task, as the app's does on a project
+    expect(__layerProbe?.asks()).toEqual([])
+    await press(await find('Add sub-project'))
+    const box = await waitFor(
+      () => document.querySelector<HTMLInputElement>('#subproject-starter'),
+      'Create a starter task',
+    )
+    if (!starter) await press(box)
+    expect(box.checked).toBe(starter)
+    await finish(true)
+    await save()
+    expect(sent.some((w) => w.name === 'issues:create')).toBe(starter)
+    expect(__layerProbe?.asks()).toEqual(asks)
+    expect(__layerProbe?.faults()).toEqual([])
+  })
 })
 
 describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
