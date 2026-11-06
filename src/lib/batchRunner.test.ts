@@ -241,6 +241,39 @@ describe('runLanes', () => {
     expect(await second.run).toEqual({ finished: ['c'], stops: [] })
   })
 
+  it('ends a run on a shared pool once its last lane ends, never waiting with nothing to run', async () => {
+    const pool = lanePool(2)
+    // a long Mark all as read over four seats, the last one long
+    const first = harness({ p: 1, q: 1, r: 1, s: 2 }, {}, pool)
+    // then a restore over three organizations, which waits for both places
+    const second = harness({ A: 1, B: 1, C: 1 }, {}, pool)
+    let ended = false
+    void second.run.then(() => {
+      ended = true
+    })
+    const step = async (h: typeof first, lane: string, n = 1) => {
+      h.at(lane, n).answer()
+      for (let i = 0; i < 4; i++) await tick()
+    }
+    await tick()
+    await step(first, 'p')
+    await step(second, 'A')
+    await step(first, 'q')
+    // B runs and C waits, with a worker of each run waiting for a place
+    expect(second.events.filter((e) => e.startsWith('send'))).toEqual(['send A 1', 'send B 1'])
+    await step(second, 'B')
+    expect(second.events).toContain('send C 1')
+    await step(second, 'C')
+    // the long seat took the place C gave back, and the restore is over
+    expect(first.events).toContain('send s 1')
+    expect(ended).toBe(true)
+    expect(await second.run).toEqual({ finished: ['A', 'B', 'C'], stops: [] })
+    await step(first, 'r')
+    await step(first, 's')
+    await step(first, 's', 2)
+    expect(await first.run).toEqual({ finished: ['p', 'q', 'r', 's'], stops: [] })
+  })
+
   it('gives a run without a pool lanes of its own', async () => {
     const pool = lanePool(2)
     const first = harness({ a: 1, b: 1 }, {}, pool)

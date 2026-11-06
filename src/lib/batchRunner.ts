@@ -215,13 +215,15 @@ export async function runLanes<Lane, Answer>(
     }
   }
 
+  // A worker takes its lane before it waits for a place, so no worker
+  // waits in a shared pool with nothing left to run, which would keep
+  // the run from ending until another action's lane ends.
   const worker = async () => {
-    while (queue.length > 0 && alive()) {
+    for (let lane = queue.shift(); lane !== undefined && alive(); lane = queue.shift()) {
       const taken = pool.take()
       const release = typeof taken === 'function' ? taken : await taken
       try {
-        const lane = queue.shift()
-        if (lane === undefined || !alive()) return
+        if (!alive()) return
         await runLane(lane)
       } finally {
         release()
