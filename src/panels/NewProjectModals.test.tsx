@@ -938,6 +938,32 @@ describe('New sub-project', () => {
     expect(create().disabled).toBe(false)
   })
 
+  it('turns Create off while a newly picked parent is checked, keeps the picked lead, and creates under the new parent', async () => {
+    await load('user')
+    const onCreate = await openSub('sensor')
+    await type(nameField(), 'Docs')
+    expect(create().disabled).toBe(false)
+    await pickLead('leo')
+    expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Leo Martins')
+    server.reads.hold(true)
+    await click(parentButton())
+    await click('[data-new-subproject-parent-choice="test-b"]')
+    // Luma Sensor's answer does not serve Test #9
+    expect(create().disabled).toBe(true)
+    expect(parentButton().textContent).toBe('Loading…')
+    // the same organization, so the picked lead stays
+    expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Leo Martins')
+    server.reads.hold(false)
+    await rerun()
+    expect(parentButton().textContent).toBe('Test #9')
+    expect(create().disabled).toBe(false)
+    await click(create())
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'project', parent: 'test-b', lead: 'leo' }),
+      { withStarter: true, shown: { orgId: home } },
+    )
+  })
+
   it('keeps focus on the Project button after a keyboard pick while the pick is checked', async () => {
     await load('user')
     await openSub('beam')
