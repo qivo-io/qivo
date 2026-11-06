@@ -117,9 +117,12 @@ type Tally = Partial<SampleCounts>
 /* Samples organization `orgId` for `day` in run `run` at `at`, unless its
  * deletion has begun, its totals are not complete or it has the day's
  * sample already. Reads its removal, its totals row, its sample of the day
- * and its latest sample before the day, and inserts at most one row. Its
- * `revisions` are the totals' revisions since that latest sample, none for
- * a first sample or a totals row a recount replaced since. */
+ * and its sample of the latest day, and inserts at most one row. Its
+ * `revisions` are the totals' revisions since that latest sample, so each
+ * write counts once. There are none for a first sample, for a totals row a
+ * recount replaced since, or for a sample a late run takes after a later
+ * day's sample, since that one counted the writes up to its own reading
+ * and the next sample counts from it. */
 async function sampleOrg(
   ctx: MutationCtx,
   orgId: string,
@@ -131,7 +134,7 @@ async function sampleOrg(
   const totals = await orgTotalsRow(ctx, orgId)
   if (totals === null || totals.counting !== undefined) return { uncounted: 1 }
   if ((await sampleOf(ctx, orgId, day)) !== null) return { present: 1 }
-  const before = await latestSample(ctx, orgId, day)
+  const before = await latestSample(ctx, orgId)
   await ctx.db.insert('storage_daily_samples', {
     org_id: orgId,
     day,
@@ -144,9 +147,12 @@ async function sampleOrg(
   // A recount deletes the totals row and counts the organization again in a
   // new one from revision 0, so a row created after the previous sample adds
   // nothing, whatever revision its count ended at. The two creation times
-  // follow the order Convex inserted the rows in, which `at` could tie.
+  // follow the order Convex inserted the rows in, which `at` could tie. A
+  // later day's run took any sample of a later day before this one, so this
+  // late one adds nothing either.
   const recounted = before !== null && totals._creationTime > before._creationTime
-  const grown = before === null || recounted ? 0 : totals.revision - before.revision
+  const grows = before !== null && !recounted && before.day < day
+  const grown = grows ? totals.revision - before.revision : 0
   return { written: 1, revisions: Math.max(0, grown) }
 }
 

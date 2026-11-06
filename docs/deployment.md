@@ -1586,9 +1586,10 @@ retained are the samples written in the last 400 days less those expired
 `revisions` counts the writes to the organizations' totals since their
 previous samples, one for each attach, removal, move, rename or purge that
 changed them, each writing up to three totals rows. It counts nothing for
-an organization's first sample or for one recounted since its previous
-sample. A dry run of the storage totals backfill in the same window gives
-the cost of a reconciliation.
+an organization's first sample, for one recounted since its previous
+sample, or for a sample a late run takes after the organization's sample
+of a later day, so each write counts once. A dry run of the storage totals
+backfill in the same window gives the cost of a reconciliation.
 
 ## Node.js version
 

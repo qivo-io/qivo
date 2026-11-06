@@ -10,16 +10,16 @@ import { utcDate } from './demoMetrics'
 import { DAY_MS } from './orgRetention'
 
 /** How many organizations one step of a day's run reads, after the run's
- * cursor in id order. Each costs the same reads whatever it stores: its
- * removal, its totals row, its sample of the day and its latest before
- * that, and at most one write. A step stays far inside one transaction's
- * limits, and a page this small keeps a step cheap to run again when an
- * attach in one of its organizations commits while it reads that
- * organization's totals. One step over 100 organizations, each counted with
- * no sample that day, read 202 documents over 402 index ranges, about 49
- * KB, and wrote 101 documents, the samples and the run row, in
- * convex/tests/storageSamples.test.ts ("reads at the batch size"); the
- * same step again with every sample present, as a retry, read 302
+ * cursor in id order. Each costs the same reads whatever it stores, its
+ * removal, its totals row, its sample of the day and its sample of the
+ * latest day, and at most one write. A step stays far inside one
+ * transaction's limits, and a page this small keeps a step cheap to run
+ * again when an attach in one of its organizations commits while it reads
+ * that organization's totals. One step over 100 organizations, each
+ * counted with no sample that day, read 202 documents over 402 index
+ * ranges, about 49 KB, and wrote 101 documents, the samples and the run
+ * row, in convex/tests/storageSamples.test.ts ("reads at the batch size");
+ * the same step again with every sample present, as a retry, read 302
  * documents over 302 ranges, about 72 KB, and wrote the run row only.
  * Tests lower it. */
 export const SAMPLE_PAGE = { orgs: 100 }
@@ -94,14 +94,12 @@ export const sampleOf = (ctx: QueryCtx, orgId: string, day: string) =>
     .withIndex('by_org_day', (q) => q.eq('org_id', orgId).eq('day', day))
     .first()
 
-/** Organization `orgId`'s latest sample, of a day before `before` when it
- * is given, or null when it has none. One indexed read. */
-export const latestSample = (ctx: QueryCtx, orgId: string, before?: string) =>
+/** Organization `orgId`'s sample of the latest day, or null when it has
+ * none. One indexed read. */
+export const latestSample = (ctx: QueryCtx, orgId: string) =>
   ctx.db
     .query('storage_daily_samples')
-    .withIndex('by_org_day', (q) =>
-      before === undefined ? q.eq('org_id', orgId) : q.eq('org_id', orgId).lt('day', before),
-    )
+    .withIndex('by_org_day', (q) => q.eq('org_id', orgId))
     .order('desc')
     .first()
 

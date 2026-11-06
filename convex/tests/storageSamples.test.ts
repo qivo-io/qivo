@@ -9,7 +9,8 @@
  *      created behind the cursor waits for the next day, and one whose
  *      reads fail is counted and logged while the others are sampled.
  *   3. No organization gets two samples of a day, however a step repeats,
- *      a stalled run resumes or a day's late run meets the next day's.
+ *      a stalled run resumes or a day's late run meets the next day's, and
+ *      such a meeting counts each write to the totals once.
  *   4. Ticks: the day's first starts its run, a later one reads one row and
  *      writes nothing, one past SAMPLE_STALLED_MS resumes the run from its
  *      cursor, and the next day starts its own run.
@@ -393,11 +394,19 @@ describe('one sample per organization and day', () => {
     })
   })
 
-  it("keeps one sample of a day when that day's late run meets the next day's, and the first reading of a run of the same day again", async () => {
+  it("keeps one sample of a day when that day's late run meets the next day's, counts each write to the totals once, and keeps the first reading of a run of the same day again", async () => {
     SAMPLE_PAGE.orgs = 1
     const t = newT()
     const one = await plantOrg(t, 10, '10000000-0000-4000-8000-000000000000')
     const two = await plantOrg(t, 20, '20000000-0000-4000-8000-000000000000')
+    // the day before, both are sampled, and then two writes to one's totals
+    vi.setSystemTime(AT - DAY_MS)
+    await runDay(t)
+    await t.run(async (ctx) => {
+      await store(ctx, one, 1)
+      await store(ctx, one, 1)
+    })
+    vi.setSystemTime(AT)
     await tick(t)
     const late = (await runRow(t))?.run ?? ''
     // the next day's run samples both organizations first
@@ -405,14 +414,35 @@ describe('one sample per organization and day', () => {
     await tick(t)
     const next = (await runRow(t, dayAfter(1)))?.run ?? ''
     for (let n = 0; n < 3; n++) await stepOf(t, dayAfter(1), next)
-    // then the first day's delayed steps reach them, and run again
+    // a third write, then the first day's delayed steps reach them, and run
+    // again
+    await t.run((ctx) => store(ctx, one, 1))
+    vi.setSystemTime(AT + DAY_MS + 60 * 60_000)
     for (let n = 0; n < 4; n++) await stepOf(t, TODAY, late)
     await settle(t)
+    // and the day after the next
+    vi.setSystemTime(AT + 2 * DAY_MS)
+    await runDay(t)
     expect(await readings(t)).toEqual([
-      [one, TODAY, 10],
-      [one, dayAfter(1), 10],
+      [one, dayAfter(-1), 10],
+      [one, TODAY, 13],
+      [one, dayAfter(1), 12],
+      [one, dayAfter(2), 13],
+      [two, dayAfter(-1), 20],
       [two, TODAY, 20],
       [two, dayAfter(1), 20],
+      [two, dayAfter(2), 20],
+    ])
+    // Three writes, each counted once. The next day's sample counts the
+    // first two from the day before's, the late one, taken after the next
+    // day's, counts none, and the day after counts the third from the next
+    // day's sample.
+    const runs = await t.run((ctx) => ctx.db.query('storage_sample_runs').collect())
+    expect(runs.map((row) => [row.day, row.counts.revisions])).toEqual([
+      [dayAfter(-1), 0],
+      [TODAY, 0],
+      [dayAfter(1), 2],
+      [dayAfter(2), 1],
     ])
 
     // a second run of the first day, from its start, keeps the first readings
@@ -423,13 +453,11 @@ describe('one sample per organization and day', () => {
     })
     for (let n = 0; n < 3; n++) await stepOf(t, TODAY, 'again')
     await settle(t)
-    expect(await readings(t)).toEqual([
-      [one, TODAY, 10],
-      [one, dayAfter(1), 10],
+    expect((await readings(t)).filter(([, day]) => day === TODAY)).toEqual([
+      [one, TODAY, 13],
       [two, TODAY, 20],
-      [two, dayAfter(1), 20],
     ])
-    expect(await runRow(t)).toMatchObject({ counts: { written: 2, present: 2 } })
+    expect(await runRow(t)).toMatchObject({ counts: { written: 2, present: 2, revisions: 0 } })
   })
 })
 
@@ -775,13 +803,13 @@ describe('reads at the batch size', () => {
     )
     // Each organization: its row, in the step's one page of organizations,
     // and four indexed reads, its removal, its totals row, its sample of
-    // the day and its latest before it, of which only the totals row is
-    // there. With the run row, read once, and the samples and the run row
-    // written.
+    // the day and its sample of the latest day, of which only the totals
+    // row is there. With the run row, read once, and the samples and the
+    // run row written.
     const n = SAMPLE_PAGE.orgs
     expect(fresh).toMatchObject({ documents: 2 * n + 2, ranges: 4 * n + 2, written: n + 1 })
     // a sample of the day found ends the organization's reads, before its
-    // latest before it
+    // sample of the latest day
     expect(retry).toMatchObject({ documents: 3 * n + 2, ranges: 3 * n + 2, written: 1 })
   })
 })

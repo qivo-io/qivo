@@ -2063,12 +2063,13 @@ export default defineSchema({
     // `uncounted`, `deleting` and `failed` the organizations they skipped
     // without a sample: totals not complete, deletion begun, or a read that
     // failed. `revisions` adds each sampled organization's totals revision
-    // less its previous sample's, the writes to its totals since then, and
-    // nothing for a first sample or for a totals row a recount replaced
-    // since. The expiry steps the run's last step started add `expired` and
-    // `expiry_steps`. The other five are what Convex's transaction metrics
-    // measured of the steps and the expiry steps, the run row's own write
-    // included.
+    // less that of its sample of the latest day, the writes to its totals
+    // since then, and nothing for a first sample, for a totals row a recount
+    // replaced since or for a sample a late run takes after a later day's,
+    // so each write counts once. The expiry steps the run's last step
+    // started add `expired` and `expiry_steps`. The other five are what
+    // Convex's transaction metrics measured of the steps and the expiry
+    // steps, the run row's own write included.
     counts: v.object({
       steps: v.number(),
       restarts: v.number(),
