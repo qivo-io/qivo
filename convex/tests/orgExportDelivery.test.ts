@@ -881,56 +881,58 @@ describe("the delivery inside Convex's limits", () => {
       }
     })
 
-  it('checks an archive of EXPORT_LIMITS.parts data parts in one query', async () => {
+  it('checks an archive in one query, its reads growing by one range a part, under 4,096 ranges at EXPORT_LIMITS.parts', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
-    // the parts cap case's archive: every table's first file, the rest tasks
-    const entries = Array.from(
-      { length: EXPORT_LIMITS.parts },
-      (_, i) => `data/tasks/${String(i + 1).padStart(4, '0')}.json`,
-    )
-    const exportId = uuid()
-    // each part a file of 3 bytes and its ZIP headers, and the end record
-    let bytes = ZIP_END_BYTES
-    for (const entry of ['README.txt', 'manifest.json', ...entries])
-      bytes += 3 + zipEntryBytes(entry)
-    await t.run((ctx) =>
-      ctx.db.insert('org_exports', {
-        id: exportId,
-        org_id: f.org.id,
-        state: 'ready',
-        requested_by: f.admin.id,
-        started_at: NOW_ISO(),
-        progress_at: NOW_ISO(),
-        completed_at: NOW_ISO(),
-        expires_at: new Date(Date.now() + ARCHIVE_TTL_MS).toISOString(),
-        progress: { section: '', records: 0, sections_done: 26, sections_total: 26 },
-        step: {
-          n: 1,
-          section: 26,
-          cursor: null,
-          part: 1,
-          seq: entries.length + 2,
-          bytes,
-          counts: {},
-        },
-        attempts: 0,
-        format_version: 4,
-        archive: { bytes, parts: entries.length + 2 },
-      }),
-    )
-    const all = [
-      { entry: 'README.txt', kind: 'readme' as const },
-      { entry: 'manifest.json', kind: 'manifest' as const },
-      ...entries.map((entry) => ({ entry, kind: 'data' as const })),
-    ]
-    for (let from = 0; from < all.length; from += 500)
+    // a lowered cap, so the case plants 60 parts rather than 4,000
+    EXPORT_LIMITS.parts = 40
+    /** What deliveryOf reads for a ready archive of `count` data parts it
+     * plants: every table's first file, the rest tasks, each a file of 3
+     * bytes. */
+    const readArchive = async (count: number) => {
+      const entries = Array.from(
+        { length: count },
+        (_, i) => `data/tasks/${String(i + 1).padStart(4, '0')}.json`,
+      )
+      const exportId = uuid()
+      // each part a file of 3 bytes and its ZIP headers, and the end record
+      let bytes = ZIP_END_BYTES
+      for (const entry of ['README.txt', 'manifest.json', ...entries])
+        bytes += 3 + zipEntryBytes(entry)
       await t.run(async (ctx) => {
-        for (const [i, { entry, kind }] of all.slice(from, from + 500).entries())
+        await ctx.db.insert('org_exports', {
+          id: exportId,
+          org_id: f.org.id,
+          state: 'ready',
+          requested_by: f.admin.id,
+          started_at: NOW_ISO(),
+          progress_at: NOW_ISO(),
+          completed_at: NOW_ISO(),
+          expires_at: new Date(Date.now() + ARCHIVE_TTL_MS).toISOString(),
+          progress: { section: '', records: 0, sections_done: 26, sections_total: 26 },
+          step: {
+            n: 1,
+            section: 26,
+            cursor: null,
+            part: 1,
+            seq: entries.length + 2,
+            bytes,
+            counts: {},
+          },
+          attempts: 0,
+          format_version: 4,
+          archive: { bytes, parts: entries.length + 2 },
+        })
+        const all = [
+          { entry: 'README.txt', kind: 'readme' as const },
+          { entry: 'manifest.json', kind: 'manifest' as const },
+          ...entries.map((entry) => ({ entry, kind: 'data' as const })),
+        ]
+        for (const [seq, { entry, kind }] of all.entries())
           await ctx.db.insert('org_export_parts', {
             export_id: exportId,
             org_id: f.org.id,
-            seq: from + i,
+            seq,
             entry,
             kind,
             storage_id: await ctx.storage.store(new Blob(['[]\n'])),
@@ -940,20 +942,36 @@ describe("the delivery inside Convex's limits", () => {
             records: 0,
           })
       })
-    const exp = Math.floor(Date.now() / 1000) + 1 + DELIVERY.tokenSeconds
-    const read = await measured(t, (ctx) =>
-      readDelivery(ctx, { export_id: exportId, minter: f.admin._id, exp }),
-    )
-    console.info('delivery: deliveryOf at EXPORT_LIMITS.parts data parts', {
-      ranges: read.ranges,
-      documents: read.documents,
-      mib: read.mib,
-      answer_kib: Math.round(JSON.stringify(read.answer).length / 1024),
+      const exp = Math.floor(Date.now() / 1000) + 1 + DELIVERY.tokenSeconds
+      const read = await measured(t, (ctx) =>
+        readDelivery(ctx, { export_id: exportId, minter: f.admin._id, exp }),
+      )
+      if (read.answer === null || 'missing' in read.answer) throw new Error('not deliverable')
+      expect(read.answer.parts).toHaveLength(count + 2)
+      expect(read.answer.bytes).toBe(bytes)
+      return { ...read, answerBytes: JSON.stringify(read.answer).length }
+    }
+    const half = await readArchive(EXPORT_LIMITS.parts / 2)
+    const full = await readArchive(EXPORT_LIMITS.parts)
+    // each data part adds one range, its file's lookup, and two documents,
+    // its row and its file's metadata
+    const more = EXPORT_LIMITS.parts / 2
+    expect(full.ranges - half.ranges).toBe(more)
+    expect(full.documents - half.documents).toBe(2 * more)
+    // so the 4,000 parts of the real cap read under Convex's 4,096 ranges
+    // and answer under 1 MB (4,007 ranges and 477 KiB with the cap's parts
+    // planted, 6 November 2026)
+    const atCap = DEFAULT_LIMITS.parts - EXPORT_LIMITS.parts
+    const perPart = (full.answerBytes - half.answerBytes) / more
+    console.info('delivery: deliveryOf at a lowered EXPORT_LIMITS.parts', {
+      parts: EXPORT_LIMITS.parts,
+      ranges: full.ranges,
+      documents: full.documents,
+      mib: full.mib,
+      answer_bytes_a_part: perPart,
+      ranges_at_cap: full.ranges + atCap,
     })
-    if (read.answer === null || 'missing' in read.answer) throw new Error('not deliverable')
-    expect(read.answer.parts).toHaveLength(EXPORT_LIMITS.parts + 2)
-    expect(read.answer.bytes).toBe(bytes)
-    expect(read.ranges).toBeLessThan(4096)
-    expect(JSON.stringify(read.answer).length).toBeLessThan(1_000_000)
+    expect(full.ranges + atCap).toBeLessThan(4096)
+    expect(full.answerBytes + perPart * atCap).toBeLessThan(1_000_000)
   })
 })
