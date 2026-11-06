@@ -764,9 +764,10 @@ async function dropStallCheck(ctx: MutationCtx, sub: Doc<'billing_subscriptions'
     await ctx.db.patch(sub._id, { sync_due_at: due, sync_safety: safety || undefined })
 }
 
-/* A storage sample's last step. It records the bytes and the blocks over
- * the allowance, adds the period's storage charge when one is due and
- * drops the organization's stall check (dropStallCheck). */
+/* The end of a storage sample, with the `bytes` it measured. It records
+ * them and the blocks over the allowance, adds the period's storage charge
+ * when one is due and drops the organization's stall check
+ * (dropStallCheck). */
 async function finishStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
