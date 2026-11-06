@@ -3874,9 +3874,11 @@ async function earlierThreadChecks(task, comments, ends, changes) {
     await check('thread-pages/ui/newer-activity', async () => {
       await newer.waitFor({ timeout: 20_000 })
       eq((await newer.textContent())?.trim(), 'Show newer activity', 'the newer control under All')
+      // the live comment window, the newest comment in it, stays through
+      // every release, so what went shows as changes missing
       expect(
-        !(await shown('data-comment')).includes(comments.at(-1)),
-        'the newest comment shows while rows above it went',
+        (await shown('data-event')).length < changes,
+        'every change shows while Show newer activity stands',
       )
       const most =
         Math.ceil(changes / THREAD_PAGE.windowHistory) +
