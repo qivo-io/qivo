@@ -304,7 +304,16 @@ file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.135. After that it checks
+backend from before the release after v0.1.135. Before the archive, it
+checks that the top bar's Inbox badge shows what the deployment's unread
+summary (`inbox.summary`) says, has the Standard agent mention Nora in a
+comment on the run's fixture task in Alpha over REST, which the badge must
+count, opens that task at its address, whose window must draw the **New**
+divider above the comment from its inbox item (`inbox.item`) and read the
+item (`messages.readItem`), so the summary drops back, and removes the
+task's item from Nora's Inbox with the row's own **Remove notification**
+(`ui/inbox-badge`). Against a backend from before v0.1.97 that step fails.
+After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
@@ -817,8 +826,8 @@ own paragraph here says so. The pages read the `inbox_items` and
 `inbox_state` rows every deployment holds since the inbox items backfill
 below, and the release changes no table, field or index. The same release
 makes `inbox.item` answer `unread_change` for an unread mention in the
-description too, as the app's task window counts it, which no app reads
-yet either.
+description too, as the app's task window counts it, which the task window
+reads from the release after v0.1.147 on.
 
 From the release after v0.1.124, `planning.ownerLoads` answers each span's
 `project_id` where the span names its task, and each owner's paused tasks
@@ -1297,6 +1306,38 @@ The release adds the index `agent_keys.by_profile_created`, through which
 Convex builds at deploy with no backfill. There is no other schema change
 and no release step.
 
+From the release after v0.1.147, the app's Inbox badge, on the desktop top
+bar and the phone's bottom Inbox tab, counts unread tasks from
+`inbox.summary`, and Mark all as read and Remove all read take their
+availability from its seat flags, which v0.1.97 (`92434062`) first shipped.
+The task window takes its **New** divider from `inbox.item` and marks a task
+read through `messages.readItem` with the item's `through`, which v0.1.97
+first shipped, and its tail note's change from the item's `unread_change`,
+which counts an unread mention in the description since v0.1.123
+(`a7239f99`). The window places the divider and sends the read only once
+`inbox.item` answers ok and current. While the person's items are
+building or `inbox.item` fails, it waits with no divider and no
+read, and it runs a failed `inbox.item` once more by itself. An
+app from this release, against a backend before v0.1.97,
+shows **…** on the badge, draws no divider and marks no task read on
+opening it, also in a tab that was open when the backend went back, until
+the backend rolls forward. Against v0.1.97 to v0.1.122 its tail note under
+Comments misses a mention in the description. So this app needs a backend
+from v0.1.123 on. The floors above, the Milestones window's v0.1.142
+(`cf03a6e4`) and the newer ones, already hold that, so this release sets no
+new floor. From it on, as from them, never return the backend to a commit
+before the newest floor above; roll forward instead. Returning the app alone to an earlier release is safe
+against a later backend, because that app counts the loaded groups and
+marks loaded messages read through `messages.markRead`, which stays. The
+release changes no server function and needs no step. It is the first whose
+app shows the inbox items' reads, which the inbox items paragraph below
+lets reach a deployment only once the backfill reported complete there.
+Every hosted deployment ran the backfill with v0.1.96, with clean second
+dry runs, and the floors since v0.1.97 forbid returning a backend below
+PR 299. This release's flow also reads a new read-only dry run on staging
+and on production before it ships, which must report no rows that differ,
+are missing or are extra.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -1732,10 +1773,11 @@ row that every message write keeps in step, and each person an
 `convex/inbox.ts` reads the rows for the capped unread summary, one task's
 item and the Inbox's pages of task groups, and answers that a person's Inbox
 is not ready while their `inbox_state` is not built, which a page says by
-naming the organization in `not_ready`. The app does not call those reads
-yet. It keeps
-the workspace inbox until a later release switches it, and REST and MCP
-still read the messages. A person whose messages were stored before the
+naming the organization in `not_ready`. Since the release after v0.1.147
+the app's badge, its Mark all as read and Remove all read and its task
+window read the summary and the item. The Inbox list keeps the workspace
+inbox until a later release switches it, and REST and MCP still read the
+messages. A person whose messages were stored before the
 release that added the rows (PR 299, merged as `cf3d683`) has no complete
 rows until the one-time `internal/inboxItemsBackfill` builds them, while a
 person whose first message comes later has them from that message on. Run

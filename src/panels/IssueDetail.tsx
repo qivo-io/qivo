@@ -67,7 +67,13 @@ import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { DONE_WITHOUT_DATES, doneWithoutDates } from '../lib/roadmapVisibility'
 import { buildPath, issueLink, sameTask } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
-import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
+import {
+  itemUnreadStart,
+  mergeSpine,
+  spineWindow,
+  type UnreadStart,
+  unreadMark,
+} from '../lib/spine'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { type RefParts, refParts } from '../lib/taskReference'
@@ -1516,10 +1522,10 @@ function CommentRow({
    the location in a breadcrumb over the title, and offers `onPopOut` — the
    same window, floating, with everything the pane left out.
    `unread` overrides where this visit's unread part starts, and whether it
-   holds a change (lib/spine.ts unreadStart). The window normally freezes
-   that itself on open, but the inbox marks an item read the moment you click
-   its row — before this component has rendered at all — so the only
-   surviving answer is the one the inbox froze first.
+   holds a change (lib/spine.ts UnreadStart). The window freezes that
+   itself on open, from the task's inbox item (P.inboxItem), also in the
+   Inbox's pane. Only the Inbox's pop-out passes one, a start of nothing,
+   since the pane behind it showed this visit's New mark already.
    `holdThread` says somebody else owns the store's one comment cache — the
    pane behind a popped-out window, which is on the same task. Without it the
    pop-out's unmount would release a thread the pane is still showing. */
@@ -2050,65 +2056,60 @@ function IssueDetail({
     return () => P.showSections(owner, false)
   }, [showsSections, watchUuid])
 
-  // Where this visit's unread part starts, frozen the moment the task opens.
-  // Opening marks the task's messages read (below), so an unfrozen mark would
-  // vanish while you were looking at it. Assigned DURING render, before any
-  // effect runs — that ordering is the whole trick. Keyed on the uuid, not
-  // issueId: on a cold deep link P.issueById[issueId] is still undefined on the
-  // first render, and a null key would freeze "nothing unread" forever.
-  // …unless the surface that opened us froze it first (the inbox, whose click
-  // marks the item read before this render): then that answer IS the frozen
-  // one, and asking again here would only ever find nothing.
+  // Where this visit's unread part starts, frozen once a visit. Opening
+  // marks the task read (below), so an unfrozen mark would vanish while you
+  // were looking at it. Assigned DURING render, before any effect runs.
+  // That ordering is the whole trick. Keyed on the uuid, not issueId: on a
+  // cold deep link P.issueById[issueId] is still undefined on the first
+  // render, and a null key would freeze "nothing unread" forever. It comes
+  // from the task's inbox item, which the store reads beside the thread
+  // (P.inboxItem), so it is exact also for messages the workspace never
+  // loaded, and stays pending until that read's first ok, current answer,
+  // while no mark shows and no read goes out. It stays pending through a
+  // seat whose items are building and through a failure, which the store
+  // runs once more, so a read that recovers still draws the divider.
+  // …unless the surface that opened us passed one (`unread`, the Inbox's
+  // pop-out over the pane that showed the mark already). Every other open,
+  // a press on an Inbox row included, takes the item's.
   // Frozen with it: whether the unread messages include a change, which the
   // tail note under Comments points at All for, since Comments loads no
   // history to look for it in.
-  const frozen = useRefID<{ key: string | null | undefined; unread: UnreadStart }>({
+  const frozen = useRefID<{ key: string | null | undefined; unread: UnreadStart | null }>({
     key: undefined,
     unread: { ts: null, change: false },
   })
-  if (frozen.current.key !== watchUuid) {
+  const shownItem = watchUuid && P.inboxItem?.task === watchUuid ? P.inboxItem : null
+  if (frozen.current.key !== watchUuid || frozen.current.unread === null) {
+    const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
     frozen.current = {
       key: watchUuid,
-      unread: unreadIn !== undefined ? unreadIn : unreadStart(P.messages, watchUuid),
+      unread:
+        unreadIn !== undefined
+          ? unreadIn
+          : !watchUuid
+            ? { ts: null, change: false }
+            : answered
+              ? itemUnreadStart(answered.item)
+              : null,
     }
   }
-  const unreadTs = frozen.current.unread.ts
-  // …and mark them read, so the sidebar badge and this window cannot disagree.
-  // The per-visit `done` set is the belt to the optimistic flip's braces: a
-  // write persistRows rolls back must not re-arm on every realtime refetch.
-  // It does re-arm for messages that ARRIVE while the window is open, which is
-  // right — you are looking at the task as the comment lands.
-  const readSent = useRefID<{ key: string | null | undefined; done: Set<string> }>({
-    key: undefined,
-    done: new Set(),
-  })
-  if (readSent.current.key !== watchUuid) readSent.current = { key: watchUuid, done: new Set() }
-  // A snoozed item is a reminder that must return unread, so looking at its
-  // task does not read it (the inbox's own select() skips it the same way).
-  const toRead = watchUuid
-    ? P.messages
-        .filter(
-          (m) =>
-            m.issueUuid === watchUuid &&
-            !m.read &&
-            m.snoozedUntil === null &&
-            !readSent.current.done.has(m.id),
-        )
-        .map((m) => m.id)
-    : []
-  // the pause is part of the key, so a mark it refused goes out once it ends
-  const toReadKey = `${toRead.join(',')}${P.editsPaused() ? ':paused' : ''}`
+  const unreadTs = frozen.current.unread?.ts ?? null
+  const unreadPending = frozen.current.unread === null
+  // …and once the start is frozen, read the whole item on the server, so
+  // what the badge counts goes also for messages the workspace never
+  // loaded. The store sends each `through` of the item once a visit, from
+  // the organization, the task and the `through` of its own answer, never
+  // for a snoozed item, a reminder that must return unread, and the pause
+  // is part of the key, so a read it refused goes out once it ends
+  // (P.readOnOpen). A later answer, such as a message that arrived while
+  // the task is open, reads it again, unless the person marked the task
+  // unread, snoozed it or ended its snooze from this client during the
+  // visit (P.readOnOpen).
+  const paused = P.editsPaused()
   useEffectID(() => {
-    if (!toRead.length) return
-    toRead.forEach((id: string) => {
-      readSent.current.done.add(id)
-    })
-    // sent on its own, so a paused mark is refused without a toast
-    if (!P.markMessagesRead(toRead, { quiet: true }))
-      toRead.forEach((id: string) => {
-        readSent.current.done.delete(id)
-      })
-  }, [toReadKey])
+    if (!watchUuid || unreadPending || !shownItem) return
+    P.readOnOpen(watchUuid)
+  }, [watchUuid, unreadPending, shownItem, paused])
 
   // The spine opens at its newest end, like the inbox thread it now matches.
   // All five key terms earn their place: a different task is a different
@@ -2697,7 +2698,7 @@ function IssueDetail({
   // where changes show rather than that All shows this one: whether the
   // person may see that change's row is the server's to decide.
   const tailNote =
-    it && actFilter === 'comments' && frozen.current.unread.change
+    it && actFilter === 'comments' && frozen.current.unread?.change
       ? 'New activity on this task. Changes show only under All.'
       : 'New activity on this task.'
   /* Resolves whether the server saved the comment; the composer keeps the

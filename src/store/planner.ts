@@ -465,6 +465,83 @@ let watchedHeld: {
 } | null = null
 /* The task and organization of the thread the parts watch, or null. */
 let threadWatched: { task: string; org: string } | null = null
+/** The unread summary across the login's seats, as convex/inbox.ts
+    summary answers it. */
+export type InboxSummaryAnswer = FunctionReturnType<typeof api.inbox.summary>
+/** The open task's inbox item, as convex/inbox.ts item answers it. */
+export type InboxItemAnswer = FunctionReturnType<typeof api.inbox.item>
+/** An inbox item's fields, from an answer that holds one. */
+export type InboxItemFields = NonNullable<Extract<InboxItemAnswer, { state: 'ok' }>['item']>
+
+/** The unread summary as the store holds it (P.inboxSummary), `loading`
+    until its first answer and while it runs again, `failed` after a
+    failure, which drops the answer, else `ok` with the answer and whether
+    it is current, the running registry's latest on the socket's newest
+    connection. A held answer that is not current stays shown. */
+export type InboxSummaryVM =
+  | { state: 'loading' | 'failed'; answer: null; current: false }
+  | { state: 'ok'; answer: InboxSummaryAnswer; current: boolean }
+
+/** The open task's inbox item as the store holds it (P.inboxItem), for the
+    task and organization whose thread the store watches: `loading` until
+    its first answer and while it runs again, `building` while the seat's
+    items are not complete, `failed` after a failure or a refusal, which
+    the store runs once more a visit by itself (itemNews), else `ok` with
+    the item, null for no item. `current` as for the summary
+    (InboxSummaryVM). */
+export type InboxItemVM = {
+  task: string
+  org: string
+  state: 'loading' | 'ok' | 'building' | 'failed'
+  item: InboxItemFields | null
+  current: boolean
+}
+
+/* Whether the latest answer of the unread summary (P.inboxSummary) and of
+   the open task's inbox item (P.inboxItem) came from the running registry,
+   and the connection each arrived on. A failure and a re-init of the parts
+   (stopParts) clear the flag, and a reconnect moves latestConnection past
+   the connection (staleInboxReads), as detailFresh does for the task
+   side. */
+let summaryFresh = false
+let summaryConnection = 0
+let itemFresh = false
+let itemConnection = 0
+/* Whether the store ran the open task's failed inbox item once more this
+   visit (itemNews), which it does once. Forgotten when the thread changes
+   or stops. */
+let itemRerun = false
+/* A hold on the open task's read on open that holds nothing, which each
+   visit starts with (itemHold). */
+const freeHold = () => ({ waiting: 0, accepted: false, keptBack: false })
+/* This client's hold on the open task's read on open this visit
+   (P.readOnOpen), from its Mark as unread or a snooze or its end on the
+   task (holdUnreadOf). It counts those writes that still wait and says
+   whether the server accepted one, and while either holds, no read on
+   open goes out. A write the server refused or that failed only stops
+   waiting, so the hold is as it would be without that write. `keptBack`
+   says whether the hold turned away a read on open the window asked for,
+   which runs again once nothing holds. Each visit gets a new hold, so a
+   write of an earlier visit changes nothing. Forgotten when the thread
+   changes or stops. */
+let itemHold = freeHold()
+/* How many answers of the open task's inbox item arrived, so the read on
+   open can tell an answer that came after its read went out
+   (P.readOnOpen). */
+let itemAnswers = 0
+/* The window's last read on open (P.readOnOpen), with its task,
+   organization and `through`, how many item answers had arrived when it
+   went out, whether the server confirmed it (never after a refusal), and
+   whether it was the one more read the rule allows at the same `through`.
+   Forgotten when the thread changes or stops. */
+let itemRead: {
+  task: string
+  org: string
+  through: number
+  sent: number
+  confirmed: boolean
+  again: boolean
+} | null = null
 let commentsWatchEpoch = 0
 /* The last thread the comments subscription delivered, the anchor the
    thread's rows are built from (buildThreadRows), as the base
@@ -980,14 +1057,95 @@ function subscribeThread(issueUuid: string, orgId: string) {
   if (!parts) return
   threadWatched = { task: issueUuid, org: orgId }
   parts.watchSide('thread', api.snapshot.threadComments, { org_id: orgId, issue_id: issueUuid })
+  subscribeItem(issueUuid, orgId)
   if (historyOwners.size > 0) startHistory()
   syncSections()
 }
 
-/* Stops the thread's side query. */
+/* Stops the thread's side query, and the inbox item's beside it. */
 function stopThread() {
   parts?.stopSide('thread')
   threadWatched = null
+  stopItem()
+}
+
+/* Watches the inbox item of task `issueUuid` in organization `orgId`
+   (convex/inbox.ts item) beside its thread, so one item read runs per
+   store, for the task whose thread it watches, and its first answer comes
+   with the thread's (itemNews). The answer held for the same task and
+   organization stays, as not current until the new subscription answers,
+   as after a re-init of the parts; another task's goes, with the window's
+   last read on open, its rerun and its hold. A subscription that already
+   watches these arguments goes on, unless its answer failed. */
+function subscribeItem(issueUuid: string, orgId: string) {
+  if (!parts) return
+  const held = PLANNER.inboxItem
+  const same = held?.task === issueUuid && held.org === orgId
+  if (!same) {
+    PLANNER.inboxItem = {
+      task: issueUuid,
+      org: orgId,
+      state: 'loading',
+      item: null,
+      current: false,
+    }
+    itemRead = null
+    itemFresh = false
+    itemRerun = false
+    itemHold = freeHold()
+  }
+  const args = parts.sideArgs('item')
+  const watching = args?.org_id === orgId && args.issue_id === issueUuid
+  if (watching && held?.state !== 'failed') return
+  itemFresh = false
+  parts.watchSide('item', api.inbox.item, { org_id: orgId, issue_id: issueUuid })
+}
+
+/* Stops the inbox item's side query, and forgets its answer, the
+   window's last read on open, its rerun and its hold. */
+function stopItem() {
+  parts?.stopSide('item')
+  PLANNER.inboxItem = null
+  itemRead = null
+  itemFresh = false
+  itemRerun = false
+  itemHold = freeHold()
+}
+
+/* Holds off the read on open of the watched task while a write about the
+   loaded messages `ids` waits, when they name one of its messages, as the
+   person's own Mark as unread or snooze does (itemHold), and answers the
+   handlers send() runs for that write. The hold stays for the rest of the
+   visit once the server accepts the write. A refusal or a failure takes
+   away only this write's part, so an unread choice the server accepted,
+   before or since, still holds. Once nothing holds, a read on open the
+   hold turned away runs again, so an update that arrived while the write
+   waited is read as it would have been without it. A write of an earlier
+   visit changes nothing. Call it just before the write goes out. */
+function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
+  const watched = threadWatched
+  if (!watched) return {}
+  const ofTask = ids.some((id) => {
+    const row = rows.messages.get(id)
+    return row?.issue_id === watched.task && row.org_id === watched.org
+  })
+  if (!ofTask) return {}
+  const hold = itemHold
+  hold.waiting++
+  return {
+    onOk: () => {
+      if (hold === itemHold) hold.accepted = true
+    },
+    onSettled: () => {
+      if (hold !== itemHold) return
+      hold.waiting--
+      // refused or failed, so the read the window asked for meanwhile goes
+      // out, unless another unread choice still holds
+      if (hold.waiting > 0 || hold.accepted || !hold.keptBack) return
+      hold.keptBack = false
+      PLANNER.readOnOpen(watched.task)
+    },
+  }
 }
 
 /* Asks for the watched task's history, for a window that shows All. It
@@ -1646,14 +1804,145 @@ function refStateNow(): TaskRefVM | null {
   return read && { ref: read.ref, state: read.state, task: read.task }
 }
 
-/* What each side query's news goes to. */
-const SIDE_NEWS: Record<SideName, (news: SideNews) => void> = {
+/* The unread summary's news in one transition, which arrived on socket
+   connection `connection`. An answer is the summary as the badge and the
+   bulk actions read it (P.inboxSummary), current while it is the running
+   registry's latest on the newest connection. A failure drops the answer,
+   so the badge shows no number, and Convex runs the query again when data
+   it read changes and after a reconnect; opening the Inbox runs it again
+   too (P.retryInboxSummary). It emits the Inbox's section when what the
+   badge or the bulk actions show changed. */
+function summaryNews(news: SideNews, connection: number) {
+  const before = summaryView()
+  if ('error' in news) {
+    console.error('[qivo] unread summary subscription failed:', news.error)
+    summaryFresh = false
+    PLANNER.inboxSummary = { state: 'failed', answer: null, current: false }
+  } else {
+    summaryFresh = true
+    summaryConnection = connection
+    PLANNER.inboxSummary = {
+      state: 'ok',
+      answer: anchor(news.value as InboxSummaryAnswer),
+      current: connection === latestConnection,
+    }
+  }
+  const flags = deriveInboxFlags()
+  if (flags || summaryView() !== before) emit('inbox')
+}
+
+/* The summary's state, whether it is current, and the count with its
+   bounds, which the badge reads, as one string to compare. */
+function summaryView(): string {
+  const s = PLANNER.inboxSummary
+  if (s.state !== 'ok') return s.state
+  const a = s.answer
+  return `ok:${s.current}:${a.unread_count}:${a.unread_more}:${a.complete}`
+}
+
+/** Sets P.canMarkAllRead and P.canRemoveRead from the unread summary
+    (P.inboxSummary) and the store's seats. Both are true while the summary
+    has no answer, since each action asks the server what it reaches first
+    (messages.bulkReach). With an answer, each is true when a seat's flag
+    is, flags that count messages about tasks the person can no longer see
+    and about archived tasks too, as both actions reach them, or when the
+    answer is not complete and leaves out a seat the store holds. A held
+    answer that is not current still counts. Answers whether either
+    changed. */
+function deriveInboxFlags(): boolean {
+  const summary = PLANNER.inboxSummary
+  let mark = true
+  let remove = true
+  if (summary.state === 'ok') {
+    const lines = summary.answer.seats
+    const left =
+      !summary.answer.complete &&
+      [...myProfiles.keys()].some((org) => !lines.some((line) => line.org_id === org))
+    mark = left || lines.some((line) => line.can_mark_all_read)
+    remove = left || lines.some((line) => line.can_remove_read)
+  }
+  const changed = mark !== PLANNER.canMarkAllRead || remove !== PLANNER.canRemoveRead
+  PLANNER.canMarkAllRead = mark
+  PLANNER.canRemoveRead = remove
+  return changed
+}
+
+/* The open task's inbox item's news in one transition, which arrived on
+   socket connection `connection` (P.inboxItem). `building` says the seat's
+   items are not complete yet, an answer's item is null for no item, a task
+   the seat is not shown or a check a bound stopped, and an error, such as
+   the refusal of a seat that is gone from the task's organization, is
+   `failed`. None of those draws a New divider or sends a read, and the
+   window's start stays pending through them. The first failure of a visit
+   runs the item once more from a fresh subscription, which loads again,
+   since Convex runs a failed query again only when data it read changes
+   and after a reconnect. A second one stays failed, logged, and leaves the
+   task unread, counted by the badge. A seat whose items are building needs
+   no rerun, as the answer changes once they are ready. A news of a task
+   the store no longer watches is dropped. It emits the task window's
+   section. */
+function itemNews(news: SideNews, connection: number) {
+  const watched = threadWatched
+  const held = PLANNER.inboxItem
+  if (!watched || held?.task !== watched.task || held.org !== watched.org) return
+  itemAnswers++
+  const shown = { task: watched.task, org: watched.org }
+  if ('error' in news) {
+    itemFresh = false
+    if (!itemRerun && parts?.rerunSide('item')) {
+      itemRerun = true
+      console.error('[qivo] inbox item subscription failed, running it once more:', news.error)
+      PLANNER.inboxItem = { ...shown, state: 'loading', item: null, current: false }
+    } else {
+      console.error('[qivo] inbox item subscription failed:', news.error)
+      PLANNER.inboxItem = { ...shown, state: 'failed', item: null, current: false }
+    }
+  } else {
+    const answer = news.value as InboxItemAnswer
+    itemFresh = true
+    itemConnection = connection
+    const current = connection === latestConnection
+    PLANNER.inboxItem =
+      answer.state === 'building'
+        ? { ...shown, state: 'building', item: null, current }
+        : { ...shown, state: 'ok', item: answer.item && anchor(answer.item), current }
+  }
+  emit('comments')
+}
+
+/* Marks the held summary and item answers not current once the socket's
+   newest connection passed the one they arrived on, or the registry that
+   brought them stopped (stopParts), and emits each section whose answer
+   changed: after a reconnect every result arrives again, and the badge
+   shows the held count as refreshing until it does. The registry learns
+   of a new connection only with the new socket's first transition, so
+   during an outage the held count passes as current until then. */
+function staleInboxReads() {
+  const summary = PLANNER.inboxSummary
+  const summaryNow = summaryFresh && summaryConnection === latestConnection
+  if (summary.state === 'ok' && summary.current !== summaryNow) {
+    PLANNER.inboxSummary = { ...summary, current: summaryNow }
+    emit('inbox')
+  }
+  const item = PLANNER.inboxItem
+  const itemNow = itemFresh && itemConnection === latestConnection
+  if (item && item.state !== 'loading' && item.state !== 'failed' && item.current !== itemNow) {
+    PLANNER.inboxItem = { ...item, current: itemNow }
+    emit('comments')
+  }
+}
+
+/* What each side query's news goes to, with the socket connection the
+   transition that brought it arrived on. */
+const SIDE_NEWS: Record<SideName, (news: SideNews, connection: number) => void> = {
   thread: threadNews,
   history: historyNews,
   task: sectionNews('task'),
   links: sectionNews('links'),
   attachments: sectionNews('attachments'),
   reference: referenceNews,
+  summary: summaryNews,
+  item: itemNews,
 }
 
 /* The state of section side `side`, whose answer is `answer`. */
@@ -2461,6 +2750,51 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
   return m
 }
 
+/* Sends messages.readItem for the item `target` names (P.readItem), and
+   runs `confirmed` once the server accepted it and its paint settled, so
+   `confirmed` may send another write. Answers false when the pause refuses
+   it. */
+function sendItemRead(
+  target: { org: string; task: string; through: number; latestAt: string },
+  quiet: boolean,
+  confirmed?: () => void,
+): boolean {
+  if (refusePausedWrite(api.messages.readItem, quiet)) return false
+  const at = new Date().toISOString()
+  const latest = Date.parse(target.latestAt)
+  const ids: string[] = []
+  for (const row of rows.messages.peekValues())
+    if (
+      row.issue_id === target.task &&
+      row.org_id === target.org &&
+      !row.read_at &&
+      row.snoozed_until === undefined &&
+      Date.parse(row.created_at) <= latest
+    )
+      ids.push(row.id)
+  let accepted = false
+  void send(
+    api.messages.readItem,
+    { org_id: target.org, issue_id: target.task, through: target.through },
+    ids.length ? { workspace: () => markLoadedMessagesRead(ids, at, true) } : 'none',
+    {
+      // the read that opening a task sends is not a change the person made
+      about: { background: quiet },
+      ...(confirmed
+        ? {
+            onOk: () => {
+              accepted = true
+            },
+            onSettled: () => {
+              if (accepted) confirmed()
+            },
+          }
+        : {}),
+    },
+  )
+  return true
+}
+
 /* Mirror the server prune after a read. A task retains its newest message
    plus any unread arrivals that were not part of this action. Skips rows
    that are gone or already read, so it can paint again, and with
@@ -2493,14 +2827,24 @@ function markLoadedMessagesRead(ids: string[], at: string, skipSnoozed = false) 
 
 const updates = createPlannerUpdates()
 /* Publishes `section` (updates.ts). In tests it first checks that the rows
-   on screen are exactly what the layers paint (checkLayers). */
+   on screen are exactly what the layers paint (checkLayers). Inside
+   together() the comments' and the Inbox's emits wait for its end
+   (heldRepaint), where a workspace emit shows them too. */
 const emit = (section?: Parameters<typeof updates.emit>[0]) => {
+  if (heldRepaint && (section === 'comments' || section === 'inbox')) {
+    heldRepaint[section] = true
+    return
+  }
   if (STRICT_LAYERS) checkLayers()
   if (!section || section === 'workspace') {
     lastShown = shownWorkspace()
     // what shows now is where the next comparison starts (sameShown)
     workspaceRows.checkpoint()
-  }
+    // a workspace emit changes every section, the held ones too
+    if (heldRepaint) heldRepaint.comments = heldRepaint.inbox = false
+    if (heldSections) heldSections.comments = heldSections.inbox = false
+  } else if (heldSections && (section === 'comments' || section === 'inbox'))
+    heldSections[section] = false
   updates.emit(section)
 }
 
@@ -2543,8 +2887,6 @@ function shownWorkspace() {
       P.messageGroups,
       P.unreadMessages,
       P.readMessageCount,
-      P.canMarkAllRead,
-      P.canRemoveRead,
       P.inboxCut,
       P.inboxCutReach.markAllRead,
       P.inboxCutReach.removeRead,
@@ -2821,36 +3163,61 @@ function repaint(parts: {
   }
 }
 
-/* The parts asked to repaint while together() runs its step, and whether
-   something outside the rows changed that a workspace emit shows (emit). */
+/* The parts asked to repaint while together() runs its step, whether
+   something outside the rows changed that a workspace emit shows (emit),
+   and whether the comments' or the Inbox's section asked to emit, as the
+   unread summary's and the inbox item's news do. */
 let heldRepaint: {
   workspace: boolean
   thread: boolean
   sections: boolean
   view: boolean
   emit: boolean
+  comments: boolean
+  inbox: boolean
 } | null = null
+/* The section emits together() still owes while its repaint runs, each
+   dropped once the repaint emitted it or the workspace (emit). */
+let heldSections: { comments: boolean; inbox: boolean } | null = null
 
 /** Runs `step`, which settles several layers, and repaints what they asked
     for once at its end. React renders after each emit, so one repaint per
-    layer would render the screen once for each. */
+    layer would render the screen once for each. The comments' and the
+    Inbox's emits wait too, since a workspace emit at the end shows them,
+    and each one it did not show goes out after it. */
 function together(step: () => void) {
   if (heldRepaint) return step()
-  heldRepaint = { workspace: false, thread: false, sections: false, view: false, emit: false }
+  heldRepaint = {
+    workspace: false,
+    thread: false,
+    sections: false,
+    view: false,
+    emit: false,
+    comments: false,
+    inbox: false,
+  }
   try {
     step()
   } finally {
     const parts = heldRepaint
     heldRepaint = null
-    // a repaint shows the emit's change too, as one render
-    if (parts.workspace || parts.thread || parts.sections || parts.view)
-      repaint({
-        workspace: parts.workspace || parts.emit,
-        thread: parts.thread,
-        sections: parts.sections,
-        view: parts.view,
-      })
-    else if (parts.emit) emit()
+    heldSections = { comments: parts.comments, inbox: parts.inbox }
+    try {
+      // a repaint shows the emit's change too, as one render
+      if (parts.workspace || parts.thread || parts.sections || parts.view)
+        repaint({
+          workspace: parts.workspace || parts.emit,
+          thread: parts.thread,
+          sections: parts.sections,
+          view: parts.view,
+        })
+      else if (parts.emit) emit()
+    } finally {
+      const left = heldSections
+      heldSections = null
+      if (left.comments) emit('comments')
+      if (left.inbox) emit('inbox')
+    }
   }
 }
 
@@ -6743,16 +7110,15 @@ function rebuild(now = new Date(), full = false) {
       .map(([issueUuid, newestFirst]) => shapeMessageGroup(issueUuid, newestFirst))
       .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
   )
-  // the badge counts ITEMS, matching what the list shows — a snoozed item is
-  // out of sight and out of the count until it returns
+  // the loaded groups that are unread and not snoozed (P.unreadMessages),
+  // which no view reads, since the badge counts from the unread summary
   P.unreadMessages = P.messageGroups.reduce((n, g) => n + (g.read || g.snoozed ? 0 : 1), 0)
   P.readMessageCount =
     hiddenReadMessages +
     P.messages.filter((message) => message.read && message.snoozedUntil === null).length
-  // Mark all as read and Remove all read also reach rows the snapshot never
-  // examined, so they stay available while such rows may exist
-  P.canMarkAllRead = P.unreadMessages > 0 || unexaminedUnread
-  P.canRemoveRead = P.readMessageCount > 0 || unexaminedRead
+  // Mark all as read and Remove all read follow the unread summary, whose
+  // rule reads the seats this repaint may have changed
+  deriveInboxFlags()
   // the snapshot delivers at most 500 messages, so the Inbox says when older
   // ones exist that it does not list, snoozed ones included, and whether
   // Mark all as read and Remove all read reach them (they skip snoozed rows)
@@ -9169,11 +9535,26 @@ export const PLANNER = {
   lastCommentsCut: [] as string[],
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
-  unreadMessages: 0, // own inbox (0074), folded per task (0088)
+  /** The loaded message groups (P.messageGroups) that are unread and not
+      snoozed. No view reads it, as the Inbox badge counts every unread
+      task from the unread summary (P.inboxSummary). The store's tests read it to
+      check the paint of loaded messages, and the browser benchmark's checks
+      read it on builds before and after that move
+      (scripts/benchmark-browser.mjs). It goes with the workspace inbox
+      part. */
+  unreadMessages: 0,
   readMessageCount: 0, // includes read notifications beyond the displayed snapshot
-  // whether the Inbox's Mark all as read and Remove all read have rows to act on
-  canMarkAllRead: false,
-  canRemoveRead: false,
+  // whether the Inbox's Mark all as read and Remove all read may change
+  // anything, from the unread summary's seat flags, and true while it has
+  // no answer (deriveInboxFlags)
+  canMarkAllRead: true,
+  canRemoveRead: true,
+  // the unread summary across the login's seats, which the Inbox badge
+  // counts from and the bulk actions take their availability from
+  inboxSummary: { state: 'loading', answer: null, current: false } as InboxSummaryVM,
+  // the open task's inbox item, which its window takes the New divider and
+  // the read on open from, else null (subscribeItem)
+  inboxItem: null as InboxItemVM | null,
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
   // whether older messages exist than the Inbox lists (the snapshot's 500),
@@ -13096,16 +13477,15 @@ export const PLANNER = {
      that hold one message. Each checks the pause before its paint, so a
      paused write paints nothing, and sends one write per organization, each
      with its own layer, so a seat that refuses takes back only its rows. */
-  /** Marks messages read and answers whether it sent the mark. `quiet`
-      refuses a paused mark without a toast, for the mark that opening a task
-      sends on its own. */
-  markMessagesRead: (ids: string[], { quiet = false } = {}): boolean => {
+  /** Marks messages read and answers whether it sent the mark, for the
+      Inbox's rows. */
+  markMessagesRead: (ids: string[]): boolean => {
     const at = new Date().toISOString()
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r && !r.read_at
     })
-    if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return false
+    if (!hit.length || refusePausedWrite(api.messages.markRead)) return false
     // an item's messages share one org, but a bulk mark-all spans seats —
     // group per org BEFORE any paint prunes the hit rows
     messagesByOrg(hit).forEach((list, org) => {
@@ -13113,11 +13493,101 @@ export const PLANNER = {
         api.messages.markRead,
         { org_id: org, ids: list },
         { workspace: () => markLoadedMessagesRead(list, at) },
-        // the read that opening a task sends is not a change the person made
-        { about: { background: quiet } },
       )
     })
     return true
+  },
+  /** Marks the person's inbox item about task `task` in organization `org`
+      read (messages.readItem), every unread message the server stored up
+      to `through`, the item's newest _creationTime as inbox.item or a page
+      row answered it, loaded or not, and answers whether it sent the read.
+      Its paint marks read the loaded messages of the task that are unread,
+      not snoozed and no newer than `latestAt`, the item's newest message,
+      so the Inbox's row turns read at once; the badge changes once the
+      unread summary answers again. The paint compares `created_at`, where
+      the server cuts by _creationTime, so a backdated notice stored after
+      the answer is painted read and comes back unread when the server
+      answers. `quiet` refuses a paused read without a toast and leaves it
+      out of what the notice counts, for the read that opening a task sends
+      on its own (P.readOnOpen). */
+  readItem: (
+    target: { org: string; task: string; through: number; latestAt: string },
+    { quiet = false } = {},
+  ): boolean => sendItemRead(target, quiet),
+  /** The read on open of task `task`, which a window shows once it froze
+      where its unread part starts. It reads the task's inbox item through
+      P.readItem, with the organization, the task and the `through` of its
+      item answer (P.inboxItem), once that answer is ok and current with
+      unread messages and no snooze. Nothing goes out while the item loads,
+      while the seat's items are building, after a failure, for no item, a
+      read item or a snoozed one, or for a task the store does not watch.
+      Once the person marked the task unread from this client, with Mark as
+      unread, a snooze or its end, it sends nothing more until the thread
+      changes or stops, so their choice holds while the task stays open,
+      from the moment that write goes out. One the server refused or that
+      failed holds nothing once answered, and a read it turned away runs
+      again then (holdUnreadOf). It sends each `through` once a visit of
+      the watched task, so the Inbox pane and its pop-out send one read,
+      and once more when the server confirmed that read and the item's
+      answer, one that came after the read went out, still holds unread
+      messages at the same `through`, as for a message whose mutation
+      started before the read and committed after it. It checks that at
+      the confirmation too, since Convex brings the answer that holds the
+      read before the read's promise resolves, so the answer that came with
+      it may hold such a message, and no later answer may come. A paused
+      read is refused quietly and goes out once the pause ends, and a
+      refusal by the server is not sent again for its `through`. Answers
+      whether it sent one. */
+  readOnOpen: (task: string): boolean => {
+    const shown = PLANNER.inboxItem
+    if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
+    // the person chose unread for this visit, or the write that does waits
+    if (itemHold.waiting > 0 || itemHold.accepted) {
+      itemHold.keptBack = true
+      return false
+    }
+    const item = shown.item
+    if (!item || item.unread_count === 0 || item.snoozed_until !== null) return false
+    const last = itemRead?.task === task && itemRead.org === shown.org ? itemRead : null
+    if (last && item.through < last.through) return false
+    const again = last !== null && item.through === last.through
+    // the same `through` again only once, after the confirmation, for an
+    // answer that came after the read went out
+    if (
+      last &&
+      item.through === last.through &&
+      (last.again || !last.confirmed || itemAnswers <= last.sent)
+    )
+      return false
+    const read: NonNullable<typeof itemRead> = {
+      task,
+      org: shown.org,
+      through: item.through,
+      sent: itemAnswers,
+      confirmed: false,
+      again,
+    }
+    const sent = sendItemRead(
+      { org: shown.org, task, through: item.through, latestAt: item.latest_at },
+      true,
+      () => {
+        if (itemRead !== read) return
+        read.confirmed = true
+        // the answer that came with the confirmation may still hold a
+        // message committed after the read
+        PLANNER.readOnOpen(task)
+      },
+    )
+    if (sent) itemRead = read
+    return sent
+  },
+  /** Runs the unread summary again from a fresh subscription when its
+      latest answer is a failure, as opening the Inbox does once a press,
+      so the badge says it is loading until the answer arrives. */
+  retryInboxSummary: () => {
+    if (PLANNER.inboxSummary.state !== 'failed' || !parts?.rerunSide('summary')) return
+    PLANNER.inboxSummary = { state: 'loading', answer: null, current: false }
+    emit('inbox')
   },
   /* Mark every current notification read, including messages hidden by the
      snapshot cap and notifications in other organization seats. Each seat
@@ -13152,9 +13622,11 @@ export const PLANNER = {
         ),
     )
   },
-  /* Back to unread — the same column, the other way. Nothing is pruned by
+  /* Back to unread, the same column the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
-     server's prune asks. */
+     server's prune asks. Marking the open task's messages unread holds off
+     its read on open for the rest of the visit, unless the server refuses
+     it or it fails (holdUnreadOf). */
   markMessagesUnread: (ids: string[]) => {
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
@@ -13169,7 +13641,7 @@ export const PLANNER = {
             if (row) row.read_at = undefined
           }),
       }
-      void send(api.messages.markUnread, { org_id: org, ids: list }, view)
+      void send(api.messages.markUnread, { org_id: org, ids: list }, view, holdUnreadOf(list))
     })
   },
   /* Removing an item removes every message in it — the caller passes the
@@ -13247,11 +13719,14 @@ export const PLANNER = {
     PLANNER.deleteMessages([id])
   },
   /* Snooze an item until an ISO instant, or bring it back now (null). Both
-     leave it UNREAD — a reminder returns bold. The ids name the item; the
+     leave it UNREAD, as a reminder returns bold. The ids name the item; the
      server stamps every row of the (recipient, task) pair, so the paint
      walks the loaded rows of the same pairs rather than just the ids. The
      timed return is the server's scheduled wake (messages.wake), never a
-     client timer — every device shows it at the same instant. */
+     client timer, so every device shows it at the same instant. Since both
+     leave it unread, either on the open task holds off its read on open
+     for the rest of the visit, unless the server refuses it or it fails
+     (holdUnreadOf). */
   snoozeMessages: (ids: string[], until: string | null) => {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length || refusePausedWrite(api.messages.snooze)) return
@@ -13280,7 +13755,7 @@ export const PLANNER = {
               }
             }),
       }
-      void send(api.messages.snooze, { org_id: org, ids: list, until }, view)
+      void send(api.messages.snooze, { org_id: org, ids: list, until }, view, holdUnreadOf(list))
     })
   },
 
@@ -15296,10 +15771,12 @@ syncStatus.subscribe((ended) => {
 })
 
 /* The side queries' news that came with the boot's transitions, before the
-   first workspace settled the boot, the latest of each side. initStore
-   hands it on once the store holds that workspace, except a side a later
-   transition brought newer news of. */
-const bootSideNews = new Map<SideName, SideNews>()
+   first workspace settled the boot, the latest of each side, with the
+   socket connection its transition arrived on. initStore hands it on once
+   the store holds that workspace, except a side a later transition brought
+   newer news of, so news held across a reconnect during the boot is not
+   current. */
+const bootSideNews = new Map<SideName, { news: SideNews; connection: number }>()
 
 /** Starts the workspace's live parts, with the task windows from the start
     once this store asked for every task (`asked`, or TASKS.atBoot in
@@ -15339,9 +15816,10 @@ function startParts(
       latestConnection = Math.max(latestConnection, news.connection)
       const ws = news.workspace
       if (!settled) {
+        staleInboxReads()
         for (const name of SIDE_NAMES) {
           const side = news.sides?.[name]
-          if (side) bootSideNews.set(name, side)
+          if (side) bootSideNews.set(name, { news: side, connection: news.connection })
         }
         if (ws.state === 'held') return
         // a boot that waits for the whole workspace shows no partial one,
@@ -15382,12 +15860,13 @@ function startParts(
       }
       // the workspace and the side queries of one transition repaint once
       together(() => {
+        staleInboxReads()
         receiveWorkspace(ws, news.at)
         for (const name of SIDE_NAMES) {
           const side = news.sides?.[name]
           if (!side) continue
           bootSideNews.delete(name)
-          SIDE_NEWS[name](side)
+          SIDE_NEWS[name](side, news.connection)
         }
       })
     },
@@ -15578,6 +16057,11 @@ function stopParts() {
   for (const side of SECTION_SIDES) sectionsWatched[side] = null
   threadCurrent = false
   detailFresh = false
+  // the summary and the item answers held stay, not current, until the
+  // next registry's answer arrives
+  summaryFresh = false
+  itemFresh = false
+  staleInboxReads()
   bootSideNews.clear()
   // the reference read runs again on the next registry (syncRefRead)
   refLast = null
@@ -15613,6 +16097,18 @@ export function disposeDemoStore() {
   resetSections()
   PLANNER.sections = null
   PLANNER.detail = null
+  // the next demo's summary and item load afresh, and the rebuild below
+  // derives the bulk actions' flags from that
+  PLANNER.inboxSummary = { state: 'loading', answer: null, current: false }
+  PLANNER.inboxItem = null
+  itemRead = null
+  itemRerun = false
+  itemHold = freeHold()
+  summaryFresh = false
+  summaryConnection = 0
+  itemFresh = false
+  itemConnection = 0
+  itemAnswers = 0
   acceptedCommentChanges.clear()
   threadStart = false
   earlierLoad = 'idle'
@@ -15923,7 +16419,7 @@ export async function initStore(
   const bootNews = [...bootSideNews]
   bootSideNews.clear()
   together(() => {
-    for (const [name, side] of bootNews) SIDE_NEWS[name](side)
+    for (const [name, side] of bootNews) SIDE_NEWS[name](side.news, side.connection)
   })
   // the rows, with any layer from before a re-init painted over them
   paintRows(true, false)

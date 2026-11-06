@@ -136,6 +136,13 @@
  * REST and opens Team sync on its project in a fresh load, which must
  * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
  * show the task's card on the agent's line from the rail (ui/team-sync).
+ * It checks the top bar's Inbox badge against the deployment's unread
+ * summary (inbox.summary), has the Standard agent mention Nora in a comment
+ * on t0 over REST, which the badge must count, opens t0 at its address,
+ * whose window must draw the New divider above that comment from its inbox
+ * item (inbox.item) and read the item (messages.readItem), so the summary
+ * drops back, and removes t0's item from Nora's Inbox with the row's own
+ * action (ui/inbox-badge).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -172,6 +179,7 @@ import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { signInBrowser } from './browser-demo.mjs'
+import { inboxBadge } from './inboxBadge.mjs'
 import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from './limits.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
 
@@ -4638,6 +4646,134 @@ async function teamSyncCheck() {
   })
 }
 
+/** The step that holds the Inbox badge to the deployment's unread summary
+ *  and reads a mentioned task on opening it (inboxBadgeCheck). */
+export const INBOX_BADGE_STEP = 'ui/inbox-badge'
+
+/** The Inbox badge counts from the deployment's unread summary
+ *  (inbox.summary), and opening a task reads its inbox item (inbox.item)
+ *  and marks it read with messages.readItem. As Nora it first opens t0 at
+ *  its address, so whatever of t0 was unread is read. On the project's
+ *  Board it waits for the summary's current answer, whose chip, state and
+ *  tab name must be what inboxBadge gives for it. The Standard agent then
+ *  mentions Nora in a comment on t0 over REST, after which the summary must
+ *  count one more, or stay more than 99, with the chip agreeing. A fresh
+ *  load of t0's address must draw the New divider right above the agent's
+ *  comment, and once the window read the item, the item must read 0 unread
+ *  and the summary its count from before. Last, Remove notification in the
+ *  Inbox row's menu removes t0's item, so Nora's Inbox is as the run found
+ *  it. The cleanup, which deletes M, removes the comment with t0. It runs
+ *  before the run archives M, which holds t0. */
+async function inboxBadgeCheck() {
+  const s = run.creds.stdKey
+  const { t0, nora } = run
+  const { M } = run.projects
+  await check(INBOX_BADGE_STEP, async () => {
+    const taskAddress = `${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${t0.key.toLowerCase()}`
+    /** The store's unread summary, once it holds a current answer. */
+    const summary = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxSummary ?? null)
+      return now?.state === 'ok' && now.current ? now : null
+    }
+    /** The store's inbox item of t0, once it holds a current answer. */
+    const item = async () => {
+      const now = await evaluate(app, () => window.PLANNER?.inboxItem ?? null)
+      return now?.task === t0.id && now.state === 'ok' && now.current ? now : null
+    }
+    /** What the top bar's Inbox tab shows now. */
+    const shown = () =>
+      evaluate(app, () => {
+        const tab = document.querySelector('[data-view-switch] [aria-label^="Inbox"]')
+        const chip = tab?.querySelector('[data-inbox-badge]')
+        return {
+          name: tab?.getAttribute('aria-label') ?? null,
+          chip: chip ? chip.textContent : null,
+          state: chip?.getAttribute('data-inbox-badge-state') ?? null,
+        }
+      })
+    /** Waits until the top bar shows what inboxBadge gives for `answer`. */
+    const shows = async (answer, what) => {
+      const want = inboxBadge(answer)
+      const agrees = async () => {
+        const got = await shown()
+        return got.name === want.tabName && got.chip === want.chip && got.state === want.state
+      }
+      expect(
+        await until(agrees, 30_000),
+        `the badge does not show ${what}: ${JSON.stringify(await shown())}`,
+      )
+    }
+    /** Whether `after` counts one more than `before`, or both more than 99. */
+    const oneMore = (before, after) =>
+      before.answer.unread_more
+        ? after.answer.unread_more
+        : after.answer.unread_count === before.answer.unread_count + 1 ||
+          (before.answer.unread_count === 99 && after.answer.unread_more)
+    // whatever of t0 was unread is read once its window opens
+    await app.goto(taskAddress, { waitUntil: 'domcontentloaded' })
+    expect(await until(async () => (await item()) !== null, 60_000), "t0's item did not answer")
+    expect(
+      await until(async () => ((await item())?.item?.unread_count ?? 0) === 0, 60_000),
+      'opening t0 did not read its item',
+    )
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    expect(await until(async () => (await summary()) !== null, 60_000), 'no summary answered')
+    const before = await summary()
+    await shows(before, 'the summary before the mention')
+    const comment = await restOk(s, 'POST', `/tasks/${t0.key}/comments`, {
+      body: `${run.tag} inbox badge for @[${nora.name}](user:${nora.id})`,
+    })
+    let after = null
+    expect(
+      await until(async () => {
+        after = await summary()
+        return after !== null && oneMore(before, after)
+      }, 60_000),
+      `the summary did not count the mention: ${JSON.stringify(after?.answer ?? null)}`,
+    )
+    await shows(after, 'the count with the mention')
+    // a fresh load of t0 draws the New divider right above the comment
+    await app.goto(taskAddress, { waitUntil: 'domcontentloaded' })
+    const above = () =>
+      evaluate(
+        app,
+        (id) => {
+          const mark = document.querySelector('[data-spine] > [data-unread-divider="mark"]')
+          return mark?.nextElementSibling?.getAttribute('data-comment') === id
+        },
+        comment.id,
+      )
+    expect(await until(above, 60_000), "the New divider is not above the agent's comment")
+    expect(
+      await until(async () => (await item())?.item?.unread_count === 0, 60_000),
+      "the window did not read t0's item",
+    )
+    let back = null
+    expect(
+      await until(async () => {
+        back = await summary()
+        if (back === null || back.answer.unread_more !== before.answer.unread_more) return false
+        return before.answer.unread_more || back.answer.unread_count === before.answer.unread_count
+      }, 60_000),
+      `the summary did not drop back: ${JSON.stringify(back?.answer ?? null)}`,
+    )
+    // the row's own Remove notification leaves Nora's Inbox as it was
+    await app.goto(`${cfg.appOrigin}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
+    const row = app.locator(`[data-message="${t0.id}"]`)
+    await row.waitFor({ timeout: 60_000 })
+    // a desktop row's menu opens on a right-click; its actions button is the phone's
+    await row.click({ button: 'right' })
+    await app.locator('[data-msg-menu] button', { hasText: 'Remove notification' }).click()
+    expect(
+      await until(async () => (await row.count()) === 0, 30_000),
+      "t0's row stayed in the Inbox",
+    )
+    return `the badge counted ${before.answer.unread_count} and then ${after.answer.unread_count} from the summary, the New divider stood above the mention, and opening ${t0.key} read it`
+  })
+}
+
 /** What the Overview of the run's own sub-project shows once the
  *  deployment answered (overviewCheck): its two tasks, one To do and due
  *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
@@ -7546,6 +7682,9 @@ async function main() {
   // Team sync on the deployment's agenda, with a task of its own, while
   // the project is active
   await teamSyncCheck()
+  // the Inbox badge from the deployment's unread summary, and the read of
+  // a mentioned task on opening it, while t0 is active
+  await inboxBadgeCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

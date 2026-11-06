@@ -58,6 +58,7 @@ import { closedBy, dropRefusedTask } from './lib/closingMoves'
 import { floatSlot } from './lib/floatStack'
 import { restoreFocus } from './lib/focusVisibility'
 import { menuTrigger } from './lib/focusWhenGone'
+import { inboxBadge } from './lib/inboxBadge'
 import { isLandscapeRoadmapOpen } from './lib/landscape'
 import { createUnsentScope, type UnsentScope, UnsentScopeContext } from './lib/leaveGuard'
 import { afterProjectSaved } from './lib/newProjectAccess'
@@ -584,7 +585,10 @@ function TopBar({
   // View switching and task creation share the first row across all views.
   // Board filters/grouping sit below; Roadmap owns its own toolbar.
   const showFilters = !inboxOpen && !syncOpen && !!info && view === 'kanban'
-  const unread = P.unreadMessages
+  // the unread summary answers on the Inbox's channel, which App does not
+  // follow, so the bar follows it itself
+  usePlannerVersion('inbox')
+  const badge = inboxBadge(P.inboxSummary)
 
   return (
     /* no rule under it either (deviation #63) — the bar is --chrome and the
@@ -609,7 +613,10 @@ function TopBar({
         {/* The Inbox is a glyph with its unread count on the corner, split
             from the views by a rule: it is a place, not a view of the scope.
             The count is filled here, unlike an outlined count beside a label,
-            because an outline cannot be read over the glyph's own lines. */}
+            because an outline cannot be read over the glyph's own lines. It
+            comes from the server's unread summary (lib/inboxBadge.ts), so
+            it shows "…" where it has no count and "12+" where it has only
+            part of one, and no chip only for a current, complete zero. */}
         <div data-view-switch className="[justify-self:center]">
           <Seg
             fit
@@ -619,14 +626,16 @@ function TopBar({
               {
                 value: 'inbox',
                 icon: 'mail',
-                ariaLabel: unread > 0 ? `Inbox, ${unread} unread` : 'Inbox',
-                badge: unread > 0 && (
+                ariaLabel: badge.tabName,
+                badge: badge.chip !== null && (
                   <span
                     data-inbox-badge
+                    data-inbox-badge-state={badge.state ?? undefined}
+                    data-refreshing={badge.refreshing ? '' : undefined}
                     aria-hidden="true"
                     className="pointer-events-none absolute -top-1.5 left-2.5 h-3.5 min-w-3.5 rounded-full bg-text-1 px-[3px] text-center font-mono text-[9px] leading-3.5 font-bold text-[var(--bg)] tabular-nums"
                   >
-                    {unread > 99 ? '99+' : unread}
+                    {badge.chip}
                   </span>
                 ),
                 divider: true,
@@ -1906,8 +1915,11 @@ function App() {
     // at it holding whatever task the last view had open would light a row-less
     // pane before a single message has been read. A deep link straight to
     // /inbox/tasks/<task> is the other direction and still lands on the task.
-    openInbox: () =>
-      move(
+    // Each press also runs a failed unread summary again, so the badge
+    // can count once more (P.retryInboxSummary).
+    openInbox: () => {
+      P.retryInboxSummary()
+      return move(
         { projectsOpen: false, settingsPage: null, sync: null, openIssue: null, inboxOpen: true },
         () => {
           setProjectsOpen(false)
@@ -1916,7 +1928,8 @@ function App() {
           setOpenIssue(null)
           setInboxOpen(true)
         },
-      ),
+      )
+    },
     // both sentinels are scopes, so they also have to leave whichever page owns
     // the screen — the sidebar is visible from the inbox, the palette from all
     openAll: () =>

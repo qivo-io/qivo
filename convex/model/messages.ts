@@ -318,11 +318,12 @@ const itemStart = (ctx: MutationCtx, a: { recipient_id: string; issue_id: string
  * than ITEM_UNREAD_CAP unread rows, it deletes the oldest unread rows until
  * the item holds the cap or ITEM_TRIM_STEP rows are gone. It never deletes
  * the item's oldest unread row, which marks where the unread run starts
- * (src/lib/spine.ts firstUnreadTs puts the New divider there), nor the
- * newest unread row of each kind, so the Inbox kind filter still finds the
- * item. A kind whose newest row lies past the first TRIM_READ keeps one more
- * row than it needs to. It never deletes `arrival` either, the row the
- * caller just posted, which woke the item from any snooze.
+ * (inbox.item answers it as first_unread_at, where src/lib/spine.ts
+ * itemUnreadStart puts the New divider), nor the newest unread row of each
+ * kind, so the Inbox kind filter still finds the item. A kind whose newest
+ * row lies past the first TRIM_READ keeps one more row than it needs to.
+ * It never deletes `arrival` either, the row the caller just posted, which
+ * woke the item from any snooze.
  *
  * The item counts what the cap deleted in `dropped` (schema.ts), kept on
  * `holder`, its newest unread row by insertion. The inbox reads walk unread

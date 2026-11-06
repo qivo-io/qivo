@@ -2707,8 +2707,9 @@ export default defineSchema({
   // (model/inboxReads.ts) and for the Inbox's pages of task groups, newest
   // or oldest first over the two list indexes (model/inboxPage.ts), and
   // answers that a profile is not ready while its inbox_state is not
-  // built. The app does not show those reads yet.
-  // The app, REST and MCP read the messages until a later release switches
+  // built. The app's Inbox badge, its Mark all as read and Remove all read
+  // and its task window read the summary and the item. The app's Inbox
+  // list, REST and MCP read the messages until a later release switches
   // them, once every deployment has run internal/inboxItemsBackfill.
   inbox_items: defineTable({
     recipient_id: v.string(),

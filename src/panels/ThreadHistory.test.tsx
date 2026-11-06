@@ -103,10 +103,12 @@ async function load(
       created_at: at(m.minute),
     })
   subs = []
+  let publish = (_: Snapshot) => {}
   network.onUpdate.mockImplementation((ref, _args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      next(structuredClone(snap))
+      publish = (value) => next(structuredClone(value))
+      publish(snap)
       return () => {}
     }
     const live: Live = { name, deliver: next, fail, closed: false }
@@ -116,8 +118,27 @@ async function load(
     }
   })
   network.query.mockResolvedValue(null)
-  // writes succeed, since opening the task marks its messages read
-  network.mutation.mockResolvedValue(null)
+  // writes succeed, since opening the task marks its messages read. The
+  // server holds the reads and sends its rows before it answers, as Convex
+  // does, so the transitions the task's inbox item brings keep them read
+  network.mutation.mockImplementation(async (ref, args) => {
+    // the server runs the write after the store sent it
+    await Promise.resolve()
+    const name = getFunctionName(ref)
+    const read =
+      name === 'messages:markRead'
+        ? (m: Row<'messages'>) => args.ids.includes(m.id)
+        : name === 'messages:readItem'
+          ? (m: Row<'messages'>) => m.issue_id === args.issue_id
+          : null
+    if (read) {
+      snap.messages = snap.messages.map((m) =>
+        !m.read_at && read(m) ? { ...m, read_at: at(30) } : m,
+      )
+      publish(snap)
+    }
+    return null
+  })
   const store = await import('../store/planner')
   P = store.P
   await store.initStore()

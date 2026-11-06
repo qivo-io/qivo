@@ -1548,6 +1548,114 @@ describe('the benchmark server', () => {
     expect(answer.subtasks.rows.length).toBeLessThan(2)
   })
 
+  it("answers the Inbox's unread summary and the open task's item, and reads the item to its through", async () => {
+    const ORG = '00000000-0000-4000-8000-000000000001'
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000&unread=12')
+    /** What query `name` answers with `args`, or undefined for none. */
+    const ask = async (name, args) => {
+      const asked = `${name}:${posted.length}`
+      await send({ type: 'query', id: asked, name, args })
+      const answer = posted.find((m) => m.to === asked)
+      if (!answer) return undefined
+      return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+    }
+    expect(await ask('inbox:summary', {})).toEqual({
+      seats: [{ org_id: ORG, ready: true, can_mark_all_read: true, can_remove_read: false }],
+      unread_count: 12,
+      unread_more: false,
+      complete: true,
+    })
+    const task = id('4', 3)
+    const item = await ask('inbox:item', { org_id: ORG, issue_id: task })
+    expect(item).toMatchObject({
+      state: 'ok',
+      item: { unread_count: 1, unread_change: true, snoozed_until: null },
+    })
+    expect(item.item.through).toBe(Date.parse(item.item.latest_at))
+    expect(await ask('inbox:item', { org_id: ORG, issue_id: id('4', 15) })).toEqual({
+      state: 'ok',
+      item: null,
+    })
+    // the item read marks the item's messages up to its through, and a
+    // through before them marks nothing
+    await send({
+      type: 'mutation',
+      id: 'early',
+      name: 'messages:readItem',
+      args: { org_id: ORG, issue_id: task, through: item.item.through - 1 },
+    })
+    expect((await ask('inbox:summary', {})).unread_count).toBe(12)
+    await send({
+      type: 'mutation',
+      id: 'read',
+      name: 'messages:readItem',
+      args: { org_id: ORG, issue_id: task, through: item.item.through },
+    })
+    expect(posted.find((m) => m.id === 'read')).toMatchObject({ type: 'answer', value: null })
+    expect((await ask('inbox:summary', {})).unread_count).toBe(11)
+    expect((await ask('inbox:item', { org_id: ORG, issue_id: task })).item).toMatchObject({
+      unread_count: 0,
+      first_unread_at: null,
+    })
+  })
+
+  it('re-sends the watched summary after a write changed it', async () => {
+    const ORG = '00000000-0000-4000-8000-000000000001'
+    const { posted, send } = await server('tasks=20&latency=0&mbps=100000&unread=2')
+    send({ type: 'watch', id: 'summary', name: 'inbox:summary', args: {} })
+    await vi.waitFor(() => expect(posted.some((m) => m.type === 'transition')).toBe(true))
+    const [first] = posted.filter((m) => m.type === 'transition')
+    expect(JSON.parse(first.results[0].text).unread_count).toBe(2)
+    posted.length = 0
+    await send({
+      type: 'mutation',
+      id: 'read',
+      name: 'messages:readItem',
+      args: { org_id: ORG, issue_id: id('4', 0) },
+    })
+    const sent = posted.filter((m) => m.type === 'transition').flatMap((m) => m.results)
+    expect(sent.map((r) => JSON.parse(r.text).unread_count)).toEqual([1])
+  })
+
+  it('answers the inbox reads in the states the page asks for', async () => {
+    const ORG = '00000000-0000-4000-8000-000000000001'
+    /** What the summary and one item answer on a page with `params`. */
+    const read = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&unread=12&${params}`)
+      const answer = async (name, args) => {
+        await send({ type: 'query', id: name, name, args })
+        const got = posted.find((m) => m.to === name)
+        if (!got) return undefined
+        return got.error ? { error: got.error } : JSON.parse(got.text)
+      }
+      return {
+        summary: await answer('inbox:summary', {}),
+        item: await answer('inbox:item', { org_id: ORG, issue_id: id('4', 0) }),
+      }
+    }
+    expect(await read('inbox=loading')).toEqual({ summary: undefined, item: undefined })
+    const failed = await read('inbox=failed')
+    expect(failed.summary.error).toContain('fails')
+    expect(failed.item.error).toContain('fails')
+    expect((await read('inbox=incomplete')).summary).toMatchObject({
+      unread_count: 12,
+      unread_more: false,
+      complete: false,
+    })
+    expect((await read('inbox=more')).summary).toMatchObject({
+      unread_count: 100,
+      unread_more: true,
+      complete: true,
+    })
+    const notReady = await read('inbox=notready')
+    expect(notReady.summary).toMatchObject({
+      seats: [{ org_id: ORG, ready: false }],
+      unread_count: 0,
+      complete: false,
+    })
+    expect(notReady.item).toEqual({ state: 'building' })
+  })
+
   it('serves the workspace in parts and re-sends only the window a remote rename changed, in one transition', async () => {
     const { posted, send } = await server('tasks=500&latency=0&mbps=100000')
     await send({ type: 'query', id: 'root', name: 'workspace:root', args: {} })

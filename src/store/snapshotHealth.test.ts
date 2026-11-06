@@ -58,6 +58,18 @@ describe('snapshot trouble', () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
   const sentNames = () => sent.map((request) => request.name)
+  /* The read that opening task-a sends on its own (P.readOnOpen), as
+     P.readItem sends it, quietly, up to message-a. */
+  const readOnOpen = () =>
+    store.P.readItem(
+      {
+        org: snapshot.orgs[0].id,
+        task: 'task-a',
+        through: Date.parse('2026-09-14T08:00:00.000Z'),
+        latestAt: '2026-09-14T08:00:00.000Z',
+      },
+      { quiet: true },
+    )
 
   async function boot() {
     store = await import('./planner')
@@ -222,7 +234,7 @@ describe('snapshot trouble', () => {
     await settle()
     const read = () => P.messages.find((message) => message.id === 'message-a')?.read
     // opening the task reads its messages on its own, and says nothing
-    expect(P.markMessagesRead(['message-a'], { quiet: true })).toBe(false)
+    expect(readOnOpen()).toBe(false)
     expect(read()).toBeFalsy()
     expect(showToast).not.toHaveBeenCalled()
     expect(P.markMessagesRead(['message-a'])).toBe(false)
@@ -252,7 +264,7 @@ describe('snapshot trouble', () => {
     sent[0].resolve(null)
     await settle()
     expect(P.issueById[task.id].status).toBe('progress')
-    P.markMessagesRead(['message-a'], { quiet: true })
+    readOnOpen()
     await settle()
     expect(sent).toHaveLength(1)
     expect(P.issueById[task.id].status).toBe('progress')

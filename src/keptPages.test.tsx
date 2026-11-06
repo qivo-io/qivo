@@ -154,10 +154,14 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   milestoneWatches.length = 0
   // the store, once it loaded, for what the person sees and may edit
   let P: typeof import('./store/planner')['P'] | null = null
+  // sends the workspace as the server holds it now
+  let publishWhole = () => {}
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
+    if (name === 'workspace:whole') {
+      publishWhole = () => next(structuredClone(snap))
+      publishWhole()
+    } else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name === 'teamSync:agenda')
       next(
         teamSyncStandIn(snap, args as SyncArgs, {
@@ -201,7 +205,25 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     return () => {}
   })
   network.query.mockResolvedValue(null)
-  network.mutation.mockResolvedValue(null)
+  // the server holds an Inbox read and sends its rows before it answers, as
+  // Convex does, so the inbox item a task window reads follows it
+  network.mutation.mockImplementation(async (ref, args) => {
+    await Promise.resolve()
+    const name = getFunctionName(ref)
+    const a = args as { ids?: string[]; issue_id?: string }
+    const read =
+      name === 'messages:markRead'
+        ? (m: Snapshot['messages'][number]) => !!a.ids?.includes(m.id)
+        : name === 'messages:readItem'
+          ? (m: Snapshot['messages'][number]) => m.issue_id === a.issue_id
+          : null
+    if (read) {
+      const at = '2026-09-14T09:00:00.000Z'
+      snap.messages = snap.messages.map((m) => (!m.read_at && read(m) ? { ...m, read_at: at } : m))
+      publishWhole()
+    }
+    return null
+  })
   const store = await import('./store/planner')
   P = store.P
   double.live?.holdWindow(held)

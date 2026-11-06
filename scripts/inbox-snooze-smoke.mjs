@@ -33,7 +33,42 @@ const groups = (page) =>
       ids: g.ids,
     })),
   )
-const unreadBadge = (page) => page.evaluate(() => window.PLANNER.unreadMessages)
+/* The badge's count, the unread summary's (P.inboxSummary) once it is
+   current, which the top bar's chip must show, as lib/inboxBadge.ts says. */
+const unreadBadge = async (page) => {
+  await page.waitForFunction(
+    () => window.PLANNER.inboxSummary.state === 'ok' && window.PLANNER.inboxSummary.current,
+    undefined,
+    { timeout: 30000 },
+  )
+  const { count, more, complete, chip } = await page.evaluate(() => {
+    const { answer } = window.PLANNER.inboxSummary
+    return {
+      count: answer.unread_count,
+      more: answer.unread_more,
+      complete: answer.complete,
+      chip: document.querySelector('[data-inbox-badge]')?.textContent ?? null,
+    }
+  })
+  const plus = complete ? '' : '+'
+  const shown = count === 0 ? (complete ? null : '…') : `${count}${plus}`
+  const want = more ? '99+' : shown
+  if (chip !== want) fail(`the badge shows ${chip ?? 'nothing'} for ${count} unread`)
+  return count
+}
+/* Waits until the summary counts `count`, as it does once the server
+   answered a write. */
+const badgeReaches = (page, count) =>
+  page
+    .waitForFunction(
+      (n) => {
+        const summary = window.PLANNER.inboxSummary
+        return summary.state === 'ok' && summary.current && summary.answer.unread_count === n
+      },
+      count,
+      { timeout: 10000 },
+    )
+    .catch(() => {})
 const openInbox = async (page) => {
   await page.goto(`${BASE}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('h1:has-text("Inbox")', { timeout: 30000 })
@@ -85,6 +120,7 @@ try {
     fail(`snoozedUntil is not ~2 days out: ${snoozed.snoozedUntil}`)
   if (snoozed.read) fail('the snoozed row is not unread')
   if ((await A.locator('[data-msg-menu]').count()) !== 0) fail('the menu stayed open after Snooze')
+  await badgeReaches(A, badgeBefore - (target.read ? 0 : 1))
   const badgeAfter = await unreadBadge(A)
   if (badgeAfter !== badgeBefore - (target.read ? 0 : 1))
     fail(`badge went ${badgeBefore} → ${badgeAfter}`)
@@ -115,8 +151,9 @@ try {
   list = await groups(A)
   if (list.find((g) => g.id === target.id).read) fail('opening a sleeping row marked it read')
   log('opening the sleeping row left it unread')
-  // the pane reads the task it holds the moment the row wakes (the app's
-  // rule for news arriving while you look at a task), so clear it first
+  // close the pane first, so the check below reads the row alone and not
+  // what the pane does with the task it holds (an open task's news is read
+  // as it arrives, unless this client marked it unread or snoozed it)
   await A.keyboard.press('Escape')
   await A.waitForFunction(() => !location.pathname.includes('/tasks/'))
   await A.click(`[data-message="${target.id}"]`, { button: 'right' })

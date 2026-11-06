@@ -2,9 +2,11 @@
  * unread summary across a person's seats and one task's item for the task
  * window, which convex/inbox.ts serves. The Inbox's pages
  * (model/inboxPage.ts) judge their rows with the same scope (inboxScope)
- * and answer the same unread change (unreadChange). The app does not call
- * these reads yet. It reads the workspace inbox part
- * (lib/workspaceParts.ts readInbox) until a later release switches it.
+ * and answer the same unread change (unreadChange). The app's Inbox badge
+ * and its bulk actions' availability read the summary, and its task window
+ * reads the item for its New divider and its read on open. The app's Inbox
+ * list reads the workspace inbox part (lib/workspaceParts.ts readInbox)
+ * until a later release switches it.
  *
  * Both show the seat's working set, as readInbox does, which holds a task
  * that is not archived, in a project of the seat's organization that is
@@ -286,14 +288,14 @@ const READ_PEEK = 8
 
 /* Whether `message` tells of a change the task window lists only under
  * All: a change, or a mention in the description, which comes with the
- * description's edit (src/lib/spine.ts unreadStart). */
+ * description's edit (src/lib/spine.ts UnreadStart). */
 const tellsChange = (message: Pick<Doc<'messages'>, 'kind' | 'detail'>): boolean =>
   message.kind === 'change' ||
   (message.kind === 'mention' && message.detail === MENTION_DETAILS.description)
 
 /**
  * Whether one of the item's unread messages tells of a change, by the app's
- * rule (src/lib/spine.ts unreadStart): a change, or a mention in the
+ * rule (src/lib/spine.ts UnreadStart): a change, or a mention in the
  * description. The item counts its changes and mentions read or not, so
  * the unread ones are those beyond the read ones, which the prune keeps to
  * at most one, so the answer reads the item's read messages, one normally,

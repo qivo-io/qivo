@@ -1036,3 +1036,74 @@ function serveOrg(s: ReturnType<typeof scripted>, id: string, windows: number) {
   for (const [i, w] of idWindows(windows).entries())
     s.set('workspace:tasks', { org_id: id, ...w }, { value: tasksPart([`${id}-${i}`]) })
 }
+
+describe("the Inbox's unread summary side", () => {
+  const summaryKey = (s: ReturnType<typeof scripted>) => s.keyOf('inbox:summary', {})
+
+  it('is watched as the registry starts, right after the root part and before it answers', () => {
+    const s = scripted()
+    serve(s)
+    const reports: PartsReport[] = []
+    createLiveParts(
+      s.live,
+      (r) => reports.push(r),
+      () => true,
+    )
+    expect(s.log).toEqual([
+      `watch ${s.keyOf('workspace:root', ROOT_ARGS)}`,
+      `watch ${summaryKey(s)}`,
+    ])
+    expect(reports).toEqual([])
+  })
+
+  it('is watched again by every new registry, as a retry or a re-init starts one', () => {
+    const s = scripted()
+    serve(s)
+    const first = createLiveParts(
+      s.live,
+      () => {},
+      () => true,
+    )
+    first.stop()
+    expect(s.watched.has(summaryKey(s))).toBe(false)
+    createLiveParts(
+      s.live,
+      () => {},
+      () => true,
+    )
+    expect(s.log.filter((line) => line === `watch ${summaryKey(s)}`)).toHaveLength(2)
+    expect(s.watched.get(summaryKey(s))).toBe(1)
+  })
+
+  it('reports its news with the transition that brought it, and its failure holds nothing', async () => {
+    const { s, reports, last } = await started()
+    const catalog = s.keyOf('workspace:catalog', { org_id: ORG })
+    s.set('inbox:summary', {}, { value: { unread_count: 3 } })
+    s.set('workspace:catalog', { org_id: ORG }, { value: ok({ teams: [{ id: 'x' }], labels: [] }) })
+    const count = reports.length
+    s.send([summaryKey(s), catalog])
+    expect(reports).toHaveLength(count + 1)
+    expect(reports.at(-1)?.sides).toEqual({ summary: { value: { unread_count: 3 } } })
+    expect(last()).toMatchObject({ state: 'complete', changed: true })
+    s.set('inbox:summary', {}, { error: new Error('summary failed') })
+    s.send([summaryKey(s)])
+    expect(reports.at(-1)?.sides).toEqual({ summary: { error: expect.any(Error) } })
+    expect(last()?.state).toBe('complete')
+  })
+
+  it('runs a failed summary again from a fresh subscription, and nothing that answered', async () => {
+    const { s, parts, reports } = await started()
+    s.set('inbox:summary', {}, { error: new Error('summary failed') })
+    s.send([summaryKey(s)])
+    s.log.length = 0
+    expect(parts.rerunSide('summary')).toBe(true)
+    expect(s.log).toEqual([`stop ${summaryKey(s)}`, `watch ${summaryKey(s)}`])
+    s.set('inbox:summary', {}, { value: { unread_count: 0 } })
+    s.send([summaryKey(s)])
+    expect(reports.at(-1)?.sides).toEqual({ summary: { value: { unread_count: 0 } } })
+    s.log.length = 0
+    expect(parts.rerunSide('summary')).toBe(false)
+    expect(parts.rerunSide('thread')).toBe(false)
+    expect(s.log).toEqual([])
+  })
+})

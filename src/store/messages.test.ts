@@ -381,7 +381,10 @@ describe('bulk notification actions through the client store', () => {
 
     const marking = P.markAllMessagesRead()
     await asked()
-    expect(P.canMarkAllRead).toBe(false)
+    // the action stays available until the unread summary answers again;
+    // the workspace's own flag goes with the action's paint
+    expect(P.canMarkAllRead).toBe(true)
+    expect(P.inboxCutReach.markAllRead).toBe(false)
     expect(requests.map((request) => request.name)).toEqual([
       'messages:markAllRead',
       'messages:markAllRead',
@@ -389,7 +392,8 @@ describe('bulk notification actions through the client store', () => {
     // a refused seat restores the server's view, flag included
     const refused = requests[0].args.org_id
     requests[0].reject(new ConvexError({ code: 'forbidden', message: 'no write access' }))
-    await vi.waitFor(() => expect(P.canMarkAllRead).toBe(true))
+    await vi.waitFor(() => expect(P.inboxCutReach.markAllRead).toBe(true))
+    expect(P.canMarkAllRead).toBe(true)
     expect(P.inboxBulk).toMatchObject({ state: 'running', stops: [{ org: refused, done: 0 }] })
     // the stop says so once the action ends
     expect(showToast).not.toHaveBeenCalled()
@@ -843,7 +847,10 @@ describe('bulk notification actions through the client store', () => {
 
     const removal = P.deleteReadMessages()
     await asked()
-    expect(P.canRemoveRead).toBe(false)
+    // as for Mark all as read, the summary's flag stays until it answers
+    // again, and the workspace's own flag goes with the action's paint
+    expect(P.canRemoveRead).toBe(true)
+    expect(P.inboxCutReach.removeRead).toBe(false)
     expect(requests.map((request) => request.name)).toEqual([
       'messages:removeRead',
       'messages:removeRead',

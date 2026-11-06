@@ -32,6 +32,7 @@ import {
   freePastMilestoneWeek,
   hasTag,
   historyRows,
+  INBOX_BADGE_STEP,
   isSiteOf,
   LABELS_EXPECTED,
   LABELS_STEP,
@@ -424,6 +425,21 @@ describe('staging check REST contract', () => {
     const add = (udfPath) => ({ type: 'ModifyQuerySet', modifications: [{ type: 'Add', udfPath }] })
     expect(addsQuery(JSON.stringify(add(AGENDA_QUERY)), AGENDA_QUERY)).toBe(true)
     expect(addsQuery(JSON.stringify(add('teamSync:lastComments')), AGENDA_QUERY)).toBe(false)
+  })
+  it("names the Inbox badge's step, and reads the store's summary and item the app keeps", () => {
+    expect(INBOX_BADGE_STEP).toBe('ui/inbox-badge')
+    // the step reads these from the page, and the top bar's hooks
+    const store = readFileSync(new URL('../src/store/planner.ts', import.meta.url), 'utf8')
+    expect(store).toContain('inboxSummary: {')
+    expect(store).toContain('inboxItem: null as InboxItemVM | null')
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    expect(app).toContain('data-inbox-badge-state={badge.state ?? undefined}')
+    // it runs after Team sync and before the archive, while t0 is active
+    const script = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const order = ['await teamSyncCheck()', 'await inboxBadgeCheck()', 'await archiveChecks()']
+    const at = order.map((call) => script.indexOf(call))
+    expect(at.every((n) => n > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
   })
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')

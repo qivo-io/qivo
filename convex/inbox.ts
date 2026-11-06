@@ -1,7 +1,10 @@
 /* The inbox reads that need only inbox_items rows (model/inboxReads.ts,
- * model/inboxPage.ts). The app does not call them yet. It keeps the
- * workspace inbox part (workspace.ts inbox) until later releases switch the
- * badge, the task window and the Inbox list to these.
+ * model/inboxPage.ts). The app watches the summary from the start beside
+ * the workspace's parts, for its Inbox badge and the availability of Mark
+ * all as read and Remove all read, and the item beside the open task's
+ * thread, for the task window's New divider and its read on open
+ * (messages.ts readItem). The Inbox list keeps the workspace inbox part
+ * (workspace.ts inbox) until a later release switches it to the pages.
  *
  * - summary (across the caller's seats): each seat's organization, whether
  *   its items are complete (model/inboxItems.ts seatReady) and whether Mark
@@ -45,7 +48,7 @@
  *   messages, none of the first 1,000 a change, answers `unread_change`
  *   true, since the rest may tell of one. `unread_change` says whether an
  *   unread message tells of a change, a change or a mention in the
- *   description, the app's rule (src/lib/spine.ts unreadStart). It reruns
+ *   description, the app's rule (src/lib/spine.ts UnreadStart). It reruns
  *   when any of those change.
  * - page (across the caller's seats): one page of at most 50 task groups,
  *   newest or oldest first by list time, with Unread only, Show snoozed,

@@ -194,7 +194,10 @@ describe('rollback during snapshot trouble', () => {
       },
       shown: () => {
         expect(message('message-a')?.read).toBe(true)
-        expect(P().canMarkAllRead).toBe(false)
+        // the action's availability follows the unread summary, which
+        // fails with the whole, so it stays available until the summary
+        // answers again, and then the server says nothing is unread
+        expect(P().canMarkAllRead).toBe(P().inboxSummary.state !== 'ok')
       },
       truth: (snap) => {
         snap.messages[0].read_at = '2026-09-15T08:30:00.000Z'
@@ -243,7 +246,8 @@ describe('rollback during snapshot trouble', () => {
       },
       shown: () => {
         expect(message('message-b')).toBeUndefined()
-        expect(P().canRemoveRead).toBe(false)
+        // as for mark all as read, from the unread summary
+        expect(P().canRemoveRead).toBe(P().inboxSummary.state !== 'ok')
       },
       truth: (snap) => {
         snap.messages.splice(1, 1)
@@ -448,6 +452,17 @@ describe('rollback during snapshot trouble', () => {
     await accept({ removed: 2, ids: ['message-a', 'message-b'], hasMore: false })
     await removed
     await refuseFollow()
+    // the workspace's own flags stay spent, and the actions' availability
+    // follows the unread summary, which failed with the whole, so both stay
+    // available until it answers again
+    expect(P().inboxCutReach).toEqual({ markAllRead: false, removeRead: false })
+    expect(P().canMarkAllRead).toBe(true)
+    expect(P().canRemoveRead).toBe(true)
+    // the server's rows after both actions answer the summary again
+    deliverTruth((snap) => {
+      snap.messages = []
+      snap.readMessageCount = 0
+    })
     expect(P().canMarkAllRead).toBe(false)
     expect(P().canRemoveRead).toBe(false)
   })

@@ -39,6 +39,8 @@ let reach: 'one' | 'many' | null
 let reachGate: Promise<void> | null
 /* Shows or hides the Inbox's kept view, for an Inbox opened `kept`. */
 let showKept: (shown: boolean) => void
+/* Sends the workspace as the server now holds it (`snap`). */
+let publishWhole: () => void = () => {}
 /* The Inbox's onExit, which Escape calls once nothing else takes it. */
 let onExit: ReturnType<typeof vi.fn<() => void>>
 
@@ -87,8 +89,10 @@ async function openInbox(
   }
   network.onUpdate.mockImplementation((ref, _args, next) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    if (name === 'workspace:whole') {
+      publishWhole = () => next(structuredClone(snap))
+      publishWhole()
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     return () => {}
   })
   network.query.mockReset()
@@ -156,6 +160,15 @@ async function press(element: HTMLElement | null | undefined) {
     element.focus()
     element.click()
   })
+}
+
+/** Marks the messages `ids` read on the server and sends its rows, as
+    Convex sends the results a write changed before its answer, so the
+    unread summary the bulk actions follow answers again. */
+function serverRead(ids: readonly string[]) {
+  const at = new Date(AT).toISOString()
+  snap.messages = snap.messages.map((m) => (ids.includes(m.id) ? { ...m, read_at: at } : m))
+  publishWhole()
 }
 
 /** Lets the timers the closing layers queued run. */
@@ -347,9 +360,11 @@ describe('Inbox focus when a row leaves', { timeout: 20_000 }, () => {
 
   it('gives focus to the first row after the toolbar button stays disabled', async () => {
     const uuids = await openInbox(3)
-    const button = await markAllReadFromToolbar((held) =>
-      held.answer({ ids: ['message-0', 'message-1', 'message-2'], hasMore: false }),
-    )
+    const button = await markAllReadFromToolbar((held) => {
+      // the summary answers before the batch does, with nothing unread
+      serverRead(['message-0', 'message-1', 'message-2'])
+      held.answer({ ids: ['message-0', 'message-1', 'message-2'], hasMore: false })
+    })
     expect(button?.disabled).toBe(true)
     expect(focused()).toBe(`row ${uuids[0]}`)
   })
@@ -546,11 +561,14 @@ describe('Inbox bulk actions that take more than one round', { timeout: 20_000 }
     const uuids = await openInbox(3)
     reach = 'many'
     // every batch answers at once, so the action ends as the notice closes
-    network.mutation.mockImplementation(async (ref) =>
-      getFunctionName(ref) === 'messages:markAllRead'
-        ? { marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false, before: 1 }
-        : null,
-    )
+    network.mutation.mockImplementation(async (ref) => {
+      if (getFunctionName(ref) !== 'messages:markAllRead') return null
+      // the server runs the batch after the store sent it, and the summary
+      // answers before the batch does, with nothing unread
+      await Promise.resolve()
+      serverRead(['message-0', 'message-1', 'message-2'])
+      return { marked: 3, ids: ['message-0', 'message-1', 'message-2'], hasMore: false, before: 1 }
+    })
     await press(markAllButton())
     await settle()
     await press(document.querySelector<HTMLElement>('[data-inbox-notice-confirm]'))
