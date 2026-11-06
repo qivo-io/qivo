@@ -36,6 +36,7 @@ import { SHAPES } from './accessShapes.setup'
 import {
   NOW,
   newT,
+  type OrgFixture,
   plantIssue,
   plantProject,
   plantSeat,
@@ -161,9 +162,18 @@ const COMBOS = PROFILE_KINDS.flatMap((kind) =>
   ),
 )
 
+/* A subtask on Firmware without holders, under a new parent on `project`. */
+async function firmwareSubtask(t: T, f: OrgFixture, project: Doc<'projects'>) {
+  const parent = await plantIssue(t, { org_id: f.org.id, project_id: project.id })
+  return await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
+}
+
 /* withOrg with Writer, who edits TBED and its sub-projects through a grant
  * on TBED, and a task without holders on Firmware, on Board rev and on
- * TBED itself, where older code stored tasks. */
+ * TBED itself, where older code stored tasks. Two subtasks of Firmware
+ * without holders sit under a parent on TBED and under one on Firmware,
+ * the projects whose sight the owner picker does not ask again
+ * (model/pickers.ts ownerRule) and the write's chain check does. */
 async function scene(t: T) {
   const f = await withOrg(t)
   const writer = await plantSeat(t, {
@@ -183,6 +193,8 @@ async function scene(t: T) {
     FW: await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id }),
     PCB: await plantIssue(t, { org_id: f.org.id, project_id: f.sub2.id }),
     TBED: await plantIssue(t, { org_id: f.org.id, project_id: f.meta.id }),
+    'FW under TBED': await firmwareSubtask(t, f, f.meta),
+    'FW under FW': await firmwareSubtask(t, f, f.sub),
   }
   return { f, writer, tasks }
 }
@@ -308,14 +320,10 @@ describe('the owner pickers against the chain check', () => {
     await person('Cy', [f.hidden])
     await person('Di', [elsewhereSub])
     await person('Ed', [elsewhere])
-    const subtaskUnder = async (project: Doc<'projects'>) => {
-      const parent = await plantIssue(t, { org_id: f.org.id, project_id: project.id })
-      return await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, parent_id: parent.id })
-    }
     const subtasks = {
-      sibling: await subtaskUnder(f.sub2),
-      hidden: await subtaskUnder(f.hidden),
-      navigation: await subtaskUnder(elsewhere),
+      sibling: await firmwareSubtask(t, f, f.sub2),
+      hidden: await firmwareSubtask(t, f, f.hidden),
+      navigation: await firmwareSubtask(t, f, elsewhere),
     }
     await keyOrg(t, f.org.id)
     return { t, f, writer, subtasks }
