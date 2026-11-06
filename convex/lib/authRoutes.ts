@@ -1,4 +1,5 @@
-/* The Better Auth routes Qivo serves over HTTP, and who calls each one.
+/* The Better Auth routes Qivo serves over HTTP, who calls each one, and
+ * their registration in the HTTP router.
  *
  * Better Auth's router serves every endpoint of every plugin, and a plugin
  * may answer other paths before the router does, as the OAuth provider
@@ -18,9 +19,18 @@
  * /oauth2/register, which lib/oauthRegistration.ts limits, and
  * /oauth2/update-client stores metadata of any size. zod checks every entry
  * of /admin/has-permission's record before the session, which
- * lib/authValidation.ts cannot stop early. */
+ * lib/authValidation.ts cannot stop early.
+ *
+ * registerAuthRoutes registers /api/auth/ and its CORS without building a
+ * Better Auth instance, and this module loads none, so the HTTP router
+ * loads no Better Auth when a request starts. http.ts's handler refuses an
+ * unlisted route, the demo's foreign or non-JSON anonymous sign-in and a
+ * body too large or too slow before it imports auth.ts. */
 
+import type { HttpRouter, PublicHttpAction } from 'convex/server'
+import { corsRouter } from 'convex-helpers/server/cors'
 import { isDemoDeployment } from './demo'
+import { appOrigins } from './deployment'
 
 /** The routes every deployment but the demo serves, as `METHOD /path`
  * under /api/auth. A `:name` segment matches any one segment. */
@@ -78,8 +88,9 @@ export const DEMO_AUTH_ROUTES = [
 export const servedAuthRoutes = (): readonly string[] =>
   isDemoDeployment() ? DEMO_AUTH_ROUTES : AUTH_ROUTES
 
-/* Where Convex routes Better Auth's requests (registerRoutes). */
-const AUTH_BASE_PATH = '/api/auth'
+/** Where Convex routes Better Auth's requests (registerAuthRoutes), which
+ * is Better Auth's own default base path, since createAuth sets none. */
+export const AUTH_BASE_PATH = '/api/auth'
 
 /** Whether `routes` lists `request`'s method and path. The path must match
  * one route segment by segment, so a trailing slash, another case or an
@@ -112,4 +123,53 @@ export function serveOnly<Auth extends { handler(request: Request): Promise<Resp
         ? auth.handler(request)
         : new Response('Not Found', { status: 404 }),
   }
+}
+
+/** `request` with the host and protocol a proxy in front of Convex put in
+ * x-better-auth-forwarded-host and -proto moved back into x-forwarded-host
+ * and -proto, which Convex's own front end overwrites, or `request` itself
+ * when it carries neither. The copy takes over `request`'s body, so hand it
+ * a request whose body is already read (lib/requestBody.ts
+ * bufferedRequest). Copied from get-convex/better-auth
+ * src/client/create-client.ts at 3f41cbcf (Apache-2.0, see
+ * vendor/convex-better-auth/LICENSE). */
+export const restoreOriginalForwardedHeaders = (request: Request) => {
+  const originalHost = request.headers.get('x-better-auth-forwarded-host')
+  const originalProto = request.headers.get('x-better-auth-forwarded-proto')
+  if (!originalHost && !originalProto) return request
+  const headers = new Headers(request.headers)
+  if (originalHost) headers.set('x-forwarded-host', originalHost)
+  if (originalProto) headers.set('x-forwarded-proto', originalProto)
+  return new Request(request, { headers })
+}
+
+/**
+ * Routes GET and POST on every path under AUTH_BASE_PATH to `handler`, with
+ * their CORS and preflight, as the adapter's registerRoutes did, without
+ * building a Better Auth instance (get-convex/better-auth
+ * src/client/create-client.ts at 3f41cbcf, Apache-2.0). `handler` is built
+ * with answerAfterBody (lib/requestBody.ts), so its answers wait for the
+ * body. An answer echoes the request's origin when it is an app origin,
+ * read on every request, or one of `allowedOrigins`, allows credentials and
+ * the Content-Type, Better-Auth-Cookie and Authorization headers and
+ * `allowedHeaders`, and exposes Set-Better-Auth-Cookie. Any other origin
+ * still gets its answer without the echo, so a browser keeps it from the
+ * page. When the app origins are misconfigured, every request here fails
+ * with an error instead of an echo.
+ */
+export function registerAuthRoutes(
+  http: HttpRouter,
+  handler: PublicHttpAction,
+  { allowedOrigins, allowedHeaders }: { allowedOrigins: string[]; allowedHeaders: string[] },
+): void {
+  const cors = corsRouter(http, {
+    // appOrigins answers exact origins only, never a wildcard
+    allowedOrigins: async () => [...appOrigins(), ...allowedOrigins],
+    allowCredentials: true,
+    allowedHeaders: ['Content-Type', 'Better-Auth-Cookie', 'Authorization', ...allowedHeaders],
+    exposedHeaders: ['Set-Better-Auth-Cookie'],
+    enforceAllowOrigins: false,
+  })
+  cors.route({ pathPrefix: `${AUTH_BASE_PATH}/`, method: 'GET', handler })
+  cors.route({ pathPrefix: `${AUTH_BASE_PATH}/`, method: 'POST', handler })
 }

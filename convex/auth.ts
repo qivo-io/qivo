@@ -1,4 +1,5 @@
 import { getCurrentAuthContext } from '@better-auth/core/context'
+import { oauthProviderAuthServerMetadata } from '@better-auth/oauth-provider'
 import { type BetterAuthOptions, betterAuth } from 'better-auth/minimal'
 import { admin } from 'better-auth/plugins'
 import { anonymous } from 'better-auth/plugins/anonymous'
@@ -38,7 +39,12 @@ import {
   rekeyMicrosoftAccount,
 } from './lib/microsoftAccounts'
 import { oauthAdapter } from './lib/oauthAdapter'
-import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
+import {
+  oauthHooks,
+  qivoOAuthProvider,
+  registerOAuthCode,
+  servedServerMetadata,
+} from './lib/oauthProvider'
 import type { PersonMailMetric } from './lib/usage'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
 
@@ -123,13 +129,15 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
 })
 
 /* Split from createAuth so betterAuth/adapter.ts (createApi) and the schema
- * generator can consume the options. registerRoutes calls createAuth({}), so
- * ctx must only be dereferenced inside callbacks and the lazy adapter.
+ * generator can consume the options. They and the tests build the options
+ * with `{}` as ctx, so ctx must only be dereferenced inside callbacks and
+ * the lazy adapter.
  *
  * Every authentication letter is sent while its request waits, and `mail`
  * holds how it went for lib/authMail.ts to report. One options object serves
- * one request: registerRoutes and every action build a fresh instance.
- * `recovery` is the operator's recovery-link capture (createCaptureAuth). */
+ * one request: every HTTP request (http.ts) and every action builds a fresh
+ * instance. `recovery` is the operator's recovery-link capture
+ * (createCaptureAuth). */
 export const createAuthOptions = (
   ctx: GenericCtx<DataModel>,
   opts?: { schemaOnly?: boolean; recovery?: { url: string | null } },
@@ -319,6 +327,17 @@ export const createAuthOptions = (
  * problem (lib/authValidation.ts). */
 export const createAuth = (ctx: GenericCtx<DataModel>) =>
   serveOnly(stopValidationEarly(betterAuth(createAuthOptions(ctx))), servedAuthRoutes())
+
+/** The authorization server metadata the OAuth provider answers to
+ * `request`, with `headers` added, as Qivo serves it
+ * (lib/oauthProvider.ts servedServerMetadata). http.ts answers its root
+ * metadata routes with it, importing this module only then. */
+export const authServerMetadata = async (
+  ctx: GenericCtx<DataModel>,
+  request: Request,
+  headers: Record<string, string>,
+) =>
+  servedServerMetadata(await oauthProviderAuthServerMetadata(createAuth(ctx), { headers })(request))
 
 /* Operator recovery-link capture (adminAuth.ts): a SECOND Better Auth
  * instance over the same options whose sendResetPassword writes the minted

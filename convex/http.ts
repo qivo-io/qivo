@@ -1,11 +1,26 @@
-import { oauthProviderAuthServerMetadata } from '@better-auth/oauth-provider'
+/* The one HTTP router. Convex loads it, with every module it imports, for
+ * each HTTP action, so none of those modules may load Better Auth, auth.ts
+ * or the adapter copy in vendor/convex-better-auth/: REST, MCP, the file and
+ * image links, uploads, billing webhooks, demo reporting and every CORS
+ * preflight would pay for it. A handler that needs Better Auth imports
+ * ./auth inside the handler, after the refusals that need none, as the
+ * sign-in, OAuth machine and metadata handlers below do.
+ * convex/tests/authTriggers.test.ts walks this module's static imports, and
+ * every deployment's build calls those routes after the push
+ * (scripts/auth-probe.mjs). Import a type from ./auth only with
+ * `import type`, which loads nothing. */
 import { httpRouter, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { internal } from './_generated/api'
-import { authComponent, createAuth } from './auth'
+import type { Id } from './_generated/dataModel'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
-import { servedAuthRoutes, servesAuthRoute } from './lib/authRoutes'
+import {
+  registerAuthRoutes,
+  restoreOriginalForwardedHeaders,
+  servedAuthRoutes,
+  servesAuthRoute,
+} from './lib/authRoutes'
 import { boundValidationAnswer } from './lib/authValidation'
 import { isDemoDeployment } from './lib/demo'
 import { demoVisitorPlatform } from './lib/demoVisitor'
@@ -14,20 +29,13 @@ import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './l
 import { badRequest } from './lib/functions'
 import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
-import { servedServerMetadata } from './lib/oauthProvider'
 import {
   manualImageDimensions,
   PANORAMA_MAX_BYTES,
   validateManualImageFile,
 } from './lib/panoramaImage'
 import { isoWeekForDate } from './lib/panoramaWeeks'
-import {
-  answerAfterBody,
-  bufferedRequest,
-  DISCARD_MS,
-  discardBody,
-  readLimitedBody,
-} from './lib/requestBody'
+import { answerAfterBody, bufferedRequest, DISCARD_MS, readLimitedBody } from './lib/requestBody'
 import { registerCuration } from './machine/curation'
 import { registerMcpRoutes } from './machine/mcp'
 import { conflictRetrying } from './machine/registry'
@@ -81,96 +89,74 @@ async function readAuthBody(request: Request, oauthClient = false): Promise<Requ
   )
 }
 
-/* Auth lives at /api/auth/* (OAuth callbacks /api/auth/callback/{microsoft,google}).
- * CORS allowedOrigins are concatenated with Better Auth's trusted origins
- * (SITE_URL plus exact ADDITIONAL_APP_ORIGINS), while the explicit localhost
- * entry preserves the original local dev allowance. A route Qivo does not
- * serve (lib/authRoutes.ts) and the demo's refusals are answered before the
- * body is read, and the demo's admission check after, so a body that never
- * arrives takes no admission. */
-const createHttpAuth: typeof createAuth = (ctx) => {
-  const auth = createAuth(ctx)
-  return {
-    ...auth,
-    handler: async (original: Request) => {
-      if (!servesAuthRoute(servedAuthRoutes(), original))
-        return isDemoDeployment()
-          ? new Response(
-              JSON.stringify({ message: 'This feature requires a regular workspace.' }),
-              {
-                status: 403,
-                headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
-              },
-            )
-          : new Response('Not Found', { status: 404 })
-      const anonymous =
-        isDemoDeployment() &&
-        original.method === 'POST' &&
-        new URL(original.url).pathname === '/api/auth/sign-in/anonymous'
-      if (anonymous) {
-        const origin = original.headers.get('Origin')
-        if (origin !== null && !appOrigins().includes(origin))
-          return new Response(null, { status: 403 })
-        if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
-          return new Response(null, { status: 415 })
-      }
-      const request = await readAuthBody(original)
-      if (request instanceof Response) return request
-      // Enforced before Better Auth allocates any identity, even when the
-      // caller goes directly to Convex rather than through our website.
-      if (
-        anonymous &&
-        (!('runMutation' in ctx) || !(await ctx.runMutation(internal.demoUploads.admit, {})))
-      )
-        return new Response(
-          JSON.stringify({ message: 'The demo is busy. Please try again shortly.' }),
-          {
-            status: 429,
-            headers: {
-              'Content-Type': 'application/json',
-              'Retry-After': '60',
-              'Cache-Control': 'no-store',
-            },
-          },
-        )
-      const response = await auth.handler(request)
-      if (anonymous && response.status === 200 && 'runMutation' in ctx) {
-        try {
-          const body: unknown = JSON.parse(await response.clone().text())
-          const user = body && typeof body === 'object' && 'user' in body ? body.user : null
-          if (user && typeof user === 'object' && 'id' in user && typeof user.id === 'string') {
-            await ctx.runMutation(recordDemoVisitor, {
-              auth_user_id: user.id,
-              ...demoVisitorPlatform(request.headers.get('User-Agent')),
-            })
-          }
-        } catch {
-          // Aggregate marketing metadata is optional. Keep the original auth
-          // response and its cookies intact even if recording is unavailable.
-        }
-      }
-      return response
-    },
+/* Auth lives at /api/auth/* (OAuth callbacks /api/auth/callback/{microsoft,google}),
+ * registered with its CORS by lib/authRoutes.ts, which builds no Better
+ * Auth instance. This answers every GET and POST there. Before it loads
+ * Better Auth (auth.ts) it refuses a route Qivo does not serve
+ * (lib/authRoutes.ts) and, on the demo, an anonymous sign-in from a foreign
+ * origin or without JSON, and then reads the body (readAuthBody), refusing
+ * one too large or too slow. None of those refusals pays for loading Better
+ * Auth. The demo's admission comes after the import, so neither a body that
+ * never arrives nor a failed import takes an admission. An import that
+ * fails throws, so the request fails with an error and no session, cookie
+ * or token is issued. answerAfterBody drops the rest of the body before any
+ * answer goes out, refusals included. A validation error's message is cut
+ * to a bounded length (lib/authValidation.ts). */
+const authRoute = answerAfterBody(async (ctx, original) => {
+  if (!servesAuthRoute(servedAuthRoutes(), original))
+    return isDemoDeployment()
+      ? new Response(JSON.stringify({ message: 'This feature requires a regular workspace.' }), {
+          status: 403,
+          headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+        })
+      : new Response('Not Found', { status: 404 })
+  const anonymous =
+    isDemoDeployment() &&
+    original.method === 'POST' &&
+    new URL(original.url).pathname === '/api/auth/sign-in/anonymous'
+  if (anonymous) {
+    const origin = original.headers.get('Origin')
+    if (origin !== null && !appOrigins().includes(origin))
+      return new Response(null, { status: 403 })
+    if (!original.headers.get('Content-Type')?.toLowerCase().startsWith('application/json'))
+      return new Response(null, { status: 415 })
   }
-}
-/* The component builds the auth routes itself, so this handler drops the
- * rest of the request body before its answer goes out, as answerAfterBody
- * does for every other route. The component's CORS preflight never reaches
- * it (lib/requestBody.ts). A validation error's message is cut to a bounded
- * length (lib/authValidation.ts). */
-const createHttpAuthAfterBody: typeof createAuth = (ctx) => {
-  const auth = createHttpAuth(ctx)
-  return {
-    ...auth,
-    handler: async (request: Request) => {
-      try {
-        return await boundValidationAnswer(await auth.handler(request))
-      } finally {
-        await discardBody(request).catch(() => {})
+  const read = await readAuthBody(original)
+  if (read instanceof Response) return read
+  const request = restoreOriginalForwardedHeaders(read)
+  const { createAuth } = await import('./auth')
+  // Enforced before Better Auth allocates any identity, even when the
+  // caller goes directly to Convex rather than through our website.
+  if (anonymous && !(await ctx.runMutation(internal.demoUploads.admit, {})))
+    return new Response(
+      JSON.stringify({ message: 'The demo is busy. Please try again shortly.' }),
+      {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Retry-After': '60',
+          'Cache-Control': 'no-store',
+        },
+      },
+    )
+  const response = await createAuth(ctx).handler(request)
+  if (anonymous && response.status === 200) {
+    try {
+      const body: unknown = JSON.parse(await response.clone().text())
+      const user = body && typeof body === 'object' && 'user' in body ? body.user : null
+      if (user && typeof user === 'object' && 'id' in user && typeof user.id === 'string') {
+        await ctx.runMutation(recordDemoVisitor, {
+          auth_user_id: user.id,
+          ...demoVisitorPlatform(request.headers.get('User-Agent')),
+        })
       }
-    },
+    } catch {
+      // Aggregate marketing metadata is optional. Keep the original auth
+      // response and its cookies intact even if recording is unavailable.
+    }
   }
-}
+  return boundValidationAnswer(response)
+})
 /* Qivo publishes no OpenID Connect discovery document. Convex checks tokens
  * with the keys at /api/auth/convex/jwks (auth.config.ts), and the OAuth
  * provider's document of this name is not served (lib/authRoutes.ts), so the
@@ -180,14 +166,13 @@ http.route({
   method: 'GET',
   handler: answerAfterBody(async () => new Response('Not Found', { status: 404 })),
 })
-authComponent.registerRoutes(http, createHttpAuthAfterBody, {
-  cors: {
-    allowedOrigins: isDemoDeployment() ? [] : ['http://localhost:5199'],
-    // Demo frontends from before country attribution was removed send this
-    // header, for example during a deployment or after a Vercel Instant
-    // Rollback. Allowing it keeps their sign-in working; Convex ignores it.
-    allowedHeaders: isDemoDeployment() ? ['X-Qivo-Demo-Visitor'] : [],
-  },
+registerAuthRoutes(http, authRoute, {
+  // the local development app, beside the app origins
+  allowedOrigins: isDemoDeployment() ? [] : ['http://localhost:5199'],
+  // Demo frontends from before country attribution was removed send this
+  // header, for example during a deployment or after a Vercel Instant
+  // Rollback. Allowing it keeps their sign-in working; Convex ignores it.
+  allowedHeaders: isDemoDeployment() ? ['X-Qivo-Demo-Visitor'] : [],
 })
 
 /* A dedicated demo can display the main app's approved weekly/default photo
@@ -237,7 +222,9 @@ http.route({
  * and token operations use only the explicit OAuth client credentials.
  * Registration also ignores an Authorization header: Better Auth 1.7 reads a
  * Bearer token there as an RFC 7591 initial access token, which Qivo does not
- * issue, and would refuse the open registration with 401. */
+ * issue, and would refuse the open registration with 401. Better Auth
+ * (auth.ts) loads only after the demo's refusal and the body read, so
+ * neither pays for it, and an import that fails fails the request. */
 const oauthMachineHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -255,6 +242,7 @@ const oauthMachine = answerAfterBody(async (ctx, request) => {
     headers.delete('Cookie')
     headers.delete('Better-Auth-Cookie')
     if (new URL(read.url).pathname.endsWith('/oauth2/register')) headers.delete('Authorization')
+    const { createAuth } = await import('./auth')
     response = await boundValidationAnswer(
       await createAuth(ctx).handler(new Request(read, { headers })),
     )
@@ -296,12 +284,10 @@ const resourceMetadata = answerAfterBody(
       { headers: oauthMetadataHeaders },
     ),
 )
+/* The authorization server metadata, from Better Auth, which this handler
+ * loads (auth.ts authServerMetadata). Its preflight needs none. */
 const serverMetadata = answerAfterBody(async (ctx, request) =>
-  servedServerMetadata(
-    await oauthProviderAuthServerMetadata(createAuth(ctx), { headers: oauthMetadataHeaders })(
-      request,
-    ),
-  ),
+  (await import('./auth')).authServerMetadata(ctx, request, oauthMetadataHeaders),
 )
 const metadataPreflight = answerAfterBody(
   async () => new Response(null, { status: 204, headers: oauthMetadataHeaders }),
@@ -546,7 +532,7 @@ const receiveBackground = answerAfterBody(async (ctx, request) => {
   if (!(await ctx.runQuery(internal.appearance.uploadContext, { id, minter: m, exp })))
     return refuse()
   const runMutation = conflictRetrying(ctx)
-  let storageId: import('./_generated/dataModel').Id<'_storage'> | undefined
+  let storageId: Id<'_storage'> | undefined
   let startedDemoWork = false
   try {
     // the demo's reservation bounds the body; elsewhere the image limit does
@@ -649,7 +635,7 @@ http.route({
       !(await verifyFileToken({ kind: 'demo_upload', id, minter, token, exp }))
     )
       return refuse()
-    let storageId: import('./_generated/dataModel').Id<'_storage'> | undefined
+    let storageId: Id<'_storage'> | undefined
     let started = false
     try {
       const ticket = await ctx.runMutation(internal.demoUploads.begin, { id, minter, exp })
@@ -694,11 +680,13 @@ http.route({
 })
 
 /* ------------------------------------------------ machine surfaces (phase 8)
- * Each surface registers its own routes from its own file — http.ts only
- * mounts them, once. Requests outside /v1/*, /mcp, /api/auth/*, /files/*,
- * /avatars/*, /backgrounds/*, /background-previews/*, /background-uploads/*,
- * /attachment-uploads/* get Convex's default 404 (a root catch-all would
- * collide with the auth + gateway prefixes — accepted delta). */
+ * Each surface registers its own routes from its own file, and http.ts only
+ * mounts them, once. Their modules load no Better Auth either, so a REST or
+ * MCP call pays nothing for sign-in (authTriggers.test.ts). Requests outside
+ * /v1/*, /mcp, /api/auth/*, /files/*, /avatars/*, /backgrounds/*,
+ * /background-previews/*, /background-uploads/*, /attachment-uploads/* get
+ * Convex's default 404, because a root catch-all would collide with the auth
+ * and gateway prefixes (an accepted difference). */
 registerRestRoutes(http)
 registerUploadRoutes(http)
 registerCuration(http)
