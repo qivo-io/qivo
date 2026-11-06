@@ -34,7 +34,7 @@ import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../comp
 import { DEMO_MODE } from '../../lib/demoMode'
 import { cleanName, overLimit, sentence } from '../../lib/fieldLimits'
 import { nameInitials } from '../../lib/initials'
-import { InviteRows, useInviteDeliveries } from '../../lib/inviteDeliveries'
+import { type InviteReads, InviteRows, useInviteDeliveries } from '../../lib/inviteDeliveries'
 import { useUnsaved } from '../../lib/leaveGuard'
 import { pageEnd, usePagedPages, useSettledSearch } from '../../lib/pagedList'
 import { useUpdateBlocker } from '../../lib/updateSafety'
@@ -679,6 +679,27 @@ function PhoneRow({
   )
 }
 
+/** The line a page shows while a read of its invitation rows failed,
+    with Try again, which reads them all afresh. Meanwhile the labels of
+    those seats say Qivo couldn't check them, never "invited". */
+function InviteReadsFailed({ reads }: { reads: InviteReads }) {
+  if (reads.failed.size === 0) return null
+  return (
+    <p role="alert" data-invites-failed className="flex items-center gap-2 text-sm text-danger">
+      Couldn't check invitation emails.
+      <Button
+        type="button"
+        variant="ghost"
+        className="h-control-sm text-sm"
+        data-invites-retry
+        onClick={reads.retry}
+      >
+        Try again
+      </Button>
+    </p>
+  )
+}
+
 /* ------------------------------------------------------------ the page */
 
 /* What Settings › Users keeps for the browser session, so Back from a
@@ -1012,6 +1033,7 @@ export function OrgUsersPage({
               </Button>
             </p>
           )}
+          <InviteReadsFailed reads={inviteRows} />
           {answer !== null && id !== null && (
             <SettingsSection>
               <div className="[display:flex] [flex-direction:column] [gap:6px]">
@@ -1147,6 +1169,7 @@ export function OrgUsersPage({
             wrapperClassName="mb-2"
             className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
           />
+          <InviteReadsFailed reads={inviteRows} />
           <div
             data-org-users=""
             onFocus={(e) => {

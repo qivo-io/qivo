@@ -53,6 +53,8 @@ type Pending = {
 // Imported after resetModules, so they share the store's module instances.
 let pages: {
   users: typeof import('./UsersSettings')
+  controls: typeof import('./UserControls')
+  invites: typeof import('../../lib/inviteDeliveries')
   person: typeof import('./usePersonSettings')
   settings: typeof import('../Settings')
   version: typeof import('../../store/usePlannerVersion')
@@ -161,6 +163,8 @@ async function load(build: (s: Snapshot) => void = () => {}) {
   await store.initStore()
   pages = {
     users: await import('./UsersSettings'),
+    controls: await import('./UserControls'),
+    invites: await import('../../lib/inviteDeliveries'),
     person: await import('./usePersonSettings'),
     settings: await import('../Settings'),
     version: await import('../../store/usePlannerVersion'),
@@ -953,6 +957,79 @@ describe('invitation labels', () => {
     ])
     expect(find('[data-invite-for="anna"]').textContent).toBe('invitation not sent')
     expect(has('[data-invite-again="anna"]')).toBe(true)
+  })
+
+  it('reads 101 pending seats on screen in two live reads, as one call names at most 100', async () => {
+    let seats: Profile[] = []
+    await load((s) => {
+      seats = Array.from({ length: 101 }, (_, i) =>
+        person(`i${String(i).padStart(3, '0')}`, `Invited ${i}`, { auth_user_id: undefined }),
+      )
+      s.profiles.push(...seats)
+    })
+    for (const seat of [seats[0], seats[100]])
+      extra.deliveries.push({
+        profile_id: seat.id,
+        email: seat.email ?? '',
+        state: 'held',
+        since: new Date().toISOString(),
+        free_at: null,
+      })
+    /* The labels of the 101 seats, read as a page reads its pending rows. */
+    function Labels() {
+      const reads = pages.invites.useInviteDeliveries(
+        store.P.homeOrg,
+        seats.map((seat) => seat.id),
+      )
+      return (
+        <pages.invites.InviteRows.Provider value={reads}>
+          {seats.map((seat) => (
+            <pages.controls.InviteLabel
+              key={seat.id}
+              user={{ id: seat.id, org: store.P.homeOrg }}
+            />
+          ))}
+        </pages.invites.InviteRows.Provider>
+      )
+    }
+    await render(() => <Labels />)
+    const label = (seat: Profile) => find(`[data-invite-for="${seat.id}"]`).textContent
+    expect(
+      opened('invites:deliveries').map((r) => (r.args.profile_ids as string[]).length),
+    ).toEqual([100, 1])
+    expect([label(seats[0]), label(seats[50]), label(seats[100])]).toEqual([
+      'invitation not sent',
+      'invited',
+      'invitation not sent',
+    ])
+    // each read is live, so a send that went out since shows
+    extra.deliveries[1].state = 'sent'
+    await act(async () => server.rerun())
+    expect(label(seats[100])).toBe('invited')
+  })
+
+  it("says it couldn't check a pending seat's invitation while its read fails, with Try again, never invited", async () => {
+    await load()
+    extra.deliveries.push({
+      profile_id: 'anna',
+      email: 'anna@xn--bcher-kva.de',
+      state: 'held',
+      since: new Date().toISOString(),
+      free_at: null,
+    })
+    force = { fail: ['deliveries'] }
+    await show()
+    const label = () => find('[data-invite-for="anna"]')
+    expect(label().textContent).toBe("couldn't check invitation")
+    expect(label().dataset.inviteState).toBe('unchecked')
+    expect(has('[data-invite-again="anna"]')).toBe(false)
+    expect(find('[data-invites-failed]').textContent).toBe(
+      "Couldn't check invitation emails.Try again",
+    )
+    force = {}
+    await click(find('[data-invites-retry]'))
+    expect(has('[data-invites-failed]')).toBe(false)
+    expect(label().textContent).toBe('invitation not sent')
   })
 })
 

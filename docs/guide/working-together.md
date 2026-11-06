@@ -8,7 +8,9 @@ with a dot, has no two dots in a row and does not end with an apostrophe. Its
 domain ends in at least two letters a to z, such as .com. A domain such as
 bücher.de works. Their seat shows **invited** until they sign in with that email address, or
 **invitation not sent** or **invitation may not have arrived** when the email
-did not go out; hover it for the reason. Admins can
+did not go out; hover it for the reason. When Qivo cannot check whether the
+email went out, the seat says **couldn't check invitation** and the page
+offers **Try again**. Admins can
 correct the email before sign-in, which sends a new invitation; afterward it
 is read-only. An organization can send up to 50 invitation emails an hour.
 An invitation held back by that limit says so on the seat, with

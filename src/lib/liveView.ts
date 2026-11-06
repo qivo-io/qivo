@@ -156,3 +156,59 @@ export function useLiveView<T>(ref: FunctionReference<'query'>, key: string | nu
     retry: () => setAttempt((n) => n + 1),
   }
 }
+
+/** What useLiveViews holds now. */
+export type LiveViews<T> = {
+  /** each key's current value or error, absent while it holds none */
+  held: ReadonlyMap<string, LiveResult<T>>
+  /** Subscribes every key afresh, as useLiveView's Try again does. */
+  retry: () => void
+}
+
+/**
+ * The live results of query `ref` for each arguments key of `keys`, as
+ * useLiveView reads one key, for a reader that splits its arguments over
+ * several calls, such as more seats than one call may name. Every key
+ * subscribes while the page shows and stops while it is hidden and when
+ * the view's effects stop, and a change to the keys subscribes them all
+ * afresh, so no key holds a result from before it. A key's failure holds
+ * its error until a result replaces it, beside the other keys' results.
+ */
+export function useLiveViews<T>(
+  ref: FunctionReference<'query'>,
+  keys: readonly string[],
+): LiveViews<T> {
+  const { visible } = useViewVisibility()
+  const [attempt, setAttempt] = useState(0)
+  // as in useLiveView, so a subscription for a newer attempt asks again
+  const opened = useRef(attempt)
+  const [held, setHeld] = useState<ReadonlyMap<string, LiveResult<T>>>(() => new Map())
+  const name = getFunctionName(ref)
+  const all = JSON.stringify(keys)
+  useEffect(() => {
+    setHeld(new Map())
+    if (keys.length === 0 || !visible) return
+    const fresh = attempt !== opened.current
+    opened.current = attempt
+    const forget = (key: string) =>
+      setHeld((was) => {
+        if (!was.has(key)) return was
+        const next = new Map(was)
+        next.delete(key)
+        return next
+      })
+    const stops = keys.map((key) =>
+      watchLive<T>(
+        ref,
+        JSON.parse(key) as Record<string, Value>,
+        (result) => setHeld((was) => new Map(was).set(key, result)),
+        undefined,
+        { fresh, restarted: () => forget(key) },
+      ),
+    )
+    return () => {
+      for (const stop of stops) stop()
+    }
+  }, [name, all, visible, attempt])
+  return { held, retry: () => setAttempt((n) => n + 1) }
+}

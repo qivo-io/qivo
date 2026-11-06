@@ -18,6 +18,7 @@ import { fmtTime } from '../../lib/dates'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { cleanName, limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
 import {
+  INVITE_UNCHECKED,
   type InviteDelivery,
   type InviteDeliveryRow,
   inviteLabel,
@@ -204,9 +205,11 @@ export function UserName({
 /** A pending seat's marker. It says "invited", or that the invitation email
     did not go out, with the reason on hover (lib/inviteDeliveries), and
     offers SendAgain when it can go again. It takes the seat's row from the
-    page's one read of its pending rows (InviteRows), and says "invited"
-    until that read answers or outside such a page. `waiting` turns
-    SendAgain off with WAITING while the store does not hold the seat. */
+    page's reads of its pending rows (InviteRows), and says "invited"
+    until the seat's read answers or outside such a page, and that it
+    couldn't check while that read failed (INVITE_UNCHECKED). `waiting`
+    turns SendAgain off with WAITING while the store does not hold the
+    seat. */
 export function InviteLabel({
   user,
   className,
@@ -216,16 +219,18 @@ export function InviteLabel({
   className?: string
   waiting?: boolean
 }) {
-  const row = useInviteRows()?.get(user.id)
+  const reads = useInviteRows()
+  const row = reads?.rows.get(user.id)
+  const unchecked = reads?.failed.has(user.id) === true
   const state = row?.state
   useRenderAt(row?.free_at ? Date.parse(row.free_at) : 0)
-  const label = inviteLabel(state, row?.free_at)
+  const label = unchecked ? INVITE_UNCHECKED : inviteLabel(state, row?.free_at)
   return (
     <>
       <HoverTooltip content={label.detail}>
         <span
           data-invite-for={user.id}
-          data-invite-state={state ?? 'none'}
+          data-invite-state={unchecked ? 'unchecked' : (state ?? 'none')}
           className={cn(
             '[font-weight:700] [font-size:var(--fs-xs)]',
             label.failed ? '[color:var(--danger)]' : '[color:var(--warn)]',
@@ -311,8 +316,8 @@ export function InviteOutcome({
   seat: string
   email: string
 }) {
-  const rows = useInviteDeliveries(orgId, [seat])
-  const row = rows?.get(seat)
+  const reads = useInviteDeliveries(orgId, [seat])
+  const row = reads.rows.get(seat)
   // the row holds the address as stored (asciiEmail), so Anna@Bücher.DE
   // matches anna@xn--bcher-kva.de
   const current = row?.email === asciiEmail(email) ? row.state : undefined
@@ -331,7 +336,7 @@ export function InviteOutcome({
   const state =
     current ??
     (last !== 'sending' ? last : undefined) ??
-    (rows && !row && !last && !waited ? 'sending' : undefined)
+    (reads.answered.has(seat) && !row && !last && !waited ? 'sending' : undefined)
   const freeAt = current === 'held' ? row?.free_at : undefined
   useRenderAt(freeAt ? Date.parse(freeAt) : 0)
   if (state === undefined) return null
