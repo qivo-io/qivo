@@ -720,7 +720,7 @@ export const seededImageBytes = (n) => pngOf(640, 480, 0.03, n + 1)
 
 /** The bytes of the --pictures picture of person `n`: a 256-pixel PNG of
     about 20 KB, as the app's own pictures are 10 to 30 KB. */
-export const seededPictureBytes = (n) => pngOf(256, 256, 0.08, 1000 + n)
+export const seededPictureBytes = (n) => pngOf(256, 256, 0.035, 1000 + n)
 
 /** The name of --files sub-project `n`, from 0: an accented one first, a
     word no other name has second, then what its files hold and a number,

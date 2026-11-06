@@ -45,15 +45,19 @@ export function pngOf(width, height, noise = 0.1, seed = 1) {
   }
   const row = width * 3 + 1
   const raw = Buffer.alloc(row * height)
+  const pixels = Buffer.alloc(width * 3)
   for (let y = 0; y < height; y++) {
-    raw[y * row] = 0
     for (let x = 0; x < width; x++) {
-      const at = y * row + 1 + x * 3
       const loud = random() < noise
-      raw[at] = loud ? random() * 256 : (x * 255) / width
-      raw[at + 1] = loud ? random() * 256 : (y * 255) / height
-      raw[at + 2] = loud ? random() * 256 : 128
+      pixels[x * 3] = loud ? random() * 256 : (x * 255) / width
+      pixels[x * 3 + 1] = loud ? random() * 256 : (y * 255) / height
+      pixels[x * 3 + 2] = loud ? random() * 256 : 128
     }
+    // each row with PNG's Sub filter, so the gradient compresses as a
+    // real image's smooth areas do and the noise sets the size
+    raw[y * row] = 1
+    for (let i = 0; i < width * 3; i++)
+      raw[y * row + 1 + i] = (pixels[i] - (i >= 3 ? pixels[i - 3] : 0)) & 0xff
   }
   const header = Buffer.alloc(13)
   header.writeUInt32BE(width, 0)
@@ -72,9 +76,9 @@ export function pngOf(width, height, noise = 0.1, seed = 1) {
     a big one. */
 export function bytesFor(url) {
   const { pathname, searchParams } = new URL(url)
-  if (pathname.startsWith('/avatars/')) return pngOf(256, 256, 0.08, 7)
+  if (pathname.startsWith('/avatars/')) return pngOf(256, 256, 0.035, 7)
   if (searchParams.get('size') === 'big') return pngOf(4096, 4096, 0.02, 11)
-  return pngOf(1200, 800, 0.05, 3)
+  return pngOf(1200, 800, 0.013, 3)
 }
 
 /** Serves `page`'s requests to perf.invalid with generated images and the
