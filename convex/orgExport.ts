@@ -42,6 +42,22 @@
  * a failed, cancelled or expired job's parts are erased at once in `erase`
  * legs. Ended jobs and their request rows stay 30 days as history.
  *
+ * Delivery. Any active admin of the organization gets a link of two
+ * minutes to a ready archive from `claimDownload` (model/orgExports.ts
+ * DELIVERY.tokenSeconds, an org_export file token, lib/fileTokens.ts), and
+ * an admin who asked for the job gets one automatic attempt, recorded on
+ * their request row however many tabs ask. The /exports/ route (http.ts)
+ * checks the link and then, on every request, the admin's authority, the
+ * job and the organization (deliveryOf), again before every part
+ * (canDeliver), holds a lease while it streams (leaseDelivery, at most
+ * DELIVERY.streams a job), and streams the stored parts as one ZIP without
+ * holding the archive. Only an archive the route served whole is recorded
+ * (recordDelivery): the job's first served_at and the organization's
+ * last_export_at, which the deletion reminder reads, so an archive that
+ * was only prepared (completed_at) never counts as a backup. A ready
+ * archive whose file is gone fails as incomplete (failDelivery). Neither
+ * the claim nor the route touches the four hours.
+ *
  * Convex drops what a failed mutation scheduled and does not retry actions.
  * `recover` (every minute) restarts a collecting job whose step stopped,
  * and fails it after RESTARTS restarts without a commit; `sweep` (every 15
@@ -64,14 +80,25 @@ import {
   internalAction,
   internalMutation,
   internalQuery,
+  type QueryCtx,
 } from './_generated/server'
-import { assertOrgAvailable } from './lib/billingAccess'
+import { assertOrgAvailable, deletionBegun } from './lib/billingAccess'
 import { crc32 } from './lib/crc32'
 import { byId } from './lib/db'
-import { uncountedWriter } from './lib/demo'
+import { demoForOrg, isDemoDeployment, uncountedWriter } from './lib/demo'
 import type { OrgExportState } from './lib/enums'
-import { authedMutation, badRequest, forbidden, notFound, orgQuery, require } from './lib/functions'
+import { exportFileUrl, mintFileToken } from './lib/fileTokens'
 import {
+  authedMutation,
+  badRequest,
+  forbidden,
+  notFound,
+  orgQuery,
+  require,
+  rule,
+} from './lib/functions'
+import {
+  archiveFileName,
   archiveRow,
   archiveTables,
   type ExportCursor,
@@ -88,6 +115,7 @@ import {
   ZIP_END_BYTES,
   zipEntryBytes,
 } from './lib/orgExport'
+import { demoCanRead } from './model/demoUploads'
 import { eraseFile } from './model/fileHolds'
 import {
   type ExportBatch,
@@ -103,17 +131,22 @@ import {
   ARCHIVE_TTL_MS,
   archiveCap,
   collectingJob,
+  DELIVERY,
+  deploymentStreams,
   EXPORT_LIMITS,
   endJob,
   eraseParts,
   exportOf,
   HISTORY_MS,
   jobsOf,
+  liveStreams,
+  noteDelivered,
   partsOf,
   RESTARTS,
   readyJobs,
   requestsOf,
   STALLED_MS,
+  setStreams,
   stopReason,
 } from './model/orgExports'
 import { newUuid } from './model/orgs'
@@ -274,6 +307,11 @@ export type ExportSummary = {
   requested_by: string | null // the first requester's name
   cancelled_by: string | null // the canceller's name
   requested: boolean // whether the caller asked for this job
+  // when the route first served the archive whole: downloaded, never proof
+  // of a saved file
+  served_at: string | null
+  // when the caller's own automatic download was claimed, while `requested`
+  auto_download_at: string | null
 }
 
 /** The organization's latest export job, and its latest ready archive that
@@ -294,10 +332,8 @@ export const status = orgQuery({
         : null
     }
     const summary = async (job: Doc<'org_exports'>): Promise<ExportSummary> => {
-      const mine = await ctx.db
-        .query('org_export_requests')
-        .withIndex('by_export_profile', (q) => q.eq('export_id', job.id).eq('profile_id', me.id))
-        .first()
+      const mine = await requestOf(ctx, job.id, me.id)
+      const requested = mine !== null && me._creationTime < mine._creationTime
       return {
         id: job.id,
         state: job.state,
@@ -318,7 +354,9 @@ export const status = orgQuery({
           job.cancelled_by,
           job.ended_at === undefined ? job._creationTime : Date.parse(job.ended_at) + 1,
         ),
-        requested: mine !== null && me._creationTime < mine._creationTime,
+        requested,
+        served_at: job.served_at ?? null,
+        auto_download_at: requested ? (mine.auto_download_at ?? null) : null,
       }
     }
     const latest = await jobsOf(ctx, me.org_id).order('desc').first()
@@ -355,6 +393,279 @@ export const cancel = authedMutation({
     if (job.state !== 'collecting') return { state: job.state }
     await endJob(ctx, job, { state: 'cancelled', by: me.id })
     return { state: 'cancelled' }
+  },
+})
+
+/* ------------------------------------------------------------ delivery */
+
+/* The refusals of a claim for a job that has no archive to download. */
+const STILL_COLLECTING = 'This export is still being prepared. Download it once it is ready.'
+const NO_LONGER_AVAILABLE = 'This export is no longer available. Prepare a new export.'
+
+/** What claimDownload answers: a link and when it stops starting a
+ * download, or why an automatic attempt gets none. */
+export type DownloadClaim =
+  | { url: string; expires_at: string }
+  | { url: null; reason: 'claimed' | 'not_requested' }
+
+/** A link of DELIVERY.tokenSeconds to the ready archive `export_id` of
+ * `org_id`, for the export page to send the browser to at once. Any active
+ * admin of the organization may download, whether or not they asked for
+ * the job, and the /exports/ route checks that again on every request.
+ *
+ * With `automatic`, the page's automatic download: only for an admin who
+ * asked for the job (their request row, their profile older than it, as
+ * `status`' `requested` asks, else `not_requested`), once per job however
+ * many tabs, devices or reconnects ask, recorded on that row (`claimed`
+ * after the first). Two claims at once conflict on the row, and Convex runs
+ * the second again, which then finds it. Without `automatic` it writes
+ * nothing, though on the public demo it still spends one demo change, as
+ * every authedMutation does.
+ *
+ * Refuses a caller who is not an active admin there (an organization whose
+ * deletion has begun holds no active seat, so its admins get the same),
+ * an unknown export and another organization's alike, and a job with no
+ * unexpired ready archive, a collecting one with its own sentence. The
+ * answer never holds a storage id, and `expires_at` is the link's own end,
+ * so a later click claims again. Allowed while the organization is
+ * read-only before its deletion, as `request` is. */
+export const claimDownload = authedMutation({
+  args: { org_id: v.string(), export_id: v.string(), automatic: v.boolean() },
+  handler: async (ctx, { org_id, export_id, automatic }): Promise<DownloadClaim> => {
+    const me = ctx.myProfiles.get(org_id)
+    if (me?.org_role !== 'admin') throw forbidden(ADMINS_ONLY)
+    await assertOrgAvailable(ctx, org_id)
+    const job = await exportOf(ctx, export_id)
+    if (job === null || job.org_id !== org_id) throw notFound('export not found')
+    if (job.state === 'collecting') throw rule(STILL_COLLECTING)
+    if (
+      job.state !== 'ready' ||
+      job.expires_at === undefined ||
+      Date.parse(job.expires_at) <= Date.now()
+    )
+      throw rule(NO_LONGER_AVAILABLE)
+    if (automatic) {
+      const mine = await requestOf(ctx, export_id, me.id)
+      if (mine === null || me._creationTime >= mine._creationTime)
+        return { url: null, reason: 'not_requested' }
+      if (mine.auto_download_at !== undefined) return { url: null, reason: 'claimed' }
+      // request rows are a temporary copy, not the visitor's records
+      await uncountedWriter(ctx.db).patch(mine._id, { auto_download_at: new Date().toISOString() })
+    }
+    // a second past the claim's whole second, so the moment the link counts
+    // as minted (exp less its lifetime, deliverable) is after every profile
+    // the claim found; the link lives DELIVERY.tokenSeconds and at most one
+    // second more
+    const exp = Math.floor(Date.now() / 1000) + 1 + DELIVERY.tokenSeconds
+    const token = await mintFileToken({ kind: 'org_export', id: export_id, minter: me.id, exp })
+    return {
+      url: exportFileUrl({ id: export_id, minter: me.id, exp, token }),
+      expires_at: new Date(exp * 1000).toISOString(),
+    }
+  },
+})
+
+/** Admin `profileId`'s request row for export `exportId`, or null. */
+const requestOf = (ctx: QueryCtx, exportId: string, profileId: string) =>
+  ctx.db
+    .query('org_export_requests')
+    .withIndex('by_export_profile', (q) => q.eq('export_id', exportId).eq('profile_id', profileId))
+    .first()
+
+/* The ready job `exportId` with its organization while profile `minter`
+ * may still download it through a link that expires at `exp` (unix
+ * seconds), else null. The job is ready with an archive and has not
+ * expired; the minter is an active admin of the job's organization,
+ * created before the link was minted (`exp` less DELIVERY.tokenSeconds), so
+ * a later profile that takes a removed admin's id gets nothing; the
+ * organization is there and its deletion has not begun; and on the public
+ * demo its cleanup has not begun and the minter's session still reads it
+ * (model/demoUploads.ts demoCanRead). Reads the job, the profile, the
+ * removal, the organization and on the demo two receipts. */
+async function deliverable(ctx: QueryCtx, exportId: string, minter: string, exp: number) {
+  const job = await exportOf(ctx, exportId)
+  if (
+    job?.state !== 'ready' ||
+    job.archive === undefined ||
+    job.expires_at === undefined ||
+    job.completed_at === undefined ||
+    Date.parse(job.expires_at) <= Date.now()
+  )
+    return null
+  const profile = await byId(ctx, 'profiles', minter)
+  if (
+    profile === null ||
+    profile.org_id !== job.org_id ||
+    !profile.active ||
+    profile.org_role !== 'admin' ||
+    profile._creationTime >= (exp - DELIVERY.tokenSeconds) * 1000
+  )
+    return null
+  if (await deletionBegun(ctx, job.org_id)) return null
+  if (isDemoDeployment()) {
+    if ((await demoForOrg(ctx, job.org_id))?.status === 'deleting') return null
+    if (
+      profile.auth_user_id === undefined ||
+      !(await demoCanRead(ctx, profile.auth_user_id, job.org_id))
+    )
+      return null
+  }
+  const org = await byId(ctx, 'organizations', job.org_id)
+  if (org === null) return null
+  return { job, org, archive: job.archive, completed_at: job.completed_at }
+}
+
+/* The parts of ready job `job` in archive order when they make the archive
+ * its row describes (`archive`), else null: at most EXPORT_LIMITS.parts
+ * data parts and the README and manifest at seq 0 and 1, as many as
+ * archive.parts, whose stored bytes and ZIP headers sum to archive.bytes,
+ * each file still stored at its stored size. It does not check the table
+ * order again, which commitFinish checked when it published the archive,
+ * so an archive of an earlier format with fewer sections stays
+ * deliverable. One range for the parts and one lookup a file. */
+async function deliverableParts(
+  ctx: QueryCtx,
+  job: Doc<'org_exports'>,
+  archive: { bytes: number; parts: number },
+): Promise<Doc<'org_export_parts'>[] | null> {
+  const parts = await partsOf(ctx, job.id).take(EXPORT_LIMITS.parts + 3)
+  if (parts.length > EXPORT_LIMITS.parts + 2 || parts.length !== archive.parts) return null
+  const [readme, manifest] = parts
+  if (readme?.seq !== 0 || readme.kind !== 'readme') return null
+  if (manifest?.seq !== 1 || manifest.kind !== 'manifest') return null
+  let bytes = ZIP_END_BYTES
+  for (const part of parts) bytes += part.stored_bytes + zipEntryBytes(part.entry)
+  if (bytes !== archive.bytes) return null
+  for (const part of parts)
+    if ((await ctx.db.system.get(part.storage_id))?.size !== part.stored_bytes) return null
+  return parts
+}
+
+/** What the route needs to serve a ready archive, after the checks of
+ * `deliverable` and of its parts (deliverableParts): its file name, the
+ * time it was ready, its bytes and, in archive order, each part's entry,
+ * file, CRC and sizes. Null when the link's admin may not download it now,
+ * and `missing` when the archive is damaged, which failDelivery then ends.
+ * It reads what the finish read, about 4,010 ranges at EXPORT_LIMITS.parts
+ * data parts, and answers under 1 MB. deliveryOf runs it for the route. */
+export async function readDelivery(
+  ctx: QueryCtx,
+  { export_id, minter, exp }: { export_id: string; minter: string; exp: number },
+) {
+  const allowed = await deliverable(ctx, export_id, minter, exp)
+  if (allowed === null) return null
+  const parts = await deliverableParts(ctx, allowed.job, allowed.archive)
+  if (parts === null) return { missing: true as const }
+  return {
+    name: archiveFileName(allowed.org.slug || allowed.org.id, allowed.completed_at),
+    completed_at: allowed.completed_at,
+    bytes: allowed.archive.bytes,
+    // the route's slices, so http.ts loads nothing of the job's model
+    slice: DELIVERY.slice,
+    parts: parts.map(({ entry, storage_id, crc32, raw_bytes, stored_bytes }) => ({
+      entry,
+      storage_id,
+      crc32,
+      raw_bytes,
+      stored_bytes,
+    })),
+  }
+}
+
+/** The ready archive the route serves (readDelivery). */
+export const deliveryOf = internalQuery({
+  args: { export_id: v.string(), minter: v.string(), exp: v.number() },
+  handler: readDelivery,
+})
+
+/** Whether the link's admin may still download export `export_id`
+ * (`deliverable`). The route asks before each part, so a demotion, a
+ * deletion that begins or the archive's end stop a download under way. A
+ * handful of reads, whatever the archive's size. */
+export const canDeliver = internalQuery({
+  args: { export_id: v.string(), minter: v.string(), exp: v.number() },
+  handler: async (ctx, { export_id, minter, exp }): Promise<boolean> =>
+    (await deliverable(ctx, export_id, minter, exp)) !== null,
+})
+
+/** A lease for one download of export `export_id`, taken just before the
+ * route answers: null when the link's admin may no longer download it
+ * (`deliverable`), and `busy` with the seconds to wait when
+ * DELIVERY.streams downloads of the archive run already, or on the public
+ * demo DELIVERY.demoStreams on the whole deployment. A lease the route
+ * never releases runs out after DELIVERY.streamMs. */
+export const leaseDelivery = internalMutation({
+  args: { export_id: v.string(), minter: v.string(), exp: v.number() },
+  handler: async (
+    ctx,
+    { export_id, minter, exp },
+  ): Promise<{ stream: string } | { busy: true; retry_after: number } | null> => {
+    const allowed = await deliverable(ctx, export_id, minter, exp)
+    if (allowed === null) return null
+    const now = Date.now()
+    const live = liveStreams(allowed.job, now)
+    const busy = { busy: true as const, retry_after: DELIVERY.retrySeconds }
+    if (live.length >= DELIVERY.streams) return busy
+    if (isDemoDeployment() && (await deploymentStreams(ctx, now)) >= DELIVERY.demoStreams)
+      return busy
+    const stream = newUuid()
+    await setStreams(ctx, allowed.job, [...live, { id: stream, until: now + DELIVERY.streamMs }])
+    return { stream }
+  },
+})
+
+/** Ends download `stream`'s lease on export `export_id` after a download
+ * that stopped short, dropping leases that ran out too. Changes nothing
+ * else. */
+export const releaseDelivery = internalMutation({
+  args: { export_id: v.string(), stream: v.string() },
+  handler: async (ctx, { export_id, stream }): Promise<null> => {
+    const job = await exportOf(ctx, export_id)
+    if (job === null || job.streams === undefined) return null
+    await setStreams(
+      ctx,
+      job,
+      liveStreams(job, Date.now()).filter((lease) => lease.id !== stream),
+    )
+    return null
+  },
+})
+
+/** Records that the route handed its reader the last byte of export
+ * `export_id`'s archive (model/orgExports.ts noteDelivered: the
+ * organization's last_export_at and the job's first served_at) and ends
+ * download `stream`'s lease. It needs no authority, since the route
+ * checked the admin before every part it sent, and writes no request row,
+ * so an admin who did not ask downloads as one who did. */
+export const recordDelivery = internalMutation({
+  args: { export_id: v.string(), stream: v.string() },
+  handler: async (ctx, { export_id, stream }): Promise<null> => {
+    const job = await exportOf(ctx, export_id)
+    if (job === null) return null
+    await noteDelivered(ctx, job)
+    await setStreams(
+      ctx,
+      job,
+      liveStreams(job, Date.now()).filter((lease) => lease.id !== stream),
+    )
+    return null
+  },
+})
+
+/** Ends export `export_id` as failed with `incomplete` when it is still
+ * ready and its parts no longer make its archive (deliverableParts), such
+ * as a file that is gone, so `status` asks for a new export instead of
+ * offering a download that cannot work. Only the job's own expiry and a
+ * newer archive erase its files, and endJob changes the state first, so a
+ * ready archive without a file is damaged. Changes nothing otherwise. */
+export const failDelivery = internalMutation({
+  args: { export_id: v.string() },
+  handler: async (ctx, { export_id }): Promise<null> => {
+    const job = await exportOf(ctx, export_id)
+    if (job?.state !== 'ready' || job.archive === undefined) return null
+    if ((await deliverableParts(ctx, job, job.archive)) !== null) return null
+    await endJob(ctx, job, { state: 'failed', code: 'incomplete' })
+    return null
   },
 })
 

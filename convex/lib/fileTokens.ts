@@ -5,6 +5,13 @@
  * (avatars/personal backgrounds) and `exp` is unix SECONDS. The gateway re-checks the MINTER's
  * access per request — exp only bounds the forwarded-link window.
  *
+ * An org_export token's id is an export job's id and its minter the admin's
+ * profile uuid in the job's organization (orgExport.ts claimDownload). The
+ * /exports/ route checks on every request that the minter is still an
+ * active admin there, as the gateway rechecks an attachment's minter, so
+ * `exp` (two minutes, model/orgExports.ts DELIVERY) only bounds when a
+ * forwarded link may start a download.
+ *
  * Key: DERIVED from BETTER_AUTH_SECRET with a domain-separation label
  * (key material = SHA-256(secret + ':qivo-files-token-v1')), never the raw
  * secret — a files-token oracle can't be turned against sessions, and no
@@ -29,6 +36,7 @@ export type FileTokenKind =
   | 'background_preview'
   | 'background_upload'
   | 'demo_upload'
+  | 'org_export'
 
 const KEY_LABEL = ':qivo-files-token-v1'
 
@@ -177,6 +185,17 @@ export function attachmentFileUrl(p: {
   token: string
 }): string {
   return `${siteUrl()}/files/${p.id}?e=${p.exp}&m=${encodeURIComponent(p.minter)}&t=${p.token}`
+}
+
+/* The link that downloads the ready archive of export `id`
+ * (http.ts /exports/), for the admin profile `minter`. */
+export function exportFileUrl(p: {
+  id: string
+  minter: string
+  exp: number
+  token: string
+}): string {
+  return `${siteUrl()}/exports/${p.id}?e=${p.exp}&m=${encodeURIComponent(p.minter)}&t=${p.token}`
 }
 
 /* The URL a REST or MCP upload sends its file to (machine/uploads.ts), for

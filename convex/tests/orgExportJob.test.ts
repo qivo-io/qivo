@@ -10,11 +10,9 @@
 /// <reference types="vite/client" />
 
 import { makeFunctionReference } from 'convex/server'
-import { inflateSync, unzipSync } from 'fflate/browser'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import { crc32 } from '../lib/crc32'
 import type { DeletedItemState } from '../lib/enums'
 import { TEXT_MAX } from '../lib/limits'
 import {
@@ -56,9 +54,19 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import {
+  archiveOf,
+  exists,
+  exportAs,
+  jobOf,
+  partsOf,
+  requestsOf,
+  START,
+  settle,
+  storedFiles,
+} from './orgExport.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 
-const START = Date.parse('2026-05-04T10:00:00.000Z')
 const DEFAULTS = { ...EXPORT_LIMITS }
 
 beforeEach(() => {
@@ -76,162 +84,6 @@ const page = makeFunctionReference<
   { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
   OrgExportPage
 >('orgExport:page')
-
-/** Runs every scheduled step, erase leg and expiry that is due now, until
- * none is left that is due. Later timers, such as an archive's expiry,
- * wait. */
-const settle = (t: T) => t.finishAllScheduledFunctions(() => vi.advanceTimersByTime(0), 5000)
-
-const jobOf = (t: T, id: string) =>
-  t.run(async (ctx) =>
-    ctx.db
-      .query('org_exports')
-      .withIndex('by_uuid', (q) => q.eq('id', id))
-      .unique(),
-  )
-
-const partsOf = (t: T, id: string) =>
-  t.run((ctx) =>
-    ctx.db
-      .query('org_export_parts')
-      .withIndex('by_export_seq', (q) => q.eq('export_id', id))
-      .collect(),
-  )
-
-const requestsOf = (t: T, id: string) =>
-  t.run((ctx) =>
-    ctx.db
-      .query('org_export_requests')
-      .withIndex('by_export_profile', (q) => q.eq('export_id', id))
-      .collect(),
-  )
-
-/** How many files storage holds. */
-const storedFiles = (t: T) =>
-  t.run(async (ctx) => (await ctx.db.system.query('_storage').collect()).length)
-
-/** Whether stored file `id` is still there. */
-const exists = (t: T, id: Id<'_storage'>) =>
-  t.run(async (ctx) => (await ctx.db.system.get(id)) !== null)
-
-/** Asks for an export as `profile` and runs the job until nothing due is
- * left. */
-async function exportAs(t: T, profile: Doc<'profiles'>, orgId: string) {
-  const asked = await as(t, profile).mutation(api.orgExport.request, { org_id: orgId })
-  await settle(t)
-  return asked.export_id
-}
-
-/* A ZIP archive of `parts` in archive order, each with its stored file,
- * built as the delivery stage will: a local header and the file for each,
- * then the central directory and its end record. */
-function zipOf(parts: readonly Doc<'org_export_parts'>[], files: readonly Uint8Array[]) {
-  const encoder = new TextEncoder()
-  const chunks: Uint8Array[] = []
-  const directory: Uint8Array[] = []
-  let offset = 0
-  for (const [i, part] of parts.entries()) {
-    const name = encoder.encode(part.entry)
-    const data = files[i]
-    const local = new DataView(new ArrayBuffer(30))
-    const central = new DataView(new ArrayBuffer(46))
-    local.setUint32(0, 0x04034b50, true)
-    central.setUint32(0, 0x02014b50, true)
-    central.setUint16(4, 20, true)
-    // version needed, UTF-8 names, deflate, 1980-01-01, CRC and sizes, at
-    // the same offsets past each record's own first field
-    for (const [view, at] of [
-      [local, 4],
-      [central, 6],
-    ] as const) {
-      view.setUint16(at, 20, true)
-      view.setUint16(at + 2, 0x0800, true)
-      view.setUint16(at + 4, 8, true)
-      view.setUint16(at + 8, 0x21, true)
-      view.setUint32(at + 10, part.crc32, true)
-      view.setUint32(at + 14, data.length, true)
-      view.setUint32(at + 18, part.raw_bytes, true)
-      view.setUint16(at + 22, name.length, true)
-    }
-    central.setUint32(42, offset, true)
-    chunks.push(new Uint8Array(local.buffer), name, data)
-    directory.push(new Uint8Array(central.buffer), name)
-    offset += 30 + name.length + data.length
-  }
-  const size = directory.reduce((sum, chunk) => sum + chunk.length, 0)
-  const end = new DataView(new ArrayBuffer(22))
-  end.setUint32(0, 0x06054b50, true)
-  end.setUint16(8, parts.length, true)
-  end.setUint16(10, parts.length, true)
-  end.setUint32(12, size, true)
-  end.setUint32(16, offset, true)
-  const all = [...chunks, ...directory, new Uint8Array(end.buffer)]
-  const out = new Uint8Array(all.reduce((sum, chunk) => sum + chunk.length, 0))
-  let at = 0
-  for (const chunk of all) {
-    out.set(chunk, at)
-    at += chunk.length
-  }
-  return out
-}
-
-/** A ready job's archive: its parts, each inflated and checked against its
- * CRC and sizes, the ZIP they make and its entries, and each table's rows
- * joined from its files. */
-async function archiveOf(t: T, exportId: string) {
-  const parts = await partsOf(t, exportId)
-  // t.run answers Convex values, so the bytes come back as ArrayBuffers
-  const buffers = await t.run(async (ctx) => {
-    const out: ArrayBuffer[] = []
-    for (const part of parts) {
-      const blob = await ctx.storage.get(part.storage_id)
-      if (blob === null) throw new Error(`the file of ${part.entry} is gone`)
-      out.push(await blob.arrayBuffer())
-    }
-    return out
-  })
-  const files = buffers.map((buffer) => new Uint8Array(buffer))
-  const decoder = new TextDecoder()
-  const texts: Record<string, string> = {}
-  for (const [i, part] of parts.entries()) {
-    expect(files[i].length, part.entry).toBe(part.stored_bytes)
-    // each part is one complete raw DEFLATE stream of its own
-    const raw = inflateSync(files[i])
-    expect(raw.length, part.entry).toBe(part.raw_bytes)
-    expect(crc32(raw), part.entry).toBe(part.crc32)
-    texts[part.entry] = decoder.decode(raw)
-  }
-  const zip = zipOf(parts, files)
-  const entries = unzipSync(zip)
-  expect(Object.keys(entries)).toEqual(parts.map((part) => part.entry))
-  for (const part of parts) expect(decoder.decode(entries[part.entry])).toBe(texts[part.entry])
-  const tables: Record<string, OrgExportRow[]> = {}
-  for (const part of parts) {
-    if (part.kind !== 'data') continue
-    const rows = JSON.parse(texts[part.entry]) as OrgExportRow[]
-    expect(rows, part.entry).toHaveLength(part.records)
-    const name = part.entry.split('/')[1]
-    tables[name] = [...(tables[name] ?? []), ...rows]
-  }
-  return {
-    parts,
-    zip,
-    tables,
-    readme: texts['README.txt'],
-    manifest: JSON.parse(texts['manifest.json']) as {
-      version: number
-      consistency: string
-      consistency_note: string
-      file_contents_included: boolean
-      collection_started_at: string
-      collection_completed_at: string
-      organization: { id: string; name?: string; slug?: string }
-      tables: Record<string, { files: string[]; records: number }>
-      skipped: { tasks: number; reason: string }
-      exclusions: string[]
-    },
-  }
-}
 
 /** Every section as the browser export reads it through `page`, by archive
  * name, each row as the archive writes it (lib/orgExport.ts archiveRow). */

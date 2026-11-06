@@ -11,8 +11,11 @@
  * without that period: every write waits for checkout, so it holds nothing
  * customers made. The terms of service promise these periods.
  *
- * Admins are emailed when the period starts, unless one of them finished an
- * export within EXPORT_FRESH_DAYS before the service ended. */
+ * Admins are emailed when the period starts, unless one of them downloaded
+ * an export within EXPORT_FRESH_DAYS before the service ended
+ * (organizations.last_export_at): the browser export once its download
+ * starts, or a prepared archive the /exports/ route served whole. An archive
+ * that was only prepared does not count. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'

@@ -23,9 +23,12 @@
  *
  * Admins act through `request` (delete the organization, ending any paid
  * subscription at once without a refund), `keep` (stop a deletion they asked
- * for) and `recordExport`, which the export panel calls once the browser has
- * built the archive. Cancelling in Billing (billingActions.cancelSubscription)
- * only stops renewal, so its period starts when Polar ends the subscription. */
+ * for) and `recordExport`, which the browser export calls once its download
+ * starts. The organization export job's /exports/ route records an archive
+ * it served whole too (orgExport.ts recordDelivery), so the deletion
+ * reminder counts a downloaded backup, never one that was only prepared.
+ * Cancelling in Billing (billingActions.cancelSubscription) only stops
+ * renewal, so its period starts when Polar ends the subscription. */
 
 import { makeFunctionReference } from 'convex/server'
 import { type ObjectType, v } from 'convex/values'
@@ -613,7 +616,10 @@ export const state = orgQuery({
   },
 })
 
-/** Records that an admin's browser finished an export. Allowed while the
+/** Records that an admin's browser export started its download, in
+ * organizations.last_export_at, which an archive the /exports/ route served
+ * whole also sets (model/orgExports.ts noteDelivered). The browser export
+ * calls it until the export panel moves to the job. Allowed while the
  * organization is read-only, because that is when exports matter most. */
 export const recordExport = authedMutation({
   args: { org_id: v.string() },

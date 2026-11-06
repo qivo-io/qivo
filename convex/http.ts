@@ -13,6 +13,7 @@ import { httpRouter, makeFunctionReference } from 'convex/server'
 import { ConvexError } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import type { ActionCtx } from './_generated/server'
 import { registerBilling } from './billingHttp'
 import { registerDemoReporting } from './demoReportingHttp'
 import {
@@ -29,6 +30,7 @@ import { FILE_TOKEN_TTL_SECONDS, type FileTokenKind, verifyFileToken } from './l
 import { badRequest } from './lib/functions'
 import { AUTH_BODY_MAX_BYTES } from './lib/limits'
 import { mcpResource, OAUTH_SCOPES, oauthIssuer } from './lib/oauth'
+import { dosTime, type ZipPart, zipCentralRecord, zipEnd, zipLocalHeader } from './lib/orgExport'
 import {
   manualImageDimensions,
   PANORAMA_MAX_BYTES,
@@ -318,6 +320,9 @@ for (const path of isDemoDeployment()
  *   GET /background-previews/<image uuid>?e=<exp>&m=<owner auth-user id>&t=<mac>
  *   GET /backgrounds/<image uuid>?e=<exp>&m=<owner auth-user id>&t=<mac>
  *
+ * The organization export's /exports/ route below shares these headers,
+ * this 404 and the preflight.
+ *
  * The MAC (lib/fileTokens: HMAC-SHA256 over kind/uuid/minter/exp, key derived
  * from BETTER_AUTH_SECRET) admits the request; the MINTER's access is then
  * RE-CHECKED per request (files.gatewayAttachment / gatewayAvatar) — exp only
@@ -376,7 +381,10 @@ const attachmentDisposition = (name: string): string => {
 }
 
 const serve = (
-  kind: Exclude<FileTokenKind, 'attachment_upload' | 'background_upload' | 'demo_upload'>,
+  kind: Exclude<
+    FileTokenKind,
+    'attachment_upload' | 'background_upload' | 'demo_upload' | 'org_export'
+  >,
   prefix: string,
 ) =>
   answerAfterBody(async (ctx, request) => {
@@ -462,6 +470,194 @@ http.route({
   handler: serve('background_preview', '/background-previews/'),
 })
 http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: preflight })
+
+/* ------------------------------------------------- /exports/ download route
+ *
+ *   GET /exports/<export uuid>?e=<exp>&m=<minter admin profile uuid>&t=<mac>
+ *
+ * A ready organization export as one ZIP (lib/orgExport.ts), for the link
+ * orgExport.claimDownload answers an admin: an org_export token, which no
+ * other route accepts and which opens no other route, minted for the
+ * export's id and the admin's profile, valid model/orgExports.ts
+ * DELIVERY.tokenSeconds. The MAC admits the request; deliveryOf then checks
+ * that the minter is still an active admin of the job's organization, that
+ * the job is ready and unexpired, that the organization's deletion and a
+ * public demo's cleanup have not begun and that the archive's parts are all
+ * there. A damaged archive fails its job (failDelivery). The download then
+ * takes a lease (leaseDelivery, DELIVERY.streams a job and
+ * DELIVERY.demoStreams on the demo), else 429 with Retry-After, which only
+ * an admin who passed every check sees. Every other refusal is the
+ * gateway's one 404, so the route says nothing of which check failed or
+ * whether an export exists. Every answer carries the gateway's headers:
+ * nosniff, the sandbox CSP and the app-origin echo, never `*` and with no
+ * credentials, so the archive never runs as content on this origin, which
+ * carries the sign-in cookies. The archive holds no file contents and the
+ * route grants nothing else. */
+
+/* What deliveryOf answers for an archive the route may serve. */
+type Delivery = {
+  completed_at: string
+  slice: number
+  parts: (ZipPart & { storage_id: Id<'_storage'> })[]
+}
+
+/**
+ * A ready archive as one ZIP body, read only when its reader pulls (a
+ * ReadableStream, as Convex recommends for answers past an HTTP action's
+ * 64 MiB of memory): for each part in seq order its local header, then its
+ * stored file from storage in slices of at most `slice` bytes, holding one
+ * part's file at a time, then the central directory and its end record.
+ * Before each part it checks the admin again (canDeliver), and it checks
+ * each file's size against the part's stored_bytes. A refusal, a file that
+ * is gone (failDelivery then ends a job still ready) or a size that
+ * differs errors the body, which stops short of its Content-Length, so the
+ * browser reports a failed download and no ZIP looks whole. Once the
+ * reader took the end record's last slice, the next pull records the
+ * delivery (recordDelivery) and closes the body; a failed record is
+ * logged and changes no byte. A reader that cancels stops the reads, and
+ * the download records nothing and releases its lease. An HTTP action
+ * runs at most 30 minutes, so a reader slower than about 55 KB/s cannot
+ * fetch a 95 MiB archive whole.
+ */
+function archiveStream(
+  ctx: ActionCtx,
+  archive: Delivery,
+  link: { export_id: string; minter: string; exp: number },
+  stream: string,
+): ReadableStream<Uint8Array> {
+  const runMutation = conflictRetrying(ctx)
+  const dos = dosTime(archive.completed_at)
+  const directory: Uint8Array[] = []
+  // the part next to send, the bytes sent so far, and the bytes of the
+  // current file or of the directory still to hand over
+  let next = 0
+  let offset = 0
+  let pending: Uint8Array | null = null
+  let at = 0
+  let tail = false
+  const release = () =>
+    runMutation(internal.orgExport.releaseDelivery, { export_id: link.export_id, stream }).catch(
+      (error: unknown) => console.warn('An export download kept its lease', { error }),
+    )
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (pending !== null && at < pending.length) {
+          const slice = pending.subarray(at, at + archive.slice)
+          at += slice.length
+          controller.enqueue(slice)
+          return
+        }
+        if (next < archive.parts.length) {
+          const part = archive.parts[next]
+          if (!(await ctx.runQuery(internal.orgExport.canDeliver, link)))
+            throw new Error('the export is no longer deliverable')
+          const blob = await ctx.storage.get(part.storage_id)
+          if (blob === null) {
+            await runMutation(internal.orgExport.failDelivery, { export_id: link.export_id })
+            throw new Error(`the file of ${part.entry} is gone`)
+          }
+          if (blob.size !== part.stored_bytes)
+            throw new Error(`the file of ${part.entry} is not its stored size`)
+          const header = zipLocalHeader(part, dos)
+          directory.push(zipCentralRecord(part, offset, dos))
+          offset += header.length + part.stored_bytes
+          pending = new Uint8Array(await blob.arrayBuffer())
+          at = 0
+          next += 1
+          controller.enqueue(header)
+          return
+        }
+        if (!tail) {
+          tail = true
+          const size = directory.reduce((sum, record) => sum + record.length, 0)
+          const end = zipEnd(archive.parts.length, size, offset)
+          pending = new Uint8Array(size + end.length)
+          let write = 0
+          for (const record of directory) {
+            pending.set(record, write)
+            write += record.length
+          }
+          pending.set(end, write)
+          directory.length = 0
+          at = Math.min(archive.slice, pending.length)
+          controller.enqueue(pending.subarray(0, at))
+          return
+        }
+        // the reader took the last slice
+        pending = null
+        await runMutation(internal.orgExport.recordDelivery, {
+          export_id: link.export_id,
+          stream,
+        }).catch((error: unknown) =>
+          console.error('A served export was not recorded', { export_id: link.export_id, error }),
+        )
+        controller.close()
+      } catch (error) {
+        pending = null
+        console.warn('An export download stopped short', { export_id: link.export_id, error })
+        await release()
+        controller.error(error)
+      }
+    },
+    async cancel() {
+      pending = null
+      await release()
+    },
+  })
+}
+
+const EXPORTS = '/exports/'
+
+const serveExport = answerAfterBody(async (ctx, request) => {
+  const url = new URL(request.url)
+  const headers = gatewayHeaders(request.headers.get('Origin'))
+  const refuse = (status = 404): Response => {
+    headers.set('Cache-Control', 'no-store')
+    return new Response(null, { status, headers })
+  }
+  const id = url.pathname.slice(EXPORTS.length)
+  const e = url.searchParams.get('e')
+  const m = url.searchParams.get('m')
+  const t = url.searchParams.get('t')
+  if (id === '' || id.includes('/') || e === null || m === null || t === null) return refuse()
+  const exp = Number(e)
+  // one answer for tampered, expired, malformed and other kinds alike
+  if (!(await verifyFileToken({ kind: 'org_export', id, minter: m, exp, token: t })))
+    return refuse()
+  const link = { export_id: id, minter: m, exp }
+  const runMutation = conflictRetrying(ctx)
+  const archive = await ctx.runQuery(internal.orgExport.deliveryOf, link)
+  if (archive === null) return refuse()
+  if ('missing' in archive) {
+    await runMutation(internal.orgExport.failDelivery, { export_id: id }).catch((error: unknown) =>
+      console.error('A damaged export was not failed', { export_id: id, error }),
+    )
+    return refuse()
+  }
+  let lease: { stream: string } | { busy: true; retry_after: number } | null
+  try {
+    lease = await runMutation(internal.orgExport.leaseDelivery, link)
+  } catch (error) {
+    // the lease kept conflicting with other downloads' leases
+    if (!(error instanceof ConvexError) || error.data?.reason !== WRITE_CONFLICT) throw error
+    lease = { busy: true, retry_after: WRITE_CONFLICT_RETRY_AFTER }
+  }
+  if (lease === null) return refuse()
+  if ('busy' in lease) {
+    headers.set('Retry-After', String(lease.retry_after))
+    return refuse(429)
+  }
+  headers.set('Content-Type', 'application/zip')
+  headers.set('Content-Disposition', attachmentDisposition(archive.name))
+  headers.set('Content-Length', String(archive.bytes))
+  headers.set('Cache-Control', 'private, no-store')
+  headers.set('Referrer-Policy', 'no-referrer')
+  return new Response(archiveStream(ctx, archive, link, lease.stream), { status: 200, headers })
+})
+
+http.route({ pathPrefix: EXPORTS, method: 'GET', handler: serveExport })
+http.route({ pathPrefix: EXPORTS, method: 'OPTIONS', handler: preflight })
 
 /* Personal uploads use an owner-bound capability, not Convex's unbound POST
  * URLs followed by a caller-supplied storage id. The receiver stores exactly
@@ -684,7 +880,7 @@ http.route({
  * mounts them, once. Their modules load no Better Auth either, so a REST or
  * MCP call pays nothing for sign-in (authTriggers.test.ts). Requests outside
  * /v1/*, /mcp, /api/auth/*, /files/*, /avatars/*, /backgrounds/*,
- * /background-previews/*, /background-uploads/*, /attachment-uploads/* get
+ * /background-previews/*, /exports/*, /background-uploads/*, /attachment-uploads/* get
  * Convex's default 404, because a root catch-all would collide with the auth
  * and gateway prefixes (an accepted difference). */
 registerRestRoutes(http)

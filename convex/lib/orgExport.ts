@@ -224,6 +224,107 @@ export const zipEntryBytes = (entry: string): number =>
 /** The bytes of a ZIP archive's end of central directory record. */
 export const ZIP_END_BYTES = 22
 
+/* ---------------------------------------------- the ZIP the route serves
+ * The /exports/ route (http.ts) sends a ready archive as one ZIP: for each
+ * part in seq order its local header and its stored bytes, then the central
+ * directory and its end record. Each entry is version 20, UTF-8 names
+ * (flag 0x0800), raw DEFLATE (method 8), the part's CRC and sizes, no extra
+ * field, no comment and no data descriptor, since every size is known before
+ * the first byte. So the archive's length is exactly the sum zipEntryBytes
+ * and ZIP_END_BYTES count. An archive of at most EXPORT_LIMITS.parts + 2
+ * entries under MAX_ARCHIVE_BYTES (model/orgExports.ts) needs no ZIP64
+ * field. */
+
+/** What a ZIP record says of one stored part. */
+export type ZipPart = { entry: string; crc32: number; raw_bytes: number; stored_bytes: number }
+
+/** A moment as the DOS time and date fields of a ZIP record, in UTC. */
+export type DosTime = { time: number; date: number }
+
+/** ISO time `iso` as ZIP's DOS time and date, in UTC, to the even second.
+ * The route gives every entry the archive's completed_at. */
+export function dosTime(iso: string): DosTime {
+  const at = new Date(iso)
+  return {
+    time: (at.getUTCHours() << 11) | (at.getUTCMinutes() << 5) | (at.getUTCSeconds() >> 1),
+    date: ((at.getUTCFullYear() - 1980) << 9) | ((at.getUTCMonth() + 1) << 5) | at.getUTCDate(),
+  }
+}
+
+/* The fields a local header and a central directory record share, from
+ * `at`: version needed, flags, method, time, date, CRC, sizes and the
+ * name's length; the extra field's length stays 0. */
+function zipFields(view: DataView, at: number, part: ZipPart, dos: DosTime, name: number): void {
+  view.setUint16(at, 20, true)
+  view.setUint16(at + 2, 0x0800, true)
+  view.setUint16(at + 4, 8, true)
+  view.setUint16(at + 6, dos.time, true)
+  view.setUint16(at + 8, dos.date, true)
+  view.setUint32(at + 10, part.crc32 >>> 0, true)
+  view.setUint32(at + 14, part.stored_bytes, true)
+  view.setUint32(at + 18, part.raw_bytes, true)
+  view.setUint16(at + 22, name, true)
+}
+
+/** The local header of `part` with its name, which goes just before its
+ * stored bytes. */
+export function zipLocalHeader(part: ZipPart, dos: DosTime): Uint8Array {
+  const name = new TextEncoder().encode(part.entry)
+  const out = new Uint8Array(30 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x04034b50, true)
+  zipFields(view, 4, part, dos, name.length)
+  out.set(name, 30)
+  return out
+}
+
+/** The central directory record of `part`, whose local header starts
+ * `offset` bytes into the archive. */
+export function zipCentralRecord(part: ZipPart, offset: number, dos: DosTime): Uint8Array {
+  const name = new TextEncoder().encode(part.entry)
+  const out = new Uint8Array(46 + name.length)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x02014b50, true)
+  view.setUint16(4, 20, true) // version made by
+  zipFields(view, 6, part, dos, name.length)
+  view.setUint32(42, offset, true)
+  out.set(name, 46)
+  return out
+}
+
+/** The end of central directory record of an archive of `count` entries
+ * whose central directory holds `directoryBytes` from `directoryOffset`. */
+export function zipEnd(count: number, directoryBytes: number, directoryOffset: number): Uint8Array {
+  const out = new Uint8Array(ZIP_END_BYTES)
+  const view = new DataView(out.buffer)
+  view.setUint32(0, 0x06054b50, true)
+  view.setUint16(8, count, true)
+  view.setUint16(10, count, true)
+  view.setUint32(12, directoryBytes, true)
+  view.setUint32(16, directoryOffset, true)
+  return out
+}
+
+/** The file name a download of an archive of organization `slug` (its id
+ * when it has none) completed on `completedAt` gets:
+ * qivo-<slug>-<YYYY-MM-DD>.zip, the slug cleaned as the browser export
+ * cleans it (src/lib/orgExport.ts safeName). The browser export names its
+ * file by the day collection started; the route names it by the day the
+ * archive was ready, as the archive holds what was read until then. */
+export function archiveFileName(slug: string, completedAt: string): string {
+  const leaf = slug.split(/[\\/]/).pop() ?? ''
+  const cleaned = Array.from(leaf)
+    .map((c) => (c.charCodeAt(0) < 32 || /[<>:"|?*]/.test(c) ? '_' : c))
+    .join('')
+    .replace(/^[. ]+|[. ]+$/g, '')
+    .slice(0, 120)
+  const name =
+    cleaned === '' || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(cleaned)
+      ? `file${cleaned === '' ? '' : `-${cleaned}`}`
+      : cleaned
+  return `qivo-${name}-${completedAt.slice(0, 10)}.zip`
+}
+
 /* Where an export job's reads stand (schema.ts org_exports.step). A child
  * section pages its parent table by organization and keeps one page of
  * parent ids, the parent it reads and where that parent's children go
