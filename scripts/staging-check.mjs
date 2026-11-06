@@ -73,7 +73,8 @@
  * comment composer picks the Standard agent from the @ mention popup
  * (pickers.mentions) with Enter, then clears the draft so nothing posts
  * (ui/label-mention-pickers); each label change is checked over REST,
- * and the sweep deletes the run's labels by its tag. It makes a
+ * and the step deletes both labels in the app before it returns, so no
+ * later search for the run tag lists them. It makes a
  * sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary, risk, attention and paused),
@@ -4583,12 +4584,14 @@ async function relationPickersCheck() {
 export const LABEL_MENTION_STEP = 'ui/label-mention-pickers'
 
 /** What the step's two labels are called after the run tag: the one it
- *  makes over REST for the picker to find, and the one the picker makes. */
-export const LABEL_MENTION_NAMES = { found: 'Picker label', made: 'Made in picker' }
+ *  makes over REST for the picker to find, and the one the picker makes.
+ *  Neither holds the word "label", which ui/settings-labels searches for
+ *  with the run tag and must find its own label alone. */
+export const LABEL_MENTION_NAMES = { found: 'Found in picker', made: 'Made in picker' }
 
 /** The task label picker and the @ mention popup on the deployment's reads
  *  (labels.picker and pickers.mentions), in the window of run.t0. The run
- *  makes `<tag> Picker label` over REST; Add label's search for the run tag
+ *  makes `<tag> Found in picker` over REST; Add label's search for the run tag
  *  lists it from the deployment's batch, a press puts it on the task, which
  *  GET /tasks/{ref} then lists, and the chip's × takes it off again. Typing
  *  `<tag> Made in picker` waits for Create new label, which shows only once
@@ -4598,8 +4601,10 @@ export const LABEL_MENTION_NAMES = { found: 'Picker label', made: 'Made in picke
  *  the Standard agent's name list the agent from the deployment's answer,
  *  Enter puts the mention in the draft, and the step then clears the
  *  draft and presses Escape, so nothing posts and nobody is notified. The
- *  sweep deletes both labels by the run tag. A backend before the release
- *  that added pickers.mentions fails the mention part. */
+ *  step deletes both labels in the app before it returns, also after a
+ *  failure, so a later step's search for the run tag lists neither; the
+ *  sweep deletes them by the run tag only when that failed too. A backend
+ *  before the release that added pickers.mentions fails the mention part. */
 async function labelMentionPickersCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
@@ -4608,6 +4613,47 @@ async function labelMentionPickersCheck() {
       name: `${run.tag} ${LABEL_MENTION_NAMES.found}`,
       color: '#2563EB',
     })
+    const madeName = `${run.tag} ${LABEL_MENTION_NAMES.made}`
+    /** Deletes the step's labels in the app, which alone deletes labels,
+     *  and waits until GET /labels lists neither. */
+    const dropLabels = async () => {
+      const names = [found.name, madeName]
+      const mine = async () =>
+        (await restRows(w, '/labels', 'labels', { search: run.tag })).filter((l) =>
+          names.includes(l.name),
+        )
+      for (const label of await mine()) {
+        await app.waitForFunction(
+          (id) => window.PLANNER?.orgLabels().some((l) => l.id === id),
+          label.id,
+          { timeout: 30_000 },
+        )
+        expect(
+          await evaluate(app, (id) => window.PLANNER.removeLabel(id), label.id),
+          `the app could not delete ${label.name}`,
+        )
+      }
+      expect(
+        await until(async () => (await mine()).length === 0),
+        `GET /labels still lists ${names.join(' or ')}`,
+      )
+    }
+    // a failure of the step itself is the one it reports
+    let passed = false
+    try {
+      const said = await pickBothWays(found, madeName)
+      passed = true
+      return said
+    } finally {
+      await dropLabels().catch((error) => {
+        if (passed) throw error
+      })
+    }
+  })
+
+  /** The step's checks in the app, on label `found` and the label named
+   *  `madeName` it makes, and what it says when they pass. */
+  async function pickBothWays(found, madeName) {
     const carried = async () =>
       (await restOk(w, 'GET', `/tasks/${run.t0.key}`)).labels.map((l) => l.id)
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`, {
@@ -4647,7 +4693,6 @@ async function labelMentionPickersCheck() {
     eq(await option.getAttribute('aria-pressed'), 'true', 'the picked label is not checked')
     await takeOff(picker, found)
     // a new label from the picker, once the deployment says it is free
-    const madeName = `${run.tag} ${LABEL_MENTION_NAMES.made}`
     const maker = await pickerFor(madeName)
     await maker.locator('[data-label-create]').waitFor({ timeout: 30_000 })
     await maker.locator('input[aria-label="Search labels"]').press('Enter')
@@ -4685,7 +4730,7 @@ async function labelMentionPickersCheck() {
       'the mention stayed in the composer',
     )
     return `put ${found.name} on ${run.t0.key} from the picker's search and took it off, made ${madeName} from the picker with Enter, and picked ${std.name} from the @ mention popup without posting`
-  })
+  }
 }
 
 /** The step that checks over the socket that the app loads tasks on demand

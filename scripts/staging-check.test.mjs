@@ -643,7 +643,23 @@ describe('staging check REST contract', () => {
     const popup = read('../src/components/mentionSuggestion.ts')
     const window = read('../src/panels/IssueDetail.tsx')
     expect(LABEL_MENTION_STEP).toBe('ui/label-mention-pickers')
-    expect(LABEL_MENTION_NAMES).toEqual({ found: 'Picker label', made: 'Made in picker' })
+    expect(LABEL_MENTION_NAMES).toEqual({ found: 'Found in picker', made: 'Made in picker' })
+    // ui/settings-labels searches for `<tag> Label` later and must find its
+    // own label alone, so neither name holds that word, and the step
+    // deletes both of its labels before it returns
+    for (const name of Object.values(LABEL_MENTION_NAMES))
+      expect(name.toLowerCase()).not.toContain('label')
+    const check = read('./staging-check.mjs')
+    expect(check.indexOf('await settingsLabelsCheck()')).toBeGreaterThan(
+      check.indexOf('await labelMentionPickersCheck()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function labelMentionPickersCheck()'),
+      check.indexOf('export const ON_DEMAND_STEP'),
+    )
+    expect(step).toContain('const names = [found.name, madeName]')
+    expect(step).toContain('window.PLANNER.removeLabel(id)')
+    expect(step).toMatch(/\} finally \{\s+await dropLabels\(\)/)
     for (const mark of [
       'data-label-picker',
       'data-label-option',

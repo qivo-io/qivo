@@ -324,8 +324,10 @@ Enter once **Create new label** shows, and in the comment composer picks
 the Standard agent from the @ mention popup (`pickers.mentions`) with
 Enter, then clears the draft so nothing posts and nobody is notified
 (`ui/label-mention-pickers`). Each label change is checked over REST, and
-the sweep deletes the run's labels by its tag. Against a backend from
-before the mention suggestions' release the mention part fails. It then
+the step deletes both labels in the app before it returns, also after a
+failure, so the later `ui/settings-labels` search for the run tag finds
+only its own label. Against a backend from before the mention suggestions'
+release the mention part fails. It then
 makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
