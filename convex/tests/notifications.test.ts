@@ -793,7 +793,7 @@ describe('mode changes', () => {
     clock(4)
     expect(await claim(a, [second], second.at)).toMatchObject({ keys: [second.key] })
     expect(await claim(b, [second], second.at)).toMatchObject({ keys: [second.key] })
-    // a's own checkpoint is second, and the account's all_from floors it
+    // a's own checkpoint, second, is past the account's all_from
     clock(5)
     expect(await summary(a)).toEqual({ state: 'none' })
     // back to 'recent': the switch is a baseline, so nothing before it
@@ -814,6 +814,33 @@ describe('mode changes', () => {
     // no key was granted twice in one scope
     const scopes = (await records(t)).map((r) => `${r.session_id ?? 'account'} ${r.key}`)
     expect(new Set(scopes).size).toBe(scopes.length)
+  })
+
+  it('floor a session’s own older checkpoint at all_from on a second switch to all', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    await beat(s)
+    await setDelivery(s, 'all')
+    // the session's own checkpoint in 'all'
+    expect(await summary(s)).toEqual({ state: 'baseline' })
+    clock(1)
+    await setDelivery(s, 'recent')
+    // in 'recent' the target alerts E and moves the account's checkpoint
+    const e = eventOf((await newsAt(t, f, 2)).message)
+    clock(2.5)
+    await beat(s)
+    expect(await claim(s, [e], e.at)).toMatchObject({ keys: [e.key] })
+    // E's record expires and the cron deletes it
+    clock(2.5 + NOTIFY.keep_ms / MINUTE + 1)
+    await t.mutation(internal.notifications.expire, {})
+    expect(await records(t)).toEqual([])
+    // back to 'all': the account's checkpoint, past the session's own, is
+    // its floor, so the 'recent' period is not summarized again
+    await setDelivery(s, 'all')
+    expect(await accountOf(t, s.authUserId)).toMatchObject({ all_from: e.at })
+    expect((await rowOf(t, s))?.covered_at).toBe(START)
+    clock(20)
+    expect(await resume(s)).toEqual({ state: 'none' })
   })
 })
 
