@@ -66,9 +66,10 @@ export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
  * - leftOut: the Deleted items the job may name in its step as having
  *   records it left out (step.left_out_items, orgExport.ts noteLeftOut),
  *   about 10 KB more. Which records are left out depends on the data, not
- *   on when the export runs, so past them the job does not fail, since a
- *   new export would fail the same way: it keeps no names and calls every
- *   item it would call complete partial (step.left_out_more). */
+ *   on when the export runs, so a new export would leave out the same
+ *   ones. Past that many names the job therefore does not fail. It keeps
+ *   no names and calls every item it would call complete partial
+ *   (step.left_out_more). */
 export const EXPORT_LIMITS = {
   archive: MAX_ARCHIVE_BYTES,
   demoArchive: DEMO_ARCHIVE_BYTES,
