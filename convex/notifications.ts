@@ -46,20 +46,23 @@
  *   answers `not_registered` without a row that can notify, and in 'recent'
  *   `not_target` unless the caller is the target, and `summarize_first`,
  *   writing nothing, when another session's claim or summary moved the
- *   checkpoint last (covered_by), so a session that became the target
- *   summarizes before its claim can move the checkpoint past what arrived
- *   while it was not the target. It grants an event once in its scope,
- *   never one at or before the latest of the live window
- *   (NOTIFY.live_window_ms) and NOTIFY.lag_ms before the last mode change
- *   and before the scope's last summary, and records each grant for
- *   NOTIFY.keep_ms. Within that minute before a summary its records refuse
- *   what it announced, so a notice stored late with an earlier time that
- *   the summary never saw is still granted. Past the scope's rate window
- *   it grants no more and answers `limited`. `through` moves the scope's
- *   checkpoint, and in 'recent' names the caller's session as the one that
- *   moved it. It reads the account row, in 'recent' the
- *   session rows up to the target, and one or two record ranges an event,
- *   and writes a record a grant and the account row ('recent') or the
+ *   checkpoint last (covered_by) or another session that can notify reported
+ *   activity after the checkpoint, which made that session the target after
+ *   it (model/notificationSessions.ts otherActiveSince). So a session that
+ *   became the target summarizes before its claim can move the checkpoint
+ *   past what arrived while it was not the target, even when it was the
+ *   target before. It grants an event once in its scope, never one at or
+ *   before the latest of the live window (NOTIFY.live_window_ms) and
+ *   NOTIFY.lag_ms before the last mode change and before the scope's last
+ *   summary, and records each grant for NOTIFY.keep_ms. Within that minute
+ *   before a summary its records refuse what it announced, so a notice stored
+ *   late with an earlier time that the summary never saw is still granted.
+ *   Past the scope's rate window it grants no more and answers `limited`.
+ *   `through` moves the scope's checkpoint, and in 'recent' names the
+ *   caller's session as the one that moved it. It reads the account row, in
+ *   'recent' the session rows up to the target and at most two rows that
+ *   reported activity after the checkpoint, and one or two record ranges an
+ *   event, and writes a record a grant and the account row ('recent') or the
  *   caller's row ('all'). It reads no message or item. The keys and times
  *   come from the feed the caller read under access, and a grant tells it
  *   nothing more.
@@ -104,11 +107,12 @@
  *   what the summary announced and grants a notice stored late that the
  *   summary never saw.
  * - When a claim answers `summarize_first`, it calls claimSummary, then
- *   offers the same events again. The session became the target after
- *   another session moved the checkpoint, and the summary covers what
- *   arrived in between; its records refuse what it announced. A login
- *   without a checkpoint and a switch to 'recent' name no session, so no
- *   claim answers it until a claim or a summary has moved the checkpoint.
+ *   offers the same events again. The session became the target after another
+ *   session moved the checkpoint or was the target, and the summary covers
+ *   what arrived in between; its records refuse what it announced. No claim
+ *   answers it before the login has a checkpoint. A switch to 'recent' names
+ *   no session, so after it a claim answers it only once another session
+ *   reported activity.
  * - It sends end when the last tab of its browser profile closes. A tab
  *   that took over beating sends it only after its first beat. End changes
  *   nothing unless that tab beat last, and a missed end leaves the session
@@ -129,6 +133,7 @@ import {
   forgetLoginRows,
   liveMs,
   NOTIFY,
+  otherActiveSince,
   record,
   recorded,
   type Scope,
@@ -294,13 +299,15 @@ export const claimAlerts = sessionMutation({
     const now = Date.now()
     if (delivery === 'recent' && (await targetOf(ctx, ctx.authUserId, now))?._id !== row._id)
       return { state: 'not_target' as const }
-    // a target that another session's claim or summary preceded summarizes
-    // first, so this claim cannot move the checkpoint past what arrived
-    // while it was not the target, which nobody alerted
+    // a target summarizes first when another session moved the checkpoint
+    // last, or reported activity after it and so was the target since, so
+    // this claim cannot move the checkpoint past what arrived while it was
+    // not the target, which nobody alerted
     if (
       delivery === 'recent' &&
-      account?.covered_by !== undefined &&
-      account.covered_by !== ctx.sessionId
+      account?.covered_at !== undefined &&
+      ((account.covered_by !== undefined && account.covered_by !== ctx.sessionId) ||
+        (await otherActiveSince(ctx, ctx.authUserId, account.covered_at, row)))
     )
       return { state: 'summarize_first' as const }
     const { scope, holder } = scopeOf(ctx, delivery, account, row)

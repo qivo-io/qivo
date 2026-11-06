@@ -737,7 +737,9 @@ export default defineSchema({
     covered_at: v.optional(v.number()),
     // the Better Auth session whose claim or summary last moved covered_at
     // in 'recent', absent after a switch to 'recent'; a claim of another
-    // target answers summarize_first (notifications.ts claimAlerts)
+    // target answers summarize_first, as does any claim once another
+    // session reported activity after covered_at (notifications.ts
+    // claimAlerts)
     covered_by: v.optional(v.string()),
     // the last summary in 'recent'; no live alert for an event at or before
     // NOTIFY.lag_ms before it, or one it recorded

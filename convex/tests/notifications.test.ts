@@ -592,6 +592,44 @@ describe('claimAlerts in the default mode', () => {
     expect((await accountOf(t, a.authUserId))?.covered_by).toBe(a.sessionId)
   })
 
+  it('sends the session that moved the checkpoint to summarize first when another was the target since', async () => {
+    const t = newT()
+    const { f, s: a } = await guestFixture(t)
+    const b = await signIn(t, a.authUserId)
+    await beat(b)
+    await beat(a)
+    clock(0.5)
+    await beat(a, { active: true })
+    expect(await summary(a)).toEqual({ state: 'baseline' })
+    // b reports activity, so it is the target, and then sleeps; its last
+    // beat keeps it live until minute 4 and it never claims
+    clock(1)
+    await beat(b, { active: true })
+    const e = eventOf((await newsAt(t, f, 1.5)).message)
+    clock(2)
+    await beat(a)
+    expect(await claim(a, [e], e.at)).toEqual({ state: 'not_target' })
+    // b lapses, so a, which moved the checkpoint last, is the target again
+    for (const minute of [3, 4, 5]) {
+      clock(minute)
+      await beat(a)
+    }
+    clock(20)
+    await beat(a)
+    const later = eventOf((await newsAt(t, f, 19.5)).message)
+    expect(await claim(a, [later], later.at)).toEqual({ state: 'summarize_first' })
+    expect(await records(t)).toEqual([])
+    // the summary covers E, which nobody alerted, and records F
+    expect(await summary(a)).toEqual({ state: 'summary' })
+    expect(await claim(a, [later], later.at)).toEqual({
+      state: 'granted',
+      keys: [],
+      limited: false,
+    })
+    clock(21)
+    expect(await summary(a)).toEqual({ state: 'none' })
+  })
+
   it('answers not_registered for a session without a row or that cannot notify', async () => {
     const t = newT()
     const login = await lonelyLogin(t)
@@ -1528,6 +1566,9 @@ describe('inside Convex’s limits', () => {
     for (const s of sessions) await beat(s)
     clock(0.5)
     await beat(sessions[0], { active: true })
+    // a baseline first, so the claim checks the checkpoint, as every claim
+    // of a target with one does
+    await claim(sessions[0], [], START)
     const events = Array.from({ length: NOTIFY.claim_keys }, (_, i) => ev(uuid(), 0.001 * i))
     const r = logged(
       'claimAlerts, 50 events, 3 sessions',
@@ -1544,6 +1585,9 @@ describe('inside Convex’s limits', () => {
     await claim(s, [ev('first', 0)], START)
     const events = (name: string) =>
       Array.from({ length: 10 }, (_, i) => ev(`${name}-${i}`, 0.01 * i))
+    // after the checkpoint, so both claims read the caller's own activity
+    // report in the check of activity after it
+    clock(0.5)
     const quiet = {
       beat: await measured(s, notifications.beat, {
         instance: 'tab-1',
