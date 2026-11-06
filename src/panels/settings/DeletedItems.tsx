@@ -1433,11 +1433,11 @@ function WholeItemWindow({
     api.deletedItems.item,
     waitsFor !== undefined && held === undefined ? JSON.stringify({ id: waitsFor }) : null,
   )
-  // the item the restore sends first: the project item the line's item
-  // waits for, else a hit's own item
+  // the item the restore sends first, the project item the line's item
+  // waits for or else a hit's own item
   const holder = waits ? (held ?? read.value ?? undefined) : item
-  // the read of that project item while the page holds no row of it: still
-  // asking, failed, or answered that the person cannot see it now
+  // the read of that project item while the page holds no row of it, which
+  // still asks, failed, or answered that the person cannot see it now
   const reading = waitsFor !== undefined && held === undefined
   const asking = reading && read.value === undefined && read.error === undefined
   const failed = reading && read.value === undefined && read.error !== undefined
@@ -1448,8 +1448,8 @@ function WholeItemWindow({
     line.kind === 'hit' && item.kind === 'task'
       ? { key: line.hit.root_key ?? item.key, title: line.hit.root_title ?? '' }
       : undefined
-  // what the line's item is called in a sentence: a subtask's root, a hit's
-  // project item, or the item itself
+  // what the line's item is called in a sentence, a subtask's root, a hit's
+  // project item or the item itself
   const itemCalled = root?.key ?? (line.kind === 'hit' ? item.title : name)
   const project = waits ? (holder?.kind === 'project' ? holder.title : undefined) : undefined
   const canRestore = holder?.can_restore === true
