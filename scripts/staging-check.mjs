@@ -4465,15 +4465,21 @@ async function milestoneWindowCheck() {
       await until(async () => (await listed()).some((m) => m.id === made.id && m.name === renamed)),
       `GET /projects/${M.key} does not name ${made.name} renamed`,
     )
-    // and delete it there, a press to arm and one to confirm
+    // and delete it there, a press to arm and, past the window that ignores
+    // a second press, one on Confirm delete
     const opened = window.locator(`[data-milestone-row="${made.id}"]`)
     await opened.waitFor({ timeout: 10_000 })
     await opened.locator('button[aria-label^="Edit"]').click()
     await editor.waitFor({ timeout: 10_000 })
-    const remove = editor.locator('button').filter({ hasText: /Delete$/ })
-    await remove.click()
+    await editor
+      .locator('button')
+      .filter({ hasText: /^Delete$/ })
+      .click()
     await sleep(700)
-    await remove.click()
+    await editor
+      .locator('button')
+      .filter({ hasText: /^Confirm delete$/ })
+      .click()
     expect(
       await until(async () => !(await listed()).some((m) => m.id === made.id)),
       `GET /projects/${M.key} still lists ${renamed}`,

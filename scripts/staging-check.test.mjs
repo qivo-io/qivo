@@ -127,6 +127,7 @@ describe('staging check REST contract', () => {
       'data-milestone-editor={m.id}',
       'data-milestone-row={m.id}',
       'aria-label="Name"',
+      "armDel ? 'Confirm delete' : 'Delete'",
     ])
       expect(modals).toContain(mark)
     expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
