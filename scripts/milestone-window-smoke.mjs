@@ -166,7 +166,17 @@ try {
   let fixture = null
   for (const meta of grid.metas) {
     const rows = await serverRows(page, meta.id, grid.weeks[0], grid.weeks[26])
-    const taken = new Set(rows.map((row) => row.week))
+    // the first day of each milestone's week, since a milestone stored on
+    // another day, as a REST add can be, still takes its whole week
+    const taken = new Set(
+      await page.evaluate(
+        (days) => {
+          const P = window.PLANNER
+          return days.map((day) => P.isoFromDate(P.weekToDate(P.isoToWeek(day))))
+        },
+        rows.map((row) => row.week),
+      ),
+    )
     const pastWeek = [-1, -2, -3, -4, -5, -6].map(at).find((week) => !taken.has(week))
     if (!taken.has(at(0)) && !taken.has(at(2)) && pastWeek) {
       fixture = {
