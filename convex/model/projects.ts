@@ -338,7 +338,7 @@ export type NewProject = {
   /** the caller when absent */
   lead_id?: string
   description?: string | null
-  /** after its siblings when absent */
+  /** after every sibling when absent (nextSiblingPlace) */
   sort_order?: number
   track_delay?: boolean
   /** Individual grants. null names no grant, which for the creator also turns
@@ -347,29 +347,36 @@ export type NewProject = {
   team_access?: Record<string, GrantLevel>
 }
 
-/* Where a new project goes in its list: after every sibling, archived and
- * hidden ones included. A top-level project counts the organization's
- * top-level metas (by_org_parent with parent_id absent), at most 500 rows
- * at the design size, live and archived, so a meta stored with a parent,
- * which no writer makes, no longer counts toward its place. A sub-project
- * counts its parent's sub-projects, at most 70 at the design size, the
- * same rows projectLevel's navigation walk reads under that parent, a read
- * accepted at the design size's sum. Only REST and MCP creates reach it;
- * the app sends its own sort_order. */
-async function siblingCount(
+/* Where a new project goes in its list: one past the largest sort_order of
+ * its siblings, archived and hidden ones included, so it sorts after every
+ * one of them also where earlier deletes, restores or the app's own places
+ * left gaps or ties (src/store/viewModels.ts byOrder sorts by sort_order). A
+ * top-level project reads the organization's top-level metas (by_org_parent
+ * with parent_id absent), at most 500 rows at the design size, live and
+ * archived, so a meta stored with a parent, which no writer makes, does not
+ * count. A sub-project reads its parent's sub-projects, at most 70 at the
+ * design size, the same rows projectLevel's navigation walk reads under
+ * that parent, a read accepted at the design size's sum. Every create that
+ * leaves sort_order out reaches it: REST, MCP and, from the release after
+ * v0.1.138, the app's (src/store/planner.ts P.addProject paints its own
+ * place by the same rule over the siblings the workspace holds). 0 when
+ * there is no sibling. */
+async function nextSiblingPlace(
   ctx: QueryCtx,
   orgId: string,
   parentId: string | undefined,
 ): Promise<number> {
-  let n = 0
+  let place = 0
   const rows =
     parentId === undefined
       ? ctx.db
           .query('projects')
           .withIndex('by_org_parent', (q) => q.eq('org_id', orgId).eq('parent_id', undefined))
       : ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
-  for await (const p of rows) if (p.type === (parentId === undefined ? 'meta' : 'project')) n++
-  return n
+  for await (const p of rows)
+    if (p.type === (parentId === undefined ? 'meta' : 'project'))
+      place = Math.max(place, p.sort_order + 1)
+  return place
 }
 
 /**
@@ -426,7 +433,7 @@ export async function createProjectCore(
   await assertLeadAllowed(ctx, me, lead_id)
   const num = await nextProjectNum(ctx, org)
   const parent_id = p.type === 'meta' ? undefined : p.parent_id
-  const sort_order = p.sort_order ?? (await siblingCount(ctx, me.org_id, parent_id))
+  const sort_order = p.sort_order ?? (await nextSiblingPlace(ctx, me.org_id, parent_id))
   await insertUnique(
     ctx,
     'projects',
