@@ -1376,6 +1376,15 @@ export const recipes: Recipe[] = [
     pause: 'U',
     act: (P) => P.saveUINow({ view: 'board' }),
   },
+  // a favorite reaches no snapshot, so the star has no truth: the
+  // navigation reads' next answers show it
+  {
+    mutation: 'projectNav:setFavorite',
+    mutator: 'setFavorite',
+    what: 'a starred project',
+    pause: 'U',
+    act: (P) => P.setFavorite({ id: 'plan', org_id: ORG }, true),
+  },
   /* --- organization setup -------------------------------------------- */
   {
     mutation: 'identity:createOrganization',

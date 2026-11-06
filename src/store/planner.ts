@@ -6018,7 +6018,8 @@ const weekStartRefusal = (d: ErrData) =>
    data calls refusePausedEdit() before its paint, and send() refuses any
    other shared write before it paints or is sent, the backstop for a
    mutator that does not check first. Personal state (read marks,
-   preferences, appearance, following) still saves, and so do the writes
+   preferences, appearance, following, favorite projects) still saves,
+   and so do the writes
    that only take access away (UNPAUSED_WRITES). Each keeps its layer once
    accepted, until a good delivery holds it, so another write's refusal
    cannot take it off the stale snapshot. Without a seat most of those need
@@ -6091,7 +6092,10 @@ function endHeldRecovery() {
 }
 
 /* The writes that go on while the snapshot is stale, each named. They change
-   only the signed-in person's own state, read the OAuth consent page's
+   only the signed-in person's own state, such as a followed task or a
+   favorite project, whose star the server checks by the seat's own access
+   and which the All projects directory shows from the navigation reads, not
+   from the snapshot, read the OAuth consent page's
    request, or only take access away: revoking or deleting a credential, and
    deactivating or removing a seat. An admin must be able to shut out a
    leaked key or a compromised person during an outage, because REST, MCP
@@ -6106,6 +6110,7 @@ const UNPAUSED_WRITES = new Set([
   'issues:unsubscribe',
   'issues:setSubscriber',
   'profiles:setMessageRetention',
+  'projectNav:setFavorite',
   'oauthConnections:getContext',
   'oauthConnections:revoke',
   'tokens:revokeAgentKey',
@@ -7340,6 +7345,7 @@ const OTHER_CHANGE: Record<string, string> = {
   messages: 'an inbox change',
   deletedItems: 'a Deleted items change',
   roadmap: 'a Roadmap change',
+  projectNav: 'a favorite change',
 }
 
 /** What the crash note says about write `name` with `args`: the key of the
@@ -13399,6 +13405,23 @@ export const PLANNER = {
       tooWide: data.too_wide === true,
     }
   },
+  /** Stars (`favorite` true) or unstars top-level project `project.id` of
+      organization `project.org_id` for this person's seat there
+      (projectNav.setFavorite), as the All projects directory's star does.
+      A favorite never reaches the workspace, so nothing paints: the
+      navigation reads' next answers move the project between their
+      groups. The server checks the star by ordinary access and refuses it,
+      with the store's toast, for a project the seat cannot see, a
+      sub-project or a read-only organization. It changes only the seat's
+      own row, so it goes out while the snapshot is stale (UNPAUSED_WRITES)
+      and pauses only without a seat, signed out and while Qivo cannot
+      save. Resolves whether the server took it. */
+  setFavorite: (project: { id: string; org_id: string }, favorite: boolean): Promise<boolean> =>
+    send(
+      api.projectNav.setFavorite,
+      { org_id: project.org_id, project_id: project.id, favorite },
+      'none',
+    ),
   /** Whether project `id` is open to this person for navigation
       (projectNav.resolve), with its name, number, organization and
       top-level project, for the project Search and Archived tasks open on.
