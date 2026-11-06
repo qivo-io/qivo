@@ -830,7 +830,7 @@ meeting for one scope, a project, a team or All projects, with every task
 the page shows, the people it walks and their week's hours, within Team
 sync's ceiling of 1,000 tasks. That release's app did not call it, so the
 release set no rollback floor and needed no step. The Team sync page reads
-it from the release after v0.1.136, which makes this release, v0.1.128, the
+it from the release after v0.1.138, which makes this release, v0.1.128, the
 backend's floor for that app, as its own paragraph below says. The same
 release moves `teamSync.lastComments` off its read of every project of the
 organization. It asks the caller's
