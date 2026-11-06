@@ -1066,8 +1066,8 @@ function stopThread() {
    with the thread's (itemNews). The answer held for the same task and
    organization stays, as not current until the new subscription answers,
    as after a re-init of the parts; another task's goes, with the window's
-   last read on open. A subscription that already watches these arguments
-   goes on, unless its answer failed. */
+   last read on open, its rerun and its hold. A subscription that already
+   watches these arguments goes on, unless its answer failed. */
 function subscribeItem(issueUuid: string, orgId: string) {
   if (!parts) return
   const held = PLANNER.inboxItem

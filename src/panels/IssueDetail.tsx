@@ -2102,7 +2102,9 @@ function IssueDetail({
   // for a snoozed item, a reminder that must return unread, and the pause
   // is part of the key, so a read it refused goes out once it ends
   // (P.readOnOpen). A later answer, such as a message that arrived while
-  // the task is open, reads it again.
+  // the task is open, reads it again, unless the person marked the task
+  // unread, snoozed it or ended its snooze from this client during the
+  // visit (P.readOnOpen).
   const paused = P.editsPaused()
   useEffectID(() => {
     if (!watchUuid || unreadPending || !shownItem) return
