@@ -92,6 +92,10 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
 | Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
 | Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
+| Subtasks per list page | 1 to 200 subtasks | limit must be a whole number of subtasks from 1 to 200. |
+| Linked tasks per list page | 1 to 200 linked tasks | limit must be a whole number of linked tasks from 1 to 200. |
+| Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
+| Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |

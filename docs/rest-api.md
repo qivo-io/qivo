@@ -411,6 +411,10 @@ into the range.
 | Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
 | Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
 | Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
+| Subtasks per list page | 1 to 200 subtasks | limit must be a whole number of subtasks from 1 to 200. |
+| Linked tasks per list page | 1 to 200 linked tasks | limit must be a whole number of linked tasks from 1 to 200. |
+| Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
+| Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -1254,9 +1258,17 @@ GET    /v1/tasks?project=ENC                scoped to a project (uuid, number
        &cursor=<next_cursor>               the next page, of active and
                                            archived tasks alike
 GET    /v1/tasks/{ref}                     ref: QN-482 | 482 | uuid — resolves
-                                           archived tasks too; adds labels,
-                                           subtasks, links and attachments
-                                           (below)
+                                           archived tasks too; adds labels and
+                                           the first 50 of its subtasks,
+                                           links, followers and attachments,
+                                           each with a cursor (below)
+GET    /v1/tasks/{ref}/subtasks            a page of its subtasks, by number
+GET    /v1/tasks/{ref}/links               a page of its links
+GET    /v1/tasks/{ref}/followers           a page of its followers, by name
+GET    /v1/tasks/{ref}/attachments         a page of its files, oldest first
+       &limit=50                           limit 1 to 200, 50 by default
+       &offset=0                           refused unless 0; page with cursor
+       &cursor=<next_cursor>               the next page of that list
 POST   /v1/tasks                           requires write on the target
                                            sub-project (see below)
 PATCH  /v1/tasks/{ref}                     requires write; also moves the
@@ -1781,25 +1793,117 @@ Task shape of a list row from `GET /v1/tasks`:
 ```
 
 `GET /v1/tasks/{ref}`, `POST /v1/tasks` and `PATCH /v1/tasks/{ref}` answer
-the single-task shape, which adds eight fields:
+the single-task shape, which adds twelve fields:
 
 ```json
 {
   "group_remaining_hours": null,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
+  "subtasks_next_cursor": null,
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
   "has_more_subtasks": false,
+  "links_next_cursor": null,
   "links": [{ "kind": "blocked_by", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "progress" }],
   "following": true,
+  "followers_next_cursor": "…cursor…",
   "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
+  "attachments_next_cursor": null,
   "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
 
-`following` says whether the caller follows the task, and `followers` lists
-everyone who does, by name, as the app's follower list shows them. See
+`subtasks`, `links`, `followers` and `attachments` each hold the first page
+of one of the task's lists, at most 50 rows, and each `<list>_next_cursor`
+is the cursor of the rest of that list, `null` only when the list ends on
+that page. Read the rest from the list's own route (below). Most tasks hold
+fewer than 50 of each, so every cursor is `null` and the arrays are whole.
+`has_more_subtasks` is `true` exactly when `subtasks_next_cursor` is set.
+`labels` holds every label of the task, at most 20. `following` says
+whether the caller follows the task, from the caller's own follow, also
+when they are past the first page of `followers`. See
 [Following](#following). `attachments` lists the task's files with download
-links, in the shape [Attachments](#attachments) describes.
+links, minted only for the files on that page, in the shape
+[Attachments](#attachments) describes. When one request cannot read every
+first page, such as the answer of a `PATCH` that archived a large group, a
+list it had no room for holds no rows and a cursor at its start, which its
+route reads in full, so a list is never shown as complete when it is not.
+
+A task's four lists page on their own routes, one page of one list at a
+time, without reading the task's text or its other lists:
+
+```
+GET /v1/tasks/{ref}/subtasks?limit=&cursor=      { "next_cursor": …, "subtasks": [ … ] }
+GET /v1/tasks/{ref}/links?limit=&cursor=         { "next_cursor": …, "links": [ … ] }
+GET /v1/tasks/{ref}/followers?limit=&cursor=     { "next_cursor": …, "followers": [ … ] }
+GET /v1/tasks/{ref}/attachments?limit=&cursor=   { "next_cursor": …, "attachments": [ … ] }
+```
+
+Each row has the shape of the same list in the single-task shape. A page
+holds at most `limit` rows, 50 by default and 1 to 200. Pass a task's
+`<list>_next_cursor`, or a page's `next_cursor`, unchanged and URL-encoded,
+as `cursor` to that list's route for the same task, and stop when
+`next_cursor` is `null`. `limit` may change from one page to the next. An
+archived group's subtask page can hold fewer than `limit` rows, or none,
+while `next_cursor` is set, because each page reads a bounded amount however
+many subtasks the group has. A short or empty page is never the end of a
+list. Only a `null` `next_cursor` is.
+
+The lists keep their order, with ties broken by id: subtasks by task
+number, links by the other task's number, followers by name, ignoring case
+and accents and comparing the names by their UTF-8 bytes, so the order
+differs from a browser's sort for some scripts, and attachments oldest
+first. A cursor works only for the organization, caller, task and list it
+came from, and for subtasks only while the task stays active, or archived,
+as it was. It works on REST and MCP alike, so a cursor from `GET
+/v1/tasks/{ref}` or MCP `get_task` continues on `GET
+/v1/tasks/{ref}/subtasks` and on MCP `list_task_related`. Pages are not a
+snapshot. A subtask, link, follower or file added, removed or renamed while
+you page can be missed or shown twice; read the task again to start afresh.
+A task holds at most 100 files, so `GET
+/v1/tasks/{ref}/attachments?limit=200` answers every file in one page, and a
+client that resolves the description's `att:<id>` images reads them all
+with that one request.
+
+A list call checks the caller and the task first, so a task the caller
+cannot read answers `404` like an unknown one. These requests are a `400`,
+checked in this order after any unknown query parameter, the task coming
+between the `offset` and the `cursor`:
+
+- `limit` that is not a whole number from 1 to 200: `limit must be a whole
+  number of subtasks from 1 to 200.`, or of linked tasks, followers or
+  attachments
+- `offset` other than `0`, with the list's own words: `offset does not
+  apply to subtasks; pass next_cursor as cursor`, `offset does not apply to
+  linked tasks; pass next_cursor as cursor`, `offset does not apply to
+  followers; pass next_cursor as cursor` or `offset does not apply to
+  attachments; pass next_cursor as cursor`
+- a `cursor` that is not the `next_cursor` of an earlier page of the same
+  list, task and caller: `cursor must be the next_cursor of an earlier
+  page`
+- a list with more rows than one request reads and sorts, twice its
+  per-task limit, which only data stored before that limit, or followers
+  that a new assignee or reviewer added past theirs, can reach: `this task
+  has more subtasks than Qivo can list in one request. Contact
+  support@qivo.io so we can help.`, `this task has more linked tasks than
+  Qivo can list in one request. Contact support@qivo.io so we can help.`,
+  `this task has more followers than Qivo can list in one request. Contact
+  support@qivo.io so we can help.` or `this task has more attachments than
+  Qivo can list in one request. Contact support@qivo.io so we can help.`
+  The single-task shape then holds no rows of that list and a cursor at its
+  start, which answers this on the list's route.
+- a check of which projects the caller can see that a fixed limit of one
+  request stopped: `Qivo could not finish checking which projects you can
+  see in one request. Contact support@qivo.io so we can help.` The
+  single-task read refuses whole with the same sentence, and so do the
+  answers of `POST /v1/tasks` and `PATCH /v1/tasks/{ref}`, whose change is
+  then not made. Only a person far past the sizes Qivo is built for, such
+  as one in hundreds of teams, meets it.
+
+Until November 2026 these arrays held every row, `/attachments` was the
+only one of the four list routes, and an archived group listed only the
+subtasks one read could reach. Code that reads one of the arrays as the
+whole list now reads its first 50 rows without an error; follow the cursors
+to read the rest.
 
 `owner_id` is whose work the task is. It is the reviewer while the task is in
 `review` with a reviewer set, else the assignee, and always the assignee on a
@@ -1809,7 +1913,7 @@ the parent task's uuid when the caller can read the parent. Otherwise it is
 caller cannot read is not mistaken for a top-level task.
 
 The single-task fields name only tasks the caller can read. `subtasks` lists
-the direct subtasks it can read, by number. An active task lists its active
+the first page of the direct subtasks it can read, by number. An active task lists its active
 ones, also those in an archived project, which do not make it a group while
 its own project is active, and an archived task lists all of them. `links` lists the task's links
 whose other task it can read, with `kind` as seen from this task (`blocks`,
@@ -1840,17 +1944,14 @@ unknown. The app then says "Completion unknown".
 An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks. So can an active group stored before the rule
 of one level of subtasks, whose subtasks have subtasks of their own. Its
-single-task shape then still lists its direct `subtasks`, but `start_week`
-and `end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
-`group_remaining_hours` is `null`. An active task has at most 100 active
-subtasks, so it always lists all of them. When even an archived group's
-direct subtasks do not all fit, `subtasks` lists those of the first ones that
-do which the caller can read, and `has_more_subtasks` is `true`. Find the
-rest in the archived list of the group's top-level project
-(`?archived=true&project=<ref>`), which covers its sub-projects, where each
-one's `parent_id` names the group. `has_more_subtasks` is `false` on every
-other task. The answer of a `PATCH`, such as one that archives such a group,
-takes the same shape.
+single-task shape then still lists the first page of its direct `subtasks`,
+but `start_week` and `end_week` are `null`, `progress` is `0` of `0` with
+`partial: true` and `group_remaining_hours` is `null`. The dates,
+`progress` and `group_remaining_hours` always come from the group's whole
+subtree, never from the first page of `subtasks`. An archived group's
+subtasks page in number order on `GET /v1/tasks/{ref}/subtasks` to the
+end, however many there are. The answer of a `PATCH`, such as one that
+archives such a group, takes the same shape.
 
 `delay` is the app's projected delay, the verdict its Roadmap and task
 window show:
@@ -1921,9 +2022,15 @@ Two tasks of the organization share at most one link. One blocks the other,
 or they relate. A link's `kind` is always read from the task in the path:
 
 ```
+GET    /v1/tasks/{ref}/links                 a page of its links (read)
 POST   /v1/tasks/{ref}/links                 { "task": "QN-9", "kind": "blocked_by" }
 DELETE /v1/tasks/{ref}/links/{kind}/{other}  remove that link
 ```
+
+`GET` answers `{ "next_cursor": …, "links": [ … ] }`, the task's links
+whose other task the caller can read, by that task's number, in the
+single-task `links` shape, a page at a time as the
+[single-task shape](#tasks) describes.
 
 `kind` is `blocks`, `blocked_by` or `relates`, and `task` and `{other}` are
 task refs. Adding or removing a link needs read access to both tasks and
@@ -2166,7 +2273,11 @@ already has 100 followers, the most a task can have. Someone must unfollow it
 first.` Tasks with more
 followers from before this limit keep them. The caller's own follow is the only one these
 routes change; managing other people's follows stays in the app. The
-single-task read shows `following` and `followers`. Qivo also makes the
+single-task read shows `following` and the first 50 `followers`, by name,
+and `GET /v1/tasks/{ref}/followers` answers `{ "next_cursor": …,
+"followers": [ … ] }`, a page at a time as the [single-task shape](#tasks)
+describes. A new assignee or reviewer follows the task even when it has
+100 followers, so a task's followers can pass the limit. Qivo also makes the
 caller follow a task when it is assigned or handed the task, mentioned on it
 or comments on it, as described under [Comments](#comments).
 
@@ -2324,7 +2435,7 @@ A task's files, the same ones the task window shows, plus the images inside
 its description:
 
 ```
-GET    /v1/tasks/{ref}/attachments                every file, oldest first (read)
+GET    /v1/tasks/{ref}/attachments                a page of files, oldest first (read)
 POST   /v1/tasks/{ref}/attachments                start an upload (write)
 POST   /v1/tasks/{ref}/attachments/{ticket}       attach the uploaded file (write)
 DELETE /v1/tasks/{ref}/attachments/{id}           delete a file (write)
@@ -2341,11 +2452,20 @@ DELETE /v1/tasks/{ref}/attachments/{id}           delete a file (write)
 }
 ```
 
+`GET /v1/tasks/{ref}/attachments` answers `{ "next_cursor": …,
+"attachments": [ … ] }`, a page of the task's files at a time, 50 by
+default and up to 200 with `limit`, as the [single-task shape](#tasks)
+describes. A task holds at most 100 files, so `limit=200` answers every
+file at once. Until November 2026 it answered every file as an array, and
+`limit`, `cursor` and `offset` were unknown parameters; code that read the
+array now finds an object, so read its `attachments` and follow
+`next_cursor` until it is `null`.
+
 `size_bytes` is measured from the stored file. `inline` is `true` for an
 image inside the task description, which the description names as
 `![alt](att:<id>)`. `url` is a download link minted for the caller that
-works for 10 minutes (`url_expires_at`); read the task or the list again for
-a fresh one. Each download checks again that the caller's user is active and
+works for 10 minutes (`url_expires_at`), only for the files of the page
+that answers it; read the task or the list again for a fresh one. Each download checks again that the caller's user is active and
 can see the task's project, so a link stops working when that access ends.
 It does not check the credential, so a link fetched before a key or token
 was revoked keeps working until it expires. Images (PNG, JPEG, WebP, GIF,
@@ -2914,6 +3034,13 @@ curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/
 # move QN-26 to the PCB sub-project and label it
 curl -X PATCH -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \
   -d '{"project":"PCB","add_labels":["Hardware"]}' "$BASE/tasks/QN-26"
+
+# QN-26 with the first 50 of each of its lists, then the next page of its
+# followers, with the answer's followers_next_cursor as cursor; repeat with
+# each page's next_cursor until it is null
+curl -H "Authorization: Bearer $QIVO_KEY" "$BASE/tasks/QN-26"
+curl -G -H "Authorization: Bearer $QIVO_KEY" --data-urlencode "cursor=<followers_next_cursor>" \
+  "$BASE/tasks/QN-26/followers?limit=200"
 
 # QN-26 waits for QN-25
 curl -X POST -H "Authorization: Bearer $QIVO_KEY" -H "Content-Type: application/json" \

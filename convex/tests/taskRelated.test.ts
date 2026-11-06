@@ -622,6 +622,48 @@ describe('the arguments', () => {
     )
     expect((await mcpTool(fx.t, key, 'list_task_related', { ref: task.id })).isError).toBe(true)
   })
+  it('refuses with pinned sentences, which the public docs quote', () => {
+    const sentences = {
+      [offsetRefusal('subtasks')]: 'offset does not apply to subtasks; pass next_cursor as cursor',
+      [offsetRefusal('linked tasks')]:
+        'offset does not apply to linked tasks; pass next_cursor as cursor',
+      [offsetRefusal('followers')]:
+        'offset does not apply to followers; pass next_cursor as cursor',
+      [offsetRefusal('attachments')]:
+        'offset does not apply to attachments; pass next_cursor as cursor',
+      [relatedTooMany('subtasks')]:
+        'this task has more subtasks than Qivo can list in one request. Contact support@qivo.io so we can help.',
+      [relatedTooMany('linked tasks')]:
+        'this task has more linked tasks than Qivo can list in one request. Contact support@qivo.io so we can help.',
+      [relatedTooMany('followers')]:
+        'this task has more followers than Qivo can list in one request. Contact support@qivo.io so we can help.',
+      [relatedTooMany('attachments')]:
+        'this task has more attachments than Qivo can list in one request. Contact support@qivo.io so we can help.',
+      [CURSOR_REFUSAL]: 'cursor must be the next_cursor of an earlier page',
+    }
+    for (const [sent, pinned] of Object.entries(sentences)) expect(sent).toBe(pinned)
+    expect(LISTS.map((list) => RELATED_NOUNS[list])).toEqual([
+      'subtasks',
+      'linked tasks',
+      'followers',
+      'attachments',
+    ])
+    const docs = import.meta.glob(['../../docs/rest-api.md', '../../docs/mcp.md'], {
+      eager: true,
+      query: '?raw',
+      import: 'default',
+    }) as Record<string, string>
+    expect(Object.keys(docs)).toHaveLength(2)
+    for (const [path, text] of Object.entries(docs)) {
+      // a wrapped line reads as one space
+      const prose = text.replace(/\s+/g, ' ')
+      for (const pinned of [
+        ...Object.values(sentences),
+        ...LISTS.map((list) => RELATED_LIMITS[list].refusal),
+      ])
+        expect(prose, path).toContain(pinned)
+    }
+  })
 })
 
 /* -------------------------------------------------------------- 2. cursors */

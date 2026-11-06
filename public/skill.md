@@ -96,6 +96,7 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | --- | --- | --- |
 | List tasks | `list_tasks` | `GET /v1/tasks` |
 | Read a task | `get_task` | `GET /v1/tasks/{ref}` |
+| Read more of a task's subtasks, links, followers or files | `list_task_related` | `GET /v1/tasks/{ref}/subtasks`, `/links`, `/followers`, `/attachments` |
 | Create a task | `create_task` | `POST /v1/tasks` |
 | Update, move or label a task | `update_task` | `PATCH /v1/tasks/{ref}` |
 | Delete a task | `delete_task` | `DELETE /v1/tasks/{ref}` |
@@ -103,7 +104,7 @@ Task operations use these names (REST paths are relative to `https://api.qivo.io
 | Remove a link | `set_task_link` with `linked: false` | `DELETE /v1/tasks/{ref}/links/{kind}/{other}` |
 | List labels, a page at a time | `list_labels` | `GET /v1/labels` |
 | Create or edit a label | `set_label` | `POST /v1/labels`, `PATCH /v1/labels/{id}` |
-| List a task's files | `get_task` (`attachments`) | `GET /v1/tasks/{ref}/attachments` |
+| List a task's files | `get_task` (`attachments`), then `list_task_related` | `GET /v1/tasks/{ref}/attachments` |
 | Attach a file | `start_attachment_upload`, then the upload and `confirm_attachment_upload` | `POST /v1/tasks/{ref}/attachments`, then the upload and the confirm |
 | Attach text you write | `attach_text_file` | (MCP only) |
 | Delete a file | `delete_attachment` | `DELETE /v1/tasks/{ref}/attachments/{id}` |
@@ -287,8 +288,13 @@ Useful field rules:
   `400` naming the rule. Restoring a subtask under a full parent brings it
   back as a top-level task. Change the parent
   later with `parent` on `update_task` or PATCH, or detach it with
-  `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list `subtasks`; a
-  `parent_id` of `null` with `has_hidden_parent: true` means the parent
+  `parent: null`. `get_task` and `GET /v1/tasks/{ref}` list the first 50
+  `subtasks`, `links`, `followers` and `attachments`, each with a cursor,
+  such as `subtasks_next_cursor`, that is `null` when the list ends there;
+  pass a cursor that is not `null` to `list_task_related` with `list` or to
+  `GET /v1/tasks/{ref}/subtasks`, `/links`, `/followers` or `/attachments`
+  until its `next_cursor` is `null`. A short or empty page is not the end.
+  A `parent_id` of `null` with `has_hidden_parent: true` means the parent
   exists but you cannot read it.
 - **Move:** send `project`, and `sub_project` when `project` names a
   meta-project, on `update_task` or PATCH. You need User or Lead access on
@@ -305,7 +311,7 @@ Useful field rules:
   links routes. Two tasks share at most one link; remove a link before
   adding another kind. A task has at most 100 links, 20 labels and 100
   attachments; past each the request is a `400` saying which task is full.
-  `get_task` lists `links`.
+  `get_task` lists the first 50 `links`, and `list_task_related` the rest.
 - **Label:** find label ids or names with `list_labels` or `GET /v1/labels`,
   a page at a time or by `search`, then send `add_labels` and `remove_labels`
   on `update_task` or PATCH. `set_label` or `POST /v1/labels` creates a label
@@ -318,9 +324,11 @@ Useful field rules:
 
 ## Files, history and workload
 
-- **Read files:** `get_task` and `GET /v1/tasks/{ref}` list `attachments`,
-  each with a download `url` that works for 10 minutes
-  (`url_expires_at`). Read the task again for a fresh link. `inline: true`
+- **Read files:** `get_task` and `GET /v1/tasks/{ref}` list the first 50
+  `attachments`, and `list_task_related` with `list: "attachments"` or
+  `GET /v1/tasks/{ref}/attachments` a page of up to 200, which holds every
+  file of a task. Each has a download `url` that works for 10 minutes
+  (`url_expires_at`). Read the task or the page again for a fresh link. `inline: true`
   marks an image inside the description.
 - **Attach a file:** `start_attachment_upload` or
   `POST /v1/tasks/{ref}/attachments` with `name`, optional `content_type`
@@ -377,8 +385,8 @@ Useful field rules:
   again.`
 - **Follow a task:** `set_following` with `ref` and `following`, or REST `PUT`
   (follow) and `DELETE` (stop) on `/v1/tasks/{ref}/following`. Followers get
-  the task's updates in their inbox. `get_task` shows `following` and
-  `followers`. You are also made a follower when you are assigned, mentioned
+  the task's updates in their inbox. `get_task` shows `following` and the
+  first 50 `followers`, and `list_task_related` the rest. You are also made a follower when you are assigned, mentioned
   or comment. A task has at most 100 followers: following one that has 100 is
   a `400` with `this task already has 100 followers, the most a task can
   have. Someone must unfollow it first.`, and comments and mentions add no follower there, though a mention
