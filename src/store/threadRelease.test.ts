@@ -232,7 +232,7 @@ describe('the task window keeps a bounded thread', () => {
       expect(last()?.before).toBe('comment-180')
     })
 
-    it('drops a newer answer that comes after the task changed, the thread started over or the gap moved', async () => {
+    it('drops a newer answer that comes after the task changed or the thread started over', async () => {
       const { P } = store
       openServed(300)
       for (let i = 0; i < 3; i++) await earlier()
@@ -258,6 +258,46 @@ describe('the task window keeps a bounded thread', () => {
       await settle()
       expect(shown()).toEqual(ids(400, 450))
       expect(P.commentsNewer).toBe('none')
+    })
+
+    it('drops a newer answer that comes after the run above the gap moved, and offers the read again', async () => {
+      const { P } = store
+      openServed(300)
+      for (let i = 0; i < 3; i++) await earlier()
+      serve = null
+      // Show newer reads before #219 to join under #169, the last row above
+      // the gap
+      void P.loadNewerComments()
+      const pending = last()
+      expect(pending?.before).toBe('comment-219')
+      // Meanwhile one window reads far up at #100 and another at #250. Two
+      // comments arrive, and the rows on the second window's screen keep the
+      // run below the gap, so the arrival lets #168 and #169 go from above it
+      P.threadPlace(pane, 'comment-100')
+      P.threadPlace(popOut, 'comment-250')
+      publish({ comments: range(252, 302), earlier: true })
+      expect(shown()).not.toContain('comment-169')
+      pending?.answer.resolve({ comments: range(169, 219), earlier: true })
+      await settle()
+      // the page meets no run now and is dropped, and the row offers the
+      // read again, before the new 50th released id
+      expect(shown()).not.toContain('comment-200')
+      expect(P.commentsNewer).toBe('more')
+      void P.loadNewerComments()
+      expect(last()?.before).toBe('comment-217')
+      // my delete of the last row above the gap moves the run alone
+      last()?.answer.reject(new Error('offline'))
+      await settle()
+      void P.loadNewerComments()
+      const read = last()
+      P.deleteComment('comment-167')
+      writes[0].answer.resolve(null)
+      await settle()
+      expect(shown()).not.toContain('comment-167')
+      read?.answer.resolve({ comments: range(167, 217), earlier: true })
+      await settle()
+      expect(shown()).not.toContain('comment-200')
+      expect(P.commentsNewer).toBe('more')
     })
 
     it('drops a deleted anchor and asks before its neighbour, and keeps the place on any other failure', async () => {
