@@ -25,7 +25,8 @@ import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
    state a section says, the hidden tab and a new week, the person's writes
    painted over the sections, the milestone the window opened on in its
    place, an open editor that keeps its draft and focus wherever its row
-   goes, and no task read. Cases that need Load more or a move on lower
+   goes, with its own read and right once no section shows it, the reading
+   position and no task read. Cases that need Load more or a move on lower
    MILESTONE_SECTION to batches of 2 and a cap of 4. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -908,6 +909,21 @@ describe("a kept editor's own read", { timeout: 30_000 }, () => {
       )
     },
   )
+
+  it("must fail: keeps the window's right where its own read answers that the person may not change it", async () => {
+    await keepEditor({ canWrite: false })
+    // the window's own right is the store's, the organization's admin
+    expect(q('[data-milestone-new]')).not.toBeNull()
+    const editor = q('[data-milestone-editor="u2"]')
+    expect(editor?.hasAttribute('data-milestone-locked')).toBe(true)
+    expect(nameBox()?.readOnly).toBe(true)
+    expect(nameBox()?.value).toBe('Step two, drafted')
+    expect(editorButton('Save')?.disabled).toBe(true)
+    expect(editorButton('Delete')?.disabled).toBe(true)
+    expect(q('[data-milestone-locked-note]')?.textContent).toBe(
+      'You can no longer change this milestone.',
+    )
+  })
 
   it('keeps the answer it had through a later failure, with its right', async () => {
     await keepEditor({ canWrite: false })
