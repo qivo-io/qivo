@@ -98,6 +98,18 @@
 //                        orglabels=60 reaches the eight batches the page
 //                        gathers at most) and error (every batch fails);
 //                        several joined by commas. Open it with role=admin
+//   teamsettings         a state Settings › Teams, a team's page and its Add
+//                        member picker answer whatever the workspace says
+//                        (teams:settingsPage, get, members and addable,
+//                        src/store/teamSettingsStandIn.setup.ts), for
+//                        screenshots of states a seeded backend cannot
+//                        reach: stopped (an open batch stops after two
+//                        rows looked at), not-ready (the three lists not
+//                        ready), error (the three lists fail), get-error
+//                        (a team page's own read fails), uncounted (every
+//                        third team not counted yet) and batch-N (batches
+//                        of N); several joined by commas. Open it with
+//                        role=admin, or as a user, who leads the first team
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -278,8 +290,12 @@
 // access or read budget. So are Settings › Labels' batches
 // (labels:settingsPage), through the stand-in the jsdom tests use
 // (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
-// reads no read budget. So are the project picker's navigation reads
-// (projectNav:page, children, search and resolve), through
+// reads no read budget. So are Settings › Teams' batches and a team's page
+// with its Add member picker (teams:settingsPage, get, members and
+// addable), through src/store/teamSettingsStandIn.setup.ts, which keeps the
+// server's audiences and counts by team_counts' rule; the team writes
+// those pages send are not answered here. So are the project picker's
+// navigation reads (projectNav:page, children, search and resolve), through
 // src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
 // ordinary access, reads no budget and has no favorites unless
 // projectnav=favorites asks. Archived tasks' own read (issues:archivedPage) has
@@ -333,6 +349,7 @@ import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.s
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
 import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStandIn.setup'
+import { isTeamSettingsRead, teamSettingsStandIn } from '../../src/store/teamSettingsStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -412,6 +429,23 @@ const forcedLabels = (() => {
     else if (state === 'error') force.fail = true
     else if (state === 'uncounted') force.uncounted = true
   }
+  return force
+})()
+/* Settings › Teams' and a team page's forced states (the `teamsettings`
+   parameter), as the stand-in's `force` takes them; `uncounted` names its
+   teams when the page reads them (readTeams). */
+const forcedTeams = (() => {
+  const force = {}
+  const fail = []
+  for (const state of (parameters.get('teamsettings') ?? '').split(',').filter(Boolean)) {
+    if (state === 'stopped') force.stop = 2
+    else if (state === 'not-ready') force.notReady = true
+    else if (state === 'error') fail.push('settingsPage', 'members', 'addable')
+    else if (state === 'get-error') fail.push('get')
+    else if (state === 'uncounted') force.uncounted = true
+    else if (/^batch-\d+$/.test(state)) force.batch = Math.max(1, Number(state.slice(6)))
+  }
+  if (fail.length) force.fail = fail
   return force
 })()
 /* The navigation reads' forced states (the `projectnav` parameter), as the
@@ -1395,6 +1429,7 @@ const read = (name, args = {}) => {
   if (isProjectListRead(name))
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
   if (name.startsWith('projectSettings:')) return readSettings(name, args)
+  if (isTeamSettingsRead(name)) return readTeams(name, args)
   // the milestone reads (src/store/milestoneStandIn.setup.ts), which answer
   // nothing where a forced state holds them back
   if (name.startsWith('milestones:')) {
@@ -1547,6 +1582,21 @@ function readSettings(name, args) {
     setTimeout(() => void emitWorkspace(), 0)
   }
   return projectSettingsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedSettings)
+}
+/** What a team settings read `name` answers for `args`, through the
+    stand-in over the workspace, with every third team uncounted under
+    teamsettings=uncounted. */
+function readTeams(name, args) {
+  const { uncounted, ...force } = forcedTeams
+  const counts = uncounted
+    ? Object.fromEntries(snapshot.teams.filter((_, n) => n % 3 === 0).map((t) => [t.id, null]))
+    : undefined
+  return teamSettingsStandIn(
+    snapshot,
+    name,
+    { org_id: org, ...args },
+    counts ? { ...force, counts } : force,
+  )
 }
 /** The projects the server holds: the workspace's, and for an admin the
     hidden program too, which an admin manages though the workspace leaves

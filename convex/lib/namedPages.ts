@@ -9,10 +9,11 @@
  * people for Deleted by and the assignee filter
  * (model/deletedItemsChoices.ts peopleBatch), the removal window's
  * Reassign picker (model/removalPreview.ts reassignChoicesOf), a task's
- * owner pickers and Team sync's mention recipients (model/pickers.ts), the
- * REST and MCP lists of people, labels, teams and a team's members
- * (lib/listCursor.ts namedListPage), and later the people and team lists
- * of Settings and the other REST and MCP lists. A list is
+ * owner pickers and Team sync's mention recipients (model/pickers.ts),
+ * Settings › Teams, a team's members and its Add member picker
+ * (model/teams.ts), the REST and MCP lists of people, labels, teams and a
+ * team's members (lib/listCursor.ts namedListPage), and later the people
+ * list of Settings and the other REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -311,6 +312,56 @@ export async function* mergeNamed<Row extends GenericDocument>(
   } finally {
     for (const stream of open) await stream.return?.()
   }
+}
+
+/** `stream` with each row that a row of `held` sits at, the same position
+ * in the same order, passed to `found` before the row is handed out: a
+ * list's rows read beside the rows that hold them. A picker reads the rows
+ * that already hold its choices this way, so a choice already held is left
+ * out without a lookup of its own, as a project's shares and grants beside
+ * the organization's teams and people for the Add team or user picker
+ * (model/projectSettings.ts candidatesOf), and a team's memberships beside
+ * the organization's people for Add member (model/teams.ts addableOf). It
+ * works because each holding row copies its choice's name key and ties on
+ * the same id. It reads `held` only as far as the row it hands out, and
+ * counts every held row it reads (NamedReads skip). Once `held` stops or
+ * the budget is full it marks nothing more, and the caller looks those rows
+ * up. Both streams read ascending, as it compares positions with
+ * compareNamed. */
+export function besideHeld<Row extends { id: string }, Held>(
+  stream: (reads: NamedReads) => NamedStream<Row>,
+  held: (reads: NamedReads) => NamedStream<Held & GenericDocument>,
+  found: (row: Row) => void,
+): (reads: NamedReads) => NamedStream<Row> {
+  return (reads) =>
+    (async function* () {
+      const marks = held(reads)[Symbol.asyncIterator]()
+      // the next held row, null past the last, undefined until it is read
+      let next: Named<Held & GenericDocument> | null | undefined
+      // whether `held` stopped or the budget filled, so nothing more is marked
+      let blind = false
+      try {
+        for await (const item of stream(reads)) {
+          while (item !== STOPPED && !blind) {
+            if (next === undefined) {
+              const step = await marks.next()
+              if (step.done === true) next = null
+              else if (step.value === STOPPED) blind = true
+              else {
+                next = step.value
+                blind = !(await reads.skip(next.row))
+              }
+            }
+            if (next === null || next === undefined || compareNamed(next.at, item.at) > 0) break
+            if (compareNamed(next.at, item.at) === 0) found(item.row)
+            next = undefined
+          }
+          yield item
+        }
+      } finally {
+        await marks.return?.()
+      }
+    })()
 }
 
 /* ------------------------------------------------------------- the budget */
@@ -635,7 +686,8 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * it, as model/labels.ts labelBatch does. The project settings lists and
  * pickers (model/projectSettings.ts), the Reassign picker
  * (model/removalPreview.ts), a task's owner and recipient pickers
- * (model/pickers.ts), the project navigation lists
+ * (model/pickers.ts), the team settings lists and picker
+ * (model/teams.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
  * (model/projectSettingsLists.ts), the REST and MCP lists in name order
  * (lib/listCursor.ts namedListPage) and Billing's Storage by project

@@ -9,11 +9,11 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { ACCESS_NEEDS_A_PERSON } from '../lib/access'
+import { ACCESS_NEEDS_A_PERSON, ACCESS_UNCHECKED, OWN_READS } from '../lib/access'
 import { AVATAR_COLORS } from '../lib/avatarColors'
 import { NO_PASSWORD_LOGIN } from '../lib/email'
 import { LIMITS } from '../lib/limits'
-import { newOrgDefaults } from '../model/orgs'
+import { newOrgDefaults, PLANNABLE_HOURS_UNCHECKED } from '../model/orgs'
 import { avatarColor } from '../model/people'
 import {
   activityFor,
@@ -881,6 +881,108 @@ describe('profiles.setPlannableHours — the rights matrix', () => {
       expect(r.data.message).toBe(LIMITS.plannableHours.refusal)
     }
     expect((await profileById(t, f.viewer.id))?.plannable_hours).toBe(37)
+  })
+})
+
+describe("profiles.setPlannableHours — a leader's check walks the person's teams within a bound", () => {
+  const RIGHTS =
+    "only an organization admin or a leader of one of this person's teams can set their plannable hours"
+
+  /* A team of organization `orgId`, with `rows` memberships. */
+  const plantTeam = (
+    t: T,
+    orgId: string,
+    rows: { profile: Doc<'profiles'>; leader?: boolean }[],
+  ): Promise<string> =>
+    t.run(async (ctx) => {
+      const id = uuid()
+      await ctx.db.insert('teams', {
+        id,
+        org_id: orgId,
+        name: `Crew ${id.slice(0, 4)}`,
+        track_delay_default: true,
+        created_at: NOW,
+      })
+      for (const { profile, leader } of rows)
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: profile.id,
+          is_leader: leader ?? false,
+        })
+      return id
+    })
+
+  const setter = (t: T, org: string) => (caller: Doc<'profiles'>, id: string, hours: number) =>
+    as(t, caller).mutation(api.profiles.setPlannableHours, { org_id: org, profile_id: id, hours })
+
+  it("passes a leader of one of the person's teams, and nobody through a team that is foreign, gone or not the person's", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const set = setter(t, f.org.id)
+    const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Ito' })
+    // the user leads a team Pat is not in, and Pat is in a team the user
+    // is in but does not lead
+    await plantTeam(t, f.org.id, [{ profile: f.user, leader: true }])
+    await plantTeam(t, f.org.id, [{ profile: f.user }, { profile: pat }])
+    // a leader row on a team of another organization that Pat is in
+    await plantTeam(t, f.otherOrg.id, [{ profile: f.user, leader: true }, { profile: pat }])
+    // a leader row and Pat's membership on a team that is gone
+    await t.run(async (ctx) => {
+      const gone = uuid()
+      await ctx.db.insert('team_members', { team_id: gone, profile_id: f.user.id, is_leader: true })
+      await ctx.db.insert('team_members', { team_id: gone, profile_id: pat.id, is_leader: false })
+    })
+    expect((await expectRefusal(set(f.user, pat.id, 30), 'rule')).data.message).toBe(RIGHTS)
+    // Pat joins Hardware, which the user leads
+    await t.run((ctx) =>
+      ctx.db.insert('team_members', { team_id: f.team.id, profile_id: pat.id, is_leader: false }),
+    )
+    await set(f.user, pat.id, 30)
+    expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
+  })
+
+  it('passes a leader at a lowered bound and refuses one past it for a person in more teams, with its own sentence, and still judges a leader in more teams', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const set = setter(t, f.org.id)
+    const most = OWN_READS.teams
+    OWN_READS.teams = 2
+    try {
+      // Pat is in two teams, the bound, Hardware among them, which the
+      // user leads
+      const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Ito' })
+      await t.run((ctx) =>
+        ctx.db.insert('team_members', { team_id: f.team.id, profile_id: pat.id, is_leader: false }),
+      )
+      await plantTeam(t, f.org.id, [{ profile: pat }])
+      await set(f.user, pat.id, 30)
+      expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
+      // one team more is past it
+      await plantTeam(t, f.org.id, [{ profile: pat }])
+      const past = await expectRefusal(set(f.user, pat.id, 31), 'rule')
+      expect(past.data).toEqual({
+        code: 'rule',
+        reason: ACCESS_UNCHECKED,
+        message: PLANNABLE_HOURS_UNCHECKED,
+      })
+      expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
+      // an admin is not walked, so passes
+      await set(f.admin, pat.id, 32)
+      expect((await profileById(t, pat.id))?.plannable_hours).toBe(32)
+      // a caller who cannot lead, a foreign target and a guest target read
+      // the rights sentence before any membership is read
+      expect((await expectRefusal(set(f.viewer, pat.id, 30), 'rule')).data.message).toBe(RIGHTS)
+      for (const target of [f.otherAdmin.id, f.guest.id, uuid()])
+        expect((await expectRefusal(set(f.user, target, 30), 'rule')).data.message).toBe(RIGHTS)
+      // the user is in three teams, past the bound, and leads Hardware, the
+      // admin's only team: the check walks the admin's teams, so it finishes
+      await plantTeam(t, f.org.id, [{ profile: f.user }])
+      await plantTeam(t, f.org.id, [{ profile: f.user }])
+      await set(f.user, f.admin.id, 21)
+      expect((await profileById(t, f.admin.id))?.plannable_hours).toBe(21)
+    } finally {
+      OWN_READS.teams = most
+    }
   })
 })
 

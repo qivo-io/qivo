@@ -8,6 +8,7 @@ import type { FieldChange } from '../../../convex/lib/functions'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { WHOLE } from '../../store/guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
+import { isTeamSettingsRead, teamSettingsServer } from '../../store/teamSettingsStandIn.setup'
 
 /* Drafts in the settings fields on the real store (lib/savedDraft.ts). A
    field keeps what the person types when the same setting changes in
@@ -81,9 +82,19 @@ async function prepare() {
   snap.teamMembers.push({ team_id: 'crew', profile_id: LEO, is_leader: false })
   requests = []
   network.query.mockResolvedValue([])
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  // a team's page reads the team and its members from the workspace last
+  // published, as the server would
+  let server = snap
+  const teams = teamSettingsServer(() => server)
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === WHOLE) publish = next
+    if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
+    if (name === WHOLE)
+      publish = (value) => {
+        server = value
+        next(value)
+        teams.rerun()
+      }
     const answers: Record<string, unknown> = {
       [WHOLE]: structuredClone(snap),
       'invites:deliveries': [],

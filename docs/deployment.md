@@ -234,7 +234,15 @@ with its run tag over REST, puts it on one of its fixture tasks, opens
 finds the label by search with **1 active task**, renames it in place and
 deletes it in its delete window (`ui/settings-labels`). While a label count
 backfill runs on the deployment, the counts read **Counting…** and that step
-fails. It then makes a sub-project of its own under its second project, with
+fails. Next it makes a team of its own with its run tag over REST, finds it by
+search on **Settings → Teams** (`teams.settingsPage`) with **0 members**,
+adds the Standard agent on the team's page through **Add member**
+(`teams.get`, `teams.members` and `teams.addable`), checks over REST and on
+both pages that the team has **1 member**, renames it in place, removes the
+agent and deletes the team from the list (`ui/settings-teams`). Against a
+backend from before the release whose app reads the team pages from the
+server that step fails. It then makes a sub-project of its own under its
+second project, with
 a User grant and a To Do task for the Standard agent, removes the agent's
 grant in that sub-project's settings, waits for the removal window to list
 the task from the deployment's preview (`accessRemovals.preview`), chooses
@@ -1153,6 +1161,28 @@ first calls them makes this release the backend's floor for that app, and
 its own paragraph here says so. The lists answer `not_ready` for an
 organization whose names are not ready. The release changes no table, field
 or index, and there is no backfill.
+
+From the release after v0.1.143, **Settings → Organization → Teams** lists
+teams from `teams.settingsPage`, 25 at a time with a search, each with its
+member count from `team_counts`, a team's page reads the team and the
+caller's rights from `teams.get` and its members from `teams.members`, 25 at
+a time with a search, and its **Add member** list reads `teams.addable` only
+while it is open. That release first ships these four queries, so it is the
+backend's floor for its app, a floor the ones above do not hold. An app from
+it, against a backend before it, says on Settings › Teams and on every team's
+page that it could not load them, also in a tab that was open when the
+backend went back, until the backend rolls forward. From that release on,
+never return the backend to a commit before it; roll forward instead.
+Returning the app alone to an earlier release is safe, because that app
+reads the workspace's teams and memberships, which the backend still sends.
+The same release checks a team leader's right to set plannable hours against
+at most 256 of the person's team memberships, in the app, REST `PATCH
+/v1/users/{id}` and MCP `update_user`, and refuses a person in more teams
+with its own sentence, which an older app shows as any refusal. The counts
+read `team_counts`, which every deployment holds since
+`internal/teamCountsBackfill` ran on 2026-10-28, and the lists read the name
+keys every deployment holds, so there is no schema change, no backfill and
+no release step.
 
 ## Node.js version
 

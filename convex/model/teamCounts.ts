@@ -1,7 +1,8 @@
 /* Team member counts (schema.ts team_counts): for each team, its
  * memberships whose profile exists in the team's organization and is not a
  * guest. REST and MCP answer them as each team's member_count
- * (model/teams.ts teamSummary); Settings does not show them yet. Every write
+ * (model/teams.ts teamSummary), and Settings › Teams and a team's page show
+ * them (model/teams.ts settingsTeamsOf and teamSettingsOf). Every write
  * of a membership moves the count in its own transaction (countMemberAdded,
  * countMemberRemoved), given the organization whose teams count the
  * membership's profile, as the profile was before the write (countingOrg).
@@ -45,7 +46,8 @@ export const shownCount = (
 ): number | null =>
   row === null || row.org_id !== team.org_id || row.through !== undefined ? null : row.members
 
-/** shownCount for one team, reading its row. */
+/** shownCount for one team, reading its row, as a team's Settings page
+ * reads it (model/teams.ts teamSettingsOf). */
 export async function memberCount(
   ctx: QueryCtx,
   team: Pick<Doc<'teams'>, 'id' | 'org_id'>,

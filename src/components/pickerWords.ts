@@ -40,6 +40,17 @@ export const ACCESS_WORDS: ChoiceWords = {
   none: 'Nothing matches.',
 }
 
+/** The Add member picker's words on a team's page. A team that is gone
+    says so in its own words, since heldLine speaks of a project. */
+export const MEMBER_WORDS: ChoiceWords = {
+  held: (held) =>
+    held?.state === 'unavailable' ? 'This team is no longer available.' : heldLine(held, true),
+  failed: "Couldn't load people.",
+  stopped: 'Showing the people found so far.',
+  empty: 'Nobody else can join this team.',
+  none: 'No people match.',
+}
+
 /** A Lead field's words. */
 export const LEAD_WORDS: ChoiceWords = {
   held: (held) => heldLine(held, true),

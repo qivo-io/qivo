@@ -1,6 +1,24 @@
 /* The team domain's public surface: create / settings /
- * delete + the three membership verbs. Thin wrappers over model/teams (the
- * rules REST and MCP share), model/orgs and model/cascade.
+ * delete + the three membership verbs, and the four reads of Settings ›
+ * Teams and a team's page. Thin wrappers over model/teams (the rules REST
+ * and MCP share), model/orgs and model/cascade.
+ *
+ * The reads (model/teams.ts) answer the app a batch at a time in name
+ * order, with a search over the whole list on the server, and read no
+ * task, comment, file, milestone, share or grant:
+ *   settingsPage  Settings › Teams: every team for an organization admin,
+ *                 the teams a leader's own row leads for anyone else who
+ *                 may lead, `refused` for the rest; each team with its
+ *                 member count from team_counts, and the number of teams
+ *                 up to three, from which the page turns Delete off for
+ *                 the last one
+ *   get           a team's page: its name, count and the caller's rights,
+ *                 each its write's rule, for every seat of the organization
+ *   members       a team's page: its members as REST and MCP list them,
+ *                 for every seat of the organization
+ *   addable       the Add member picker, read once a batch while it is
+ *                 open: the people who may join, `refused` as the add
+ *                 refuses
  *
  * Ported predicates (final SQL state):
  *   teams_insert            is_org_admin (0081:218)
@@ -31,14 +49,28 @@ import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx } from './_generated/server'
 import { byId } from './lib/db'
-import { accessRemovalMutation, adminMutation, notFound, orgMutation } from './lib/functions'
+import {
+  accessRemovalMutation,
+  adminMutation,
+  notFound,
+  orgMutation,
+  orgQuery,
+} from './lib/functions'
 import { vHeldTasks } from './model/projectAccess'
 import {
+  addableOf,
   addTeamMemberCore,
   createTeamCore,
   deleteTeamCore,
   removeTeamMemberCore,
+  type SettingsTeamsAnswer,
   setTeamLeaderCore,
+  settingsMembersOf,
+  settingsTeamsOf,
+  type TeamChoicesAnswer,
+  type TeamMembersAnswer,
+  type TeamSettingsAnswer,
+  teamSettingsOf,
   updateTeamCore,
   vTeamExpected,
 } from './model/teams'
@@ -53,6 +85,65 @@ async function myTeam(ctx: MeCtx, id: string): Promise<Doc<'teams'>> {
   if (team === null || team.org_id !== ctx.me.org_id) throw notFound('team not found')
   return team
 }
+
+/** The arguments of a team list: an optional search, and the cursors of
+ * the batch's start (`after`, none for the first batch) and, to keep a
+ * loaded batch live, its end (`through`). */
+const vListArgs = {
+  search: v.optional(v.string()),
+  after: v.optional(v.string()),
+  through: v.optional(v.string()),
+}
+
+/* ----------------------------------------------------------- settingsPage
+ * Settings › Teams. */
+
+/** One batch of Settings › Teams (model/teams.ts settingsTeamsOf): every
+ * team of the organization for an admin, the teams the caller leads for
+ * anyone else who may lead a team, and `refused` for a viewer, a guest and
+ * an agent; `not_ready` until the name keys are written. Each team has its
+ * member count from team_counts, null while Qivo counts it, and a ready
+ * batch says how many teams the organization holds, up to three. */
+export const settingsPage = orgQuery({
+  args: vListArgs,
+  handler: (ctx, a): Promise<SettingsTeamsAnswer> => settingsTeamsOf(ctx, ctx.me, a),
+})
+
+/* -------------------------------------------------------------------- get
+ * A team's Settings page. */
+
+/** Team `id` for its Settings page (model/teams.ts teamSettingsOf): its
+ * name, member count and the caller's rights, `can_manage` for the rename
+ * and `can_manage_members` for the membership writes, each its write's
+ * rule; `unavailable` alike for an unknown, foreign or deleted team. */
+export const get = orgQuery({
+  args: { id: v.string() },
+  handler: (ctx, { id }): Promise<TeamSettingsAnswer> => teamSettingsOf(ctx, ctx.me, id),
+})
+
+/* ---------------------------------------------------------------- members
+ * A team's members on its Settings page. */
+
+/** One batch of team `team_id`'s members (model/teams.ts
+ * settingsMembersOf), each with their role, leadership and plannable
+ * hours, the members REST and MCP list; `unavailable` for a team the
+ * organization does not hold and `not_ready` while names are not ready. */
+export const members = orgQuery({
+  args: { team_id: v.string(), ...vListArgs },
+  handler: (ctx, a): Promise<TeamMembersAnswer> => settingsMembersOf(ctx, ctx.me, a),
+})
+
+/* ---------------------------------------------------------------- addable
+ * The Add member picker of a team's Settings page, read once a batch. */
+
+/** One batch of the people who may join team `team_id` (model/teams.ts
+ * addableOf): its organization's admins, users and viewers who are not
+ * members, never guests; `refused` with the sentence addMember would
+ * refuse with. addMember checks again. */
+export const addable = orgQuery({
+  args: { team_id: v.string(), ...vListArgs },
+  handler: (ctx, a): Promise<TeamChoicesAnswer> => addableOf(ctx, ctx.me, a),
+})
 
 /* ----------------------------------------------------------------- create
  * P.addTeam — admin only; the client pre-generates the uuid; defaults are

@@ -42,7 +42,6 @@
  * keys (nameKeysReady), because an unkeyed row sorts first and a search by
  * name misses it. */
 
-import type { GenericDocument } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
@@ -71,23 +70,20 @@ import { badRequest, notFound, require } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
 import { LIMITS, LIST_BATCH } from '../lib/limits'
 import {
+  besideHeld,
   compareIn,
-  compareNamed,
   indexAfter,
   inGroup,
   type ListBatch,
   listBatch,
   mergeNamed,
-  type Named,
   type NamedAt,
   type NamedOrder,
   type NamedReads,
-  type NamedStream,
   type NamedTie,
   namedCeiling,
   openNamedCursor,
   type ReadGuard,
-  STOPPED,
 } from '../lib/namedPages'
 import { nameKey } from '../lib/nameKey'
 import { canCreateProjects, projectCreationRefusal } from '../lib/projectCreators'
@@ -716,51 +712,6 @@ const PERSON_MARK = '1'
 
 /* Whether `key` is a position of the Add team or user picker. */
 const markedKey = (key: string): boolean => key.startsWith(TEAM_MARK) || key.startsWith(PERSON_MARK)
-
-/* `stream` with each row that a row of `held` sits at, the same position
- * in the same order, passed to `found` before the row is handed out. The
- * Add team or user picker reads a project's shares and grants
- * beside the organization's teams and people this way, so a choice the
- * project already holds is left out without a lookup of its own: a share or
- * grant copies its team's or person's name key, and its tie is the same id.
- * It reads `held` only as far as the row it hands out, and counts every
- * held row it reads (NamedReads skip). Once `held` stops or the budget is
- * full it marks nothing more, and the picker looks those rows up. */
-function besideHeld<Row extends { id: string }, Held>(
-  stream: (reads: NamedReads) => NamedStream<Row>,
-  held: (reads: NamedReads) => NamedStream<Held & GenericDocument>,
-  found: (row: Row) => void,
-): (reads: NamedReads) => NamedStream<Row> {
-  return (reads) =>
-    (async function* () {
-      const marks = held(reads)[Symbol.asyncIterator]()
-      // the next held row, null past the last, undefined until it is read
-      let next: Named<Held & GenericDocument> | null | undefined
-      // whether `held` stopped or the budget filled, so nothing more is marked
-      let blind = false
-      try {
-        for await (const item of stream(reads)) {
-          while (item !== STOPPED && !blind) {
-            if (next === undefined) {
-              const step = await marks.next()
-              if (step.done === true) next = null
-              else if (step.value === STOPPED) blind = true
-              else {
-                next = step.value
-                blind = !(await reads.skip(next.row))
-              }
-            }
-            if (next === null || next === undefined || compareNamed(next.at, item.at) > 0) break
-            if (compareNamed(next.at, item.at) === 0) found(item.row)
-            next = undefined
-          }
-          yield item
-        }
-      } finally {
-        await marks.return?.()
-      }
-    })()
-}
 
 /** A choice of the Add team or user picker: a team, or a person with what
  * they may be given (GrantChoices). `type` tells them apart, since a

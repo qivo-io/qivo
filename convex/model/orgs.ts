@@ -24,13 +24,13 @@
  * seed/reset mutations simply do not call them. */
 
 import type { WithoutSystemFields } from 'convex/server'
-import { v } from 'convex/values'
+import { ConvexError, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { isTeamLeader } from '../lib/access'
+import { ACCESS_UNCHECKED, canLeadTeams, isTeamLeader, OWN_READS } from '../lib/access'
 import { byId } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
-import { conflict, notFound, require, rule } from '../lib/functions'
+import { conflict, notFound, type Refusal, require, rule } from '../lib/functions'
 import { limitedText, limitedWhole } from '../lib/limitRules'
 import { LIMITS, SLUG_SHAPE } from '../lib/limits'
 import { named, nameKey } from '../lib/nameKey'
@@ -626,11 +626,28 @@ export async function assertNotLastAdmin(
  * Order matters — rights first with ONE sentence for unknown/foreign/
  * unauthorized (0049), the agent check AFTER it so probing uuids learns
  * nothing, then the whole-hours range. Deliberately not self-service (0094).
- * No narration. Returns the fresh row (MCP and REST answer with it). */
+ * No narration. Returns the fresh row (MCP and REST answer with it).
+ *
+ * A caller who is not an admin passes when they lead one of the person's
+ * teams. A caller who cannot lead teams (lib/access.ts canLeadTeams) is
+ * refused before any membership is read. The check walks the person's own
+ * memberships, the teams that matter here, at most OWN_READS.teams of them
+ * (256; a person is in 5 teams at the design size), and asks of each
+ * whether the caller leads it (isTeamLeader). A person in more teams than
+ * that is refused with PLANNABLE_HOURS_UNCHECKED rather than judged from
+ * part of their teams, since a check that cannot finish never lets a write
+ * through; every seat reads every team's members, so the refusal tells
+ * nothing new. */
 
 /* The rights refusal. REST answers it 403; the app and MCP show the rule. */
 export const PLANNABLE_HOURS_RIGHTS =
   "only an organization admin or a leader of one of this person's teams can set their plannable hours"
+
+/** The refusal of a leader's hours write for a person in more teams than
+ * the check reads (OWN_READS.teams). REST answers it 400, as any rule; the
+ * app and MCP show it. */
+export const PLANNABLE_HOURS_UNCHECKED =
+  "Qivo could not finish checking this person's teams in one request. Ask an organization admin to change these hours."
 
 export async function setPlannableHoursCore(
   ctx: MutationCtx,
@@ -650,12 +667,20 @@ export async function setPlannableHoursCore(
     // by a guest, a viewer or an agent grant nothing. A guest is never a team
     // member, so a stale row gives no leader rights over them either. Same
     // sentence, so probing learns nothing.
-    if (target.org_role === 'guest') throw rights
-    let leads = false
-    const memberships = ctx.db
+    if (target.org_role === 'guest' || !canLeadTeams(a.me)) throw rights
+    const most = OWN_READS.teams
+    const memberships = await ctx.db
       .query('team_members')
       .withIndex('by_profile', (q) => q.eq('profile_id', target.id))
-    for await (const tm of memberships) {
+      .take(most + 1)
+    if (memberships.length > most)
+      throw new ConvexError<Refusal>({
+        code: 'rule',
+        reason: ACCESS_UNCHECKED,
+        message: PLANNABLE_HOURS_UNCHECKED,
+      })
+    let leads = false
+    for (const tm of memberships) {
       if (await isTeamLeader(ctx, a.me, tm.team_id)) {
         leads = true
         break

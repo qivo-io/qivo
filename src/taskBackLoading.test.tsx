@@ -11,6 +11,7 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
+import { isTeamSettingsRead, teamSettingsServer } from './store/teamSettingsStandIn.setup'
 
 /* Back or Forward to a task's address while every task loads
    (store/liveParts.ts), on App and the real store: the
@@ -194,20 +195,23 @@ async function bootLoading(
   let publish = (_: Snapshot) => {}
   // what the server holds: the workspace last published
   let server = snap
-  // a project's Settings page and Settings' project lists read from the
-  // workspace last published
+  // a project's Settings page, Settings' project lists and its team pages
+  // read from the workspace last published
   const settings = projectSettingsServer(() => server)
   const lists = projectListsServer(() => server)
+  const teams = teamSettingsServer(() => server)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
+    if (isTeamSettingsRead(name)) return teams.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       publish = (value) => {
         server = value
         next(structuredClone(value))
         settings.rerun()
         lists.rerun()
+        teams.rerun()
       }
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })

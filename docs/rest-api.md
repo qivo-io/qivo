@@ -1197,7 +1197,12 @@ Like the app and MCP's `update_user`, it takes an organization admin or a
 leader of a team the person belongs to (migration 0094), and nobody else,
 yourself included. Anyone else gets `403` with `only an organization admin
 or a leader of one of this person's teams can set their plannable hours`,
-whoever the target is. An unknown or foreign id is `404` `user not found`.
+whoever the target is. Qivo checks a team leader against at most 256 of the
+person's teams in one request, so a leader setting the hours of a person in
+more teams gets `400` with `Qivo could not finish checking this person's
+teams in one request. Ask an organization admin to change these hours.` An
+organization admin is not refused this way.
+An unknown or foreign id is `404` `user not found`.
 An agent has no plannable week (0103), so naming one is a `400` with `an
 agent has no plannable week, because its capacity is unbounded`. The change writes
 no activity row, as in the app.

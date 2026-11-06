@@ -72,6 +72,8 @@ import {
   TASK_PAGES_MAX,
   TASK_WINDOWS_QUERY,
   TEAM_SYNC_STEP,
+  TEAMS_EXPECTED,
+  TEAMS_STEP,
   THREAD_PAGE,
   taskPages,
   UPLOAD_STEP,
@@ -126,6 +128,38 @@ describe('staging check REST contract', () => {
       confirm:
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     })
+  })
+  it("checks its own team in Settings › Teams and on its page, by the pages' own marks and words", () => {
+    const page = readFileSync(
+      new URL('../src/panels/settings/TeamSettings.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(page).toMatch(/`\$\{grouped\(count\)\} member\$\{count === 1 \? '' : 's'\}`/)
+    for (const mark of [
+      'data-org-teams=""',
+      'data-teams-state={state}',
+      'data-teams-search=""',
+      'data-team-row={id}',
+      'data-team-open',
+      'data-team-count=""',
+      'data-team-kept=""',
+      'data-team-delete',
+      "'Click again to delete this team'",
+      'data-team-settings-state={read.state}',
+      'data-team-members-state={state}',
+      'data-team-member-count=""',
+      'data-team-member-picker=""',
+      'probe="data-team-member-picker-search"',
+      'data-team-member-choice={person.id}',
+      'data-team-member-add=""',
+      'data-settings-team-member={id}',
+      'data-team-member-remove',
+      "'Click again to confirm'",
+      'aria-label="Team name"',
+    ])
+      expect(page, mark).toContain(mark)
+    expect(TEAMS_STEP).toBe('ui/settings-teams')
+    expect(TEAMS_EXPECTED).toEqual({ none: '0 members', one: '1 member' })
   })
   it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')

@@ -16,9 +16,11 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Doc } from '../_generated/dataModel'
+import { OWN_READS } from '../lib/access'
 import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import { ROUTES } from '../machine/rest'
+import { PLANNABLE_HOURS_UNCHECKED } from '../model/orgs'
 import {
   activityFor,
   beforeBodyRead,
@@ -674,5 +676,40 @@ describe('PATCH /v1/users/{id}', () => {
     expect(row?.plannable_hours).toBe(31)
     // capacity is a setting, not an event: no activity row
     expect(await activityFor(t, f.org.id)).toEqual([])
+  })
+
+  it("answers 400 with its own sentence where a leader's check reads past its bound", async () => {
+    const fx = await fixture()
+    const { t, f } = fx
+    const leader = await plantToken(t, f.user, { access: 'write' })
+    const most = OWN_READS.teams
+    // the admin is in Hardware, which the user leads, and one team more
+    OWN_READS.teams = 1
+    try {
+      await t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: f.org.id,
+          name: 'Second crew',
+          track_delay_default: true,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: f.admin.id,
+          is_leader: false,
+        })
+      })
+      expect(
+        await call(t, leader, 'PATCH', `/v1/users/${f.admin.id}`, { plannable_hours: 20 }),
+      ).toEqual({ status: 400, body: { error: PLANNABLE_HOURS_UNCHECKED } })
+      // the rights sentence stays 403
+      expect(
+        await call(t, leader, 'PATCH', `/v1/users/${f.viewer.id}`, { plannable_hours: 20 }),
+      ).toEqual({ status: 403, body: { error: RIGHTS } })
+    } finally {
+      OWN_READS.teams = most
+    }
   })
 })

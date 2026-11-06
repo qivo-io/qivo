@@ -22,6 +22,7 @@ import { ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
 import { useProjectSettings } from './settings/useProjectSettings'
+import { useTeamSettings } from './settings/useTeamSettings'
 
 function SettingsScreen({
   page,
@@ -72,11 +73,17 @@ function SettingsScreen({
   const admin = P.isAdmin()
   const desktopSettings = window.qivoDesktop?.isElectron ? window.qivoDesktop.settings : undefined
   // Only home-organization team leaders and admins can open team settings.
+  // The Teams item and the org-teams check read the store's own
+  // memberships (P.isTeamLeader) until t3/limits-roster-parts gives them a
+  // server answer; a team's page decides from the server's (teamRead).
   const myTeams = P.teams.filter((t) => t.org === P.homeOrg && P.isTeamLeader(t.id))
   /* A project page's read of its settings, for the check below, the
      phone's Back and the page itself, which takes it as a prop rather than
      watching it a second time, so the check and the page follow one read. */
   const projectRead = useProjectSettings(page.startsWith('project:') ? page.slice(8) : null)
+  /* A team page's read of the team and the caller's rights, for the check
+     below and the page itself, as the project page's. */
+  const teamRead = useTeamSettings(page.startsWith('team:') ? page.slice(5) : null)
 
   useEffectS(() => {
     const h = (e: KeyboardEvent) => {
@@ -143,7 +150,12 @@ function SettingsScreen({
       const gone = projectRead.state === 'unavailable' || projectRead.state === 'archived'
       if (gone && holdingProject !== page.slice(8)) resetPage('account')
     } else if (page.indexOf('team:') === 0) {
-      if (!P.isTeamLeader(page.slice(5))) resetPage('account')
+      // the server's answer decides, whether or not the workspace holds the
+      // team; nothing moves while it loads, refreshes or failed
+      const gone =
+        teamRead.state === 'unavailable' ||
+        (teamRead.state === 'ok' && !teamRead.answer?.can_manage)
+      if (gone) resetPage('account')
     } else if (page.startsWith('user:')) {
       if (!admin) resetPage('account')
       else if (!P.homeUsers().some((user) => user.id === page.slice(5))) resetPage('org-users')
@@ -247,7 +259,9 @@ function SettingsScreen({
   else if (page === 'org-teams') content = <OrgTeamsPage setPage={setPage} />
   else if (page === 'org-labels') content = <OrgLabelsPage />
   else if (page.indexOf('team:') === 0)
-    content = <TeamPage teamId={page.slice(5)} setPage={setPage} onBackPage={onBackPage} />
+    content = (
+      <TeamPage teamId={page.slice(5)} read={teamRead} setPage={setPage} onBackPage={onBackPage} />
+    )
   else if (page.indexOf('project:') === 0)
     content = (
       <ProjectPage

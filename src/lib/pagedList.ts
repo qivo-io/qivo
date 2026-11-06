@@ -6,8 +6,9 @@
    relation pickers, the shared project picker
    (components/ProjectPicker.tsx), the expanded sub-project lists and an
    archived project's sub-projects in Settings
-   (panels/settings/ProjectLists.tsx), and later Settings' teams and people
-   (the limits plan's "Settings team list loading"). Beside it, a page
+   (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
+   and its Add member picker (panels/settings/TeamSettings.tsx), and later
+   Settings' people. Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
    which Previous and Next replace, as Settings › Projects and Archived
    projects read theirs, and useMoreOnScroll loads the next batch of a

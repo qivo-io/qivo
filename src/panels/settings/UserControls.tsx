@@ -349,15 +349,25 @@ const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
 // with the range's sentence. The typed hours are a draft against the hours
 // they began from (lib/savedDraft.ts): hours changed elsewhere meanwhile show
 // under the field, and nothing saves until Use saved or Keep mine. Team
-// leaders may edit this field, not other profile data.
+// leaders may edit this field, not other profile data. `user` needs only the
+// fields the field shows, so a team's member list can pass a member the
+// store does not hold, read-only. The save goes through P.updateUser, which
+// needs the store's row, so pass `canEdit` only while the store holds it.
+// `onUnsaved` hears whether the field holds unsaved hours or a save the
+// server has not answered yet, so a list can keep the row on screen while a
+// search would hide it. The store paints a sent save at once, which reads
+// as saved, so without the wait a refusal would find no field to bring the
+// typed hours and the conflict back in.
 export function PlannableHoursInput({
   user,
   canEdit,
   width = 48,
+  onUnsaved,
 }: {
-  user: UserVM
+  user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'plannableHours'>
   canEdit: boolean
   width?: number
+  onUnsaved?: (id: string, unsaved: boolean) => void
 }) {
   const draft = useSavedDraft(
     `${user.id}:plannable_hours`,
@@ -366,6 +376,12 @@ export function PlannableHoursInput({
     'plannable hours',
     !canEdit || user.isAgent,
   )
+  const id = user.id
+  // the saves sent and not answered yet
+  const [waiting, setWaiting] = useStateS(0)
+  const held = draft.unsaved || waiting > 0
+  useEffectS(() => onUnsaved?.(id, held), [id, held])
+  useEffectS(() => () => onUnsaved?.(id, false), [id])
   // a number refused on blur stays typed and marked until it changes, or
   // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
@@ -392,7 +408,17 @@ export function PlannableHoursInput({
     }
     // a conflict waits for Use saved or Keep mine; a pause keeps the hours
     if (draft.conflict || P.refusePausedEdit()) return
-    P.updateUser(user.id, { plannableHours: h }, draft.save(h).as('plannable_hours'))
+    // the save waits until the server answers it, after a refusal has
+    // brought the draft back, or until the store refused it before sending
+    let open = true
+    const settle = () => {
+      if (!open) return
+      open = false
+      setWaiting((n) => n - 1)
+    }
+    setWaiting((n) => n + 1)
+    const save = draft.save(h).as('plannable_hours')
+    if (!P.updateUser(user.id, { plannableHours: h }, { ...save, onSettled: settle })) settle()
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
   return (

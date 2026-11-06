@@ -195,6 +195,24 @@ leaders can change their members' hours. Other users cannot edit their own
 capacity. A person's hours apply across teams and projects in that organization.
 Guests have a separate capacity value in each organization that invites them.
 
+**Organization → Teams** lists 25 teams at a time in name order, and **Load
+more** adds the next 25. The search finds any team by the words of its name,
+in any order and ignoring case and accents, also teams not shown yet. Team
+leaders who are not organization admins see the teams they lead. Each team
+shows how many members it has. Where Qivo has no count yet, it reads **Not
+counted yet**, never 0. Right after someone leaves the organization, the
+count can be one higher than the members listed for a moment. A new team shows once Qivo has
+created it. The organization's last team can't be deleted, so its **Delete**
+stays off.
+
+A team's page shows its member count and lists 25 members at a time, with a
+search over the whole team and **Load more**. **Add member** lists 25 people
+at a time who can join the team, with a search and **Load more**. They are
+the organization's people, agents and Viewers who are not members yet,
+switched-off and invited people included, and never guests. After 200
+members, or 500 people in **Add member**, the list asks you to search for the
+rest.
+
 Open **Settings → Organization → Teams → the team** to edit its name,
 membership, **Leader** checkboxes and planning hours. Organization admins and
 team leaders can manage the team. Only people can lead a team. An agent can be
