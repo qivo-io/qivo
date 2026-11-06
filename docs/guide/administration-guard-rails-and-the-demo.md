@@ -244,17 +244,22 @@ last billed count, and the Billing page says it passed the limit. Email
 [support@qivo.io](mailto:support@qivo.io) to arrange billing for a larger
 organization ([Limits](./limits.md)).
 
-Billing lists active and inactive accounts and guests with their own billing.
-It also shows shared storage and API allowances, API usage by account, each
-with **View credentials**, and current storage. Current storage counts task
-attachments and description images, files in Deleted items included until
-they are deleted for good
+Billing counts active and inactive accounts and guests with their own
+billing. **Who counts toward your bill** and **Who does not count toward your
+bill** load 25 names at a time when you open them, with **Load more** and a
+search of names. Billing also shows shared storage and API allowances, API
+calls and current storage. **API calls by account** lists the accounts with
+the most calls first, 25 at a time with **Load more** and a search of account
+names across the whole list, each with its total over all its credentials and
+**View credentials**. Accounts of people who left show as **Removed user**.
+Current storage counts task attachments and description images, files in
+Deleted items included until they are deleted for good
 ([Deleted items](./how-work-is-organized.md#deleted-items)). Profile pictures
 and backgrounds are part of the base price and do not count. **Storage by
 project** lists projects largest first, 25 at a time with **Load more**, with
 a search of project names across the whole list, and labels archived
 projects, projects in Deleted items and removed ones. Usage can change while
-you browse. **Refresh** reads current usage and starts the list over,
+you browse. **Refresh** reads current usage and starts every list over,
 keeping its search. In the private demo, files in Deleted items also count
 toward its 5 MiB of shared upload storage until they are deleted for good with
 **Delete now…** ([Private demo](./qivo-in-one-minute.md#private-demo)).

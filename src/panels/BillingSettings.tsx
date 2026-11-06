@@ -8,17 +8,15 @@ import { DEMO_MODE, WORKSPACE_SIGNUP_URL } from '@/lib/demoMode'
 import { holdUnsaved } from '@/lib/leaveGuard'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../convex/_generated/api'
-import type {
-  BillingSummary,
-  BillingUsage as BillingUsageData,
-} from '../../convex/lib/billingTypes'
+import type { BillingDetails, BillingUsageFigures } from '../../convex/lib/billingTypes'
 import { P } from '../store/planner'
 import { BillingOverview } from './BillingOverview'
 import { BillingUsage } from './BillingUsage'
 
 /** The organization's Billing page. `setPage` opens another settings page,
  * such as the export before cancelling, and `onViewCredentials` opens API
- * access on one account and period of the usage. */
+ * access on one account and period of the usage. In the demo, which bills
+ * nothing, it shows a static page that reads nothing. */
 export function BillingSettings({
   setPage,
   onViewCredentials,
@@ -31,12 +29,10 @@ export function BillingSettings({
       <>
         <PageTitle>Billing</PageTitle>
         <SettingsSection title="Demo workspace">
-          <SettingsField
-            label="Users"
-            hint="Admins can add users as needed. Monthly subscriptions bill the current active user count at renewal."
-          >
-            <p data-seat-count className="text-base">
-              {P.homeActiveUsers().length} active users
+          <SettingsField label="Users">
+            <p className="text-sm text-text-2">
+              Admins can add users as needed. Monthly subscriptions bill the current active user
+              count at renewal.
             </p>
           </SettingsField>
           <SettingsField label="Subscription">
@@ -72,8 +68,8 @@ function LiveBillingSettings({
   setPage: (page: string) => void
   onViewCredentials: (entry: ApiAccessEntry) => void
 }) {
-  const [summary, setSummary] = useState<BillingSummary | null>(null)
-  const [usage, setUsage] = useState<BillingUsageData | null>(null)
+  const [summary, setSummary] = useState<BillingDetails | null>(null)
+  const [usage, setUsage] = useState<BillingUsageFigures | null>(null)
   const [summaryError, setSummaryError] = useState('')
   const [usageError, setUsageError] = useState('')
   const [actionError, setActionError] = useState('')
@@ -84,11 +80,14 @@ function LiveBillingSettings({
   const actionInFlight = useRef(false)
   useUpdateBlocker(busy)
 
+  // The details stay live, so a payment or a renewal shows without a
+  // Refresh. They name nobody; the name lists read their own batches only
+  // while open (BillingAccountNames).
   useEffect(() => {
     let active = true
     setSummaryError('')
     const unsubscribe = convex.onUpdate(
-      api.billing.summary,
+      api.billing.details,
       { org_id: orgId },
       (result) => {
         if (active) {
@@ -106,16 +105,18 @@ function LiveBillingSettings({
     }
   }, [orgId, refresh])
 
-  // API usage changes with every machine call. Read it once on opening and
-  // on each Refresh (billing.currentUsage), rather than keeping an expensive
-  // reactive subscription to the hot counter table. Storage by project reads
-  // its own batches the same way (BillingStorage).
+  // API usage changes with every machine call. Read the figures once on
+  // opening and on each Refresh (billing.usageFigures), rather than keeping
+  // an expensive reactive subscription to the hot counter table. API calls
+  // by account and Storage by project read their own batches the same way
+  // (BillingApiAccounts, BillingStorage). A failed read keeps the last
+  // figures under its error line.
   useEffect(() => {
     let active = true
     setRefreshing(true)
     setUsageError('')
     convex
-      .query(api.billing.currentUsage, { org_id: orgId })
+      .query(api.billing.usageFigures, { org_id: orgId })
       .then((result) => {
         if (active) {
           setUsage(result)
@@ -225,6 +226,8 @@ function LiveBillingSettings({
       {summary && (
         <BillingOverview
           billing={summary}
+          orgId={orgId}
+          refresh={refresh}
           busy={busy}
           onCheckout={() => void openPayment('checkout')}
           onManage={() => void openPayment('portal')}
@@ -232,14 +235,10 @@ function LiveBillingSettings({
           onExport={() => setPage('org-general')}
         />
       )}
-      {usageError && (
-        <p role="alert" className="mb-4 text-sm text-danger">
-          Usage could not be refreshed: {usageError}
-        </p>
-      )}
-      {usage && summary && (
+      {summary && (
         <BillingUsage
           usage={usage}
+          error={usageError}
           currency={summary.plan?.currency}
           status={summary.status}
           measuredAt={measuredAt}

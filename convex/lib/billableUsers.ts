@@ -6,6 +6,7 @@ import schema from '../schema'
 import { subscriptionFor } from './billingAccess'
 import { isDemoDeployment } from './demo'
 import type { OrgRole, ProfileKind } from './enums'
+import type { ReadGuard } from './namedPages'
 
 export type BillableUser = {
   profile_id: string
@@ -27,54 +28,124 @@ export type BillableUsers = {
 const hasHomeRole = (profile: Doc<'profiles'>): boolean =>
   profile.org_role === 'admin' || profile.org_role === 'user' || profile.org_role === 'viewer'
 
-/** Active is the administrator-controlled switch, not recent login activity.
- * Organization deletion also clears it on a home profile whose guest
- * organizations it marks over several steps (markHomeProfileRemoved), while
- * the profile waits to be deleted.
- * Invitations count immediately. A guest is exempt only while the same email
- * has an active home membership; claim state and subscription payment state
- * do not change that rule. All profile write paths normalize stored emails.
- * Callers must enforce billing access. Only the requested org's identities
- * leave this helper; foreign membership details never enter the breakdown. */
+/** Where one profile stands for the organization's bill:
+ * - `member`, an active admin, standard user or Viewer, person or agent,
+ *   claimed or an invitation, who counts;
+ * - `guest_without_home`, an active guest whose email has no active home
+ *   membership in any organization, who counts;
+ * - `guest_with_home`, an active guest billed where that home membership
+ *   is, who does not count here;
+ * - `inactive`, a profile an admin deactivated, whatever its role, who
+ *   does not count.
+ * The four partition an organization's roster, since every role is one of
+ * admin, user, viewer and guest. */
+export type BillingStanding = 'member' | 'guest_without_home' | 'guest_with_home' | 'inactive'
+
+/** The standings that count toward the bill. */
+export const BILLABLE_STANDINGS: readonly BillingStanding[] = ['member', 'guest_without_home']
+
+/** Where `profile` stands for its organization's bill (BillingStanding),
+ * the one rule getBillableUsers, rosterCounts and Billing's name lists
+ * (model/billingLists.ts) decide by, so the counters and the lists never
+ * disagree. Active is the administrator-controlled switch, not recent login
+ * activity, and an inactive guest is inactive whatever its home. A guest's
+ * home check walks the profiles of its email across organizations
+ * (profiles.by_email) until it finds an active home role; claim state and
+ * subscription payment state do not change the rule, and all profile write
+ * paths normalize stored emails. With `guard`, a name list's read guard
+ * (lib/namedPages.ts), it counts that walk's index range and every profile
+ * it reads, and always finishes the walk, so the standing is never a
+ * guess and the list stops after the row once its share is spent. Nothing
+ * of another organization's profile leaves this function. */
+export async function billingStanding(
+  ctx: QueryCtx,
+  profile: Doc<'profiles'>,
+  guard?: ReadGuard,
+): Promise<BillingStanding> {
+  if (!profile.active) return 'inactive'
+  switch (profile.org_role) {
+    case 'admin':
+    case 'user':
+    case 'viewer':
+      return 'member'
+    case 'guest': {
+      if (profile.email === undefined) return 'guest_without_home'
+      const email = profile.email.toLowerCase()
+      await guard?.range()
+      const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
+      for await (const match of matches) {
+        await guard?.document(match)
+        if (match.active && hasHomeRole(match)) return 'guest_with_home'
+      }
+      return 'guest_without_home'
+    }
+  }
+}
+
+/** The people and agents of organization `orgId` who count toward its
+ * bill (billingStanding `member` or `guest_without_home`), in profile id
+ * order, with the total and the member and guest counts.
+ *
+ * Organization deletion also clears `active` on a home profile whose
+ * guest organizations it marks over several steps (markHomeProfileRemoved),
+ * while the profile waits to be deleted. Invitations count immediately. A
+ * guest is exempt only while the same email has an active home membership
+ * (billingStanding). Callers must enforce billing access. Only the
+ * requested org's identities leave this helper; foreign membership details
+ * never enter the breakdown. It reads every profile of the organization, the
+ * seat count's whole-roster read that enrollment, checkout, reconciliation
+ * and a period's profile_ids need. */
 export async function getBillableUsers(ctx: QueryCtx, orgId: string): Promise<BillableUsers> {
   const users: BillableUser[] = []
   let members = 0
   let guests = 0
   const profiles = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId))
   for await (const profile of profiles) {
-    if (!profile.active) continue
-    let reason: BillableUser['reason']
-    if (hasHomeRole(profile)) {
-      reason = 'member'
-      members += 1
-    } else if (profile.org_role === 'guest') {
-      let hasActiveHome = false
-      if (profile.email !== undefined) {
-        const email = profile.email.toLowerCase()
-        const matches = ctx.db.query('profiles').withIndex('by_email', (q) => q.eq('email', email))
-        for await (const match of matches) {
-          if (match.active && hasHomeRole(match)) {
-            hasActiveHome = true
-            break
-          }
-        }
-      }
-      if (hasActiveHome) continue
-      reason = 'guest_without_home'
-      guests += 1
-    } else {
-      continue
-    }
+    const standing = await billingStanding(ctx, profile)
+    if (standing === 'member') members += 1
+    else if (standing === 'guest_without_home') guests += 1
+    else continue
     users.push({
       profile_id: profile.id,
       name: profile.name,
       kind: profile.kind,
       org_role: profile.org_role,
-      reason,
+      reason: standing,
     })
   }
   users.sort((a, b) => a.profile_id.localeCompare(b.profile_id))
   return { total: users.length, members, guests, users }
+}
+
+/** The counters of Billing's Users section: who counts toward the bill,
+ * the active profiles, the inactive ones and the active guests billed in
+ * their home organization. */
+export type RosterCounts = {
+  billable: number
+  active: number
+  inactive: number
+  ownBilling: number
+}
+
+/** The counters Billing's Users section shows, from one walk of the
+ * organization's profiles, each classified by billingStanding: the people
+ * and agents who count toward the bill (`billable`, getBillableUsers'
+ * total), the active ones whatever their standing (`active`), the
+ * inactive ones and the active guests billed in their home organization
+ * (`ownBilling`). It answers numbers only. At the design size it reads up
+ * to 1,000 profiles, and each active guest's home check reads the
+ * profiles of its email. */
+export async function rosterCounts(ctx: QueryCtx, orgId: string): Promise<RosterCounts> {
+  const counts = { billable: 0, active: 0, inactive: 0, ownBilling: 0 }
+  const profiles = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId))
+  for await (const profile of profiles) {
+    if (profile.active) counts.active += 1
+    const standing = await billingStanding(ctx, profile)
+    if (standing === 'inactive') counts.inactive += 1
+    else if (standing === 'guest_with_home') counts.ownBilling += 1
+    else counts.billable += 1
+  }
+  return counts
 }
 
 const reconcileBilling = makeFunctionReference<'action', { org_id: string }, null>(

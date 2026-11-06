@@ -4,7 +4,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { BillingPlan, BillingSummary } from '../../../convex/lib/billingTypes'
+import type { BillingDetails, BillingPlan } from '../../../convex/lib/billingTypes'
 import { endClosing, playClosingAnimations } from '../../lib/closingAnimation.setup'
 import { OrgBilling } from './OrgBilling'
 
@@ -35,7 +35,7 @@ const plan = (id: string, name: string): BillingPlan => ({
 const PLANS = [plan('team-2025', 'Team 2025'), plan('team-2026', 'Team 2026')]
 /** The organization's billing as the server reads it now, on the default
     plan until one is assigned. */
-const summary = (): BillingSummary => ({
+const summary = (): BillingDetails => ({
   enabled: true,
   configured: true,
   plan: PLANS.find((p) => p.id === (server.assigned ?? 'team-2025')) ?? null,
@@ -48,8 +48,6 @@ const summary = (): BillingSummary => ({
   inactive_users: 0,
   invited_users_with_own_billing: 0,
   billable_users: 7,
-  billable_accounts: [],
-  non_billable_accounts: [],
   billed_seats: 0,
   next_seats: 7,
   next_seat_amount_cents: 7000,

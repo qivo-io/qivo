@@ -7,9 +7,13 @@
  * difference, so a run also repairs those. Every API call ranks the row it
  * counts on the same way, so a row ranked by a call is left alone, and no
  * row's calls are counted twice, whichever comes first. API access reads
- * the ranks and a month's total (apiAccess.ts page and summary), and checks
- * first that the bucket's rows are all ranked (usageRanked), answering that
- * it is not ready, or that the total is not available, until then.
+ * the ranks and a month's total (apiAccess.ts page and summary), and
+ * Billing reads a month's total (billing.usageFigures) and the account rows
+ * (billing.apiAccounts). Each read checks first that the bucket's rows are
+ * all ranked (usageRanked). Until they are, API access answers that it is
+ * not ready, or that the total is not available, and Billing shows the
+ * month's API calls, and any bucket's API calls by account, as being
+ * counted.
  *
  * Check a deployment before changing it. `remaining` is a query, so it
  * cannot write, and a key that may only run internal queries can run it. It
@@ -60,8 +64,8 @@
  * (action 'usage_ranks_backfill', actor 'system') with its counts. The
  * results hold counts and organization, profile and bucket ids only. Running
  * it again is safe, and a clean deployment reports zeros. It writes no
- * activity, sends no task event and changes nothing a person sees. The
- * Billing page still sums the usage rows. */
+ * activity and sends no task event. What a person sees changes only where
+ * API access and Billing waited for the ranks, as said above. */
 import { makeFunctionReference } from 'convex/server'
 import { getDocumentSize, type Infer, v } from 'convex/values'
 import type { Doc, Id } from '../_generated/dataModel'

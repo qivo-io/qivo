@@ -1,6 +1,8 @@
 /* Billing's reads of stored task files from the stored-byte totals:
- * billing.currentUsage (model/billing.ts currentUsageOf) and
- * billing.storageProjects (model/billingStorage.ts storageProjectsBatch).
+ * billing.usageFigures (model/billing.ts usageFiguresOf), the deprecated
+ * billing.currentUsage (currentUsageOf), which answers the same storage
+ * figures, and billing.storageProjects (model/billingStorage.ts
+ * storageProjectsBatch).
  *
  *   1. Current storage is the organization's totals. Files attached in
  *      several sub-projects add up, a task in Deleted items still counts
@@ -166,9 +168,9 @@ async function plantTotals(t: T, orgId: string, rows: readonly Planted[]): Promi
   })
 }
 
-/** Billing's current usage as `by` reads it. */
+/** Billing's usage figures as `by` reads them. */
 const usageOf = (t: T, by: Doc<'profiles'>) =>
-  as(t, by).query(api.billing.currentUsage, { org_id: by.org_id })
+  as(t, by).query(api.billing.usageFigures, { org_id: by.org_id })
 
 /** One batch of Storage by project as `by` reads it. */
 const batchOf = (t: T, by: Doc<'profiles'>, a: { search?: string; cursor?: string } = {}) =>

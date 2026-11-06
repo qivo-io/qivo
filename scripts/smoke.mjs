@@ -1979,10 +1979,18 @@ try {
     waitUntil: 'domcontentloaded',
   })
   await pageA.locator('[data-billing-subscription]').waitFor({ timeout: 30000 })
+  // the counters from the live details, and each name list's first batch
+  // as the page reads it (billing.accountList), never the deprecated summary
   const billing = await pageA.evaluate(async () => {
     const { api } = await import('/convex/_generated/api.js')
     const { convex } = await import('/src/lib/convex.ts')
-    return convex.query(api.billing.summary, { org_id: window.PLANNER.org.id })
+    const org_id = window.PLANNER.org.id
+    const [details, billable, nonBillable] = await Promise.all([
+      convex.query(api.billing.details, { org_id }),
+      convex.query(api.billing.accountList, { org_id, kind: 'billable' }),
+      convex.query(api.billing.accountList, { org_id, kind: 'non_billable' }),
+    ])
+    return { ...details, lists: { billable, non_billable: nonBillable } }
   })
   const billableText = (await pageA.locator('[data-seat-count]').textContent()).trim()
   if (
@@ -2002,12 +2010,41 @@ try {
     await fail('Billing checkout availability differs from the backend entitlement')
   if ((await pageA.locator('[data-billing-portal]').count()) !== Number(billing.portal_available))
     await fail('Billing portal availability differs from the backend subscription')
-  await pageA.getByText('Who counts toward your bill', { exact: true }).click()
-  for (const account of billing.billable_accounts) {
-    const row = pageA.locator(`[data-billable-account="${account.profile_id}"]`)
-    if ((await row.innerText()).trim() !== account.name)
-      await fail('Billing billable-account row must show only the account name')
+  /* Opens one name list and checks that it shows the first batch the
+     server answers for its kind, names only, and then its end line or Load
+     more. */
+  const checkNames = async (summary, kind, mark) => {
+    const first = billing.lists[kind]
+    if (first.state !== 'ready') await fail(`Billing's ${kind} list answered ${first.state}`)
+    await pageA.getByText(summary, { exact: true }).click()
+    const list = pageA.locator(`[data-billing-names-list="${kind}"]`)
+    // the list mounts as it opens, so wait for it to be there and loaded
+    await pageA
+      .waitForFunction(
+        (k) => {
+          const end = document
+            .querySelector(`[data-billing-names-list="${k}"]`)
+            ?.getAttribute('data-billing-names-end')
+          return end !== undefined && end !== 'loading'
+        },
+        kind,
+        { timeout: 15000 },
+      )
+      .catch(() => fail(`Billing's ${kind} list did not load its first batch`))
+    const shown = await list
+      .locator(`[${mark}]`)
+      .evaluateAll(
+        (rows, m) => rows.map((row) => [row.getAttribute(m), row.textContent.trim()]),
+        mark,
+      )
+    const expected = first.rows.map((row) => [row.profile_id, row.name])
+    if (JSON.stringify(shown) !== JSON.stringify(expected))
+      await fail(`Billing's ${kind} list does not show the server's first batch by name only`)
+    const end = await list.getAttribute('data-billing-names-end')
+    if (end !== (first.next === null ? 'end' : 'more'))
+      await fail(`Billing's ${kind} list ends with ${end} after its first batch`)
   }
+  await checkNames('Who counts toward your bill', 'billable', 'data-billable-account')
   if (
     (await pageA.locator('[data-billing-inactive-count]').innerText()).trim() !==
     `${billing.inactive_users} inactive user${billing.inactive_users === 1 ? '' : 's'}`
@@ -2021,17 +2058,11 @@ try {
     (await ownBillingCount.innerText()).trim() !== String(billing.invited_users_with_own_billing)
   )
     await fail('Billing own-billing invitee counter is incorrect')
-  await pageA.getByText('Who does not count toward your bill', { exact: true }).click()
-  if (
-    (await pageA.locator('[data-non-billable-account]').count()) !==
-    billing.non_billable_accounts.length
+  await checkNames(
+    'Who does not count toward your bill',
+    'non_billable',
+    'data-non-billable-account',
   )
-    await fail('Billing non-billable account list has an incorrect number of users')
-  for (const account of billing.non_billable_accounts) {
-    const row = pageA.locator(`[data-non-billable-account="${account.profile_id}"]`)
-    if ((await row.innerText()).trim() !== account.name)
-      await fail('Billing non-billable-account row must show only the account name')
-  }
   if (billing.plan) {
     await pageA.locator('[data-billing-usage]').waitFor({ timeout: 15000 })
     await pageA.getByRole('button', { name: 'Refresh', exact: true }).click()

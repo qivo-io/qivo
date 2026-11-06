@@ -9989,10 +9989,6 @@ export const PLANNER = {
      page. Guests hold a seat in the org's `profiles` but are not part of it:
      they occupy no seat and belong to no team. */
   homeUsers: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole !== 'guest'),
-  /* …the switched-on ones. This is the BILLABLE set and the one every picker
-     offers; `homeUsers` still lists everybody, because the Users page has to
-     show you the person you switched off in order to switch them back on. */
-  homeActiveUsers: () => PLANNER.homeUsers().filter((u) => u.active),
   /* …and the guests of my organization, listed apart (Settings › Users) */
   homeGuests: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole === 'guest'),
   /* every project of MINE this guest holds a grant on — what the Users

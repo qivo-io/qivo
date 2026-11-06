@@ -7,7 +7,7 @@ import { refuseDemoFeature } from './lib/demo'
 import { notFound, platformMutation, platformQuery, require, rule } from './lib/functions'
 import { audit } from './model/admin'
 import {
-  billingSummary,
+  billingDetailsOf,
   defaultPlan,
   enrollOrganization,
   grantComplimentaryMonths,
@@ -26,9 +26,13 @@ export const listPlans = platformQuery({
   }),
 })
 
+/** An organization's Billing details for the operator console's
+ * organization page (model/billing.ts billingDetailsOf): its plan, status,
+ * counters and terms, and no account name, which no console shows. It
+ * walks the roster once. */
 export const orgBilling = platformQuery({
   args: { org_id: v.string() },
-  handler: async (ctx, { org_id }) => await billingSummary(ctx, org_id),
+  handler: async (ctx, { org_id }) => await billingDetailsOf(ctx, org_id),
 })
 
 // Called only after the platform action validates the provider's actual terms.

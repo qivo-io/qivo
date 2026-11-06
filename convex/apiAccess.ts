@@ -331,9 +331,9 @@ async function pastAllowance(
  * and a key the period list does not hold answers `period_unavailable`,
  * never another period. The total comes from the bucket's aggregates
  * (model/billingUsage.ts periodCalls), never from summing usage rows. The
- * current period's allowance counts billable users (model/billing.ts
- * usageAllowance), which reads every profile; the Billing area bounds that
- * read. */
+ * current period's allowance follows the subscription's billed seats, or
+ * counts billable users without them (model/billing.ts usageAllowance),
+ * which reads every profile, at most 1,000 at the design size. */
 export const summary = orgQuery({
   args: { period: v.optional(v.string()) },
   handler: async (ctx, args): Promise<ApiAccessSummary> => {

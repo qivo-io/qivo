@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import { getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
-import { as, newT, plantSeat, uuid, withOrg } from './helpers.setup'
+import type { AccountNameRow, BillingSummary } from '../lib/billingTypes'
+import { nameKey } from '../lib/nameKey'
+import { as, NOW, newT, type OrgFixture, plantSeat, type T, uuid, withOrg } from './helpers.setup'
 
 beforeEach(() => {
   vi.stubEnv('POLAR_ACCESS_TOKEN', '')
@@ -11,6 +13,65 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs()
 })
+
+/** Every profile of `orgId` keyed and the organization marked keyed, as
+ * the name keys backfill leaves them, so the name lists read. */
+const keyed = (t: T, orgId: string) =>
+  t.run(async (ctx) => {
+    for (const p of await ctx.db
+      .query('profiles')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .collect())
+      await ctx.db.patch(p._id, { name_key: nameKey(p.name) })
+    await ctx.db.insert('org_ready', { org_id: orgId, name_keys_at: NOW })
+  })
+
+/** Every name of one of Billing's lists as `f.admin` reads it, batch by
+ * batch from the start. */
+async function namesOf(t: T, f: OrgFixture, kind: 'billable' | 'non_billable') {
+  const rows: AccountNameRow[] = []
+  let cursor: string | undefined
+  for (let i = 0; i < 20; i++) {
+    const batch = await as(t, f.admin).query(api.billing.accountList, {
+      org_id: f.org.id,
+      kind,
+      ...(cursor === undefined ? {} : { cursor }),
+    })
+    if (batch.state !== 'ready') throw new Error(`the list answered ${batch.state}`)
+    rows.push(...batch.rows)
+    if (batch.next === null) return rows
+    cursor = batch.next
+  }
+  throw new Error('the list did not end')
+}
+
+/** Checks that billing.details answers what the deprecated `summary`
+ * answers without its two lists, that the name lists name exactly its
+ * lists' accounts, in name order, and that no answer holds anything of
+ * the home profile `home` or the other organization. */
+async function sameAsSummary(
+  t: T,
+  f: OrgFixture,
+  summary: BillingSummary,
+  home: { id: string; name: string },
+) {
+  const details = await as(t, f.admin).query(api.billing.details, { org_id: f.org.id })
+  const { billable_accounts, non_billable_accounts, ...counters } = summary
+  expect(details).toEqual(counters)
+  expect(details).not.toHaveProperty('billable_accounts')
+  expect(details).not.toHaveProperty('non_billable_accounts')
+  const billable = await namesOf(t, f, 'billable')
+  const non = await namesOf(t, f, 'non_billable')
+  const ids = (rows: { profile_id: string }[]) => new Set(rows.map((row) => row.profile_id))
+  expect(ids(billable)).toEqual(ids(billable_accounts))
+  expect(ids(non)).toEqual(ids(non_billable_accounts))
+  for (const rows of [billable, non]) {
+    const keys = rows.map((row) => nameKey(row.name))
+    expect(keys).toEqual([...keys].sort())
+  }
+  const shown = JSON.stringify([details, billable, non])
+  for (const hidden of [home.id, home.name, f.otherOrg.id]) expect(shown).not.toContain(hidden)
+}
 
 describe('billable users', () => {
   it('lists local excluded users and counts inactive users separately from guests billed elsewhere', async () => {
@@ -46,14 +107,19 @@ describe('billable users', () => {
     expect(JSON.stringify(initial)).not.toContain(home.id)
     expect(JSON.stringify(initial)).not.toContain(home.name)
     expect(JSON.stringify(initial)).not.toContain(f.otherOrg.id)
+    // the details and the name lists agree with it at every step
+    await keyed(t, f.org.id)
+    await sameAsSummary(t, f, initial, home)
 
     // A guest's own billing is relevant only while that invited profile is active.
     await t.run((ctx) => ctx.db.patch(f.guest._id, { active: false }))
-    expect(await summary()).toMatchObject({
+    const inactiveGuest = await summary()
+    expect(inactiveGuest).toMatchObject({
       billable_users: 4,
       inactive_users: 3,
       invited_users_with_own_billing: 0,
     })
+    await sameAsSummary(t, f, inactiveGuest, home)
     await t.run(async (ctx) => {
       await ctx.db.patch(f.guest._id, { active: true })
       await ctx.db.patch(home._id, { active: false })
@@ -68,6 +134,7 @@ describe('billable users', () => {
       f.guest.id,
     )
     expect(changed.billable_accounts.map((account) => account.profile_id)).toContain(f.guest.id)
+    await sameAsSummary(t, f, changed, home)
   })
 
   it('counts active people, viewers, agents and unclaimed invitations, excluding inactive profiles', async () => {

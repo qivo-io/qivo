@@ -12,12 +12,14 @@ import {
   MEMBER_PUT_FIELDS,
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
-import { billingBytes, STORAGE_COUNTING } from '../src/lib/billingDisplay'
+import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import {
   AGENDA_QUERY,
   ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
+  BILLING_ACCOUNTS_MARKS,
+  BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
   deleteOutcome,
@@ -374,6 +376,43 @@ describe('staging check REST contract', () => {
       row: `${billingBytes(2048)} · 1 file`,
       counting: STORAGE_COUNTING,
     })
+  })
+
+  it("checks Billing's API calls by account and Who counts toward your bill on the run's agents, after the storage step", () => {
+    const sources = [
+      '../src/panels/BillingUsage.tsx',
+      '../src/panels/BillingApiAccounts.tsx',
+      '../src/panels/BillingAccountNames.tsx',
+      '../src/panels/BillingOverview.tsx',
+      '../src/panels/settings/ApiAccessSettings.tsx',
+    ]
+      .map((path) => readFileSync(new URL(path, import.meta.url), 'utf8'))
+      .join('\n')
+    // every mark the step reads is on the page
+    for (const mark of Object.values(BILLING_ACCOUNTS_MARKS)) expect(sources).toContain(mark)
+    expect(BILLING_ACCOUNTS_STEP).toBe('ui/billing-accounts')
+    // the step tells a counted figure from the counting sentence
+    expect(BILLING_STORAGE_EXPECTED.counting).toBe(CALLS_COUNTING)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await billingAccountsCheck()')).toBeGreaterThan(
+      check.indexOf('await billingStorageCheck()'),
+    )
+    const step = check.slice(
+      check.indexOf('async function billingAccountsCheck()'),
+      check.indexOf('export const SETTINGS_PROJECTS_STEP'),
+    )
+    // one call with each agent key still in use, before Billing opens
+    expect(step).toContain(
+      "for (const cred of [c.stdKey, c.viewerKey]) await restOk(cred, 'GET', '/me')",
+    )
+    expect(step.indexOf("restOk(cred, 'GET', '/me')")).toBeLessThan(
+      step.indexOf('app.goto(billing'),
+    )
+    // it reads; the only write is the usage those calls make
+    expect(step).not.toMatch(/restOk\([^)]*'(POST|PUT|PATCH|DELETE)'/)
+    expect(step).toContain(`await app.locator(\`[\${m.search}]\`).fill(run.tag)`)
+    expect(step).toContain(`await app.locator(\`[\${m.namesSearch}="billable"]\`).fill(run.tag)`)
+    expect(step).toContain(`eq(await app.locator(\`[\${m.accessPeriod}]\`).inputValue(), period`)
   })
 
   it("uploads through the task window's file input and finds the file by its row", () => {

@@ -301,7 +301,7 @@ describe('when the service ends', () => {
 
 describe('cancelling a subscription', () => {
   const summary = (t: T, f: Awaited<ReturnType<typeof withOrg>>) =>
-    as(t, f.admin).query(api.billing.summary, { org_id: f.org.id })
+    as(t, f.admin).query(api.billing.details, { org_id: f.org.id })
   /* Polar ends a subscription cancelled at period end once the period is
    * over, a minute after END here. */
   const ended = Date.parse(END) + 60_000
@@ -524,7 +524,7 @@ describe('cancelling a subscription', () => {
   it('stops the deletion when complimentary access is granted again', async () => {
     const { t, f, operator } = await billed()
     await operator.mutation(grant, { org_id: f.org.id, months: 1 })
-    const until = (await as(t, f.admin).query(api.billing.summary, { org_id: f.org.id }))
+    const until = (await as(t, f.admin).query(api.billing.details, { org_id: f.org.id }))
       .complimentary_until!
     vi.setSystemTime(Date.parse(until) + 60_000)
     await exportNow(t, f)
@@ -1572,7 +1572,7 @@ describe('an organization that never completes checkout', () => {
   it('shows no checkout deadline once complimentary access was granted', async () => {
     const { t, f, operator } = await billed()
     const status = () => as(t, f.user).query(api.billing.status, { org_id: f.org.id })
-    const summary = () => as(t, f.admin).query(api.billing.summary, { org_id: f.org.id })
+    const summary = () => as(t, f.admin).query(api.billing.details, { org_id: f.org.id })
     expect((await status()).checkout_due_at).toBe(at(3))
     expect((await summary()).checkout_due_at).toBe(at(3))
     await operator.mutation(grant, { org_id: f.org.id, months: 1 })

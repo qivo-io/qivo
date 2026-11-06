@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MARKETING_DEMO } from '../convex/internal/marketingDemoData'
 import { LIMITS } from '../convex/lib/limits'
 import {
+  apiAccountId,
   fileSeedId,
   inboxCommentId,
   parseSeedArgs,
+  planApiAccounts,
   planArchive,
   planFiles,
   planInbox,
@@ -14,6 +16,7 @@ import {
   planSeed,
   relationId,
   runBoardScaleSeed,
+  seededAgentName,
   seededFileBytes,
   seededFileProject,
   seededFileText,
@@ -29,12 +32,14 @@ import {
    workspace parts, the archived ones `fake.archived` holds, in the issues
    table two rows a page beside a task of another organization that carries
    a seed mark, the description rows `fake.texts` holds beside one of that
-   organization's, the personal
-   tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
-   `fake.usage` hold, and every mutation it receives, with the login it came
-   as. A comment whose id `fake.comments` holds is refused as taken, so is
-   a project or task create whose id `fake.usedRows` (the used_ids table)
-   holds, as the server refuses it, and an archive marks its task in
+   organization's, the personal tokens, agent keys and usage rows
+   `fake.tokens`, `fake.keys` and `fake.usage` hold, Billing's current
+   bucket `fake.period`, the pending profile removals `fake.removals`
+   holds, and every mutation it receives, with the login it came as. A
+   comment whose id `fake.comments` holds is refused as taken, so is a
+   profile create whose id those usage rows or removals name, and a
+   project or task create whose id `fake.usedRows` (the used_ids table)
+   holds, as the server refuses them, and an archive marks its task in
    `fake.issues` archived. */
 const fake = vi.hoisted(() => ({
   issues: [],
@@ -46,6 +51,11 @@ const fake = vi.hoisted(() => ({
   tokens: [],
   keys: [],
   usage: [],
+  // the bucket billing.usageFigures answers, a paid period's key, so a seed
+  // that works the month out from the clock finds none of its rows
+  period: '2026-10-20T00:00:00.000Z',
+  // the profile_removals table
+  removals: [],
   // the sub-projects the workspace holds, the one below when null
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
@@ -67,6 +77,9 @@ vi.mock('convex/browser', () => ({
       // a system table answers the admin itself, never a person it acts as
       if (name === '_system/cli/tableData' && this.login)
         throw new Error("You don't have permission to perform this operation.")
+      // Billing's figures answer an admin only
+      if (name === 'billing:usageFigures' && this.login !== 'nora-login')
+        throw Object.assign(new Error('forbidden'), { data: { message: 'admin only' } })
       if (name === '_system/cli/tableData' && args.table === 'issues') {
         const rows = [
           ...fake.archived,
@@ -108,6 +121,7 @@ vi.mock('convex/browser', () => ({
             used_ids: fake.usedRows,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
+            profile_removals: fake.removals,
             issue_descriptions: [
               ...fake.texts,
               {
@@ -127,6 +141,7 @@ vi.mock('convex/browser', () => ({
           orgs: [{ id: 'org' }],
         },
         'workspace:catalog': { state: 'ok', teams: [], labels: [] },
+        'billing:usageFigures': { period_kind: 'paid', period_key: fake.period },
         'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
         'workspace:projects': {
           state: 'ok',
@@ -163,6 +178,15 @@ vi.mock('convex/browser', () => ({
         fake.usedRows.some((row) => row.row_id === fields.id)
       )
         throw Object.assign(new Error('taken'), { data: { message: 'this id is already taken' } })
+      // a removed profile's id stays taken while its usage or its removal
+      // names it (convex/profiles.ts create)
+      if (
+        name === 'profiles:create' &&
+        [...fake.usage, ...fake.removals].some((row) => row.profile_id === fields.id)
+      )
+        throw Object.assign(new Error('taken'), {
+          data: { message: 'a profile with this id already exists' },
+        })
       if (name === 'issues:archive') {
         const task = fake.issues.find((issue) => issue.id === fields.id)
         if (task) task.archived_at = '2026-10-29T00:00:00.000Z'
@@ -1512,5 +1536,239 @@ describe('board-scale-seed --files', () => {
       storage_id: 'storage-1',
       inline: false,
     })
+  })
+})
+
+describe('board-scale-seed --api-accounts', () => {
+  const api = ['--api-url', 'http://127.0.0.1:3215']
+
+  it('takes an agent count from 0 to 100 with the local site origin', () => {
+    expect(parseSeedArgs(local).apiAccounts).toBe(0)
+    expect(parseSeedArgs([...local, '--api-accounts', '90', ...api]).apiAccounts).toBe(90)
+    expect(parseSeedArgs([...local, '--api-accounts', '100', ...api]).apiAccounts).toBe(100)
+    for (const count of ['101', '-1', '2.5', 'many'])
+      expect(() => parseSeedArgs([...local, '--api-accounts', count, ...api])).toThrow(
+        '--api-accounts takes a whole number from 0 to 100.',
+      )
+    // its calls go to the backend's own site origin, on loopback only
+    expect(() => parseSeedArgs([...local, '--api-accounts', '5'])).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--api-accounts', '5', '--api-url', 'https://x.convex.site']),
+    ).toThrow(/--api-url/)
+  })
+
+  it('plans agents named for the searches, 1 to 7 calls each, every third set inactive', () => {
+    const plan = planApiAccounts({ org: 'org', count: 7, profiles: new Map(), used: new Map() })
+    expect(plan.map((step) => [step.name, step.calls, step.deactivate, step.create])).toEqual([
+      ['Zoë relay 01', 2, false, true],
+      ['Quillon importer 02', 3, false, true],
+      ['Backup checker 03', 4, true, true],
+      ['Support triage bot 04', 5, false, true],
+      ['Calendar sync agent 05', 6, false, true],
+      ['Report writer 06', 7, true, true],
+      ['Build relay 07', 1, false, true],
+    ])
+    // ids from their numbers, the same for every run and apart per organization
+    expect(plan[0].id).toBe(apiAccountId('org', 1))
+    expect(apiAccountId('org', 1)).not.toBe(apiAccountId('other', 1))
+    expect(new Set(plan.map((step) => step.id)).size).toBe(7)
+    // the unique word is in no other name up to the bound
+    const names = Array.from({ length: 100 }, (_, i) => seededAgentName(i + 1).toLowerCase())
+    expect(names.filter((name) => name.includes('quillon'))).toEqual(['quillon importer 02'])
+    expect(names.filter((name) => name.includes('zoë'))).toEqual(['zoë relay 01'])
+  })
+
+  it('plans only what a stopped run left missing', () => {
+    const id = (n) => apiAccountId('org', n)
+    const profiles = new Map([
+      // 1 done; 2 made with one call of its three; 3 done but still active;
+      // 6 already inactive, whatever its calls
+      [id(1), { id: id(1), active: true }],
+      [id(2), { id: id(2), active: true }],
+      [id(3), { id: id(3), active: true }],
+      [id(6), { id: id(6), active: false }],
+    ])
+    const used = new Map([
+      [id(1), 2],
+      [id(2), 1],
+      [id(3), 4],
+    ])
+    const plan = planApiAccounts({ org: 'org', count: 6, profiles, used })
+    expect(plan.map((step) => [step.n, step.create, step.calls, step.deactivate])).toEqual([
+      [2, false, 2, false],
+      [3, false, 0, true],
+      [4, true, 5, false],
+      [5, true, 6, false],
+    ])
+  })
+
+  it('makes each agent, its key and its calls as Nora, then sets every third inactive, and a rerun adds nothing', async () => {
+    fake.calls = []
+    fake.issues = []
+    fake.people = []
+    fake.usage = []
+    const fetched = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init) => {
+        fetched.push([url, init.headers.Authorization.slice(0, 11)])
+        return { ok: true, status: 200, headers: new Headers() }
+      }),
+    )
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(fake.calls.map(([name, fields, as]) => [name, fields.name ?? fields.id, as])).toEqual([
+      ['profiles:create', 'Zoë relay 01', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 01', 'nora-login'],
+      ['profiles:create', 'Quillon importer 02', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 02', 'nora-login'],
+      ['profiles:create', 'Backup checker 03', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 03', 'nora-login'],
+      ['profiles:deactivate', apiAccountId('org', 3), 'nora-login'],
+    ])
+    expect(fake.calls[0][1]).toEqual({
+      org_id: 'org',
+      id: apiAccountId('org', 1),
+      name: 'Zoë relay 01',
+      org_role: 'user',
+      kind: 'agent',
+      color: expect.stringMatching(/^#[0-9A-F]{6}$/),
+    })
+    expect(fake.calls[1][1]).toMatchObject({ org_id: 'org', agent_id: apiAccountId('org', 1) })
+    // 2, 3 and 4 calls, each with its agent's new key, on the site origin
+    expect(fetched).toHaveLength(9)
+    expect(new Set(fetched.map(([url]) => url))).toEqual(new Set(['http://127.0.0.1:3215/v1/me']))
+    expect(new Set(fetched.map(([, auth]) => auth))).toEqual(new Set(['Bearer qva_']))
+
+    // a rerun finds the agents, their calls and the inactive one, and adds nothing
+    fake.people = [1, 2, 3].map((n) => ({
+      id: apiAccountId('org', n),
+      org_id: 'org',
+      kind: 'agent',
+      active: n !== 3,
+    }))
+    fake.usage = [1, 2, 3].map((n) => ({
+      org_id: 'org',
+      profile_id: apiAccountId('org', n),
+      credential_id: `agent_keys:${n}`,
+      credential_name: `Billing load key 0${n}`,
+      period_start: fake.period,
+      calls: 1 + (n % 7),
+    }))
+    fake.calls = []
+    vi.stubGlobal('fetch', vi.fn())
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.people = []
+      fake.usage = []
+    }
+    expect(fake.calls).toEqual([])
+  })
+
+  it('counts only the calls its own keys made in the bucket Billing shows now', async () => {
+    const id = (n) => apiAccountId('org', n)
+    fake.calls = []
+    fake.issues = []
+    fake.people = [1, 2].map((n) => ({ id: id(n), org_id: 'org', kind: 'agent', active: true }))
+    fake.usage = [
+      // agent 1 made both its calls last month and 1 of them so far this month
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:1',
+        credential_name: 'Billing load key 01',
+        period_start: 'month:2026-10',
+        calls: 2,
+      },
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:2',
+        credential_name: 'Billing load key 01',
+        period_start: fake.period,
+        calls: 1,
+      },
+      // agent 2's 3 calls this month came from a key --credentials gave it
+      {
+        org_id: 'org',
+        profile_id: id(2),
+        credential_id: 'agent_keys:3',
+        credential_name: 'Nightly build (scale 4)',
+        period_start: fake.period,
+        calls: 3,
+      },
+    ]
+    const fetched = vi.fn(async () => ({ ok: true, status: 200, headers: new Headers() }))
+    vi.stubGlobal('fetch', fetched)
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '2', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.people = []
+      fake.usage = []
+    }
+    // each gets a new key with only the calls the current bucket lacks
+    expect(fake.calls.map(([name, fields]) => [name, fields.name, fields.agent_id])).toEqual([
+      ['tokens:createAgentKey', 'Billing load key 01', id(1)],
+      ['tokens:createAgentKey', 'Billing load key 02', id(2)],
+    ])
+    expect(fetched).toHaveBeenCalledTimes(1 + 3)
+  })
+
+  it('leaves a seeded agent removed through Users removed on a rerun', async () => {
+    const id = (n) => apiAccountId('org', n)
+    fake.calls = []
+    fake.issues = []
+    // agents 1 and 2 were removed. Agent 1's usage keeps its id, and agent 2's
+    // removal is still running. Agent 3 was never made.
+    fake.people = []
+    fake.usage = [
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:1',
+        credential_name: 'Billing load key 01',
+        period_start: 'month:2026-10',
+        calls: 2,
+      },
+    ]
+    fake.removals = [{ profile_id: id(2), phase: 'access' }]
+    const lines = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, headers: new Headers() })),
+    )
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: (line) => lines.push(line),
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.usage = []
+      fake.removals = []
+    }
+    expect(fake.calls.map(([name, fields]) => [name, fields.name ?? fields.id])).toEqual([
+      ['profiles:create', 'Backup checker 03'],
+      ['tokens:createAgentKey', 'Billing load key 03'],
+      ['profiles:deactivate', id(3)],
+    ])
+    expect(lines).toContain(
+      '2 seeded agents were removed through Users and stay removed (Zoë relay 01, Quillon importer 02).',
+    )
   })
 })

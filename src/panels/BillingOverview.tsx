@@ -17,10 +17,11 @@ import { useClosingWords } from '@/lib/closingWords'
 import { limitSentence } from '@/lib/fieldLimits'
 import { restoreFocus } from '@/lib/focusVisibility'
 import { useFocusWhenGone } from '@/lib/focusWhenGone'
-import type { BillingSummary } from '../../convex/lib/billingTypes'
+import type { BillingDetails } from '../../convex/lib/billingTypes'
 import { LIMITS } from '../../convex/lib/limits'
+import { type AccountListKind, BillingAccountNames } from './BillingAccountNames'
 
-const statusLabels: Record<BillingSummary['status'], string> = {
+const statusLabels: Record<BillingDetails['status'], string> = {
   unconfigured: 'Not configured',
   pending: 'Subscription required',
   complimentary: 'Complimentary access',
@@ -34,7 +35,7 @@ const statusLabels: Record<BillingSummary['status'], string> = {
 
 /** The sentence under the status: what the organization can do now and
  * what happens next. */
-function statusExplanation(billing: BillingSummary): string {
+function statusExplanation(billing: BillingDetails): string {
   if (billing.deletion)
     return `Your organization is read-only and will be deleted on ${billingDate(billing.deletion.delete_after)}. ${
       billing.deletion.reason === 'requested'
@@ -59,16 +60,24 @@ function statusExplanation(billing: BillingSummary): string {
   return 'Your subscription renews automatically with your current number of billable users.'
 }
 
-/** The organization's subscription, allowances and payment actions. */
+/** The organization's subscription, allowances and payment actions, from
+ * its live details (billing.details), and its Users section, whose two name
+ * lists read organization `orgId`'s names 25 at a time only while open
+ * (BillingAccountNames) and start over when `refresh`, the page's Refresh
+ * count, changes. */
 export function BillingOverview({
   billing,
+  orgId,
+  refresh,
   busy,
   onCheckout,
   onManage,
   onCancel,
   onExport,
 }: {
-  billing: BillingSummary
+  billing: BillingDetails
+  orgId: string
+  refresh: number
   busy: boolean
   onCheckout: () => void
   onManage: () => void
@@ -229,49 +238,40 @@ export function BillingOverview({
           )
         )}
         <SettingsGroup legend="Billable accounts">
-          <details>
-            <summary className="cursor-pointer text-sm text-text-1">
-              Who counts toward your bill
-            </summary>
-            <ul className="mt-3 space-y-2">
-              {billing.billable_accounts.map((account) => (
-                <li
-                  key={account.profile_id}
-                  data-billable-account={account.profile_id}
-                  className="break-words text-sm"
-                >
-                  {account.name}
-                </li>
-              ))}
-            </ul>
-            {billing.billable_accounts.length === 0 && (
-              <p className="mt-3 text-sm text-text-2">No billable users.</p>
-            )}
-          </details>
+          <NameList kind="billable" orgId={orgId} refresh={refresh}>
+            Who counts toward your bill
+          </NameList>
         </SettingsGroup>
         <SettingsGroup legend="Non-billable accounts">
-          <details>
-            <summary className="cursor-pointer text-sm text-text-1">
-              Who does not count toward your bill
-            </summary>
-            <ul className="mt-3 space-y-2">
-              {billing.non_billable_accounts.map((account) => (
-                <li
-                  key={account.profile_id}
-                  data-non-billable-account={account.profile_id}
-                  className="break-words text-sm"
-                >
-                  {account.name}
-                </li>
-              ))}
-            </ul>
-            {billing.non_billable_accounts.length === 0 && (
-              <p className="mt-3 text-sm text-text-2">No non-billable users.</p>
-            )}
-          </details>
+          <NameList kind="non_billable" orgId={orgId} refresh={refresh}>
+            Who does not count toward your bill
+          </NameList>
         </SettingsGroup>
       </SettingsSection>
     </>
+  )
+}
+
+/** One of the Users section's names-only lists, collapsed under its
+ * summary `children`. Its names mount while it is open, so a closed list
+ * reads nothing and closing one drops what it read. */
+function NameList({
+  kind,
+  orgId,
+  refresh,
+  children,
+}: {
+  kind: AccountListKind
+  orgId: string
+  refresh: number
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details data-billing-names-toggle={kind} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary className="cursor-pointer text-sm text-text-1">{children}</summary>
+      {open && <BillingAccountNames orgId={orgId} kind={kind} refresh={refresh} />}
+    </details>
   )
 }
 

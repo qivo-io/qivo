@@ -1,7 +1,7 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { billingEnabled, subscriptionFor } from '../lib/billingAccess'
-import type { BillingUsage } from '../lib/billingTypes'
+import type { BillingPeriodHead } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { isDemoDeployment } from '../lib/demo'
 import { LIMITS } from '../lib/limits'
@@ -56,7 +56,7 @@ export function consumeIngress(
  * - `month`: a UTC calendar month, keyed `month:YYYY-MM`, used whenever there
  *   is no live paid period. Never charged. `end` is the month's last day. */
 export type UsagePeriod = {
-  kind: BillingUsage['period_kind']
+  kind: BillingPeriodHead['period_kind']
   key: string
   start: string
   end: string | null
@@ -487,8 +487,8 @@ export async function recordApiCall(
     .unique()
   await writeUsageRow(ctx, usage, key, (usage?.calls ?? 0) + 1, args.credential_name)
   // A calendar month has no allowance and is never charged, so its total is
-  // only the shards writeUsageRow counted on, which API access reads
-  // (periodCalls; model/billing.ts still sums the usage rows).
+  // only the shards writeUsageRow counted on, which API access and Billing
+  // read (periodCalls).
   if (kind === 'month') return true
   const total = await ctx.db
     .query('billing_usage_totals')

@@ -1,24 +1,24 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type {
-  BillingSummary,
-  BillingUsage as BillingUsageData,
-} from '../../convex/lib/billingTypes'
+import type { BillingDetails, BillingUsageFigures } from '../../convex/lib/billingTypes'
 import type { ApiAccessEntry } from '../lib/apiAccess'
 import { BillingUsage } from './BillingUsage'
 
-/* Billing's usage: current storage from the totals, the paid period's
-   sample beside it, and API calls by account, each account's total with a
-   View credentials link and no nested credential rows. Storage by project
-   reads its own batches, which answer an empty list here. */
+/* Billing's usage figures: API calls from the bucket's aggregates, or being
+   counted, current storage from the totals, the paid period's sample
+   beside it, the section before its figures answered and after a failed
+   read, and the two lists, API calls by account for the figures' bucket
+   and Storage by project, which read their own batches and answer empty
+   lists here. */
 
 const network = vi.hoisted(() => ({ query: vi.fn() }))
 vi.mock('../lib/convex', () => ({ convex: network }))
 
-const USAGE: BillingUsageData = {
+const USAGE: BillingUsageFigures = {
   period_kind: 'month',
   period_key: 'month:2026-10',
   period_start: '2026-10-01T00:00:00.000Z',
@@ -32,14 +32,10 @@ const USAGE: BillingUsageData = {
   storage_overage_cents: 0,
   waived: true,
   delivery_unconfirmed: false,
-  users: [
-    { profile_id: 'nora', name: 'Nora Lind', calls: 30 },
-    { profile_id: 'gone', name: 'Removed user', calls: 12 },
-  ],
 }
 
 /* A paid period of a plan, with its allowance. */
-const PAID: BillingUsageData = {
+const PAID: BillingUsageFigures = {
   ...USAGE,
   period_kind: 'paid',
   period_key: '2026-10-01T00:00:00.000Z',
@@ -68,10 +64,11 @@ afterEach(async () => {
 })
 
 const render = (
-  usage: BillingUsageData,
+  usage: BillingUsageFigures | null,
   o: {
-    status?: BillingSummary['status']
+    status?: BillingDetails['status']
     currency?: string
+    error?: string
     view?: (entry: ApiAccessEntry) => void
   } = {},
 ) =>
@@ -80,9 +77,10 @@ const render = (
       <TooltipProvider>
         <BillingUsage
           usage={usage}
+          error={o.error ?? ''}
           currency={o.currency}
           status={o.status ?? 'active'}
-          measuredAt={0}
+          measuredAt={Date.parse('2026-10-20T08:00:00.000Z')}
           orgId="org-1"
           refresh={0}
           onViewCredentials={o.view ?? vi.fn()}
@@ -91,6 +89,22 @@ const render = (
     ),
   )
 const text = (css: string) => container.querySelector(css)?.textContent ?? null
+const named = (name: string) =>
+  network.query.mock.calls.filter(([ref]) => getFunctionName(ref) === name).map(([, a]) => a)
+
+describe('API calls', () => {
+  it('shows the calls with the included calls, or says they are being counted, never 0', async () => {
+    await render(PAID, { currency: 'usd' })
+    expect(text('[data-billing-calls]')).toBe('42 of 1,000 included calls')
+    await render(USAGE)
+    expect(text('[data-billing-calls]')).toBe('42 calls')
+    await render({ ...PAID, calls: null }, { currency: 'usd' })
+    expect(text('[data-billing-calls]')).toBe('Being counted. Check again later.')
+    // the case that must fail: null never reads as no calls, and names no
+    // allowance it cannot compare
+    expect(text('[data-billing-calls]')).not.toMatch(/^0|included/)
+  })
+})
 
 describe('current storage', () => {
   it('shows the totals with what they count, or says they are being counted, never 0', async () => {
@@ -122,41 +136,44 @@ describe('current storage', () => {
       expect(text('[data-billing-storage-sample]')).toBeNull()
     }
   })
-
-  it('says usage can change while browsing and that Refresh shows the current lists, and reads Storage by project', async () => {
-    await render(USAGE)
-    expect(container.querySelector('[data-billing-usage] p')?.textContent).toContain(
-      'Usage can change while you browse. Refresh shows the current figures and lists.',
-    )
-    expect(network.query).toHaveBeenCalledTimes(1)
-    expect(network.query.mock.calls[0][1]).toEqual({ org_id: 'org-1' })
-    expect(text('[data-billing-storage-note]')).toBe('No stored files.')
-  })
 })
 
-describe('API calls by account', () => {
-  it('shows each account’s total with View credentials and no nested credential rows', async () => {
-    const view = vi.fn<(entry: ApiAccessEntry) => void>()
-    await render(USAGE, { view })
-    const accounts = [...container.querySelectorAll('[data-billing-account]')]
-    expect(accounts.map((account) => account.textContent)).toEqual([
-      'Nora Lind30 callsView credentials',
-      'Removed user12 callsView credentials',
-    ])
-    expect(container.textContent).toContain('Each account’s total covers all of its credentials.')
-    // the credentials are API access's to show, a page at a time
-    expect(container.querySelector('[data-billing-account] li')).toBeNull()
-
-    const link = container.querySelector<HTMLButtonElement>(
-      '[data-billing-view-credentials="gone"]',
+describe('the Usage section', () => {
+  it("says usage can change while browsing, and reads API calls by account for the figures' bucket and Storage by project", async () => {
+    await render(USAGE)
+    expect(text('[data-billing-usage] p')).toMatch(
+      /^Measured .+\. Usage can change while you browse\. Refresh shows the current figures and lists\.$/,
     )
-    expect(link?.getAttribute('aria-label')).toBe('View credentials of Removed user')
-    await act(async () => link?.click())
-    // the organization, account and period of the usage on screen
-    expect(view).toHaveBeenCalledWith({
-      org_id: 'org-1',
-      profile_id: 'gone',
-      period_key: 'month:2026-10',
-    })
+    expect(named('billing:apiAccounts')).toEqual([{ org_id: 'org-1', period: 'month:2026-10' }])
+    expect(named('billing:storageProjects')).toEqual([{ org_id: 'org-1' }])
+    expect(network.query).toHaveBeenCalledTimes(2)
+    expect(text('[data-billing-accounts-note]')).toBe('No recorded API calls this period.')
+    expect(text('[data-billing-storage-note]')).toBe('No stored files.')
+    // the account rows are BillingApiAccounts', a batch at a time
+    expect(container.querySelector('[data-billing-accounts]')).not.toBeNull()
+  })
+
+  it('shows Loading usage or the error in place of the figures before they answered, with Storage by project and without the measurement line', async () => {
+    await render(null)
+    expect(text('[data-billing-usage-loading]')).toBe('Loading usage…')
+    expect(text('[data-billing-usage] p')).toBe(
+      'Usage can change while you browse. Refresh shows the current figures and lists.',
+    )
+    // no figure, so nothing a check could read as one
+    expect(container.querySelector('[data-billing-storage-bytes]')).toBeNull()
+    expect(container.querySelector('[data-billing-calls]')).toBeNull()
+    // Storage by project reads at once; API calls by account waits for the bucket
+    expect(named('billing:storageProjects')).toHaveLength(1)
+    expect(named('billing:apiAccounts')).toHaveLength(0)
+
+    await render(null, { error: 'Network down' })
+    expect(text('[data-billing-usage-error]')).toBe('Usage could not be refreshed: Network down')
+    expect(container.querySelector('[data-billing-usage-loading]')).toBeNull()
+    expect(container.querySelector('[data-billing-storage-bytes]')).toBeNull()
+
+    // a failed Refresh keeps the last figures under the error line
+    await render(USAGE, { error: 'Network down' })
+    expect(text('[data-billing-usage-error]')).toBe('Usage could not be refreshed: Network down')
+    expect(text('[data-billing-calls]')).toBe('42 calls')
   })
 })

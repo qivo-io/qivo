@@ -24,9 +24,13 @@ import {
 import { billingDueBy, getBillableUsers, markBillingMembershipChanged } from '../lib/billableUsers'
 import { addCalendarMonths } from '../lib/billingAccess'
 import type {
+  AccountNames,
+  ApiAccounts,
+  BillingDetails,
   BillingPlan,
   BillingSummary,
   BillingUsage,
+  BillingUsageFigures,
   BillingUsageReport,
   StorageProjects,
 } from '../lib/billingTypes'
@@ -57,6 +61,23 @@ const currentUsage = makeFunctionReference<'query', { org_id: string }, BillingU
 )
 const storageProjects = makeFunctionReference<'query', { org_id: string }, StorageProjects>(
   'billing:storageProjects',
+)
+const details = makeFunctionReference<'query', { org_id: string }, BillingDetails>(
+  'billing:details',
+)
+const usageFigures = makeFunctionReference<'query', { org_id: string }, BillingUsageFigures>(
+  'billing:usageFigures',
+)
+const apiAccounts = makeFunctionReference<'query', { org_id: string; period: string }, ApiAccounts>(
+  'billing:apiAccounts',
+)
+const accountList = makeFunctionReference<
+  'query',
+  { org_id: string; kind: 'billable' | 'non_billable' },
+  AccountNames
+>('billing:accountList')
+const orgBilling = makeFunctionReference<'query', { org_id: string }, BillingDetails>(
+  'adminBilling:orgBilling',
 )
 const status = makeFunctionReference<'query', { org_id: string }, { writable: boolean }>(
   'billing:status',
@@ -329,16 +350,39 @@ describe('billing authority and plan versions', () => {
         'forbidden',
         /admin only/,
       )
-      for (const read of [currentUsage, storageProjects])
+      for (const read of [currentUsage, storageProjects, details, usageFigures])
         await expectRefusal(caller.query(read, { org_id: f.org.id }), 'forbidden', /admin only/)
+      await expectRefusal(
+        caller.query(apiAccounts, { org_id: f.org.id, period: 'month:2026-01' }),
+        'forbidden',
+        /admin only/,
+      )
+      await expectRefusal(
+        caller.query(accountList, { org_id: f.org.id, kind: 'billable' }),
+        'forbidden',
+        /admin only/,
+      )
       await expectRefusal(caller.action(checkout, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(caller.action(portal, { org_id: f.org.id }), 'forbidden', /admin only/)
       expect(await caller.query(status, { org_id: f.org.id })).toMatchObject({ writable: false })
     }
     await expectRefusal(t.query(summary, { org_id: f.org.id }), 'forbidden', /not signed in/)
+    for (const read of [details, usageFigures])
+      await expectRefusal(t.query(read, { org_id: f.org.id }), 'forbidden', /not signed in/)
     await expectRefusal(t.action(checkout, { org_id: f.org.id }), 'forbidden', /not signed in/)
+    for (const read of [summary, details, usageFigures])
+      await expectRefusal(
+        as(t, f.otherAdmin).query(read, { org_id: f.org.id }),
+        'forbidden',
+        /no profile/,
+      )
     await expectRefusal(
-      as(t, f.otherAdmin).query(summary, { org_id: f.org.id }),
+      as(t, f.otherAdmin).query(apiAccounts, { org_id: f.org.id, period: 'month:2026-01' }),
+      'forbidden',
+      /no profile/,
+    )
+    await expectRefusal(
+      as(t, f.otherAdmin).query(accountList, { org_id: f.org.id, kind: 'billable' }),
       'forbidden',
       /no profile/,
     )
@@ -364,6 +408,20 @@ describe('billing authority and plan versions', () => {
     expect(oldSummary.plan).toMatchObject({ name: 'Founding', seat_price_cents: 100 })
     expect(oldSummary.plan).not.toHaveProperty('polar_product_id')
     expect(oldSummary.plan).not.toHaveProperty('api_meter_id')
+    // the details and the operator console's answer leave the provider ids
+    // out the same way
+    for (const shown of [
+      await as(t, f.admin).query(details, { org_id: f.org.id }),
+      await operator.query(orgBilling, { org_id: f.org.id }),
+    ]) {
+      expect(shown.plan).toMatchObject({ name: 'Founding', seat_price_cents: 100 })
+      for (const id of ['polar_product_id', 'api_meter_id', 'storage_meter_id'])
+        expect(shown.plan).not.toHaveProperty(id)
+    }
+    // the console answers the admin's details, without a name list
+    const console = await operator.query(orgBilling, { org_id: f.org.id })
+    expect(console).toEqual(await as(t, f.admin).query(details, { org_id: f.org.id }))
+    expect(console).not.toHaveProperty('billable_accounts')
     await t.mutation(apply, { payload: remote(f.org.id) })
     await expectRefusal(
       operator.mutation(assignPlan, { org_id: f.org.id, plan_id: newerId }),
