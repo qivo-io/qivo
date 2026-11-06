@@ -665,6 +665,46 @@ describe('claimAlerts in the default mode', () => {
     expect(await summary(a)).toEqual({ state: 'none' })
   })
 
+  it.each([
+    ['stops notifying', (_: T, b: Session) => beat(b, { can_notify: false })],
+    ['signs out', (t: T, b: Session) => betterAuth(t).deleteSession(b.token)],
+  ])(
+    'sends the session that moved the checkpoint to summarize first when another became the target by activity, never claimed and %s',
+    async (_, leave) => {
+      authEnv()
+      const t = newT()
+      const { f, s: a } = await guestFixture(t)
+      const b = await signIn(t, a.authUserId)
+      await beat(b)
+      await beat(a)
+      clock(0.5)
+      await beat(a, { active: true })
+      expect(await summary(a)).toEqual({ state: 'baseline' })
+      // b reports activity, so it is the target, and never claims
+      clock(1)
+      await beat(b, { active: true })
+      const e = eventOf((await newsAt(t, f, 1.5)).message)
+      clock(2)
+      await beat(a)
+      expect(await claim(a, [e], e.at)).toEqual({ state: 'not_target' })
+      // once b's row cannot notify or is gone, a is the target again and no
+      // session row shows that b was the target meanwhile
+      await leave(t, b)
+      const later = eventOf((await newsAt(t, f, 2.5)).message)
+      clock(3)
+      await beat(a)
+      expect(await claim(a, [later], later.at)).toEqual({ state: 'summarize_first' })
+      expect(await records(t)).toEqual([])
+      // the summary covers E, which nobody alerted, and records the later one
+      expect(await summary(a)).toEqual({ state: 'summary' })
+      expect(await claim(a, [later], later.at)).toEqual({
+        state: 'granted',
+        keys: [],
+        limited: false,
+      })
+    },
+  )
+
   it('answers not_registered for a session without a row or that cannot notify', async () => {
     const t = newT()
     const login = await lonelyLogin(t)
@@ -1725,8 +1765,8 @@ describe('inside Convex’s limits', () => {
     await claim(s, [ev('first', 0)], START)
     const events = (name: string) =>
       Array.from({ length: 10 }, (_, i) => ev(`${name}-${i}`, 0.01 * i))
-    // after the checkpoint, so both claims read the caller's own activity
-    // report in the check of activity after it
+    // a report after the checkpoint, which the caller's own claim moved,
+    // so the beat hands nothing off
     clock(0.5)
     const quiet = {
       beat: await measured(s, notifications.beat, {

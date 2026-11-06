@@ -16,15 +16,15 @@ import { forbidden } from '../lib/functions'
  * with structuredClone.
  *
  * A beat reads the session in its token and its login (one nested call),
- * the session row and the account row, and writes the session row. A claim
- * in the default mode reads the account row, the session rows up to the
- * first live one, at most two rows that reported activity after the
- * checkpoint and one record range a new event, and writes a record a grant
+ * the session row and the account row, and writes the session row, and the
+ * account row once a handoff (notifications.ts beat). A claim in the
+ * default mode reads the account row, the session rows up to the first
+ * live one and one record range a new event, and writes a record a grant
  * and the account row. Every call reads only the caller's login's rows.
  * Measured in tests/notifications.test.ts "inside Convex's limits", which
  * counts the call's own reads without the nested session lookup, a beat
  * reads 4 ranges and 5 documents and writes 1, a claim of 50 new events
- * with 3 sessions and a checkpoint reads 56 ranges and 7 documents and
+ * with 3 sessions and a checkpoint reads 55 ranges and 6 documents and
  * writes 51, and beside 1,000 other people's sessions and 10,000 records a
  * beat and a claim of 10 events read exactly what they read without them. */
 export const NOTIFY = {
@@ -161,27 +161,6 @@ export async function targetOf(
     if (read >= NOTIFY.scan) return null
   }
   return null
-}
-
-/** Whether a row of login `authUserId` other than `self` that can notify
- * reported activity after `at`. The beat that reported it made its session
- * live with the newest active_at, so that session was the target at some
- * time after `at`. A row that reported while it could not notify, and can
- * now, counts too, which at worst sends a claim to summarize once more
- * than needed. One range, two rows at most. */
-export async function otherActiveSince(
-  ctx: QueryCtx,
-  authUserId: string,
-  at: number,
-  self: Doc<'notification_sessions'>,
-): Promise<boolean> {
-  const rows = await ctx.db
-    .query('notification_sessions')
-    .withIndex('by_login_notify_active', (q) =>
-      q.eq('auth_user_id', authUserId).eq('can_notify', true).gt('active_at', at),
-    )
-    .take(2)
-  return rows.some((row) => row._id !== self._id)
 }
 
 /** Where a claim's records and floors live: the account in 'recent'
