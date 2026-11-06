@@ -19,7 +19,10 @@
    - Typing rests MENTION_DELAY_MS before a read, and a text whose words
      did not change reads nothing. A new text drops every older text's
      answer, and Load more and Try again read nothing while a read runs. A
-     text past LIMITS.search reads nothing and says so.
+     text whose words (searchWords, what the read sends) pass LIMITS.search
+     reads nothing and says so. The limit reads the words the list is keyed
+     by, so whitespace alone never makes a text too long, and a text is
+     never too long once and readable the next time under the same key.
    - While the answer for the typed text is on its way, the last answer's
      rows stay, dimmed and not pressable, above "Searching…", so the list
      does not flicker and no row of an older text can be picked. An Enter
@@ -241,15 +244,18 @@ export const mentionSuggestion: Omit<
       list.open(openKey)
     }
 
-    /** Takes the text after "@" as typed now. A changed text reads after
-        MENTION_DELAY_MS, unless it is too long or known to match nobody. */
+    /** Takes the text after "@" as typed now. A text with new words reads
+        after MENTION_DELAY_MS, unless its words are too long or known to
+        match nobody. */
     function update(query: string) {
       const nextWords = searchWords(query)
       const nextKey = `${org}\n${nextWords}`
-      tooLong = overLimit(LIMITS.search, query.trim())
       if (nextKey !== typedKey) {
         typedKey = nextKey
         words = nextWords
+        // the words the key holds and the read sends, so whether a text is
+        // too long changes only with its key
+        tooLong = overLimit(LIMITS.search, words)
         selected = 0
         if (enterFor !== null && enterFor !== typedKey) enterFor = null
         if (timer !== null) clearTimeout(timer)

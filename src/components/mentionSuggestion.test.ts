@@ -339,6 +339,22 @@ describe('the mention popup', () => {
     expect([state(p), lines(p)]).toEqual(['held', [limitSentence(LIMITS.search)]])
   })
 
+  it('measures LIMITS.search on the words it reads, so a text long only by its spaces reads and its correction keeps that read', async () => {
+    const p = popup()
+    // past the limit only through its spaces: the words are "anna fält"
+    p.start(`anna${' '.repeat(LIMITS.search.max)}fält`)
+    expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
+    await rest()
+    // taking spaces out keeps the words, so it reads nothing new
+    p.type(`anna${' '.repeat(LIMITS.search.max - 10)}fält`)
+    await rest()
+    expect(store.reads.map((r) => r.search)).toEqual(['anna fält'])
+    await answer()
+    expect([state(p), ids(p)]).toEqual(['ok', ['anna']])
+    expect(p.key('Enter')).toBe(true)
+    expect(p.command).toHaveBeenCalledWith({ id: 'anna', label: 'Anna Fält' })
+  })
+
   it('says no match without a read for a text that starts with one that matched nobody', async () => {
     const p = popup()
     p.start('zz')
