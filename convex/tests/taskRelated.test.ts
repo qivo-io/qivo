@@ -986,6 +986,44 @@ describe('visibility', () => {
     expect(ids(readOnly.links).sort()).toEqual([...ownRows.links].sort())
   })
 
+  it('leaves out a subtask and a linked task of another organization in a project the caller reads', async () => {
+    const fx = await setup()
+    // bad data: tasks whose org_id is another organization's but whose
+    // project is FW, which the agent reads, so only the organization
+    // checks keep them out
+    for (const over of [{}, { archived_at: NOW }]) {
+      const [group] = await plantTasks(fx, 1, over)
+      const [done] = await plantTasks(fx, 1, { parent_id: group.id, status: 'done', ...over })
+      const [open] = await plantTasks(fx, 1, { parent_id: group.id, ...over })
+      await plantTasks(fx, 1, {
+        parent_id: group.id,
+        org_id: fx.otherOrg.id,
+        status: 'done',
+        ...over,
+      })
+      const [end] = await plantTasks(fx, 1)
+      const [strayEnd] = await plantTasks(fx, 1, { org_id: fx.otherOrg.id })
+      await plantLinks(fx, group, [end, strayEnd])
+      const kids = ids([done, open])
+      const name = JSON.stringify(over)
+      for (const details of [
+        await restDetails(fx, fx.agent, group.id),
+        await mcpDetails(fx, fx.agent, group.id),
+      ]) {
+        expect(ids(details.subtasks as Row[]), name).toEqual(kids)
+        expect(ids(details.links as Row[]), name).toEqual([end.id])
+        // the stray subtask does not count, and leaves the group's facts
+        // partial, as a hidden subtask does
+        expect(details.progress, name).toEqual({ done: 1, total: 2, percent: 50, partial: true })
+      }
+      for (const list of ['subtasks', 'links'] as const) {
+        const want = list === 'subtasks' ? kids : [end.id]
+        expect(ids((await restList(fx, fx.agent, list, group.id)).rows), name).toEqual(want)
+        expect(ids((await mcpList(fx, fx.agent, list, group.id)).rows), name).toEqual(want)
+      }
+    }
+  })
+
   it('lists a follower who lost sight of the task, and leaves out a dropped description image', async () => {
     const fx = await setup()
     const [task] = await plantTasks(fx, 1)
@@ -1581,6 +1619,55 @@ describe('comment pages', () => {
     // the task, its comments and four people asked by id (one gone), where
     // the roster read 200 profiles
     for (const read of [rest, mcp]) expect(read.documents).toBeLessThan(40)
+  })
+
+  it('names no author or editor whose profile is another organization’s', async () => {
+    const fx = await setup()
+    const [task] = await plantTasks(fx, 1)
+    // bad data: comments by a person of another organization, one of them
+    // edited by that person, beside one by a person of this one
+    await fx.t.run(async (ctx) => {
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        author: fx.otherAdmin.id,
+        body: 'From elsewhere',
+        created_at: at(0),
+      })
+      await ctx.db.insert('comments', {
+        id: uuid(),
+        issue_id: task.id,
+        author: fx.user.id,
+        body: 'From here',
+        created_at: at(1),
+        edited_at: at(2),
+        edited_by: fx.otherAdmin.id,
+      })
+    })
+    type Named = {
+      author_id: string | null
+      author_name: string | null
+      edited_by_name: string | null
+    }
+    const rest = (await fx.t.query(internal.machine.rest.listComments, {
+      ...reader(fx.agent),
+      ref: task.id,
+    })) as Named[]
+    const mcp = JSON.parse(
+      await fx.t.query(internal.machine.mcp.listComments, { ...reader(fx.agent), ref: task.id }),
+    ) as Named[]
+    for (const [surface, rows] of [
+      ['REST', rest],
+      ['MCP', mcp],
+    ] as const) {
+      expect(
+        rows.map((c) => [c.author_id, c.author_name, c.edited_by_name]),
+        surface,
+      ).toEqual([
+        [fx.otherAdmin.id, null, null],
+        [fx.user.id, 'user', null],
+      ])
+    }
   })
 })
 
