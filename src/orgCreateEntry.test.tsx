@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OrgCreate } from '../convex/lib/billingAccess'
 import { TooltipProvider } from './components/ui/tooltip'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 
 /* The sidebar's and the phone project list's "Create your organization"
    entry, on the real store, for a login whose only seat it can open is a
@@ -84,14 +85,16 @@ function guestOnly(create?: OrgCreate): Snapshot {
   return snap
 }
 
-/** Boots the real store on `snap`, and answers it with a function that
+/** Boots the real store on `snap`, with the project directory's reads
+    answered by their stand-in, and answers it with a function that
     publishes `snap` again with the create state `create`. */
 async function boot(snap: Snapshot) {
   vi.resetModules()
   let publish = (_: Snapshot) => {}
-  network.onUpdate.mockImplementation((ref, _args, next) => {
+  network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') {
+    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
+    else if (name === 'workspace:whole') {
       publish = (value) => next(structuredClone(value))
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
@@ -158,13 +161,18 @@ describe('the phone project list', () => {
       does, with `createOrg` as its action. */
   async function list(snap: Snapshot, createOrg = vi.fn()) {
     const booted = await boot(snap)
-    const { ProjectDirectory } = await import('./components/MobileWorkspace')
+    const { ProjectDirectory } = await import('./components/ProjectDirectory')
     const { usePlannerVersion } = await import('./store/usePlannerVersion')
     function Live() {
       usePlannerVersion()
-      return <ProjectDirectory actions={{ createOrg, openAll: vi.fn() }} />
+      return <ProjectDirectory actions={{ createOrg, openProject: vi.fn() }} />
     }
     await show(<Live />, '.mobile-project-directory')
+    // the fixture's one project heads no tree, so the stand-in's page,
+    // as the server's, lists nothing
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-project-directory-end="empty"]')).not.toBeNull(),
+    )
     return booted
   }
 

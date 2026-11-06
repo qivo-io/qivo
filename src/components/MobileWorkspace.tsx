@@ -6,30 +6,18 @@ import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { noProjectsHint } from '../lib/noProjects'
 import { type RevealRequest, useReveal } from '../lib/reveal'
-import { matchesAllWords } from '../lib/search'
 import { registerTaskMount, useFollowTaskFocus } from '../lib/taskFocus'
 import { useLatest } from '../lib/useLatest'
-import { useMobile, useMobileBackLayer } from '../lib/useMobile'
+import { useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
 import { type BoardView, useBoardView } from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
-import {
-  Avatar,
-  Icon,
-  MenuItem,
-  PausedMark,
-  Popover,
-  PriorityIcon,
-  ProjectName,
-  Seg,
-  StatusDot,
-} from './qivo'
+import { Avatar, Icon, MenuItem, PausedMark, Popover, PriorityIcon, Seg, StatusDot } from './qivo'
 import { Button } from './ui/button'
 import { Dialog, DialogContent, DialogTitle } from './ui/dialog'
-import { Input } from './ui/input'
 import { NativeSelect } from './ui/native-select'
 import { ViewFilters } from './viewFilters'
 
@@ -270,156 +258,6 @@ export function MobileNavigation({
         </Button>
       ))}
     </nav>
-  )
-}
-
-/** The directory preserves project and sub-project actions without a tiny rail. */
-export function ProjectDirectory({ actions }: { actions: Actions }) {
-  const mobile = useMobile()
-  const directory = useRef<HTMLDivElement>(null)
-  const [search, setSearch] = useState('')
-  const query = mobile ? '' : search
-  const projects = P.visibleProjects().filter((project) =>
-    matchesAllWords(
-      `${project.name} ${P.orgs.find((org) => org.id === project.org)?.name || ''}`,
-      query,
-    ),
-  )
-  return (
-    <div ref={directory} className="mobile-project-directory">
-      {!mobile && (
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Find a project…"
-          className="bg-surface-1"
-          aria-label="Find a project"
-        />
-      )}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button data-all-nav onClick={actions.openAll}>
-          <Icon name="layers" size={16} /> All projects
-        </Button>
-        {P.canCreateProject() && (
-          <Button data-new-project onClick={() => actions.newProject({ kind: 'program' })}>
-            <Icon name="plus" size={16} /> New project
-          </Button>
-        )}
-      </div>
-      {projects.map((project) => {
-        const visibleChildren = project.children
-          .map((id) => P.project(id))
-          .filter((sub) => !!sub && P.canSee(sub.id))
-        return (
-          <section key={project.id} className="mobile-project-card">
-            <div className="mobile-project-row">
-              <Button
-                variant="unstyled"
-                className="mobile-project-open"
-                onClick={() => actions.openProject(project.id)}
-              >
-                <span className="min-w-0 flex-1 text-left">
-                  <span className="block break-words font-semibold">
-                    <ProjectName project={project} wrap />
-                  </span>
-                  <span className="block text-xs text-text-2">
-                    {P.orgs.find((org) => org.id === project.org)?.name}, {visibleChildren.length}{' '}
-                    sub-projects
-                  </span>
-                </span>
-                <Icon name="chevronRight" size={16} />
-              </Button>
-            </div>
-            <div className="mobile-project-actions">
-              <Button variant="ghost" onClick={() => actions.openSettings(`project:${project.id}`)}>
-                <Icon name="people" size={16} /> People & settings
-              </Button>
-              <Popover
-                width={230}
-                align="right"
-                button={(toggle) => (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`${project.name} actions`}
-                    onClick={toggle}
-                  >
-                    <Icon name="more" size={16} />
-                  </Button>
-                )}
-              >
-                {(close) => (
-                  <>
-                    {P.levelOn(project.id) === 'lead' && (
-                      <MenuItem
-                        onClick={(e) => {
-                          const trigger = menuTrigger(e.currentTarget)
-                          close()
-                          actions.newProject({ parent: project.id }, () => trigger)
-                        }}
-                      >
-                        <Icon name="plus" size={16} /> New sub-project
-                      </MenuItem>
-                    )}
-                    <MenuItem
-                      onClick={() => {
-                        close()
-                        actions.openArchivedTasks(project.id)
-                      }}
-                    >
-                      <Icon name="inbox" size={16} /> Archived tasks
-                    </MenuItem>
-                  </>
-                )}
-              </Popover>
-            </div>
-            {!!visibleChildren.length && (
-              <details className="mobile-subprojects">
-                <summary>
-                  Sub-projects <Icon name="chevronDown" size={16} />
-                </summary>
-                {visibleChildren.map((sub) => (
-                  <Button
-                    key={sub.id}
-                    variant="ghost"
-                    className="mobile-subproject-row"
-                    onClick={() => actions.openProject(sub.id)}
-                  >
-                    <span className="min-w-0 flex-1 whitespace-normal text-left">
-                      <ProjectName project={sub} wrap />
-                    </span>
-                    <Icon name="chevronRight" size={16} />
-                  </Button>
-                ))}
-              </details>
-            )}
-          </section>
-        )
-      })}
-      {!projects.length && (
-        <p className="p-5 text-text-2">
-          {query ? 'No projects match your search.' : noProjectsHint()}
-        </p>
-      )}
-      {/* while the server would create one (P.orgCreate) */}
-      {!P.homeOrg && P.orgCreate === 'now' && (
-        <Button
-          onClick={(e) => {
-            const opener = e.currentTarget
-            // the button leaves once the organization exists, and New
-            // project comes, as the organization's first admin can create one
-            actions.createOrg(() =>
-              opener.isConnected
-                ? null
-                : (directory.current?.querySelector<HTMLElement>('[data-new-project]') ??
-                  directory.current?.querySelector<HTMLElement>('[data-all-nav]')),
-            )
-          }}
-        >
-          <Icon name="plus" size={16} /> Create your organization
-        </Button>
-      )}
-    </div>
   )
 }
 

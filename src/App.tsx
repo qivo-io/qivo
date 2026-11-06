@@ -27,13 +27,9 @@ import {
 import { cn } from '@/lib/utils'
 import { BillingNotice } from './components/BillingNotice'
 import { ViewKeeper } from './components/KeptView'
-import {
-  MobileHeader,
-  MobileNavigation,
-  MobileTaskList,
-  ProjectDirectory,
-} from './components/MobileWorkspace'
+import { MobileHeader, MobileNavigation, MobileTaskList } from './components/MobileWorkspace'
 import { navRow, navRowDiv } from './components/navRow'
+import { ProjectDirectory } from './components/ProjectDirectory'
 import { Icon, MenuItem, Popover, ProjectName, Seg } from './components/qivo'
 import { TasksLoadingBar } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
@@ -149,16 +145,20 @@ let toastSeq = 0
 /* ---------- sidebar ---------- */
 /* Navigation rows share components/navRow.ts with Settings. */
 
-function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
+function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen, projectsOpen }) {
   const scopeProj = P.project(scope)
-  // "My view" and "All projects" are scopes, not pages — they light up like a
-  // project row, and the inbox (which owns the screen) outranks both. `scope`
-  // holds one value, so the four kinds of row are mutually exclusive for free.
-  // Team sync is a page with a row of its own: while it is open that row is
-  // the only lit one, and the scope underneath waits unlit for its return.
-  const allOn = !inboxOpen && !syncOpen && P.isAllScope(scope)
-  const mineOn = !inboxOpen && !syncOpen && P.isMineScope(scope)
-  const scopeOn = (id: string) => !syncOpen && scope === id
+  // "My view" is a scope and lights up like a project row. "All projects"
+  // opens the project directory, a page, and lights while it shows; it also
+  // lights for the All projects scope the old paths still reach (the boot
+  // and the access guard for a person who sees no project, Team sync's
+  // person jumps and addresses ending in /all), so the rail always names
+  // where the person is. The inbox, which owns the screen, outranks every
+  // one of them. Team sync is a page with a row of its own: while it is open
+  // that row is the only lit one, and the scope underneath waits unlit for
+  // its return, as it does under the directory.
+  const allOn = !inboxOpen && !syncOpen && (projectsOpen || P.isAllScope(scope))
+  const mineOn = !inboxOpen && !syncOpen && !projectsOpen && P.isMineScope(scope)
+  const scopeOn = (id: string) => !syncOpen && !projectsOpen && scope === id
   const scopeOwner = scopeProj
     ? scopeProj.type === 'meta'
       ? scopeProj.id
@@ -252,10 +252,10 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           </Button>
         </div>
 
-        {/* My view (deviation #49) — the same three views as All projects below,
+        {/* My view (deviation #49): the three views across every project,
           narrowed to the tasks assigned to ME on any seat I hold (0081). The
           first row because it is the personal surface (the inbox, the other
-          one, is the top bar's first tab); the wider scope follows it. */}
+          one, is the top bar's first tab); All projects follows it. */}
         <div className="[padding:0_12px_4px]">
           <Button
             variant="quiet"
@@ -271,11 +271,10 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
           </Button>
         </div>
 
-        {/* All projects (deviation #47) shows the Roadmap across every
-          project this login can reach, home organization and guest seats
-          alike, and the Board and the Overview ask to choose one of them
-          there. It sits above the per-project list because it is the widest
-          scope, not a page of its own. */}
+        {/* All projects (deviation #47) opens the project directory, every
+          project this login can reach by its own access, home organization
+          and guest seats alike, its favorites first. It sits above the
+          per-project list because it lists them all. */}
         <div className="[padding:0_12px_4px]">
           <Button
             variant="quiet"
@@ -283,7 +282,7 @@ function Sidebar({ scope, setScope, actions, inboxOpen, syncOpen }) {
             aria-current={allOn ? 'page' : undefined}
             data-on={allOn ? '' : undefined}
             data-all-nav
-            onClick={() => actions.openAll()}
+            onClick={() => actions.openProjects()}
             className={navRow}
           >
             <Icon name="layers" size={16} />
@@ -1930,14 +1929,8 @@ function App() {
         },
       )
     },
-    // both sentinels are scopes, so they also have to leave whichever page owns
-    // the screen — the sidebar is visible from the inbox, the palette from all
-    openAll: () =>
-      move({ ...leftInbox(), settingsPage: null, scope: P.ALL_SCOPE }, () => {
-        setSettingsPage(null)
-        leaveInbox()
-        setScope(P.ALL_SCOPE)
-      }),
+    // My view is a scope, so it also has to leave whichever page owns the
+    // screen — the sidebar is visible from the inbox, the palette from all
     openMine: () =>
       move(
         {
@@ -1953,6 +1946,10 @@ function App() {
           if (mobile) setView('kanban')
         },
       ),
+    // All projects: the project directory, from the sidebar's row and the
+    // phone's Projects tab. It leaves the scope and the view as they are,
+    // so visiting it never changes the saved scope, and closes a task
+    // window, since its address names no task
     openProjects: () =>
       move(
         { settingsPage: null, inboxOpen: false, sync: null, openIssue: null, projectsOpen: true },
@@ -2508,7 +2505,7 @@ function App() {
               actions={actions}
             />
           ) : projectsOpen ? (
-            <WorkspacePageHeader label="Projects" icon="layers" />
+            <WorkspacePageHeader label="All projects" icon="layers" />
           ) : (
             (inboxOpen || sync || scopeInfo) && (
               <TopBar
@@ -2542,6 +2539,7 @@ function App() {
               actions={actions}
               inboxOpen={inboxOpen}
               syncOpen={!!sync}
+              projectsOpen={projectsOpen}
             />
           )
         }

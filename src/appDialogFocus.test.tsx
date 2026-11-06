@@ -9,6 +9,7 @@ import { CONFIRM_IGNORE_MS } from './lib/useConfirmArm'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { answerProjectNav, isProjectNavRead } from './store/projectNavStandIn.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
@@ -155,7 +156,9 @@ async function boot(
     const name = getFunctionName(ref)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
-    if (name === 'workspace:whole') {
+    // the All projects directory lists the server's navigation reads
+    if (isProjectNavRead(name)) answerProjectNav(snap, name, args, next, fail)
+    else if (name === 'workspace:whole') {
       publish = (value) => {
         const copy = structuredClone(value)
         held(copy)
@@ -382,7 +385,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     ['phone header', 'Create', '', 'Project actions', 'New sub-project'],
     ['phone header', 'Cancel', '', 'Project actions', 'New sub-project'],
     ['Settings › Projects', 'Create', 'settings/projects', 'Project actions', 'New sub-project…'],
-    ['Projects page', 'Create', 'projects', 'Plan actions', 'New sub-project'],
+    ['Projects page', 'Create', 'projects', 'Plan actions', 'New sub-project…'],
   ])(
     "gives focus back to the %s menu's button after %s",
     async (where, choice, path, label, item) => {
@@ -476,7 +479,8 @@ describe('a project saved from the Projects page', { timeout: 30_000 }, () => {
           () => document.querySelector('[data-slot="popover-content"]'),
           'the menu',
         )
-        await press(await find('New sub-project', menu))
+        // the item comes once the project's settings answer
+        await press(await find('New sub-project…', menu))
         await finish(true)
       }
       // the dialog gives focus back to its opener on the page
