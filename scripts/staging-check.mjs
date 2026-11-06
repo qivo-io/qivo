@@ -4918,7 +4918,7 @@ export const PROJECT_DIALOGS_EXPECTED = { team: 'viewer', nora: 'user' }
  *  the agent.
  *  The project goes in the cleanup with its sub-project, and the sweep
  *  finds both by their tag. It needs the run's team, and a backend from the
- *  release after v0.1.138 on, which takes a create without a sort_order. */
+ *  release after v0.1.140 on, which takes a create without a sort_order. */
 async function projectDialogsCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std

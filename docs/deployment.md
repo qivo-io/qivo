@@ -247,7 +247,7 @@ with the run's team as Viewer and with Nora as User from the deployment's
 pickers. It opens **New sub-project** from its first project's menu, picks
 the new project from the **Project** list and makes a sub-project there,
 and checks both over REST (`ui/project-dialogs`). The cleanup deletes both.
-Against a backend from before the release after v0.1.138, which still
+Against a backend from before the release after v0.1.140, which still
 requires `sort_order`, that step fails. It then makes a sub-project of its
 own under its first project, uploads one file of 2,048 bytes over REST to a
 task there, opens **Billing**, checks that current storage shows a figure
@@ -1094,7 +1094,7 @@ that app derives the Roadmap from the workspace's tasks, and
 `planning.assigneeLoad`, which this release no longer calls, stays for it.
 The release changes no server function and needs no step.
 
-From the release after v0.1.138, `projects.create` takes `sort_order` as
+From the release after v0.1.140, `projects.create` takes `sort_order` as
 optional, refuses one that is not a finite number and stores nothing, and,
 when a create leaves it out, places the new project one past the largest
 finite place among its siblings, archived and hidden ones included.
