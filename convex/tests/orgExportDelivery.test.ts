@@ -386,6 +386,9 @@ describe('the /exports/ route', () => {
     const { f, exportId } = await ready(t)
     const job = await jobOf(t, exportId)
     if (job?.archive === undefined || job.completed_at === undefined) throw new Error('not ready')
+    // slices of 64 bytes, so each file and the directory go out in several,
+    // and the bytes are compared across their edges
+    DELIVERY.slice = 64
     const res = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect(res.status).toBe(200)
     expect(Object.fromEntries(res.headers.entries())).toMatchObject({
