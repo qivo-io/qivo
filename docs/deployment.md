@@ -1012,6 +1012,25 @@ when it attaches or within an hour of its expiry, or while a demo row holds
 `declared` or a demo background holds `preview_skipped`, which go with their
 demo within a day. There is no backfill and no release step.
 
+From the release after v0.1.136, **Settings → Projects → All projects**,
+**Archived projects**, a project page's Sub-projects section and an
+archived project's **Show sub-projects** read `projectSettings.projects`,
+`subProjects`, `archived` and `archivedSubProjects`, which v0.1.129 (PR
+#364, `e0a2d0b7`) first shipped, instead of the workspace, one
+organization at a time and 25 a page, and a restore from Archived projects
+sends the organization the page showed. That makes v0.1.129 the backend's
+floor for this app: against a backend before it, these pages say they
+could not load the lists and offer Try again, never an empty list, also in
+a tab that was open when the backend went back, until the backend rolls
+forward. The upload tickets' floor above, the release after v0.1.135,
+already holds it, so this release sets no new rollback floor; from it on,
+as from that one, never return the backend to a commit before that
+release, and roll forward instead. Returning the app alone to an earlier
+release is safe, because that app lists the workspace's projects and the
+backend keeps every function it calls. The release changes no server
+function, so it has no server change and no release step. The New project
+and New sub-project dialogs still read the workspace.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
