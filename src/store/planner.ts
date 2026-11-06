@@ -1238,9 +1238,12 @@ function startPress(direction: 'earlier' | 'newer') {
 /* Which side a release after an arrival, or after an editor closed, takes
    (keepThread), and what it keeps: for each place a window reported
    (threadPlaces), the reported row and the 50 rows after it in time order,
-   both kinds counted, which are on that window's screen. The pages of the
-   last press are not kept here: a reader still up there reports a place
-   among them, and one back at the newest end lets them go. With no place
+   both kinds counted, which are on that window's screen. A comment held
+   apart for its editor (pinnedComments) shows at its time outside every
+   run, so a place on it keeps the 50 held rows from its time on, the ones
+   under it on screen. The pages of the last press are not kept here: a
+   reader still up there reports a place among them, and one back at the
+   newest end lets them go. With no place
    reported, or the topmost one at or below a gap or in the live rows, the
    oldest side goes. A reader above a gap keeps the
    rows around them: the newer run goes from the gap down, then the end of
@@ -1259,13 +1262,20 @@ function arrivalMoves(held: ReturnType<typeof heldThread>): {
   let top: { kind: HeldKind | null; at: number; ts: number } | null = null
   for (const first of threadPlaces.values()) {
     if (first === null) continue
-    const i = merged.findIndex((r) => r.id === first)
+    let i = merged.findIndex((r) => r.id === first)
+    let after = 51
+    const apart = i === -1 ? pinnedComments.get(first) : undefined
+    if (apart) {
+      const ts = Date.parse(apart.created_at)
+      i = merged.findIndex((r) => r.ts >= ts)
+      after = 50
+    }
     if (i === -1) continue
-    for (const r of merged.slice(i, i + 51)) keep.add(r.id)
-    const ts = merged[i].ts
+    for (const r of merged.slice(i, i + after)) keep.add(r.id)
+    const { id, ts } = merged[i]
     if (top !== null && top.ts <= ts) continue
-    const kind = kinds.find((k) => k.older.some((r) => r.id === first)) ?? null
-    top = { kind, at: kind ? kind.older.findIndex((r) => r.id === first) : -1, ts }
+    const kind = kinds.find((k) => k.older.some((r) => r.id === id)) ?? null
+    top = { kind, at: kind ? kind.older.findIndex((r) => r.id === id) : -1, ts }
   }
   // no place, or the topmost at or below a gap or in the live rows
   if (top === null || top.kind === null) return { moves: ['top'], keep }

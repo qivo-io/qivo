@@ -351,6 +351,27 @@ describe('the task window keeps a bounded thread', () => {
     })
   })
 
+  describe('places and presses', () => {
+    it('places a report on a comment held apart for its editor at its time, so an arrival keeps the rows under it', async () => {
+      const { P } = store
+      openServed(300)
+      await earlier()
+      await earlier()
+      P.holdComment(pane, 'comment-150')
+      // a comment arrives while the reader is at the newest end, so the oldest
+      // row goes, and the one in the editor is held apart above the rest
+      publish({ comments: range(251, 301), earlier: true })
+      expect(P.pinnedComments).toEqual(['comment-150'])
+      // the reader scrolls up to it, and the next arrival keeps the rows
+      // under it on screen, letting #250 go from below the gap instead
+      P.threadPlace(pane, 'comment-150')
+      publish({ comments: range(252, 302), earlier: true })
+      expect(shown().slice(0, 3)).toEqual(['comment-150', 'comment-151', 'comment-152'])
+      expect(shown()).not.toContain('comment-250')
+      expect(held()).toBe(121)
+    })
+  })
+
   describe('drafts and edits', () => {
     it('holds the comment open in an editor apart through every release, until its editor closes', async () => {
       const { P } = store
