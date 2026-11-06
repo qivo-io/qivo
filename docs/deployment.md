@@ -211,10 +211,14 @@ mismatch worse:
    name. No answer, or one `5xx` while the other routes answered as
    expected, can be a brief fault of the network or of Convex while sign-in
    works.
-2. Call the routes by hand as above. When they answer as expected, run the
-   build again: **Deploy staging** from main for staging, and for production
-   and the demo the newest release's **Production release** run again, which
-   is allowed (see [Production release](#production-release)). A passing
+2. Call the routes by hand as above. When they answer as expected, deploy
+   the same commit again. Run **Deploy staging** from main for staging. For
+   production and the demo, re-run the failed **Production release** run of
+   the newest release, or, while main still points at that commit, run
+   **Prepare release**, which drafts main's commit under a new version (see
+   [Shipping a change](#shipping-a-change)). Once main has moved, publish a
+   new, higher version that targets that commit from the GitHub interface
+   instead (see [Rollback and hotfixes](#rollback-and-hotfixes)). A passing
    build moves the domain and records success.
 3. When they still fail, fix a wrong setting, or follow
    [Rollback and hotfixes](#rollback-and-hotfixes): fix forward, or publish
