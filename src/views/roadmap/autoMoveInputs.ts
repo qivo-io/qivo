@@ -86,3 +86,24 @@ export function autoMoveMoves(inputs: AutoMoveInputs, tasks: readonly PartTask[]
     canWrite: (it) => editable.has(it.project),
   })
 }
+
+/** Everything autoMoveMoves reads of `inputs` and `tasks`, as one string,
+    so the Roadmap solves again only when it changed: each task in order,
+    with its dates, status, whether it is a group, its children, its links
+    and whether the reader may edit its project. Keep it beside the solver's
+    reads (lib/schedule.ts autoMoves). */
+export function autoMoveKey(inputs: AutoMoveInputs, tasks: readonly PartTask[]): string {
+  const editable = new Set(inputs.editable_projects)
+  return JSON.stringify(
+    tasks.map((t) => [
+      t.id,
+      t.start,
+      t.end,
+      t.status,
+      t.isGroup,
+      t.children,
+      t.links,
+      editable.has(t.project),
+    ]),
+  )
+}

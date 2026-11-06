@@ -4,7 +4,7 @@ import { act, useLayoutEffect, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RoadmapAnswer } from '../../convex/lib/roadmap'
+import type { DependencyAnswer, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
@@ -581,6 +581,47 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     })
     expect(move()?.disabled).toBe(true)
     expect(move()?.dataset.autoMove).toBe('waiting')
+  })
+
+  it('solves again when a linked task moves to a project the reader may or may not edit, its dates unchanged', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { start_week: week(0), end_week: week(0) })
+        snap.links.push({
+          id: 'link-1',
+          source_id: 'one-1',
+          target_id: 'two-1',
+          type: 'blocks',
+          pair_key: 'one-1:two-1',
+          created_at: '2026-09-01T08:00:00.000Z',
+        })
+      },
+      { scope: 'plan' },
+    )
+    // the reader may edit One, where one-1 stays, and not Two
+    const one = board.snapshot.projects[0].id
+    board.server.roadmap.edit = (name, answer) => {
+      const a = answer as DependencyAnswer
+      return name === 'tasks:roadmapDependencies' && a.state === 'ok' && a.auto_move.state === 'ok'
+        ? { ...a, auto_move: { ...a.auto_move, editable_projects: [one] } }
+        : answer
+    }
+    await renderRoadmap(board)
+    const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
+    // two-1 starts before its blocker ends, in Two: nothing to move
+    expect(move()?.disabled).toBe(true)
+    // someone moves two-1 to One, its dates, status and links as they were
+    const two = board.snapshot.issues[1]
+    two.project_id = one
+    await board.answer()
+    expect(move()?.disabled).toBe(false)
+    expect(move()?.textContent).toContain('1')
+    // and back to Two
+    two.project_id = 'two'
+    await board.answer()
+    expect(move()?.disabled).toBe(true)
   })
 
   it("draws a group's bar over its subtask's saved move before the answer runs again", async () => {

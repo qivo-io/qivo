@@ -41,7 +41,7 @@ import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip, type TeamPerson } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
-import { autoMoveMoves, autoMoveTasks } from './roadmap/autoMoveInputs'
+import { autoMoveKey, autoMoveMoves, autoMoveTasks } from './roadmap/autoMoveInputs'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
 import { type FlagView, flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
@@ -1248,16 +1248,11 @@ function Roadmap({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [autoMoveInputs, viewsNow, P.gridEpoch],
   )
-  // what the solver reads of the parts, so a delivery that changed none of
-  // their dates, statuses, families, links or write levels moves nothing
+  // what the solver reads of the parts (autoMoveKey), so a delivery that
+  // changed none of their dates, statuses, families, links or the reader's
+  // right to edit each one's project moves nothing
   const partsRead = useMemoR(
-    () =>
-      autoMoveInputs && partTasks
-        ? JSON.stringify([
-            autoMoveInputs.editable_projects,
-            partTasks.map((t) => [t.id, t.start, t.end, t.status, t.children, t.links]),
-          ])
-        : '',
+    () => (autoMoveInputs && partTasks ? autoMoveKey(autoMoveInputs, partTasks) : ''),
     [autoMoveInputs, partTasks],
   )
   const pendingMoves: AutoMove[] = useMemoR(
