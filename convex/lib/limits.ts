@@ -205,6 +205,11 @@ export const BY_IDS_MAX = 100
  * unread and read halves (lib/inbox.ts). */
 export const INBOX_LIMIT = 500
 
+/** The most comments and changes the task window keeps loaded for the open
+ * task (threadRows), measured in the browser benchmark's thread phase
+ * (scripts/benchmark-browser.mjs --thread) on 6 November 2026. */
+export const THREAD_ROWS = 150
+
 /** Days a read inbox message is kept when the person has not chosen. */
 export const DEFAULT_MESSAGE_RETENTION_DAYS = 7
 
@@ -504,6 +509,19 @@ export const LIMITS = {
     unit: 'comments in any 60 seconds',
     refusal: tooManyComments(60),
     on: ALL,
+  },
+  // A budget of the app's own, not a stored cap: the task window keeps at
+  // most this many comments and changes of the open task loaded and reads
+  // the others again when the person scrolls back to them
+  // (src/lib/threadBudget.ts THREAD_KEEP). No server function reads it, and
+  // REST and MCP pages are apart from it.
+  threadRows: {
+    label: 'Comments and changes the task window keeps loaded',
+    group: 'tasks',
+    max: THREAD_ROWS,
+    unit: 'comments and changes of the open task',
+    refusal: `the task window keeps at most ${grouped(THREAD_ROWS)} comments and changes of a task loaded and lets go of those farthest from where you read. Show earlier and Show newer load them again.`,
+    on: ['app'],
   },
   followers: {
     label: 'Followers per task',

@@ -153,6 +153,14 @@ import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { type RefParts, refParts, taskRef } from '../lib/taskReference'
 import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '../lib/taskSections'
 import { type SyncVerdict, syncMeetingOf, weekHoursOf } from '../lib/teamSync'
+import {
+  type HeldKind,
+  joinNewer,
+  newerAnchor,
+  type ReleaseMove,
+  releaseThread,
+  THREAD_KEEP,
+} from '../lib/threadBudget'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
@@ -574,17 +582,21 @@ let historyEpoch = 0
    another task opens. A re-init of the parts (stopParts) keeps it until the
    new subscription delivers. */
 let historySnap: Row<'activity_events'>[] | null = null
-/* The watched task's history older than that page, oldest first: earlier
-   pages (P.loadEarlierHistory) and rows that left the page as newer ones
-   arrived. Server truth like historySnap, but not live: only the live page
-   runs again when what the person may see changes. A row loaded earlier
-   that the person stops receiving, after a grant ends or a task it names
-   moves or goes, stays on screen until the history loads again (Comments
-   and back to All, or the task opened again). Those rows came while the
-   person could see them, so nothing new shows. The store does not re-read
-   the loaded pages, since no change it hears of covers every input of the
-   server's rule (lib/activityVisibility.ts memberSeesActivity): a task a
-   row names can move or go where the person never sees it. A live page
+/* The watched task's history older than that page, oldest first: the run
+   above the gap while one is open (historyGap), else every loaded row older
+   than the page. They are earlier pages (P.loadEarlierHistory), pages Show
+   newer activity read back, and rows that left the page as newer ones
+   arrived while no gap was open. Server truth like historySnap, but not
+   live: only the live page runs again when what the person may see
+   changes. A row loaded earlier that the person stops receiving, after a
+   grant ends or a task it names moves or goes, stays on screen until the
+   history loads again (Comments and back to All, or the task opened again)
+   or the store lets it go past its budget (keepThread). Those rows came
+   while the person could see them, so nothing new shows. The store does
+   not re-read the loaded pages, since no change it hears of covers every
+   input of the server's rule (lib/activityVisibility.ts
+   memberSeesActivity): a task a row names can move or go where the person
+   never sees it. A live page
    that does not begin with a loaded row, as after more changes between two
    deliveries than a page holds, starts the history over from that page
    (receiveHistory), and Show earlier activity loads the rest again: joining
@@ -601,11 +613,16 @@ let historyLoad: 'idle' | 'loading' | 'failed' = 'idle'
    not receive, so this can be a row the thread does not show. */
 let historyNext: string | null = null
 /* The watched thread's comments older than the live window, oldest first in
-   thread order. They are earlier pages (P.loadEarlierComments) and comments
-   that left the window as newer ones arrived. Server truth like
-   commentsSnap, but not live. The store patches it for the person's own
-   edits and deletes; other people's changes to these comments show when the
-   task opens again. */
+   thread order: the run above the gap while one is open (commentsGap), else
+   every loaded comment older than the live window. They are earlier pages
+   (P.loadEarlierComments), pages Show newer comments read back, and
+   comments that left the window as newer ones arrived while no gap was
+   open. Server truth like commentsSnap, but not live. The store patches it
+   for the person's own edits and deletes; other people's changes to these
+   comments show when they load again. With the history, the newer run and
+   the live window, at most THREAD_KEEP.rows rows are held, and a loaded
+   comment stays until a release lets it go (keepThread) or the task opens
+   again. */
 let olderComments: Row<'comments'>[] = []
 /* The person's comment edits and deletes in the watched thread that the
    server accepted (null for a delete), until a live window holds the
@@ -617,6 +634,52 @@ const acceptedCommentChanges = new Map<string, Partial<Row<'comments'>> | null>(
    earlier, and how the last load of an earlier page went. */
 let threadStart = false
 let earlierLoad: 'idle' | 'loading' | 'failed' = 'idle'
+/* The released span of the watched thread's comments (lib/threadBudget.ts):
+   the ids the store let go between the run above it (olderComments) and the
+   run below it (newerComments), oldest first in thread order, or null with
+   no gap. The runs are arrays of their own, so a delete or a dropped
+   comment before the gap cannot shift where it is. Show newer comments
+   reads the span back (P.loadNewerComments), anchored at these ids, which
+   the server answered for this task. The gap can hold no id once every one
+   of them proved deleted; it closes only when a page proves the runs meet.
+   With no gap, newerComments is empty. */
+let commentsGap: string[] | null = null
+/* The comments kept below the gap and above the live window, oldest first
+   in thread order: comments that slid out of the live window while a gap
+   was open, and the rows below a gap that a release left. Server truth
+   like olderComments, patched the same way. */
+let newerComments: Row<'comments'>[] = []
+/* How the last Show newer comments read went, and the number of the read
+   that counts, which a later read and a changed gap move on, so an answer
+   that comes after them is dropped. */
+let newerLoad: 'idle' | 'loading' | 'failed' = 'idle'
+let newerAsk = 0
+/* The same for the history: the released change ids between olderEvents
+   and newerEvents, the changes kept below that gap, and the last Show newer
+   activity read. */
+let historyGap: string[] | null = null
+let newerEvents: Row<'activity_events'>[] = []
+let historyNewerLoad: 'idle' | 'loading' | 'failed' = 'idle'
+let historyNewerAsk = 0
+/* The comment each window has open in its editor (P.holdComment), by the
+   window's own object. A release passes over such a comment rather than
+   unmount its editor with the draft: it leaves its run, and the store holds
+   its row in pinnedComments, which the window shows at its time, until a
+   page or the live window holds it again or no editor holds it. */
+const commentHolds = new Map<object, string>()
+const pinnedComments = new Map<string, Row<'comments'>>()
+/* The first comment or change on screen in each window, by the window's own
+   object, null while the window shows the thread's newest end
+   (P.threadPlace). A comment or change that arrives past the budget
+   releases on the side farther from the topmost of them (arrivalMoves).
+   Dropped when its window unmounts and when another task is watched. */
+const threadPlaces = new Map<object, string | null>()
+/* The rows the last press of Show earlier or Show newer keeps through every
+   release until the next press: the rows the window measures to keep the
+   reader's place, each kind's oldest row for Show earlier and each kind's
+   last row above the gap for Show newer, and the pages the press loaded,
+   of both kinds under All, where one press reads both (startPress). */
+let pressKeep = new Set<string>()
 /* The windows that show the watched task's Subtasks, Linked tasks and
    Attachments (P.showSections): a floating window or pop-out, and on a
    phone its Details tab. Each list has a side query of the live parts
@@ -788,8 +851,18 @@ export type TaskSectionsVM = {
 }
 
 /** What the task window shows above the oldest loaded comment
-    (P.commentsEarlier). */
+    (P.commentsEarlier), and where the store let comments go between its
+    two runs (P.commentsNewer). */
 export type CommentsEarlier = 'none' | 'more' | 'loading' | 'failed'
+
+/** One kind's gap as the task window places it (lib/spine.ts spineGap):
+    the latest time of a row kept above it and the earliest of a row kept
+    below it, in ms, and the ids kept above it, by which the window splits
+    the rows when a seeded thread's times run against its order. */
+export type ThreadGapSide = { end: number; below: number; above: ReadonlySet<string> }
+/** The watched thread's gaps (P.threadGap): the comments' and, while the
+    history is held, the changes', each null without one. */
+export type ThreadGap = { comments: ThreadGapSide | null; history: ThreadGapSide | null }
 
 /** Whether the watched thread's subscription failed (P.commentsFailure),
     or its history's (P.historyFailure): 'failed' until a later delivery or
@@ -799,14 +872,18 @@ export type CommentsFailure = 'none' | 'failed' | 'retrying'
 
 /* Builds the watched thread's rows from its last deliveries and the rows
    loaded before them: the comments, empty while none are delivered (or
-   nothing is watched), and the history, empty while it is not delivered.
-   The thread's layers paint over them (repaint). */
+   nothing is watched), with the comments held apart for an editor
+   (pinnedComments), and the history, empty while it is not delivered. The
+   thread's layers paint over them (repaint). */
 function buildThreadRows() {
+  syncPinned()
   rows.threadEvents =
     historySnap === null
       ? []
       : structuredClone([
-          ...new Map([...olderEvents, ...historySnap].map((r) => [r.id, r])).values(),
+          ...new Map(
+            [...olderEvents, ...newerEvents, ...historySnap].map((r) => [r.id, r]),
+          ).values(),
         ])
   PLANNER.historyLoaded = historySnap !== null
   if (commentsSnap === null) {
@@ -814,31 +891,71 @@ function buildThreadRows() {
     return
   }
   rows.comments = new Map(
-    structuredClone([...olderComments, ...commentsSnap]).map((r) => [r.id, r]),
+    structuredClone([...olderComments, ...newerComments, ...commentsSnap]).map((r) => [r.id, r]),
   )
+  for (const [id, row] of pinnedComments)
+    if (!rows.comments.has(id)) rows.comments.set(id, structuredClone(row))
   PLANNER.commentsLoaded = true
+}
+
+/* Lets go of the comments held apart for an editor (pinnedComments) that a
+   run or the live window holds again, or that no editor holds any more. */
+function syncPinned() {
+  if (pinnedComments.size === 0) return
+  const editing = new Set(commentHolds.values())
+  const held = new Set(
+    [...olderComments, ...newerComments, ...(commentsSnap ?? [])].map((r) => r.id),
+  )
+  for (const id of pinnedComments.keys())
+    if (held.has(id) || !editing.has(id)) pinnedComments.delete(id)
+}
+
+/* Closes the watched thread's comment gap and drops the run below it,
+   which the caller has placed or let go, and drops any Show newer read on
+   its way. */
+function dropCommentsGap() {
+  commentsGap = null
+  newerComments = []
+  newerAsk++
+  newerLoad = 'idle'
+}
+
+/* The same for the history's gap (dropCommentsGap). */
+function dropHistoryGap() {
+  historyGap = null
+  newerEvents = []
+  historyNewerAsk++
+  historyNewerLoad = 'idle'
 }
 
 /* Records a delivery of the watched thread's live window, oldest first in
    thread order, and whether the thread holds earlier comments. Comments that
-   left the window at its old end move to olderComments, so what a reader
-   loaded stays while new comments arrive. A window with nothing earlier
-   starts the thread, so nothing loaded before it exists any more. Returns
-   the comments that just left the window, oldest first, since a delivery
-   alone cannot tell one deleted from the old end from one that slid out
-   (checkSlidOut). When the window no longer meets what was loaded, because
-   more comments arrived between two deliveries than it holds, the thread
-   starts over from the window. */
+   left the window at its old end join the run just above it, the newer run
+   while a gap is open, else olderComments, so what a reader loaded stays
+   while new comments arrive, until a release lets it go (keepThread). A
+   window with nothing earlier starts the thread, so nothing loaded before
+   it exists any more. Returns the comments that just left the window,
+   oldest first, since a delivery alone cannot tell one deleted from the old
+   end from one that slid out (checkSlidOut). A window that reaches back
+   into what was loaded, as after a delete inside it, keeps the rows before
+   its first comment: in the newer run that run up to it, in the gap the
+   ids before it with no newer run (a window that starts at the gap's first
+   id meets the run above, so the gap closes), and in the run above that
+   run up to it with no gap. When the window no longer meets what was
+   loaded, because more comments arrived between two deliveries than it
+   holds, the thread starts over from the window, with no gap. A comment
+   held apart for an editor stays through every one of these. */
 function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
   if (first === undefined || !page.earlier) {
     olderComments = []
+    dropCommentsGap()
   } else if (prev !== null) {
     const at = prev.findIndex((r) => r.id === first.id)
     if (at > 0) {
-      const known = new Set(olderComments.map((r) => r.id))
+      const known = new Set([...olderComments, ...newerComments].map((r) => r.id))
       slid = prev.slice(0, at)
       const moved = slid
         .filter((r) => !known.has(r.id) && acceptedCommentChanges.get(r.id) !== null)
@@ -846,12 +963,24 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
           const change = acceptedCommentChanges.get(r.id)
           return change ? { ...r, ...change } : r
         })
-      olderComments = [...olderComments, ...moved]
+      if (commentsGap === null) olderComments = [...olderComments, ...moved]
+      else newerComments = [...newerComments, ...moved]
     } else if (at === -1) {
       // the window reached down into what was loaded before it, or past it
+      const inNewer = newerComments.findIndex((r) => r.id === first.id)
+      const inGap = commentsGap?.indexOf(first.id) ?? -1
       const kept = olderComments.findIndex((r) => r.id === first.id)
-      olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
-      if (kept === -1) threadStart = false
+      if (inNewer !== -1) newerComments = newerComments.slice(0, inNewer)
+      else if (commentsGap !== null && inGap > 0) {
+        const before = commentsGap.slice(0, inGap)
+        dropCommentsGap()
+        commentsGap = before
+      } else if (inGap === 0) dropCommentsGap()
+      else {
+        dropCommentsGap()
+        olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
+        if (kept === -1) threadStart = false
+      }
     }
   }
   // the first page decides, also after the empty thread a new task shows
@@ -875,9 +1004,13 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
    history a reader loaded stays. A page whose first row is in olderEvents
    reaches back into what was loaded, and the loaded rows from that one on
    give way to it. Neither moves historyNext, which stays older than every
-   row they hold. Any other page begins with no loaded row, because more
-   rows arrived between two deliveries than it holds or the person can now
-   see a row they could not, and starts the history over from it. */
+   row they hold. While a gap is open (historyGap) the rows that left the
+   page join the run below it, and a page that reaches back into that run,
+   into the gap or above it keeps what is before its first row as
+   receiveThread does for the comments. Any other page begins with no
+   loaded row, because more rows arrived between two deliveries than it
+   holds or the person can now see a row they could not, and starts the
+   history over from it. */
 function receiveHistory(page: {
   events: Row<'activity_events'>[]
   earlier: boolean
@@ -887,12 +1020,24 @@ function receiveHistory(page: {
   const head = page.events[0]
   const at = head ? prev.findIndex((r) => r.id === head.id) : -1
   const back = head ? olderEvents.findIndex((r) => r.id === head.id) : -1
+  const inNewer = head ? newerEvents.findIndex((r) => r.id === head.id) : -1
+  const inGap = head && historyGap ? historyGap.indexOf(head.id) : -1
   if (historySnap === null || !page.earlier || head === undefined) restartHistory(page)
   else if (at !== -1) {
-    const known = new Set(olderEvents.map((r) => r.id))
-    olderEvents = [...olderEvents, ...prev.slice(0, at).filter((r) => !known.has(r.id))]
-  } else if (back !== -1) olderEvents = olderEvents.slice(0, back)
-  else restartHistory(page)
+    const known = new Set([...olderEvents, ...newerEvents].map((r) => r.id))
+    const moved = prev.slice(0, at).filter((r) => !known.has(r.id))
+    if (historyGap === null) olderEvents = [...olderEvents, ...moved]
+    else newerEvents = [...newerEvents, ...moved]
+  } else if (inNewer !== -1) newerEvents = newerEvents.slice(0, inNewer)
+  else if (historyGap !== null && inGap > 0) {
+    const before = historyGap.slice(0, inGap)
+    dropHistoryGap()
+    historyGap = before
+  } else if (inGap === 0) dropHistoryGap()
+  else if (back !== -1) {
+    dropHistoryGap()
+    olderEvents = olderEvents.slice(0, back)
+  } else restartHistory(page)
   historySnap = page.events
 }
 
@@ -904,6 +1049,7 @@ function receiveHistory(page: {
 function restartHistory(page: { earlier: boolean; next: string | null }) {
   historyEpoch++
   olderEvents = []
+  dropHistoryGap()
   historyStart = !page.earlier
   historyNext = page.next
   historyLoad = 'idle'
@@ -916,6 +1062,7 @@ function resetHistory() {
   historyEpoch++
   historySnap = null
   olderEvents = []
+  dropHistoryGap()
   historyNext = null
   historyStart = false
   historyLoad = 'idle'
@@ -960,11 +1107,14 @@ async function checkSlidOut(
     page.earlier && page.comments[0] ? slid.findIndex((r) => r.id === page.comments[0].id) : 0
   const gone = slid.slice(Math.max(reach, 0)).filter((r) => !held.has(r.id))
   const drop = new Set(gone.map((r) => r.id))
+  // wherever they went, the run above the live window or the one below a gap
   olderComments = olderComments.filter((r) => !drop.has(r.id))
+  newerComments = newerComments.filter((r) => !drop.has(r.id))
   // A page that starts the thread before an unmoved window, all of it
   // loaded, means nothing earlier is left to load.
   const loaded = new Set(olderComments.map((r) => r.id))
   const start =
+    commentsGap === null &&
     !threadStart &&
     !page.earlier &&
     commentsSnap?.[0]?.id === firstId &&
@@ -976,10 +1126,202 @@ async function checkSlidOut(
 }
 
 /* Drops the comment `id` from the watched thread's server truth, for a
-   comment the server says no longer exists. The caller repaints. */
+   comment the server says no longer exists: from its run, the live window,
+   the gap's ids and the comments held apart for an editor. The caller
+   repaints. */
 function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
+  newerComments = newerComments.filter((r) => r.id !== id)
+  if (commentsGap?.includes(id)) commentsGap = commentsGap.filter((gone) => gone !== id)
+  pinnedComments.delete(id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
+}
+
+/* A comment as the release walks it (lib/threadBudget.ts HeldRow), with
+   its row. */
+type HeldComment = { id: string; ts: number; row: Row<'comments'> }
+/* A change as the release walks it. */
+type HeldChange = { id: string; ts: number; row: Row<'activity_events'> }
+const heldComment = (row: Row<'comments'>): HeldComment => ({
+  id: row.id,
+  ts: Date.parse(row.created_at),
+  row,
+})
+const heldChange = (row: Row<'activity_events'>): HeldChange => ({
+  id: row.id,
+  ts: Date.parse(row.ts),
+  row,
+})
+
+/* What the store holds of the watched thread, as the release walks it: the
+   comments, and the history while it is held. */
+function heldThread(): { comments: HeldKind<HeldComment>; history: HeldKind<HeldChange> | null } {
+  return {
+    comments: {
+      older: olderComments.map(heldComment),
+      gap: commentsGap,
+      newer: newerComments.map(heldComment),
+      live: (commentsSnap ?? []).map(heldComment),
+    },
+    history:
+      historySnap === null
+        ? null
+        : {
+            older: olderEvents.map(heldChange),
+            gap: historyGap,
+            newer: newerEvents.map(heldChange),
+            live: historySnap.map(heldChange),
+          },
+  }
+}
+
+/* Starts the rows a press of Show earlier (`earlier`) or Show newer keeps
+   (pressKeep): the rows the window measures to keep the reader's place,
+   each kind's oldest row for Show earlier and each kind's last row above
+   the gap for Show newer. Under All one press reads both kinds one after
+   the other, so a load that starts while another is on its way belongs to
+   the same press and keeps what it started. */
+function startPress(direction: 'earlier' | 'newer') {
+  const loading = [earlierLoad, historyLoad, newerLoad, historyNewerLoad].includes('loading')
+  if (loading) return
+  const ids =
+    direction === 'earlier'
+      ? [
+          (olderComments[0] ?? newerComments[0] ?? commentsSnap?.[0])?.id,
+          historySnap === null
+            ? undefined
+            : (olderEvents[0] ?? newerEvents[0] ?? historySnap[0])?.id,
+        ]
+      : [olderComments.at(-1)?.id, olderEvents.at(-1)?.id]
+  pressKeep = new Set(ids.filter((id) => id !== undefined))
+}
+
+/* Which side a release after an arrival, or after an editor closed, takes
+   (keepThread), and what it keeps: for each place a window reported
+   (threadPlaces), the reported row and the 50 rows after it in time order,
+   both kinds counted, which are on that window's screen. The pages of the
+   last press are not kept here: a reader still up there reports a place
+   among them, and one back at the newest end lets them go. With no place
+   reported, or the topmost one at or below a gap or in the live rows, the
+   oldest side goes. A reader above a gap keeps the
+   rows around them: the newer run goes from the gap down, then the end of
+   the run they read in that is farther from them. With no gap, the end
+   farther from them goes. */
+function arrivalMoves(held: ReturnType<typeof heldThread>): {
+  moves: ReleaseMove[]
+  keep: Set<string>
+} {
+  const keep = new Set<string>()
+  const kinds: HeldKind[] = held.history ? [held.comments, held.history] : [held.comments]
+  const merged = kinds
+    .flatMap((k) => [...k.older, ...k.newer, ...k.live])
+    .sort((a, b) => a.ts - b.ts)
+  // the topmost reported row, and the kind whose run above the gap holds it
+  let top: { kind: HeldKind | null; at: number; ts: number } | null = null
+  for (const first of threadPlaces.values()) {
+    if (first === null) continue
+    const i = merged.findIndex((r) => r.id === first)
+    if (i === -1) continue
+    for (const r of merged.slice(i, i + 51)) keep.add(r.id)
+    const ts = merged[i].ts
+    if (top !== null && top.ts <= ts) continue
+    const kind = kinds.find((k) => k.older.some((r) => r.id === first)) ?? null
+    top = { kind, at: kind ? kind.older.findIndex((r) => r.id === first) : -1, ts }
+  }
+  // no place, or the topmost at or below a gap or in the live rows
+  if (top === null || top.kind === null) return { moves: ['top'], keep }
+  const gaps = kinds.filter((k) => k.gap !== null)
+  // a row of a kind without a gap counts as above the other kind's gap
+  // when it is no later than that gap's last row above
+  const gapEnd = Math.min(
+    ...gaps.map((k) => k.older.reduce((max, r) => Math.max(max, r.ts), Number.NEGATIVE_INFINITY)),
+  )
+  if (gaps.length && top.kind.gap === null && top.ts > gapEnd) return { moves: ['top'], keep }
+  const toTop = top.at
+  const toEnd = top.kind.older.length - 1 - top.at + (gaps.length ? 0 : top.kind.live.length)
+  const far: ReleaseMove = toTop > toEnd ? 'top' : 'up'
+  return { moves: gaps.length ? ['down', far] : [far], keep }
+}
+
+/* Lets go of the watched thread's rows past THREAD_KEEP.rows
+   (lib/threadBudget.ts releaseThread), on the side `why` names: after an
+   earlier page (`earlier`) the newer side, after a newer page the oldest
+   side, after an arrival, an editor closing or the history starting the
+   side arrivalMoves picks. It never takes the live window or page, the
+   rows a press keeps (pressKeep) after that press's page, or the rows on
+   screen around a reported place, it never splits an instant, and it passes over a comment
+   open in an editor, which it holds apart (pinnedComments). Released
+   comments leave acceptedCommentChanges, since a read brings them back with
+   the server's text, edits included. A release from the top unloads that
+   kind's start, and the history then reads on before its oldest kept row
+   (historyNext). The caller repaints. Answers whether rows went. */
+function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
+  if (commentsSnap === null) return false
+  const held = heldThread()
+  const count =
+    olderComments.length +
+    newerComments.length +
+    commentsSnap.length +
+    (historySnap === null ? 0 : olderEvents.length + newerEvents.length + historySnap.length)
+  if (count <= THREAD_KEEP.rows) return false
+  const side =
+    why === 'arrival'
+      ? arrivalMoves(held)
+      : {
+          moves: why === 'earlier' ? (['down', 'up'] as ReleaseMove[]) : (['top'] as ReleaseMove[]),
+          keep: pressKeep,
+        }
+  const after = releaseThread({
+    comments: held.comments,
+    history: held.history,
+    keep: side.keep,
+    pinned: new Set(commentHolds.values()),
+    moves: side.moves,
+    budget: THREAD_KEEP.rows,
+  })
+  if (!after) return false
+  const editing = new Set(commentHolds.values())
+  const c = after.comments
+  olderComments = c.older.map((h) => h.row)
+  newerComments = c.newer.map((h) => h.row)
+  commentsGap = c.gap
+  if (c.fromTop) threadStart = false
+  for (const h of c.released) {
+    acceptedCommentChanges.delete(h.id)
+    if (editing.has(h.id)) pinnedComments.set(h.id, h.row)
+  }
+  const e = after.history
+  if (e && historySnap !== null) {
+    olderEvents = e.older.map((h) => h.row)
+    newerEvents = e.newer.map((h) => h.row)
+    historyGap = e.gap
+    if (e.fromTop) {
+      historyStart = false
+      historyNext = (olderEvents[0] ?? newerEvents[0] ?? historySnap[0])?.id ?? null
+    }
+  }
+  return true
+}
+
+/* Closes both gaps with the rows above them, for the history starting or
+   stopping (P.showHistory): the window opens the other filter at its
+   newest end, so the runs below the gaps are what it reads, and Show
+   earlier reads on from them. A comment open in an editor among the rows
+   that go is held apart. */
+function dropAboveGap() {
+  const editing = new Set(commentHolds.values())
+  if (commentsGap !== null) {
+    for (const row of olderComments) if (editing.has(row.id)) pinnedComments.set(row.id, row)
+    olderComments = newerComments
+    threadStart = false
+    dropCommentsGap()
+  }
+  if (historyGap !== null && historySnap !== null) {
+    olderEvents = newerEvents
+    historyStart = false
+    dropHistoryGap()
+    historyNext = (olderEvents[0] ?? historySnap[0])?.id ?? null
+  }
 }
 
 /* The server's row of task `uuid` in the last snapshot delivery. A task the
@@ -1219,8 +1561,11 @@ function threadNews(news: SideNews) {
       emit('comments')
       return
     }
+    // and the released ids and the comment held apart for an editor go too
     commentsSnap = []
     olderComments = []
+    dropCommentsGap()
+    pinnedComments.clear()
     threadStart = true
     threadDelivered(issueUuid)
     return
@@ -1228,6 +1573,8 @@ function threadNews(news: SideNews) {
   PLANNER.commentsFailure = 'none'
   const page = anchor(news.value as FunctionReturnType<typeof api.snapshot.threadComments>)
   const slid = receiveThread(page)
+  // past the budget, an arrival lets rows go away from where the windows read
+  keepThread('arrival')
   if (slid.length && page.comments[0])
     void checkSlidOut(watched.org, issueUuid, page.comments[0].id, slid, current)
   threadDelivered(issueUuid)
@@ -1264,7 +1611,10 @@ function historyNews(news: SideNews) {
     // the task is gone or hidden: a whole history that holds nothing
     restartHistory({ earlier: false, next: null })
     historySnap = []
-  } else receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
+  } else {
+    receiveHistory(anchor(news.value as FunctionReturnType<typeof api.snapshot.threadHistory>))
+    keepThread('arrival')
+  }
   PLANNER.historyFailure = 'none'
   owe('thread')
 }
@@ -2890,6 +3240,10 @@ function shownWorkspace() {
       P.threadEvents,
       P.commentsEarlier,
       P.historyEarlier,
+      P.commentsNewer,
+      P.historyNewer,
+      P.threadGap,
+      P.pinnedComments,
       P.sections,
       P.detail,
       P.reference,
@@ -5809,33 +6163,76 @@ function refusalSentence(e: unknown): string {
 }
 
 /** Reads older comment `id` of the watched thread again from the server
-    (snapshot.commentsBefore, the page before the comment after it) and
-    shows what is stored now: a comment older than the live window gets no
-    delivery. A comment gone meanwhile leaves the thread. */
+    (snapshot.commentsBefore, the page before the comment after it in thread
+    order) and shows what is stored now: a comment older than the live
+    window gets no delivery. The comment after the last one above a gap is
+    the gap's first released id, not the first row below it, whose page can
+    miss the comment. A released id the server calls no comment now was
+    deleted, so it leaves the gap and the read asks before the next one. A
+    comment gone meanwhile leaves the thread. */
 async function refreshOlderComment(id: string) {
   const issueUuid = watchedComments
   const watchEpoch = commentsWatchEpoch
   const org = watchedOrgOf()
-  const thread = [...olderComments, ...(commentsSnap ?? [])]
-  const after = thread[thread.findIndex((r) => r.id === id) + 1]
-  if (!issueUuid || !org || !after || thread.every((r) => r.id !== id)) return
-  let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
-  try {
-    page = await convex.query(api.snapshot.commentsBefore, {
-      org_id: org,
-      issue_id: issueUuid,
-      before: after.id,
-    })
-  } catch (e) {
-    console.error('[qivo] an older comment failed to load again:', e)
+  const order = [
+    ...olderComments.map((r) => r.id),
+    ...(commentsGap ?? []),
+    ...newerComments.map((r) => r.id),
+    ...(commentsSnap ?? []).map((r) => r.id),
+  ]
+  const at = order.indexOf(id)
+  if (!issueUuid || !org || at === -1) return
+  const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+  for (let next = at + 1; next < order.length; next++) {
+    const after = order[next]
+    let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+    try {
+      page = await convex.query(api.snapshot.commentsBefore, {
+        org_id: org,
+        issue_id: issueUuid,
+        before: after,
+      })
+    } catch (e) {
+      if (!current()) return
+      if (errData(e).code === 'bad_request' && commentsGap?.includes(after)) {
+        commentsGap = commentsGap.filter((gone) => gone !== after)
+        continue
+      }
+      console.error('[qivo] an older comment failed to load again:', e)
+      return
+    }
+    if (!current()) return
+    const fresh = page.comments.find((r) => r.id === id)
+    patchHeldComment(id, fresh ? anchor([fresh])[0] : null, true)
+    repaint({ thread: true })
     return
   }
-  if (watchedComments !== issueUuid || commentsWatchEpoch !== watchEpoch) return
-  const fresh = page.comments.find((r) => r.id === id)
-  olderComments = fresh
-    ? olderComments.map((r) => (r.id === id ? anchor([fresh])[0] : r))
-    : olderComments.filter((r) => r.id !== id)
-  repaint({ thread: true })
+}
+
+/** Whether comment `id` of the watched thread is held outside the live
+    window, in a run or apart for an editor, where no delivery reaches it. */
+function heldBeforeWindow(id: string): boolean {
+  return (
+    olderComments.some((r) => r.id === id) ||
+    newerComments.some((r) => r.id === id) ||
+    pinnedComments.has(id)
+  )
+}
+
+/** Patches comment `id` wherever the watched thread holds it outside the
+    live window with `edit`, or drops it for null. With `whole`, `edit` is
+    the whole row, as a fresh read brings it. */
+function patchHeldComment(id: string, edit: Partial<Row<'comments'>> | null, whole = false) {
+  const patch = (list: Row<'comments'>[]) =>
+    edit === null
+      ? list.filter((r) => r.id !== id)
+      : list.map((r) => (r.id === id ? (whole ? (edit as Row<'comments'>) : { ...r, ...edit }) : r))
+  olderComments = patch(olderComments)
+  newerComments = patch(newerComments)
+  const pinned = pinnedComments.get(id)
+  if (pinned && edit === null) pinnedComments.delete(id)
+  else if (pinned && edit)
+    pinnedComments.set(id, whole ? (edit as Row<'comments'>) : { ...pinned, ...edit })
 }
 
 /* --- refusals over a field someone else changed ----------------------------
@@ -7274,6 +7671,70 @@ function rebuildComments() {
     !PLANNER.commentsLoaded || threadStart ? 'none' : earlierLoad === 'idle' ? 'more' : earlierLoad
   PLANNER.historyEarlier =
     !PLANNER.historyLoaded || historyStart ? 'none' : historyLoad === 'idle' ? 'more' : historyLoad
+  PLANNER.commentsNewer =
+    !PLANNER.commentsLoaded || commentsGap === null
+      ? 'none'
+      : newerLoad === 'idle'
+        ? 'more'
+        : newerLoad
+  PLANNER.historyNewer =
+    !PLANNER.historyLoaded || historyGap === null
+      ? 'none'
+      : historyNewerLoad === 'idle'
+        ? 'more'
+        : historyNewerLoad
+  PLANNER.threadGap = threadGapOf(PLANNER.threadGap)
+  PLANNER.pinnedComments = keep(
+    PLANNER.pinnedComments,
+    [...pinnedComments.keys()].filter((id) => rows.comments.has(id)),
+  )
+}
+
+/* Each kind's gap as the window places it (P.threadGap): the latest time
+   kept above it, the earliest kept below it and the ids kept above, from
+   the anchors, or null with no gap in either kind. `prev` comes back while
+   nothing changed, so a repaint that leaves the gap alone shows the same
+   value (shownWorkspace). */
+function threadGapOf(prev: ThreadGap | null): ThreadGap | null {
+  const side = (
+    gap: string[] | null,
+    above: { id: string; at: string }[],
+    below: { at: string }[],
+    was: ThreadGapSide | null | undefined,
+  ): ThreadGapSide | null => {
+    if (gap === null) return null
+    const end = above.reduce((max, r) => Math.max(max, Date.parse(r.at)), Number.NEGATIVE_INFINITY)
+    const first = below.reduce(
+      (min, r) => Math.min(min, Date.parse(r.at)),
+      Number.POSITIVE_INFINITY,
+    )
+    if (
+      was &&
+      was.end === end &&
+      was.below === first &&
+      was.above.size === above.length &&
+      above.every((r) => was.above.has(r.id))
+    )
+      return was
+    return { end, below: first, above: new Set(above.map((r) => r.id)) }
+  }
+  const atOf = (r: Row<'comments'>) => ({ id: r.id, at: r.created_at })
+  const atOfChange = (r: Row<'activity_events'>) => ({ id: r.id, at: r.ts })
+  const comments = side(
+    commentsSnap === null ? null : commentsGap,
+    olderComments.map(atOf),
+    [...newerComments, ...(commentsSnap ?? [])].map(atOf),
+    prev?.comments,
+  )
+  const history = side(
+    historySnap === null ? null : historyGap,
+    olderEvents.map(atOfChange),
+    [...newerEvents, ...(historySnap ?? [])].map(atOfChange),
+    prev?.history,
+  )
+  if (comments === null && history === null) return null
+  if (prev && prev.comments === comments && prev.history === history) return prev
+  return { comments, history }
 }
 
 /** Rebuilds every view model from the rows. The tasks reshape only where
@@ -9984,6 +10445,18 @@ export const PLANNER = {
   // whether the watched task's history arrived, which only a window that
   // shows All asks for (showHistory); false again once none does
   historyLoaded: false,
+  // whether the store let go of comments between the two runs it keeps of
+  // the watched thread past its budget (lib/threadBudget.ts), which Show
+  // newer comments reads back: 'none' with no gap, else 'more', 'loading'
+  // while P.loadNewerComments runs and 'failed' after it failed
+  commentsNewer: 'none' as CommentsEarlier,
+  // the same for the history's changes (P.loadNewerHistory)
+  historyNewer: 'none' as CommentsEarlier,
+  // each kind's gap as the window places it (spineGap), or null with none
+  threadGap: null as ThreadGap | null,
+  // the comments held apart for an editor after a release passed over
+  // them (P.holdComment), which only that editor's window shows
+  pinnedComments: [] as string[],
   /* Changes whenever a rebuild changes anything a task's view reads besides
      the task's own view model and delay (store/taskIndex.ts): people (but not their
      Team sync stamps), organizations and their settings, projects and
@@ -13429,6 +13902,11 @@ export const PLANNER = {
     resetSections()
     commentsSnap = null
     olderComments = []
+    dropCommentsGap()
+    pinnedComments.clear()
+    // the places and the press named rows of the task before
+    threadPlaces.clear()
+    pressKeep = new Set()
     acceptedCommentChanges.clear()
     threadStart = false
     earlierLoad = 'idle'
@@ -13465,14 +13943,21 @@ export const PLANNER = {
       none does, which drops every history row, so a window back on
       Comments asks for no history at all. Each window passes one object of
       its own, since the Inbox pane and its pop-out can show one task under
-      different filters. */
+      different filters. The history's start and its stop close the
+      comments' gap with the comments above it (dropAboveGap): the window
+      opens the other filter at its newest end, and with the gap kept, All
+      would show Show earlier activity and Show newer activity over a gap
+      in the comments its newest changes never reach. A second window on
+      the task under Comments loses its place then. */
   showHistory: (owner: object, on: boolean) => {
     const before = historyOwners.size
     if (on) historyOwners.add(owner)
     else historyOwners.delete(owner)
     if (before > 0 === historyOwners.size > 0) return
+    const gap = commentsGap !== null
+    dropAboveGap()
     if (on) {
-      if (startHistory()) repaint({ thread: true })
+      if (startHistory() || gap) repaint({ thread: true })
       return
     }
     stopHistory()
@@ -13615,7 +14100,10 @@ export const PLANNER = {
       (snapshot.commentsBefore, one page) and adds them above it. One load at
       a time. A failure shows as commentsEarlier 'failed', and calling this
       again retries. When the oldest loaded comment was deleted meanwhile, it
-      is dropped and the load asks before the next one. Never throws. */
+      is dropped and the load asks before the next one. Past the budget the
+      store then lets go of the rows nearest the newest end, outside the
+      live window (keepThread), and keeps the page and the row the window
+      measures. Never throws. */
   loadEarlierComments: async (): Promise<void> => {
     const issueUuid = watchedComments
     const watchEpoch = commentsWatchEpoch
@@ -13628,6 +14116,7 @@ export const PLANNER = {
       earlierLoad = state
       repaint({ thread: true })
     }
+    startPress('earlier')
     show('loading')
     for (;;) {
       const first = olderComments[0] ?? commentsSnap?.[0]
@@ -13656,10 +14145,14 @@ export const PLANNER = {
       // thread started over from its live window meanwhile, the next click
       // asks again.
       if ((olderComments[0] ?? commentsSnap?.[0])?.id === first.id) {
-        const known = new Set([...olderComments, ...(commentsSnap ?? [])].map((r) => r.id))
+        const known = new Set(
+          [...olderComments, ...newerComments, ...(commentsSnap ?? [])].map((r) => r.id),
+        )
         const added = anchor(page.comments.filter((r) => !known.has(r.id)))
         olderComments = [...added, ...olderComments]
         if (!page.earlier) threadStart = true
+        for (const r of added) pressKeep.add(r.id)
+        keepThread('earlier')
       }
       return show('idle')
     }
@@ -13684,6 +14177,7 @@ export const PLANNER = {
     }
     const before = historyNext
     if (!before) return
+    startPress('earlier')
     show('loading')
     let page: FunctionReturnType<typeof api.snapshot.historyBefore>
     try {
@@ -13701,12 +14195,245 @@ export const PLANNER = {
     // Added only above the row the page was asked about. When the history
     // started over from its live page meanwhile, the next click asks again.
     if (historyNext === before) {
-      const known = new Set([...olderEvents, ...(historySnap ?? [])].map((r) => r.id))
-      olderEvents = [...anchor(page.events.filter((r) => !known.has(r.id))), ...olderEvents]
+      const known = new Set(
+        [...olderEvents, ...newerEvents, ...(historySnap ?? [])].map((r) => r.id),
+      )
+      const added = anchor(page.events.filter((r) => !known.has(r.id)))
+      olderEvents = [...added, ...olderEvents]
       historyNext = page.next
       if (!page.earlier) historyStart = true
+      for (const r of added) pressKeep.add(r.id)
+      keepThread('earlier')
     }
     show('idle')
+  },
+
+  /** Loads back comments the store let go between its two runs of the
+      watched thread (Show newer comments): snapshot.commentsBefore with the
+      watched task in its organization, before the 50th released id, or the
+      first comment kept below the gap when fewer are released
+      (lib/threadBudget.ts newerAnchor), and joins the page to the run above
+      (joinNewer). A page that reaches no comment of that run and does not
+      start the thread, which only comments past the server's page bytes
+      make, reads on before its own first comment. An anchor the server
+      calls no comment (bad_request) leaves the gap, or the run below it,
+      and the read asks before its neighbour above, so the page still
+      reaches the run. Any other failure shows as commentsNewer 'failed',
+      and calling this again retries. One read at a time; an answer that
+      comes after the task changed or the gap moved is dropped. Then the
+      store lets go of the rows at the oldest end (keepThread). Never
+      throws. */
+  loadNewerComments: async (): Promise<void> => {
+    const issueUuid = watchedComments
+    const watchEpoch = commentsWatchEpoch
+    const org = watchedOrgOf()
+    if (!issueUuid || !org || commentsSnap === null || commentsGap === null) return
+    if (newerLoad === 'loading') return
+    startPress('newer')
+    const ask = ++newerAsk
+    const show = (state: typeof newerLoad) => {
+      if (newerAsk !== ask) return
+      newerLoad = state
+      repaint({ thread: true })
+    }
+    show('loading')
+    // the run above the gap and the gap's first id, which must stay as they
+    // were for the pages to join (a refusal below moves the latter)
+    const top = olderComments.at(-1)?.id
+    let head = commentsGap[0]
+    const mine = () =>
+      watchedComments === issueUuid && commentsWatchEpoch === watchEpoch && newerAsk === ask
+    const current = () =>
+      mine() && commentsGap !== null && olderComments.at(-1)?.id === top && commentsGap[0] === head
+    // an answer that came after the runs moved is dropped, and the row
+    // offers the read again
+    const dropped = () => {
+      if (mine()) show('idle')
+    }
+    const below = () => (newerComments[0] ?? commentsSnap?.[0])?.id
+    let before = newerAnchor(commentsGap, below())
+    let from: string | undefined
+    const pages: Row<'comments'>[] = []
+    for (let reads = 0; before !== undefined && reads < 100; reads++) {
+      let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+      try {
+        page = await convex.query(api.snapshot.commentsBefore, {
+          org_id: org,
+          issue_id: issueUuid,
+          before,
+        })
+      } catch (e) {
+        if (!current()) return dropped()
+        if (errData(e).code !== 'bad_request' || pages.length || commentsGap === null) {
+          console.error('[qivo] newer comments failed to load:', e)
+          return show('failed')
+        }
+        // `before` is no comment now. It leaves the gap, or the run below
+        // it, and the read asks before its neighbour above in the gap
+        // (G[48] for G[49]), whose page still reaches the run above; a
+        // first released id or a first row below asks by the rule again.
+        const gone = before
+        const at = commentsGap.indexOf(gone)
+        if (at !== -1) {
+          commentsGap = commentsGap.filter((id) => id !== gone)
+          head = commentsGap[0]
+        } else dropComment(gone)
+        before = at > 0 ? commentsGap[at - 1] : newerAnchor(commentsGap, below())
+        continue
+      }
+      if (!current()) return dropped()
+      from ??= before
+      pages.unshift(...anchor(page.comments))
+      const joined = joinNewer(olderComments, commentsGap, from, pages, !page.earlier, false)
+      if (joined.kind !== 'join') {
+        before = page.comments[0]?.id
+        continue
+      }
+      if (joined.gap === null) {
+        olderComments = [...joined.older, ...newerComments]
+        dropCommentsGap()
+        newerAsk = ask
+      } else {
+        olderComments = joined.older
+        commentsGap = joined.gap
+      }
+      if (joined.added.length === joined.older.length && !page.earlier) threadStart = true
+      for (const r of joined.added) pressKeep.add(r.id)
+      keepThread('newer')
+      return show('idle')
+    }
+    if (current()) show(before === undefined ? 'idle' : 'failed')
+    else dropped()
+  },
+
+  /** Loads back changes the store let go between its two runs of the
+      watched task's history (Show newer activity), as loadNewerComments
+      does for comments, through snapshot.historyBefore. A page that reaches
+      no change of the run above and holds only released ids reads on from
+      its `next`. One that holds a change the store never had without
+      reaching that run, which a change in what the person may see makes,
+      starts the history over from what it read, with nothing above it, so
+      no gap is stitched across unproven (joinNewer `restart`). */
+  loadNewerHistory: async (): Promise<void> => {
+    const issueUuid = watchedComments
+    const epoch = historyEpoch
+    const org = watchedOrgOf()
+    if (!issueUuid || !org || historySnap === null || historyGap === null) return
+    if (historyNewerLoad === 'loading') return
+    startPress('newer')
+    const ask = ++historyNewerAsk
+    const show = (state: typeof historyNewerLoad) => {
+      if (historyNewerAsk !== ask) return
+      historyNewerLoad = state
+      repaint({ thread: true })
+    }
+    show('loading')
+    const top = olderEvents.at(-1)?.id
+    let head = historyGap[0]
+    const mine = () =>
+      watchedComments === issueUuid && historyEpoch === epoch && historyNewerAsk === ask
+    const current = () =>
+      mine() && historyGap !== null && olderEvents.at(-1)?.id === top && historyGap[0] === head
+    const dropped = () => {
+      if (mine()) show('idle')
+    }
+    const below = () => (newerEvents[0] ?? historySnap?.[0])?.id
+    let before = newerAnchor(historyGap, below())
+    let from: string | undefined
+    const pages: Row<'activity_events'>[] = []
+    // at most a read for every page of the gap and two more
+    const most = Math.ceil(historyGap.length / 50) + 2
+    for (let reads = 0; before !== undefined && reads < most; reads++) {
+      let page: FunctionReturnType<typeof api.snapshot.historyBefore>
+      try {
+        page = await convex.query(api.snapshot.historyBefore, {
+          org_id: org,
+          issue_id: issueUuid,
+          before,
+        })
+      } catch (e) {
+        if (!current()) return dropped()
+        if (errData(e).code !== 'bad_request' || pages.length || historyGap === null) {
+          console.error('[qivo] newer history failed to load:', e)
+          return show('failed')
+        }
+        // as for comments: the row leaves the gap or the run below it
+        const gone = before
+        const at = historyGap.indexOf(gone)
+        if (at !== -1) {
+          historyGap = historyGap.filter((id) => id !== gone)
+          head = historyGap[0]
+        } else newerEvents = newerEvents.filter((r) => r.id !== gone)
+        before = at > 0 ? historyGap[at - 1] : newerAnchor(historyGap, below())
+        continue
+      }
+      if (!current()) return dropped()
+      from ??= before
+      pages.unshift(...anchor(page.events))
+      const joined = joinNewer(olderEvents, historyGap, from, pages, !page.earlier, true)
+      if (joined.kind === 'short') {
+        before = page.next ?? undefined
+        continue
+      }
+      if (joined.kind === 'restart') break
+      if (joined.gap === null) {
+        olderEvents = [...joined.older, ...newerEvents]
+        dropHistoryGap()
+        historyNewerAsk = ask
+      } else {
+        olderEvents = joined.older
+        historyGap = joined.gap
+      }
+      if (joined.added.length === joined.older.length && !page.earlier) {
+        historyStart = true
+        historyNext = null
+      }
+      for (const r of joined.added) pressKeep.add(r.id)
+      keepThread('newer')
+      return show('idle')
+    }
+    if (!current()) return dropped()
+    // No page could be shown to meet the run above. The history starts over
+    // from the run below the gap, with nothing above it, and Show earlier
+    // activity reads on before its oldest row, so nothing is stitched across
+    // a gap the server did not prove.
+    historyEpoch++
+    olderEvents = newerEvents
+    dropHistoryGap()
+    historyNewerAsk = ask
+    historyStart = false
+    historyNext = (olderEvents[0] ?? historySnap?.[0])?.id ?? null
+    historyLoad = 'idle'
+    show('idle')
+  },
+
+  /** Registers the comment the window `owner` has open in its editor, or
+      none, as the window's editingComment changes and with null when it
+      unmounts. A release passes over such a comment and holds it apart
+      (P.pinnedComments), so its editor and draft stay. Once no editor
+      holds a comment held apart, it goes, and the store lets go of rows on
+      an arrival's side (keepThread). Each window passes one object of its
+      own, as for P.showHistory. */
+  holdComment: (owner: object, id: string | null) => {
+    const was = commentHolds.get(owner) ?? null
+    if (was === id) return
+    if (id === null) commentHolds.delete(owner)
+    else commentHolds.set(owner, id)
+    if (was === null || [...commentHolds.values()].includes(was)) return
+    const pinned = pinnedComments.delete(was)
+    if (keepThread('arrival') || pinned) repaint({ thread: true })
+  },
+
+  /** Reports the first comment or change on screen in the window `owner`,
+      by its id, or null while the window shows the thread's newest end, as
+      the reader scrolls. A comment or change that arrives past the budget
+      lets go of rows on the side farther from the topmost window's place,
+      and keeps the rows around each place (keepThread). Called with no
+      `first`, it drops the window's report, as on unmount. A window that
+      never reported counts as at its newest end. */
+  threadPlace: (owner: object, first?: string | null) => {
+    if (first === undefined) threadPlaces.delete(owner)
+    else threadPlaces.set(owner, first)
   },
 
   /* ---- Team sync (deviation #316) ----
@@ -13940,15 +14667,15 @@ export const PLANNER = {
           toastWriteError(error)
           // an older comment gets no delivery, so it is read again to show
           // the text that refused this edit
-          if (errData(error).reason === FIELD_CHANGED && olderComments.some((r) => r.id === id))
+          if (errData(error).reason === FIELD_CHANGED && heldBeforeWindow(id))
             void refreshOlderComment(id)
         },
         // A comment older than the live window gets no delivery, so the saved
-        // edit goes into olderComments, the truth the thread is built from.
+        // edit goes into the run that holds it, the truth the thread is built
+        // from, or into the comment held apart for its editor.
         onOk: () => {
           acceptedCommentChanges.set(id, edit)
-          if (olderComments.some((r) => r.id === id))
-            olderComments = olderComments.map((r) => (r.id === id ? { ...r, ...edit } : r))
+          patchHeldComment(id, edit)
         },
       },
     )
@@ -13977,13 +14704,12 @@ export const PLANNER = {
           toastWriteError(error)
           // as for an edit: an older comment is read again to show the
           // text that refused this delete
-          if (errData(error).reason === FIELD_CHANGED && olderComments.some((r) => r.id === id))
+          if (errData(error).reason === FIELD_CHANGED && heldBeforeWindow(id))
             void refreshOlderComment(id)
         },
         onOk: () => {
           acceptedCommentChanges.set(id, null)
-          if (olderComments.some((r) => r.id === id))
-            olderComments = olderComments.filter((r) => r.id !== id)
+          patchHeldComment(id, null)
         },
       },
     )
@@ -16628,6 +17354,11 @@ export function disposeDemoStore() {
   watchedOrg = null
   commentsSnap = null
   olderComments = []
+  dropCommentsGap()
+  commentHolds.clear()
+  pinnedComments.clear()
+  threadPlaces.clear()
+  pressKeep = new Set()
   historyOwners.clear()
   resetHistory()
   sectionOwners.clear()
