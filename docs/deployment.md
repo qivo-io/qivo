@@ -1162,7 +1162,7 @@ its own paragraph here says so. The lists answer `not_ready` for an
 organization whose names are not ready. The release changes no table, field
 or index, and there is no backfill.
 
-From the release after v0.1.141, **Settings → Organization → Teams** lists
+From the release after v0.1.143, **Settings → Organization → Teams** lists
 teams from `teams.settingsPage`, 25 at a time with a search, each with its
 member count from `team_counts`, a team's page reads the team and the
 caller's rights from `teams.get` and its members from `teams.members`, 25 at
