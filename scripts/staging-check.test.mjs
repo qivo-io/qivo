@@ -25,6 +25,7 @@ import {
   FIXTURE_STATUS,
   FORMERLY_BARE,
   freeMilestoneWeek,
+  freePastMilestoneWeek,
   hasTag,
   historyRows,
   isSiteOf,
@@ -126,7 +127,7 @@ describe('staging check REST contract', () => {
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     })
   })
-  it("opens its own milestone in the Milestones window by the window's own marks, in a free week", () => {
+  it("opens its own milestone in the Milestones window by the window's own marks, in a free week, and a past one in Past", () => {
     const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
     for (const mark of [
       'data-milestone-window',
@@ -134,6 +135,11 @@ describe('staging check REST contract', () => {
       'data-milestone-row={m.id}',
       'aria-label="Name"',
       "armDel ? 'Confirm delete' : 'Delete'",
+      // the sections the step waits on and the disclosure it expands
+      'data-milestone-section={side}',
+      'data-milestone-section-state={open ? view.state : undefined}',
+      'data-milestone-past-toggle',
+      'aria-expanded={pastOpen}',
     ])
       expect(modals).toContain(mark)
     expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
@@ -145,6 +151,12 @@ describe('staging check REST contract', () => {
     expect(freeMilestoneWeek(['2026-11-24', '2026-11-30'], '2026-11-06', 1)).toBe('2026-12-07')
     // a week starting on Sunday
     expect(freeMilestoneWeek([], '2026-11-06', 0)).toBe('2026-11-22')
+    // a past milestone goes in the first free week before the run's own
+    expect(freePastMilestoneWeek([], '2026-11-06', 1)).toBe('2026-10-26')
+    expect(freePastMilestoneWeek(['2026-10-27', '2026-10-21'], '2026-11-06', 1)).toBe('2026-10-12')
+    expect(freePastMilestoneWeek([], '2026-11-06', 0)).toBe('2026-10-25')
+    // must fail: the run's own week is not in the past
+    expect(freePastMilestoneWeek([], '2026-11-06', 1)).not.toBe('2026-11-02')
   })
   it("checks the removal window on a sub-project of its own, in the window's words", () => {
     const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
