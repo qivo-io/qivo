@@ -1,6 +1,9 @@
 /* Teams and their members, the rules the app (teams.ts), REST and MCP
- * (machine/teams.ts) share, so each rule exists once, and the pages REST and
- * MCP list teams and a team's members in (teamPage, memberPage).
+ * (machine/teams.ts) share, so each rule exists once, the pages REST and
+ * MCP list teams and a team's members in (teamPage, memberPage), and the
+ * reads of Settings › Teams, a team's page and its Add member picker
+ * (settingsTeamsOf, teamSettingsOf, settingsMembersOf, addableOf), which
+ * list the members memberPage lists and count as team_counts counts.
  *
  * Who may do what:
  * - Creating a team: organization admins only. Agents are never admins, so
@@ -35,9 +38,18 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, notFound, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { LIMITS, LIST_BATCH } from '../lib/limits'
 import { NAMES_NOT_READY, type NamedListPage, namedListPage, namedScope } from '../lib/listCursor'
-import type { ReadGuard } from '../lib/namedPages'
+import {
+  besideHeld,
+  indexAfter,
+  type ListBatch,
+  listBatch,
+  mergeNamed,
+  type NamedReads,
+  namedCeiling,
+  type ReadGuard,
+} from '../lib/namedPages'
 import { named, nameKey } from '../lib/nameKey'
 import { allWordsMatcher } from '../lib/search'
 import { logActivity, signedDetail } from './activity'
@@ -56,6 +68,7 @@ import {
   idTieOf,
   inlineBudget,
   nameKeysReady,
+  profileRoleIndex,
   teamIndex,
   teamMemberIndex,
 } from './nameKeys'
@@ -71,13 +84,20 @@ import {
   withinRoom,
 } from './projectAccess'
 import { grantee, reachOfGrantee } from './projectNav'
-import { UNKEYED_MOST } from './projectSettings'
+import {
+  type ListArgs,
+  orderedListAsk,
+  type PersonRow,
+  personRow,
+  UNKEYED_MOST,
+} from './projectSettings'
 import {
   countingOrg,
   countingOrgOf,
   countMemberAdded,
   countMemberRemoved,
   insertTeamCount,
+  memberCount,
   shownCount,
   teamCountRow,
 } from './teamCounts'
@@ -244,6 +264,24 @@ export type TeamMembersPageJson = {
   members: TeamMemberJson[]
 }
 
+/** The profile of `membership`, a membership of `team`, read with
+ * `lookup` (a batch's counted lookup or a plain read), when a member list
+ * lists it: null when the profile is gone, in another organization or a
+ * guest's, the rule team_counts counts by (model/teamCounts.ts). REST, MCP
+ * (memberPage) and the app's member list (settingsMembersOf) list members
+ * by it, so their rule stays one. */
+export async function memberProfile(
+  ctx: QueryCtx,
+  team: Doc<'teams'>,
+  membership: Doc<'team_members'>,
+  lookup: ReadGuard['lookup'] = (read) => read(),
+): Promise<Doc<'profiles'> | null> {
+  const profile = await lookup(() => byId(ctx, 'profiles', membership.profile_id))
+  return profile === null || profile.org_id !== team.org_id || profile.org_role === 'guest'
+    ? null
+    : profile
+}
+
 /* Whether every membership of `team` without a copy of its person's name
  * key belongs to a profile that is gone or in another organization, which
  * the member list leaves out anyway. The walk in name order does not read
@@ -329,9 +367,8 @@ export async function memberPage(
     index: teamMemberIndex(ctx, team.id),
     keep: async (membership, guard) => {
       if (!matches(membership.name_key ?? '')) return null
-      const profile = await guard.lookup(() => byId(ctx, 'profiles', membership.profile_id))
-      if (profile === null || profile.org_id !== team.org_id || profile.org_role === 'guest')
-        return null
+      const profile = await memberProfile(ctx, team, membership, guard.lookup)
+      if (profile === null) return null
       return {
         id: profile.id,
         name: profile.name,
@@ -341,6 +378,282 @@ export async function memberPage(
     limit: p.limit,
   })
   return { next_cursor: page.next_cursor, team: summary, members: page.rows }
+}
+
+/* ------------------------------------------- the app's team settings */
+
+/** The refusal of an `after` or `through` that is not a cursor of the same
+ * team list for the same arguments and search. */
+export const NOT_TEAM_CURSOR =
+  'after and through must be cursors from an earlier answer of this list, with the same arguments and search; start again from the first batch'
+
+/** What teams.settingsPage answers a seat that may neither run the
+ * organization nor lead a team (lib/access.ts canLeadTeams). */
+export const TEAM_LIST_REFUSAL =
+  'only organization admins and team leaders can open the team settings'
+
+/* The list names the app's team list cursors seal (lib/namedPages.ts
+ * namedCursor). */
+const SETTINGS_TEAMS_LIST = 'teams.settings'
+const SETTINGS_MEMBERS_LIST = 'teams.members'
+const ADDABLE_LIST = 'teams.addable'
+
+/* The organization roles Add member offers: a guest is never a member
+ * (addTeamMemberCore), so the guests' role index is never read. */
+const MEMBER_ROLES = ['admin', 'user', 'viewer'] as const
+
+/* `a` opened for a team list, whose positions tie on one id. */
+const teamListAsk = (list: string, scope: readonly string[], a: ListArgs) =>
+  orderedListAsk(list, scope, a, { tieOf: idTieOf, refusal: NOT_TEAM_CURSOR })
+
+/* Team `id` of `me`'s organization, or null for an unknown id, a team of
+ * another organization and one deleted meanwhile, alike, as teams.ts
+ * myTeam refuses them. */
+async function teamOf(ctx: QueryCtx, me: Doc<'profiles'>, id: string) {
+  const team = await byId(ctx, 'teams', id)
+  return team === null || team.org_id !== me.org_id ? null : team
+}
+
+/** What teams.settingsPage answers: `refused` with TEAM_LIST_REFUSAL,
+ * `not_ready` without name keys, or one batch with `teams`, how many teams
+ * the organization holds up to 3, which stands for three or more. */
+export type SettingsTeamsAnswer =
+  | { state: 'refused'; message: string }
+  | { state: 'not_ready' }
+  | ({ state: 'ready'; teams: number } & ListBatch<TeamSummaryJson>)
+
+/**
+ * teams.settingsPage for `me`: one batch of Settings › Teams, LIST_BATCH
+ * teams in name order (teamIndex, the name key in Convex's byte order,
+ * then the id), each as its summary (teamSummary) with its member count
+ * from team_counts, null while Qivo counts it. An organization admin reads
+ * every team of the organization, and anyone else who may lead teams
+ * (lib/access.ts canLeadTeams) reads the teams whose membership row of
+ * their own leads them, isTeamLeader's rule, one lookup a team. A viewer,
+ * a guest and an agent are refused with TEAM_LIST_REFUSAL before anything
+ * is read.
+ *
+ * The search keeps the teams whose name holds every word of it in any
+ * order, ignoring case and accents, matched over every team before the
+ * batch is cut and before the membership or the count is read. Cursors are
+ * sealed with the organization, `me` and the search's name key
+ * (NOT_TEAM_CURSOR). The batch reads within NAMED_READ (lib/namedPages.ts
+ * listBatch), so it can stop short with `stopped`, and it answers
+ * `not_ready` until the organization's name keys are all written.
+ *
+ * Every ready batch answers `teams`, from at most three rows of
+ * teams.by_org, so the page turns Delete off for the organization's last
+ * team from the server's answer and not from the rows it loaded. The
+ * deletion still checks the last team at full scope (assertNotLastTeam).
+ * It reads no profile, no other person's membership and no share.
+ */
+export async function settingsTeamsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: ListArgs,
+): Promise<SettingsTeamsAnswer> {
+  const admin = me.org_role === 'admin'
+  if (!admin && !canLeadTeams(me)) return { state: 'refused', message: TEAM_LIST_REFUSAL }
+  const ask = await teamListAsk(SETTINGS_TEAMS_LIST, [me.org_id, me.id], a)
+  if (!(await nameKeysReady(ctx, me.org_id))) return { state: 'not_ready' }
+  const teams = (
+    await ctx.db
+      .query('teams')
+      .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
+      .take(3)
+  ).length
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: indexAfter(teamIndex(ctx, me.org_id), ask.after),
+    keep: async (team: Doc<'teams'>, guard): Promise<TeamSummaryJson | null> => {
+      if (!matches(nameKey(team.name))) return null
+      if (!admin && !(await guard.lookup(() => membershipOf(ctx, team.id, me.id)))?.is_leader)
+        return null
+      return await teamSummary(ctx, team, guard.lookup)
+    },
+    limit: LIST_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', teams, ...batch }
+}
+
+/** What teams.get answers: `unavailable` for a team the caller's
+ * organization does not hold, else the team's name, its member count
+ * (shownCount, null while Qivo counts it) and the caller's rights. */
+export type TeamSettingsAnswer =
+  | { state: 'unavailable' }
+  | {
+      state: 'ok'
+      team: { id: string; name: string }
+      member_count: number | null
+      /** whether the caller may rename the team (assertRunsTeam) */
+      can_manage: boolean
+      /** whether the caller may add and remove members and make or unmake
+       * leaders (assertManagesMembers) */
+      can_manage_members: boolean
+    }
+
+/**
+ * teams.get for `me`: team `id` of their organization for its Settings
+ * page, read whether or not the app holds it. Every active seat of the
+ * organization reads it, as every seat reads every team over REST and MCP
+ * and in the workspace; the page shows only to a caller with `can_manage`
+ * (src/panels/Settings.tsx). An unknown id, a team of another organization
+ * and one deleted meanwhile all answer `unavailable`.
+ *
+ * Each right is its write's rule. `can_manage` is assertRunsTeam's, an
+ * organization admin or a leader of the team (lib/access.ts isTeamLeader),
+ * for the rename. `can_manage_members` is assertManagesMembers', which also
+ * needs a person (canChangeAccess), for adding and removing members and
+ * making leaders. No seat has the one without the other today, since
+ * agents are never admins and never lead, but the page follows each write's
+ * own rule on purpose, so a change to either rule changes what the page
+ * offers with it.
+ */
+export async function teamSettingsOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  id: string,
+): Promise<TeamSettingsAnswer> {
+  const team = await teamOf(ctx, me, id)
+  if (team === null) return { state: 'unavailable' }
+  const can_manage = me.org_role === 'admin' || (await isTeamLeader(ctx, me, team.id))
+  return {
+    state: 'ok',
+    team: { id: team.id, name: team.name },
+    member_count: await memberCount(ctx, team),
+    can_manage,
+    can_manage_members: can_manage && canChangeAccess(me),
+  }
+}
+
+/** A member as a team's Settings page lists them: the person; `is_leader`,
+ * the stored flag, so an agent's or a Viewer's old leader row shows and can
+ * be cleared; `can_lead`, whether a leader write accepts them
+ * (canLeadTeams); and their plannable hours, null for the organization's
+ * default week. */
+export type TeamMemberRow = PersonRow & {
+  is_leader: boolean
+  can_lead: boolean
+  plannable_hours: number | null
+}
+
+/** What a team's member list or its Add member picker is asked for. */
+export type TeamListArgs = ListArgs & { team_id: string }
+
+/** What teams.members answers. */
+export type TeamMembersAnswer =
+  | { state: 'unavailable' }
+  | { state: 'not_ready' }
+  | ({ state: 'ready' } & ListBatch<TeamMemberRow>)
+
+/**
+ * teams.members for `me`: one batch of LIST_BATCH members of team
+ * `a.team_id` of their organization for its Settings page, in the order of
+ * their memberships' copies of the person's name key (teamMemberIndex),
+ * then the profile id, with the search matched against the copy before the
+ * profile is read. It lists the members memberPage lists (memberProfile),
+ * so a guest's stale membership and a profile that is gone or of another
+ * organization are left out. Every active seat of the organization reads
+ * it, as over REST and MCP. The team as teamSettingsOf resolves it, else
+ * `unavailable`; `not_ready` while memberPage would refuse, until the name
+ * keys are all written and every membership without a copy is one it would
+ * leave out (unkeyedMembersGone). Cursors are sealed with the organization,
+ * the team and the search's name key (NOT_TEAM_CURSOR). It reads no task,
+ * share or grant.
+ */
+export async function settingsMembersOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: TeamListArgs,
+): Promise<TeamMembersAnswer> {
+  const ask = await teamListAsk(SETTINGS_MEMBERS_LIST, [me.org_id, a.team_id], a)
+  const team = await teamOf(ctx, me, a.team_id)
+  if (team === null) return { state: 'unavailable' }
+  if (!(await nameKeysReady(ctx, team.org_id)) || !(await unkeyedMembersGone(ctx, team)))
+    return { state: 'not_ready' }
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: indexAfter(teamMemberIndex(ctx, team.id), ask.after),
+    keep: async (membership: Doc<'team_members'>, guard): Promise<TeamMemberRow | null> => {
+      if (!matches(membership.name_key ?? '')) return null
+      const profile = await memberProfile(ctx, team, membership, guard.lookup)
+      if (profile === null) return null
+      return {
+        ...personRow(profile),
+        is_leader: membership.is_leader,
+        can_lead: canLeadTeams(profile),
+        plannable_hours: profile.plannable_hours ?? null,
+      }
+    },
+    limit: LIST_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
+}
+
+/** What teams.addable answers: the states of teams.members, `refused` with
+ * the sentence the write would refuse with, else one batch. */
+export type TeamChoicesAnswer =
+  | { state: 'unavailable' }
+  | { state: 'refused'; message: string }
+  | { state: 'not_ready' }
+  | ({ state: 'ready' } & ListBatch<PersonRow>)
+
+/**
+ * teams.addable for `me`: one batch of the Add member picker of team
+ * `a.team_id`, LIST_BATCH people in name order (profileRoleIndex), the
+ * organization's admins, users and viewers who are not members, people and
+ * agents, switched-off people and pending invitations included, never
+ * guests, as addTeamMemberCore accepts them. The team, else `unavailable`;
+ * then `refused` as assertManagesMembers refuses, ACCESS_NEEDS_A_PERSON for
+ * an agent and TEAM_RUNS_RULE for anyone who neither administers the
+ * organization nor leads the team; `not_ready` without name keys.
+ *
+ * The team's memberships are read beside the people in the same order
+ * (lib/namedPages.ts besideHeld), since a membership copies its person's
+ * name key and ties on the profile id, so a member costs one document and
+ * no range and is left out before the batch is cut. A person the search
+ * matched whom no membership marked is looked up by team and profile
+ * before they are offered, one range, which catches a membership whose copy
+ * trails a rename or has none. Cursors are sealed with the organization,
+ * the team and the search's name key (NOT_TEAM_CURSOR). The add checks
+ * again (addTeamMemberCore), so a person who joined meanwhile changes
+ * nothing.
+ */
+export async function addableOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  a: TeamListArgs,
+): Promise<TeamChoicesAnswer> {
+  const ask = await teamListAsk(ADDABLE_LIST, [me.org_id, a.team_id], a)
+  const team = await teamOf(ctx, me, a.team_id)
+  if (team === null) return { state: 'unavailable' }
+  if (!canChangeAccess(me)) return { state: 'refused', message: ACCESS_NEEDS_A_PERSON }
+  if (me.org_role !== 'admin' && !(await isTeamLeader(ctx, me, team.id)))
+    return { state: 'refused', message: TEAM_RUNS_RULE }
+  if (!(await nameKeysReady(ctx, team.org_id))) return { state: 'not_ready' }
+  const people = MEMBER_ROLES.map((role) =>
+    indexAfter(profileRoleIndex(ctx, team.org_id, role), ask.after),
+  )
+  // the people the team's memberships mark as members, by profile id
+  const members = new Set<string>()
+  const matches = allWordsMatcher(nameKey(ask.search))
+  const batch = await listBatch(ctx, ask, {
+    stream: besideHeld(
+      (reads: NamedReads) => mergeNamed(people.map((stream) => stream(reads))),
+      indexAfter(teamMemberIndex(ctx, team.id), ask.after),
+      (profile) => members.add(profile.id),
+    ),
+    keep: async (profile: Doc<'profiles'>, guard): Promise<PersonRow | null> => {
+      if (members.has(profile.id) || !matches(nameKey(profile.name))) return null
+      if ((await guard.lookup(() => membershipOf(ctx, team.id, profile.id))) !== null) return null
+      return personRow(profile)
+    },
+    limit: LIST_BATCH,
+    ceiling: await namedCeiling(ctx),
+  })
+  return { state: 'ready', ...batch }
 }
 
 /** Creates a team with the standard settings (newTeamDefaults). Organization

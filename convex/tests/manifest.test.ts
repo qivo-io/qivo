@@ -726,10 +726,14 @@ teamSync:agenda query public {"type":"object","value":{"org_id":{"fieldType":{"t
 teamSync:lastComments query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teamSync:stamp mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"first_since":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:addMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+teams:addable query public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:deleteDeep mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":true},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+teams:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+teams:members query public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:removeMember mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"on_held_tasks":{"fieldType":{"type":"union","value":[{"type":"literal","value":"leave"},{"type":"literal","value":"keep_as_viewer"},{"type":"object","value":{"reassign_to":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}]},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:setLeader mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"is_leader":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+teams:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:createAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"agent_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"key_prefix":{"fieldType":{"type":"string"},"optional":false},"key_hash":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:createMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"token_prefix":{"fieldType":{"type":"string"},"optional":false},"token_hash":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"expires_at":{"fieldType":{"type":"string"},"optional":true}}}
@@ -1256,7 +1260,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // per visible open task.
   teamSync: { agenda: 'authedQuery', lastComments: 'orgQuery', stamp: 'orgMutation' },
   // Removing a member stays open to org admins during a billing pause;
-  // adding one does not.
+  // adding one does not. Settings › Teams (settingsPage) answers admins and
+  // the teams a leader leads and refuses anyone who cannot lead; a team's
+  // page reads get and members, which every seat of the organization reads
+  // as over REST and MCP; the Add member picker (addable) refuses as
+  // addMember would.
   teams: {
     create: 'adminMutation',
     update: 'orgMutation',
@@ -1264,6 +1272,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     addMember: 'orgMutation',
     removeMember: 'accessRemovalMutation',
     setLeader: 'orgMutation',
+    settingsPage: 'orgQuery',
+    get: 'orgQuery',
+    members: 'orgQuery',
+    addable: 'orgQuery',
   },
   // Revoking and deleting an agent key stay open to org admins during a
   // billing pause; creating one does not.
@@ -1291,7 +1303,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 239
+const PUBLIC_COUNT = 243
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
