@@ -4,6 +4,7 @@
  * No deployment path seeds users or resets workspace data. */
 import { execFileSync } from 'node:child_process'
 import http from 'node:http'
+import { recordSiteUrl } from './auth-probe.mjs'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 
 /* The CLI takes its preview branch iff the deploy key is a preview key —
@@ -201,7 +202,9 @@ export function websiteOrigin(env) {
 
 /* The build command. `run` is execFileSync, `receipt` writes
  * dist/version.json, and `fetch` and `sleep` reach the Management API; the
- * tests pass their own to see which commands and requests run. */
+ * tests pass their own to see which commands and requests run. With
+ * QIVO_SITE_URL_FILE set, it also records the deployment's site URL there
+ * (auth-probe.mjs recordSiteUrl). */
 export async function main(
   env,
   { run = execFileSync, receipt = writeDeploymentReceipt, fetch, sleep } = {},
@@ -242,6 +245,8 @@ export async function main(
     }
     requireProductionBackendEnv(env, backendEnv)
   }
+  // for app-deploy.mjs's probe of the auth routes once convex has pushed
+  recordSiteUrl(env)
   run('npm', ['run', 'build'], {
     stdio: 'inherit',
     env: { ...env, SITE_ORIGIN: websiteOrigin(env) },

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { address } from '../convex/lib/mailConfig'
 import {
@@ -368,6 +371,60 @@ describe('main — a preview build names the backend a preview before it pushes'
       ).rejects.toThrow('cannot read a deployment name out of VITE_CONVEX_URL')
       expect(run).not.toHaveBeenCalled()
       expect(fetch).not.toHaveBeenCalled()
+    }
+  })
+})
+
+describe("main — hands the deployment's site URL to app-deploy.mjs's probe", () => {
+  const staging = {
+    QIVO_ENVIRONMENT: 'staging',
+    QIVO_APP_ORIGIN: 'https://preview.qivo.io',
+    QIVO_CONVEX_DEPLOYMENT: 'fixture-cloud-123',
+    VITE_CONVEX_URL: 'https://fixture-cloud-123.convex.cloud',
+    VITE_CONVEX_SITE_URL: 'https://fixture-cloud-123.convex.site',
+    CONVEX_DEPLOY_KEY: 'prod:fixture-cloud-123|test-only',
+  }
+  const backend = { QIVO_ENVIRONMENT: 'staging', SITE_URL: 'https://preview.qivo.io' }
+  const run = () =>
+    vi.fn((command, args) =>
+      command === 'npx' && args[2] === 'get' ? `${backend[args[3]]}\n` : '',
+    )
+  const folders = []
+  afterEach(() => {
+    for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
+  })
+  const fileIn = () => {
+    const folder = mkdtempSync(join(tmpdir(), 'qivo-vercel-build-'))
+    folders.push(folder)
+    return join(folder, 'site-url')
+  }
+
+  it('writes the site URL only when QIVO_SITE_URL_FILE names a file', async () => {
+    const file = fileIn()
+    await main({ ...staging, QIVO_SITE_URL_FILE: file }, { run: run(), receipt: vi.fn() })
+    expect(readFileSync(file, 'utf8')).toBe('https://fixture-cloud-123.convex.site\n')
+    const unset = fileIn()
+    await main(staging, { run: run(), receipt: vi.fn() })
+    expect(existsSync(unset)).toBe(false)
+  })
+
+  it('refuses a malformed VITE_CONVEX_SITE_URL before it builds', async () => {
+    for (const site of [
+      undefined,
+      'http://fixture-cloud-123.convex.site',
+      'https://x.convex.site/a',
+    ]) {
+      const file = fileIn()
+      const runner = run()
+      await expect(
+        main(
+          { ...staging, VITE_CONVEX_SITE_URL: site, QIVO_SITE_URL_FILE: file },
+          { run: runner, receipt: vi.fn() },
+        ),
+        String(site),
+      ).rejects.toThrow(/Convex site URL/)
+      expect(existsSync(file)).toBe(false)
+      expect(runner.mock.calls.some(([command]) => command === 'npm')).toBe(false)
     }
   })
 })

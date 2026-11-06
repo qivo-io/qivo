@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process'
+import http from 'node:http'
+import { pushThenProbe } from './auth-probe.mjs'
 import { isPreviewDeployKey } from './vercel-build.mjs'
 
 /** Refuse ambiguous credentials before the CLI can write to a backend. */
@@ -24,15 +26,21 @@ export function assertAppTarget(env) {
 
 /** Checks the target, then pushes the backend with vercel-build.mjs as the
  * build command, which refuses a production backend without its mail
- * settings. Deployment never creates users, seeds data or resets a
- * workspace. `run` is execFileSync; the tests pass their own. */
-export function deploy(env, run = execFileSync) {
+ * settings, and then calls the deployment's sign-in, OAuth token and
+ * metadata routes (auth-probe.mjs), failing the Vercel build when one does
+ * not answer as expected. Deployment never creates users, seeds data or
+ * resets a workspace. A refused target throws before anything runs; the
+ * rest settles the promise this returns. `run` is execFileSync, and
+ * `check` (probe, fetch, sleep, log) reaches the probe; the tests pass
+ * their own. */
+export function deploy(env, run = execFileSync, check = {}) {
   assertAppTarget(env)
-  run('npx', ['convex', 'deploy', '--cmd', 'node scripts/vercel-build.mjs'], {
-    stdio: 'inherit',
-  })
+  return pushThenProbe(env, { run, command: 'node scripts/vercel-build.mjs', ...check })
 }
 
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  deploy(process.env)
+  /* the probe's requests go through HTTPS_PROXY or HTTP_PROXY when one is
+     set, as vercel-build.mjs's do. Node 24.14 added this. */
+  http.setGlobalProxyFromEnv?.()
+  await deploy(process.env)
 }
