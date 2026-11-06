@@ -295,7 +295,7 @@ describe('runLanes', () => {
     restore.at('B', 1).answer()
     await settle()
     expect(inbox.events).toEqual(['send p 1'])
-    // A meets the pause: its place goes to q, and C leaves the queue unsent
+    // A meets the pause, so its place goes to q and C leaves the queue unsent
     restore.at('A', 1).refuse(PAUSE)
     await settle()
     expect(inbox.events).toEqual(['send p 1', 'send q 1'])

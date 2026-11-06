@@ -248,8 +248,11 @@ export async function runLanes<Lane, Answer>(
   // the pause came, and stops without sending.
   const worker = async () => {
     for (let lane = queue.shift(); lane !== undefined && alive(); lane = queue.shift()) {
-      const taken = paused === null ? pool.take(pausing.signal) : null
-      const release = taken === null || typeof taken === 'function' ? taken : await taken
+      let release: (() => void) | null = null
+      if (paused === null) {
+        const taken = pool.take(pausing.signal)
+        release = typeof taken === 'function' ? taken : await taken
+      }
       try {
         if (!alive()) return
         await runLane(lane)
