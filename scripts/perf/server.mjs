@@ -246,9 +246,12 @@
 //                        refuse-at-2 (the second write is refused whole),
 //                        pause-at-2 (the second meets the pause), deferred
 //                        (a task item restored with the project item it
-//                        waits for is deferred) and two-orgs (the person
+//                        waits for is deferred), two-orgs (the person
 //                        holds a seat in Partner Co too, with a deleted
-//                        project there); several joined by commas
+//                        project there), purge-counting (Delete now's count
+//                        never answers), purge-at-least (it counts at least
+//                        1,000 items) and purge-failed (it fails); several
+//                        joined by commas
 //   archivedprojects (0) archives that many of the last programs, keeping
 //                        the first live: every other one after its first
 //                        sub-project was archived on its own a day before,
@@ -702,6 +705,8 @@ const forcedDeleted = (() => {
   if (deletedStates.has('refuse-at-2')) force.refuseAt = 2
   if (deletedStates.has('pause-at-2')) force.pauseAt = 2
   if (deletedStates.has('deferred')) force.deferred = true
+  if (deletedStates.has('purge-at-least')) force.purge = 'at-least'
+  if (deletedStates.has('purge-failed')) force.purge = 'failed'
   return force
 })()
 const deletedCount = option('deleted', 0)
@@ -1657,7 +1662,10 @@ const read = (name, args = {}) => {
   if (name.startsWith('projectNav:'))
     return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
   // Deleted items (src/store/deletedItemsStandIn.setup.ts)
-  if (isDeletedRead(name)) return deletedStandIn(deletedWorld(), name, args, forcedDeleted)
+  if (isDeletedRead(name))
+    return name === 'deletedItems:purgeSummary' && deletedStates.has('purge-counting')
+      ? NO_ANSWER
+      : deletedStandIn(deletedWorld(), name, args, forcedDeleted)
   // Settings' project lists (src/store/projectSettingsListsStandIn.setup.ts)
   if (isProjectListRead(name))
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)

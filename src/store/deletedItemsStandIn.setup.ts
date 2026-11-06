@@ -148,6 +148,9 @@ export type ForcedDeleted = {
   pauseAt?: number
   /** a restore defers a task item whose project item the same call restores */
   deferred?: boolean
+  /** Delete now's count of a project item: at least 1,000 (`at-least`), or
+      a failed read (`failed`) */
+  purge?: 'at-least' | 'failed'
 }
 
 const badRequest = (message: string) => new ConvexError({ code: 'bad_request', message })
@@ -462,8 +465,15 @@ export function deletedStandIn(
       return deletedRolesOf(fx)
     case 'deletedItems:people':
       return deletedPeopleOf(fx, args as { org_id: string }, force)
-    case 'deletedItems:purgeSummary':
-      return deletedPurgeSummaryOf(fx, String(args.id))
+    case 'deletedItems:purgeSummary': {
+      if (force.purge === 'failed') throw new Error('deletedItems.purgeSummary failed')
+      const summary = deletedPurgeSummaryOf(fx, String(args.id))
+      // a task item takes nothing along, whatever the bound
+      const project = deletedItemOf(fx, String(args.id))?.kind === 'project'
+      return force.purge === 'at-least' && summary !== null && project
+        ? { along: 1000, exact: false }
+        : summary
+    }
     case 'deletedItems:item':
       return deletedItemOf(fx, String(args.id))
   }

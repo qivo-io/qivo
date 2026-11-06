@@ -1776,6 +1776,14 @@ describe('Deleted items on the benchmark page', () => {
       ids: after.entries.map((e) => e.item_id),
     })
     expect(refused.error).toMatchObject({ code: 'rule' })
+    // Delete now's count past its bound, and failing
+    const counts = async (state) => {
+      const at = await deleted(`deleted=5&role=admin&deletedstate=${state}`)
+      const project = (await at.read('deletedItems:page')).entries[0].item_id
+      return at.read('deletedItems:purgeSummary', { id: project })
+    }
+    expect(await counts('purge-at-least')).toEqual({ along: 1000, exact: false })
+    expect((await counts('purge-failed')).error).toContain('failed')
     const pausing = await deleted('deleted=5&role=admin&deletedstate=pause-at-2')
     const any = (
       await pausing.read('deletedItems:page', { scope: { org_id: pausing.org, all: true } })
