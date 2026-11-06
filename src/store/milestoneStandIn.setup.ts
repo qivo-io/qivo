@@ -22,7 +22,7 @@
    queries. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError } from 'convex/values'
-import { MILESTONE_READ_PROJECTS } from '../../convex/lib/limits'
+import { MILESTONE_READ_PROJECTS, MILESTONE_READ_ROWS } from '../../convex/lib/limits'
 import { nameKey } from '../../convex/lib/nameKey'
 import { allWordsMatcher } from '../../convex/lib/search'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
@@ -34,17 +34,46 @@ import {
   shownDay,
 } from './milestoneRows'
 
+/** A state a section or a range answers whatever the workspace says. */
+type ForcedBatch = 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
+
 /** A state the stand-in answers whatever the workspace says, for each
     read: no answer (`loading`), a failure (`error`), a refusal with the
     server's sentence for a read too large (`refused`) or for an access
     check a bound stopped (`unchecked`), for `get` an answer of null
     (`unavailable`), and for a section or a range a read that stops after
-    its first row (`stopped`). `canWrite` replaces `get`'s `can_write`. */
+    its first row (`stopped`). `upcoming` and `past` force one side of a
+    section alone, over `section`, so a test can fail Past while Upcoming
+    answers. `more` forces a section ask that grows or moves a section,
+    one whose `limit` is above `firstBatch` (25 unless set, the app's
+    first batch, src/lib/milestoneSection.ts MILESTONE_SECTION) or that
+    names `after`, over its side's state, so a Load more fails while the
+    read it grows answers. `canWrite` replaces `get`'s `can_write`. */
 export type ForcedMilestones = {
   get?: 'loading' | 'error' | 'unavailable' | 'refused' | 'unchecked'
-  section?: 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
-  between?: 'loading' | 'error' | 'refused' | 'unchecked' | 'stopped'
+  section?: ForcedBatch
+  upcoming?: ForcedBatch
+  past?: ForcedBatch
+  more?: ForcedBatch
+  firstBatch?: number
+  between?: ForcedBatch
   canWrite?: boolean
+}
+
+/** The state `force` holds the read `query` with `args` in, if any: a
+    section ask's own one first (ForcedMilestones `more`, then its side). */
+function forcedOf(
+  query: 'get' | 'section' | 'between',
+  args: MilestoneReadArgs,
+  force: ForcedMilestones,
+): ForcedMilestones['get'] | ForcedBatch | undefined {
+  if (query !== 'section') return force[query]
+  const grows = args.after !== undefined || (args.limit ?? 0) > (force.firstBatch ?? 25)
+  return (
+    (grows ? force.more : undefined) ??
+    (args.side === 'past' ? force.past : force.upcoming) ??
+    force.section
+  )
 }
 
 /** The arguments of the three reads, as the app sends them. */
@@ -62,9 +91,9 @@ export type MilestoneReadArgs = {
 /** How many days before `from` a read starts (convex/model/milestones.ts
     OVERFLOW_DAYS). */
 const OVERFLOW_DAYS = 3
-/** The most rows a section batch takes (convex/model/milestones.ts
-    MILESTONE_READ.rows). */
-const SECTION_ROWS = 25
+/** The most rows a section answer holds (convex/lib/limits.ts
+    MILESTONE_READ_ROWS, convex/model/milestones.ts MILESTONE_READ.rows). */
+const SECTION_ROWS = MILESTONE_READ_ROWS
 /** The most weeks a range spans (LIMITS.roadmapWeeks.max). */
 const RANGE_WEEKS = 260
 
@@ -176,7 +205,7 @@ export function milestoneStandIn(
   args: MilestoneReadArgs,
   force: ForcedMilestones = {},
 ): unknown {
-  const forced = force[query]
+  const forced = forcedOf(query, args, force)
   if (forced === 'loading') return undefined
   if (forced === 'error') throw new Error('the milestone read failed')
   if (forced === 'unchecked') throw refusal('access_unchecked', MILESTONES_UNCHECKED)
