@@ -40,6 +40,8 @@ import {
   historyRows,
   INBOX_BADGE_STEP,
   isSiteOf,
+  LABEL_MENTION_NAMES,
+  LABEL_MENTION_STEP,
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
@@ -634,6 +636,25 @@ describe('staging check REST contract', () => {
     for (const text of Object.values(RELATION_EXPECTED)) expect(picker).toContain(text)
     for (const mark of ['data-picker-row', 'data-picker-all', 'data-picker-current'])
       expect(picker).toContain(mark)
+  })
+  it('checks the label picker and the mention popup through their own marks', () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    const picker = read('../src/panels/LabelPicker.tsx')
+    const popup = read('../src/components/mentionSuggestion.ts')
+    const window = read('../src/panels/IssueDetail.tsx')
+    expect(LABEL_MENTION_STEP).toBe('ui/label-mention-pickers')
+    expect(LABEL_MENTION_NAMES).toEqual({ found: 'Picker label', made: 'Made in picker' })
+    for (const mark of [
+      'data-label-picker',
+      'data-label-option',
+      'data-label-create',
+      'aria-label="Search labels"',
+    ])
+      expect(picker).toContain(mark)
+    for (const mark of ['data-mention-popup', 'data-mention-id']) expect(popup).toContain(mark)
+    // the chip's × the step presses, named by its label
+    expect(window).toContain('`Remove label “$' + '{label.name}”`')
+    expect(window).toContain('ariaLabel="Leave a comment"')
   })
   it("chooses projects in Archived tasks and Search through the picker's own marks", () => {
     const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')

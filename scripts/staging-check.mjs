@@ -65,7 +65,15 @@
  * that ends the list, a task of its second project only after Search all
  * your projects, and the subtask it made as a current subtask in Add
  * subtask, with one task it makes over REST in its second project and
- * nothing written through the pickers (ui/relation-pickers). It makes a
+ * nothing written through the pickers (ui/relation-pickers). In the same
+ * task's window it finds a label of its own, made over REST, through the
+ * label picker's search on the deployment's batches (labels.picker), puts
+ * it on and takes it off with the chip's ×, creates `<tag> Made in picker`
+ * from the picker with Enter once Create new label shows, and in the
+ * comment composer picks the Standard agent from the @ mention popup
+ * (pickers.mentions) with Enter, then clears the draft so nothing posts
+ * (ui/label-mention-pickers); each label change is checked over REST,
+ * and the sweep deletes the run's labels by its tag. It makes a
  * sub-project of its own
  * with an overdue task and a paused one, opens its Overview and waits for
  * the deployment's answers (overview.summary, risk, attention and paused),
@@ -4570,6 +4578,116 @@ async function relationPickersCheck() {
   })
 }
 
+/** The step that checks the task label picker and the editor's mention
+ *  suggestions (labelMentionPickersCheck). */
+export const LABEL_MENTION_STEP = 'ui/label-mention-pickers'
+
+/** What the step's two labels are called after the run tag: the one it
+ *  makes over REST for the picker to find, and the one the picker makes. */
+export const LABEL_MENTION_NAMES = { found: 'Picker label', made: 'Made in picker' }
+
+/** The task label picker and the @ mention popup on the deployment's reads
+ *  (labels.picker and pickers.mentions), in the window of run.t0. The run
+ *  makes `<tag> Picker label` over REST; Add label's search for the run tag
+ *  lists it from the deployment's batch, a press puts it on the task, which
+ *  GET /tasks/{ref} then lists, and the chip's × takes it off again. Typing
+ *  `<tag> Made in picker` waits for Create new label, which shows only once
+ *  the deployment's answer says the name is free and the run may create
+ *  labels, and Enter makes it and puts it on the task, both checked over
+ *  REST, before its chip's × takes it off. In the comment composer "@" and
+ *  the Standard agent's name list the agent from the deployment's answer,
+ *  Enter puts the mention in the draft, and the step then clears the
+ *  draft and presses Escape, so nothing posts and nobody is notified. The
+ *  sweep deletes both labels by the run tag. A backend before the release
+ *  that added pickers.mentions fails the mention part. */
+async function labelMentionPickersCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  await check(LABEL_MENTION_STEP, async () => {
+    const found = await restOk(w, 'POST', '/labels', {
+      name: `${run.tag} ${LABEL_MENTION_NAMES.found}`,
+      color: '#2563EB',
+    })
+    const carried = async () =>
+      (await restOk(w, 'GET', `/tasks/${run.t0.key}`)).labels.map((l) => l.id)
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${run.t0.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const dialog = app.locator('[role="dialog"]')
+    await dialog.locator('[data-task-title]').waitFor({ timeout: 60_000 })
+    /** Opens Add label and types `text` into its search. */
+    const pickerFor = async (text) => {
+      const add = dialog.locator('button[aria-label="Add label"]')
+      expect(await until(async () => await add.isEnabled()), 'Add label stays disabled')
+      await add.click()
+      const picker = app.locator('[data-label-picker]')
+      await picker.waitFor({ timeout: 20_000 })
+      await picker.locator('input[aria-label="Search labels"]').fill(text)
+      return picker
+    }
+    /** Closes the picker and takes `label` off with its chip's ×. */
+    const takeOff = async (picker, label) => {
+      await app.keyboard.press('Escape')
+      await picker.waitFor({ state: 'detached', timeout: 10_000 })
+      await dialog.locator(`button[aria-label="Remove label “${label.name}”"]`).click()
+      expect(
+        await until(async () => !(await carried()).includes(label.id)),
+        `GET /tasks/${run.t0.key} still lists ${label.name}`,
+      )
+    }
+    // a label of its own, from the deployment's batch, on and off
+    const picker = await pickerFor(run.tag)
+    const option = picker.locator(`[data-label-option="${found.id}"]`)
+    await option.waitFor({ timeout: 30_000 })
+    await option.click()
+    expect(
+      await until(async () => (await carried()).includes(found.id)),
+      `GET /tasks/${run.t0.key} does not list ${found.name}`,
+    )
+    eq(await option.getAttribute('aria-pressed'), 'true', 'the picked label is not checked')
+    await takeOff(picker, found)
+    // a new label from the picker, once the deployment says it is free
+    const madeName = `${run.tag} ${LABEL_MENTION_NAMES.made}`
+    const maker = await pickerFor(madeName)
+    await maker.locator('[data-label-create]').waitFor({ timeout: 30_000 })
+    await maker.locator('input[aria-label="Search labels"]').press('Enter')
+    let made = null
+    expect(
+      await until(async () => {
+        made =
+          (await restRows(w, '/labels', 'labels', { search: run.tag })).find(
+            (l) => l.name === madeName,
+          ) ?? null
+        return made !== null && (await carried()).includes(made.id)
+      }),
+      `GET /labels and GET /tasks/${run.t0.key} do not list ${madeName}`,
+    )
+    await takeOff(maker, made)
+    // the Standard agent from the @ mention popup, never posted
+    const composer = dialog.locator('[role="textbox"][aria-label="Leave a comment"]')
+    await composer.click()
+    await app.keyboard.type(`@${std.name}`)
+    const row = app.locator(`[data-mention-popup] [data-mention-id="${std.id}"]`)
+    await row.waitFor({ timeout: 30_000 })
+    for (let n = 0; n < 8 && !(await row.evaluate((el) => el.classList.contains('active'))); n++)
+      await app.keyboard.press('ArrowDown')
+    await app.keyboard.press('Enter')
+    const mention = composer.locator(`[data-type="mention"][data-id="${std.id}"]`)
+    expect(
+      await until(async () => (await mention.count()) === 1),
+      `the composer holds no mention of ${std.name}`,
+    )
+    await app.keyboard.press('ControlOrMeta+A')
+    await app.keyboard.press('Backspace')
+    await app.keyboard.press('Escape')
+    expect(
+      await until(async () => (await mention.count()) === 0),
+      'the mention stayed in the composer',
+    )
+    return `put ${found.name} on ${run.t0.key} from the picker's search and took it off, made ${madeName} from the picker with Enter, and picked ${std.name} from the @ mention popup without posting`
+  })
+}
+
 /** The step that checks over the socket that the app loads tasks on demand
  *  (tasksOnDemandCheck). */
 export const ON_DEMAND_STEP = 'ui/tasks-on-demand'
@@ -7963,6 +8081,8 @@ async function main() {
   await boardCheck()
   // the task window's relation pickers, while it is active
   await relationPickersCheck()
+  // the label picker and the @ mention popup in the same window
+  await labelMentionPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
   // the Board and a task address without task windows, then the Roadmap
