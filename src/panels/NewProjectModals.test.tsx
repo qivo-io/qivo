@@ -291,6 +291,11 @@ const listed = () =>
   )
 const accessSearch = () => find<HTMLInputElement>('[data-project-access-search]')
 const popupText = () => find('[data-new-project-access-popup]').textContent ?? ''
+/** Whether the open popover is modal. A modal Radix popover hides the
+    dialog behind it from screen readers and keeps wheel and touch
+    scrolling inside itself, which a list over a modal dialog needs, since
+    the dialog's scroll lock cancels those events everywhere else. */
+const popoverIsModal = () => find('[data-modal-shell]').closest('[aria-hidden="true"]') !== null
 
 describe('New project for a standard user', () => {
   beforeEach(() => load('user'))
@@ -449,6 +454,15 @@ describe("New project's Lead", () => {
     ])
     await click('[data-lead-choice="sam"]')
     expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Sam Ode')
+  })
+
+  it('opens modal, so its list scrolls inside the dialog', async () => {
+    await load('user')
+    await render(<dialogs.NewProjectModal onClose={vi.fn()} onCreate={vi.fn()} />)
+    expect(popoverIsModal()).toBe(false)
+    await click('[data-project-lead-picker]')
+    expect(has('[data-lead-choices]')).toBe(true)
+    expect(popoverIsModal()).toBe(true)
   })
 
   it('keeps the creator and says why when the server refuses or is not ready', async () => {
@@ -959,6 +973,21 @@ describe('New sub-project', () => {
     await type(search, 'zz')
     await rest()
     expect(text()).toContain('No projects match.')
+  })
+
+  it('opens its Project and Lead popovers modal, so their lists scroll inside the dialog', async () => {
+    await load('user')
+    await openSub('sensor')
+    expect(popoverIsModal()).toBe(false)
+    await click(parentButton())
+    expect(has('[data-new-subproject-parents]')).toBe(true)
+    expect(popoverIsModal()).toBe(true)
+    await pressEscape(find('[data-new-subproject-parent-search]'))
+    expect(has('[data-new-subproject-parents]')).toBe(false)
+    expect(popoverIsModal()).toBe(false)
+    await click('[data-project-lead-picker]')
+    expect(has('[data-lead-choices]')).toBe(true)
+    expect(popoverIsModal()).toBe(true)
   })
 
   it('reads its Lead with the parent, in the parent’s organization', async () => {

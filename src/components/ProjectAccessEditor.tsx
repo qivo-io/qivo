@@ -937,6 +937,8 @@ export type LeadPickerFor = { org_id: string; project_id?: string; parent_id?: s
  * `busy` says a pick is on its way, and `onPick` hears the person picked.
  * While `disabled` or `busy`, an open list keeps reading but its choices
  * are off, so a pick made as the page's writes turn off sends nothing.
+ * Pass `modal` inside a modal dialog, whose scroll lock would otherwise stop
+ * wheel and touch scrolling of the list (qivo Popover).
  */
 export function LeadPicker({
   on,
@@ -944,6 +946,7 @@ export function LeadPicker({
   emptyLabel,
   disabled,
   busy,
+  modal = false,
   onPick,
 }: {
   on: LeadPickerFor
@@ -951,6 +954,7 @@ export function LeadPicker({
   emptyLabel?: string
   disabled: boolean
   busy: boolean
+  modal?: boolean
   onPick: (person: { id: string; name: string }) => void
 }) {
   const label = lead?.name ?? emptyLabel ?? 'No lead'
@@ -959,6 +963,7 @@ export function LeadPicker({
     <Popover
       width={280}
       backLayer
+      modal={modal}
       onEscapeKeyDown={escapeClearsFirst('data-lead-picker-search')}
       wrapStyle={{ minWidth: 0 }}
       button={(toggle, open) => (

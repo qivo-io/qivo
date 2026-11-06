@@ -627,6 +627,7 @@ function NewProjectModal({
           lead={lead}
           disabled={!P.homeOrg}
           busy={false}
+          modal
           onPick={changeLead}
         />
       </MField>
@@ -838,6 +839,7 @@ function NewSubProjectModal({
             emptyLabel="Loading…"
             disabled={!org || !parent}
             busy={false}
+            modal
             onPick={(person) => setPicked({ ...person, org })}
           />
         </MField>
@@ -886,7 +888,8 @@ function NewSubProjectModal({
 /* The New sub-project dialog's Project field: a button naming the parent
    once the check answered that it may take a sub-project, "Choose a
    project…" otherwise and "Loading…" while it checks, which opens the
-   server's parents in organization `org`. */
+   server's parents in organization `org`. Its popover is modal, so its
+   list scrolls inside the modal dialog (qivo Popover). */
 function ParentPicker({
   org,
   parent,
@@ -912,6 +915,7 @@ function ParentPicker({
     <Popover
       width={300}
       backLayer
+      modal
       onEscapeKeyDown={escapeClearsFirst('data-new-subproject-parent-search')}
       wrapStyle={{ minWidth: 0 }}
       button={(toggle, open) => (
