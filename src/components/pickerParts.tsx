@@ -17,10 +17,11 @@ import { MenuItem } from './qivo'
 /**
  * The end of a picker's list (lib/pagedList.ts listEnd) in `words`, as the
  * Reassign picker ends its own (panels/Modals.tsx ReassignChoiceList). It
- * says nothing is there only at the list's real end. In a `menu` Load more
- * is a menu row; in a list of checkboxes it is a button marked `moreHook`,
- * which stays focusable while it reads. `onMore` replaces the list's own
- * Load more, as a picker that moves focus to the first new row does.
+ * says nothing is there only at the list's real end. Load more is a menu
+ * row in a `menu` and a button in a list of checkboxes, each marked
+ * `moreHook`. The button stays focusable while it reads. `onMore` replaces
+ * the list's own Load more, as a picker that moves focus to the first new
+ * row does.
  */
 export function ChoiceEnd<A extends HeldPick, Row>({
   end,
