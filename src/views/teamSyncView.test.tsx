@@ -183,6 +183,28 @@ async function mention(handle: string, text: string) {
   return field
 }
 
+/** Types `text` into input `box` through an input event, as a person
+    does, which takes the unsaved lease (lib/leaveGuard.ts). */
+async function typeInto(box: HTMLInputElement | null | undefined, text: string) {
+  if (!box) throw new Error('missing the box')
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  await act(async () => {
+    box.focus()
+    setValue?.call(box, text)
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+/** Whether some write since the `from`th the network saw sent Remaining
+    `hours`. The network's calls run on from case to case. */
+const sentRemaining = (hours: number, from = 0) =>
+  network.mutation.mock.calls
+    .slice(from)
+    .some(
+      ([, args]) =>
+        (args as { patch?: { remaining_hours?: number } }).patch?.remaining_hours === hours,
+    )
+
 /** Edits the stand-in's answers: each row's `over` by number. */
 const rowsEdit =
   (over: Record<number, Partial<Extract<AgendaAnswer, { state: 'ok' }>['rows'][number]>>) =>
@@ -856,12 +878,56 @@ describe('a meeting that stops fitting', () => {
         box()?.blur()
       })
       await settle()
-      expect(
-        network.mutation.mock.calls.some(
-          ([, args]) =>
-            (args as { patch?: { remaining_hours?: number } }).patch?.remaining_hours === 9,
-        ),
-      ).toBe(true)
+      expect(sentRemaining(9)).toBe(true)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'keeps the stale meeting and the hours typed in it through Try again, busy until its answer, and the next ok answer makes the box write again',
+    async () => {
+      const { board, P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      const box = () => card(handle)?.querySelector<HTMLInputElement>('[data-sync-input]')
+      await typeInto(box(), '9')
+      board.server.sync.fail = new Error('down')
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      // Try again, whose answer the server holds back
+      board.server.sync.fail = undefined
+      board.server.sync.hold = true
+      const before = board.server.sync.asked.length
+      const note = document.querySelector('[data-sync-stale-note="error"]')
+      await click(
+        [...(note?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Try again'),
+      )
+      await settle()
+      expect(board.server.sync.asked.length).toBeGreaterThan(before)
+      // the meeting stays, stale and read-only, busy, with the typed hours
+      expect(state()).toBe('stale')
+      expect(page()?.getAttribute('aria-busy')).toBe('true')
+      expect(card(handle)).not.toBeNull()
+      expect(box()?.readOnly).toBe(true)
+      expect(box()?.value).toBe('9')
+      board.server.sync.hold = false
+      await board.answer()
+      await settle()
+      expect(state()).toBe('ok')
+      expect(page()?.hasAttribute('aria-busy')).toBe(false)
+      // the ok answer makes the box write again, the typed hours with it
+      expect(box()?.readOnly).toBe(false)
+      expect(box()?.value).toBe('9')
+      const from = network.mutation.mock.calls.length
+      await act(async () => {
+        box()?.focus()
+        box()?.blur()
+      })
+      await settle()
+      expect(sentRemaining(9, from)).toBe(true)
     },
     BOARD_TEST_TIMEOUT,
   )

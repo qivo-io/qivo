@@ -31,7 +31,8 @@
      grid, marked refreshing; a meeting whose live answer stops fitting
      (over_ceiling, over_budget) or whose read fails keeps its last ok
      answer under the refusal's note, marked stale, so cards keep their
-     unsent text; unavailable shows the picker. */
+     unsent text, also while Try again asks afresh, when the page is busy
+     until the answer arrives; unavailable shows the picker. */
 
 import { useEffect, useState } from 'react'
 import { roundTenths } from '../../../convex/lib/numbers'
@@ -116,7 +117,8 @@ export type SyncMeeting = {
       the earliest of its read stopping, its connection going and the
       refusal or failure arriving (P.syncRead fitted.until) */
   stoppedAt: number | null
-  /** Asks the server afresh (Try again). */
+  /** Asks the server afresh (Try again), keeping the meeting on screen,
+      busy, until the answer arrives (P.watchSync). */
   retry: () => void
   /** the answer whose meeting shows, or null */
   answer: SyncAgenda | null

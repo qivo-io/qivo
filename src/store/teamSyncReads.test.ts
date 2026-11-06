@@ -239,7 +239,7 @@ describe("Team sync's read", () => {
     expect(store.P.handleOf('far')).toBeNull()
   })
 
-  it('drops the rows on a new scope or a new attempt', async () => {
+  it('drops the rows on a new scope', async () => {
     answer = ok([row('far', 9)])
     await watch(await keyOf({ kind: 'all' }))
     expect(store.P.syncTask('far')).toBeDefined()
@@ -248,11 +248,48 @@ describe("Team sync's read", () => {
     // another scope is another meeting: it never stands in, even refreshing
     expect(store.P.syncTask('far')).toBeUndefined()
     expect(store.P.syncRead().key).toBeNull()
+  })
+
+  it('keeps its rows and the answer it fitted across a new attempt until the attempt answers, and drops them when it fitted none', async () => {
     answer = ok([row('far', 9)])
-    await watch(await keyOf({ kind: 'all' }))
+    const key = await keyOf({ kind: 'all' })
+    await watch(key)
+    open.get(key)?.fail(new ConvexError({ code: 'internal', message: 'down' }))
+    await turn()
+    const until = store.P.syncRead().fitted?.until
+    expect(until).toEqual(expect.any(Number))
+    /** Try again `n`, whose answer the server holds back. */
+    const again = (n: number) => {
+      network.onUpdate.mockImplementationOnce((_ref, args, receive, fail) => {
+        open.set(JSON.stringify(args), { next: receive, fail })
+        asked.push(JSON.stringify(args))
+        return () => open.delete(JSON.stringify(args))
+      })
+      store.P.watchSync(key, 1, n)
+    }
+    again(1)
+    // the stale meeting stays, not current, while the attempt is on its way
+    expect(asked).toEqual([key, key])
     expect(store.P.syncTask('far')).toBeDefined()
-    answer = ok([])
-    store.P.watchSync(await keyOf({ kind: 'all' }), 1, 1)
+    expect(store.P.syncRead()).toMatchObject({ key, current: false, fitted: { key, until } })
+    expect(store.P.syncRead().error).toBeDefined()
+    // another failure keeps it stale, stopped when it first stopped
+    open.get(key)?.fail(new ConvexError({ code: 'internal', message: 'down' }))
+    await turn()
+    expect(store.P.syncRead()).toMatchObject({ key, current: true, fitted: { key, until } })
+    expect(store.P.syncTask('far')).toBeDefined()
+    // an ok answer replaces it as any answer does
+    again(2)
+    open.get(key)?.next(ok([row('near', 10)]))
+    await turn()
+    expect(store.P.syncTask('far')).toBeUndefined()
+    expect(store.P.syncTask('near')).toBeDefined()
+    expect(store.P.syncRead()).toMatchObject({ key, current: true, fitted: { until: null } })
+    // with no answer fitted, as after unavailable, a new attempt drops the
+    // result at once, so the page shows its wait
+    await serve({ state: 'unavailable' })
+    expect(store.P.syncRead().fitted).toBeNull()
+    again(3)
     expect(store.P.syncRead().key).toBeNull()
   })
 

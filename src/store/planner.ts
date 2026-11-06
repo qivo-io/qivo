@@ -3252,9 +3252,10 @@ function syncViewRead(slot: ViewSlot) {
 
 /** Forgets view `slot`'s rows, its owners' loads and what its read held,
     and repaints the views when it held any, such as a failure Try again
-    leaves, so the view shows its wait at once. A milestone read's Retry
-    keeps its last answer (`keepMilestones`), as the view keeps the person's
-    draft over it (P.milestoneRead). */
+    leaves on a read that kept no answer (watchView), so the view shows its
+    wait at once. A milestone read's Retry keeps its last answer
+    (`keepMilestones`), as the view keeps the person's draft over it
+    (P.milestoneRead). */
 function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
   const read = viewReads.get(slot)
   const held = !!read?.held
@@ -3287,6 +3288,15 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
  * text filter that only narrows the Board's (views/board/useBoardView.ts
  * narrowsText), and the same Team sync meeting on a new day or week grid
  * (P.watchSync). The view decides when it holds; the store keeps one rule.
+ * A new `attempt` on a read that keeps its rows past a failure
+ * (ViewQuery keepsOnError) and still holds the last answer whose rows it
+ * took (ViewRead fitted) asks afresh without dropping anything. The held
+ * result, that answer, its rows and whether it is behind stay, not
+ * current, until the attempt's result replaces them as any result does.
+ * So Team sync's Try again keeps a stale meeting's cards with their
+ * unsent text. A new attempt on any other read drops what it held, so the
+ * view shows its wait at once, except that a milestone read's Retry keeps
+ * its last answer (releaseViewRows `keepMilestones`).
  */
 function watchView(
   slot: ViewSlot,
@@ -3329,12 +3339,19 @@ function watchView(
   const other =
     key !== null && (read.query !== query || (read.held !== null && read.held.key !== key && !hold))
   if (key !== null && (retry || other)) {
+    // a new attempt keeps the answer a read that keeps its rows still shows
+    const keeps = !other && !!read.query.keepsOnError && read.fitted !== null
     read.stop?.()
     read.stop = null
     read.live = null
     read.current = false
     read.query = query
-    releaseViewRows(slot, retry && !other && !!query.milestones)
+    if (keeps) {
+      fittedStops(read)
+      // the view shows the kept answer as waiting for the attempt's
+      viewReadsChanged = true
+      owe('view')
+    } else releaseViewRows(slot, retry && !other && !!query.milestones)
   }
   if (read.want === key && !retry && !other) return
   const wasLive = read.live !== null
@@ -10257,7 +10274,10 @@ export const PLANNER = {
       null while its page or the tab is hidden, which stops it and keeps
       what it held, read again with the same arguments when the page asks
       for them again. `owner` names the mounted page and a new `attempt`
-      (Try again) asks afresh, as P.watchBoard's. The same meeting, its
+      (Try again) asks afresh, as P.watchBoard's, but keeps the meeting it
+      last fitted, not current, until the attempt's answer arrives
+      (watchView), so a stale meeting's cards keep their unsent text; with
+      no meeting kept it drops what it held. The same meeting, its
       organization and scope, on another day or week grid keeps the meeting
       it held, never as current, until the new day's answer arrives
       (watchView `hold`), so a card's unsent text survives midnight. A key
