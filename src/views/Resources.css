@@ -186,6 +186,19 @@
   white-space: nowrap;
   max-width: 100%;
 }
+/* A load the view could not read ("unknown") or is still reading ("…"):
+   no heat, in the muted voice of the headings' Counting… and unknown. */
+.resource-strip .rs-heat-unknown {
+  background: none;
+  color: var(--text-3);
+}
+.resource-strip .rs-heat-unknown strong {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+.resource-strip .rs-heat-value[data-load-unknown] strong {
+  font-style: italic;
+}
 .resource-strip .rs-empty {
   height: 38px;
   margin: 0;
