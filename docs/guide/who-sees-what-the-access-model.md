@@ -165,8 +165,9 @@ decides. The lead starts as you. **Lead** lists the people who may lead the
 project 25 at a time, with a search over the organization's people and
 **Load more**. **Project access** lists the organization's teams and then its
 people 25 at a time, with a search and **Load more**, and offers organization
-admins like anyone else. The teams and people you check stay checked, listed
-first under **Selected**, while you search again.
+admins like anyone else. The teams and people you check stay checked while
+you search, and with the search empty they are listed first under
+**Selected**.
 
 If you are not an organization admin and pick someone else as lead, Qivo adds
 you to **Project access** as **User**. The field then names you, such as
