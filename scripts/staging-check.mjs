@@ -3683,7 +3683,13 @@ async function threadPageChecks() {
     return `${task.key} with ${count} comments and ${changes} changes`
   })
   if (!made) {
-    for (const id of ['rest', 'mcp', 'ui/earlier-comments', 'ui/earlier-activity'])
+    for (const id of [
+      'rest',
+      'mcp',
+      'ui/earlier-comments',
+      'ui/earlier-activity',
+      'ui/newer-activity',
+    ])
       skip(`thread-pages/${id}`, 'the task could not be filled')
     return
   }

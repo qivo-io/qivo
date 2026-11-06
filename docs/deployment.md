@@ -272,7 +272,8 @@ presses **Show newer activity** until it goes
 (`thread-pages/ui/newer-activity`), checks that the presses together brought
 back every change after the first one's place through the newest, each once
 and in order, and finds **Show earlier activity** back at the top; it skips
-that check when the thread fits the budget. Its uploads
+that check when the thread fits the budget, and when the task could not be
+filled. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
