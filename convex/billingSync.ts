@@ -693,19 +693,20 @@ export const restartStorage = internalMutation({
  * transaction never reads the totals, which every attach writes. The step
  * reads the organization's stored-byte totals when it runs
  * (model/storageTotals.ts storageTotalsOf), normally within a second of
- * the renewal: every task file it stores, files in Deleted items included
- * until they are deleted for good, the figure Billing shows as current
- * storage. A file stored after that waits for the next period. It records
+ * the renewal. They count every task file the organization stores, files
+ * in Deleted items included until they are deleted for good, the figure
+ * Billing shows as current storage. A file stored after that waits for the
+ * next period. It records
  * the bytes and the blocks over the plan's allowance for the period's
  * seats. When there are blocks and the period starts after any
  * complimentary grant, it also adds the storage charge, which is collected
  * with the period's metered usage on its closing invoice and never recurs.
  *
  * While the totals are not complete, as while an operator's recount runs,
- * the step logs a warning and writes nothing, never 0, so the sample waits:
- * apply starts it again STORAGE_STALL_MS after its start, stops it after
- * STORAGE_ATTEMPTS starts and retries it STORAGE_RETRY_MS later, and a
- * sample started again measures the totals when it runs. A step whose
+ * the step logs a warning and writes nothing, never 0, and the sample
+ * waits. Apply starts it again STORAGE_STALL_MS after its start, stops it
+ * after STORAGE_ATTEMPTS starts and retries it STORAGE_RETRY_MS later, and
+ * a sample started again measures the totals when it runs. A step whose
  * period is gone, or whose run was started again, does nothing
  * (takeStorageSample). */
 export const storageStep = internalMutation({

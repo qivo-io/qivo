@@ -2015,7 +2015,7 @@ export default defineSchema({
   /* Daily storage samples (storageSamples.ts): one reading a UTC day of an
    * organization's stored-byte totals, as its storage_org_totals row held
    * them when the day's run read it, files in Deleted items included. A
-   * row is an actual reading only, never an estimate: an organization
+   * row is an actual reading only, never an estimate. An organization
    * whose totals are not complete, whose deletion has begun or that a run
    * never reached has no row for the day. At most one row per organization
    * and day. Nothing bills from them yet. They go after

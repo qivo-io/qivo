@@ -3,7 +3,7 @@
  * Deleted items included, as one storage_daily_samples row an
  * organization, in steps of SAMPLE_PAGE.orgs organizations in id order. It
  * reads only each organization's totals row, never an attachment row, and
- * bills nothing: the samples are what a daily storage charge would
+ * bills nothing. The samples are what a daily storage charge would
  * average, and the run rows say what recording them costs.
  *
  * The hourly cron (crons.ts 'storage-daily-samples', minute 20) calls tick.
@@ -252,8 +252,8 @@ function dayStart(day: string): number {
  * both included and at most 62 days apart: each day's run with its
  * counters, their sums, the runs finished and the hourly ticks the range
  * implies (model/storageSamples.ts CostReport). Read only. It names no
- * organization: a run's cursor and id stay out. The staging reading runs
- * it, as this module's header says. */
+ * organization, and leaves a run's cursor and id out. The staging reading
+ * runs it, as this module's header says. */
 export const costReport = internalQuery({
   args: { from: v.string(), to: v.string() },
   handler: async (ctx, { from, to }): Promise<CostReport> => {
