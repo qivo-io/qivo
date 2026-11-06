@@ -1704,7 +1704,7 @@ describe('board-scale-seed --api-accounts', () => {
         org_id: 'org',
         profile_id: id(2),
         credential_id: 'agent_keys:3',
-        credential_name: 'Build relay (scale 4)',
+        credential_name: 'Nightly build (scale 4)',
         period_start: fake.period,
         calls: 3,
       },
