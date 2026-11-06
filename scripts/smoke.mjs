@@ -1680,7 +1680,8 @@ try {
     let checkedMarkers = 0
     for (const row of rows) {
       const label = row.querySelector('[data-roadmap-task-open]')
-      const task = label && p.issueById[label.dataset.roadmapTaskOpen]
+      // a row's task by its handle, held or only in the Roadmap's answer
+      const task = label && p.anyTask(label.dataset.roadmapTaskOpen)
       if (label && !task)
         errors.push(`Rendered task ${label.dataset.roadmapTaskOpen} is missing from the planner`)
       if (

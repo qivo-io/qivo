@@ -129,15 +129,18 @@ if (!process.argv.includes('--serve'))
 // the timed phases, each with its script, layout and style time and the
 // number of App renders in it. Tasks load on demand: `startup` is the
 // startup without task windows, and the phases before `taskLoad` (BEFORE_ASK)
-// run before any task is held; taskLoad times the ask for every task
-// (P.askTasks) to every task held, and every phase after it reads or edits
-// held tasks
+// run before any task is held, the Roadmap's navigation and drag among them,
+// since the Roadmap reads its tasks from the server (tasks.roadmap); taskLoad
+// times the ask for every task (P.askTasks) to every task held, and every
+// phase after it reads or edits held tasks. A build from before the Roadmap
+// read the server asks for every task as the Roadmap mounts, so its
+// navigation holds that load and its taskLoad finds every task held
 const PHASES = [
   'searchOpen',
   'search',
-  'taskLoad',
   'navigation',
   'drag',
+  'taskLoad',
   'comments',
   'remote',
   'remoteWhilePending',
@@ -180,7 +183,7 @@ const PHASES = [
 ]
 /* The phases that run before the ask for every task (taskLoad), on a
    workspace that holds no task; the report names them (report.beforeAsk). */
-const BEFORE_ASK = ['startup', 'searchOpen', 'search']
+const BEFORE_ASK = ['startup', 'searchOpen', 'search', 'navigation', 'drag']
 // the medians --baseline prints side by side
 const COMPARED = [
   ...[
@@ -669,31 +672,19 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   assert.equal(await page.locator('[cmdk-item]').count(), searchRows)
   await page.keyboard.press('Escape')
   await settle()
-  // From the ask for every task (P.askTasks) to every task held, before the
-  // first phase that needs them. A build from before tasks loaded on demand
-  // has no ask and loads every task as it boots, so the phase waits for that
-  // load to end (P.stillLoading), which a whole boot has ended already.
-  phase('taskLoad')
-  metrics.taskLoad.push(
-    await timed(async () => {
-      await page.evaluate(() => window.PLANNER.askTasks?.('benchmark'))
-      await page.waitForFunction(
-        () =>
-          typeof window.PLANNER.tasksHeld === 'function'
-            ? window.PLANNER.tasksHeld()
-            : window.PLANNER.stillLoading() === null,
-        null,
-        { timeout: timeout * 10 },
-      )
-    }),
-  )
-  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
   const roadmap = await viewButton(page, 'Roadmap')
+  // From the click until the Roadmap shows its rows: on this build its
+  // answer for the selection (data-roadmap-state ok), with no task of the
+  // workspace held; on a build from before it read the server, every task
+  // loaded and the Roadmap drawn from them (data-roadmap-panel)
   phase('navigation')
   metrics.navigation.push(
     await timed(async () => {
       await roadmap.click()
-      await shows(page, '[data-roadmap-panel]')
+      await shows(
+        page,
+        '[data-roadmap-root][data-roadmap-state="ok"] [data-roadmap-panel], [data-roadmap-panel]:not([data-roadmap-root] *)',
+      )
       await shows(page, '[data-roadmap-task-open]')
     }),
   )
@@ -719,7 +710,8 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
   await settle()
   const bounds = await bar.boundingBox()
   const taskId = await bar.getAttribute('data-bar')
-  const initial = await page.evaluate((id) => window.PLANNER.issueById[id].start, taskId)
+  // the dragged task by its handle, held or only in the Roadmap's answer
+  const initial = await page.evaluate((id) => window.PLANNER.anyTask(id).start, taskId)
   const writes = await page.evaluate(() => window.__perf.writes)
   phase('drag')
   assert.equal(
@@ -742,7 +734,26 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
       await page.waitForFunction((previous) => window.__perf.writes > previous, writes)
     }),
   )
-  assert.notEqual(await page.evaluate((id) => window.PLANNER.issueById[id].start, taskId), initial)
+  assert.notEqual(await page.evaluate((id) => window.PLANNER.anyTask(id).start, taskId), initial)
+  // From the ask for every task (P.askTasks) to every task held, before the
+  // first phase that needs them. A build from before tasks loaded on demand
+  // has no ask and loads every task as it boots, so the phase waits for that
+  // load to end (P.stillLoading), which a whole boot has ended already.
+  phase('taskLoad')
+  metrics.taskLoad.push(
+    await timed(async () => {
+      await page.evaluate(() => window.PLANNER.askTasks?.('benchmark'))
+      await page.waitForFunction(
+        () =>
+          typeof window.PLANNER.tasksHeld === 'function'
+            ? window.PLANNER.tasksHeld()
+            : window.PLANNER.stillLoading() === null,
+        null,
+        { timeout: timeout * 10 },
+      )
+    }),
+  )
+  assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks)
   await page.locator('[data-roadmap-task-open]').first().click()
   phase('comments')
   await page.locator('[data-task-close]').waitFor()
@@ -1105,9 +1116,9 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
     .locator('[data-view-switch]')
     .getByRole('radio', { name: 'Roadmap', exact: true })
     .click({ timeout: timeout * 10 })
-  // the phone Roadmap asks for every task as it mounts and shows its
-  // schedule button once they are held, so the timed phase starts after
-  // that load, as it started after the whole boot before
+  // the phone Roadmap shows its schedule button once its answer for the
+  // selection arrived (a build from before it read the server, once every
+  // task is held), so the timed phase starts after that
   const schedule = await handle(page.getByRole('button', { name: 'Task schedule', exact: true }))
   await settle()
   phase('variedPhoneRoadmap')

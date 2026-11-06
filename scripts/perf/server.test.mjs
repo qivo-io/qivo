@@ -369,6 +369,59 @@ describe('the benchmark server', () => {
     }
   })
 
+  it("answers the Roadmap's two reads for the selection the app opens, with the states the page asks for", async () => {
+    /** What tasks:roadmap and tasks:roadmapDependencies answer for the
+        first program on a workspace with page parameters `params`. */
+    const roadmap = async (params, filters = {}) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      const scope = { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id }
+      const args = {
+        scope,
+        filters: { mine: false, owners: [], priority: null, search: '', ...filters },
+        window: { from: '2026-09-07', to: '2026-11-02' },
+      }
+      await send({ type: 'query', id: 'roadmap', name: 'tasks:roadmap', args })
+      await send({ type: 'query', id: 'deps', name: 'tasks:roadmapDependencies', args: { scope } })
+      const read = (to) => {
+        const answer = posted.find((m) => m.to === to)
+        return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+      }
+      return { answer: read('roadmap'), deps: read('deps') }
+    }
+    const ok = await roadmap('tasks=300')
+    expect(ok.answer.state).toBe('ok')
+    expect(ok.answer.rows.length).toBeGreaterThan(0)
+    expect(ok.answer.projects).toHaveLength(10)
+    expect(ok.answer.remaining.state).toBe('ok')
+    expect(ok.answer.rows.every((row) => row.description === undefined)).toBe(true)
+    expect(ok.deps.state).toBe('ok')
+    expect(ok.deps.auto_move.state).toBe('ok')
+    // the forced states, several at once
+    expect((await roadmap('tasks=100&roadmap=over_ceiling')).answer).toMatchObject({
+      state: 'over_ceiling',
+      ceiling: 1000,
+    })
+    expect((await roadmap('tasks=100&roadmap=over_budget')).answer.state).toBe('over_budget')
+    const both = await roadmap('tasks=100&roadmap=counting,deps-budget')
+    expect(both.answer.remaining).toEqual({ state: 'unavailable', reason: 'counting' })
+    expect(both.deps).toEqual({ state: 'over_budget' })
+    const auto = await roadmap('tasks=100&roadmap=remaining-budget,automove-budget')
+    expect(auto.answer.remaining).toEqual({ state: 'unavailable', reason: 'budget' })
+    expect(auto.deps.auto_move).toEqual({ state: 'over_budget' })
+    expect((await roadmap('tasks=100&roadmap=access_unchecked')).answer).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    expect((await roadmap('tasks=100&roadmap=error')).answer.error).toContain('roadmap=error')
+    // an organization Viewer may edit no project of a part
+    const viewer = await roadmap('tasks=300&role=viewer')
+    if (viewer.deps.state === 'ok' && viewer.deps.auto_move.state === 'ok')
+      expect(viewer.deps.auto_move.editable_projects).toEqual([])
+  }, 60_000)
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

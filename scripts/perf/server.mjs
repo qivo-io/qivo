@@ -74,6 +74,16 @@
 //                        gathers at most), error (every read fails) and
 //                        favorites (the first two programs starred);
 //                        several joined by commas
+//   roadmap              a state the Roadmap's reads (tasks:roadmap and
+//                        tasks:roadmapDependencies) answer whatever the
+//                        tasks say, for screenshots of states a seeded
+//                        backend cannot reach: over_ceiling, over_budget,
+//                        unavailable and access_unchecked (both reads),
+//                        counting and remaining-budget (the headings'
+//                        Remaining), deps-budget (the dependency read past
+//                        its budget), automove-budget (Auto-move's inputs
+//                        past their size) and error (the Roadmap's read
+//                        fails); several joined by commas
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -235,9 +245,14 @@
 // Board's query (tasks:board), through the one stand-in the jsdom tests use
 // (src/store/boardStandIn.setup.ts): the Board's rules over the workspace
 // held here, with no access or read budget, and the ceiling of 1,000 tasks.
-// So are the owner loads the delays of tasks only the Board's answer brings
-// read (planning:ownerLoads, src/store/ownerLoadsStandIn.setup.ts), from the
-// same workspace, with no bounds. So are the Overview's queries
+// So are the Roadmap's two reads (tasks:roadmap and tasks:roadmapDependencies),
+// through the stand-in the jsdom tests use (src/store/roadmapStandIn.setup.ts):
+// the Roadmap's rules over the workspace held here, with no access or read
+// budget, the ceiling of 1,000 rows and every project editable but for
+// role=viewer. So are the owner loads the delays of tasks only a view's
+// answer brings and Team utilization read (planning:ownerLoads,
+// src/store/ownerLoadsStandIn.setup.ts), from the same workspace, with no
+// bounds. So are the Overview's queries
 // (overview:summary, risk, attention, paused and health), through the
 // stand-in the jsdom tests use (src/store/overviewStandIn.setup.ts), with no
 // access or read budget. So are Settings › Labels' batches
@@ -288,6 +303,7 @@ import {
 import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
+import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -324,6 +340,11 @@ const subprojectCount = Math.max(1, option('subprojects', 10))
 const doneShare = parameters.has('done') ? Math.min(1, Math.max(0, option('done', 0))) : null
 const titleLength = parameters.has('titles') ? Math.max(1, option('titles', 40)) : null
 const forcedBoard = parameters.get('board') ?? undefined
+/* The Roadmap's forced states (the `roadmap` parameter): those its
+   stand-in's `force` takes, and whether its read fails. */
+const roadmapStates = (parameters.get('roadmap') ?? '').split(',').filter(Boolean)
+const forcedRoadmap = roadmapStates.filter((state) => state !== 'error')
+const roadmapFails = roadmapStates.includes('error')
 /* The Overview's forced states (the `overview` parameter), as the
    stand-in's `force` takes them. */
 const forcedOverview = (() => {
@@ -1378,6 +1399,15 @@ const read = (name, args = {}) => {
       return searchPage(args)
     case 'tasks:board':
       return boardStandIn(snapshot, args, { force: forcedBoard })
+    // the Roadmap's reads (src/store/roadmapStandIn.setup.ts)
+    case 'tasks:roadmap':
+      if (roadmapFails) throw new Error("the Roadmap's read fails, as roadmap=error asks")
+      return roadmapStandIn(snapshot, args, { force: forcedRoadmap })
+    case 'tasks:roadmapDependencies':
+      return dependenciesStandIn(snapshot, args, {
+        force: forcedRoadmap,
+        canEdit: () => !viewer,
+      })
     case 'labels:settingsPage': {
       const { uncounted, ...force } = forcedLabels
       return labelSettingsStandIn(snapshot, args, {
