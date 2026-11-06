@@ -448,12 +448,12 @@ function TeamFields({
   // the list tells that it does not, or the store holds no such membership
   useEffect(() => {
     setAdded((m) =>
-      without(m, (id, added) => {
+      without(m, (id, named) => {
         const person = storePerson(id)
         return (
           loaded.has(id) ||
           !person?.teams.includes(teamId) ||
-          listPassed(list, search.settled, person.name || added, id)
+          listPassed(list, search.settled, person.name || named, id)
         )
       }),
     )
