@@ -46,6 +46,7 @@ import {
   LABELS_STEP,
   LIST_REFUSALS,
   MILESTONE_STEP,
+  newerWalk,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
@@ -61,6 +62,7 @@ import {
   pace,
   parseArgs,
   peoplePagesMax,
+  pressSettled,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -1412,6 +1414,36 @@ describe("the task window's budget in the thread step", () => {
     expect(threadFitsBudget(60, 511, 1000)).toBe(true)
     expect(threadFitsBudget(60, 90, 150)).toBe(true)
     expect(threadFitsBudget(60, 91, 150)).toBe(false)
+  })
+
+  it('counts a press once its loading row went and its place moved or its control went', () => {
+    // the loading row stands in for the control's button, so not yet
+    expect(pressSettled({ state: 'loading', place: 'c1' }, 'c1')).toBe('wait')
+    expect(pressSettled({ state: 'loading', place: 'c0' }, 'c1')).toBe('wait')
+    // back, but nothing moved, so the press loaded nothing so far
+    expect(pressSettled({ state: 'more', place: 'c1' }, 'c1')).toBe('wait')
+    expect(pressSettled({ state: 'unread', place: null }, 'c1')).toBe('wait')
+    // the place moved, or the control went for good
+    expect(pressSettled({ state: 'more', place: 'c0' }, 'c1')).toBe('done')
+    expect(pressSettled({ state: null, place: null }, 'c1')).toBe('done')
+    expect(pressSettled({ state: 'failed', place: 'c1' }, 'c1')).toBe('failed')
+  })
+
+  it('checks that Show newer brought back every change after its first place, once and in order', () => {
+    const ids = Array.from({ length: 8 }, (_, n) => `e${n}`)
+    expect(() => newerWalk('e3', ['e4', 'e5', 'e6', 'e7'], ids)).not.toThrow()
+    // a change missing, one twice, two swapped, short of the newest
+    const wrong = [
+      ['e4', 'e6', 'e7'],
+      ['e4', 'e5', 'e5', 'e6', 'e7'],
+      ['e4', 'e6', 'e5', 'e7'],
+      ['e4', 'e5', 'e6'],
+    ]
+    for (const met of wrong)
+      expect(() => newerWalk('e3', met, ids)).toThrow(
+        /^the changes Show newer activity brought back:/,
+      )
+    expect(() => newerWalk('c9', ['e4'], ids)).toThrow(/is not in the history$/)
   })
 })
 

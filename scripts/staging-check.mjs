@@ -3642,7 +3642,8 @@ async function commentPageChecks() {
  *  empty page, and in the task window uses Show earlier comments and Show
  *  earlier activity until the first comment and the created row appear,
  *  then, past the task window's budget (LIMITS.threadRows), Show newer
- *  activity until the newest comment and change are back. */
+ *  activity until it goes, every change after its first place back once
+ *  and in order. */
 async function threadPageChecks() {
   const w = run.creds.writeToken
   let task
@@ -3698,20 +3699,27 @@ async function threadPageChecks() {
     }
     fail('paging did not end')
   }
-  /** The created row's id, the newest row's and the row count of the
-   *  history `read` pages. */
+  /** The created row's id, the newest row's, the row count and every
+   *  row's id, oldest first, of the history `read` pages. */
   const history = async (read) => {
     const rows = historyRows(await walk(read), changes)
-    return { created: rows[0].id, newest: rows.at(-1).id, count: rows.length }
+    return {
+      created: rows[0].id,
+      newest: rows.at(-1).id,
+      count: rows.length,
+      ids: rows.map((r) => r.id),
+    }
   }
   let created
   let newest
+  let ids
   await check('thread-pages/rest', async () => {
     const r = await history((before) =>
       restOk(w, 'GET', `/tasks/${task.key}/activity${before ? `?before=${before}` : ''}`),
     )
     created = r.created
     newest = r.newest
+    ids = r.ids
     return `${r.count} rows in 2 pages`
   })
   await check('thread-pages/mcp', async () => {
@@ -3721,7 +3729,7 @@ async function threadPageChecks() {
     if (created) eq(r.created, created, 'the created row REST answered')
     return `${r.count} rows in 2 pages`
   })
-  await earlierThreadChecks(task, comments, { created, newest }, changes)
+  await earlierThreadChecks(task, comments, { created, newest, ids }, changes)
 }
 
 /** Whether a task's thread of `comments` comments and `changes` changes
@@ -3730,6 +3738,31 @@ async function threadPageChecks() {
  *  Show newer activity. */
 export function threadFitsBudget(comments, changes, budget = LIMITS.threadRows.max) {
   return comments + changes <= budget
+}
+
+/** Where a press of a task window thread control stands after one look at
+ *  the page, `seen`, which holds the control's state (its data attribute,
+ *  `more`, `loading` or `failed`, or null once it went) and `place`, the
+ *  row the press moves, read together, against `before`, that row before
+ *  the press. While the page loads its loading row stands in for the
+ *  control's button, so a press counts only once that row went and the
+ *  place moved or the control went. Answers `wait` until then, then
+ *  `done`, or `failed` when the load failed. */
+export function pressSettled(seen, before) {
+  if (seen.state === 'failed') return 'failed'
+  if (seen.state === null) return 'done'
+  return seen.state === 'more' && seen.place !== before ? 'done' : 'wait'
+}
+
+/** Checks the changes Show newer activity brought back, press by press, in
+ *  the order they showed (`met`), against the task's history `ids`, oldest
+ *  first. They must be every change after `start`, the last change above
+ *  the control before the first press, through the newest, each once and
+ *  in order. */
+export function newerWalk(start, met, ids) {
+  const from = ids.indexOf(start)
+  expect(from !== -1, `the change above Show newer activity, ${start}, is not in the history`)
+  same(met, ids.slice(from + 1), 'the changes Show newer activity brought back')
 }
 
 /** The rows of a task's history, oldest first, from `pages`, the pages
@@ -3754,64 +3787,100 @@ export function historyRows(pages, total) {
  *  loads the rest of the thread, each until the control goes. Past the
  *  comments and changes the window keeps loaded (LIMITS.threadRows), a
  *  press lets as many rows go at the newest end as it loads, so a press
- *  counts as progress once the thread's first row moved, not its row
- *  count, and Show newer activity then stands where the rows went and is
- *  pressed until it goes, back to the newest comment and change, with Show
- *  earlier activity at the top again. The Comments and All checks each
- *  open the task afresh, so one can fail without the other; the newer
- *  check goes on in the window the All check walked back. `comments` are
- *  the task's comment ids, oldest first, `ends` the ids of its created row
- *  and its newest change, and `changes` the number of rows in its
- *  history. */
+ *  counts as progress once its loading row went and the thread's first row
+ *  moved, not its row count (pressSettled). Show newer activity then stands
+ *  where the rows went and is pressed until it goes, each press bringing
+ *  the changes right under the row above it, until together they are every
+ *  change after the first press's place through the newest, each once and
+ *  in order (newerWalk), with Show earlier activity at the top again. The
+ *  live comments can be hidden then, beside the history's released start,
+ *  so only the comments that show are checked, the newest ones in order.
+ *  The Comments and All checks each open the task afresh, so one can fail
+ *  without the other; the newer check goes on in the window the All check
+ *  walked back. `comments` are the task's comment ids, oldest first, `ends`
+ *  the ids of its created row, its newest change and its whole history,
+ *  oldest first, and `changes` the number of rows in its history. */
 async function earlierThreadChecks(task, comments, ends, changes) {
-  const { created, newest } = ends
+  const { created, newest, ids } = ends
   const more = app.locator('[data-earlier-comments="more"] button')
   const newer = app.locator('[data-newer-comments="more"] button')
   /** The ids the thread shows in the attribute `name`, top to bottom. */
   const shown = (name) =>
     app.locator(`[${name}]`).evaluateAll((els, n) => els.map((el) => el.getAttribute(n)), name)
-  /** The id of the thread's first row, or of the row right above Show
-   *  newer activity, or null. */
-  const firstRow = () =>
+  /** The state of the control `attr` names (its value, or null once it
+   *  went) and the id of the row a press of it moves, the thread's first
+   *  row (`first`) or the row right above the control (`above`), in one
+   *  look, so both come from one render. */
+  const look = (attr, which) =>
     app
       .locator('[data-spine-feed]')
-      .evaluate((feed) => {
-        const row = feed.querySelector('[data-comment], [data-event]')
-        return row?.getAttribute('data-comment') ?? row?.getAttribute('data-event') ?? null
-      })
-      .catch(() => null)
-  const rowAboveNewer = () =>
-    app
-      .locator('[data-newer-comments]')
-      .evaluate((control) => {
-        let row = control.previousElementSibling
-        while (row && !row.matches('[data-comment], [data-event]')) row = row.previousElementSibling
-        return row?.getAttribute('data-comment') ?? row?.getAttribute('data-event') ?? null
-      })
-      .catch(() => null)
-  /** Presses `control` until it goes, at most `most` times, each press
-   *  counting once the row `place` reads moved or the control went, and
-   *  answers the number of presses. */
-  const pressUntilGone = async (control, place, loading, most, label) => {
+      .evaluate(
+        (feed, { attr, which }) => {
+          const control = feed.querySelector(`[${attr}]`)
+          let row = null
+          if (which === 'first') row = feed.querySelector('[data-comment], [data-event]')
+          else if (control) {
+            row = control.previousElementSibling
+            while (row && !row.matches('[data-comment], [data-event]'))
+              row = row.previousElementSibling
+          }
+          return {
+            state: control?.getAttribute(attr) ?? null,
+            place: row?.getAttribute('data-comment') ?? row?.getAttribute('data-event') ?? null,
+          }
+        },
+        { attr, which },
+      )
+      .catch(() => ({ state: 'unread', place: null }))
+  /** The ids of the changes the thread shows after the row `before`, down
+   *  to Show newer activity or, once it went, to the end, top to bottom,
+   *  or null when `before` does not show. */
+  const changesAfter = (before) =>
+    app.locator('[data-spine-feed]').evaluate((feed, before) => {
+      const rows = [...feed.querySelectorAll('[data-comment], [data-event], [data-newer-comments]')]
+      const at = rows.findIndex(
+        (r) => (r.getAttribute('data-comment') ?? r.getAttribute('data-event')) === before,
+      )
+      if (at === -1) return null
+      const out = []
+      for (const row of rows.slice(at + 1)) {
+        if (row.hasAttribute('data-newer-comments')) break
+        const id = row.getAttribute('data-event')
+        if (id) out.push(id)
+      }
+      return out
+    }, before)
+  /** The id of the last change above Show newer activity, or null. */
+  const lastChangeAboveNewer = () =>
+    app.locator('[data-newer-comments]').evaluate((control) => {
+      let row = control.previousElementSibling
+      while (row && !row.hasAttribute('data-event')) row = row.previousElementSibling
+      return row?.getAttribute('data-event') ?? null
+    })
+  /** Presses the control `attr` names until it goes, at most `most` times,
+   *  and answers the number of presses. Each press counts once its loading
+   *  row went and the row `which` names moved or the control went
+   *  (pressSettled); `after`, when given, runs after each press with the
+   *  row that stood there before it. */
+  const pressUntilGone = async (attr, which, most, label, after) => {
+    const control = app.locator(`[${attr}="more"] button`)
     let clicks = 0
     while ((await control.count()) > 0) {
       expect(clicks < most, `${label} did not go after ${clicks} presses`)
-      const before = await place()
+      const before = (await look(attr, which)).place
       await control.click()
       clicks++
-      expect(
-        await until(
-          async () => (await control.count()) === 0 || (await place()) !== before,
-          20_000,
-        ),
-        `${label} loaded nothing after ${clicks} presses`,
-      )
-      // the control returns once the page is in, or goes for good
-      await app.locator(loading).waitFor({ state: 'detached' })
+      let settled = 'wait'
+      await until(async () => {
+        settled = pressSettled(await look(attr, which), before)
+        return settled !== 'wait'
+      }, 20_000)
+      expect(settled !== 'failed', `${label} failed to load after ${clicks} presses`)
+      expect(settled === 'done', `${label} loaded nothing after ${clicks} presses`)
+      if (after) await after(before)
     }
     return clicks
   }
-  const earlierLoading = '[data-earlier-comments="loading"]'
   /** Opens the task window under Comments and waits for its first page. */
   const open = async () => {
     await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
@@ -3828,7 +3897,12 @@ async function earlierThreadChecks(task, comments, ends, changes) {
       !(await shown('data-comment')).includes(comments[0]),
       'the first comment is already shown',
     )
-    const clicks = await pressUntilGone(more, firstRow, earlierLoading, 2, 'Show earlier comments')
+    const clicks = await pressUntilGone(
+      'data-earlier-comments',
+      'first',
+      2,
+      'Show earlier comments',
+    )
     same(
       (await shown('data-comment')).toSorted(),
       comments.toSorted(),
@@ -3850,9 +3924,8 @@ async function earlierThreadChecks(task, comments, ends, changes) {
         Math.ceil(changes / THREAD_PAGE.windowHistory) +
         Math.ceil(comments.length / THREAD_PAGE.comments)
       const clicks = await pressUntilGone(
-        more,
-        firstRow,
-        earlierLoading,
+        'data-earlier-comments',
+        'first',
         most,
         'Show earlier activity',
       )
@@ -3866,7 +3939,7 @@ async function earlierThreadChecks(task, comments, ends, changes) {
       return `${clicks} presses to the created row`
     })
   else skip('thread-pages/ui/earlier-activity', 'REST did not answer the created row')
-  if (!created || !newest)
+  if (!created || !newest || !ids)
     skip('thread-pages/ui/newer-activity', 'REST did not answer the created row')
   else if (threadFitsBudget(comments.length, changes))
     skip('thread-pages/ui/newer-activity', "the thread fits the task window's budget")
@@ -3874,8 +3947,8 @@ async function earlierThreadChecks(task, comments, ends, changes) {
     await check('thread-pages/ui/newer-activity', async () => {
       await newer.waitFor({ timeout: 20_000 })
       eq((await newer.textContent())?.trim(), 'Show newer activity', 'the newer control under All')
-      // the live comment window, the newest comment in it, stays through
-      // every release, so what went shows as changes missing
+      // the live comment window stays through every release, so what went
+      // shows as changes missing
       expect(
         (await shown('data-event')).length < changes,
         'every change shows while Show newer activity stands',
@@ -3883,18 +3956,31 @@ async function earlierThreadChecks(task, comments, ends, changes) {
       const most =
         Math.ceil(changes / THREAD_PAGE.windowHistory) +
         Math.ceil(comments.length / THREAD_PAGE.comments)
+      // each press brings the changes right under the row above the control
+      const start = await lastChangeAboveNewer()
+      const met = []
       const clicks = await pressUntilGone(
-        newer,
-        rowAboveNewer,
-        '[data-newer-comments="loading"]',
+        'data-newer-comments',
+        'above',
         most,
         'Show newer activity',
+        async (before) => {
+          const rows = await changesAfter(before)
+          expect(rows !== null, `${before}, the row above Show newer activity, went`)
+          met.push(...rows)
+        },
       )
-      expect((await shown('data-comment')).includes(comments.at(-1)), 'the newest comment')
-      expect((await shown('data-event')).includes(newest), 'the newest change')
+      newerWalk(start, met, ids)
+      // the comments that show, if the history's released start hides none
+      const shownComments = await shown('data-comment')
+      same(
+        shownComments,
+        comments.slice(comments.length - shownComments.length),
+        'the comments that show after Show newer activity',
+      )
       await more.waitFor({ timeout: 20_000 })
       eq((await more.textContent())?.trim(), 'Show earlier activity', 'the control at the top')
-      return `${clicks} presses back to the newest comment and change`
+      return `${clicks} presses back to the newest change, ${met.length} changes in order`
     })
   // leave the task, so its thread is not open while the run changes it
   await check('thread-pages/ui/leave', async () => {

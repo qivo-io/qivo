@@ -266,11 +266,13 @@ of each, reads its history over REST and MCP back to the first change, and
 in the task window presses **Show earlier comments** and **Show earlier
 activity** until the first comment and the created row appear. Past the
 comments and changes the window keeps loaded (`threadRows`, 150), a press
-lets as many rows go as it loads, so each press must move the thread's first
-row rather than add rows. The step then presses **Show newer activity**
-until it goes (`thread-pages/ui/newer-activity`) and finds the newest comment
-and change with **Show earlier activity** back at the top; it skips that
-check when the thread fits the budget. Its uploads
+lets as many rows go as it loads, so each press must, once its loading row
+went, move the thread's first row rather than add rows. The step then
+presses **Show newer activity** until it goes
+(`thread-pages/ui/newer-activity`), checks that the presses together brought
+back every change after the first one's place through the newest, each once
+and in order, and finds **Show earlier activity** back at the top; it skips
+that check when the thread fits the budget. Its uploads
 check that an upload URL stores one file, and one upload is a file at the
 organization's per-file limit (20 MiB by default), sent through a REST upload
 ticket, confirmed, downloaded and deleted again, which shows whether the
