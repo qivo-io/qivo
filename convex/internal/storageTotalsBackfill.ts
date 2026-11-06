@@ -80,8 +80,17 @@
  * run began, and goes on with its own. Its first step deletes the
  * organization's row, so writers leave the totals alone, the next steps
  * delete its project and task rows, and the count then starts from zero.
- * Until it ends, the organization reads as not counted. An organization
- * whose deletion has begun is listed as skipped and left to its deletion.
+ * Until it ends, the organization reads as not counted. Billing shows its
+ * storage as being counted, the daily storage samples skip it
+ * (storageSamples.ts), and a paid period's storage sample that starts
+ * meanwhile waits and records nothing (billingSync.ts storageStep). Such a
+ * sample starts again 15 minutes after its start, stops after
+ * STORAGE_ATTEMPTS starts with a billing.storage_sample_failed audit row,
+ * which names its period, and starts again 6 hours later. Once the count
+ * has ended, start such a sample at once:
+ *   "$H" TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
+ * An organization whose deletion has begun is listed as skipped and left to
+ * its deletion.
  * A call that wrote adds one platform_audit_log row (action
  * 'storage_totals_backfill', actor 'system') with its totals, also when it
  * met an error. Running it again is safe. It writes no activity, sends no
