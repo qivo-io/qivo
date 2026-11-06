@@ -159,8 +159,8 @@ export const BOARD_TASKS = 1000
  * selection, every seat and sub-project together, each group and each
  * subtask counted, unlike the Board's count (BOARD_TASKS). Shown parents
  * and a group's subtasks that are not rows count toward the Roadmap's read
- * budgets, not here. The Roadmap view names it once it reads the server;
- * no LIMITS entry yet. */
+ * budgets, not here. LIMITS.roadmapTasks, the Limits guide's row, which
+ * the app's Roadmap names when a selection passes it. */
 export const ROADMAP_TASKS = 1000
 
 /** The most tasks one Team sync agenda holds (teamSync.ts agenda), across
@@ -620,6 +620,14 @@ export const LIMITS = {
     max: TEAM_SYNC_TASKS,
     unit: "tasks across the meeting, each counted once, among its open tasks without subtasks in scope, the Backlog tasks Needs an owner lists and the recently done tasks each person's Done since can show",
     refusal: `this selection exceeds Team sync's ${grouped(TEAM_SYNC_TASKS)}-task limit.`,
+    on: ['app'],
+  },
+  roadmapTasks: {
+    label: 'Tasks one Roadmap shows',
+    group: 'tasks',
+    max: ROADMAP_TASKS,
+    unit: 'tasks, each task with subtasks and each subtask counted, across the project or sub-project with its filters and window, or My view',
+    refusal: `this selection exceeds the Roadmap's ${grouped(ROADMAP_TASKS)}-task limit.`,
     on: ['app'],
   },
   restoreBatch: {
