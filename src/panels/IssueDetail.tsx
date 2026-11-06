@@ -2700,11 +2700,12 @@ function IssueDetail({
     }
   }, [newer, shown.length])
   // The window reports the first comment or change on screen as the reader
-  // scrolls (P.threadPlace), or null while the newest row or the composer
-  // shows, so a comment that arrives past the budget lets go of rows away
-  // from where they read. An IntersectionObserver rooted at the viewport
-  // sees the rows of the floating window's spine, the phone's stacked
-  // scroller and the Inbox pane alike.
+  // scrolls (P.threadPlace), or null while the newest row shows, or the
+  // composer where it scrolls with the rows, so a release keeps the rows
+  // the reader sees and a comment that arrives past the budget lets go of
+  // rows away from them. An IntersectionObserver rooted at the viewport
+  // sees the rows of the floating window's spine, the phone's feed and the
+  // Inbox pane alike.
   const placeOwner = useRefID({})
   const placeRow = useRefID<Element | null>(null)
   const spineKey = `${shown.length}:${shown[0]?.id ?? ''}:${shown.at(-1)?.id ?? ''}:${newer}`
@@ -2715,7 +2716,11 @@ function IssueDetail({
       ? scroller
       : scroller?.querySelector('[data-spine-feed]')
     if (!feed || typeof IntersectionObserver === 'undefined') return
-    const composer = feed.closest('[data-spine-scroll]')?.querySelector('[data-composer]') ?? null
+    // The composer marks the newest end only where it scrolls with the
+    // rows, inside the scroller. On a phone the feed scrolls on its own
+    // above a composer that always shows, so the place comes from the
+    // feed's rows alone.
+    const composer = scroller?.querySelector('[data-composer]') ?? null
     const rows = [...feed.querySelectorAll('[data-comment], [data-event]')]
     const seen = new Set<Element>()
     const report = () => {

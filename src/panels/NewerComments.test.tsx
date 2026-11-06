@@ -234,6 +234,37 @@ async function walkBack(presses: number) {
     await answer({ comments: range(200 - 50 * i, 250 - 50 * i), earlier: true })
   }
 }
+/* Puts in a stand-in IntersectionObserver and answers `see`, which tells
+   the last one made that the rows it watches for which `visible` holds are
+   on screen and the rest are not. */
+function watchRows() {
+  const observers: { callback: IntersectionObserverCallback; targets: Element[] }[] = []
+  vi.stubGlobal(
+    'IntersectionObserver',
+    class {
+      targets: Element[] = []
+      constructor(callback: IntersectionObserverCallback) {
+        observers.push({ callback, targets: this.targets })
+      }
+      observe(target: Element) {
+        this.targets.push(target)
+      }
+      disconnect() {}
+    },
+  )
+  return async (visible: (el: Element) => boolean) => {
+    const watcher = observers.at(-1)
+    if (!watcher) throw new Error('nothing observes the rows')
+    await act(async () =>
+      watcher.callback(
+        watcher.targets.map(
+          (target) => ({ target, isIntersecting: visible(target) }) as IntersectionObserverEntry,
+        ),
+        {} as IntersectionObserver,
+      ),
+    )
+  }
+}
 function editorOf(label: string) {
   return vi.waitFor(
     () => {
@@ -402,33 +433,7 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
 
   it('reports the first row on screen as the reader scrolls, and null at the newest end', async () => {
     await load()
-    // a stand-in observer that sees the rows a test names
-    const observers: { callback: IntersectionObserverCallback; targets: Element[] }[] = []
-    vi.stubGlobal(
-      'IntersectionObserver',
-      class {
-        targets: Element[] = []
-        constructor(callback: IntersectionObserverCallback) {
-          observers.push({ callback, targets: this.targets })
-        }
-        observe(target: Element) {
-          this.targets.push(target)
-        }
-        disconnect() {}
-      },
-    )
-    const see = async (visible: (el: Element) => boolean) => {
-      const watcher = observers.at(-1)
-      if (!watcher) throw new Error('nothing observes the rows')
-      await act(async () =>
-        watcher.callback(
-          watcher.targets.map(
-            (target) => ({ target, isIntersecting: visible(target) }) as IntersectionObserverEntry,
-          ),
-          {} as IntersectionObserver,
-        ),
-      )
-    }
+    const see = watchRows()
     const place = vi.spyOn(P, 'threadPlace')
     // two pages back the store holds its 120, #150 to #219 above the gap
     // and the live window
@@ -455,5 +460,35 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
       '[Show newer comments]',
       ...comments(251, 301),
     ])
+  })
+
+  it('on a phone takes the place from the feed, while the composer below it always shows', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query.includes('max-width'),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    )
+    await load()
+    const see = watchRows()
+    const place = vi.spyOn(P, 'threadPlace')
+    await walkBack(2)
+    expect(document.querySelector('[data-mobile-task]')).not.toBeNull()
+    // the feed scrolls on its own above the composer, which stays on
+    // screen while the reader reads #160 and #161
+    const reading = new Set([comment(160).id, comment(161).id])
+    await see(
+      (el) =>
+        el.hasAttribute('data-composer') || reading.has(el.getAttribute('data-comment') ?? ''),
+    )
+    expect(place.mock.calls.at(-1)?.[1]).toBe(comment(160).id)
+    // at the feed's newest end it reports null
+    await see(
+      (el) =>
+        el.hasAttribute('data-composer') || el.getAttribute('data-comment') === comment(299).id,
+    )
+    expect(place.mock.calls.at(-1)?.[1]).toBeNull()
   })
 })
