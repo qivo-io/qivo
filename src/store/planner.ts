@@ -3520,6 +3520,11 @@ function releaseMilestoneRows(slot: ViewSlot) {
   dropHeldMilestoneParts()
 }
 
+/** Whether `ask` names more top-level projects than one read names
+    (MILESTONE_READS.projects), so the store asks nothing. */
+const milestoneAskTooMany = (ask: MilestoneAsk) =>
+  ask.kind !== 'get' && new Set(ask.projects).size > MILESTONE_READS.projects
+
 /** The arguments of `ask` as its query takes them, as JSON in a fixed key
     order, with its projects once each and sorted and its empty fields left
     out, so equal asks share one subscription. */
@@ -10077,7 +10082,7 @@ export const PLANNER = {
         }
         return
       }
-      if (ask.kind !== 'get' && new Set(ask.projects).size > MILESTONE_READS.projects) {
+      if (milestoneAskTooMany(ask)) {
         if (read && read.owner !== owner && read.want !== null) return
         if (milestonesTooMany.has(slot)) return
         milestonesTooMany.add(slot)
@@ -10104,12 +10109,17 @@ export const PLANNER = {
   },
   /** What milestone read `slot` holds now (MilestoneRead), painted with the
       person's own milestone writes. A failure or refusal after an answer
-      keeps that answer beside it. */
-  milestoneRead: (slot: ViewSlot): MilestoneRead => {
-    if (milestonesTooMany.has(slot)) return { state: 'too_many' }
+      keeps that answer beside it. `ask` names the arguments the view shows
+      now, which its effect registers after the render: an answer or a
+      failure for other arguments says nothing of them, so the read is
+      loading until theirs arrives, and an ask of more top-level projects
+      than one read names is too_many at once. */
+  milestoneRead: (slot: ViewSlot, ask?: MilestoneAsk): MilestoneRead => {
+    if (ask ? milestoneAskTooMany(ask) : milestonesTooMany.has(slot)) return { state: 'too_many' }
+    const want = ask ? milestoneKey(ask) : null
     const held = viewRead(slot)
-    const kept = milestoneAnswer(slot)
-    if (held.error !== undefined) {
+    const kept = want === null || milestoneRows.keyOf(slot) === want ? milestoneAnswer(slot) : null
+    if (held.error !== undefined && (want === null || held.key === want)) {
       const d = errData(held.error)
       if (d.reason !== undefined && MILESTONE_REFUSALS.has(d.reason))
         return {

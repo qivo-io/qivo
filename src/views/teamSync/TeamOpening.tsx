@@ -31,6 +31,7 @@ import {
 } from '@/lib/teamSync'
 import { cn } from '@/lib/utils'
 import { useViewVisibility } from '@/lib/viewVisibility'
+import type { MilestoneAsk } from '@/store/milestoneRows'
 import { type IssueVM, type MilestoneVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { LIMITS } from '../../../convex/lib/limits'
@@ -218,6 +219,9 @@ function useSyncMilestoneReads(metaIds: Set<string>, todayWeek: number, owner: n
   const from = weekToISO(todayWeek)
   const to = weekToISO(todayWeek + 2)
   const empty = projects.length === 0
+  // the reads' arguments as the opening shows them now
+  const nextAsk: MilestoneAsk = { kind: 'section', projects, from, side: 'upcoming', limit: 1 }
+  const aheadAsk: MilestoneAsk = { kind: 'between', projects, from, to }
   useEffect(() => {
     if (empty) return
     const ask = visible
@@ -246,8 +250,9 @@ function useSyncMilestoneReads(metaIds: Set<string>, todayWeek: number, owner: n
         { state: 'ok', current: true, answer: { rows: [], next: null, stopped: null } },
       )
     : syncMilestones<MilestoneVM>(
-        P.milestoneRead(SYNC_MILESTONE_SLOTS.next),
-        P.milestoneRead(SYNC_MILESTONE_SLOTS.ahead),
+        // an answer for arguments the effect has not asked yet is loading
+        P.milestoneRead(SYNC_MILESTONE_SLOTS.next, nextAsk),
+        P.milestoneRead(SYNC_MILESTONE_SLOTS.ahead, aheadAsk),
       )
   return { ...shown, retry: () => setAttempt((n) => n + 1) }
 }

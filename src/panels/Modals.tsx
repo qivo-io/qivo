@@ -2395,7 +2395,8 @@ function useOpenedMilestone(id: string | undefined) {
     return () => P.releaseMilestones(MILESTONE_OPEN, owner)
   }, [id, owner])
   return {
-    read: id ? P.milestoneRead(MILESTONE_OPEN) : null,
+    // an answer for another milestone than this window's is loading
+    read: id ? P.milestoneRead(MILESTONE_OPEN, { kind: 'get', id }) : null,
     retry: () => setAttempt((n) => n + 1),
   }
 }

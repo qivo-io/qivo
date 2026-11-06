@@ -139,27 +139,17 @@ async function load() {
   network.mutation.mockResolvedValue(null)
   const store = await import('../../store/planner')
   await store.initStore()
-  return {
-    store,
-    TeamOpening: (await import('./TeamOpening')).TeamOpening,
-    syncDay: (await import('../../lib/teamSync')).syncDay,
-    usePlannerVersion: (await import('../../store/usePlannerVersion')).usePlannerVersion,
-    TooltipProvider: (await import('../../components/ui/tooltip')).TooltipProvider,
-  }
-}
-
-const settle = async () => {
-  for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
-}
-
-/** Renders the opening over top-level projects `metaIds`, `weeks` weeks
-    after this one. */
-async function render(metaIds: string[], weeks = 0) {
-  const { TeamOpening, syncDay, usePlannerVersion, TooltipProvider, store } = loaded
-  const now = Date.now()
-  const day = syncDay(now)
-  function Screen() {
+  const { TeamOpening } = await import('./TeamOpening')
+  const { syncDay } = await import('../../lib/teamSync')
+  const { usePlannerVersion } = await import('../../store/usePlannerVersion')
+  const { TooltipProvider } = await import('../../components/ui/tooltip')
+  /* The opening over top-level projects `metaIds`, `weeks` weeks after
+     this one, rendering again on every store change. One component for
+     the whole load, so a render with other props updates the mounted
+     opening. */
+  function Screen({ metaIds, weeks, now }: { metaIds: string[]; weeks: number; now: number }) {
     usePlannerVersion()
+    const day = syncDay(now)
     return (
       <TooltipProvider>
         <TeamOpening
@@ -174,7 +164,18 @@ async function render(metaIds: string[], weeks = 0) {
       </TooltipProvider>
     )
   }
-  await act(async () => root.render(<Screen />))
+  return { store, Screen }
+}
+
+const settle = async () => {
+  for (let i = 0; i < 6; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+}
+
+/** Renders the opening over top-level projects `metaIds`, `weeks` weeks
+    after this one, updating the mounted opening if there is one. */
+async function render(metaIds: string[], weeks = 0) {
+  const { Screen } = loaded
+  await act(async () => root.render(<Screen metaIds={metaIds} weeks={weeks} now={Date.now()} />))
   await settle()
 }
 
@@ -279,6 +280,28 @@ describe('the next milestone and those of this week and next', () => {
     expect(note()?.textContent).toContain(MILESTONES_TOO_LARGE.slice(1))
     // the rows it showed stay under the refusal
     expect(listed()).toEqual(['Beta build', 'Zed review', 'Field test'])
+  })
+})
+
+describe('a new scope on a mounted opening', () => {
+  it("shows nothing of the old scope's answers for the new scope, also while hidden", async () => {
+    fixture()
+    loaded = await load()
+    await render(['plan', 'ship'])
+    expect(cell()?.textContent).toContain('Beta build')
+    // hidden, the opening asks nothing, and its answers are Plan's and Ship's
+    await act(async () => setHidden(true))
+    await settle()
+    await render(['plan'])
+    expect(cell()?.getAttribute('data-sync-next-milestone')).toBe('loading')
+    expect(q('[data-sync-milestones]')?.textContent).toContain('Loading milestones…')
+    expect(listed()).toEqual([])
+    // shown again, it reads Plan's alone
+    await act(async () => setHidden(false))
+    await settle()
+    expect(live('milestones:between')[0].args).toMatchObject({ projects: ['plan'] })
+    expect(cell()?.textContent).toContain('Zed review')
+    expect(listed()).toEqual(['Zed review'])
   })
 })
 

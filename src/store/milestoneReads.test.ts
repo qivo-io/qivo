@@ -222,6 +222,31 @@ describe('the asks', () => {
   })
 })
 
+describe('the arguments a view shows', () => {
+  it('is loading for an answer to other arguments, and too_many at once for too many projects', async () => {
+    await boot()
+    await watch('a', upcoming())
+    const P = store.P
+    expect(P.milestoneRead('a', upcoming())).toMatchObject({ state: 'ok', current: true })
+    // the view shows Ship's before its effect asks for them
+    expect(P.milestoneRead('a', upcoming(['ship']))).toEqual({ state: 'loading' })
+    // a failure for other arguments says nothing of these either
+    force = { section: 'error' }
+    await watch('a', upcoming(['ship']))
+    expect(P.milestoneRead('a', upcoming(['ship'])).state).toBe('failed')
+    expect(P.milestoneRead('a', upcoming(['plan']))).toEqual({ state: 'loading' })
+    const projects = store.MILESTONE_READS.projects
+    store.MILESTONE_READS.projects = 3
+    try {
+      expect(P.milestoneRead('a', upcoming(['plan', 'ship', 'docs', 'other']))).toEqual({
+        state: 'too_many',
+      })
+    } finally {
+      store.MILESTONE_READS.projects = projects
+    }
+  })
+})
+
 describe('the states', () => {
   it('is loading, then ok and current', async () => {
     await boot()
