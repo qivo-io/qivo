@@ -1240,6 +1240,32 @@ describe('an archived group’s subtasks', () => {
     expect(details.progress).toMatchObject({ total: 60, partial: true })
   })
 
+  it('end on a full page with no cursor where the last subtask fills it', async () => {
+    const fx = await setup()
+    const [group] = await plantTasks(fx, 1, { title: 'Archived group', archived_at: NOW })
+    // exactly a default page of archived subtasks, every one readable
+    const kids = await plantTasks(fx, DEFAULT_PAGE_SIZE, { parent_id: group.id, archived_at: NOW })
+    for (const details of [
+      await restDetails(fx, fx.agent, group.id),
+      await mcpDetails(fx, fx.agent, group.id),
+    ]) {
+      expect(ids(details.subtasks as Row[])).toEqual(ids(kids))
+      expect(details.subtasks_next_cursor).toBeNull()
+      expect(details.has_more_subtasks).toBe(false)
+    }
+    // two pages of half as many, the second ending the list
+    const half = DEFAULT_PAGE_SIZE / 2
+    const pages = await everyPage((cursor) =>
+      restList(fx, fx.agent, 'subtasks', group.id, {
+        limit: String(half),
+        ...(cursor === null ? {} : { cursor }),
+      }),
+    )
+    expect(pages.pages.map((page) => page.rows.length)).toEqual([half, half])
+    expect(pages.pages[1].next_cursor).toBeNull()
+    expect(ids(pages.rows)).toEqual(ids(kids))
+  })
+
   it('counts a subtask the caller may not be shown at a fixed size, so a hidden title moves no page end', async () => {
     const fx = await setup()
     // 20 hidden subtasks before one the agent reads, by number, with short
