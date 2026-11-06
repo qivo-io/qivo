@@ -207,6 +207,15 @@ same arguments and answers the same way. Its `upload_url` now points at
 Qivo and stores one file, where before it was a Convex URL that stored a
 file for every POST until it expired (see [Attachments](#attachments)).
 
+A confirm sent again after a lost answer changed the
+`confirm_attachment_upload` description, which now says that only the user
+that started the upload can confirm it, for the same task, that the file
+attaches once, that a confirm sent again with the same `ticket` and
+`storage_id` answers the same attachment and that any other ticket is
+refused. The tool takes the same arguments, and a client holding the older
+catalogue keeps working. Its model reads the old description until the
+client refreshes its tool list.
+
 In October 2026 `update_task`, `update_comment`, `delete_comment`,
 `update_project`, `set_project_access`, `set_milestone`, `delete_milestone`,
 `set_label`, `set_team` and `update_user` gained an optional `expected`
