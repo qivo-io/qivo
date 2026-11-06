@@ -161,11 +161,11 @@ export function createBackgroundImageCache(
   let disposed = false
   let writes = Promise.resolve()
   const urls = new Map<Blob, string>()
-  // a request by identity, its transfer, and how many callers that may
-  // leave still wait for it
+  // a request by identity, its transfer, how many callers that may leave
+  // still wait for it, and whether every such caller left, which stops it
   const pending = new Map<
     string,
-    { request: Promise<string>; transfer: AbortController; waiting: number }
+    { request: Promise<string>; transfer: AbortController; waiting: number; stopped: boolean }
   >()
   let controller = new AbortController()
   const validBlob = (blob: unknown, maxBytes: number): blob is Blob =>
@@ -301,7 +301,7 @@ export function createBackgroundImageCache(
         transient = null
       }
     })
-    pending.set(identity, { request, transfer, waiting: 0 })
+    pending.set(identity, { request, transfer, waiting: 0, stopped: false })
     request.catch(() => {
       if (pending.get(identity)?.request === request) pending.delete(identity)
     })
@@ -345,8 +345,9 @@ export function createBackgroundImageCache(
       if (disposed || !same(selected ?? null, selection)) throw new BackgroundChanged()
       if (signal?.aborted) throw new DOMException('Background request left', 'AbortError')
       const identity = `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`
-      // a request every caller left is stopping; a new caller starts afresh
-      if (!pending.has(identity) || pending.get(identity)?.transfer.signal.aborted)
+      // A settled request answers again until the selection changes; one
+      // every caller left is stopped, so a new caller starts afresh.
+      if (!pending.has(identity) || pending.get(identity)?.stopped)
         fetchFor(url, quality, identity, new AbortController())
       const entry = pending.get(identity) as NonNullable<ReturnType<typeof pending.get>>
       if (!signal) {
@@ -358,7 +359,10 @@ export function createBackgroundImageCache(
       return await new Promise<string>((resolve, reject) => {
         const leave = () => {
           entry.waiting--
-          if (entry.waiting === 0) entry.transfer.abort()
+          if (entry.waiting === 0) {
+            entry.stopped = true
+            entry.transfer.abort()
+          }
           reject(new DOMException('Background request left', 'AbortError'))
         }
         signal.addEventListener('abort', leave, { once: true })

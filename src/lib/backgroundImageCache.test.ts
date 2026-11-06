@@ -438,6 +438,38 @@ describe('a caller leaving a shared background request', () => {
     expect(await next).toMatch(/^blob:/)
   })
 
+  it('answers a settled request again until the selection changes, also for bytes too large to keep', async () => {
+    const f = fixture()
+    // past the 4 MiB the cache keeps for a preview, so only the request holds it
+    const large = new Blob([new Uint8Array(4 * 1024 * 1024 + 1)], { type: 'image/webp' })
+    f.fetchImage.mockImplementation(async () => new Response(large))
+    const validate = vi.fn(async () => {})
+    const cache = createBackgroundImageCache(scope, { ...f.options, validate })
+    cache.select(selection)
+    const first = await cache.resolve('https://private.test/preview', selection, 'preview')
+    expect(
+      await cache.resolve(
+        'https://private.test/preview?t=renewed',
+        selection,
+        'preview',
+        new AbortController().signal,
+      ),
+    ).toBe(first)
+    expect(await cache.resolve('https://private.test/preview?t=third', selection, 'preview')).toBe(
+      first,
+    )
+    expect(f.fetchImage).toHaveBeenCalledOnce()
+    expect(validate).toHaveBeenCalledOnce()
+    await cache.settled()
+    expect(f.saved()?.preview).toBeUndefined()
+    // a new preview version asks again
+    const next = { ...selection, previewVersion: '3' }
+    cache.select(next)
+    await cache.resolve('https://private.test/preview?v=3', next, 'preview')
+    expect(f.fetchImage).toHaveBeenCalledTimes(2)
+    cache.dispose()
+  })
+
   it('rejects an already aborted caller at once, leaving the selection and its cache as they were', async () => {
     const f = fixture()
     const cache = createBackgroundImageCache(scope, f.options)
