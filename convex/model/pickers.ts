@@ -21,7 +21,7 @@
  * (lib/access.ts canBeAssignedFor and canSeeProjectFor), so a batch reads
  * the access rows once and a person costs no read of their own. Levels
  * come only from levelsFrom, as the writes' per-person checks come from
- * levelUnder: an organization admin is offered while both give admins
+ * levelUnder. An organization admin is offered while both give admins
  * Lead, and follows ordinary access after the admin access split removes
  * both branches. tests/pickerParity.test.ts holds the pickers to the writes
  * over every access shape.
@@ -29,12 +29,13 @@
  * The lists walk the organization's people in name order (lib/namedPages.ts
  * listBatch over model/nameKeys.ts indexes), keep each person the rule lets
  * in whose name holds every whitespace-separated word of the search,
- * ignoring case and accents, and answer PersonRow rows (model/projectSettings
- * .ts), never an email, a picture, a team, a level, a task or a project. They
- * answer `not_ready` until the organization's names are keyed. The rule's
- * reads keep to a share of their own (PICKERS.rule) and answer
- * `over_budget` with no row past it; the walk keeps to NAMED_READ and
- * answers `stopped` with a cursor past it, never an end it did not reach.
+ * ignoring case and accents, and answer PersonRow rows
+ * (model/projectSettings.ts), never an email, a picture, a team, a level, a
+ * task or a project. They answer `not_ready` until the organization's names
+ * are keyed. The rule's reads keep to a share of their own (PICKERS.rule)
+ * and answer `over_budget` with no row past it; the walk keeps to
+ * NAMED_READ and answers `stopped` with a cursor past it, never an end it
+ * did not reach.
  *
  * Nothing here reads a task's title, description, comments or files, and
  * nothing writes. */
@@ -182,9 +183,10 @@ type PickerTask = { task: Doc<'issues'>; project: Doc<'projects'>; top: Doc<'pro
  *    leaves them out); reading the top-level project first keeps
  *    projectLevel from throwing on a broken chain;
  * 3. the caller's level on the project, navigation included (projectLevel,
- *    the rule behind canSeeProject): none is `unavailable`, below User is
- *    `refused` with NO_WRITE_ACCESS, the write gate's sentence, which
- *    navigation never changes since it only ever adds Viewer;
+ *    the rule behind canSeeProject), `unavailable` when there is none, and
+ *    `refused` with NO_WRITE_ACCESS, the write gate's sentence, when it is
+ *    below User, a verdict navigation never changes since it only ever
+ *    adds Viewer;
  * 4. for a reviewer, a task with an active subtask in a live project
  *    (model/issues.ts hasSubtasks) is `refused` with REVIEWER_ON_GROUP.
  * Its reads are the write's own: the task, two projects and the caller's
@@ -221,8 +223,8 @@ async function pickerTask(
 type Rule = (profile: Doc<'profiles'>) => boolean
 
 /* Whether `id`'s project shows to each profile, or null when nobody can
- * see it: the project is gone, or its parent is, or the parent is not
- * top-level, where the write's chain check refuses everyone
+ * see it, because the project is gone, or its parent is, or the parent is
+ * not top-level, where the write's chain check refuses everyone
  * (model/issues.ts chainSight reads a missing project as unseen, and
  * rootMetaOf throws on a broken chain). */
 async function sightOn(
@@ -243,10 +245,10 @@ async function sightOn(
 
 /**
  * The write's rule for a new assignee or reviewer of the gate's task
- * (model/issues.ts updateIssueCore): someone who can hold work with User
- * or Lead on the task's project (assertAssigneeRule, lib/access.ts
- * canBeAssignedFor) who sees the project of every task above it
- * (ancestorsFrom and chainSight, canSeeProjectFor, navigation included).
+ * (model/issues.ts updateIssueCore). It lets in someone who can hold work
+ * with User or Lead on the task's project (assertAssigneeRule,
+ * lib/access.ts canBeAssignedFor) who sees the project of every task above
+ * it (ancestorsFrom and chainSight, canSeeProjectFor, navigation included).
  * The task's own project and, for a task in a sub-project, its top-level
  * project are not asked again, since User on the task's project shows
  * both, the second for navigation. A task above whose project, or whose
@@ -279,7 +281,7 @@ async function ownerRule(
 }
 
 /**
- * Whom Team sync's Mention window may notify about the gate's task: the
+ * Whom Team sync's Mention window may notify about the gate's task, by the
  * mention fan-out's rule, sight of the task's project (model/messages.ts
  * postMessage, navigation included, so a task stored on a top-level
  * project counts whoever reaches one of its sub-projects), with the

@@ -1146,9 +1146,9 @@ function byProjectId<R extends { project_id: string }>(rows: readonly R[]): Map<
   return out
 }
 
-/** Whether `me` sees `project`: any level on it, navigation included
- * (projectLevel). canSeeProjectFor answers it for every profile of the
- * project's organization at once, from the project's side. */
+/** Whether `me` sees `project`, which takes any level on it, navigation
+ * included (projectLevel). canSeeProjectFor answers it for every profile of
+ * the project's organization at once, from the project's side. */
 export async function canSeeProject(
   ctx: QueryCtx,
   me: Doc<'profiles'>,
@@ -1721,19 +1721,19 @@ export async function projectLevelsForProfiles(
 }
 
 /** profileCanBeAssigned for every profile of `project`'s organization at
- * once: whether the profile can hold work (canHoldWork, an active admin,
- * user or guest) and holds User or Lead on `project`, with its level from
- * projectLevelsForProfiles. It reads what that reads, a few index ranges
- * for the project, its top-level project and each team sharing them, and
- * then answers each profile without a read. `guard` and `reads` go to
- * projectLevelsForProfiles, so a caller stops it before its reads fill the
- * transaction and shares its reads with later calls. A profile of another
- * organization answers false. The task owner pickers ask it for a new
- * assignee or reviewer (model/pickers.ts ownerRule), the rule the task
- * writes ask one person at a time (model/issues.ts assertAssigneeRule), and
- * REST and MCP project users compute `assignable` the same way
- * (lib/core.ts listProjectUsersCore). Levels come only from levelsFrom, so
- * an organization admin passes while it gives admins Lead. */
+ * once, which is whether the profile can hold work (canHoldWork, an active
+ * admin, user or guest) and holds User or Lead on `project`, with its
+ * level from projectLevelsForProfiles. It reads what that reads, a few
+ * index ranges for the project, its top-level project and each team
+ * sharing them, and then answers each profile without a read. `guard` and
+ * `reads` go to projectLevelsForProfiles, so a caller stops it before its
+ * reads fill the transaction and shares its reads with later calls. A
+ * profile of another organization answers false. The task owner pickers
+ * ask it for a new assignee or reviewer (model/pickers.ts ownerRule), the
+ * rule the task writes ask one person at a time (model/issues.ts
+ * assertAssigneeRule), and REST and MCP project users compute `assignable`
+ * the same way (lib/core.ts listProjectUsersCore). Levels come only from
+ * levelsFrom, so an organization admin passes while it gives admins Lead. */
 export async function canBeAssignedFor(
   ctx: QueryCtx,
   project: Doc<'projects'>,
@@ -1747,7 +1747,7 @@ export async function canBeAssignedFor(
  * from the project's side. A profile sees the project with a level from
  * projectLevelsForProfiles. A top-level meta project also shows, read-only,
  * to whoever holds a level on one of its sub-projects, live or archived,
- * which is projectLevel's navigation: it reads the sub-projects by
+ * which is projectLevel's navigation. It reads the sub-projects by
  * by_parent in one range, and each one's levels through the same `reads`,
  * a few index ranges a sub-project, about 210 for the design size's 30 live
  * and 40 archived ones. A level on a sub-project that comes from the

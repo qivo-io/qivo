@@ -15,7 +15,7 @@
  * No app control reads them yet; t3/limits-owner-pickers moves those
  * controls onto them. Each is to be read once a batch, or once a check,
  * and never subscribed. Each takes the organization and a task in it, and
- * runs the write's own gate before it reads any person: an unknown task,
+ * runs the write's own gate before it reads any person. An unknown task,
  * one of another organization, a deleted or archived one, one in an
  * archived project or under an archived top-level project, and one in a
  * project the caller cannot see all answer `unavailable` alike, and a
@@ -26,8 +26,8 @@
  * organization's names are keyed and `over_budget` when the rule's reads
  * pass their share, and a list cursor opens only for the list,
  * organization, task, field and search it came from. Rows are person rows
- * (model/projectSettings.ts PersonRow): no email, picture, team, level,
- * task, title or project. None reads a task's title, description,
+ * (model/projectSettings.ts PersonRow), with no email, picture, team,
+ * level, task, title or project. None reads a task's title, description,
  * comments or files, and none writes. */
 
 import { v } from 'convex/values'
@@ -49,14 +49,13 @@ const vListArgs = {
   through: v.optional(v.string()),
 }
 
-/** One batch of the people who could become task `issue_id`'s assignee or
- * reviewer (`field`) in name order: active admins, users and guests with
- * User or Lead on the task's project who see the project of every task
- * above it, the people issues.update accepts as a new holder
- * (model/pickers.ts taskOwnersOf). A reviewer asked for a task with an
- * active subtask is refused with the write's sentence. Answers
- * `unavailable`, `refused`, `not_ready`, `over_budget`, or `ready` with the
- * rows, `next` and `stopped` (lib/namedPages.ts ListBatch). */
+/** One batch, in name order, of the people issues.update accepts as task
+ * `issue_id`'s new assignee or reviewer (`field`), the active admins, users
+ * and guests with User or Lead on the task's project who see the project
+ * of every task above it (model/pickers.ts taskOwnersOf). A reviewer asked
+ * for a task with an active subtask is refused with the write's sentence.
+ * Answers `unavailable`, `refused`, `not_ready`, `over_budget`, or `ready`
+ * with the rows, `next` and `stopped` (lib/namedPages.ts ListBatch). */
 export const taskOwners = orgQuery({
   args: {
     issue_id: v.string(),
@@ -66,22 +65,23 @@ export const taskOwners = orgQuery({
   handler: (ctx, a): Promise<PeopleBatch> => taskOwnersOf(ctx, ctx.me, a),
 })
 
-/** One batch of the people Team sync's Mention window may notify about
- * task `issue_id` in name order: active people, not agents, who see the
- * task's project, the caller left out (model/pickers.ts syncRecipientsOf).
- * Answers as taskOwners. */
+/** One batch, in name order, of the people Team sync's Mention window may
+ * notify about task `issue_id`, the active people, not agents, who see the
+ * task's project, with the caller left out (model/pickers.ts
+ * syncRecipientsOf). Answers as taskOwners. */
 export const syncRecipients = orgQuery({
   args: { issue_id: v.string(), ...vListArgs },
   handler: (ctx, a): Promise<PeopleBatch> => syncRecipientsOf(ctx, ctx.me, a),
 })
 
-/** For each distinct id of `ids`, at most 100, in the order asked: the
- * person's row, null for an id the organization does not hold, and whether
- * they could be chosen now in task `issue_id`'s picker for `field`, by the
- * rule its list offers people by (model/pickers.ts canOwnOf). A current
- * holder answers their row also when switched off, and not eligible when
- * the write would refuse them as a new holder. Answers the lists' gate
- * states, `over_budget`, or `ready` with `rows`. */
+/** For each distinct id of `ids` (at most 100 as sent, repeats counted), in
+ * the order asked, the person's row, null for an id the organization does
+ * not hold, and whether they could be chosen now in task `issue_id`'s
+ * picker for `field`, by the rule its list offers people by
+ * (model/pickers.ts canOwnOf). A current holder answers their row also
+ * when switched off, and not eligible when the write would refuse them as
+ * a new holder. Answers the lists' gate states, `over_budget`, or `ready`
+ * with `rows`. */
 export const canOwn = orgQuery({
   args: {
     issue_id: v.string(),

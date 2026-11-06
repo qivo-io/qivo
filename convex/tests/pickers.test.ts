@@ -168,8 +168,8 @@ async function base(t: T = newT()) {
 }
 
 /* base with 30 more people who edit Firmware, Person 00 to Person 29, and
- * Zoë Ångström, who sorts after them: 34 owners with the admin, the lead
- * and the guest. */
+ * Zoë Ångström, who sorts after them, so 34 owners with the admin, the
+ * lead and the guest. */
 async function crowded() {
   const b = await base()
   const crowd: Doc<'profiles'>[] = []
@@ -860,7 +860,7 @@ describe("the pickers' read budgets", () => {
     expect(await everyAnswer(b.t, b.f.user, b.issue.id, [b.f.guest.id])).toEqual(
       Array(6).fill({ state: 'over_budget' }),
     )
-    // canOwn's lookups count against the same share: the fewest ranges
+    // canOwn's lookups count against the same share, so the fewest ranges
     // the rule needs, and two more, hold one lookup and not twenty
     Object.assign(PICKERS.rule, DEFAULT_RULE)
     const check = (ids: string[]) =>
@@ -897,8 +897,8 @@ describe("the pickers inside Convex's limits", () => {
       }
     })
 
-  /* A list read measured, logged under `name` and checked to answer whole:
-   * never stopped, and, when `end`, the end of the list. */
+  /* A list read measured, logged under `name` and checked to answer whole,
+   * which means never stopped and, when `end`, at the end of the list. */
   async function whole(
     name: string,
     t: T,
@@ -1060,9 +1060,10 @@ describe("the pickers inside Convex's limits", () => {
       taskOwnersOf(ctx, f.user, { issue_id: issue.id, field: 'assignee' }),
     )
     expect(first.batch.rows).toHaveLength(LIST_BATCH)
-    // the walk reads the people of the batch, not the roster: the rule's
-    // 997 members and about one profile a row, and a few ranges for the
-    // gate, the rule and the three role indexes, not one a person
+    // the walk reads the people of the batch, not the roster, so the reads
+    // are the rule's 997 members and about one profile a row, and a few
+    // ranges for the gate, the rule and the three role indexes, not one a
+    // person
     expect(first.ranges).toBeLessThanOrEqual(40)
     expect(first.documents).toBeLessThanOrEqual(1200)
     const search = await whole(

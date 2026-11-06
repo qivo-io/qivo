@@ -48,8 +48,9 @@ import { keyOrg } from './nameKeys.setup'
 /* What a write throws at its end so convex-test rolls it back. */
 const ROLLED_BACK = 'rolled back on purpose'
 
-/* Runs `write` in a transaction that throws at its end: true when it went
- * through, else the sentence it refused with. Nothing it wrote stays. */
+/* Runs `write` in a transaction that throws at its end, and answers true
+ * when it went through, else the sentence it refused with. Nothing it
+ * wrote stays. */
 async function attempt(t: T, write: (ctx: MutationCtx) => Promise<void>): Promise<true | string> {
   try {
     await t.run(async (ctx) => {
@@ -152,8 +153,8 @@ const pickersOn = (t: T, me: Doc<'profiles'>, issueId: string, who: string) =>
     return out as Record<PickerField, { offered: boolean; checked: boolean }>
   })
 
-/* The roles each kind of profile may hold: an agent is a user or a viewer
- * (profiles.ts). */
+/* The roles each kind of profile may hold, where an agent is a user or a
+ * viewer (profiles.ts). */
 const COMBOS = PROFILE_KINDS.flatMap((kind) =>
   ORG_ROLES.filter((role) => kind === 'person' || role === 'user' || role === 'viewer').flatMap(
     (org_role) => [true, false].map((active) => ({ kind, org_role, active })),
