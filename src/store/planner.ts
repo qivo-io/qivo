@@ -3649,21 +3649,23 @@ export type MilestoneRead =
    keeps its objects (keepItems). */
 const shapedMilestones = new Map<
   ViewSlot,
-  { from: MilestonesShown; take: MilestoneTake; grid: number; answer: MilestoneAnswer }
+  { from: MilestonesShown; grid: number; answer: MilestoneAnswer }
 >()
 
-/** Milestone read `slot`'s answer as it shows, painted, or null. */
+/** Milestone read `slot`'s answer as it shows, painted, or null: its rows
+    and the rest of the answer they were painted from, never a newer
+    anchor's `next`, `stopped` or project before a repaint paints it. */
 function milestoneAnswer(slot: ViewSlot): MilestoneAnswer | null {
   const shown = milestoneRows.shownOf(slot)
-  const take = milestoneRows.anchorOf(slot)
-  if (!shown || !take) return null
+  if (!shown) return null
+  const { take } = shown
   const was = shapedMilestones.get(slot)
   if (
     was &&
     was.from.rows === shown.rows &&
     was.from.past === shown.past &&
-    was.grid === PLANNER.gridEpoch &&
-    milestoneRows.anchorOf(slot) === was.take
+    was.from.take === take &&
+    was.grid === PLANNER.gridEpoch
   )
     return was.answer
   const answer: MilestoneAnswer = {
@@ -3674,7 +3676,7 @@ function milestoneAnswer(slot: ViewSlot): MilestoneAnswer | null {
     ...(shown.past === undefined ? {} : { past: shown.past }),
     ...(take.project === undefined ? {} : { project: take.project, canWrite: !!take.canWrite }),
   }
-  shapedMilestones.set(slot, { from: shown, take, grid: PLANNER.gridEpoch, answer })
+  shapedMilestones.set(slot, { from: shown, grid: PLANNER.gridEpoch, answer })
   return answer
 }
 

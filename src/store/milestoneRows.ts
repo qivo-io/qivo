@@ -82,8 +82,15 @@ export type MilestoneTake = {
   canWrite?: boolean
 }
 
-/** One read's rows on screen: its anchor's with the paints over them. */
-export type MilestonesShown = { rows: readonly MilestoneRow[]; past?: boolean }
+/** One read's rows on screen: its anchor's with the paints over them, with
+    the rest of the answer they were painted from (`take`), so a view never
+    pairs the rows of one answer with the `next`, `stopped` or project of a
+    newer one that a repaint has not painted yet. */
+export type MilestonesShown = {
+  rows: readonly MilestoneRow[]
+  past?: boolean
+  take: MilestoneTake
+}
 
 type Anchor = { key: string; ask: MilestoneAsk; take: MilestoneTake }
 
@@ -289,7 +296,9 @@ export function createMilestoneRows(o: {
       painted = new Map(
         ranked.map(([slot, { take }]) => [
           slot,
-          take.past === undefined ? { rows: take.rows } : { rows: take.rows, past: take.past },
+          take.past === undefined
+            ? { rows: take.rows, take }
+            : { rows: take.rows, past: take.past, take },
         ]),
       )
     },
@@ -377,7 +386,8 @@ export function createMilestoneRows(o: {
         if (ask.kind === 'get' && ask.id === id && take.project) return take.project.org_id
       return undefined
     },
-    /** Slot `slot`'s rows on screen, or null when it holds no answer. */
+    /** Slot `slot`'s rows on screen, with the answer they were painted
+        from, or null when the screen shows no answer of it yet. */
     shownOf: (slot: string): MilestonesShown | null => painted.get(slot) ?? null,
     /** Slot `slot`'s answer as the server sent it, or null. */
     anchorOf: (slot: string): MilestoneTake | null => anchors.get(slot)?.take ?? null,

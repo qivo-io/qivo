@@ -315,6 +315,32 @@ describe('the states', () => {
   })
 })
 
+describe('a repaint that waits', () => {
+  it('shows the rows on screen with the answer they came from until the views repaint', async () => {
+    await boot()
+    force = { between: 'stopped' }
+    await watch('sync', range())
+    const P = store.P
+    expect(names('sync')).toEqual(['Alpha'])
+    // a painted write that waits holds the views' repaint back a turn
+    void P.updateMilestone('later', { name: 'Later 2' })
+    force = {}
+    const sub = subs.find((s) => s.name === 'milestones:between')
+    if (!sub) throw new Error('no range read')
+    answerMilestones(server, sub.name, sub.args, sub.receive, sub.fail, force)
+    // the stopped answer's one row is never shown as a whole answer
+    let read = P.milestoneRead('sync')
+    if (read.state !== 'ok') throw new Error('no answer')
+    expect(read.answer.rows.map((m) => m.name)).toEqual(['Alpha'])
+    expect(read.answer.stopped).not.toBeNull()
+    await turns()
+    read = P.milestoneRead('sync')
+    if (read.state !== 'ok') throw new Error('no answer')
+    expect(read.answer.rows.map((m) => m.name)).toEqual(['Alpha', 'Beta'])
+    expect(read.answer.stopped).toBeNull()
+  })
+})
+
 describe('the hidden tab and the reconnect', () => {
   it('keeps the answer while stopped, and is current again only after a fresh delivery', async () => {
     await boot()
