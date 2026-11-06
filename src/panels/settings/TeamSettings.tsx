@@ -125,6 +125,20 @@ function lastReady<A extends { state: string }>(list: PagedList<A, unknown>) {
   return null
 }
 
+/** Whether the answers `list` holds are current, as Settings › Projects
+    asks (ProjectLists.tsx). The page shows, and showed at the last render
+    too, since the list hears that it shows only after a render, and the
+    list is not refreshing. A hidden page keeps its last answers, which can
+    be from before a write, so a kept row asks this before listPassed. */
+function useListCurrent(list: Pick<PagedList<unknown, unknown>, 'refreshing'>) {
+  const { visible } = useViewVisibility()
+  const showed = useRef(visible)
+  useEffect(() => {
+    showed.current = visible
+  })
+  return visible && showed.current && !list.refreshing
+}
+
 /** The state a list shows on its container: loading, failed, refreshing
     or ok. */
 function listState(list: PagedList<unknown, unknown>) {
@@ -452,16 +466,7 @@ function TeamFields({
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
-  // whether the list's answers are current, as Settings › Projects asks
-  // (ProjectLists.tsx). The page shows, and showed at the last render too,
-  // since the list hears that it shows only after a render, and the list
-  // is not refreshing.
-  const { visible } = useViewVisibility()
-  const showed = useRef(visible)
-  useEffect(() => {
-    showed.current = visible
-  })
-  const current = visible && showed.current && !list.refreshing
+  const current = useListCurrent(list)
   // an added member goes from the kept rows once a loaded batch holds them,
   // or the store holds no such membership, as after a refusal. Until the
   // server added them every answer is from before the add, so only once it
@@ -989,14 +994,20 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const removing = (id: string) => P.removingAccess({ kind: 'deleteTeam', teamId: id })
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
   // the teams this visit created, by id with their names, which show above
-  // the list until a loaded batch holds them, the list tells that it does
-  // not, or the store no longer holds them
+  // the list until a loaded batch holds them, the store no longer holds
+  // them, or the list's current answers tell that they do not. A create
+  // answered while the page is hidden finds answers from before it.
   const [made, setMade] = useState<ReadonlyMap<string, string>>(() => new Map())
+  const current = useListCurrent(list)
   useEffect(() => {
     setMade((m) =>
       without(m, (id, name) => {
         const team = storeTeam(id)
-        return loaded.has(id) || !team || listPassed(list, search.settled, team.name || name, id)
+        return (
+          loaded.has(id) ||
+          !team ||
+          (current && listPassed(list, search.settled, team.name || name, id))
+        )
       }),
     )
   })

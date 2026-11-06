@@ -503,6 +503,46 @@ describe('Settings › Teams', () => {
     expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
   })
 
+  it('keeps a team created while the tab is hidden as Added until a batch after the return holds it', async () => {
+    await load()
+    // a batch holds two teams, so the list of Bench and Crew has ended
+    server.force = { batch: 2 }
+    await teamsPage()
+    expect(teamRows().map((r) => r.id)).toEqual(['bench', 'crew'])
+    expect(teamsEnd()).toBe('')
+    await type(find<HTMLInputElement>('input[placeholder="New team name"]'), 'Field crew')
+    await click(button('Add team'))
+    const created = requests.find((r) => r.name === 'teams:create')?.args.id as string
+    // the server creates the team while the tab is hidden, which keeps the
+    // ended list from before the create
+    await setVisibility('hidden')
+    team(server.snap, created, 'Field crew')
+    await act(async () =>
+      server.publish({ ...server.snap, delivered_at: '2026-09-15T09:00:00.000Z' }),
+    )
+    await answer('teams:create', 'accept')
+    const kept = [
+      { id: created, name: 'Field crew', count: 'Added' },
+      { id: 'bench', name: 'Bench', count: '0 members' },
+      { id: 'crew', name: 'Crew', count: '3 members' },
+    ]
+    expect(teamRows()).toEqual(kept)
+    // back on the tab, the list reads again. Until that read answers, the
+    // ended list it shows is from before the create, both in the first
+    // render after the return and while it refreshes, so it tells nothing.
+    server.reads.hold(true)
+    await setVisibility('visible')
+    expect(teamRows()).toEqual(kept)
+    server.reads.hold(false)
+    await rerun()
+    // the new first batch ends at Crew, before Field crew's place
+    expect(open('teams:settingsPage')).toHaveLength(1)
+    expect(teamRows()).toEqual(kept)
+    await click(document.querySelector('[data-teams-more]'))
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
+    expect(teamRows().map((r) => r.name)).toEqual(['Bench', 'Crew', 'Field crew'])
+  })
+
   it("lists a leader's teams with the non-admin description, and reads nothing for a seat that leads none", async () => {
     await load((snap) => {
       snap.profiles[0].org_role = 'user'
