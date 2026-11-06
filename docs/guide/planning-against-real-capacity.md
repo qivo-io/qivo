@@ -108,6 +108,14 @@ paused tasks, plus upcoming milestones. Projected misses and slipping counts
 include only projects with delay tracking. It also lists people at **90% or
 more** capacity this week and milestones for this week and next.
 
+The summary reads the next milestone and the milestones of this week and
+next from the server, for the top-level projects of the scope, and shows
+them as loading meanwhile. It says "None scheduled" or "No milestones this
+week or next" only when the server read every milestone. When it could not
+read them all, the next milestone shows as unknown and the list says some
+may be missing. A scope of more than 200 top-level projects reads none and
+says so; choose a team or a project instead.
+
 Two lists help complete assignments:
 
 - **Needs an owner** includes unassigned To Do, In Progress or In Review

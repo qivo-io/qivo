@@ -89,7 +89,8 @@ A task with subtasks but none scheduled shows as unplanned. While you drag a
 subtask, its parent's bar follows it.
 
 Milestones appear as violet diamonds. Drag one to move it or click it to open
-the Milestones window ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
+the Milestones window, which reads that milestone from the server as an
+Overview row does ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
 A project has at most one milestone a week, so a diamond dropped on a week
 that already has one of the project's milestones goes back, and Qivo names
 the milestone there.

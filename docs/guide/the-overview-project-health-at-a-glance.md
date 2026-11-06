@@ -88,8 +88,12 @@ midnight it counts again for the new day.
 
 **Milestones** shows names, projects, calendar weeks, dates and relative
 timing, with the next milestone highlighted. Select **+** or a row to open
-the project's Milestones window. Add a name and week, then select **Add** or
-press Enter. Use **Edit** to change an existing milestone, then **Save**,
+the project's Milestones window. A row opens that milestone from the server,
+so the window says "Loading this milestone…" for a moment, then shows it
+with its editor, or as a row if you can only view it. It says so instead
+when the milestone can't be opened because it was deleted or you no longer
+have access, and when it is deleted while the window shows it. Add a name
+and week, then select **Add** or press Enter. Use **Edit** to change an existing milestone, then **Save**,
 **Cancel** or **Delete**. Each change saves separately; **Done** closes the
 window. Qivo adds milestones to the top-level project. People with read-only
 access to it, including people whose access covers only a sub-project, can
