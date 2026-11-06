@@ -2,9 +2,11 @@
  * unread summary across a person's seats and one task's item for the task
  * window, which convex/inbox.ts serves. The Inbox's pages
  * (model/inboxPage.ts) judge their rows with the same scope (inboxScope)
- * and answer the same unread change (unreadChange). The app does not call
- * these reads yet. It reads the workspace inbox part
- * (lib/workspaceParts.ts readInbox) until a later release switches it.
+ * and answer the same unread change (unreadChange). The app's Inbox badge
+ * and its bulk actions' availability read the summary, and its task window
+ * reads the item for its New divider and its read on open. The app's Inbox
+ * list reads the workspace inbox part (lib/workspaceParts.ts readInbox)
+ * until a later release switches it.
  *
  * Both show the seat's working set, as readInbox does, which holds a task
  * that is not archived, in a project of the seat's organization that is

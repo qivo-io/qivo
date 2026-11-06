@@ -1,7 +1,10 @@
 /* The inbox reads that need only inbox_items rows (model/inboxReads.ts,
- * model/inboxPage.ts). The app does not call them yet. It keeps the
- * workspace inbox part (workspace.ts inbox) until later releases switch the
- * badge, the task window and the Inbox list to these.
+ * model/inboxPage.ts). The app watches the summary from the start beside
+ * the workspace's parts, for its Inbox badge and the availability of Mark
+ * all as read and Remove all read, and the item beside the open task's
+ * thread, for the task window's New divider and its read on open
+ * (messages.ts readItem). The Inbox list keeps the workspace inbox part
+ * (workspace.ts inbox) until a later release switches it to the pages.
  *
  * - summary (across the caller's seats): each seat's organization, whether
  *   its items are complete (model/inboxItems.ts seatReady) and whether Mark
