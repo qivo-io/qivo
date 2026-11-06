@@ -13,8 +13,9 @@
    screen. An agent's key line and its key panel read tokens.agentKeys
    once, for the agents on screen, and again after a key write or the
    page's refresh, never as a subscription. A row whose name, address or
-   hours are being typed, an agent whose key panel is open and a person
-   added on this visit stay on screen through a search or a page move.
+   hours are being typed or wait for the server's answer to their save, an
+   agent whose key panel is open and a person added on this visit stay on
+   screen through a search or a page move.
    Leaving the page drops every answer; the page remembers only its search
    and page starts (usersKept). */
 import React, { useEffect as useEffectS, useRef as useRefS, useState as useStateS } from 'react'
@@ -758,7 +759,8 @@ export function OrgUsersPage({
   /* ---- the rows kept on screen ---- */
   // the people this visit added, which leave once a page has held them
   const [added, setAdded] = useStateS<readonly string[]>([])
-  // the fields with unsaved text, by person
+  // the fields that hold their row, with unsaved text or a save the server
+  // has not answered (UserControls.tsx useHeldRow), by person
   const [drafts, setDrafts] = useStateS<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map())
   // the profiles removed here, hidden while the store no longer holds them
   const [removed, setRemoved] = useStateS<ReadonlySet<string>>(() => new Set())

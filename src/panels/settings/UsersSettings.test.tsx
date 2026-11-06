@@ -526,6 +526,67 @@ describe('kept rows', () => {
     ).toEqual(['anna', 'p01'])
   })
 
+  it('keeps a row whose rename or address waits for the server through a search, and brings a refused one back in it', async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    await show()
+    const name = find<HTMLInputElement>('input[data-user-name="p00"]')
+    await act(async () => name.focus())
+    await type(name, 'Paula New')
+    const email = find<HTMLInputElement>('input[data-user-email="anna"]')
+    // focus moves on, so the rename saves on its way out, and the address
+    // as the search box takes focus
+    await act(async () => email.focus())
+    await type(email, 'anna.new@example.test')
+    await search('planner')
+    const sent = (id: string) =>
+      pending.find((p) => p.name === 'profiles:update' && p.args.id === id)
+    expect(sent('p00')?.args).toMatchObject({ patch: { name: 'Paula New' } })
+    expect(sent('anna')?.args).toMatchObject({ patch: { email: 'anna.new@example.test' } })
+    // the store painted both, which read as saved, but the rows wait for
+    // the server's answers
+    expect(pageRows()).toEqual([me.id])
+    expect(keptRows().sort()).toEqual(
+      [
+        ['anna', 'kept'],
+        ['p00', 'kept'],
+      ].sort(),
+    )
+    // the server takes the address, and Anna's row goes
+    await act(async () => sent('anna')?.resolve(null))
+    await settle()
+    expect(keptRows()).toEqual([['p00', 'kept']])
+    // someone else renamed Person 00 first, so the server refuses the rename
+    const p00 = snap.profiles.find((p) => p.id === 'p00')
+    if (p00) p00.name = 'Paula Other'
+    await act(async () => publish(structuredClone(snap)))
+    await act(async () =>
+      sent('p00')?.reject(
+        new ConvexError({
+          code: 'conflict',
+          reason: 'field_changed',
+          message: 'name changed since you read it',
+          changes: [
+            { record: 'profile', id: 'p00', field: 'name', by: null, at: new Date().toISOString() },
+          ],
+        }),
+      ),
+    )
+    await settle()
+    // the same field holds the typed name, with the name the server keeps
+    expect(keptRows()).toEqual([['p00', 'kept']])
+    expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
+    expect(name.value).toBe('Paula New')
+    expect(find('[data-user-row="p00"] [data-draft-conflict]').textContent).toContain(
+      'Changed elsewhere to “Paula Other”.',
+    )
+    // Use saved lets the draft go, and the row with it once focus leaves
+    await click(find('[data-user-row="p00"] [data-draft-use-saved]'))
+    expect(name.value).toBe('Paula Other')
+    await act(async () => find<HTMLInputElement>('[data-users-search]').focus())
+    expect(keptRows()).toEqual([])
+    expect(pending.filter((p) => p.name === 'profiles:update')).toHaveLength(2)
+  })
+
   it("keeps the open key panel's row and its fresh secret through a page move", async () => {
     await load((s) => s.profiles.push(...people(30)))
     await openKeys()

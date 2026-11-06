@@ -28,23 +28,44 @@ import {
 import { projectRightBox } from '../../lib/projectCreators'
 import { EMAIL, PERSON_NAME, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { UserPatch, UserVM } from '../../store/planner'
+import type { FieldSave, UserPatch, UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { DraftConflictLine } from './controls'
 
 /** What a control says while its row waits for the store's profile. */
 export const WAITING = 'Loading this person…'
 
-/** Reports whether a draft holds unsaved text to `onUnsaved` as it changes,
-    and as false when the field goes, so a list can keep its row on screen
-    while a search or a page move would hide it. */
-function useReportUnsaved(
+/** Tells `onUnsaved` whether a field holds its row, as that changes, and
+    false when the field goes, so a list can keep the row on screen while a
+    search or a page move would hide it. A field holds its row while its
+    draft is unsaved and while a save it sent waits for the server. The
+    store paints a sent save at once, which reads as saved, so without the
+    wait a refusal would find no field to bring the typed text and its
+    conflict back in. Answers `send`, which makes a save through `write`
+    with `save` and counts it until the server answers it (FieldSave
+    onSettled), or at once when the store refused it before sending. */
+function useHeldRow(
   id: string,
   unsaved: boolean,
   onUnsaved: ((id: string, unsaved: boolean) => void) | undefined,
 ) {
-  useEffectS(() => onUnsaved?.(id, unsaved), [id, unsaved])
+  // the saves sent and not answered yet
+  const [sending, setSending] = useStateS(0)
+  const held = unsaved || sending > 0
+  useEffectS(() => onUnsaved?.(id, held), [id, held])
   useEffectS(() => () => onUnsaved?.(id, false), [id])
+  return (save: FieldSave, write: (save: FieldSave) => boolean): boolean => {
+    let open = true
+    const settle = () => {
+      if (!open) return
+      open = false
+      setSending((n) => n - 1)
+    }
+    setSending((n) => n + 1)
+    const sent = write({ ...save, onSettled: settle })
+    if (!sent) settle()
+    return sent
+  }
 }
 
 // Roster renames commit on blur and affect this organization only. Account
@@ -54,7 +75,8 @@ function useReportUnsaved(
 // shows under it, and nothing saves until Use saved or Keep mine. A name over
 // the cap stays typed and invalid, with the cap's sentence, until it is
 // shortened. `waiting` shows the name read-only while the store does not
-// hold the person; `onUnsaved` hears whether a typed name is unsaved.
+// hold the person; `onUnsaved` hears whether the field holds its row, with
+// a typed name unsaved or a rename the server has not answered (useHeldRow).
 export function UserName({
   user,
   isSelf,
@@ -68,7 +90,7 @@ export function UserName({
 }) {
   const canEdit = P.isAdmin() && !waiting
   const draft = useSavedDraft(`${user.id}:name`, user.name, PERSON_NAME, 'name', !canEdit)
-  useReportUnsaved(user.id, draft.unsaved, onUnsaved)
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   const v = draft.text
   // Measure the proportional text so adjacent identity chips stay close.
   const mirror = React.useRef<HTMLSpanElement>(null)
@@ -90,7 +112,7 @@ export function UserName({
     }
     // a conflict waits for Use saved or Keep mine; a paused rename keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    P.updateUser(user.id, { name: next }, draft.save(next).as('name'))
+    send(draft.save(next).as('name'), (save) => P.updateUser(user.id, { name: next }, save))
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
   const chips = (
@@ -329,7 +351,8 @@ export function InviteOutcome({
 // and an address changed elsewhere while it is typed shows under it, and
 // nothing saves until Use saved or Keep mine. `waiting` shows the address
 // read-only while the store does not hold the person; `onUnsaved` hears
-// whether a typed address is unsaved.
+// whether the field holds its row, with a typed address unsaved or a change
+// the server has not answered (useHeldRow).
 export function UserEmail({
   user,
   waiting = false,
@@ -341,7 +364,7 @@ export function UserEmail({
 }) {
   const canEdit = !DEMO_MODE && P.isAdmin() && user.pending && !waiting
   const draft = useSavedDraft(`${user.id}:email`, user.email, EMAIL, 'email', !canEdit)
-  useReportUnsaved(user.id, draft.unsaved, onUnsaved)
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   // Addresses are stored as asciiEmail writes them, so an edit that only
   // changes case or writes the domain in Unicode changes nothing.
   const commit = () => {
@@ -349,7 +372,8 @@ export function UserEmail({
     if (next === '' || draft.isSaved(next)) return draft.showSaved()
     // a conflict waits for Use saved or Keep mine; a paused change keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    if (!P.updateUser(user.id, { email: next }, draft.save(next).as('email'))) draft.discard()
+    const save = draft.save(next).as('email')
+    if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent))) draft.discard()
   }
   if (!canEdit) {
     return (
@@ -411,11 +435,9 @@ const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
 // hold, read-only. The save goes through P.updateUser, which needs the
 // store's row, so pass `canEdit` only while the store holds it, and
 // `waiting` while a row waits for it, which says so. `onUnsaved` hears
-// whether the field holds unsaved hours or a save the server has not
-// answered yet, so a list can keep the row on screen while a search would
-// hide it. The store paints a sent save at once, which reads as saved, so
-// without the wait a refusal would find no field to bring the typed hours
-// and the conflict back in.
+// whether the field holds its row, with unsaved hours or a save the server
+// has not answered (useHeldRow), so a list can keep the row on screen while
+// a search would hide it.
 export function PlannableHoursInput({
   user,
   canEdit,
@@ -436,12 +458,7 @@ export function PlannableHoursInput({
     'plannable hours',
     !canEdit || user.isAgent,
   )
-  const id = user.id
-  // the saves sent and not answered yet
-  const [pending, setPending] = useStateS(0)
-  const held = draft.unsaved || pending > 0
-  useEffectS(() => onUnsaved?.(id, held), [id, held])
-  useEffectS(() => () => onUnsaved?.(id, false), [id])
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   // a number refused on blur stays typed and marked until it changes, or
   // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
@@ -468,17 +485,9 @@ export function PlannableHoursInput({
     }
     // a conflict waits for Use saved or Keep mine; a pause keeps the hours
     if (draft.conflict || P.refusePausedEdit()) return
-    // the save waits until the server answers it, after a refusal has
-    // brought the draft back, or until the store refused it before sending
-    let open = true
-    const settle = () => {
-      if (!open) return
-      open = false
-      setPending((n) => n - 1)
-    }
-    setPending((n) => n + 1)
-    const save = draft.save(h).as('plannable_hours')
-    if (!P.updateUser(user.id, { plannableHours: h }, { ...save, onSettled: settle })) settle()
+    send(draft.save(h).as('plannable_hours'), (save) =>
+      P.updateUser(user.id, { plannableHours: h }, save),
+    )
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
   return (

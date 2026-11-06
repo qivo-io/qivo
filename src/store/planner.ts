@@ -8923,7 +8923,7 @@ export type UserPatch = Partial<{
     save fails (SendOptions). Without them a save checks the values on screen.
     onSettled runs once the server answered a sent save, either way, after
     keepDraft or keepUnsaved, for a field that tells its list while its save
-    waits (P.updateUser's hours). */
+    waits (P.updateUser's name, address and hours). */
 export type FieldSave = {
   seen?: Record<string, unknown>
   keepDraft?: SendOptions<unknown>['keepDraft']
