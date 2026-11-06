@@ -24,8 +24,9 @@
    more or fewer rows than its limit. The section shows them as they come:
    it never sorts, cuts or merges the server's rows.
 
-   The module imports no store code at runtime and only structural types,
-   so it is tested on its own (lib/milestoneSection.test.ts). */
+   The module imports nothing from store/planner.ts. From the store it
+   takes only structural types and positionOf (store/milestoneRows.ts), so
+   it is tested on its own (lib/milestoneSection.test.ts). */
 
 import { MILESTONE_READ_ROWS } from '../../convex/lib/limits'
 import { type MilestoneAsk, type MilestonePosition, positionOf } from '../store/milestoneRows'

@@ -58,11 +58,11 @@ export type MilestoneSection = {
  * while it hides every ask stops and keeps its answer, which shows as
  * refreshing on return. A Load more keeps the shown read live under its
  * slot and asks the larger one under the next; once that one answers, it
- * shows and the old slot goes, and if it fails or is refused the old one
- * stays with a note and Retry. A new search, week or base releases every
- * slot at once and starts the first batch again, so no rows of another
- * search show. A base of null also forgets the search. Every slot goes
- * when the view unmounts.
+ * shows and the old slot goes. If it fails, the old one stays with a note
+ * and Retry, and if it is refused, with the server's sentence and no
+ * Retry. A new search, week or base releases every slot at once and starts
+ * the first batch again, so no rows of another search show. A base of null
+ * also forgets the search. Every slot goes when the view unmounts.
  */
 export function useMilestoneSection(prefix: string, base: SectionBase | null): MilestoneSection {
   const { visible } = useViewVisibility()

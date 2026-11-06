@@ -1,6 +1,7 @@
 /* The one gate that pauses a view's live reads (lib/liveView.ts, and the
    reads the store owns: the Board's, views/board/useBoardView.ts, the
-   Overview's, views/Overview.tsx, the milestone reads, P.watchMilestones,
+   Overview's, views/Overview.tsx, the Roadmap's,
+   views/roadmap/useRoadmapView.ts, the milestone reads, P.watchMilestones,
    of the Milestones window, panels/Modals.tsx useMilestoneGet for the
    milestone it opened on and a kept editor's, and its Upcoming and Past
    sections, views/useMilestoneSection.ts, and of Team sync's opening,
