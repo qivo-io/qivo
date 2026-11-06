@@ -889,9 +889,10 @@ describe("the delivery inside Convex's limits", () => {
     const f = await withOrg(t)
     // a lowered cap, so the case plants 60 parts rather than 4,000
     EXPORT_LIMITS.parts = 40
-    /** What deliveryOf reads for a ready archive of `count` data parts it
-     * plants: every table's first file, the rest tasks, each a file of 3
-     * bytes. */
+    /** What deliveryOf reads for a ready archive it plants with a README, a
+     * manifest and `count` data parts, each a data/tasks file of 3 bytes,
+     * which deliverableParts accepts because it does not check the table
+     * order. */
     const readArchive = async (count: number) => {
       const entries = Array.from(
         { length: count },
