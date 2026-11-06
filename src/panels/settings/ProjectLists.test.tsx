@@ -779,19 +779,37 @@ describe('Settings › Projects', () => {
     expect(text('[data-subprojects-end]')).toBe("Couldn't load its sub-projects.Retry")
   })
 
-  it('keeps a sub-project made here in its open list until the server’s list holds it', async () => {
-    await projects()
-    await click(find('[data-project-row="plan"] button'))
+  /** Specs, the sub-project of Plan that New sub-project makes here. */
+  const specs = () => ({ ...server.snap.projects[1], id: 'specs', num: 30, name: 'Specs' })
+  /** Creates sub-project `made` from Plan's New sub-project… as the
+      dialog does: the store paints it, which the server's list lacks, and
+      the page hears its id. Answers how to tell the page whether the
+      server stored it. */
+  async function create(made: ReturnType<typeof specs>) {
     await click(find('[data-project-row="plan"] button[aria-label="Project actions"]'))
     await click(button('New sub-project…'))
     const [, , onCreated] = onNewSubProject.mock.lastCall ?? []
-    // the store paints the new sub-project, which the server's list lacks
-    const made = { ...server.snap.projects[1], id: 'specs', num: 30, name: 'Specs' }
     await act(async () =>
       server.publish({ ...server.snap, projects: [...server.snap.projects, made] }),
     )
-    await act(async () => onCreated('specs'))
+    let stored: (ok: boolean) => void = () => {}
+    const saved = new Promise<boolean>((resolve) => {
+      stored = resolve
+    })
+    await act(async () => onCreated(made.id, saved))
     await settle()
+    return async (ok: boolean) => {
+      await act(async () => stored(ok))
+      await settle()
+    }
+  }
+
+  it('keeps a sub-project made here in its open list until the server’s list holds it', async () => {
+    await projects()
+    await click(find('[data-project-row="plan"] button'))
+    const made = specs()
+    const stored = await create(made)
+    // before the server stored it, a list that ended without it keeps it
     expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
     const kept = find('[data-subproject-row="specs"] button')
     kept.focus()
@@ -799,6 +817,69 @@ describe('Settings › Projects', () => {
     expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
     // the row the server's list took in keeps its element and its focus
     expect(document.activeElement).toBe(find('[data-subproject-row="specs"] button'))
+    await stored(true)
+    expect(subNames('plan')).toEqual(['Docs', 'Specs', 'Work'])
+  })
+
+  it('lets a sub-project made here go once a loaded batch held it, so a rename past the loaded batches leaves it there', async () => {
+    // batches of two, so a name after Work's falls behind Load more, and
+    // Plan shows on the second page
+    server.force = { batch: 2 }
+    await projects()
+    await click(find('[data-settings-projects-next]'))
+    expect(projectNames()).toEqual(['Ops', 'Plan'])
+    await click(find('[data-project-row="plan"] button'))
+    const made = specs()
+    const stored = await create(made)
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    await elsewhere((snap) => snap.projects.push(made))
+    await stored(true)
+    expect(subNames('plan')).toEqual(['Docs', 'Specs'])
+    await elsewhere((snap) => {
+      const p = snap.projects.find((x) => x.id === 'specs')
+      if (p) p.name = 'Zeta'
+    })
+    // Zeta follows Work, past the loaded batch, so it shows only there
+    expect(subNames('plan')).toEqual(['Docs', 'Work'])
+    await click(find('[data-subproject-more]'))
+    expect(subNames('plan')).toEqual(['Docs', 'Work', 'Zeta'])
+  })
+
+  it('lets a sub-project made here go once the server stored it and a loaded list tells it does not hold it', async () => {
+    await projects()
+    await click(find('[data-project-row="plan"] button'))
+    // the store holds Specs and the server's list never does
+    const stored = await create(specs())
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    // while the page is hidden its list's answers may be from before
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await stored(true)
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    // and while it refreshes on return
+    server.lists.hold(true)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    server.lists.hold(false)
+    await rerun()
+    expect(subNames('plan')).toEqual(['Docs', 'Work'])
+  })
+
+  it('shows no sub-project made here while its list answers that the sub-projects can’t be listed', async () => {
+    await projects()
+    await click(find('[data-project-row="plan"] button'))
+    await create(specs())
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
+    server.force = { unavailable: true }
+    await rerun()
+    expect(subNames('plan')).toEqual([])
+    expect(text('[data-subprojects-end]')).toBe("This project's sub-projects can't be listed.")
+    // it shows again with the list, which still lacks it
+    server.force = {}
+    await rerun()
+    expect(subNames('plan')).toEqual(['Specs', 'Docs', 'Work'])
   })
 
   it('reads nothing of the store’s catalogue and no task, and its levels only for New sub-project', async () => {

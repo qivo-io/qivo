@@ -13,14 +13,11 @@
    projectSettings.leadCandidates, lives here too, as it shares the
    picker's lines. */
 import type { FunctionReference, FunctionReturnType } from 'convex/server'
-import { compareValues } from 'convex/values'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
 import { api } from '../../convex/_generated/api'
 import { LIMITS } from '../../convex/lib/limits'
-import { nameKey } from '../../convex/lib/nameKey'
-import { allWordsMatcher } from '../../convex/lib/search'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { DEMO_MODE } from '../lib/demoMode'
 import { limitSentence, sentence } from '../lib/fieldLimits'
@@ -30,6 +27,7 @@ import {
   type ListBatch,
   type ListEnd,
   listEnd,
+  listPassed,
   type PagedList,
   usePagedList,
   useSettledSearch,
@@ -83,9 +81,6 @@ const listArgs = (project: ShownProject, search: string, at: BatchAt) => ({
   ...(at.through === null ? {} : { through: at.through }),
 })
 
-/* The place of a row with `name` and `id` in the server's name order. */
-const placeOf = (name: string, id: string) => [nameKey(name), id]
-
 /** One of the two access lists: its search box's text, the settled search
     and the paged list over `query`. */
 function useAccessList<A, Row extends { id: string; name: string }>(
@@ -106,22 +101,6 @@ function useAccessList<A, Row extends { id: string; name: string }>(
     ? 'too_long'
     : listEnd(list, search.settled !== '')
   return { text, setText, search, list, end }
-}
-
-/** Whether a loaded list tells that it does not hold the row with `name`
-    and `id`: its batches reached past that place, or the list ended, with
-    no batch stopped or failed, under a search that would show the row. */
-function passed<A, Row extends { id: string; name: string }>(
-  list: PagedList<A, Row>,
-  search: string,
-  name: string,
-  id: string,
-): boolean {
-  if (!allWordsMatcher(nameKey(search))(nameKey(name))) return false
-  if (list.phase !== 'ready' || list.partial || list.settling || list.stopped) return false
-  if (!list.next) return true
-  const last = list.rows.at(-1)
-  return !!last && compareValues(placeOf(last.name, last.id), placeOf(name, id)) > 0
 }
 
 /* What a batch says in place, after its rows, with Retry: a batch above
@@ -424,10 +403,10 @@ export function ProjectAccessEditor({
       const left = all.filter((k) =>
         k.kind === 'team'
           ? !teams.list.rows.some((r) => r.id === k.id) &&
-            !passed(teams.list, teams.search.settled, k.name, k.id)
+            !listPassed(teams.list, teams.search.settled, k.name, k.id)
           : k.id !== leadId &&
             !users.list.rows.some((r) => r.id === k.id) &&
-            !passed(users.list, users.search.settled, k.name, k.id),
+            !listPassed(users.list, users.search.settled, k.name, k.id),
       )
       return left.length === all.length ? all : left
     })

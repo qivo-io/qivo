@@ -1612,12 +1612,13 @@ function App() {
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
   // (sidebar header +, palette) opens the project one, everything else,
   // always parented, opens the sub-project one. `onCreated` hears the id
-  // of a sub-project the dialog creates, as Settings › Projects keeps it in
-  // its open list until the server's list holds it.
+  // of a sub-project the dialog creates and whether the server stored it,
+  // as Settings › Projects keeps it in its open list until its loaded
+  // batches hold it or, once stored, tell that they do not.
   const openNewProject = (
     init,
     focusAfterClose?: () => HTMLElement | null,
-    onCreated?: (id: string) => void,
+    onCreated?: (id: string, saved: Promise<boolean>) => void,
   ) => {
     createdProject.current = null
     setModal({
@@ -1993,9 +1994,15 @@ function App() {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
     const placeAtCreate = placeRef.current
+    // whether the server stored it, for the dialog's opener (onCreated)
+    let answered: (stored: boolean) => void = () => {}
+    const saved = new Promise<boolean>((resolve) => {
+      answered = resolve
+    })
     const id = P.addProject(
       p,
       () => {
+        answered(true)
         if (withStarter) {
           P.addIssue({
             title: p.name,
@@ -2025,6 +2032,7 @@ function App() {
         focusAfterMove.current = () => projectTarget(id)
       },
       () => {
+        answered(false)
         // the refusal takes away the sub-project's row, which the dialog gave
         // focus to as it closed (afterNewSubProject), and its parent stays
         const { parent } = p
@@ -2032,7 +2040,7 @@ function App() {
       },
     )
     createdProject.current = id ?? null
-    if (id) modal?.onCreated?.(id)
+    if (id) modal?.onCreated?.(id, saved)
     setModal(null)
   }
 

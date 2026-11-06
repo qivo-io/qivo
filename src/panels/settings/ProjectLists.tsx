@@ -23,9 +23,9 @@
    organizations to choose from, the home organization and whether the
    login may create a project there (P.canCreateProject, for New project),
    the login's seats for the page memory, that Lead level, and a
-   sub-project created here until the server's list holds it. Each read
-   stops while the tab is hidden and when the page is left, and keeps no
-   answer past it. */
+   sub-project created here until its open list holds it or tells that it
+   does not. Each read stops while the tab is hidden and when the page is
+   left, and keeps no answer past it. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -55,6 +55,7 @@ import {
 import {
   type ListEnd,
   listEnd,
+  listPassed,
   type PagedList,
   type PagedPages,
   type PageEnd,
@@ -63,6 +64,7 @@ import {
   usePagedPages,
   useSettledSearch,
 } from '../../lib/pagedList'
+import { useViewVisibility } from '../../lib/viewVisibility'
 import { P } from '../../store/planner'
 import { ArchiveOrDeleteProjectModal } from '../Modals'
 import {
@@ -467,11 +469,12 @@ export function OrgProjectsPage({
   setPage: (page: string) => void
   onNewProject: () => void
   /** opens New sub-project; `focusAfterClose` is what takes focus as it
-      closes, and `onCreated` hears the id of the sub-project it created */
+      closes, and `onCreated` hears the id of the sub-project it created
+      and whether the server stored it */
   onNewSubProject: (
     parent: string,
     focusAfterClose?: () => HTMLElement | null,
-    onCreated?: (id: string) => void,
+    onCreated?: (id: string, saved: Promise<boolean>) => void,
   ) => void
   onOpenArchivedTasks: (projectId: string) => void
 }) {
@@ -492,16 +495,32 @@ export function OrgProjectsPage({
     starts: kept && kept.org === org && kept.search === search.settled ? kept.starts : undefined,
   })
   // the sub-projects New sub-project made here, by project, which its open
-  // list keeps until a loaded batch holds them
-  const [made, setMade] = useStateS<ReadonlyMap<string, readonly string[]>>(() => new Map())
+  // list keeps until a loaded batch holds them or, once the server stored
+  // them, tells that it does not (SettingsSubProjects)
+  const [made, setMade] = useStateS<ReadonlyMap<string, readonly Made[]>>(() => new Map())
+  /** Changes project `parent`'s entries in `made` with `edit`. */
+  const editMade = (parent: string, edit: (was: readonly Made[]) => readonly Made[]) =>
+    setMade((all) => {
+      const was = all.get(parent) ?? []
+      const next = edit(was)
+      if (next.length === was.length && next.every((m, i) => m === was[i])) return all
+      const out = new Map(all)
+      if (next.length > 0) out.set(parent, next)
+      else out.delete(parent)
+      return out
+    })
   React.useEffect(() => {
     projectsKept = { login: loginNow(), org, search: search.settled, starts: page.starts, open }
   })
   const toggle = (id: string) => setOpen((was) => (was === id ? null : id))
   const newSubProject = (parent: string, focusAfterClose?: () => HTMLElement | null) =>
-    onNewSubProject(parent, focusAfterClose, (id) =>
-      setMade((was) => new Map(was).set(parent, [...(was.get(parent) ?? []), id])),
-    )
+    onNewSubProject(parent, focusAfterClose, (id, saved) => {
+      editMade(parent, (was) => [...was, { id, saved: false }])
+      // a refused create's row leaves the store, which ends its kept row
+      void saved.then((ok) => {
+        if (ok) editMade(parent, (was) => was.map((m) => (m.id === id ? { id, saved: true } : m)))
+      })
+    })
   const canCreate = org === P.homeOrg && P.canCreateProject()
   const searching = search.settled !== ''
   const end = pageEnd(page, searching)
@@ -588,6 +607,7 @@ export function OrgProjectsPage({
             org={org}
             parent={row}
             made={made.get(row.id) ?? []}
+            onSettled={(ids) => editMade(row.id, (was) => was.filter((m) => !ids.includes(m.id)))}
             setPage={setPage}
             onOpenArchivedTasks={onOpenArchivedTasks}
             onAdd={() => newSubProject(row.id)}
@@ -895,23 +915,39 @@ export function SubProjectsEnd({
   }
 }
 
+/** A sub-project New sub-project made in Settings › Projects, and whether
+    the server has stored it yet. */
+type Made = { id: string; saved: boolean }
+
 /* An open project's live sub-projects in Settings › Projects, a batch at a
    time as the list's end scrolls into view or Load more is pressed, up to
    PROJECT_LIST_LIMITS.subProjects. It reads only while it is mounted, so
    closing the project, leaving its page or the page changing stops it.
-   A sub-project New sub-project made here (`made`) shows first while the
-   store holds it and no loaded batch does. */
+   A sub-project New sub-project made here (`made`) shows first, as the
+   store holds it, until a loaded batch holds it or, once the server
+   stored it, tells that it does not (lib/pagedList.ts listPassed), as
+   the access lists keep a grant added past their rows.
+   `onSettled` then hears its id, which the page drops from `made`, so a
+   later answer that moves it past the loaded batches, as a rename does,
+   never brings the store's row back outside the server's order. Until
+   the server stored it every loaded batch lacks it, and while the page
+   is hidden or the list refreshes its answers may be from before, so
+   only a hold counts then. It shows no kept row while the list is held,
+   as when it is not ready or the project's sub-projects can't be
+   listed. */
 function SettingsSubProjects({
   org,
   parent,
   made,
+  onSettled,
   setPage,
   onOpenArchivedTasks,
   onAdd,
 }: {
   org: string
   parent: SettingsProjectRow
-  made: readonly string[]
+  made: readonly Made[]
+  onSettled: (ids: readonly string[]) => void
   setPage: (page: string) => void
   onOpenArchivedTasks: (projectId: string) => void
   onAdd: () => void
@@ -919,10 +955,32 @@ function SettingsSubProjects({
   const list = useSubProjects({ org, project: parent.id })
   const end = listEnd(list, false)
   const loaded = new Set(list.rows.map((r) => r.id))
-  const keptRows = made.flatMap((id) => {
-    const p = loaded.has(id) ? null : P.project(id)
-    return p && p.parent === parent.id ? [{ id, name: p.name, num: p.num ?? 0 }] : []
+  // whether the list's answers are its current ones: the page shows, and
+  // showed at the last render too, as the list hears that it shows only
+  // after a render, and the list is not refreshing
+  const { visible } = useViewVisibility()
+  const showed = React.useRef(visible)
+  React.useEffect(() => {
+    showed.current = visible
   })
+  const current = visible && showed.current && !list.refreshing
+  const settled = new Set(
+    made.flatMap(({ id, saved }) => {
+      if (loaded.has(id)) return [id]
+      const p = saved && current ? P.project(id) : undefined
+      return p && listPassed(list, '', p.name, id) ? [id] : []
+    }),
+  )
+  React.useEffect(() => {
+    if (settled.size > 0) onSettled([...settled])
+  })
+  const keptRows =
+    list.phase === 'held'
+      ? []
+      : made.flatMap(({ id }) => {
+          const p = settled.has(id) ? undefined : P.project(id)
+          return p && p.parent === parent.id ? [{ id, name: p.name, num: p.num ?? 0 }] : []
+        })
   const tags = tagsOf(org, [
     ...keptRows.map((r) => ({ ...r, parent: parent.id })),
     ...list.rows.map((r) => ({ ...r, parent: parent.id })),

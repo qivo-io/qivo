@@ -74,9 +74,11 @@
    is never an end (listEnd). */
 
 import type { FunctionReference } from 'convex/server'
-import { ConvexError, type Value } from 'convex/values'
+import { ConvexError, compareValues, type Value } from 'convex/values'
 import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { LIST_BATCH, type Limit } from '../../convex/lib/limits'
+import { nameKey } from '../../convex/lib/nameKey'
+import { allWordsMatcher } from '../../convex/lib/search'
 import { overLimit } from './fieldLimits'
 import { watchLive } from './liveView'
 import { useRested } from './useRested'
@@ -209,6 +211,26 @@ export function listEnd(
   if (list.partial || list.stopped) return 'partial'
   if (list.rows.length === 0 && searching) return 'none'
   return 'end'
+}
+
+/* The place of a row with `name` and `id` in the server's name order. */
+const placeOf = (name: string, id: string) => [nameKey(name), id]
+
+/** Whether `list`, in the server's name key order tied by the id, tells
+    that it does not hold the row with `name` and `id`: its batches reached
+    past that place, or the list ended, with no batch stopped or failed,
+    under a search that would show the row. */
+export function listPassed<A, Row extends { id: string; name: string }>(
+  list: PagedList<A, Row>,
+  search: string,
+  name: string,
+  id: string,
+): boolean {
+  if (!allWordsMatcher(nameKey(search))(nameKey(name))) return false
+  if (list.phase !== 'ready' || list.partial || list.settling || list.stopped) return false
+  if (!list.next) return true
+  const last = list.rows.at(-1)
+  return !!last && compareValues(placeOf(last.name, last.id), placeOf(name, id)) > 0
 }
 
 /** A search box's text as a list asks the server with it: `typed`, the
