@@ -762,10 +762,11 @@ export const reapOrphans = internalMutation({
 
 /** How many expired tickets one reapUploadTickets leg handles. A ticket
  * holding a file nothing names costs eleven index ranges (the file,
- * storageIdInUse's nine and the erase), so a full leg reads about 2,200 of
- * Convex's 4,096 index ranges with the page and the restore check. Tests
- * lower it. */
-export const UPLOAD_TICKET_PAGE = { size: 200 }
+ * storageIdInUse's nine and the erase), so a full leg reads about 1,100 of
+ * Convex's 4,096 index ranges with the page and the restore check, and its
+ * file erases keep a leg's whole execution well inside a second on a local
+ * backend (a leg of 200 reached 925 ms once). Tests lower it. */
+export const UPLOAD_TICKET_PAGE = { size: 100 }
 
 const vTicketCounts = v.object({
   tickets: v.number(), // expired tickets deleted
