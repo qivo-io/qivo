@@ -284,8 +284,9 @@ toward its 5 MiB of shared upload storage until they are deleted for good with
 API calls accumulate during each paid subscription period. Qivo samples storage
 at the start of the period and collects its extra charge, plus API overages, on
 the invoice at the end of the period. That is the renewal invoice, or the final
-one when a cancelled subscription ends. The sample leaves out files in Deleted
-items, and Billing shows it beside current storage, which can differ from it.
+one when a cancelled subscription ends. The sample counts the same files as
+current storage, files in Deleted items included, and Billing shows it beside
+current storage, which changes during the period.
 Polar handles checkout taxes and recurring payments.
 
 Without a paid billing period, for example during free access, before you
