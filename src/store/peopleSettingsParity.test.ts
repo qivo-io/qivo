@@ -8,14 +8,17 @@
  * the server seals its own, with one figure at its design size a case:
  * 1,000 people for the list, one person and 100 by id; a guest who reads
  * 200 live sub-projects in an everyday organization; 25 agents with
- * everyday keys; and the creators under each setting among 1,000 people.
- * It also compares the refusals. */
+ * everyday keys; the invitation rows of the seats a page names; and the
+ * creators under each setting among 1,000 people. It also compares the
+ * refusals. */
 
 import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { Doc } from '../../convex/_generated/dataModel'
+import type { InviteDeliveryRow } from '../../convex/invites'
 import { newWindowKey } from '../../convex/lib/db'
 import { nameKey } from '../../convex/lib/nameKey'
+import { newOrgDefaults } from '../../convex/model/orgs'
 import {
   as,
   NOW,
@@ -322,6 +325,103 @@ describe("the Users page's stand-in", () => {
     )
   })
 
+  it('answers the invitation rows of the seats a page names as the server does', async () => {
+    const { t, org, nora, people } = await northstar()
+    // a pending seat (no login, an address), a seat claimed after its
+    // send, and a pending seat of another organization, each with one
+    // failed send Nora's change caused
+    const invited = people[4]
+    const sentAt = new Date(Date.now() - 60_000).toISOString()
+    const [claimed, foreign] = await t.run(async (ctx) => {
+      const elsewhere = uuid()
+      await ctx.db.insert('organizations', {
+        id: elsewhere,
+        name: 'Elsewhere',
+        slug: 'elsewhere',
+        ...newOrgDefaults(NOW),
+      })
+      const out: Doc<'profiles'>[] = []
+      for (const [orgId, name, email] of [
+        [org.id, 'Cleo Claimed', 'cleo@example.test'],
+        [elsewhere, 'Far Away', 'far@example.test'],
+      ] as const) {
+        const _id = await ctx.db.insert('profiles', {
+          id: uuid(),
+          org_id: orgId,
+          name,
+          email,
+          initials: 'PL',
+          color: '#7a7ad0',
+          org_role: 'user',
+          active: true,
+          kind: 'person',
+          created_at: NOW,
+        })
+        out.push((await ctx.db.get(_id)) as Doc<'profiles'>)
+      }
+      for (const seat of [invited, ...out])
+        await ctx.db.insert('platform_audit_log', {
+          ts: sentAt,
+          actor_email: 'system',
+          action: 'invite_email',
+          channel: 'app',
+          target_org_id: seat.org_id,
+          target_profile_id: seat.id,
+          detail: { email: seat.email, sent: false, settled: true, resend: false, by: nora.id },
+        })
+      return out
+    })
+    await keyOrg(t, org.id)
+    const ref = makeFunctionReference<'query'>('invites:deliveries')
+    // the rows the server reported while Cleo was pending, and Far Away's,
+    // as the stand-in is given them
+    const before = (await as(t, nora).query(ref, { org_id: org.id })) as InviteDeliveryRow[]
+    expect(before.map((r) => r.profile_id).sort()).toEqual([invited.id, claimed.id].sort())
+    const extra = {
+      deliveries: [
+        ...before,
+        {
+          profile_id: foreign.id,
+          email: 'far@example.test',
+          state: 'unsent' as const,
+          since: sentAt,
+          free_at: null,
+        },
+      ],
+    }
+    await t.run((ctx) => ctx.db.patch(claimed._id, { auth_user_id: 'auth_cleo' }))
+    const ws = await workspaceOf(as(t, nora))
+    if (!ws) throw new Error('no workspace')
+    const named = [invited.id, claimed.id, foreign.id, 'no-such-seat']
+    const walk = await same(
+      t,
+      nora,
+      ws,
+      'invites:deliveries',
+      { org_id: org.id, profile_ids: named },
+      false,
+      extra,
+    )
+    expect((walk.server[0] as unknown as InviteDeliveryRow[]).map((r) => r.profile_id)).toEqual([
+      invited.id,
+    ])
+    // an empty list names no seat, and walks none
+    await same(t, nora, ws, 'invites:deliveries', { org_id: org.id, profile_ids: [] }, false, extra)
+    // a standard user sees only the sends their own change caused
+    const zoe = await plantLogin(t, people[0])
+    const theirs = await workspaceOf(as(t, zoe))
+    if (!theirs) throw new Error('no workspace')
+    await same(
+      t,
+      zoe,
+      theirs,
+      'invites:deliveries',
+      { org_id: org.id, profile_ids: named },
+      false,
+      extra,
+    )
+  })
+
   it('answers the creators line under each setting among 1,000 people as the server does', async () => {
     const { t, org, nora, people } = await northstar({ people: 1000 })
     for (const setting of ['users', 'selected', 'admins'] as const) {
@@ -404,13 +504,19 @@ describe("the Users page's stand-in", () => {
     expect(
       await code(() => peopleSettingsStandIn(ws, 'people:settingsPage', { ...base, search: long })),
     ).toBe('rule')
-    for (const ids of [Array.from({ length: 101 }, () => nora.id)]) {
+    // past the bounds on ids, and agentKeys with none
+    const many101 = Array.from({ length: 101 }, () => nora.id)
+    for (const [name, said, args] of [
+      ['people:byIds', '101 ids', { ...base, ids: many101 }],
+      ['invites:deliveries', '101 ids', { ...base, profile_ids: many101 }],
+      ['tokens:agentKeys', 'no ids', { ...base, agent_ids: [] }],
+      ['tokens:agentKeys', '26 ids', { ...base, agent_ids: many101.slice(0, 26) }],
+    ] as const) {
       expect(
-        await code(() =>
-          as(t, nora).query(makeFunctionReference<'query'>('people:byIds'), { ...base, ids }),
-        ),
+        await code(() => as(t, nora).query(makeFunctionReference<'query'>(name), args)),
+        `${name}, ${said}`,
       ).toBe('bad_request')
-      expect(await code(() => peopleSettingsStandIn(ws, 'people:byIds', { ...base, ids }))).toBe(
+      expect(await code(() => peopleSettingsStandIn(ws, name, args)), `${name}, ${said}`).toBe(
         'bad_request',
       )
     }

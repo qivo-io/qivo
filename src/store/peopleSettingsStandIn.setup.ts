@@ -31,8 +31,9 @@
      the standard users in name key order who may create projects under
      the organization's setting, active ones only, two named and up to 100
      counted, `more` past them;
-   - invites:deliveries: the rows of `extra.deliveries` among profile_ids
-     for an admin, at most BY_IDS_MAX ids.
+   - invites:deliveries: the rows of `extra.deliveries` of the
+     organization's seats that are still invitations among profile_ids, in
+     their order, for an admin, at most BY_IDS_MAX ids.
 
    Its cursors are plain JSON of the list, the scope and the position, so
    equal positions give equal text, as the server's sealed cursors do, and
@@ -387,11 +388,15 @@ export function peopleSettingsStandIn(
     // the Users page is an admin's; another seat sees only its own sends,
     // which these rows do not record, so it sees none
     if (!admin) return []
-    return (extra.deliveries ?? []).filter(
-      (r) =>
-        people.some((p) => p.id === r.profile_id) &&
-        (ids === undefined || ids.includes(r.profile_id)),
-    )
+    const rows = extra.deliveries ?? []
+    // a seat of the organization that is still an invitation, as
+    // convex/invites.ts isInvitation keeps it
+    const invitation = (id: string) =>
+      people.some(
+        (p) => p.id === id && p.kind === 'person' && p.active && !!p.email && !p.auth_user_id,
+      )
+    const seats = new Set(ids ?? rows.map((r) => r.profile_id))
+    return [...seats].filter(invitation).flatMap((id) => rows.filter((r) => r.profile_id === id))
   }
   throw new Error(`the people settings stand-in does not answer ${name}`)
 }
