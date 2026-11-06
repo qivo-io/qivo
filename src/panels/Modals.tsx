@@ -2536,14 +2536,17 @@ function MilestoneModal({
     )
   }
   /* A milestone of the window: the opened one from the answer, with its
-     stored name and day, any other from the list, the workspace's. */
+     stored name and day as the answer holds them when asked, any other
+     from the list, the workspace's. */
   const item = (m: MilestoneVM, own: boolean) => {
     const editing = m.id === editId && (own ? answered : canWrite)
     return editing ? (
       <MilestoneEditor
         key={m.id}
         m={m}
-        stored={own ? answer?.stored.get(m.id) : undefined}
+        storedOf={
+          own ? () => shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(m.id) : undefined
+        }
         locked={!canWrite}
         onClose={() => setEditId(null)}
         onDelete={own ? () => setDeletedHere(true) : undefined}
@@ -2789,21 +2792,24 @@ function MilestoneRowView({
 /* The row, opened: name and week on the lit material of an on-state, then
    Delete / Cancel / Save on a second line. Enter saves; Escape cancels the
    edit and leaves the window open (data-escape-owner, see ModalShell).
-   `stored` is the milestone's stored name and day as the row it renders
-   from holds them (a milestone read's answer, MilestoneAnswer.stored), else
-   the store's (P.milestoneRow); the save sends them as what the person saw.
+   `storedOf` answers the milestone's stored name and day as the row it
+   renders from holds them now (a milestone read's answer,
+   MilestoneAnswer.stored), else the editor reads the store's
+   (P.milestoneRow); the save sends them as what the person saw, and a
+   refused save rebases on them as they are once the store took its paint
+   back.
    `locked` keeps the typed text read-only once the person may no longer
    change the milestone. The Name box takes focus when the editor opens,
    unless the person already moved focus inside the window. */
 function MilestoneEditor({
   m,
-  stored,
+  storedOf,
   locked = false,
   onClose,
   onDelete,
 }: {
   m: MilestoneVM
-  stored?: { name: string; week: string }
+  storedOf?: () => { name: string; week: string } | undefined
   locked?: boolean
   onClose: () => void
   /** runs as the person deletes the milestone here */
@@ -2812,10 +2818,10 @@ function MilestoneEditor({
   // the name and day stored when the editor opened, which the save sends as
   // what the person saw. After a save refused over someone else's change,
   // the draft stays and their version becomes it once it shows (rebase), so
-  // a second Save replaces it on purpose.
-  const storedRef = useRefM(stored)
-  storedRef.current = stored
-  const storedNow = () => storedRef.current ?? P.milestoneRow(m.id) ?? undefined
+  // a second Save replaces it on purpose. Read when asked, never as of the
+  // last render: a refusal's keepDraft runs right after the store took the
+  // person's paint back, before React renders again.
+  const storedNow = () => (storedOf ? storedOf() : P.milestoneRow(m.id)) ?? undefined
   const [seen, setSeen] = useStateM(storedNow)
   const rebase = useRefM(false)
   const takeStored = () => {

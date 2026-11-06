@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FIELD_CHANGED } from '../../convex/lib/fieldPrints'
 import { TooltipProvider } from '../components/ui/tooltip'
 import {
   answerMilestones,
@@ -290,6 +292,58 @@ describe('the rights the answer gives', () => {
     expect(q('[data-milestone-locked-note]')?.textContent).toBe(
       'You can no longer change this milestone.',
     )
+  })
+})
+
+describe('a save refused because someone changed the milestone first', () => {
+  it("keeps the draft on the server's row, so the next Save sends it against that row", async () => {
+    fixture()
+    await start()
+    const writes: { args: Record<string, unknown>; reject: (e: unknown) => void }[] = []
+    network.mutation.mockImplementation((ref, args) =>
+      getFunctionName(ref) === 'projects:updateMilestone'
+        ? new Promise((_, reject) => writes.push({ args, reject }))
+        : Promise.resolve(null),
+    )
+    await open('alpha')
+    // someone renames it, which the window's read shows
+    const theirs = server.milestones.find((m) => m.id === 'alpha')
+    if (!theirs) throw new Error('no alpha')
+    theirs.name = 'Alpha 2'
+    await rerun()
+    const box = nameBox()
+    if (!box) throw new Error('no editor')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, 'Al')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const save = () =>
+      [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find(
+        (b) => b.textContent === 'Save',
+      )
+    await act(async () => save()?.click())
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(writes[0].args).toMatchObject({ patch: { name: 'Al' }, expected: { name: 'Alpha' } })
+    writes[0].reject(
+      new ConvexError({
+        code: 'conflict',
+        reason: FIELD_CHANGED,
+        message: 'the name of the milestone changed since you read it',
+        changes: [{ record: 'milestone', id: 'alpha', field: 'name', by: 'someone', at: AT }],
+      }),
+    )
+    await settle()
+    expect(nameBox()?.value).toBe('Al')
+    await act(async () => save()?.click())
+    await settle()
+    // the draft goes out against their name, never as already saved
+    expect(writes).toHaveLength(2)
+    expect(writes[1].args).toMatchObject({
+      id: 'alpha',
+      patch: { name: 'Al' },
+      expected: { name: 'Alpha 2' },
+    })
   })
 })
 
