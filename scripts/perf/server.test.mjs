@@ -416,6 +416,19 @@ describe('the benchmark server', () => {
       reason: 'access_unchecked',
     })
     expect((await roadmap('tasks=100&roadmap=error')).answer.error).toContain('roadmap=error')
+    // the owner loads answer every owner unavailable, or not at all
+    const loads = async (params) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&tasks=100&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const args = { org_id: snap.orgs[0].id, owner_ids: [snap.profiles[0].id] }
+      await send({ type: 'query', id: 'loads', name: 'planning:ownerLoads', args })
+      const answer = posted.find((m) => m.to === 'loads')
+      return answer ? JSON.parse(answer.text) : null
+    }
+    expect((await loads('loads=unavailable')).owners[0].state).toBe('unavailable')
+    expect(await loads('loads=loading')).toBeNull()
+    expect((await loads('')).owners[0].state).toBe('ok')
     // an organization Viewer may edit no project of a part
     const viewer = await roadmap('tasks=300&role=viewer')
     if (viewer.deps.state === 'ok' && viewer.deps.auto_move.state === 'ok')

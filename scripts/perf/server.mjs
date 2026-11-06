@@ -84,6 +84,11 @@
 //                        its budget), automove-budget (Auto-move's inputs
 //                        past their size) and error (the Roadmap's read
 //                        fails); several joined by commas
+//   loads                a state the owner loads (planning:ownerLoads)
+//                        answer for screenshots of Team utilization, the
+//                        planning panel and the delays: unavailable (every
+//                        owner past the reader's bounds) or loading (no
+//                        answer)
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -345,6 +350,8 @@ const forcedBoard = parameters.get('board') ?? undefined
 const roadmapStates = (parameters.get('roadmap') ?? '').split(',').filter(Boolean)
 const forcedRoadmap = roadmapStates.filter((state) => state !== 'error')
 const roadmapFails = roadmapStates.includes('error')
+/* The owner loads' forced state (the `loads` parameter). */
+const forcedLoads = parameters.get('loads') ?? null
 /* The Overview's forced states (the `overview` parameter), as the
    stand-in's `force` takes them. */
 const forcedOverview = (() => {
@@ -1437,7 +1444,11 @@ const read = (name, args = {}) => {
     // the owner loads the delays of tasks only the Board's answer brings
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':
-      return ownerLoadsStandIn(snapshot, args)
+      // loads=loading never answers
+      if (forcedLoads === 'loading') return NO_ANSWER
+      return ownerLoadsStandIn(snapshot, args, {
+        unavailable: forcedLoads === 'unavailable' ? args.owner_ids : [],
+      })
     // the removal window's reads (src/store/removalStandIn.setup.ts)
     case 'accessRemovals:preview':
       return removalPreviewStandIn(snapshot, args.change, forcedRemoval, args.reassign_to)
