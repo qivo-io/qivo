@@ -32,13 +32,13 @@ type Row = { id: string; name: string }
 const BASE: SectionBase = { projects: ['plan'], from: '2026-11-02', side: 'upcoming' }
 const KEY = sectionKey(BASE) ?? ''
 
-/** `count` rows named Step 1 and on, weekly from 2026-11-02. */
+/** `count` rows named Step n, from Step `from` on. */
 function rowsOf(count: number, from = 1): Row[] {
   return Array.from({ length: count }, (_, i) => ({ id: `m${from + i}`, name: `Step ${from + i}` }))
 }
 
-/** An answer of `rows`, each stored on its own Monday, with `next` at the
-    last row unless `whole`. */
+/** An answer of `rows`, each stored on its own Monday from 2026-11-02 on,
+    in the order given, with `next` at the last row unless `whole`. */
 function answerWith(
   rows: Row[],
   o: { whole?: boolean; stopped?: string; past?: boolean } = {},
@@ -46,7 +46,7 @@ function answerWith(
   const stored = new Map(
     rows.map((row, i) => [
       row.id,
-      { name: row.name, week: `2026-${11 + Math.floor(i / 4)}-0${(i % 4) + 1}` },
+      { name: row.name, week: new Date(Date.UTC(2026, 10, 2 + 7 * i)).toISOString().slice(0, 10) },
     ]),
   )
   const last = rows.at(-1)
