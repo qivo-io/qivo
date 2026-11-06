@@ -1751,6 +1751,22 @@ gets them only at its next reset, and a seed refuses there until then, as
 for every dataset change; a seed of an absent or empty demo writes version
 10, and the public demo's new copies have them.
 
+From the release after v0.1.151, `files.mintUrls` refuses a call that names
+more than 100 attachments or more than 1,000 profile pictures, whole and
+before it reads anything, and reads each task and each project's access once
+a call. The app of that release asks for file URLs through one queue, at
+most 100 ids a call and two calls at a time, loads description and comment
+images as they come near view, and holds pictures and the background while
+the page is hidden. It works against any backend, since every backend takes
+calls of that size, so the release sets no rollback floor and needs no
+step. Returning the app to an earlier release stays safe, and so does
+returning the backend down to the newest floor above. An app loaded before
+the release asks for one attachment a call and works unchanged. It asks for
+every picture its workspace holds in one call, which inside the design size
+is at most 1,000, and a tab whose organizations together hold more pictures
+shows initials until it reloads. The release changes no table, field or
+index, and there is no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
