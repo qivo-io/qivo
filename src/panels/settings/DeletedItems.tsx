@@ -1404,8 +1404,9 @@ function comesBack(holder: DeletedRow): string {
     the store sends the item again once the project is back. The project
     item the line's item waits for is the page's when it holds it, and is
     read from deletedItems.item while the window shows otherwise, Restore
-    waiting for it. When nothing can be restored, the window says why and
-    offers Close. While a restore is saving, the window waits for it, also
+    waiting for it; a failed read says so with Try again, and an answer
+    that the person cannot see it says Qivo can't find it. When nothing can
+    be restored, the window says why and offers Close. While a restore is saving, the window waits for it, also
     when the page meanwhile shows the item restoring or gone. */
 function WholeItemWindow({
   line,
@@ -1435,7 +1436,12 @@ function WholeItemWindow({
   // the item the restore sends first: the project item the line's item
   // waits for, else a hit's own item
   const holder = waits ? (held ?? read.value ?? undefined) : item
-  const asking = waitsFor !== undefined && held === undefined && read.value === undefined
+  // the read of that project item while the page holds no row of it: still
+  // asking, failed, or answered that the person cannot see it now
+  const reading = waitsFor !== undefined && held === undefined
+  const asking = reading && read.value === undefined && read.error === undefined
+  const failed = reading && read.value === undefined && read.error !== undefined
+  const gone = reading && read.value === null
   const name = line.kind === 'hit' ? line.hit.key : itemName(item)
   // the task item a subtask's hit belongs to, by its root
   const root =
@@ -1478,6 +1484,23 @@ function WholeItemWindow({
         too. It can only come back after the project.
       </p>
     )
+  /** What the window says while it has no project item to send. */
+  const holderNote = failed ? (
+    <div role="alert" className="flex items-center gap-3 text-sm">
+      <span>Couldn't load its project.</span>
+      <Button type="button" size="sm" data-whole-retry onClick={read.retry}>
+        Try again
+      </Button>
+    </div>
+  ) : gone ? (
+    <p data-whole-gone className="text-sm">
+      Qivo can't find its project in Deleted items now.
+    </p>
+  ) : asking ? (
+    <p role="status" className="text-sm">
+      Loading its project…
+    </p>
+  ) : null
   // what the store sends once the project waited for is back
   const follows = root
     ? ` ${root.key} and its subtasks follow once the project is back.`
@@ -1493,7 +1516,8 @@ function WholeItemWindow({
       submitLabel={saving ? 'Restoring…' : `Restore ${andList(restores)}`}
       focusAfterClose={focusAfterClose}
       footer={
-        canRestore || saving || asking ? undefined : (
+        // Restore stays, disabled, while the project item may still come
+        canRestore || saving || asking || failed ? undefined : (
           <>
             <div className="min-w-0 flex-1" />
             <Button type="button" variant="ghost" className="text-text-1" onClick={onClose}>
@@ -1516,6 +1540,7 @@ function WholeItemWindow({
             . It can only come back with that task.
           </p>
           {waits && before(root.key)}
+          {waits && holderNote}
           {(!waits || holder) && (
             <p className="text-sm">
               {reason ??
@@ -1538,6 +1563,7 @@ function WholeItemWindow({
             </p>
           )}
           {waits && before(line.kind === 'hit' ? item.title : name)}
+          {waits && holderNote}
           {holder && (
             <p className="text-sm">
               {reason ?? `${comesBack(holder)}${waits && line.kind === 'hit' ? follows : ''}`}

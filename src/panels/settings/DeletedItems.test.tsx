@@ -959,6 +959,54 @@ describe('restoring', () => {
     expect(toasts().some((t) => /Restored 2/.test(String(t)))).toBe(false)
   })
 
+  it('says a failed read of the project an item waits for with Try again, and one it cannot see, apart from loading', async () => {
+    const next = world({ tasks: 1 })
+    const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
+    const task = fixture.items.find((i) => i.row.kind === 'task')
+    if (!task) throw new Error('no task item')
+    task.row = {
+      ...task.row,
+      can_restore: false,
+      blocked: { reason: 'project_deleted', item_id: `deleted-${FW}` },
+    }
+    // the page that shows the task holds no project item
+    const projects = fixture.items.filter((i) => i.row.kind === 'project')
+    fixture.items = fixture.items.filter((i) => i.row.kind === 'task')
+    await load(next, fixture)
+    holdReads = (sub) => sub.name === 'deletedItems:item'
+    await open(undefined, undefined, true)
+    await choose(EL)
+    await click(find(`[data-deleted-row="${task.row.id}"] [data-restore]`))
+    const dialog = () => find('[role="dialog"]')
+    const restore = () => button('Restore the project and QN-10')
+    expect(dialog().querySelector('[role="status"]')?.textContent).toBe('Loading its project…')
+    expect(restore().hasAttribute('disabled')).toBe(true)
+    const reads = () => subs.filter((s) => s.open && s.name === 'deletedItems:item')
+    await act(async () => reads()[0].fail(new Error('offline')))
+    await settle()
+    expect(dialog().querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn't load its project.",
+    )
+    expect(restore().hasAttribute('disabled')).toBe(true)
+    // Try again reads it afresh, and the person cannot see it now
+    holdReads = null
+    await click(find('[data-whole-retry]'))
+    expect(text('[data-whole-gone]')).toBe("Qivo can't find its project in Deleted items now.")
+    expect(dialog().querySelector('[role="alert"]')).toBeNull()
+    expect(all('[role="dialog"] button').map((b) => b.textContent)).not.toContain(
+      'Restore the project and QN-10',
+    )
+    expect(button('Close')).toBeDefined()
+    // once the project item answers, Restore names it and may be pressed
+    fx.items.push(...projects)
+    await act(async () => {
+      for (const sub of reads()) answer(sub)
+    })
+    await settle()
+    expect(has('[data-whole-gone]')).toBe(false)
+    expect(button('Restore Firmware and QN-10').hasAttribute('disabled')).toBe(false)
+  })
+
   it('restores a subtask search found in a task deleted before its project, sending that project first', async () => {
     const next = world({ tasks: 1 })
     const fixture = deletedFixtureOf(next, { tasks: 1, at: NOW.toISOString() })
