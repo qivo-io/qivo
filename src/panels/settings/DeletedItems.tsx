@@ -290,8 +290,8 @@ export function DeletedItemsPage() {
   /* The selection holds what the person can still act on. A selected row
      the page shows in a state that cannot be restored leaves it, unless the
      last restore refused it with a reason or an action still answers for
-     it; one of another page stays until a restore answers for it. A row the
-     page shows again replaces the one kept. */
+     it; one of another page stays until a restore or Delete now answers
+     for it. A row the page shows again replaces the one kept. */
   useEffect(() => {
     setSelected((current) => {
       let next: Map<string, Picked> | null = null
@@ -1144,6 +1144,10 @@ export function DeletedItemsPage() {
             setSaving(true)
             const outcome = await P.purgeDeletedItems([row])
             setSaving(false)
+            // an item deleted for good leaves the selection, which no page
+            // shows it in any more to take it out
+            const gone = new Set(outcome.done)
+            setSelected((current) => new Map([...current].filter(([id]) => !gone.has(id))))
             const name = row.kind === 'task' ? row.key : `“${row.title}”`
             const refused = outcome.refused[0]
             if (outcome.done.includes(row.id)) toast(`Deleted ${name} for good.`)

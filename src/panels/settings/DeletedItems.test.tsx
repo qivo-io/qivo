@@ -1119,6 +1119,22 @@ describe('Delete now', () => {
     expect(toasts()).toContain('Deleted QN-10 for good.')
   })
 
+  it('takes an item deleted for good out of the selection, so Restore offers only what is left', async () => {
+    await open(world({ tasks: 3 }))
+    await choose(`all:${ORG}`)
+    await click(find(`[data-deleted-row="${taskItem(10)}"] [data-select]`))
+    await click(find(`[data-deleted-row="${taskItem(11)}"] [data-select]`))
+    expect(text('[data-deleted-count]')).toBe('2 selected')
+    await click(find(`[data-deleted-row="${taskItem(10)}"] [data-row-menu]`))
+    await click(find('[data-delete-now]'))
+    await click(button('Delete for good'))
+    expect(toasts()).toContain('Deleted QN-10 for good.')
+    expect(has(`[data-deleted-row="${taskItem(10)}"]`)).toBe(false)
+    expect(text('[data-deleted-count]')).toBe('1 selected')
+    await click(button('Restore 1 selected'))
+    expect(restores().map((c) => c.args)).toEqual([{ org_id: ORG, ids: [taskItem(11)] }])
+  })
+
   it('says Deleting… on the row while Delete now runs, and Restoring… only while a restore does', async () => {
     await open(world({ tasks: 2 }))
     await choose(`all:${ORG}`)
