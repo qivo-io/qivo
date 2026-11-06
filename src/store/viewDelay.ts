@@ -29,7 +29,7 @@ import type { ViewRow } from '../../convex/lib/viewReads'
 import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import { DELAY_UNKNOWN, type DelayInfo, type DelayIssue, delayBeforeLoads } from '../lib/delay'
-import type { LoadSpan } from '../lib/workload'
+import type { LoadItem, LoadSpan } from '../lib/workload'
 import type { OwnerLoad } from './ownerLoadCache'
 import type { IssueVM } from './viewModels'
 
@@ -324,6 +324,28 @@ export function ownerItemsOf(
   }
   out.push(...(filed.get(`${org}\u0000${owner}`) ?? []))
   return out
+}
+
+/** The planning panel's work items from a person's reconciled work
+    (ownerItemsOf): every item with hours, a task the reader is shown under
+    its project, named by `projectName`, and busy time elsewhere as Other
+    projects (lib/workload.ts loadByProject). Paused work adds no hours. */
+export function planItemsOf(
+  items: readonly OwnerItem[],
+  projectName: (id: string) => string | null,
+): LoadItem[] {
+  return items
+    .filter((item) => !item.paused)
+    .map((item) => ({
+      issueUuid: item.uuid,
+      projectId: item.project,
+      projectName: item.project ? projectName(item.project) : null,
+      start: item.start,
+      end: item.end,
+      remaining: item.remaining,
+      remainingSet: item.remainingSet,
+      visible: item.uuid !== null && item.project !== null,
+    }))
 }
 
 /** What a group's verdict knows besides the task: whether its dates are

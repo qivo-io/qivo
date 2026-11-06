@@ -61,7 +61,7 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
-import type { LoadIssue } from '../lib/workload'
+import type { LoadIssue, LoadItem } from '../lib/workload'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import type { Snapshot } from './plannerFixture.setup'
@@ -108,6 +108,7 @@ async function start(snap: Snapshot) {
     autoMove: await import('../views/roadmap/autoMoveInputs'),
     views: { ...(await import('./viewDelay')), ...(await import('./ownerLoadCache')) },
     standIn: await import('./roadmapStandIn.setup'),
+    workload: await import('../lib/workload'),
     probe: store.__layerProbe,
     snapshot: snap,
   })
@@ -1246,6 +1247,65 @@ describe('Team utilization', () => {
       // and the answers read as built match everywhere
       expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
       expect(teamDiffers(P, owners, scopes, {}, 'scope')).toBe(false)
+    }
+  })
+
+  it("gives the planning panel the figures planning.assigneeLoad gave, from the owner loads through the app's reconciler", async () => {
+    const t = newT()
+    const { org, profiles } = await plantNorthstar(t)
+    await withReach(t)
+    const people = await orgPeople(t, org.id)
+    const now = Date.parse('2026-09-09T18:00:00.000Z')
+    for (const key of ['nora', 'leo']) {
+      const id = await northstarId(`person:${key}`)
+      const profile = profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`no ${key}`)
+      const P = await storeOf(t, profile, now)
+      const owners = await ownerLoadsFor(t, P, profile, people)
+      const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
+      const name = (projectId: string) => P.project(projectId)?.name ?? null
+      let compared = 0
+      for (const one of owners) {
+        if (one.state !== 'ok') continue
+        // the rows the panel read before, unestimated ones kept
+        const rows = await as(t, profile).query(api.planning.assigneeLoad, {
+          assignee_id: one.owner_id,
+        })
+        const before: LoadItem[] = rows.map((r) => ({
+          issueUuid: r.issue_id || null,
+          projectId: r.project_id || null,
+          projectName: r.project_name || null,
+          start: P.dates.isoToWeek(r.start_week),
+          end: P.dates.isoToWeek(r.end_week),
+          remaining: r.remaining != null ? Number(r.remaining) : 0,
+          remainingSet: r.remaining_set_at != null ? P.dates.tsToWeek(r.remaining_set_at) : null,
+          visible: !!r.visible,
+        }))
+        const load = P.views.ownerLoadOf(one, owners.hidden)
+        if (load?.state !== 'ok') throw new Error(`${one.owner_id} read as ${load?.state}`)
+        const items = P.views.ownerItemsOf(profile.org_id, one.owner_id, load, {
+          held: () => false,
+          inView: () => false,
+          viewRows: () => [],
+          projectLive: () => true,
+          orgOf: () => profile.org_id,
+          heldItems: () => [],
+        })
+        const after = P.views.planItemsOf(items, name)
+        const buckets = (list: typeof before) =>
+          P.workload
+            .loadByProject(list, w0, w1)
+            .map((b) => [b.projectId, b.name, Math.round(b.hours * 1e6) / 1e6])
+        expect(buckets(after), `${profile.name}: ${one.owner_id}'s panel`).toEqual(buckets(before))
+        // auto-fit places the same end against either
+        for (const hours of [8, 40, 120])
+          expect(
+            P.workload.fitEndWeekAgainst(after, null, P.dates.TODAY_WEEK, hours, 40),
+            `${profile.name}: ${one.owner_id}'s fit of ${hours} h`,
+          ).toBe(P.workload.fitEndWeekAgainst(before, null, P.dates.TODAY_WEEK, hours, 40))
+        if (before.length > 0) compared++
+      }
+      expect(compared, profile.name).toBeGreaterThan(0)
     }
   })
 

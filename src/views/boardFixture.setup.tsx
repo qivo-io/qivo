@@ -149,6 +149,8 @@ export async function loadBoard(
     open: Set<{ args: BoardArgs; next: (value: unknown) => void; fail?: (e: unknown) => void }>
     /** the owners whose loads answer unavailable */
     unavailable: string[]
+    /** whether the owner-load calls wait for `answer()` */
+    holdLoads: boolean
     /** the owner-load calls open now */
     loads: Set<{ args: OwnerLoadsArgs; next: (value: unknown) => void }>
     /** the Overview's queries: `hold` keeps their answers back, or those
@@ -214,6 +216,7 @@ export async function loadBoard(
     asked: [],
     open: new Set(),
     unavailable: [],
+    holdLoads: false,
     loads: new Set(),
     roadmap: {
       hold: false,
@@ -331,7 +334,8 @@ export async function loadBoard(
     if (name === 'planning:ownerLoads') {
       const call = { args: args as OwnerLoadsArgs, next }
       server.loads.add(call)
-      next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
+      if (!server.holdLoads)
+        next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
       return () => server.loads.delete(call)
     }
     if (name === 'teamSync:agenda') {

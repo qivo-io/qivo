@@ -36,7 +36,7 @@ import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
 import { type IssueFilters, type IssueVM, P, ROADMAP_SLOT, type ScopeInfo } from '../store/planner'
-import type { OwnerItem } from '../store/viewDelay'
+import { planItemsOf } from '../store/viewDelay'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
 import { ResourceStrip, type TeamPerson } from './Resources'
@@ -103,24 +103,6 @@ type PendingRequest = RoadmapRequest & { kind: 'plan' | 'reveal' }
 
 /* No request of either kind. */
 const NO_REQUESTS = { plan: null, reveal: null }
-
-/** The planning panel's work items from a person's reconciled work
-    (P.ownerItems): every item with hours, a task the reader is shown by
-    its project, busy time elsewhere as Other projects. Paused work adds
-    no hours. */
-const loadItemsOf = (items: readonly OwnerItem[]): LoadItem[] =>
-  items
-    .filter((item) => !item.paused)
-    .map((item) => ({
-      issueUuid: item.uuid,
-      projectId: item.project,
-      projectName: item.project ? (P.project(item.project)?.name ?? null) : null,
-      start: item.start,
-      end: item.end,
-      remaining: item.remaining,
-      remainingSet: item.remainingSet,
-      visible: item.uuid !== null && item.project !== null,
-    }))
 
 /** The Roadmap's own root, which names its state for drives, tests and the
     benchmark (data-roadmap-root, data-roadmap-state) and is busy while it
@@ -897,7 +879,7 @@ function Roadmap({
     const items = P.ownerItems(sessionOrg, sessionOwner)
     return {
       loading: false,
-      items: items ? loadItemsOf(items) : null,
+      items: items ? planItemsOf(items, (id) => P.project(id)?.name ?? null) : null,
       ownOnly: load.state === 'ok' && load.hidden === 'own_only' && !P.isMine(sessionModel),
     }
   })()
