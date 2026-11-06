@@ -78,8 +78,9 @@ export type PageCtx = {
   cards: Map<UnsentScope, SyncCardPlace>
   /** while the meeting stopped updating (state stale), the title of the
       task controls it turns off (stoppedTitle), else null: the cards'
-      typed text stays and a mention still sends, while an owner list or
-      the reviewer prompt open before it closes and writes nothing */
+      typed text stays and a mention still sends, while an owner list, the
+      status menu or the reviewer prompt open before it closes and writes
+      nothing */
   frozen: string | null
 }
 

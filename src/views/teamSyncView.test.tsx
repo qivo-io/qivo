@@ -946,6 +946,42 @@ describe('a meeting that stops fitting', () => {
   )
 
   it(
+    'closes a card’s status menu open at the refusal, whose picks then write nothing and bring no reviewer prompt',
+    async () => {
+      const { board, P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      const status = card(handle)?.querySelector('[data-fieldselect]')
+      await act(async () =>
+        status?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+      )
+      const review = [...document.querySelectorAll('[role="option"]')].find(
+        (option) => option.textContent === 'In Review',
+      )
+      expect(review).toBeDefined()
+      board.server.sync.force = { state: 'over_budget' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      expect(document.querySelector('[role="option"]')).toBeNull()
+      // a pick on the option the menu showed writes nothing
+      const sent = network.mutation.mock.calls.length
+      await click(review)
+      await settle()
+      expect(network.mutation.mock.calls.length).toBe(sent)
+      // and set no reviewer prompt for the next ok answer to show
+      board.server.sync.force = {}
+      await board.answer()
+      await settle()
+      expect(state()).toBe('ok')
+      expect(document.querySelector('[data-sync-reviewer-prompt]')).toBeNull()
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'says it stopped updating when the tab hid, not when the refusal arrived on return',
     async () => {
       const { board } = await open(people({}), (snap) => ({

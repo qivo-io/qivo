@@ -551,7 +551,8 @@ function UnreadDivider({ place = 'mark', note }: { place?: 'mark' | 'tail'; note
    An action row invokes onSelect without changing the selected value; trailing
    content belongs only to the closed trigger. backLayer gives the menu a phone
    Back entry; a pick closes the menu and applies at once, with no history
-   step (lib/useMobile useMenuBackLayer). */
+   step (lib/useMobile useMenuBackLayer). A menu open as `disabled` turns on
+   closes, and a pick made then applies nothing. */
 const ACTION_VALUE = '\0action' // no option id can collide with it
 function FieldSelect<T extends string>({
   value,
@@ -586,6 +587,10 @@ function FieldSelect<T extends string>({
 }) {
   const [open, setOpen] = useState(false)
   const close = useMenuBackLayer(open, () => setOpen(false), backLayer)
+  // a menu open as its select turns off closes, and a pick then applies nothing
+  useEffect(() => {
+    if (disabled && open) close()
+  }, [disabled])
   // a menu pick arrives just before the menu's own close, which carries it
   const pick = useRef<(() => void) | null>(null)
   // the trigger names the choice itself, also while the menu's closed list
@@ -603,6 +608,7 @@ function FieldSelect<T extends string>({
         close(then ?? undefined)
       }}
       onValueChange={(next) => {
+        if (disabled) return
         const apply = () => {
           if (next === ACTION_VALUE) action?.onSelect()
           else if (next !== value) onChange(next as T)
