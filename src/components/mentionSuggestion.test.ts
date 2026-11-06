@@ -389,7 +389,7 @@ describe('the mention popup', () => {
 
   it('measures LIMITS.search on the words it reads, so a text long only by its spaces reads and its correction keeps that read', async () => {
     const p = popup()
-    // past the limit only through its spaces: the words are "anna fält"
+    // past the limit only through its spaces, with the words "anna fält"
     p.start(`anna${' '.repeat(LIMITS.search.max)}fält`)
     expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
     await rest()

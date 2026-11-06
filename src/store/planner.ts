@@ -8898,7 +8898,7 @@ const goneLabels = new Set<string>()
 /** What a toggle's refusal of a label deleted since it was listed says. */
 const LABEL_GONE_TEXT = 'This label no longer exists.'
 
-/** What the label toggles do on a refusal of label `labelId`: one that says
+/** What the label toggles do on a refusal of label `labelId`. One that says
     the label is not of the task's organization keeps it in goneLabels and
     says it no longer exists, and any other is toasted as every refusal is.
     A refusal that follows a create (`created`) the server refused too says
