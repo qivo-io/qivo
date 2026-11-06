@@ -789,6 +789,18 @@ describe('opened on a milestone', { timeout: 30_000 }, () => {
     expect(q('[data-milestone-window]')?.getAttribute('data-milestone-open-state')).toBe('ok')
   })
 
+  it('reads Upcoming for the project the opener named while the milestone loads', async () => {
+    fixture({ up: 2 })
+    force = { get: 'loading' }
+    await start()
+    await open({ id: 'u1', project: 'plan' })
+    expect(q('[data-milestone-open]')?.textContent).toBe('Loading this milestone…')
+    expect(live(sectionSubs('upcoming')).map((s) => s.args.projects)).toEqual([['plan']])
+    // nothing of it shows before the milestone's answer named the project
+    expect(sectionOf('upcoming')).toBeNull()
+    expect(q('[data-modal-shell]')?.textContent).not.toContain('Plan')
+  })
+
   it("asks the answer's project once the opener named another", async () => {
     fixture({
       up: 1,
