@@ -184,6 +184,21 @@ describe('a restore of more than one round', () => {
     expect(showToast).toHaveBeenCalledWith('Restored 60 items.', 'success')
   })
 
+  it('runs on the lanes every large action shares', async () => {
+    await load()
+    const { LANE_POOL } = await import('../lib/batchRunner')
+    const done = P.restoreDeletedItems([...tasks(A, 30), ...tasks(B, 30)], { bulk: true })
+    await settle()
+    expect(calls.map((c) => c.args.org_id)).toEqual([A, B])
+    // both shared places are taken, so another large action would wait
+    const taken = LANE_POOL.take()
+    expect(taken).toBeInstanceOf(Promise)
+    for (let i = 0; i < 4; i++) await answerNext()
+    expect((await done).done).toHaveLength(60)
+    const release = await taken
+    release()
+  })
+
   it('runs two organizations at once and the third once one finishes', async () => {
     await load()
     const done = P.restoreDeletedItems([...tasks(A, 3), ...tasks(B, 2), ...tasks(C, 4)], {
@@ -325,6 +340,24 @@ describe('an action of one round', () => {
     expect((await done).done).toHaveLength(2)
     expect(showToast).not.toHaveBeenCalled()
     expect(P.deletedAction).toMatchObject({ state: 'finished', long: false })
+  })
+
+  it('runs on lanes of its own, so it never waits behind a large action', async () => {
+    await load()
+    const { LANE_POOL } = await import('../lib/batchRunner')
+    const done = P.restoreDeletedItems([...tasks(A, 2), ...tasks(B, 2)], { bulk: true })
+    await settle()
+    expect(calls.map((c) => c.args.org_id)).toEqual([A, B])
+    expect(P.deletedAction).toMatchObject({ long: false, lanes: 2 })
+    // both of its calls are in flight, and the shared places are free
+    const first = LANE_POOL.take()
+    const second = LANE_POOL.take()
+    expect(first).toBeTypeOf('function')
+    expect(second).toBeTypeOf('function')
+    for (const ticket of [first, second]) if (typeof ticket === 'function') ticket()
+    await answerNext()
+    await answerNext()
+    expect((await done).done).toHaveLength(4)
   })
 
   it('refuses a second action while one runs, sending nothing', async () => {

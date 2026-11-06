@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   KEEP_OPEN,
+  LANE_POOL,
   LANES_AT_ONCE,
   type LanePool,
   type LaneRun,
@@ -274,11 +275,12 @@ describe('runLanes', () => {
     expect(await first.run).toEqual({ finished: ['p', 'q', 'r', 's'], stops: [] })
   })
 
-  it('gives a run without a pool lanes of its own', async () => {
-    const pool = lanePool(2)
-    const first = harness({ a: 1, b: 1 }, {}, pool)
+  it('gives a run without a pool lanes of its own, also while the shared lanes are full', async () => {
+    // a long action holds both shared places
+    const first = harness({ a: 1, b: 1 }, {}, LANE_POOL)
     const alone = harness({ c: 1 })
     await tick()
+    expect(first.events).toEqual(['send a 1', 'send b 1'])
     expect(alone.events).toEqual(['send c 1'])
     for (const s of ['a', 'b']) first.at(s, 1).answer()
     alone.at('c', 1).answer()
