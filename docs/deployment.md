@@ -263,9 +263,22 @@ rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
 1 file** by searching **Storage by project** for its run tag and the word
 storage, and deletes the file over REST, also after a failure
 (`ui/billing-storage`). That shows the deployment's stored-byte totals are
-counted and that the page reads them (`billing.currentUsage` and
-`billing.storageProjects`). Against a backend from before those queries
-that step fails. Back in the run's task window it attaches a small
+counted and that the page reads them (`billing.usageFigures` and
+`billing.storageProjects`). Against a backend from before the release after
+v0.1.141, whose Billing page reads `billing.details` and
+`billing.usageFigures`, that step fails. It then calls `GET /v1/me` once
+with each of the run's agent keys, opens **Billing** again, checks that
+**API calls** shows a figure rather than **Being counted**, finds the
+run's Standard and Viewer agents alone by searching **API calls by
+account** for its run tag, each with at least one call, opens **View
+credentials** on the Standard agent, which must open API access on that
+agent and the period Billing showed, and finds both agents again by
+searching **Who counts toward your bill** for the run tag
+(`ui/billing-accounts`). It writes only the usage of those two calls. That
+shows the deployment's usage aggregates are complete and that the page
+lists and searches the run's own accounts (`billing.apiAccounts` and
+`billing.accountList`). Against a backend from before the release after
+v0.1.141 that step fails. Back in the run's task window it attaches a small
 file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
@@ -972,7 +985,8 @@ the removal window's floor (the release after v0.1.120) already holds.
 Billing reads its usage from `billing.currentUsage` and its Storage by
 project list from `billing.storageProjects`, once on opening and on each
 Refresh and never subscribed, which the release after v0.1.134 first ships
-together with the app that reads them. Current storage comes from the
+together with the app that reads them (the release after v0.1.141 moves the
+usage to `billing.usageFigures`, below). Current storage comes from the
 stored-byte totals, files in Deleted items included, and Billing shows the
 paid period's storage sample beside it. An app from that release, against
 a backend before it, says on Billing that usage could not be refreshed,
@@ -1183,6 +1197,27 @@ read `team_counts`, which every deployment holds since
 `internal/teamCountsBackfill` ran on 2026-10-28, and the lists read the name
 keys every deployment holds, so there is no schema change, no backfill and
 no release step.
+
+From the release after v0.1.141, Billing reads its details from
+`billing.details`, a live read that answers the counts without the account
+names, its usage figures once on opening and on each Refresh from
+`billing.usageFigures`, whose API calls come from the bucket's aggregates,
+and its lists of API calls by account (`billing.apiAccounts`) and of
+billable and non-billable accounts (`billing.accountList`) 25 at a time,
+which that release first ships together with the app that reads them. An
+app from that release, against a backend before it, shows Billing's load
+error instead of the page, also in a tab that was open when the backend
+went back, until the backend rolls forward. From that release on, never
+return the backend to a commit before it; roll forward instead. Returning
+the app alone to an earlier release is safe while the backend keeps
+`billing.summary` and `billing.currentUsage`, which this release keeps
+unchanged for tabs loaded before it, and the release that removes them
+adds them to the Instant Rollback list above. The operator console's
+organization page reads `adminBilling.orgBilling`, which answers without
+the account names from this release, and no console reads them. The
+release after v0.1.140, the backend's floor before this one, is older, so
+this release becomes the newest floor. There is no schema change, no
+backfill and no release step.
 
 ## Node.js version
 
@@ -1493,7 +1528,9 @@ project's or task's number, which the organization never gives another, so
 a task or project that takes the id of a purged one, in any organization,
 counts in a row of its own and never changes another's. From the release
 after v0.1.134, Billing's current storage and its Storage by project list
-read the totals (`billing.currentUsage` and `billing.storageProjects`).
+read the totals (`billing.currentUsage` and `billing.storageProjects`), and
+from the release after v0.1.141 its current storage reads them through
+`billing.usageFigures`.
 The storage sample at the start of a paid period and the legacy
 `billing.usageReport` still scan the attachment rows. A new organization
 starts counted at zero. An
@@ -1746,9 +1783,11 @@ month, on the organization's `billing_month_totals`. A row stored before
 the release that added them has none until the one-time
 `internal/credentialKeysBackfill` and `internal/usageRanksBackfill` give it
 them, and the next call of a credential ranks its row as well. API access
-reads them. Until both backfills report nothing left, it says it is not
-ready to list credentials, and a calendar month whose rows are not all
-ranked shows its total as not available yet. Run both backfills on every
+reads them, and from the release after v0.1.141 so do Billing's **API
+calls** and **API calls by account**. Until both backfills report nothing
+left, API access says it is not ready to list credentials, a calendar
+month whose rows are not all ranked shows its total as not available yet,
+and Billing shows such a bucket's calls and accounts as being counted. Run both backfills on every
 hosted deployment once it serves that release, as the modules' headers say.
 Read each dry run first, then run it.
 A call that does not finish in about five minutes answers where to go on:
