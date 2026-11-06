@@ -113,8 +113,11 @@ next from the server, for the top-level projects of the scope, and shows
 them as loading meanwhile. It says "None scheduled" or "No milestones this
 week or next" only when the server read every milestone. When it could not
 read them all, the next milestone shows as unknown and the list says some
-may be missing. A scope of more than 200 top-level projects reads none and
-says so; choose a team or a project instead.
+may be missing. If loading the next milestone or the list fails, the summary
+says so with **Retry**, and if Qivo refuses to read them, it gives the
+reason, keeping what it showed until a fresh answer arrives. A scope of more
+than 200 top-level projects reads none and says so; choose a team or a
+project instead.
 
 Two lists help complete assignments:
 

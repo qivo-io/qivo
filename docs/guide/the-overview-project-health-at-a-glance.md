@@ -92,12 +92,16 @@ the project's Milestones window. A row opens that milestone from the server,
 so the window says "Loading this milestone…" for a moment, then shows it
 with its editor, or as a row if you can only view it. It says so instead
 when the milestone can't be opened because it was deleted or you no longer
-have access, and when it is deleted while the window shows it. Add a name
-and week, then select **Add** or press Enter. Use **Edit** to change an existing milestone, then **Save**,
-**Cancel** or **Delete**. Each change saves separately; **Done** closes the
-window. Qivo adds milestones to the top-level project. People with read-only
-access to it, including people whose access covers only a sub-project, can
-view milestones but cannot add, move or edit them.
+have access, and when it is deleted while the window shows it. If loading
+fails, the window says so with **Retry**, and if Qivo refuses to read the
+milestone, the window gives the reason; a milestone it already showed stays
+with the change you are typing, also while the browser tab is hidden. Add a
+name and week, then select **Add** or press Enter. Use **Edit** to change an
+existing milestone, then **Save**, **Cancel** or **Delete**. Each change
+saves separately; **Done** closes the window. Qivo adds milestones to the
+top-level project. People with read-only access to it, including people
+whose access covers only a sub-project, can view milestones but cannot add,
+move or edit them.
 
 A project has at most one milestone in each calendar week, counting the
 milestones added from its sub-projects. Weeks begin on the organization's
