@@ -231,8 +231,9 @@ function Roadmap({
      answer on screen holds their task or says it cannot (`pending`), one
      of each kind, and the ones it resolved, which the effect below acts on
      once each (`resolved`). The task a plan request names goes with the
-     Roadmap's read from the request on (`planAsk`), so the answer it waits
-     for keeps the task past the filter row. */
+     Roadmap's read from the request on (`planAsk`), in place of an open
+     session's, so the answer it waits for keeps the task past the filter
+     row, until the request resolves. */
   type Requests<T> = { plan: T | null; reveal: T | null }
   const [pending, setPendingState] = useStateR<Requests<PendingRequest>>(NO_REQUESTS)
   /* The requests as the latest change left them. A request taken in the
@@ -309,15 +310,17 @@ function Roadmap({
   const NW = w1 - w0 + 1
   /* What the Roadmap shows, from the server's answer for the selection, the
      filter row and this window. Planning can bypass the toolbar filters,
-     but never the roadmap's status rule: the session's task, or the task a
-     plan request names, goes with the read (`planned`), by its current
-     sub-project, and skips the filters on screen too. */
+     but never the roadmap's status rule: the task a plan request names, or
+     else the session's task, goes with the read (`planned`), by its current
+     sub-project, and skips the filters on screen too. A request taken while
+     a session is open sends its own task, so the answer it waits for holds
+     it, and the session it replaces ends once the new one starts. */
   const sessionModel = session
     ? (P.anyTask(session.issueId) ?? P.viewTask(ROADMAP_SLOT, session.uuid))
     : undefined
-  const planned: PlannedTask | null = session
-    ? { id: session.uuid, project_id: sessionModel?.project ?? session.project }
-    : planAsk
+  const planned: PlannedTask | null =
+    planAsk ??
+    (session ? { id: session.uuid, project_id: sessionModel?.project ?? session.project } : null)
   const view = useRoadmapView(info, filters, w0, w1, planned)
   /** The task handle `id` names on the Roadmap: one its answer brings, else
       the workspace's or another view's. */
@@ -1035,17 +1038,28 @@ function Roadmap({
      be a request it took before it hid: that one goes, not again. */
   const takenReveal = useRefR<number | null>(null)
   const takenPlan = useRefR<number | null>(null)
+  /** The task plan request `req` sends with the Roadmap's read (`planAsk`),
+      where its source knows the task's uuid and sub-project, else null. */
+  const askOf = (req: PendingRequest): PlannedTask | null =>
+    req.kind === 'plan' && req.uuid && req.project
+      ? { id: req.uuid, project_id: req.project }
+      : null
   /** Takes request `req`: pans the window to the weeks its source knows,
       sends a task to plan with the Roadmap's read from now on, so the answer
       keeps it past the filter row, and waits until an answer on screen
       resolves the request (below). */
   const take = (req: PendingRequest) => {
     if (mobile) setMobileLayout('timeline')
-    if (req.kind === 'plan' && req.uuid && req.project)
-      setPlanAsk({ id: req.uuid, project_id: req.project })
+    const ask = askOf(req)
+    if (ask) setPlanAsk(ask)
     panTo(req.start, req.end ?? req.start)
     setPending({ ...pendingRef.current, [req.kind]: req })
   }
+  /** Stops sending the task of plan request `req` with the read, once it
+      resolved, unless a newer request sends its own: an open session then
+      sends its task again. */
+  const dropPlanAsk = (req: PendingRequest) =>
+    setPlanAsk((was) => (was && was.id === req.uuid ? null : was))
   useEffectR(() => {
     if (!revealTask) return
     // App drops the request only while it is still this one
@@ -1079,12 +1093,15 @@ function Roadmap({
      task, it acts at once; where the Roadmap shows a note instead, it says
      why the task cannot be planned or shown here; and where a current
      answer for the arguments on screen does not hold it, that it is not on
-     the roadmap any more. Meanwhile it waits. */
+     the roadmap any more. A plan request that sends its task judges only
+     an answer for arguments that carry it. Meanwhile it waits. */
   useEffectR(() => {
     for (const req of [pending.plan, pending.reveal]) {
       // A request taken since this render replaced this one, and the next
       // render resolves that one instead.
       if (!req || pendingRef.current[req.kind] !== req) continue
+      const ask = askOf(req)
+      if (ask && planned?.id !== ask.id) continue
       const done = () => setPending({ ...pendingRef.current, [req.kind]: null })
       const it = view.tasks.find((t) => (req.uuid ? t.uuid === req.uuid : t.id === req.id))
       if (it) {
@@ -1095,7 +1112,7 @@ function Roadmap({
       const why = cannotPlanReason(view)
       if (!why && view.state !== 'ok') continue
       done()
-      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
+      if (req.kind === 'plan') dropPlanAsk(req)
       if (req.kind === 'plan') onFocusConsumed?.(req.n)
       else onRevealConsumed?.(req.n)
       if (why)
@@ -1122,18 +1139,22 @@ function Roadmap({
     return act(resolvedPlan)
   }, [resolvedPlan?.req.n])
   /** Acts on request `req`, resolved to the task with handle `id`; answers
-      the cleanup of the frames that bring it into view. */
+      the cleanup of the frames that bring it into view. A plan request
+      taken since replaces this one, which then does nothing. */
   function act({ req, id }: { req: PendingRequest; id: string }) {
     const consumed = () =>
       req.kind === 'plan' ? onFocusConsumed?.(req.n) : onRevealConsumed?.(req.n)
+    if (req.kind === 'plan' && pendingRef.current.plan) {
+      consumed()
+      return
+    }
+    if (req.kind === 'plan') dropPlanAsk(req)
     const it = taskOf(id)
     if (!it) {
-      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
       consumed()
       return
     }
     if (req.kind === 'reveal' || P.isGroup(it)) {
-      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
       openTo(it)
       setRevealed({ id: it.id, n: req.n })
       return bringIntoView(it, consumed)
@@ -1141,7 +1162,6 @@ function Roadmap({
     // The task can change after the detail window requested planning.
     if (it.status === 'backlog') {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
-      setPlanAsk(null)
       consumed()
       return
     }
@@ -1159,6 +1179,8 @@ function Roadmap({
       if (dueWeek != null) end = Math.min(end, dueWeek)
       sendDates(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
     }
+    // the session it replaces, if any, ends here, its dates as they were
+    // saved, and this one sends its task with the read from now on
     const started: PlanSession = {
       issueId: it.id,
       uuid: it.uuid,
@@ -1170,8 +1192,6 @@ function Roadmap({
     }
     sessionRef.current = started
     setSession(started)
-    // the session sends its task with the read from now on
-    setPlanAsk(null)
     // Pan to the (possibly just placed) bar and center it. Consuming earlier
     // changes focusPlan and cancels these frames in the effect cleanup
     // before the task can be scrolled into view.
@@ -1179,10 +1199,12 @@ function Roadmap({
   }
   /* A session whose task an answer for its arguments no longer holds, as it
      moved where the filter row hides it or left the selection, or whose
-     Roadmap shows a note instead, ends with a word, writing nothing more. */
+     Roadmap shows a note instead, ends with a word, writing nothing more.
+     While a plan request sends its own task instead, the answer cannot say
+     so, and the session stays until that request resolves. */
   useEffectR(() => {
     const s = sessionRef.current
-    if (!s) return
+    if (!s || planned?.id !== s.uuid) return
     const gone =
       view.state === 'ok'
         ? !view.tasks.some((t) => t.uuid === s.uuid)

@@ -11,6 +11,9 @@ for example because the project is past the Roadmap's 1,000-task limit, Qivo
 says why and starts no session. If the task leaves the Roadmap during the
 session, for example because someone moved it to another sub-project that
 your filters hide, the session ends and its dates stay as they were saved.
+Planning another task while a session is open moves the session to that
+task once the Roadmap shows it; the first task's dates stay as they were
+saved.
 
 A task with subtasks takes its dates from them, so its button reads
 **Show on roadmap**. It opens the timeline and finds the task's bar or

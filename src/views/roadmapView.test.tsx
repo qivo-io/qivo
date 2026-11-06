@@ -956,6 +956,57 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(consumed).toHaveBeenCalledWith(2)
   })
 
+  it("switches an open session to a task the filters hide, which the read then names, and keeps the first one's saved dates", async () => {
+    // one-1 and one-3 pass no filter: only a session or a request sends
+    // them with the read
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues.push({
+          ...taskRow(snap, 'one-3', 'todo', 3),
+          remaining_hours: 2,
+          start_week: week(0),
+          end_week: week(0),
+        })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const filters = { ...ROW, priority: 'high' }
+    await renderRoadmap(board, { filters, focusPlan: planOne(board) })
+    await flush()
+    expect(planCard('QN-1')).not.toBeNull()
+    expect(rows().sort()).toEqual(['QN-1', 'QN-2'])
+    // the session moves one-1 a week later, its end fitted to its 2 hours
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    const saved = datesSent('one-1')
+    expect(saved).toEqual([{ start_week: week(1) }])
+    // Plan on roadmap for one-3 while the session is open
+    await renderRoadmap(board, {
+      filters,
+      focusPlan: { ...planOne(board, 2), id: 'QN-3', key: 'QN-3', uuid: 'one-3', end: TODAY_WEEK },
+    })
+    await board.answer()
+    await settle()
+    await flush()
+    // the read names one-3, and the session is one-3's
+    expect(roadmapAsks(board).at(-1)?.planned_task).toEqual({
+      id: 'one-3',
+      project_id: board.snapshot.projects[0].id,
+    })
+    expect(planCard('QN-3')).not.toBeNull()
+    expect(planCard('QN-1')).toBeNull()
+    expect(rows().sort()).toEqual(['QN-2', 'QN-3'])
+    // one-1 keeps the dates its session saved: nothing restores them, and
+    // no sentence says a task left or is not on the roadmap
+    expect(datesSent('one-1')).toEqual(saved)
+    expect(window.showToast).not.toHaveBeenCalled()
+    expect(consumedPlans).toHaveBeenCalledWith(2)
+  })
+
   it('pans to a Done task outside the window, then shows it', async () => {
     const board = await loadBoard(
       network,
