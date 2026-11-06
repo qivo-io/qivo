@@ -1645,8 +1645,10 @@ describe('a single-task read of an archived group', () => {
     })
     expect(new Set(rest.subtasks.map((t) => t.id))).toEqual(new Set(kids))
     expect((mcp.subtasks as unknown[]).length).toBe(30)
-    // where the request holds fewer ranges than those 30 questions, the walk
-    // stops before the next one and the group's facts say they are unknown
+    // where the request holds fewer ranges than the questions about 28
+    // more sub-projects, which with FW and PCB are the 30 one project
+    // holds, the read stops before it would pass them and the group's
+    // facts say they are unknown
     const tight = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
     const narrow = await plantIssue(tight.t, {
@@ -1656,7 +1658,7 @@ describe('a single-task read of an archived group', () => {
       title: 'Group',
     })
     await tight.t.run(async (ctx) => {
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 28; i++) {
         const project_id = uuid()
         await ctx.db.insert('projects', {
           id: project_id,

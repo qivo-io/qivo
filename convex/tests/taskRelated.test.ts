@@ -1502,11 +1502,12 @@ describe('access', () => {
     const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
     // an archived group stored before the rule of one level: one subtask
-    // in FW, and under it 30 more in 30 sub-projects of TBED, which only
-    // the walk meets, each a question of a few ranges
+    // in FW, and under it 28 more in 28 sub-projects of TBED, which only
+    // the walk meets, each a question of a few ranges; with FW and PCB,
+    // the 30 live sub-projects one project holds at the design size
     const [group] = await plantTasks(fx, 1, { archived_at: NOW })
     const [kid] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
-    const subs = await plantSubProjects(fx, 30, { under: fx.meta })
+    const subs = await plantSubProjects(fx, 28, { under: fx.meta })
     for (const sub of subs)
       await plantTasks(fx, 1, { parent_id: kid.id, archived_at: NOW, project_id: sub.id })
     for (const details of [
@@ -1523,10 +1524,10 @@ describe('access', () => {
     const roomy = await setup()
     const [whole] = await plantTasks(roomy, 1, { archived_at: NOW })
     const [under] = await plantTasks(roomy, 1, { parent_id: whole.id, archived_at: NOW })
-    for (const sub of await plantSubProjects(roomy, 30, { under: roomy.meta }))
+    for (const sub of await plantSubProjects(roomy, 28, { under: roomy.meta }))
       await plantTasks(roomy, 1, { parent_id: under.id, archived_at: NOW, project_id: sub.id })
     expect((await restDetails(roomy, roomy.agent, whole.id)).progress).toMatchObject({
-      total: 30,
+      total: 28,
       partial: false,
     })
   })
@@ -1849,9 +1850,9 @@ describe('reads at the design size', () => {
       fx.sub2,
       ...(await plantSubProjects(fx, 68, { under: fx.meta, archived: 40 })),
     ]
+    // one subtask in each, so only the sub-projects reach their design size
     const [group] = await plantTasks(fx, 1)
-    for (const [i, sub] of subs.entries())
-      await plantTasks(fx, i < 30 ? 2 : 1, { parent_id: group.id, project_id: sub.id })
+    for (const sub of subs) await plantTasks(fx, 1, { parent_id: group.id, project_id: sub.id })
     const { reads } = await measureTask(
       fx,
       fx.agent,
@@ -1860,7 +1861,7 @@ describe('reads at the design size', () => {
     )
     const details = reads['REST details'].out as Details
     expect(details.progress).toMatchObject({ partial: false })
-    expect((reads['REST subtasks at 200'].out as { subtasks: Row[] }).subtasks).toHaveLength(100)
+    expect((reads['REST subtasks at 200'].out as { subtasks: Row[] }).subtasks).toHaveLength(70)
   })
 
   it('an archived group whose subtasks sit in 70 sub-projects of its project, 30 live and 40 archived', async () => {
