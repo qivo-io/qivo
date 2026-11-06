@@ -114,11 +114,35 @@ describe('the plan of a section', () => {
     expect(again.pending?.after?.id).toBe('m4')
   })
 
-  it('continues from `next` with one batch after a read that stopped', () => {
+  it.each([
+    ['shorter than a batch', 1, 'm1'],
+    ['with no row', 0, null],
+  ] as const)(
+    'moves on at the cap from a painted answer %s, never past the rows it shows',
+    (_, count, from) => {
+      MILESTONE_SECTION.batch = 2
+      MILESTONE_SECTION.rows = 4
+      const plan = swapPlan(morePlan(startPlan(KEY, '', 1), answerWith(rowsOf(2)), 2))
+      expect(plan.shown.limit).toBe(4)
+      // the server's answer held four, and the person's own writes took the
+      // rest out of it, so its next is past every row it shows
+      const full = answerWith(rowsOf(4))
+      const painted = { ...full, rows: full.rows.slice(0, count) }
+      const stored = from === null ? undefined : full.stored.get(from)
+      const after = from === null || !stored ? full.next : positionOf({ ...stored, id: from })
+      expect(morePlan(plan, painted, 3).pending).toEqual({ n: 3, after, limit: 4, attempt: 0 })
+    },
+  )
+
+  it('continues from `next` with one batch after a read that stopped, then grows from there', () => {
     const plan = startPlan(KEY, '', 1)
     const stopped = answerWith(rowsOf(3), { whole: true, stopped: '2026-12-07' })
     const next = morePlan(plan, stopped, 2)
     expect(next.pending).toEqual({ n: 2, after: stopped.next, limit: 25, attempt: 0 })
+    // the continuation answers a full batch, and the next Load more grows it
+    // where it starts
+    const again = morePlan(swapPlan(next), answerWith(rowsOf(25, 4)), 3)
+    expect(again.pending).toEqual({ n: 3, after: stopped.next, limit: 50, attempt: 0 })
   })
 
   it('offers nothing to load past an answer with no next', () => {
