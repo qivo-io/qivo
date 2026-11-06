@@ -1170,13 +1170,16 @@ describe("the pickers inside Convex's limits", () => {
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
     await keyOrg(t, f.org.id)
-    // three teams a person and 30 open tasks a sub-project, the everyday
-    // values; no team shares a project here
+    // three teams a person, the everyday value; no team shares a project here
     const [pia, rae] = await people(t, f, ['Pia', 'Rae'], [f.team.id, platform, ops])
     for (const p of [pia, rae]) await grant(t, f.sub, p)
     // the lead and Rae reach Atlas through its last archived sub-project
     for (const p of [f.user, rae]) await grant(t, atlas.all[69], p, 'viewer')
-    for (const sub of atlas.subs) await openTasks(t, f, sub, 30)
+    // Atlas's sub-projects hold no task. The everyday 30 open tasks a
+    // sub-project would put 900 under Atlas, past the 800 a project holds
+    // with its sub-projects, and the pickers read no task here but the
+    // subtask, its parent and its own subtasks. Firmware holds 30 with the
+    // subtask.
     await openTasks(t, f, f.sub, 29)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const subtask = await plantIssue(t, {
@@ -1201,13 +1204,14 @@ describe("the pickers inside Convex's limits", () => {
     const platform = await keyedTeam(t, f, 'Platform')
     const ops = await keyedTeam(t, f, 'Ops')
     await keyOrg(t, f.org.id)
-    // three teams a person and 30 open tasks a sub-project, the everyday
-    // values; no team shares a project here
+    // three teams a person, the everyday value; no team shares a project here
     const [kim, lou] = await people(t, f, ['Kim', 'Lou'], [f.team.id, platform, ops])
     await grant(t, atlas.meta, kim)
     // Lou reaches Atlas only through its last archived sub-project
     await grant(t, atlas.all[69], lou)
-    for (const sub of atlas.subs) await openTasks(t, f, sub, 30)
+    // Atlas's sub-projects hold no task. The everyday 30 open tasks a
+    // sub-project would put 900 under Atlas, past the 800 a project holds
+    // with its sub-projects, and the pickers read no task here but this one.
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const first = await whole(
       'recipients, a task on a top-level project of 30 and 40 archived sub-projects',
