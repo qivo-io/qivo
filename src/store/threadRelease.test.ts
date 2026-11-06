@@ -471,6 +471,33 @@ describe('the task window keeps a bounded thread', () => {
     })
   })
 
+  describe('deletes', () => {
+    it('joins the gap to the start when every comment above it is deleted', async () => {
+      const { P } = store
+      openServed(300)
+      for (let i = 0; i < 3; i++) await earlier()
+      serve = null
+      // #100 to #169 were all deleted. Show earlier drops each anchor in
+      // turn, and then reads back the released comments before the run
+      // below the gap, here the live window, with no gap left
+      void P.loadEarlierComments()
+      for (let n = 100; n < 170; n++) {
+        expect(last()?.before).toBe(`comment-${n}`)
+        last()?.answer.reject(notAComment())
+        await settle()
+      }
+      expect(last()?.before).toBe('comment-250')
+      last()?.answer.resolve({ comments: range(200, 250), earlier: true })
+      await settle()
+      expect(shown()).toEqual(ids(200, 300))
+      expect(P.commentsNewer).toBe('none')
+      expect(P.threadGap).toBeNull()
+      expect(P.commentsEarlier).toBe('more')
+      void P.loadEarlierComments()
+      expect(last()?.before).toBe('comment-200')
+    })
+  })
+
   const showAll = () => store.P.showHistory(pane, true)
 
   describe('changes', () => {

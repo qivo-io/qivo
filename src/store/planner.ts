@@ -937,6 +937,18 @@ function pinEditing(gone: readonly Row<'comments'>[]) {
   for (const row of gone) if (editing.has(row.id)) pinnedComments.set(row.id, row)
 }
 
+/* Joins the comments' gap to the thread's start once deletes emptied the
+   run above it, as a release from the top does. The run below becomes the
+   only one, and Show earlier comments reads the released comments back
+   before it. Without this, Show earlier would read before the live window
+   and add released comments above a gap that still lists them. */
+function joinEmptyRun() {
+  if (commentsGap === null || olderComments.length > 0) return
+  olderComments = newerComments
+  threadStart = false
+  dropCommentsGap()
+}
+
 /* Records a delivery of the watched thread's live window, oldest first in
    thread order, and whether the thread holds earlier comments. Comments that
    left the window at its old end join the run just above it, the newer run
@@ -1124,6 +1136,7 @@ async function checkSlidOut(
   // wherever they went, the run above the live window or the one below a gap
   olderComments = olderComments.filter((r) => !drop.has(r.id))
   newerComments = newerComments.filter((r) => !drop.has(r.id))
+  joinEmptyRun()
   // A page that starts the thread before an unmoved window, all of it
   // loaded, means nothing earlier is left to load.
   const loaded = new Set(olderComments.map((r) => r.id))
@@ -1141,7 +1154,8 @@ async function checkSlidOut(
 
 /* Drops the comment `id` from the watched thread's server truth, for a
    comment the server says no longer exists: from its run, the live window,
-   the gap's ids and the comments held apart for an editor. The caller
+   the gap's ids and the comments held apart for an editor. A gap whose run
+   above it empties joins the thread's start (joinEmptyRun). The caller
    repaints. */
 function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
@@ -1149,6 +1163,7 @@ function dropComment(id: string) {
   if (commentsGap?.includes(id)) commentsGap = commentsGap.filter((gone) => gone !== id)
   pinnedComments.delete(id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
+  joinEmptyRun()
 }
 
 /* A comment as the release walks it (lib/threadBudget.ts HeldRow), with
@@ -6284,7 +6299,8 @@ function heldBeforeWindow(id: string): boolean {
 
 /** Patches comment `id` wherever the watched thread holds it outside the
     live window with `edit`, or drops it for null. With `whole`, `edit` is
-    the whole row, as a fresh read brings it. */
+    the whole row, as a fresh read brings it. A gap whose run above it
+    empties joins the thread's start (joinEmptyRun). */
 function patchHeldComment(id: string, edit: Partial<Row<'comments'>> | null, whole = false) {
   const patch = (list: Row<'comments'>[]) =>
     edit === null
@@ -6296,6 +6312,7 @@ function patchHeldComment(id: string, edit: Partial<Row<'comments'>> | null, who
   if (pinned && edit === null) pinnedComments.delete(id)
   else if (pinned && edit)
     pinnedComments.set(id, whole ? (edit as Row<'comments'>) : { ...pinned, ...edit })
+  joinEmptyRun()
 }
 
 /* --- refusals over a field someone else changed ----------------------------
