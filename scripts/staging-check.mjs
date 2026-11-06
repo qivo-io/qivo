@@ -71,7 +71,7 @@
  * deployment's app loads every task only for a page that needs them. It
  * makes a task of the Standard agent's in Alpha over REST and opens Team
  * sync on its project in a fresh load, which must subscribe Team sync's
- * agenda (teamSync.agenda) once and no task window, and show the task's
+ * agenda (teamSync.agenda) and no task window, and show the task's
  * card on the agent's line from the rail (ui/team-sync). The
  * relation pickers step waits for each window's Link task and Add subtask
  * to turn on, which they do once the window's own read of its task has
