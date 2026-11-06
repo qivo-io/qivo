@@ -2,6 +2,7 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, components } from '../_generated/api'
 import type { Doc, Id, TableNames } from '../_generated/dataModel'
+import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import { MARKETING_DEMO, marketingId } from '../internal/marketingDemoData'
 import { moveProjectToTrash, moveTasksToTrash, TRASH_BUDGET } from '../model/deletedItems'
@@ -76,6 +77,31 @@ async function makeDemo(t: T, provision: boolean | number = true) {
       provisionPublicDemoStep(ctx, (await ctx.db.get(made.receiptId))!, made.user),
     )
   return t.run(async (ctx) => (await ctx.db.get(made.receiptId))!)
+}
+
+/** Login `authId`'s notification setting, two session rows and three
+ * delivery records (schema.ts account_notifications). */
+async function plantNotificationRows(ctx: MutationCtx, authId: string) {
+  await ctx.db.insert('account_notifications', {
+    auth_user_id: authId,
+    delivery: 'all',
+    changed_at: NOW,
+    all_from: NOW,
+  })
+  for (let i = 0; i < 2; i++)
+    await ctx.db.insert('notification_sessions', {
+      auth_user_id: authId,
+      session_id: uuid(),
+      instance: 'tab-1',
+      can_notify: true,
+      beat_at: NOW,
+    })
+  for (let i = 0; i < 3; i++)
+    await ctx.db.insert('notification_deliveries', {
+      auth_user_id: authId,
+      key: uuid(),
+      expires_at: NOW + 900_000,
+    })
 }
 
 async function rows(t: T, orgId: string) {
@@ -572,6 +598,8 @@ describe('public Northstar provisioning and bounded deletion', () => {
       await ctx.db.patch(profile._id, { avatar_storage_id: file })
       return file
     })
+    // the other visitor's notification rows, which must stay
+    await t.run((ctx) => plantNotificationRows(ctx, b.auth_user_id))
     const allOtherRows = await ownedSnapshot(t)
     const a = await makeDemo(t)
     const otherBefore = await rows(t, b.org_id!)
@@ -693,6 +721,9 @@ describe('public Northstar provisioning and bounded deletion', () => {
         expires_at: NOW + 60_000,
         changes: '{}',
       })
+      // the visitor's notification setting, sessions and records, which the
+      // purge's sessions phase leaves, since it runs no session trigger
+      await plantNotificationRows(ctx, a.auth_user_id)
       const attachment = await ctx.storage.store(new Blob(['attachment']) as never)
       const avatar = await ctx.storage.store(new Blob(['avatar']) as never)
       const background = await ctx.storage.store(new Blob(['background']) as never)
@@ -831,6 +862,12 @@ describe('public Northstar provisioning and bounded deletion', () => {
     expect(remainder.bytes[4]).not.toBeNull()
     expect(remainder.tables.comments).toBe(MARKETING_DEMO.comments.length)
     expect(remainder.tables.roadmap_history).toBe(0)
+    // the other visitor's notification rows alone are left
+    expect([
+      remainder.tables.account_notifications,
+      remainder.tables.notification_sessions,
+      remainder.tables.notification_deliveries,
+    ]).toEqual([1, 2, 3])
     expect(remainder.tables.user_prefs).toBe(0)
     expect(remainder.tables.issue_attachments).toBe(0)
     expect(remainder.tables.custom_backgrounds).toBe(0)

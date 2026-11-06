@@ -6,6 +6,7 @@
 import { makeFunctionReference } from 'convex/server'
 import type { Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import { forgetSession } from '../model/notificationSessionEnd'
 import { isDemoDeployment } from './demo'
 import { OAUTH_ACCESS_TOKEN_TTL_SECONDS } from './oauth'
 import { keepRecentSignIns } from './signIns'
@@ -38,8 +39,12 @@ export type EndedSession = {
  * the two months a usage run may be reading meanwhile (keepRecentSignIns).
  * Older months can wait, so they are kept in a call of their own (usage.ts
  * keepSignIn), which also reads the login and forgets the months of one
- * already deleted. The demo has neither. */
+ * already deleted. The demo has neither. First, also on the demo, it
+ * deletes the session's notification row (model/notificationSessionEnd.ts),
+ * so a signed-out, banned or expired session stops being a delivery
+ * target in the same transaction. */
 export async function endSession(ctx: MutationCtx, session: EndedSession, endedAt: number) {
+  await forgetSession(ctx, session._id)
   if (isDemoDeployment()) return
   await endSessionAccess(ctx, session._id, endedAt)
   await keepRecentSignIns(ctx, session.userId, session, Date.now())

@@ -219,6 +219,7 @@ export const createAuthOptions = (
               auth_user_id: user.id,
             })
             await runner.runMutation(internal.usage.forgetLogin, { auth_user_id: user.id })
+            await runner.runMutation(internal.notifications.forgetLogin, { auth_user_id: user.id })
           },
         },
       },
