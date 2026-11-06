@@ -319,9 +319,9 @@
 // of the seats a page names (people:settingsPage, get and byIds,
 // tokens:agentKeys, orgs:projectCreators and invites:deliveries), through
 // src/store/peopleSettingsStandIn.setup.ts, which keeps the server's
-// audiences, order and search and reads no budget; the profile and key
-// writes those pages send are not answered here. So are the project picker's navigation reads
-// (projectNav:page, children, search and resolve), through
+// audiences, order and search and reads no budget. The profile and key
+// writes those pages send get no answer here. So are the project picker's
+// navigation reads (projectNav:page, children, search and resolve), through
 // src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
 // ordinary access, reads no budget and has no favorites unless
 // projectnav=favorites asks. Archived tasks' own read (issues:archivedPage) has
@@ -689,7 +689,8 @@ const teamMembers = profiles.map((profile, n) => ({
   profile_id: profile.id,
   is_leader: n % 10 === 0,
 }))
-/* `agents`: Standard user agents, in no team, after the people. */
+/* The `agents` option's Standard user agents, in no team, after the
+   people. */
 const agentRows = Array.from({ length: Math.max(0, option('agents', 0)) }, (_, n) => ({
   id: id('c', n),
   org_id: org,
@@ -702,7 +703,7 @@ const agentRows = Array.from({ length: Math.max(0, option('agents', 0)) }, (_, n
   created_at: now,
 }))
 profiles.push(...agentRows)
-/* Each agent's keys as tokens:agentKeys lists them: three, the oldest
+/* Each agent's three keys as tokens:agentKeys lists them, the oldest
    revoked, which the server holds outside the workspace. */
 const agentKeys = agentRows.flatMap((agent, n) =>
   [1, 2, 3].map((k) => ({

@@ -1476,7 +1476,7 @@ async function openUsers() {
 }
 
 /** Searches Settings › Users for `text` and waits for the page the
- *  deployment answers for it: every row on it names the text, or its end
+ *  deployment answers for it, whose every row names the text, or whose end
  *  says nothing matches. The search goes to the server once typing rests. */
 async function searchUsers(text) {
   await app.locator('[data-users-search]').fill(text)
@@ -5110,8 +5110,8 @@ async function settingsTeamsCheck() {
 /** The step that checks Settings › Users (settingsUsersCheck). */
 export const SETTINGS_USERS_STEP = 'ui/settings-users'
 
-/** What Settings › Users and the creators line say (settingsUsersCheck):
- *  the end of a search that matches nobody, and the creators line's
+/** What Settings › Users and the creators line say (settingsUsersCheck),
+ *  the end of a search that matches nobody and the creators line's
  *  sentence after the names, as the pages word them. */
 export const SETTINGS_USERS_EXPECTED = {
   none: 'No people match.',
@@ -5119,9 +5119,9 @@ export const SETTINGS_USERS_EXPECTED = {
 }
 
 /** The creators line's names for `creators` in name order, as
- *  src/lib/projectCreators.ts creatorPhrase words them: up to three in
- *  full, else the first two and the others counted exactly up to 100, with
- *  the agents among them, and past 100 "and more than 100 others". */
+ *  src/lib/projectCreators.ts creatorPhrase words them. That is up to three
+ *  in full, else the first two and the others counted exactly up to 100,
+ *  with the agents among them, and past 100 "and more than 100 others". */
 export function creatorsLine(creators) {
   const name = (c) => (c.kind === 'agent' ? `${c.name} (agent)` : c.name)
   if (creators.length <= 3)
