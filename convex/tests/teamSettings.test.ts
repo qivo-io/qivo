@@ -644,6 +644,9 @@ describe('teams.addable', () => {
     const member = await plantLogin(fx.t, await plantSeat(fx.t, { org_id: fx.org.id, name: 'Mo' }))
     await keyOrg(fx.t, fx.org.id)
     await plantMembers(fx.t, fx.team, [member])
+    // a Viewer's and a guest's old leader rows grant nothing, as the add's
+    // check asks whether they may lead at all
+    await plantMembers(fx.t, fx.team, [fx.viewer, fx.guest], { is_leader: true })
     expect(await fx.t.run((ctx) => addableOf(ctx, fx.agent, { team_id: fx.team.id }))).toEqual({
       state: 'refused',
       message: ACCESS_NEEDS_A_PERSON,
