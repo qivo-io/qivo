@@ -1406,8 +1406,9 @@ function comesBack(holder: DeletedRow): string {
     read from deletedItems.item while the window shows otherwise, Restore
     waiting for it; a failed read says so with Try again, and an answer
     that the person cannot see it says Qivo can't find it. When nothing can
-    be restored, the window says why and offers Close. While a restore is saving, the window waits for it, also
-    when the page meanwhile shows the item restoring or gone. */
+    be restored, the window says why and offers Close. While a restore is
+    saving, the window waits for it, also when the page meanwhile shows the
+    item restoring or gone. */
 function WholeItemWindow({
   line,
   onPage,
