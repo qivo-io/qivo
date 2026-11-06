@@ -23,7 +23,8 @@
  *   7. Teardowns: a deletion in steps and deleteOrgDeep leave none of an
  *      organization's samples, the Northstar wipe keeps them, and a step
  *      after a deletion began writes none.
- *   8. costReport sums a range and refuses a malformed or longer one.
+ *   8. costReport sums a range, names no organization, cursor or run, also
+ *      of a run under way, and refuses a malformed or longer one.
  *   9. The reads of one step at the batch size, logged for SAMPLE_PAGE.
  *
  * Totals are written only through their writers: the app's attach for a
@@ -727,7 +728,7 @@ describe('costReport', () => {
   const report = (t: T, from: string, to: string) =>
     t.query(internal.storageSamples.costReport, { from, to })
 
-  it("sums the days' runs, names no organization, and counts the hourly ticks", async () => {
+  it("sums the days' runs, names no organization, cursor or run, also of a run under way, and counts the hourly ticks", async () => {
     const t = newT()
     for (let i = 0; i < 3; i++) await plantOrg(t, 10)
     await runDay(t)
@@ -754,6 +755,27 @@ describe('costReport', () => {
     const text = JSON.stringify(out)
     for (const s of await allSamples(t)) expect(text).not.toContain(s.org_id)
     expect(text).not.toContain(a?.run)
+
+    // a run under way, whose cursor names the last organization it did
+    SAMPLE_PAGE.orgs = 1
+    vi.setSystemTime(AT + 2 * DAY_MS)
+    await tick(t)
+    await nextCall(t)
+    const open = await runRow(t, dayAfter(2))
+    expect(open).not.toHaveProperty('finished_at')
+    expect(open?.cursor).toEqual(expect.any(String))
+    const under = await report(t, dayAfter(-1), dayAfter(2))
+    expect(under).toMatchObject({ runs: 3, finished: 2 })
+    expect(under.days[2]).toEqual({
+      day: dayAfter(2),
+      started_at: AT + 2 * DAY_MS,
+      finished_at: null,
+      counts: open?.counts,
+    })
+    const words = JSON.stringify(under)
+    expect(words).not.toContain(open?.cursor)
+    for (const s of await allSamples(t)) expect(words).not.toContain(s.org_id)
+    for (const row of [a, b, open]) expect(words).not.toContain(row?.run)
     // 62 days apart is the widest range
     expect((await report(t, TODAY, dayAfter(62))).days_in_range).toBe(63)
   })
