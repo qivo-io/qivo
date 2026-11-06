@@ -767,6 +767,14 @@ describe('the cursors', () => {
     const fx = await setup()
     const { task, order } = await related(fx, 3)
     const { next_cursor } = await restList(fx, fx.agent, 'subtasks', task.id, { limit: '1' })
+    // the other lists' cursors, taken before the archive too
+    const others = ['links', 'followers', 'attachments'] as const
+    const before = new Map<TaskRelatedList, string>()
+    for (const list of others) {
+      const page = await restList(fx, fx.agent, list, task.id, { limit: '1' })
+      expect(ids(page.rows), list).toEqual(order[list].slice(0, 1))
+      before.set(list, page.next_cursor as string)
+    }
     // the group and its subtasks archived, so the list is now all subtasks
     await fx.t.run(async (ctx) => {
       for (const id of [task.id, ...order.subtasks]) {
@@ -782,9 +790,14 @@ describe('the cursors', () => {
       'bad_request',
       CURSOR_REFUSAL,
     )
-    // the links' cursors do not depend on it
-    const links = await restList(fx, fx.agent, 'links', task.id, { limit: '1' })
-    expect(links.rows).toHaveLength(1)
+    // the other lists' cursors do not depend on it and continue
+    for (const list of others) {
+      const rest = await restList(fx, fx.agent, list, task.id, {
+        cursor: before.get(list) as string,
+      })
+      expect(ids(rest.rows), list).toEqual(order[list].slice(1))
+      expect(rest.next_cursor, list).toBeNull()
+    }
   })
 
   it('continues a details cursor on its list, a REST cursor on MCP, and lets limit change', async () => {
