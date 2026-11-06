@@ -7,7 +7,7 @@
      [<view>/]p/<n>            project/sub-project scope
      <view>/all|mine           sentinel scope, optionally /tasks/<ref>
      settings/<page>           account, org-*, projects-* or team:<uuid>
-     settings/project/<n>      project settings
+     settings/project/<n>      project settings, by number or uuid
      projects                  directory
      archive                   old Archive address; opens settings/projects-archived-tasks
      inbox[/tasks/<ref>]       inbox, optionally with a task open
@@ -18,6 +18,11 @@
    Task refs accept qn-<num> (any case), bare numbers or immutable uuids;
    project refs accept numbers or uuids. Emission is lowercase. Numbers are
    org-scoped and survive moves; renamed project keys are display-only.
+   A project settings page names a project the workspace holds by its
+   number, and one it does not hold by its uuid under the organization the
+   page's own read named (noteProjectPage), which parses back to the page
+   without the workspace: the page's read (projectSettings.get) decides
+   what it shows, so a reload, Back and Forward open it again.
    A task the workspace holds resolves to its handle, and one it does not
    to a reference (lib/taskReference.ts) that the task window reads from
    the server, in the organization the address names. Tasks resolve their
@@ -26,7 +31,7 @@
    Legacy #/ links share parseSegments and are replaced by path routes;
    unrelated hashes, including auth fragments, are ignored. */
 
-import { parseIssueRef } from '../../convex/lib/taskRefs'
+import { parseIssueRef, UUID } from '../../convex/lib/taskRefs'
 import type { AddressedTask } from '../store/liveParts'
 import { ALL_SCOPE, ISSUE_PREFIX, MINE_SCOPE, P } from '../store/planner'
 import type { IssueVM } from '../store/viewModels'
@@ -200,14 +205,10 @@ const orgSegment = (orgId: string | undefined | null): string => {
   return o?.slug ? o.slug : ORG_NONE
 }
 
-/** Organization and team settings use the home organization; projects use
-    their own organization. Personal and desktop settings have no organization
-    scope and take `~`. */
+/** Organization and team settings use the home organization. Personal and
+    desktop settings have no organization scope and take `~`. A project's
+    page names its own organization (buildPath). */
 const settingsOrg = (page: string): string | null => {
-  if (page.indexOf('project:') === 0) {
-    const p = P.project(page.slice(8))
-    return p ? p.org : null
-  }
   if (page === 'account' || page.startsWith('account-') || page === 'desktop' || page === 'menu')
     return null
   return P.homeOrg || null
@@ -290,8 +291,18 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   const issue = (s: string | undefined) => (orgUnknown ? undefined : findIssueKey(s, org))
   if (seg[0] === 'settings') {
     if (seg[1] === 'project') {
-      const p = proj(seg[2])
-      r.settings = p ? `project:${p.id}` : 'account'
+      /* A uuid names the page whether the workspace holds the project or
+         not, and the page's own read decides what it shows; a number reads
+         through the workspace. Under a slug this login cannot resolve,
+         neither does, as for every segment past the page. */
+      const s = seg[2] ?? ''
+      const p = UUID.test(s) ? null : proj(s)
+      r.settings =
+        !orgUnknown && UUID.test(s)
+          ? `project:${s.toLowerCase()}`
+          : p
+            ? `project:${p.id}`
+            : 'account'
     } else r.settings = seg[1] || 'account'
     return r
   }
@@ -528,10 +539,53 @@ const unnamedRef = (open: string | null | undefined): boolean =>
   !!open && !!refParts(open) && !taskNamed(open)
 
 /* The organization and number each project settings page was last named
-   by. A project that leaves while its page shows (its Archive or delete
-   window holds the page, ProjectSettings onHolding) keeps that address, so
-   App writes no new entry over the window's phone marker. */
+   by while the workspace held its project. A project that leaves while
+   its page shows with its Archive or delete window open (ProjectSettings
+   onHolding) keeps that address, so App writes no new entry over the
+   window's phone marker. */
 const namedProjects = new Map<string, { org: string; seg: string; num: number }>()
+
+/* The project settings pages whose project the workspace does not hold,
+   each with the organization its page's read named (noteProjectPage).
+   buildPath names such a page by its uuid under that organization, which
+   parses back to the page, so a reload, Back and Forward open it again. */
+const unheldPages = new Map<string, { org: string }>()
+
+/* The revision of unheldPages, which App's address follows (projectPagesRev),
+   so an answer that names a page's organization rewrites the address at
+   once, in place. */
+let pagesRev = 0
+const pagesListeners = new Set<() => void>()
+
+/** Subscribes to the notes of project settings pages, for
+    useSyncExternalStore beside projectPagesRev. */
+export function subscribeProjectPages(listener: () => void): () => void {
+  pagesListeners.add(listener)
+  return () => pagesListeners.delete(listener)
+}
+
+/** The revision of the notes of project settings pages (noteProjectPage). */
+export const projectPagesRev = (): number => pagesRev
+
+/** Tells the address that the settings page of project `id` shows a
+    project its read (projectSettings.get) found in organization `org`,
+    while the workspace does not hold it and no window holds the page, or,
+    with null, that it no longer does. The address then names the page by
+    the project's uuid under that organization, in place. */
+export function noteProjectPage(id: string, at: { org: string } | null): void {
+  const was = unheldPages.get(id)
+  if (at === null) {
+    if (!was) return
+    unheldPages.delete(id)
+  } else {
+    if (was?.org === at.org) return
+    unheldPages.delete(id)
+    unheldPages.set(id, { org: at.org })
+    if (unheldPages.size > NAMED_MAX) unheldPages.delete(unheldPages.keys().next().value ?? id)
+  }
+  pagesRev++
+  for (const listener of pagesListeners) listener()
+}
 
 /** Whether `path` names the settings page of the project `page` names by
     the organization and number it was last named by: the page's own
@@ -659,9 +713,13 @@ export function buildPath(state: UiState): string {
           namedProjects.delete(namedProjects.keys().next().value ?? id)
         return at(p.org, `/settings/project/${String(p.num)}`)
       }
-      // a project that left while its page shows keeps the page's address,
-      // by its id once its organization left too, as `~` would read the
-      // number in the home organization
+      // a page whose read found its project outside the workspace, by its
+      // uuid under the organization that read named (noteProjectPage)
+      const unheld = p ? undefined : unheldPages.get(id)
+      if (unheld) return at(unheld.org, `/settings/project/${encodeURIComponent(id)}`)
+      // a project that left while its page shows with a window open keeps
+      // the page's address, by its id once its organization left too, as
+      // `~` would read the number in the home organization
       const was = p ? undefined : namedProjects.get(id)
       if (was && orgSegment(was.org) !== ORG_NONE) {
         was.seg = orgSegment(was.org)

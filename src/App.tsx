@@ -82,10 +82,12 @@ import {
   parseHash,
   parsePath,
   pathMatchesState,
+  projectPagesRev,
   type Route,
   sameTask,
   scopeForIssueOn,
   scopeTaskOf,
+  subscribeProjectPages,
   syncPlaceOf,
   type UiState,
   viewBehindTask,
@@ -1206,6 +1208,10 @@ function App() {
   const refRev = useSyncExternalStore(P.updates.comments.subscribe, () =>
     isTaskRef(openIssue) ? P.updates.comments.getSnapshot() : null,
   )
+  // A project settings page names the organization of a project the
+  // workspace does not hold once its read answers (lib/router.ts
+  // noteProjectPage), which the address follows in place.
+  const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
   // The Roadmap and Team sync need every task: they ask for them as they
   // mount (TasksLoadingView) and wait until the workspace holds them
   const tasksLoading = !P.tasksHeld()
@@ -1305,7 +1311,19 @@ function App() {
     if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
     else pushPage({ qivoPrevious: location.pathname }, p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, refRev, settled])
+  }, [
+    scope,
+    view,
+    openIssue,
+    settingsPage,
+    inboxOpen,
+    projectsOpen,
+    sync,
+    rev,
+    refRev,
+    pagesRev,
+    settled,
+  ])
   // the task the boot, Back or Forward named by a reference, once its
   // answer names its project: its scope, unless the page moved meanwhile
   useEffect(() => {
