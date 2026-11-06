@@ -46,6 +46,10 @@
 //   bigimages (0)        how many of those images are 4,096 pixels square,
 //                        the largest the app uploads, rather than small
 //                        photos, for the bytes and decoded memory they hold
+//   pictureskept         the most bytes the pictures keep (the page lowers
+//                        src/lib/avatarSources.ts AVATAR_SOURCES.keptBytes,
+//                        scripts/perf/entry.tsx), so past it a picture
+//                        waits as the person's initials with few people
 //   hidden (4)           projects the signed-in person cannot see, as full
 //                        of tasks as the visible ones; they reach the
 //                        workspace only as anonymized load rows and the

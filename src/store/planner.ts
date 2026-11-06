@@ -10541,6 +10541,21 @@ export const PLANNER = {
   /** The loader of description and comment images (lib/inlineImages.ts),
       one a store. */
   inlineImages,
+  /** What the file URL mints, the pictures and the inline images hold now,
+      for the benchmark page's measurement and the closing review. */
+  fileStats: () => ({
+    mints: {
+      running: mintQueue.running(),
+      most: mintQueue.mostRunning(),
+      sent: mintQueue.sent(),
+    },
+    pictures: {
+      keptBytes: avatarSources.keptBytes(),
+      downloading: avatarSources.downloading(),
+      mostDownloading: avatarSources.mostDownloading(),
+    },
+    images: inlineImages.stats(),
+  }),
   setInboxOpener,
   get roadmapUndo() {
     return {

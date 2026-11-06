@@ -93,6 +93,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   // counted at pictureBytes until it is known
   let kept = 0
   let downloading = 0
+  let mostDownloading = 0
   // keys waiting for room, in the order the store asked for them
   const waitingKeys = new Map<string, Entry>()
   // prepares waiting for a download slot, in order
@@ -138,6 +139,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   const takeSlot = (signal: AbortSignal): Promise<void> | null => {
     if (downloading < AVATAR_SOURCES.downloads && !paused && slotQueue.length === 0) {
       downloading++
+      mostDownloading = Math.max(mostDownloading, downloading)
       return null
     }
     return new Promise<void>((resolve, reject) => {
@@ -146,6 +148,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         grant: () => {
           signal.removeEventListener('abort', leave)
           downloading++
+          mostDownloading = Math.max(mostDownloading, downloading)
           resolve()
         },
       }
@@ -321,8 +324,10 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     },
     /** The bytes the kept pictures hold, for the tests and the measurement. */
     keptBytes: () => kept,
-    /** Downloads on their way, for the tests and the measurement. */
+    /** Downloads on their way, and the most at once, for the tests and the
+        measurement. */
     downloading: () => downloading,
+    mostDownloading: () => mostDownloading,
     async prepare(key: string, lease: Lease, ticket = entries.get(key)): Promise<boolean> {
       if (!current(key, ticket)) return false
       ticket.expiresAt = lease.exp * 1000

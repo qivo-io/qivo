@@ -65,6 +65,8 @@ export function createMintQueue(mint: MintCall, options: Options) {
   }
   const known = new Map<string, Waiting>() // waiting or on their way, by key
   let running = 0
+  let mostRunning = 0
+  let sent = 0
   let generation = 0
   let pumping = false
 
@@ -84,6 +86,8 @@ export function createMintQueue(mint: MintCall, options: Options) {
   const send = (chunk: { kind: MintRequest['kind']; org: string; items: Waiting[] }) => {
     const version = generation
     running++
+    sent++
+    mostRunning = Math.max(mostRunning, running)
     let answered = false
     const answer = (outcome: (w: Waiting) => MintOutcome) => {
       if (answered) return
@@ -164,8 +168,12 @@ export function createMintQueue(mint: MintCall, options: Options) {
       schedule()
       return answer
     },
-    /** How many calls are on their way, for the tests and the measurement. */
+    /** How many calls are on their way, and the most at once, for the
+        tests and the measurement. */
     running: () => running,
+    mostRunning: () => mostRunning,
+    /** How many calls the queue has sent. */
+    sent: () => sent,
     /** Answers every request still waiting or on its way `failed` and lets
         the calls on their way go, for sign-out, a demo's end and
         reinitialization. Their answers are dropped when they come. */
