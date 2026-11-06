@@ -500,6 +500,68 @@ describe('the benchmark server', () => {
     expect((await page('')).answer.error).toContain('only organization admins')
   }, 60_000)
 
+  it('answers the milestone reads from the workspace, with the states the page asks for', async () => {
+    /** What `name` answers with `args` on a workspace with page parameters
+        `params`, and the workspace. */
+    const read = async (params, name, args) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'ms', name, args: args(snap) })
+      const answer = posted.find((m) => m.to === 'ms')
+      if (!answer) return { snap, answer: undefined }
+      return {
+        snap,
+        answer: answer.error ? { error: answer.error, data: answer.data } : JSON.parse(answer.text),
+      }
+    }
+    const projects = (snap) => snap.projects.filter((p) => !p.parent_id).map((p) => p.id)
+    const range = (snap) => ({
+      projects: projects(snap),
+      from: snap.milestones[0].week,
+      to: snap.milestones[3].week,
+    })
+    const between = await read('', 'milestones:between', range)
+    expect(between.answer.rows.map((row) => row.name)).toEqual([
+      'Milestone 1',
+      'Milestone 2',
+      'Milestone 3',
+    ])
+    expect(between.answer).toMatchObject({ next: null, stopped: null })
+    const next = await read('', 'milestones:section', (snap) => ({
+      projects: projects(snap),
+      from: snap.milestones[1].week,
+      side: 'upcoming',
+      limit: 1,
+    }))
+    expect(next.answer.rows.map((row) => row.name)).toEqual(['Milestone 2'])
+    expect(next.answer.past).toBe(true)
+    const get = (snap) => ({ id: snap.milestones[0].id })
+    expect((await read('', 'milestones:get', get)).answer).toMatchObject({
+      row: { name: 'Milestone 1' },
+    })
+    // a Viewer opens it read-only
+    expect((await read('role=viewer', 'milestones:get', get)).answer.can_write).toBe(false)
+    // the forced states
+    expect((await read('milestones=open-loading', 'milestones:get', get)).answer).toBeUndefined()
+    expect((await read('milestones=open-unavailable', 'milestones:get', get)).answer).toBeNull()
+    expect((await read('milestones=open-error', 'milestones:get', get)).answer.error).toContain(
+      'failed',
+    )
+    expect(
+      (await read('milestones=open-refused', 'milestones:get', get)).answer.data,
+    ).toMatchObject({ reason: 'milestone_read_too_large' })
+    const partial = await read('milestones=sync-partial', 'milestones:between', range)
+    expect(partial.answer.rows).toHaveLength(1)
+    expect(partial.answer.stopped).not.toBeNull()
+    expect(
+      (await read('milestones=sync-refused', 'milestones:between', range)).answer.data,
+    ).toMatchObject({ reason: 'milestone_read_too_large' })
+    expect(
+      (await read('milestones=sync-loading', 'milestones:between', range)).answer,
+    ).toBeUndefined()
+  }, 60_000)
+
   it("answers the project picker's navigation reads from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, each program with the everyday 3 sub-projects, so 45

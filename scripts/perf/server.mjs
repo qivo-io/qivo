@@ -184,6 +184,21 @@
 //                        Archived projects. programs=120&subprojects=3&
 //                        archivedprojects=60 lists 60 live and 60 archived
 //                        projects, inside the design size
+//   milestones           a state the app's milestone reads (milestones:get,
+//                        section and between) answer whatever the workspace
+//                        says, for screenshots of states a seeded backend
+//                        cannot reach (src/store/milestoneStandIn.setup.ts):
+//                        for the Milestones window's read of the milestone
+//                        it opens on, open-loading (it never answers),
+//                        open-error (it fails), open-unavailable (it
+//                        answers null) and open-refused (the refusal of a
+//                        read too large); for Team sync's opening,
+//                        sync-loading, sync-error, sync-partial (both reads
+//                        stop after their first row), sync-refused and
+//                        sync-too-many (the page lowers the store's cap of
+//                        projects one read names to none, scripts/perf/
+//                        entry.tsx, so the opening asks nothing); several
+//                        joined by commas
 //   grants (0)           User grants on the first program for that many
 //                        more people, with more people in the
 //                        organization when it needs them, so the Users
@@ -236,6 +251,7 @@ import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
+import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
@@ -337,6 +353,22 @@ const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
 const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
+/* The milestone reads' forced states (the `milestones` parameter), as the
+   stand-in's `force` takes them; sync-too-many is the page's
+   (scripts/perf/entry.tsx). */
+const forcedMilestones = (() => {
+  const force = {}
+  const sync = { 'sync-loading': 'loading', 'sync-error': 'error', 'sync-partial': 'stopped' }
+  for (const state of (parameters.get('milestones') ?? '').split(',').filter(Boolean)) {
+    if (state === 'open-loading') force.get = 'loading'
+    else if (state === 'open-error') force.get = 'error'
+    else if (state === 'open-unavailable') force.get = 'unavailable'
+    else if (state === 'open-refused') force.get = 'refused'
+    else if (state === 'sync-refused') force.section = force.between = 'refused'
+    else if (state in sync) force.section = force.between = sync[state]
+  }
+  return force
+})()
 /* The relation pickers' forced states (the `relations` parameter), as the
    stand-in's `force` takes them. */
 const forcedRelations = (() => {
@@ -952,8 +984,9 @@ function deliver(to, result) {
       if (value === NO_ANSWER) return
       encoded = encode(value)
     } catch (error) {
-      // a read the server cannot answer fails only its own caller
-      post({ type: 'result', to, error: String(error?.message ?? error) })
+      // a read the server cannot answer fails only its own caller, with a
+      // refusal's data, as Convex sends a ConvexError's
+      post({ type: 'result', to, error: String(error?.message ?? error), ...refusalOf(error) })
       return
     }
     await transfer(encoded.bytes)
@@ -1032,6 +1065,12 @@ const windowAnswered = new Set()
 /** What a read answers when it never answers (window=loading): nothing is
     sent for it. */
 const NO_ANSWER = Symbol('no answer')
+/** The data of a refusal a read threw (a ConvexError's), for the page to
+    throw again as one, or nothing for any other failure. */
+const refusalOf = (error) =>
+  error && typeof error === 'object' && error.data && typeof error.data === 'object'
+    ? { data: error.data }
+    : {}
 /** The task `ref` names in organization `orgId` as convex/lib/taskWindow.ts
     taskByRef reads it: a uuid in any case, or a number bare or as QN-12 in
     that organization only. */
@@ -1225,6 +1264,17 @@ const read = (name, args = {}) => {
   if (isProjectListRead(name))
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
   if (name.startsWith('projectSettings:')) return readSettings(name, args)
+  // the milestone reads (src/store/milestoneStandIn.setup.ts), which answer
+  // nothing where a forced state holds them back
+  if (name.startsWith('milestones:')) {
+    const answer = milestoneStandIn(
+      snapshot,
+      name.slice('milestones:'.length),
+      args,
+      forcedMilestones,
+    )
+    return answer === undefined ? NO_ANSWER : answer
+  }
   // the relation pickers' read, before the task window's other reads
   if (name === 'taskWindow:relationCandidates')
     return relationPickerStandIn(
@@ -1381,7 +1431,7 @@ function transition() {
         if (value === NO_ANSWER) continue
         encoded = encode(value)
       } catch (error) {
-        results.push({ to, error: String(error?.message ?? error) })
+        results.push({ to, error: String(error?.message ?? error), ...refusalOf(error) })
         continue
       }
       if (encoded.text === part.sent) continue
