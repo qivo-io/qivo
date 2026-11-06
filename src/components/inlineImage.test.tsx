@@ -93,6 +93,8 @@ describe('description images', () => {
     const box = container.querySelector<HTMLElement>('.mdimgbox')
     expect(box?.textContent).toBe('Loading image…')
     expect(box?.style.aspectRatio).toBe('4 / 3')
+    // in pixels: a percentage of the shrink-to-fit wrapper would shrink it
+    expect(box?.style.width).toBe('453px')
     expect(container.querySelector('img')).toBeNull()
     const watched = container.querySelector('.mdimgreach')
     await moveAll(true)
