@@ -832,17 +832,18 @@ describe('at the design size', () => {
 
 /* -------------------------------------------------- the error contract */
 
-it('refuses a search past LIMITS.search and a through before after as bad requests', async () => {
+it('refuses a search past LIMITS.search and a through not past after as bad requests', async () => {
   const fx = await setup()
   await plantTeams(
     fx.t,
     fx.org.id,
-    Array.from({ length: 60 }, (_, i) => `Team ${i}`),
+    Array.from({ length: 30 }, (_, i) => `Team ${i}`),
   )
   const one = ready(await read.teams(fx.t, fx.admin))
-  const two = ready(await read.teams(fx.t, fx.admin, { after: one.next ?? '' }))
+  expect(one.next).not.toBeNull()
+  // a through at after's own place is refused, as one before it is
   const e = await expectRefusal(
-    read.teams(fx.t, fx.admin, { after: two.next ?? '', through: one.next ?? '' }),
+    read.teams(fx.t, fx.admin, { after: one.next ?? '', through: one.next ?? '' }),
     'bad_request',
     /through must be a cursor after/,
   )
