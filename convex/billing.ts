@@ -279,12 +279,14 @@ export const storageNowPage = internalQuery({
 })
 
 /**
- * @deprecated The app reads billing.currentUsage and billing.storageProjects
- * since the release after v0.1.134. This report stays, with its scan and its
- * answer, through that release, so tabs and desktop windows loaded before it
- * still load Billing, and a later release removes it with usageHead,
- * storageNowPage and the scan and adds it to the Instant Rollback list in
- * docs/deployment.md.
+ * @deprecated The app stopped reading this report in the release after
+ * v0.1.134, which reads billing.currentUsage and billing.storageProjects
+ * instead; from the release after v0.1.141 it reads billing.usageFigures in
+ * place of currentUsage. This report stays, with its scan and its answer,
+ * through the release after v0.1.134, so tabs and desktop windows loaded
+ * before it still load Billing, and a later release removes it with
+ * usageHead, storageNowPage and the scan and adds it to the Instant
+ * Rollback list in docs/deployment.md.
  *
  * The usage report that Billing read before then (model/billing.ts
  * billingUsageHead). Its storage is counted page by page, as a period's

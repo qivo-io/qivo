@@ -82,7 +82,11 @@ export async function billingStanding(
   }
 }
 
-/** Organization deletion also clears `active` on a home profile whose
+/** The people and agents of organization `orgId` who count toward its
+ * bill (billingStanding `member` or `guest_without_home`), in profile id
+ * order, with the total and the member and guest counts.
+ *
+ * Organization deletion also clears `active` on a home profile whose
  * guest organizations it marks over several steps (markHomeProfileRemoved),
  * while the profile waits to be deleted. Invitations count immediately. A
  * guest is exempt only while the same email has an active home membership
