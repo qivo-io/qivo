@@ -51,8 +51,9 @@ const fake = vi.hoisted(() => ({
   tokens: [],
   keys: [],
   usage: [],
-  // the bucket billing.usageFigures answers
-  period: 'month:2026-11',
+  // the bucket billing.usageFigures answers, a paid period's key, so a seed
+  // that works the month out from the clock finds none of its rows
+  period: '2026-10-20T00:00:00.000Z',
   // the profile_removals table
   removals: [],
   // the sub-projects the workspace holds, the one below when null
@@ -140,7 +141,7 @@ vi.mock('convex/browser', () => ({
           orgs: [{ id: 'org' }],
         },
         'workspace:catalog': { state: 'ok', teams: [], labels: [] },
-        'billing:usageFigures': { period_kind: 'month', period_key: fake.period },
+        'billing:usageFigures': { period_kind: 'paid', period_key: fake.period },
         'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
         'workspace:projects': {
           state: 'ok',
