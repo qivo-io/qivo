@@ -120,7 +120,8 @@ const vTeamAccessMap = v.record(v.string(), vGrantLevel)
  * taken key). Without `sort_order` the project goes after every sibling
  * (model/projects.ts nextSiblingPlace), as REST and MCP creates go; the app
  * leaves it out from the release after v0.1.138, and an earlier app's
- * `sort_order` is stored as sent. */
+ * `sort_order` is stored as sent. The number validator lets NaN and the
+ * infinities through, which createProjectCore refuses (SORT_ORDER_SHAPE). */
 export const create = orgMutation({
   args: {
     id: v.string(),

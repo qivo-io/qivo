@@ -13632,8 +13632,12 @@ export const PLANNER = {
       name: p.name,
       lead_id: p.lead || profileIn(orgId),
       description: p.description || '',
-      // one past the largest place, as the server places it
-      sort_order: siblings.reduce((place, x) => Math.max(place, x.sort_order + 1), 0),
+      // one past the largest place, as the server places it, skipping a
+      // place that is not a finite number as the server does
+      sort_order: siblings.reduce(
+        (place, x) => (Number.isFinite(x.sort_order) ? Math.max(place, x.sort_order + 1) : place),
+        0,
+      ),
       track_delay: true,
       created_at: new Date().toISOString(),
     }

@@ -1088,8 +1088,9 @@ that app derives the Roadmap from the workspace's tasks, and
 The release changes no server function and needs no step.
 
 From the release after v0.1.138, `projects.create` takes `sort_order` as
-optional and, when a create leaves it out, places the new project one past
-the largest place among its siblings, archived and hidden ones included.
+optional, refuses one that is not a finite number and stores nothing, and,
+when a create leaves it out, places the new project one past the largest
+finite place among its siblings, archived and hidden ones included.
 REST and MCP creates, which leave it out, take the same place, so a new
 project goes after every sibling also where deletes, restores or earlier app
 creates left gaps or ties in the places, where counting the siblings, as

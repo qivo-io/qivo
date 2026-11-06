@@ -287,6 +287,9 @@ export const PARENT_NOT_TOP_LEVEL =
 /** The refusal of a new sub-project under an archived project. */
 export const PARENT_ARCHIVED = 'the project is archived, so restore it first'
 
+/** The refusal of a create whose sort_order is NaN or an infinity. */
+export const SORT_ORDER_SHAPE = "a project's sort order is a finite number"
+
 /** What subProjectParent answers: the parent, a parent that reads as
  * missing (PARENT_NOT_FOUND), or the refusal the create throws. */
 export type ParentCheck =
@@ -338,7 +341,8 @@ export type NewProject = {
   /** the caller when absent */
   lead_id?: string
   description?: string | null
-  /** after every sibling when absent (nextSiblingPlace) */
+  /** after every sibling when absent (nextSiblingPlace); a finite number
+   * when sent, else createProjectCore refuses it */
   sort_order?: number
   track_delay?: boolean
   /** Individual grants. null names no grant, which for the creator also turns
@@ -360,7 +364,11 @@ export type NewProject = {
  * leaves sort_order out reaches it: REST, MCP and, from the release after
  * v0.1.138, the app's (src/store/planner.ts P.addProject paints its own
  * place by the same rule over the siblings the workspace holds). 0 when
- * there is no sibling. */
+ * there is no sibling. A sibling whose sort_order is not a finite number,
+ * which createProjectCore refuses but an older backend stored as sent, is
+ * skipped. One past NaN is NaN and one past Infinity is Infinity, and byOrder
+ * cannot sort either, so counting it would hand its place on to every later
+ * create in the list. */
 async function nextSiblingPlace(
   ctx: QueryCtx,
   orgId: string,
@@ -374,7 +382,7 @@ async function nextSiblingPlace(
           .withIndex('by_org_parent', (q) => q.eq('org_id', orgId).eq('parent_id', undefined))
       : ctx.db.query('projects').withIndex('by_parent', (q) => q.eq('parent_id', parentId))
   for await (const p of rows)
-    if (p.type === (parentId === undefined ? 'meta' : 'project'))
+    if (p.type === (parentId === undefined ? 'meta' : 'project') && Number.isFinite(p.sort_order))
       place = Math.max(place, p.sort_order + 1)
   return place
 }
@@ -387,7 +395,9 @@ async function nextSiblingPlace(
  * another lead or any grant takes a person. A creator who is not an org admin
  * and names someone else as lead of a top-level project gets User access
  * unless the request names their own (lib/projectGrants.ts creatorGrant).
- * The org's counter gives the number; the key comes from the name.
+ * The org's counter gives the number; the key comes from the name. A
+ * sort_order that is not a finite number is refused, as Convex's number
+ * validator lets NaN and the infinities through.
  */
 export async function createProjectCore(
   ctx: MutationCtx,
@@ -395,6 +405,8 @@ export async function createProjectCore(
 ): Promise<Doc<'projects'>> {
   const { me, now, project: p } = a
   assertNewRowId(p.id)
+  if (p.sort_order !== undefined && !Number.isFinite(p.sort_order))
+    throw badRequest(SORT_ORDER_SHAPE)
   const lead_id = p.lead_id ?? me.id
   // Neither products nor sub-projects have an owning team. A parent is the
   // only structural requirement for a sub-project; permissions are explicit

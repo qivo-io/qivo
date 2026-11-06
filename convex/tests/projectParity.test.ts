@@ -33,7 +33,7 @@ import {
   parseHeldTasks,
   removeProjectGrantCore,
 } from '../model/projectAccess'
-import { createProjectCore } from '../model/projects'
+import { createProjectCore, SORT_ORDER_SHAPE } from '../model/projects'
 import {
   activityFor,
   as,
@@ -638,6 +638,56 @@ describe('creating projects and sub-projects', () => {
       sort_order: 1,
     })
     expect((await projectRow(fx.t, app.id))?.sort_order).toBe(1)
+  })
+
+  it('refuses a sort order that is not a finite number and stores nothing, and places past a stored one by the finite places alone', async () => {
+    const fx = await setup()
+    for (const sort_order of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const id = uuid()
+      await refused(
+        as(fx.t, fx.user).mutation(api.projects.create, {
+          org_id: fx.org.id,
+          id,
+          type: 'meta',
+          key: 'BAD',
+          name: 'Bad place',
+          sort_order,
+        }),
+        'bad_request',
+        SORT_ORDER_SHAPE,
+      )
+      expect(await projectRow(fx.t, id), String(sort_order)).toBeNull()
+    }
+    // a top-level project and a sub-project of TBED stored with NaN, as an
+    // older backend stored a create's place as sent, past every finite one
+    await plantProject(fx.t, { org_id: fx.org.id, sort_order: Number.NaN })
+    await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      sort_order: Number.NaN,
+    })
+    const pastLast = async (pick: (p: Doc<'projects'>) => boolean) =>
+      fx.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
+          .collect()
+        const places = rows.filter(pick).map((p) => p.sort_order)
+        return Math.max(0, ...places.filter(Number.isFinite).map((place) => place + 1))
+      })
+    const tops = await pastLast((p) => p.type === 'meta' && p.parent_id === undefined)
+    const subs = await pastLast((p) => p.type === 'project' && p.parent_id === fx.meta.id)
+    const top = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.user),
+      body: JSON.stringify({ name: 'Past the gap' }),
+    })) as Json
+    expect((await projectRow(fx.t, top.id as string))?.sort_order).toBe(tops)
+    const sub = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.user),
+      body: JSON.stringify({ name: 'Sub past the gap', parent: 'TBED' }),
+    })) as Json
+    expect((await projectRow(fx.t, sub.id as string))?.sort_order).toBe(subs)
   })
 
   it('places a top-level project by the top-level metas only, not a meta stored with a parent', async () => {

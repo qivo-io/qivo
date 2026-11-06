@@ -192,6 +192,27 @@ describe('project creation through the client store', () => {
       expect(order()).toEqual([fixture, 'alpha', 'pier', top, 'plan-b'])
     })
 
+    it('paints a top-level project past the finite places alone when a held sibling has none', () => {
+      const fixture = snap.projects[0].id
+      // a project an older backend stored with NaN as its place, created
+      // before every other, so the order puts it first
+      snap.projects.push({
+        ...snap.projects[0],
+        id: 'nan',
+        type: 'meta',
+        parent_id: undefined,
+        key: 'NAN',
+        num: 4,
+        name: 'No place',
+        sort_order: Number.NaN,
+        created_at: '2020-01-01T00:00:00.000Z',
+      })
+      deliver(structuredClone(snap))
+      const top = P.addProject({ type: 'meta', key: 'NEW', name: 'New' })!
+      // at 9, one past Old at 8, and before Beacon plan at 40
+      expect(order()).toEqual(['nan', fixture, 'alpha', 'pier', top, 'plan-b'])
+    })
+
     it('sends a sub-project of a held parent to the parent’s organization, led by my seat there, and paints it after its siblings', () => {
       const fixture = snap.projects[0].id
       const sub = P.addProject({ type: 'project', key: 'SUB', name: 'Sub', parent: 'plan-b' })!
