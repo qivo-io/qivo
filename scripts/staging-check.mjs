@@ -59,7 +59,11 @@
  * whose figures, sentence and lists must count exactly those two, then
  * opens its project's Overview, whose health table (overview.health) must
  * hold that sub-project's row with those two tasks' figures, and opens the
- * sub-project's Board from the row (ui/overview). It records the frames the
+ * sub-project's Board from the row (ui/overview). It makes a milestone with
+ * its run tag over REST on its project, presses its row on the project's
+ * Overview, which opens the Milestones window on the deployment's answer
+ * (milestones.get), and renames and deletes it there, each of which REST
+ * then shows (ui/milestones). It records the frames the
  * page sends on its sync socket and opens its project's Board and a fixture
  * task's address in fresh loads, neither of which may subscribe the
  * workspace's task windows (workspace.tasks), then the Roadmap, which must
@@ -4395,6 +4399,93 @@ async function overviewCheck() {
   })
 }
 
+/** The step that checks the Milestones window opened on a milestone
+ *  (milestoneWindowCheck). */
+export const MILESTONE_STEP = 'ui/milestones'
+
+/** The first week, from three weeks after the run's own on, that
+ *  `milestones` (YYYY-MM-DD days) leaves free, in an organization whose
+ *  weeks start on `weekStart`, so a milestone made there shows among the
+ *  Overview's upcoming milestones. */
+export function freeMilestoneWeek(milestones, today, weekStart) {
+  const taken = new Set(milestones.map((day) => weekOf(day, weekStart)))
+  let week = addDays(weekOf(today, weekStart), 21)
+  while (taken.has(week)) week = addDays(week, 7)
+  return week
+}
+
+/** The Milestones window on the deployment's answer (milestones.get): the
+ *  run makes `<tag> Milestone` over REST on its project M in a week M
+ *  leaves free after the run's own, then in the app M's Overview reaches
+ *  its ok state, a press on the milestone's row opens the window, which
+ *  reads the milestone and shows its editor with its name, a rename there
+ *  saved with Save reaches GET /projects/M, and its Delete, pressed twice,
+ *  leaves GET /projects/M without it. The milestone lives on M, so the
+ *  cleanup that deletes M removes one a failure left. It runs while M is
+ *  active, after ui/overview. */
+async function milestoneWindowCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check(MILESTONE_STEP, async () => {
+    const me = await restOk(w, 'GET', '/me')
+    const held = (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    const date = freeMilestoneWeek(
+      held.map((m) => m.date),
+      todayUtc(),
+      me.organization.week_start,
+    )
+    const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+      name: `${run.tag} Milestone`,
+      date,
+    })
+    const listed = async () => (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/overview/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app
+      .locator('[data-workspace-view] [data-overview-root][data-overview-state="ok"]')
+      .waitFor({ timeout: 60_000 })
+    const row = app.locator(`[data-workspace-view] [data-overview-milestone="${made.id}"]`)
+    await row.waitFor({ timeout: 60_000 })
+    await row.click()
+    const window = app.locator('[data-modal-shell] [data-milestone-window]')
+    await window.waitFor({ timeout: 10_000 })
+    const editor = window.locator(`[data-milestone-editor="${made.id}"]`)
+    await editor.waitFor({ timeout: 60_000 })
+    const name = editor.locator('input[aria-label="Name"]')
+    eq(await name.inputValue(), made.name, "the editor's name")
+    // rename it there
+    const renamed = `${run.tag} Milestone renamed`
+    await name.fill(renamed)
+    await editor
+      .locator('button')
+      .filter({ hasText: /^Save$/ })
+      .click()
+    expect(
+      await until(async () => (await listed()).some((m) => m.id === made.id && m.name === renamed)),
+      `GET /projects/${M.key} does not name ${made.name} renamed`,
+    )
+    // and delete it there, a press to arm and one to confirm
+    const opened = window.locator(`[data-milestone-row="${made.id}"]`)
+    await opened.waitFor({ timeout: 10_000 })
+    await opened.locator('button[aria-label^="Edit"]').click()
+    await editor.waitFor({ timeout: 10_000 })
+    const remove = editor.locator('button').filter({ hasText: /Delete$/ })
+    await remove.click()
+    await sleep(700)
+    await remove.click()
+    expect(
+      await until(async () => !(await listed()).some((m) => m.id === made.id)),
+      `GET /projects/${M.key} still lists ${renamed}`,
+    )
+    await app
+      .locator('[data-modal-shell] button')
+      .filter({ hasText: /^Done$/ })
+      .click()
+    return `opened ${made.name} from ${M.key}'s Overview on the deployment's answer, renamed it and deleted it in its window`
+  })
+}
+
 /** The step that checks Settings › Labels (settingsLabelsCheck). */
 export const LABELS_STEP = 'ui/settings-labels'
 
@@ -6536,6 +6627,9 @@ async function main() {
   await relationPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
+  // the Milestones window opened from the project's Overview, on a
+  // milestone of its own, while the project is active
+  await milestoneWindowCheck()
   // the Board and a task address without task windows, then the Roadmap
   // with them, while the project is active
   await tasksOnDemandCheck()
