@@ -16,7 +16,13 @@ import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { byId } from '../lib/db'
-import { archiveRow, JOB_ORDER, LIVE_READ_WARNING, type OrgExportRow } from '../lib/orgExport'
+import {
+  archiveRow,
+  JOB_ORDER,
+  LIVE_READ_WARNING,
+  ORG_EXPORT_ORDER,
+  type OrgExportRow,
+} from '../lib/orgExport'
 import { restoreItems, TRASH_BUDGET } from '../model/deletedItems'
 import { type BatchJob, exportRow, JOINED_PAGE_SIZE, readBatch } from '../model/orgExportRead'
 import { EXPORT_LIMITS } from '../model/orgExports'
@@ -1223,6 +1229,59 @@ describe("the Deleted items section reads only the organization's own rows", () 
     expect(archive.readme).toMatch(/Being in this archive restores nothing/)
     expect(archive.readme).toMatch(/Records Qivo already deleted for good are not here/)
     expect(archive.readme).toMatch(/manifest.json counts such tasks\s+under\s+skipped/)
+  })
+})
+
+describe('a job collecting at the deploy of format 4', () => {
+  it('goes on from the live sections a format 3 job read into the Deleted items section, keeping every stored row, and finishes as format 4', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    const before = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await comment(t, before)
+    await deleteTask(t, f, before.id)
+    await settle(t)
+    const during = await plantIssue(t, { org_id, project_id: f.sub.id })
+    await comment(t, during)
+    later()
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id })
+    // the release before read the live sections only, so its job is past
+    // them, and it wrote none of this release's step fields
+    await exportUntil(t, export_id, ORG_EXPORT_ORDER.length)
+    await t.run(async (ctx) => {
+      const job = await byId(ctx, 'org_exports', export_id)
+      if (job === null) throw new Error('no job')
+      const { n, section, cursor, part, seq, bytes, counts } = job.step
+      expect(section).toBe(ORG_EXPORT_ORDER.length)
+      await ctx.db.patch(job._id, {
+        format_version: 3,
+        step: { n, section, cursor, part, seq, bytes, counts },
+      })
+    })
+    // deleted after the live sections read it
+    later()
+    await deleteTask(t, f, during.id)
+    await settle(t)
+    expect(await jobOf(t, export_id)).toMatchObject({ state: 'ready', format_version: 4 })
+    const [beforeItem, duringItem] = [await itemFor(t, before.id), await itemFor(t, during.id)]
+    const archive = await archiveOf(t, export_id)
+    expect(archive.manifest.version).toBe(4)
+    expect(Object.keys(archive.manifest.deleted_items?.tables ?? {})).toEqual(
+      JOB_ORDER.filter((section) => section.folder === 'deleted').map((section) => section.key),
+    )
+    // with no record of when the live sections ended, every stored row
+    // stays, also those of an item deleted after its table was read
+    const expected = await storedExpectation(t, org_id, [beforeItem.id, duringItem.id])
+    for (const [key, rows] of Object.entries(expected))
+      expect(archive.tables[key], key).toEqual(rows)
+    expect(idsOf(archive.tables['deleted/tasks'])).toEqual([before.id, during.id].sort())
+    expect(archive.tables['deleted/comments']).toHaveLength(2)
+    expect(itemRow(archive, beforeItem.id)).toMatchObject({ export_rows: 'complete' })
+    expect(itemRow(archive, duringItem.id)).toMatchObject({
+      export_rows: 'partial',
+      export_reason: 'deleted_during_export',
+      deleted_during_export: true,
+    })
   })
 })
 
