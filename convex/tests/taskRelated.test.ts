@@ -41,7 +41,7 @@ import {
 } from '../lib/core'
 import { newWindowKey } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
-import { DEFAULT_PAGE_SIZE, LIMITS } from '../lib/limits'
+import { DEFAULT_PAGE_SIZE, LIMITS, TASK_ROW_MAX_BYTES } from '../lib/limits'
 import { CURSOR_REFUSAL, listCursorText, offsetRefusal } from '../lib/listCursor'
 import { nameKey } from '../lib/nameKey'
 import { sha256hex } from '../machine/auth'
@@ -353,6 +353,20 @@ async function everyPage(read: (cursor: string | null) => Promise<Paged>, most =
     cursor = page.next_cursor
   }
   throw new Error(`the pages did not end after ${most}`)
+}
+
+/* The least budget in bytes, from 0 to 64 KiB, at which `fits` holds, as
+ * it does for every larger budget once it holds for one. */
+async function leastBudget(fits: (bytes: number) => Promise<boolean>): Promise<number> {
+  let low = 0
+  let high = 64 * 1024
+  expect(await fits(high)).toBe(true)
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2)
+    if (await fits(mid)) high = mid
+    else low = mid + 1
+  }
+  return low
 }
 
 async function refused(p: Promise<unknown>, code: RefusalCode, sentence: string): Promise<void> {
@@ -1215,6 +1229,36 @@ describe('an archived group’s subtasks', () => {
     expect(long).toBe(short)
   })
 
+  it('counts a hidden subtask at a fixed size also where each asks about a project not asked yet', async () => {
+    const fx = await setup()
+    // eight sub-projects of SKNK, which the agent cannot read, one hidden
+    // subtask in each, so the tally looks at the request's reads after
+    // every hidden row, before one subtask the agent reads
+    const subs = await plantSubProjects(fx, 8, { under: fx.hidden })
+    const groupWith = async (title: string) => {
+      const [group] = await plantTasks(fx, 1, { archived_at: NOW })
+      for (const sub of subs)
+        await plantTasks(fx, 1, {
+          parent_id: group.id,
+          archived_at: NOW,
+          project_id: sub.id,
+          title,
+        })
+      const [shown] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
+      // the least page budget whose first page reaches the subtask the
+      // agent reads, past every hidden one
+      return await leastBudget(async (bytes) => {
+        SUBTASK_PAGE.bytes = bytes
+        const page = await restList(fx, fx.agent, 'subtasks', group.id)
+        return ids(page.rows).includes(shown.id)
+      })
+    }
+    const short = await groupWith('x')
+    const long = await groupWith('x'.repeat(LIMITS.title.max))
+    expect(short).toBeGreaterThan(subs.length * TASK_ROW_MAX_BYTES)
+    expect(long).toBe(short)
+  })
+
   it('reads the first row of a page whose budget is spent, so paging moves on', async () => {
     const fx = await setup()
     const [group] = await plantTasks(fx, 1, { archived_at: NOW })
@@ -1302,6 +1346,33 @@ describe('bounds and room', () => {
     const shelved = await restDetails(fx, fx.agent, archived.task.id)
     expect(ids(shelved.subtasks)).toEqual(archived.order.subtasks.slice(0, 1))
     expect(shelved.has_more_subtasks).toBe(true)
+  })
+
+  it('counts a hidden link end at a fixed size in the details’ room, each asking about a project not asked yet', async () => {
+    const fx = await setup()
+    // links to eight tasks in eight sub-projects of SKNK, which the agent
+    // cannot read, and to one task it reads
+    const subs = await plantSubProjects(fx, 8, { under: fx.hidden })
+    const taskWith = async (title: string) => {
+      const [task] = await plantTasks(fx, 1)
+      const hidden = []
+      for (const sub of subs)
+        hidden.push(...(await plantTasks(fx, 1, { project_id: sub.id, title })))
+      const [shown] = await plantTasks(fx, 1)
+      await plantLinks(fx, task, [...hidden, shown])
+      // the least room in which the details answer the links whole
+      return await leastBudget(async (bytes) => {
+        TASK_DETAILS.bytes = bytes
+        const details = await restDetails(fx, fx.agent, task.id)
+        if (details.links_next_cursor !== null) return false
+        expect(ids(details.links as Row[])).toEqual([shown.id])
+        return true
+      })
+    }
+    const short = await taskWith('x')
+    const long = await taskWith('x'.repeat(LIMITS.title.max))
+    expect(short).toBeGreaterThan((subs.length - 1) * TASK_ROW_MAX_BYTES)
+    expect(long).toBe(short)
   })
 
   it('keeps a write’s answer within the room the write left', async () => {

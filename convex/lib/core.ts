@@ -2001,22 +2001,23 @@ function cutAfter<Row>(
 
 /* Whether a task the read names is shown: one of the caller's organization
  * whose project `access` says the caller can see, the organization checked
- * first, since accessOf reads a project of any organization. A question
- * about a project not asked before reads, so the tally looks at the
- * request's reads after it. */
+ * first, since accessOf reads a project of any organization, and whether
+ * the question was about a project not asked before (`fresh`), which reads
+ * out of a tally's sight. A reader counting in a room counts the task's row
+ * first and only then looks at the request's reads (ReadTally look), so the
+ * look holds the row at its real size once and a hidden row's fixed charge
+ * replaces that size. A look before the row is counted would charge a
+ * hidden row its real size and the fixed charge until the next look. */
 async function shownTask(
   me: Caller,
   task: Doc<'issues'>,
   access: Access,
   asked: Set<string>,
-  room: RelatedRoom | undefined,
-): Promise<boolean> {
-  if (task.org_id !== me.org_id) return false
+): Promise<{ shown: boolean; fresh: boolean }> {
+  if (task.org_id !== me.org_id) return { shown: false, fresh: false }
   const fresh = !asked.has(task.project_id)
   asked.add(task.project_id)
-  const shown = await access.visible(task.project_id)
-  if (fresh && room !== undefined) await room.tally.look()
-  return shown
+  return { shown: await access.visible(task.project_id), fresh }
 }
 
 /**
@@ -2048,8 +2049,9 @@ async function subtasksByNumber(
       room.tally.doc(kid, TASK_ROW_MAX_BYTES)
       return { rows, next: at }
     }
-    const shown = await shownTask(me, kid, access, asked, room)
+    const { shown, fresh } = await shownTask(me, kid, access, asked)
     room.tally.doc(kid, shown ? undefined : TASK_ROW_MAX_BYTES)
+    if (fresh) await room.tally.look()
     at = { key: '', tie: [kid.num] }
     if (shown) rows.push(taskRefOf(kid))
     if (!(await roomLeft(room))) return { rows, next: at }
@@ -2080,7 +2082,7 @@ const readSubtasks: PageReader<TaskRefJson> = async (ctx, a) => {
   const rows: Positioned<TaskRefJson>[] = []
   for (const kid of kids) {
     if (kid.archived_at !== undefined) continue
-    if (!(await shownTask(a.me, kid, a.access, asked, undefined))) continue
+    if (!(await shownTask(a.me, kid, a.access, asked)).shown) continue
     rows.push({ at: { key: '', tie: [kid.num] }, row: taskRefOf(kid) })
   }
   return cutAfter(rows, a.after, a.limit)
@@ -2124,8 +2126,9 @@ const readLinks: PageReader<TaskLinkJson> = async (ctx, a) => {
       link.source_id === issue.id ? link.target_id : link.source_id,
     )
     if (other === null) continue
-    const seen = await shownTask(me, other, access, asked, room)
+    const { shown: seen, fresh } = await shownTask(me, other, access, asked)
     room?.tally.doc(other, seen ? undefined : TASK_ROW_MAX_BYTES)
+    if (fresh) await room?.tally.look()
     // the read task is shown, since the call found it (findIssue)
     if (!linkShown(link, (id) => id === issue.id || (seen && id === other.id))) continue
     rows.push({
