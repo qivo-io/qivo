@@ -52,7 +52,7 @@
       "slug": "the-roadmap",
       "title": "The Roadmap",
       "order": 7,
-      "description": "The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project, tasks sit under their sub-projects. All projects and My view group them by…",
+      "description": "The Roadmap shows scheduled tasks as bars on a weekly timeline, for one project, one sub-project or My view. In a project, tasks sit under their sub-projects…",
       "aliases": {
         "refresh-remaining-hours-before-you-plan": ["estimates-refresh-the-numbers-before-you-plan"]
       }
@@ -69,7 +69,7 @@
       "slug": "planning-against-real-capacity",
       "title": "Planning against real capacity",
       "order": 9,
-      "description": "Plan on roadmap opens the timeline and highlights the task. Unscheduled tasks receive a starter bar. A Backlog task must first move to another status; trying…"
+      "description": "Plan on roadmap opens the timeline and highlights the task. From All projects it opens the task's project. The task stays on the timeline for the session…"
     },
     {
       "file": "the-task-window.md",

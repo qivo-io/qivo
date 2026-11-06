@@ -14,8 +14,8 @@ and flags projected delays. Other users see saved changes live.
 
 Views and dialogs may show **Loading…** the first time you open them.
 
-Qivo loads every task only when a page or action needs every one of them:
-the Roadmap, a new task and the Inbox's search. A note at the
+Qivo loads every task only when something needs every one of them: a new
+task and the Inbox's search. A note at the
 bottom of the page then says **Loading tasks…**, with a bar that moves but
 does not say how far it has got. The Board, the task list, the Overview,
 Team sync and Search show what the server answers for them, before and while
@@ -26,15 +26,15 @@ subtasks or linked tasks shows at once, and you can change it at once, its
 parent, its subtasks and its links included. A task opened by the number
 in its link takes changes once the window has read it on its own. Moving,
 archiving and deleting such a task work at once too, once its window has
-read every subtask of it. The Roadmap opens once every task
-has loaded, and so do moving, archiving and deleting a task you have just
-created, unless its window has read every subtask of it. An open task's
+read every subtask of it. The Roadmap opens at once from the server.
+Moving, archiving and deleting a task you have just created wait until
+every task has loaded, unless its window has read every subtask of it. An open task's
 subtasks, linked tasks and attachments load on their own, and its
 **Parent**, **Subtasks** and **Linked tasks** pickers search every task on
 the server. Settings and all its pages open at once. A link to one task
 opens without loading every task. If loading stops, the note says why and
 that changes you make show as you made them until every task has loaded,
-and it offers **Try again**, as the pages that wait for every task do.
+and it offers **Try again**, as the Inbox's search does.
 
 If your organization uses Microsoft and sign-in asks for admin approval, see
 [Microsoft sign-in and administrator approval](./microsoft-sign-in-and-administrator-approval.md).

@@ -1,8 +1,15 @@
 ## Plan on roadmap
 
-**Plan on roadmap** opens the timeline and highlights the task. Unscheduled
-tasks receive a starter bar. A Backlog task must first move to another status;
-trying to plan it leaves its dates unchanged. Done tasks can still be planned.
+**Plan on roadmap** opens the timeline and highlights the task. From **All
+projects** it opens the task's project. The task stays on the timeline for the
+session whatever the filters, and the Roadmap moves its window to the task
+first if needed. Unscheduled tasks receive a starter bar. A Backlog task must
+first move to another status; trying to plan it leaves its dates unchanged.
+Done tasks can still be planned. When the task cannot show on that Roadmap,
+for example because the project is past the Roadmap's 1,000-task limit, Qivo
+says why and starts no session. If the task leaves the Roadmap during the
+session, for example because someone moved it to another sub-project that
+your filters hide, the session ends and its dates stay as they were saved.
 
 A task with subtasks takes its dates from them, so its button reads
 **Show on roadmap**. It opens the timeline and finds the task's bar or
@@ -20,6 +27,10 @@ The planning panel offers:
 - The owner's committed hours by project, excluding paused work. Hidden
   projects appear as anonymous **Other projects** hours where your role allows
   it ([Delay projections](./will-it-be-ready-in-time-the-delay-status.md#how-the-projection-works)). The free-hours summary uses that person's plannable week.
+  These figures update while you plan: your own changes count at once, and
+  changes others make to the owner's work show as they save. As a guest or
+  organization Viewer looking at someone else's work, the panel says
+  **Counts only projects you can see**.
 - **Confirm** to keep the dates or **Cancel** to restore the original dates,
   including an unscheduled state.
 
@@ -27,13 +38,18 @@ Agents have no weekly capacity limit. Auto-fit ends in the start or measurement
 week, whichever is later, and shows **No weekly capacity limit for auto-fit**.
 When Qivo cannot read the owner's workload, for example when they hold more
 open work than it reads at once, the panel shows **Workload is unavailable**
-and auto-fit pauses. That applies to agents too.
+and auto-fit pauses until Qivo can read it again. That applies to agents too.
 
 ## The Team strip
 
 **Team utilization** sits below the Roadmap on the same weekly grid. People
 and agents appear alphabetically. Each person's cells show their scheduled
 load as a percentage of their own plannable hours, with **0%** for empty weeks.
+While Qivo reads a person's workload their cells show **…**, and where it
+could not read it, for example past the bounds of one read, a cell says
+**unknown**, never 0%. As a guest or organization Viewer, Qivo reads the
+workload of the 50 people with the most tasks on the Roadmap, and shows the
+others as unknown.
 Their weekly capacity appears beside their name. New people start with the
 organization default, initially 32 hours ([Planning hours](./organization-and-team-settings.md#planning-hours-and-teams)).
 
@@ -245,12 +261,11 @@ Use the row controls to change tasks without opening them:
   Roadmap finds its bar or unplanned row without starting a planning session.
 - The **review tick** marks the task reviewed without changing it.
 
-A row's **Board** link opens the task's sub-project. Its **Roadmap** link
-uses All projects for an all-project sync, or the task's sub-project
-otherwise. The links beside a person's name filter to that person, using
+A row's **Board** and **Roadmap** links open the task's sub-project. The
+links beside a person's name filter to that person, using
 the selected project when applicable; for an all-project or team sync they
-open All projects, where the Board asks you to choose a project and then
-shows that person's tasks in it. Other filters clear so tasks remain
+open All projects, where the Board and the Roadmap ask you to choose a
+project and then show that person's tasks in it. Other filters clear so tasks remain
 visible; Focus stays unchanged.
 
 Read-only projects disable edits and mentions. On phones, Back closes an open

@@ -1,11 +1,15 @@
-The Roadmap shows scheduled tasks as bars on a weekly timeline. In a project,
-tasks sit under their sub-projects. **All projects** and **My view** group them
-by project, then sub-project. Undated tasks appear below the scheduled tasks
+The Roadmap shows scheduled tasks as bars on a weekly timeline, for one
+project, one sub-project or **My view**. In a project, tasks sit under their
+sub-projects. **My view** groups your own tasks by project, then sub-project.
+In **All projects** the Roadmap asks you to choose a project, as the Board
+and the Overview do. Undated tasks appear below the scheduled tasks
 with an **unplanned** marker and their due date, if set. Click one to open it
 and set its plan. Tasks with subtasks take their dates from them instead.
 
 Project and sub-project headings show their unfinished tasks' total remaining
-hours and stay visible while you scroll their rows. Use a heading's arrow to
+hours and stay visible while you scroll their rows. While Qivo is still
+counting those hours, a heading reads **Counting…**, and where it could not
+count them within its limits, a muted **unknown**. Neither means zero hours. Use a heading's arrow to
 collapse it. The double chevron in the **Task** header collapses or expands
 all groups, including groups inside collapsed projects. Filters hide groups
 with no matching tasks; clearing a filter restores their previous collapsed state.
@@ -19,6 +23,17 @@ subtasks follows its subtasks instead of its own hidden status: it is never
 hidden as Backlog, and it counts as Done only when all its subtask work is
 Done. These rules also apply to the phone's landscape timeline and **Task
 schedule**, which uses the current roadmap window.
+
+The Roadmap shows at most 1,000 tasks at a time, counting each task with
+subtasks and each subtask, across the project or sub-project with its filters
+and window, or My view. A selection past that, or one Qivo could not read
+within the Roadmap's limits, shows no tasks and says so instead of showing
+part of it. Choose one of the sub-projects it offers or narrow your filters,
+such as Priority or the text filter. A shorter window does not help, as
+unfinished tasks show whatever their dates
+([Limits](./limits.md)). When you move the window, the Roadmap keeps its
+timeline, marked as refreshing, until the new weeks have loaded; a new filter
+shows **Loading tasks…** until its tasks arrive.
 
 ## A window you control
 
@@ -78,7 +93,8 @@ Click the portrait beside a task to change or clear its assignee. For a task
 Bars fill the whole planned period; their length does not show completion.
 **Done bars are green**, including groups whose descendant work is all Done.
 Other bars are blue unless delay tracking marks unfinished work yellow or red
-([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A **paused** task keeps its color and gains diagonal lines, including on
+([Delay status](./will-it-be-ready-in-time-the-delay-status.md)). A bar is gray, and its hover text says **Delay unknown**, when
+Qivo could not read its owner's workload to judge it. A **paused** task keeps its color and gains diagonal lines, including on
 its connected and adjacent edge badges.
 
 A task with subtasks takes its dates from them. Its bar runs from the
@@ -136,16 +152,23 @@ the same way, and history stays.
 
 ## Dependencies you can see and safely fix
 
-**Blocks** links appear as finish-to-start arrows. Green means the blocker
-ends before the blocked task starts. Red means it ends in or after the blocked
-task's start week. Arrows update while you drag.
+**Blocks** links appear as finish-to-start arrows between two bars on the
+timeline. Green means the blocker ends before the blocked task starts. Red
+means it ends in or after the blocked task's start week. Arrows update while
+you drag. A task you have just scheduled shows its arrows once its dates are
+saved. When Qivo cannot read the selection's links within the Roadmap's
+limits, no arrow shows, and a line above the timeline says why.
 
 **Auto-move** shifts blocked tasks to start after their blockers, including
-chains of dependent tasks. It moves a task with subtasks by moving its
+chains of dependent tasks. It works on the tasks linked to this Roadmap's
+tasks, here or in other projects, and leaves chains with no task on this
+Roadmap alone. It moves a task with subtasks by moving its
 subtasks. It never moves Done or Backlog tasks, or tasks you cannot edit,
 though they still count as blockers. A conflict stays red when fixing it
 would mean moving one of them. Cycles remain unresolved with red arrows, so you must remove or change
-those links.
+those links. When the selection's dependency chains are too long to read at
+once, Auto-move is unavailable and says so, and the arrows still show. It
+also waits until your changes, on the Roadmap or elsewhere, are saved.
 
 ## Refresh remaining hours before you plan
 

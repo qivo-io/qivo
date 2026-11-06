@@ -237,8 +237,8 @@ while Qivo cannot read every subtask of this task**. With **Read-only
 project access** you cannot change it or comment on it, but you can link it
 to a task you can edit, and you can still edit or delete your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
-once every task has loaded and then highlights it, unless you have left the
-roadmap meanwhile. Once every task has loaded for a page that needs them,
+at once and highlights the task once its timeline holds it, unless you have
+left the roadmap meanwhile. Once every task has loaded for a page that needs them,
 the window shows the task from the workspace in place, and a title, hours
 or a comment you were typing stay. If Qivo cannot check such a task for changes, the window keeps showing
 it as it last loaded and says so, with **Retry**. Its changes then wait with
