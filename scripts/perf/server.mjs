@@ -268,6 +268,7 @@ import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { parseIssueRef } from '../../convex/lib/taskRefs'
+import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
@@ -1695,6 +1696,21 @@ async function mutate(name, args) {
     await emitWorkspace()
     writes++
     return { id: seat.id, emailed: false }
+  }
+  if (name === 'teamSync:stamp') {
+    // a Team sync card's change stamps the page owner (convex/teamSync.ts
+    // stamp), which the workspace's profile and the agenda then carry
+    const at = new Date().toISOString()
+    snapshot.profiles = snapshot.profiles.map((profile) => {
+      if (profile.id !== args.profile_id) return profile
+      const prev =
+        profile.sync_at === undefined ? null : { at: profile.sync_at, since: profile.sync_since }
+      const { at: sync_at, since: sync_since } = nextSyncStamp(prev, at, args.first_since)
+      return { ...profile, sync_at, sync_since }
+    })
+    await emitWorkspace()
+    writes++
+    return null
   }
   if (name === 'roadmap:change') {
     // Only dates change here, so no task becomes or stops being a group.

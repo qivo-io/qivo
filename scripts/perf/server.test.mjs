@@ -254,7 +254,8 @@ describe('the benchmark server', () => {
 
   it("answers Team sync's agenda from its stand-in, with the states the page asks for", async () => {
     /** What teamSync:agenda answers for the first program on a workspace
-        with page parameters `params`, and the server to read it again. */
+        with page parameters `params`, and ways to read it again and to send
+        the server a write. */
     const agenda = async (params) => {
       const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
       await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
@@ -276,7 +277,7 @@ describe('the benchmark server', () => {
         const answer = posted.find((m) => m.to === at)
         return answer.error ? { error: answer.error } : JSON.parse(answer.text)
       }
-      return { answer: await read('agenda'), read, program }
+      return { answer: await read('agenda'), read, send, org: args.org_id }
     }
     const ok = await agenda('tasks=200')
     expect(ok.answer.state).toBe('ok')
@@ -284,6 +285,16 @@ describe('the benchmark server', () => {
     expect(ok.answer.people.length).toBeGreaterThan(0)
     expect(ok.answer.hidden).toBe('counted')
     expect(ok.answer.people.every((p) => p.week.state === 'ok')).toBe(true)
+    // a card's change stamps the page owner, whom the next answer carries so
+    const person = ok.answer.people.find((p) => p.stamp === null)
+    await ok.send({
+      type: 'mutation',
+      id: 'stamp',
+      name: 'teamSync:stamp',
+      args: { org_id: ok.org, profile_id: person.id },
+    })
+    const stamped = (await ok.read('stamped')).people.find((p) => p.id === person.id)
+    expect(stamped.stamp?.at).toEqual(expect.any(String))
     for (const state of ['over_ceiling', 'over_budget', 'unavailable'])
       expect((await agenda(`tasks=200&sync=${state}`)).answer.state).toBe(state)
     expect((await agenda('tasks=200&sync=access_unchecked')).answer).toMatchObject({
