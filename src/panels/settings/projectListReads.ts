@@ -1,20 +1,13 @@
 /* What Settings' project lists (ProjectLists.tsx) and a project's Settings
    page (ProjectSettings.tsx) share beside their components: the open
    lists' caps, how a list answer reads, the sub-project list's read and
-   its Load more, and the name tags of rows shown together. */
-import { useRef } from 'react'
+   the name tags of rows shown together. Their Load more is
+   lib/loadMore.ts. */
 import { api } from '../../../convex/_generated/api'
 import type { NavChildRow } from '../../../convex/model/projectNavReads'
 import type { SettingsListAnswer } from '../../../convex/model/projectSettingsLists'
 import { sentence } from '../../lib/fieldLimits'
-import { useFocusWhenGone } from '../../lib/focusWhenGone'
-import {
-  type BatchAt,
-  type ListEnd,
-  type PagedList,
-  useMoreOnScroll,
-  usePagedList,
-} from '../../lib/pagedList'
+import { type BatchAt, usePagedList } from '../../lib/pagedList'
 import { duplicateNameTags } from '../../store/viewModels'
 
 /** The most rows an open list gathers, which tests lower and set back: an
@@ -79,32 +72,4 @@ export function useSubProjects(at: { org: string; project: string } | null) {
     id: (row: NavChildRow) => row.id,
     most: PROJECT_LIST_LIMITS.subProjects,
   })
-}
-
-/**
- * Load more for an open list: keeps focus on the button while it reads,
- * and once Load more goes moves it to the first new row's control
- * (`rowControl`), else `rest()`, as Settings › Labels does. Answers the
- * press and the marker ref that loads more as the list's end scrolls into
- * view (lib/pagedList.ts useMoreOnScroll).
- */
-export function useLoadMore<A, Row extends { id: string }>(
-  list: PagedList<A, Row>,
-  end: ListEnd,
-  rowControl: (id: string) => HTMLElement | null,
-  rest: () => HTMLElement | null,
-) {
-  const from = useRef<number | null>(null)
-  useFocusWhenGone(end === 'more', () => {
-    if (end === 'loading') return null
-    const row = from.current === null ? undefined : list.rows[from.current]
-    return (row ? rowControl(row.id) : null) ?? rest()
-  })
-  const more = () => {
-    if (list.phase === 'more') return
-    from.current = list.rows.length
-    list.more()
-  }
-  const marker = useMoreOnScroll(more, end === 'more' && list.phase !== 'more')
-  return { more, marker }
 }
