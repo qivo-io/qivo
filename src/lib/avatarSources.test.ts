@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AvatarImageCache } from './avatarImageCache'
-import { createAvatarSources } from './avatarSources'
+import { AVATAR_SOURCES, createAvatarSources } from './avatarSources'
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void
@@ -29,13 +29,13 @@ function persistentFixture(blob: Blob | null = new Blob(['cached face'], { type:
   return { cache, blobs }
 }
 
-function fixture() {
+function fixture(overrides: { shrink?: (blob: Blob) => Promise<Blob> } = {}) {
   let now = 0
   let serial = 0
   const fetcher = vi
     .fn<typeof fetch>()
     .mockImplementation(async () => new Response(new Blob(['face'])))
-  const decode = vi.fn<(url: string) => Promise<void>>().mockResolvedValue()
+  const decode = vi.fn<(url: string) => Promise<unknown>>().mockResolvedValue(undefined)
   const revokeUrl = vi.fn()
   const createUrl = vi.fn(() => `blob:portrait-${++serial}`)
   const cache = createAvatarSources({
@@ -44,6 +44,7 @@ function fixture() {
     decode,
     createUrl,
     revokeUrl,
+    ...overrides,
   })
   cache.sync([KEY])
   return {
@@ -362,5 +363,148 @@ describe('prepared profile pictures', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('profile picture bounds', () => {
+  const BOUNDS = structuredClone(AVATAR_SOURCES)
+  afterEach(() => {
+    Object.assign(AVATAR_SOURCES, structuredClone(BOUNDS))
+  })
+  const KIB = 1024
+  const face = (bytes: number) => new Blob([new Uint8Array(bytes)], { type: 'image/webp' })
+  const keys = (n: number) => Array.from({ length: n }, (_, i) => `avatar:person-${i}:v1`)
+
+  it('downloads at most six pictures at once', async () => {
+    const f = fixture()
+    const held = Array.from({ length: 8 }, () => deferred<Response>())
+    let next = 0
+    f.fetcher.mockImplementation(
+      () => (held[next++] as ReturnType<typeof deferred<Response>>).promise,
+    )
+    const all = keys(8)
+    f.cache.sync(all)
+    const loading = all.map((key) => f.cache.prepare(key, LEASE))
+    expect(f.fetcher).toHaveBeenCalledTimes(6)
+    expect(f.cache.downloading()).toBe(6)
+    // a key waiting for a slot is on its way, so nothing mints it again
+    expect(f.cache.needsRefresh(all[7] as string)).toBe(false)
+    held[0]?.resolve(new Response(face(KIB)))
+    await vi.waitFor(() => expect(f.fetcher).toHaveBeenCalledTimes(7))
+    for (const h of held) h.resolve(new Response(face(KIB)))
+    expect(await Promise.all(loading)).toEqual(Array(8).fill(true))
+    expect(f.cache.downloading()).toBe(0)
+  })
+
+  it.each([
+    ['300 KiB', 300 * KIB, 256],
+    ['512-pixel', 20 * KIB, 512],
+  ])('re-encodes a %s picture and keeps the result', async (_, bytes, edge) => {
+    const shrink = vi.fn(async () => face(18 * KIB))
+    const f = fixture({ shrink })
+    f.fetcher.mockResolvedValue(new Response(face(bytes)))
+    f.decode.mockResolvedValueOnce({ width: edge, height: edge })
+    f.decode.mockResolvedValueOnce({ width: 256, height: 256 })
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(true)
+    expect(shrink).toHaveBeenCalledOnce()
+    expect(f.cache.url(KEY)).toBe('blob:portrait-2')
+    expect(f.cache.keptBytes()).toBe(18 * KIB)
+    expect(f.revokeUrl).toHaveBeenCalledWith('blob:portrait-1')
+  })
+
+  it('keeps a picture that stays too large as initials, never kept or retried until its version changes', async () => {
+    const stored = persistentFixture(null)
+    const f = fixture({ shrink: async () => face(300 * KIB) })
+    f.cache.setPersistent(stored.cache)
+    f.fetcher.mockResolvedValue(new Response(face(300 * KIB)))
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(false)
+    expect(f.cache.url(KEY)).toBeNull()
+    expect(stored.cache.put).not.toHaveBeenCalled()
+    expect(f.cache.keptBytes()).toBe(0)
+    f.time(3_600_000)
+    expect(f.cache.needsRefresh(KEY)).toBe(false)
+    const replaced = 'avatar:person:version-two'
+    f.cache.sync([replaced])
+    expect(f.cache.needsRefresh(replaced)).toBe(true)
+  })
+
+  it('starts no download past a lowered kept budget, and a roster change frees room in the order asked', async () => {
+    AVATAR_SOURCES.keptBytes = 500 * KIB
+    const f = fixture()
+    f.fetcher.mockImplementation(async () => new Response(face(200 * KIB)))
+    const [a, b, c, d] = keys(4) as [string, string, string, string]
+    f.cache.sync([a, b, c, d])
+    expect(await f.cache.prepare(a, LEASE)).toBe(true)
+    expect(await f.cache.prepare(b, LEASE)).toBe(true)
+    // 400 KiB kept: one more picture of up to 256 KiB would pass 500
+    expect(await f.cache.prepare(c, LEASE)).toBe(false)
+    expect(await f.cache.prepare(d, LEASE)).toBe(false)
+    expect(f.fetcher).toHaveBeenCalledTimes(2)
+    expect([c, d].map((k) => [f.cache.url(k), f.cache.needsRefresh(k)])).toEqual([
+      [null, false],
+      [null, false],
+    ])
+    f.cache.sync([b, c, d])
+    expect(f.cache.needsRefresh(c)).toBe(true)
+    expect(f.cache.needsRefresh(d)).toBe(false)
+    expect(await f.cache.prepare(c, LEASE)).toBe(true)
+    expect(f.cache.keptBytes()).toBe(400 * KIB)
+  })
+
+  it('counts restored pictures in the kept bytes', async () => {
+    const f = fixture()
+    f.cache.setPersistent(persistentFixture(face(30 * KIB)).cache)
+    await f.cache.restore()
+    expect(f.cache.keptBytes()).toBe(30 * KIB)
+    f.cache.failure(KEY, true)
+    expect(f.cache.keptBytes()).toBe(0)
+  })
+
+  it('removes the persistent copy when the gateway refuses the picture', async () => {
+    const stored = persistentFixture()
+    const f = fixture()
+    f.cache.setPersistent(stored.cache)
+    f.fetcher.mockResolvedValueOnce(new Response(null, { status: 404 }))
+    expect(await f.cache.prepare(KEY, LEASE)).toBe(false)
+    expect(stored.cache.remove).toHaveBeenCalledWith(KEY)
+  })
+
+  it('renews, downloads and releases nothing while hidden, and on return renews without a download', async () => {
+    const f = fixture()
+    await f.cache.prepare(KEY, LEASE)
+    const ready = f.cache.url(KEY)
+    f.cache.pause(true)
+    // an hour hidden, far past the lease and its grace
+    f.time(3_600_000)
+    expect(f.cache.needsRefresh(KEY)).toBe(false)
+    expect(f.cache.expire()).toBe(false)
+    expect(f.cache.url(KEY)).toBe(ready)
+    const other = 'avatar:other:v1'
+    f.cache.sync([KEY, other])
+    const waiting = f.cache.prepare(other, { ...LEASE, exp: 4200 })
+    expect(f.fetcher).toHaveBeenCalledOnce()
+    f.cache.pause(false)
+    expect(await waiting).toBe(true)
+    expect(f.cache.needsRefresh(KEY)).toBe(true)
+    expect(f.cache.url(KEY)).toBe(ready)
+    await f.cache.prepare(KEY, { url: 'https://files.test/portrait?token=back', exp: 4200 })
+    expect(f.fetcher).toHaveBeenCalledTimes(2)
+    expect(f.cache.url(KEY)).toBe(ready)
+    // a refusal at the renewal still releases it
+    expect(f.cache.failure(KEY, true)).toBe(true)
+    expect(f.cache.url(KEY)).toBeNull()
+  })
+
+  it('releases a held picture whose renewal keeps failing after the return, not later', async () => {
+    const f = fixture()
+    await f.cache.prepare(KEY, LEASE)
+    f.cache.pause(true)
+    f.time(3_600_000)
+    f.cache.pause(false)
+    f.cache.failure(KEY, false)
+    f.time(3_600_000 + 10 * 60_000 - 1)
+    expect(f.cache.url(KEY)).not.toBeNull()
+    f.time(3_600_000 + 10 * 60_000)
+    expect(f.cache.url(KEY)).toBeNull()
   })
 })
