@@ -567,6 +567,26 @@ describe('items a restore deferred', () => {
     expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
   })
 
+  it('sends its second send at once when the pause that refused it ended before the refusal came back', async () => {
+    const { task } = await deferOne()
+    whole.fail(new Error('[CONVEX Q(workspace:whole)] [Request ID: 1] Server Error'))
+    await settle()
+    expect(P.editsPaused()).toBe(true)
+    // the pause refuses the second send at the press, and edits resume
+    // before the store hands the watch that refusal
+    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    whole.next({ ...structuredClone(whole.snap), delivered_at: '2026-10-16T17:00:00.000Z' })
+    expect(P.editsPaused()).toBe(false)
+    expect(calls).toEqual([])
+    // the row's answer stays as it was, so only the watch can send it again
+    await settle()
+    expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
+    await answerNext()
+    expect(watchOf(task.id)).toEqual([])
+    expect(P.deletedWaiting.size).toBe(0)
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+  })
+
   it('waits out the save pause that refuses its second send, and sends it once Qivo is back', async () => {
     const { task } = await deferOne()
     vi.useFakeTimers()

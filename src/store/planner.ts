@@ -6090,13 +6090,28 @@ const deferredWatches = new Map<string, () => void>()
    neither the save pause nor snapshot trouble holds any more. */
 const afterPause = new Set<() => void>()
 
+/* How many times edits have resumed (resumeAfterPause), so a write can
+   tell whether a pause ended between its send and its answer. */
+let pauseEnds = 0
+
 /** Runs what waits for edits to resume, once both pauses have ended. */
 function resumeAfterPause() {
   // one pause can end while the other still holds
   if (snapshotTrouble || savePause()) return
+  pauseEnds += 1
   const waiting = [...afterPause]
   afterPause.clear()
   for (const run of waiting) run()
+}
+
+/** Runs `run` once edits resume after a write the pause refused, whose
+    send began when pauseEnds was `since`. A pause that ended before the
+    refusal came back has already run what waited for it, so `run` goes at
+    once when edits have resumed since and no pause holds now; otherwise it
+    waits for the next resumeAfterPause. */
+function afterPauseSince(since: number, run: () => void) {
+  if (pauseEnds !== since && !snapshotTrouble && !savePause()) run()
+  else afterPause.add(run)
 }
 
 /** Sets P.deletedAction and shows it on the page. */
@@ -6424,8 +6439,9 @@ async function runDeletedItems<Reason>(
    another waits without judging it. A re-send skips the busy rule, so a
    new action may run beside the watches, and honors the pause. When the
    pause refuses it or stops its call, the watch goes on and judges the
-   last row it took again once edits resume (resumeAfterPause), or on the
-   row's next answer, whichever comes first. */
+   last row it took again once edits resume (afterPauseSince), at once when
+   they resumed before the refusal came back, or on the row's next answer,
+   whichever comes first. */
 function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet<string>) {
   if (deferredWatches.has(item.id)) return
   const epoch = storeEpoch
@@ -6456,16 +6472,15 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
   }
   const resend = (row: DeletedRow) => {
     sending = true
+    // a pause can end before this send's answer comes back
+    const since = pauseEnds
     void runDeletedItems([row], RESTORE_CALLS(bulk), { bulk, resend: true }).then((outcome) => {
       sending = false
       if (ended || epoch !== storeEpoch) return
       const refused = outcome.refused.find((r) => r.id === row.id)
       if (refused) return end(refusalText(refused.reason))
       // the pause is no refusal of the item, which waits for edits to resume
-      if (outcome.paused) {
-        afterPause.add(again)
-        return
-      }
+      if (outcome.paused) return afterPauseSince(since, again)
       if (outcome.failed.includes(row.id) || outcome.unknown.includes(row.id))
         return end(outcome.error === null ? 'Try again.' : reasonAfter(outcome.error))
       end()
