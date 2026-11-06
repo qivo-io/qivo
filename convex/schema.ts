@@ -2069,7 +2069,7 @@ export default defineSchema({
     // so each write counts once. The expiry steps the run's last step
     // started add `expired` and `expiry_steps`. The other five are what
     // Convex's transaction metrics measured of the steps and the expiry
-    // steps, the run row's own write included.
+    // steps, the read and write of the run row's own update included.
     counts: v.object({
       steps: v.number(),
       restarts: v.number(),

@@ -16,7 +16,8 @@
  *      cursor, and the next day starts its own run.
  *   5. The run row's counters: the revisions since each previous sample,
  *      none after a recount whatever revision it ends at, and Convex's
- *      transaction metrics.
+ *      transaction metrics, equal to what each step and expiry step
+ *      measured in the end, the run row's own update included.
  *   6. Expiry goes a page at a time and keeps the days inside the
  *      retention.
  *   7. Teardowns: a deletion in steps and deleteOrgDeep leave none of an
@@ -49,7 +50,7 @@ import {
   SAMPLE_STALLED_MS,
 } from '../model/storageSamples'
 import { addToOrg, addToProject, orgTotalsRow, startOrgTotals } from '../model/storageTotals'
-import { step as stepFn, tick as tickFn } from '../storageSamples'
+import { expire as expireFn, step as stepFn, tick as tickFn } from '../storageSamples'
 import {
   as,
   expectRefusal,
@@ -192,22 +193,34 @@ const beginDeletion = (t: T, orgId: string) =>
   )
 
 /** What one transaction read and wrote, from Convex's metrics. */
-type Measured = { ranges: number; documents: number; bytes: number; written: number }
+type Measured = {
+  ranges: number
+  documents: number
+  bytes: number
+  written: number
+  written_bytes: number
+}
+
+/** What transaction `ctx` has read and written so far. */
+async function metricsOf(ctx: MutationCtx): Promise<Measured> {
+  const m = await ctx.meta.getTransactionMetrics()
+  return {
+    ranges: m.databaseQueries.used,
+    documents: m.documentsRead.used,
+    bytes: m.bytesRead.used,
+    written: m.documentsWritten.used,
+    written_bytes: m.bytesWritten.used,
+  }
+}
 
 /** Registered mutation `fn` run inside one transaction of its own, with
- * what that transaction read and wrote. */
+ * what that transaction read and wrote in the end. */
 const measured = (t: T, fn: unknown, args: Record<string, unknown>) =>
   t.run(async (ctx): Promise<Measured> => {
     await (
       fn as { _handler: (ctx: MutationCtx, args: Record<string, unknown>) => Promise<unknown> }
     )._handler(ctx, args)
-    const m = await ctx.meta.getTransactionMetrics()
-    return {
-      ranges: m.databaseQueries.used,
-      documents: m.documentsRead.used,
-      bytes: m.bytesRead.used,
-      written: m.documentsWritten.used,
-    }
+    return await metricsOf(ctx)
   })
 
 /* ------------------------------------------------------------ the cases */
@@ -583,6 +596,46 @@ describe("the run's counters", () => {
       revision: recounted?.revision,
     })
   })
+
+  it('adds what each step and expiry step measured in the end, the read and write of the run row included', async () => {
+    SAMPLE_PAGE.orgs = 2
+    const t = newT()
+    for (let i = 0; i < 3; i++) await plantOrg(t, 10)
+    // a day past the retention, for the expiry to delete
+    vi.setSystemTime(AT - SAMPLE_RETENTION_DAYS * DAY_MS)
+    await runDay(t)
+    vi.setSystemTime(AT)
+    await tick(t)
+    const run = (await runRow(t))?.run ?? ''
+    const counts = async () => (await runRow(t))?.counts
+    // a full page, the last page, which finishes the run, and the expiry
+    for (const [fn, args] of [
+      [stepFn, { day: TODAY, run }],
+      [stepFn, { day: TODAY, run }],
+      [expireFn, { day: TODAY }],
+    ] as const) {
+      const before = await counts()
+      const m = await measured(t, fn, args)
+      const after = await counts()
+      expect({
+        documents_read: (after?.documents_read ?? 0) - (before?.documents_read ?? 0),
+        bytes_read: (after?.bytes_read ?? 0) - (before?.bytes_read ?? 0),
+        documents_written: (after?.documents_written ?? 0) - (before?.documents_written ?? 0),
+        bytes_written: (after?.bytes_written ?? 0) - (before?.bytes_written ?? 0),
+        database_queries: (after?.database_queries ?? 0) - (before?.database_queries ?? 0),
+      }).toEqual({
+        documents_read: m.documents,
+        bytes_read: m.bytes,
+        documents_written: m.written,
+        bytes_written: m.written_bytes,
+        database_queries: m.ranges,
+      })
+    }
+    expect(await runRow(t)).toMatchObject({
+      finished_at: AT,
+      counts: { steps: 2, written: 3, expired: 3, expiry_steps: 1 },
+    })
+  })
 })
 
 describe('expiry', () => {
@@ -733,13 +786,7 @@ describe('what the totals add to the writes they count', () => {
         await (
           fn as { _handler: (ctx: MutationCtx, args: Record<string, unknown>) => Promise<unknown> }
         )._handler(ctx, { org_id: f.org.id, ...args })
-        const m = await ctx.meta.getTransactionMetrics()
-        return {
-          ranges: m.databaseQueries.used,
-          documents: m.documentsRead.used,
-          bytes: m.bytesRead.used,
-          written: m.documentsWritten.used,
-        }
+        return await metricsOf(ctx)
       })
     const id = uuid()
     const attached = await call(attachFn, {
@@ -804,8 +851,8 @@ describe('reads at the batch size', () => {
     // Each organization: its row, in the step's one page of organizations,
     // and four indexed reads, its removal, its totals row, its sample of
     // the day and its sample of the latest day, of which only the totals
-    // row is there. With the run row, read once, and the samples and the
-    // run row written.
+    // row is there. With the run row, read once and again by its update,
+    // and the samples and the run row written.
     const n = SAMPLE_PAGE.orgs
     expect(fresh).toMatchObject({ documents: 2 * n + 2, ranges: 4 * n + 2, written: n + 1 })
     // a sample of the day found ends the organization's reads, before its

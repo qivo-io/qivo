@@ -1577,7 +1577,8 @@ steps (`counts.steps`, the organizations divided by 100, rounded down, plus
 one) and the expiry steps (`counts.expiry_steps`, at least one). The reads
 and writes are `documents_read`, `documents_written`, `bytes_read`,
 `bytes_written` and `database_queries`, which Convex measured of the steps
-and expiry steps, plus one indexed read of at most one row for each tick.
+and expiry steps, the update of the run row that ends each one included,
+plus one indexed read of at most one row for each tick.
 `database_queries` is Convex's own count, not the index ranges the code
 opens; a local backend counted 7 before a transaction's first read.
 Each sample written (`written`) is one row of about 230 bytes, and the rows

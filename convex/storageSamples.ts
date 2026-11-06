@@ -156,8 +156,11 @@ async function sampleOrg(
   return { written: 1, revisions: Math.max(0, grown) }
 }
 
-/* Adds `tally` and what Convex measured of this transaction so far to run
- * row `row`, counting the row's own write, and writes it with `patch`. */
+/* Adds `tally` and what Convex measured of this transaction to run row
+ * `row`, as this transaction read it last, and writes it with `patch`. The
+ * metrics are read before that patch, so the patch's own work is added as
+ * Convex measures it, one read of the row as it was and one write of the
+ * row as it becomes. */
 async function record(
   ctx: MutationCtx,
   row: Doc<'storage_sample_runs'>,
@@ -167,9 +170,9 @@ async function record(
   const m = await ctx.meta.getTransactionMetrics()
   const measured = {
     ...tally,
-    documents_read: m.documentsRead.used,
+    documents_read: m.documentsRead.used + 1,
     documents_written: m.documentsWritten.used + 1,
-    bytes_read: m.bytesRead.used,
+    bytes_read: m.bytesRead.used + getDocumentSize(row),
     bytes_written: m.bytesWritten.used,
     database_queries: m.databaseQueries.used,
   }
