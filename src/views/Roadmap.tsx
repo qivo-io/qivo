@@ -793,9 +793,10 @@ function Roadmap({
     setMsLive(n)
   }
   /* A drop sends the flag's new week with the stored name and day of the
-     answer it came from as the move's expected values, read when it drops
-     (storedOf), as a flag in a row that did not render again since may
-     hold an older render's commit. */
+     answer it came from as what the person saw (P.setMilestone `seen`),
+     read when it drops (storedOf), as a flag in a row that did not render
+     again since may hold an older render's commit. A move sends only the
+     day, so its expected value is that answer's stored day. */
   const msCommit = (id, epoch) => {
     const w = msLiveRef.current[id]
     msLiveRef.current = {}

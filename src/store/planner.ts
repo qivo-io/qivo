@@ -16752,8 +16752,9 @@ export const PLANNER = {
 
   /** Moves milestone `id` to week `week`, as a flag's drag does. `seen` is
       the milestone as the flag showed it, its stored name and day from the
-      answer it came from, which go out as the move's expected values
-      (updateMilestone); without it they come from the row on screen. */
+      answer it came from; updateMilestone sends only the fields it
+      changes, so the move's expected value is the day in `seen`. Without
+      it the row on screen gives it. */
   setMilestone: (id: string, week: number, seen?: { name: string; week: string }) => {
     void PLANNER.updateMilestone(id, { week }, seen)
   },
