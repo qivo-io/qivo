@@ -4471,15 +4471,10 @@ async function milestoneWindowCheck() {
     await opened.waitFor({ timeout: 10_000 })
     await opened.locator('button[aria-label^="Edit"]').click()
     await editor.waitFor({ timeout: 10_000 })
-    await editor
-      .locator('button')
-      .filter({ hasText: /^Delete$/ })
-      .click()
-    await sleep(700)
-    await editor
-      .locator('button')
-      .filter({ hasText: /^Confirm delete$/ })
-      .click()
+    await confirmTwice(
+      editor.locator('button').filter({ hasText: /^Delete$/ }),
+      editor.locator('button').filter({ hasText: /^Confirm delete$/ }),
+    )
     expect(
       await until(async () => !(await listed()).some((m) => m.id === made.id)),
       `GET /projects/${M.key} still lists ${renamed}`,
