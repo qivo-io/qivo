@@ -3887,6 +3887,10 @@ const DEPENDENCIES_QUERY: ViewQuery = { ref: api.tasks.roadmapDependencies }
 export const ROADMAP_SLOT = 'roadmap'
 export const ROADMAP_DEPS_SLOT = 'roadmap:deps'
 const PLAN_LOADS = 'roadmap:plan'
+/** The two slots of the Roadmap's milestone reads, the shown range and a
+    new window's on its way, which it alternates
+    (views/roadmap/useRoadmapMilestones.ts) and P.releaseRoadmap forgets. */
+export const ROADMAP_MILESTONE_SLOTS = ['milestones:roadmap:a', 'milestones:roadmap:b'] as const
 
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
@@ -4329,9 +4333,13 @@ function overviewStep(step: () => void) {
    section shows ('milestone:kept') and its Upcoming and Past sections,
    one live read each and a Load more's on its way
    ('milestones:window:upcoming:<n>', 'milestones:window:past:<n>',
-   views/useMilestoneSection.ts), and Team sync's opening its next
+   views/useMilestoneSection.ts), Team sync's opening its next
    milestone and the milestones of this week and next
-   ('milestones:sync-next', 'milestones:sync-ahead'). Each is a view read
+   ('milestones:sync-next', 'milestones:sync-ahead'), and the Roadmap's
+   flags for the weeks on screen, the shown range and a new window's on
+   its way under two fixed slots it alternates
+   (ROADMAP_MILESTONE_SLOTS, views/roadmap/useRoadmapMilestones.ts). Each
+   is a view read
    (watchView), with its owner, attempt, key, connection and the answer it
    keeps while it stops, and its answer's milestones are the read's anchor
    in milestoneRows. Every
@@ -12148,13 +12156,17 @@ export const PLANNER = {
     const load = ownerLoads.loadOf(org, owner)
     return load.state === 'ok' && load.team ? ownerItemsOf(org, owner, load, ownerItemsCtx) : null
   },
-  /** Forgets the Roadmap's reads, their rows and the owners Team
-      utilization and the planning panel registered: its page left. */
+  /** Forgets the Roadmap's reads, their rows, its milestone reads and
+      their answers, and the owners Team utilization and the planning
+      panel registered: its page left. A kept page's reads only stop while
+      it hides, so their answers show again on its return; App calls this
+      once the page is no longer kept. */
   releaseRoadmap: () => {
     slotExtraOwners.delete(ROADMAP_SLOT)
     releaseView(ROADMAP_SLOT)
     releaseView(ROADMAP_DEPS_SLOT)
     ownerLoads.release(PLAN_LOADS)
+    for (const slot of ROADMAP_MILESTONE_SLOTS) PLANNER.releaseMilestones(slot)
   },
   /** Registers the Overview's reads for `key` (store/overviewLists.ts
       overviewKey: its scope and its clock), or none with null while its
@@ -16738,8 +16750,12 @@ export const PLANNER = {
     return row ? { name: row.name, week: row.week } : null
   },
 
-  setMilestone: (id: string, week: number) => {
-    void PLANNER.updateMilestone(id, { week })
+  /** Moves milestone `id` to week `week`, as a flag's drag does. `seen` is
+      the milestone as the flag showed it, its stored name and day from the
+      answer it came from, which go out as the move's expected values
+      (updateMilestone); without it they come from the row on screen. */
+  setMilestone: (id: string, week: number, seen?: { name: string; week: string }) => {
+    void PLANNER.updateMilestone(id, { week }, seen)
   },
 
   /* Milestones sit on a project's roadmap (0078). The caller passes the meta
