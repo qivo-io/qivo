@@ -5,9 +5,9 @@
    wait, and a row source that did not bring a task. Each is an empty state
    (components/ViewNote.tsx). The Roadmap keeps its toolbar, and where the
    scope has milestones its timeline frame, beside every one, and none
-   names a shorter window as a way to narrow: the window bounds no read's
-   size, since unfinished work shows whatever its dates. None shows part of
-   a Roadmap. */
+   names a shorter window as a way to narrow. The window bounds only Done
+   tasks, since unfinished work shows whatever its dates. None shows part
+   of a Roadmap. */
 
 import type { ReactNode } from 'react'
 import { LIMITS } from '../../../convex/lib/limits'

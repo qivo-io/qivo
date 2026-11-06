@@ -13,8 +13,8 @@ import { type AutoMove, autoMoves, type ScheduleTask } from '../../lib/schedule'
 /** A task of a part as the solver reads it, by uuid, with its row. */
 export type PartTask = ScheduleTask & { id: string; project: string; row: DependencyRow }
 
-/** What the Roadmap or the workspace shows of a part's task now, painted
-    with the person's pending writes: its weeks and status. */
+/** The weeks and status the Roadmap or the workspace shows of a part's
+    task now, painted with the person's pending writes. */
 export type ShownDates = { start: number | null; end: number | null; status: string }
 
 /**

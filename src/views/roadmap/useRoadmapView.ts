@@ -31,7 +31,7 @@
      filter, narrowed by its own text check (roadmapArgs.ts keepsRoadmap).
      A page shown again keeps the rows its read kept, marked refreshing.
      Any other change shows the loading note. No state shows part of a
-     selection as the selection: a row with no model to show keeps the
+     selection as the selection. A row with no model to show keeps the
      Roadmap loading, and STALL.ms later says so (`incomplete`).
    - The headings' Remaining comes from the answer's counts in tenths of an
      hour, summed and divided by 10 once, and says counting or unknown,

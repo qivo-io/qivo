@@ -21,8 +21,8 @@ import { BOARD_SEARCH_DELAY_MS } from '../board/boardArgs'
 
 /** What the Roadmap asks for. */
 export type RoadmapRequest =
-  /** All projects, which the server has no selection for: the Roadmap
-      asks to choose a project */
+  /** All projects, which the server has no selection for. The Roadmap
+      asks to choose a project. */
   | { kind: 'choose' }
   /** a text filter past LIMITS.search, which the server refuses */
   | { kind: 'search_limit' }
@@ -89,12 +89,13 @@ const wordsOf = (search: string) => search.toLowerCase().split(/\s+/).filter(Boo
 /**
  * Whether the Roadmap keeps the answer for the arguments `from` (a key of
  * roadmapRequest) on screen, marked refreshing, while the answer for `to`
- * is on its way: the same scope and filter row, with another window or
- * planned task (the coordinator's rule of 5 November 2026), or typing that
- * only narrows the text filter, every other filter the same, so the
- * Roadmap's own check of what it shows can only drop a task the server
- * keeps (the Board's rule, views/board/useBoardView.ts narrowsText). Any
- * other change shows the loading frame.
+ * is on its way. It keeps it for the same scope and filter row with
+ * another window or planned task (the coordinator's rule of 5 November
+ * 2026), and for typing that only narrows the text filter, every other
+ * filter the same, so the Roadmap's own check of what it shows can only
+ * drop a task the server keeps (the Board's rule,
+ * views/board/useBoardView.ts narrowsText). Any other change shows the
+ * loading frame.
  */
 export function keepsRoadmap(from: string, to: string): boolean {
   if (from === to) return false
