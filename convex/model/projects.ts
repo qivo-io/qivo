@@ -362,7 +362,7 @@ export type NewProject = {
  * design size, the same rows projectLevel's navigation walk reads under
  * that parent, a read accepted at the design size's sum. Every create that
  * leaves sort_order out reaches it: REST, MCP and, from the release after
- * v0.1.138, the app's (src/store/planner.ts P.addProject paints its own
+ * v0.1.140, the app's (src/store/planner.ts P.addProject paints its own
  * place by the same rule over the siblings the workspace holds). 0 when
  * there is no sibling. A sibling whose sort_order is not a finite number,
  * which createProjectCore refuses but an older backend stored as sent, is
