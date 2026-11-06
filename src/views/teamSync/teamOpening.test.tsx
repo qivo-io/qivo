@@ -179,6 +179,12 @@ async function render(metaIds: string[], weeks = 0) {
   await settle()
 }
 
+/** Unmounts the opening, as a person's page of the walk replaces it. */
+async function leave() {
+  await act(async () => root.render(null))
+  await settle()
+}
+
 /** Answers the live milestone reads again. */
 async function rerun() {
   for (const sub of subs)
@@ -302,6 +308,38 @@ describe('a new scope on a mounted opening', () => {
     expect(live('milestones:between')[0].args).toMatchObject({ projects: ['plan'] })
     expect(cell()?.textContent).toContain('Zed review')
     expect(listed()).toEqual(['Zed review'])
+  })
+})
+
+describe("the opening's lifecycle", () => {
+  it('asks the new scope and stops the old one when a mounted opening gets other projects', async () => {
+    fixture()
+    loaded = await load()
+    await render(['plan', 'ship'])
+    expect(listed()).toEqual(['Beta build', 'Zed review', 'Field test'])
+    await render(['ship'])
+    expect(live('milestones:between').map((s) => s.args.projects)).toEqual([['ship']])
+    expect(live('milestones:section').map((s) => s.args.projects)).toEqual([['ship']])
+    expect(cell()?.textContent).toContain('Beta build')
+    expect(listed()).toEqual(['Beta build', 'Field test'])
+  })
+
+  it('shows what it read as refreshing when it mounts again for the same scope', async () => {
+    fixture()
+    loaded = await load()
+    await render(['plan', 'ship'])
+    // a person's page replaces it: the reads stop and keep their answers
+    await leave()
+    expect(subs.filter((s) => !s.stopped)).toHaveLength(0)
+    force = { section: 'loading', between: 'loading' }
+    await render(['plan', 'ship'])
+    expect(live('milestones:between')).toHaveLength(1)
+    expect(cell()?.textContent).toContain('Beta build')
+    expect(listed()).toEqual(['Beta build', 'Zed review', 'Field test'])
+    expect(q('[data-sync-milestones]')?.getAttribute('aria-busy')).toBe('true')
+    force = {}
+    await rerun()
+    expect(q('[data-sync-milestones]')?.hasAttribute('aria-busy')).toBe(false)
   })
 })
 

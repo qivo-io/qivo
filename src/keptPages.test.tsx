@@ -38,6 +38,8 @@ vi.mock('./lib/auth', () => ({
 const MINUTE = 60_000
 // the task comment threads the store subscribed to, and whether each stopped
 const threads: { stopped: boolean }[] = []
+// the milestone reads the store subscribed to, and whether each stopped
+const milestoneWatches: { name: string; stopped: boolean }[] = []
 const realTimeout = globalThis.setTimeout
 
 let container: HTMLDivElement
@@ -142,13 +144,20 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   snap.issues[0].title = 'Write the release notes'
   prepare(snap)
   threads.length = 0
+  milestoneWatches.length = 0
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
-    else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
-    else if (name === 'teamSync:lastComments')
+    else if (isMilestoneRead(name)) {
+      answerMilestones(snap, name, args, next, fail)
+      const watch = { name, stopped: false }
+      milestoneWatches.push(watch)
+      return () => {
+        watch.stopped = true
+      }
+    } else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'taskWindow:task' && answersTasks) {
       // the window's own read of a task the workspace does not hold, by its
@@ -316,6 +325,34 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       "the new sitting's review tick",
     )
     expect(fresh.dataset.syncReviewed).toBe('0')
+  })
+
+  it("keeps the opening's milestone reads while Team sync is kept, and forgets them once it is not", async () => {
+    const org = await boot((snap) => void underProgram(snap))
+    const { P } = await import('./store/planner')
+    const { SYNC_MILESTONE_SLOTS } = await import('./lib/teamSync')
+    await go(`/app/${org}/sync/p/1`)
+    const sync = await shownPage('sync')
+    await waitFor(
+      () => sync.querySelector('[data-sync-next-milestone="none"]'),
+      "the opening's next milestone",
+    )
+    const live = () => milestoneWatches.filter((w) => !w.stopped).map((w) => w.name)
+    expect(live().sort()).toEqual(['milestones:between', 'milestones:section'])
+    // hidden behind the Board, the reads stop and keep their answers
+    await go(`/app/${org}/board/all`)
+    await shownPage('kanban')
+    await waitFor(() => live().length === 0, 'the stopped milestone reads')
+    expect(P.milestoneRead(SYNC_MILESTONE_SLOTS.next)).toMatchObject({
+      state: 'ok',
+      current: false,
+    })
+    // 30 minutes without input: Team sync is no longer kept, and its reads go
+    await act(async () => vi.advanceTimersByTime(30 * MINUTE))
+    await waitFor(() => !sync.isConnected, 'the released Team sync page')
+    for (const slot of Object.values(SYNC_MILESTONE_SLOTS))
+      expect(P.milestoneRead(slot)).toEqual({ state: 'loading' })
+    expect(live()).toEqual([])
   })
 
   it("opens an all-project sync row's Board jump on the task's sub-project, and its Roadmap jump on All projects", async () => {
