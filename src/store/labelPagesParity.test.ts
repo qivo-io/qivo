@@ -13,12 +13,23 @@
 import { describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
-import { as, newT, type T, uuid, workspaceOf } from '../../convex/tests/helpers.setup'
+import {
+  as,
+  NOW,
+  newT,
+  plantSeat,
+  type T,
+  uuid,
+  workspaceOf,
+} from '../../convex/tests/helpers.setup'
 import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import {
   type LabelPageAnswer,
   type LabelPageArgs,
+  type LabelPickerAnswer,
+  labelPickerStandIn,
   labelSettingsStandIn,
+  labelsByIdsStandIn,
 } from './labelPagesStandIn.setup'
 
 vi.hoisted(() => {
@@ -80,7 +91,7 @@ function refusal(read: () => unknown): string | null {
 }
 
 /** What both answer, with each cursor replaced by whether it is there. */
-const shape = (a: LabelPageAnswer) => ({ ...a, next: a.next !== null })
+const shape = (a: LabelPageAnswer | LabelPickerAnswer) => ({ ...a, next: a.next !== null })
 
 /** The query's answer and the stand-in's for the same arguments, each
     following its own cursors (`at`, from earlier answers of each). */
@@ -180,5 +191,68 @@ describe("the label pages' stand-in", () => {
         }),
       ),
     ).toBe('bad_request')
+  })
+})
+
+describe("the label picker's and byIds' stand-ins", () => {
+  it('answers the batches, searches, exact and can_create as labels.picker does, for an admin and a guest', async () => {
+    const f = await northstar()
+    const guest = await plantSeat(f.t, {
+      org_id: f.org.id,
+      name: 'Gus Guest',
+      org_role: 'guest',
+      auth_user_id: uuid(),
+      accepted_at: NOW,
+    })
+    for (const who of [f.nora, guest]) {
+      const ws = await workspaceOf(as(f.t, who))
+      if (!ws) throw new Error('no workspace')
+      const read = async (args: Omit<LabelPageArgs, 'org_id'>, stand = args) => ({
+        server: await as(f.t, who).query(api.labels.picker, { org_id: f.org.id, ...args }),
+        stand: labelPickerStandIn(ws, { org_id: f.org.id, ...stand }),
+      })
+      const first = await read({})
+      expect(first.server.can_create).toBe(who === f.nora)
+      expect(shape(first.stand), who.name).toEqual(shape(first.server))
+      // a later batch leaves can_create out
+      const rest = await read({ after: first.server.next ?? '' }, { after: first.stand.next ?? '' })
+      expect(rest.server).not.toHaveProperty('can_create')
+      expect(shape(rest.stand)).toEqual(shape(rest.server))
+      for (const search of ['test', 'emile', 'ZULU CHECK', 'nothing here']) {
+        const found = await read({ search })
+        expect(shape(found.stand), search).toEqual(shape(found.server))
+      }
+      // a picker cursor is not one of Settings', nor the other way
+      if (who === f.nora)
+        await expect(
+          as(f.t, who).query(api.labels.settingsPage, {
+            org_id: f.org.id,
+            after: first.server.next ?? '',
+          }),
+        ).rejects.toMatchObject({ data: { code: 'bad_request' } })
+      expect(
+        refusal(() =>
+          labelSettingsStandIn(ws, { org_id: f.org.id, after: first.stand.next ?? '' }),
+        ),
+      ).toBe(who === f.nora ? 'bad_request' : 'forbidden')
+    }
+  })
+
+  it('answers labels by id as labels.byIds does, each once in the order asked', async () => {
+    const f = await northstar()
+    const ws = await workspaceOf(as(f.t, f.nora))
+    if (!ws) throw new Error('no workspace')
+    const [a, b, c] = ws.labels.filter((l) => l.org_id === f.org.id)
+    const ids = [c.id, 'unknown-id', a.id, c.id, b.id]
+    const server = await as(f.t, f.nora).query(api.labels.byIds, { org_id: f.org.id, ids })
+    expect(server.rows.map((r) => r.id)).toEqual([c.id, a.id, b.id])
+    expect(labelsByIdsStandIn(ws, { org_id: f.org.id, ids })).toEqual(server)
+    const many = Array.from({ length: 101 }, () => a.id)
+    await expect(
+      as(f.t, f.nora).query(api.labels.byIds, { org_id: f.org.id, ids: many }),
+    ).rejects.toMatchObject({ data: { code: 'bad_request' } })
+    expect(refusal(() => labelsByIdsStandIn(ws, { org_id: f.org.id, ids: many }))).toBe(
+      'bad_request',
+    )
   })
 })

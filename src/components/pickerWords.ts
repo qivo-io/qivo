@@ -60,6 +60,20 @@ export const LEAD_WORDS: ChoiceWords = {
   none: 'Nothing matches.',
 }
 
+/** The task label picker's words (panels/LabelPicker.tsx). Its read
+    answers no state of its own with no rows, so `held` is a refusal, as of
+    a search past its limit, with the server's sentence. */
+export const LABEL_WORDS: ChoiceWords = {
+  held: (held) =>
+    held?.state === 'refused' && held.message
+      ? sentence(held.message)
+      : "Labels can't be listed now.",
+  failed: "Couldn't load labels.",
+  stopped: 'Showing the labels found so far.',
+  empty: 'No labels yet.',
+  none: 'No matching labels.',
+}
+
 /** Keeps a picker's popover open on an Escape in its search box, marked
     `probe`, while the box holds text, which the box then clears. */
 export const escapeClearsFirst = (probe: string) => (event: KeyboardEvent) => {

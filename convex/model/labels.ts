@@ -20,7 +20,7 @@ import { assertNewRowId, byId, insertUnique } from '../lib/db'
 import { trimmedForm } from '../lib/fieldPrints'
 import { badRequest, forbidden, rule } from '../lib/functions'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS, LIST_BATCH } from '../lib/limits'
+import { LABEL_RIGHTS_UNCHECKED, LIMITS, LIST_BATCH } from '../lib/limits'
 import { type NamedListPage, namedListPage, namedScope } from '../lib/listCursor'
 import {
   compareNamed,
@@ -46,10 +46,9 @@ import {
   tallyAssignment,
 } from './labelCounts'
 
-/** The refusal of a label create whose rights check could not finish in one
- * request (lib/access.ts canWriteOrgLabels answered null). */
-export const LABEL_RIGHTS_UNCHECKED =
-  'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
+/* The refusal of a label create whose rights check could not finish in one
+ * request, which lives in lib/limits.ts so the app can show it. */
+export { LABEL_RIGHTS_UNCHECKED }
 
 declare const checkedCreator: unique symbol
 

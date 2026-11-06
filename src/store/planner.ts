@@ -7924,6 +7924,17 @@ export type TeamSettingsAnswer = FunctionReturnType<typeof api.teams.get>
 export type TeamMembersAnswer = FunctionReturnType<typeof api.teams.members>
 /** One answer of a team's Add member picker (teams.addable). */
 export type TeamChoices = FunctionReturnType<typeof api.teams.addable>
+/** One batch of the task label picker as the server answers it
+    (labels.picker): its rows, `next`, `stopped`, `exact` and, in a first
+    batch, `can_create`. */
+export type LabelPickerBatch = FunctionReturnType<typeof api.labels.picker>
+/** A label the task label picker or labels.byIds answers. */
+export type LabelChoice = LabelPickerBatch['rows'][number]
+/** One answer of the task label picker's read (P.labelChoices): a batch,
+    or a refusal with the server's sentence. */
+export type LabelChoices =
+  | ({ state: 'ready' } & LabelPickerBatch)
+  | { state: 'refused'; message: string }
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -8497,11 +8508,14 @@ type UpdateOptions = {
 
 /** Puts label `labelId` on task `uuid` in the workspace's rows, or takes
     it off with `on` false, as a label toggle paints them. Skips while the
-    workspace does not hold the task or the label, so a write from the
-    window's own answer paints the workspace once it holds the task. */
+    workspace does not hold the task, so a write from the window's own
+    answer paints the workspace once it holds the task. A label the
+    workspace does not hold paints too: the task's labels list every id
+    (store/taskIndex.ts), and the window names one it does not hold from
+    labels.byIds. */
 function labelRowsPaint(uuid: string, labelId: string, on: boolean): Paint {
   return () => {
-    if (!rows.issues.has(uuid) || !rows.labels.has(labelId)) return
+    if (!rows.issues.has(uuid)) return
     const has = workspaceRows
       .peekList('issueLabels')
       .some((il) => il.issue_id === uuid && il.label_id === labelId)
@@ -8870,9 +8884,11 @@ const unsentText = new WeakMap<Paint, string>()
     from the painted answer's labels. It paints the answer and the
     workspace (labelRowsPaint), and marks the views' copies of the task,
     whose rows send no labels, as unsure under a text filter until the
-    server accepts it (unsentText). `created` is as on the held path. */
+    server accepts it (unsentText). `created` is as on the held path. The
+    workspace need not hold the label: the server checks that it is one of
+    the task's organization, and a refusal takes the paint back. */
 function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boolean>) {
-  if (!rows.labels.get(labelId) || refusePausedEdit()) return
+  if (refusePausedEdit()) return
   const uuid = a.uuid
   const on = !a.answer.labels.some((row) => row.label_id === labelId)
   const full = on && labelBlock(a.answer.labels)
@@ -11118,35 +11134,11 @@ export const PLANNER = {
      attaches to tasks of its OWN org (the 0028 trigger). Defaults to home.
      Settings › Labels lists its rows from the server (labels.settingsPage)
      and reads this catalogue for its duplicate-name check and to paint its
-     rows' names and colors. */
+     rows' names and colors. The task label picker and the window's Labels
+     section never list from it (panels/LabelPicker.tsx). */
   orgLabels: (orgId?: string) => {
     const org = orgId || PLANNER.homeOrg
     return PLANNER.labels.filter((l) => l.org === org)
-  },
-  /* mirrors the server's can_write_org_labels: org admin, the lead of any
-     project, or a user-level grant somewhere in the org. Permission-based,
-     not membership-based — picking a label is open to everyone, curating it
-     isn't. It governs adding labels; renaming, recoloring and deleting them
-     is for org admins (isAdmin), as on the server. */
-  canWriteOrgLabels: (orgId?: string, uid?: string) => {
-    const org = orgId || PLANNER.homeOrg
-    const u = actorIn(org, uid)
-    if (!u) return false
-    // The vocabulary belongs to the organization, so only staff may curate
-    // it, including those who receive project write access through a team.
-    if (u.orgRole !== 'admin' && u.orgRole !== 'user') return false
-    if (u.orgRole === 'admin') return true
-    // the access map already surfaces projects.lead_id as 'lead'; the org
-    // fence is intrinsic — a grant elsewhere says nothing about this list.
-    // Only a top-level meta counts, as on the server, which reads no meta
-    // stored under another (convex/lib/access.ts canWriteOrgLabels)
-    return PLANNER.projects.some(
-      (p) =>
-        p.type === 'meta' &&
-        !p.parent &&
-        p.org === org &&
-        ['lead', 'user'].includes(levelOnProject(p, u.id) || ''),
-    )
   },
   subscribe: updates.subscribe,
   updates: updates.channels,
@@ -12916,6 +12908,36 @@ export const PLANNER = {
       if (code === 'bad_request' || code === 'rule')
         return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
       console.error('[qivo] relation picker read failed:', e)
+      return null
+    }
+  },
+
+  /* --- the task label picker -------------------------------------------- */
+  /** One batch of the task label picker for organization `org`
+      (labels.picker), read once and never subscribed to: the labels whose
+      name holds every word of `search`, after `cursor`, an earlier answer's
+      `next`, or from the start, with `exact` and, in a first batch,
+      `can_create`. A search past its limit or a cursor the server no
+      longer accepts answers `refused` with the server's sentence, and a
+      failed read null. */
+  labelChoices: async (o: {
+    org: string
+    search: string
+    cursor: string | null
+  }): Promise<LabelChoices | null> => {
+    try {
+      const batch: LabelPickerBatch | null = await convex.query(api.labels.picker, {
+        org_id: o.org,
+        ...(o.search === '' ? {} : { search: o.search }),
+        ...(o.cursor === null ? {} : { after: o.cursor }),
+      })
+      // an answer that holds no batch is a failed read, never an empty list
+      return Array.isArray(batch?.rows) ? { state: 'ready', ...batch } : null
+    } catch (e) {
+      const { code, message } = errData(e)
+      if (code === 'bad_request' || code === 'rule')
+        return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
+      console.error('[qivo] label picker read failed:', e)
       return null
     }
   },
@@ -15865,7 +15887,10 @@ export const PLANNER = {
   /** Puts the label on the task or takes it off. `created` is the `saved`
       answer of an addLabel this toggle follows: when the server refuses
       that create, it refuses the toggle too, and only the create's refusal
-      is toasted. */
+      is toasted. The workspace need not hold the label, such as one the
+      picker's batch or labels.byIds named: the server checks that it is
+      one of the task's organization (labels.toggle), and a refusal takes
+      the paint back with its toast. */
   toggleIssueLabel: (issueId: string, labelId: string, created?: Promise<boolean>) => {
     const uuid = keyToUuid.get(issueId)
     const issue = uuid ? rows.issues.get(uuid) : null
@@ -15875,7 +15900,7 @@ export const PLANNER = {
       if (shown) toggleAnswerLabel(shown, labelId, created)
       return
     }
-    if (!rows.labels.get(labelId) || refusePausedEdit()) return
+    if (refusePausedEdit()) return
     // the state asked for travels with the write (`on`), so the paint and
     // the server set it, and a repeat changes nothing
     const on = !rows.issueLabels.some((il) => il.issue_id === uuid && il.label_id === labelId)

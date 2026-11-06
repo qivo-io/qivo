@@ -354,8 +354,9 @@ describe('a task the workspace does not hold, in the store', () => {
         }),
       )
       const shown = detail('far-1')
-      // the task index's order, by name, then id, of labels the workspace holds
-      expect(shown?.view?.labels).toEqual(['label-a', 'label-z'])
+      // the task index's order: by name, then id, the labels the workspace
+      // holds, then by id one it does not, which the window names by id
+      expect(shown?.view?.labels).toEqual(['label-a', 'label-z', 'label-unknown'])
       expect(shown?.view?.subscribed).toBe(true)
       expect(shown?.view?.parent).toBe('QN-41')
       expect(shown?.parent).toMatchObject({

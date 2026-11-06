@@ -105,13 +105,15 @@ export type DetailInputs = {
 /* -1, 0 or 1 as `a` sorts before, with or after `b` in code unit order. */
 const order = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
 
-/** Label ids by name, then id, as the task index orders a task's labels,
-    without those the workspace does not hold. */
+/** Label ids as the task index orders a task's labels: those the
+    workspace holds by name, then id, and after them, by id, those it does
+    not, which the window names from labels.byIds. Every id stays, so a
+    label not loaded is never taken for one taken off. */
 function labelsInOrder(ids: readonly string[], name: (id: string) => string | undefined) {
   return ids
-    .flatMap((id) => {
+    .map((id) => {
       const named = name(id)
-      return named === undefined ? [] : [{ id, key: named.toLowerCase() }]
+      return { id, key: named === undefined ? '1' : `0${named.toLowerCase()}` }
     })
     .sort((a, b) => order(a.key, b.key) || order(a.id, b.id))
     .map((label) => label.id)

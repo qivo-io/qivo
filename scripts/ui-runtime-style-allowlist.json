@@ -32,8 +32,12 @@
     "reason": "measured split-pane width; message titles and context use text classes"
   },
   "src/panels/IssueDetail.tsx": {
-    "count": 17,
-    "reason": "task-window and backdrop animation, editor sizing, anchors, and picker label colors; selected task labels use scoped CSS, edited-comment hover styling uses the shared tooltip and utility classes, and the Remaining box is the shared Input"
+    "count": 16,
+    "reason": "task-window and backdrop animation, editor sizing and anchors; selected task labels use scoped CSS, edited-comment hover styling uses the shared tooltip and utility classes, and the Remaining box is the shared Input"
+  },
+  "src/panels/LabelPicker.tsx": {
+    "count": 1,
+    "reason": "each label row's color dot, the organization's own label color"
   },
   "src/panels/Modals.tsx": {
     "count": 2,

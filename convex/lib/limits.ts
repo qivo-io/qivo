@@ -213,6 +213,13 @@ export const DEFAULT_MESSAGE_RETENTION_DAYS = 7
  * cannot be spelled, which /app/~/ routing depends on. */
 export const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/
 
+/** The refusal of a label create whose rights check could not finish in one
+ * request (lib/access.ts canWriteOrgLabels answered null). The task label
+ * picker shows it in place of Create new label when labels.picker answers
+ * can_create null (src/panels/LabelPicker.tsx). */
+export const LABEL_RIGHTS_UNCHECKED =
+  'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
+
 /** The refusal of a send again while the seat's newest invitation email is
  * still being sent. */
 export const INVITE_SENDING = 'this invitation email is being sent; wait for it to finish'

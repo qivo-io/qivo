@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest'
 import { descriptionForm, printOf, trimmedForm } from '../../convex/lib/fieldPrints'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { labelPickerStandIn } from '../store/labelPagesStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The task window on a task the workspace does not hold, on the real store:
@@ -633,7 +634,10 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
       patch: { due_date: pick?.dataset.calDay },
       expected: { due_date: day(14) },
     })
-    // a label, from the picker
+    // a label, from the picker, which lists the server's batch
+    network.query.mockImplementation(async (ref, args) =>
+      getFunctionName(ref) === 'labels:picker' ? labelPickerStandIn(snap, args) : null,
+    )
     await click(document.querySelector('button[aria-label="Add label"]'))
     await nextFrame()
     await click(buttonNamed('Hardware'))

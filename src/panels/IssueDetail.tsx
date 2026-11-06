@@ -29,7 +29,6 @@ import { IssueSubscribers } from '../components/IssueSubscribers'
 import { LimitedTextarea } from '../components/LimitedField'
 import { Markdown } from '../components/markdown'
 import {
-  AnchoredPop,
   Avatar,
   DateInput,
   DateSelect,
@@ -66,7 +65,6 @@ import { parentBlock, subtaskBlock } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
 import { DONE_WITHOUT_DATES, doneWithoutDates } from '../lib/roadmapVisibility'
 import { buildPath, issueLink, sameTask } from '../lib/router'
-import { matchesAllWords } from '../lib/search'
 import {
   itemUnreadStart,
   mergeSpine,
@@ -74,7 +72,7 @@ import {
   type UnreadStart,
   unreadMark,
 } from '../lib/spine'
-import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
+import { attachmentBlock, linkBlock } from '../lib/taskCaps'
 import { markTaskFocus, restoreTaskFocus } from '../lib/taskFocus'
 import { type RefParts, refParts } from '../lib/taskReference'
 import { groupTotals, workspaceTotals } from '../lib/taskSections'
@@ -100,6 +98,7 @@ import {
   type TaskRefVM,
   type TaskSectionsVM,
 } from '../store/planner'
+import { LabelPickerPopup } from './LabelPicker'
 import {
   ArchiveOrDeleteTaskModal,
   FAMILY_UNKNOWN,
@@ -107,13 +106,9 @@ import {
   WAITS_FOR_CHECK,
   WAITS_FOR_TASKS,
 } from './Modals'
-import {
-  type CurrentRelation,
-  type CurrentRelations,
-  PickerRefusal,
-  RelationPicker,
-} from './RelationPicker'
+import { type CurrentRelation, type CurrentRelations, RelationPicker } from './RelationPicker'
 import { useTaskKey } from './taskKey'
+import { useTaskLabels } from './taskLabels'
 
 // the editor chunk (~150 KB gz of TipTap) loads only for users who can edit,
 // after the workspace's first paint (App.tsx); viewers render the plain
@@ -665,155 +660,6 @@ function AttachmentsSection({
         </div>
       )}
     </section>
-  )
-}
-
-/* Label picker: a temporary floating popup (Linear-style) anchored under the
-   Labels heading. Searches the organization's shared label list, toggles on
-   click; stays open for multiple toggles, closes on Escape or outside click.
-   When the query matches nothing exactly, a clearly-marked "Create new
-   label" row appears — creating is deliberate, never accidental. A query
-   longer than a label name may be gets the cap's sentence in its place, so
-   nothing is created from a cut name. */
-export function LabelPickerPopup({
-  it,
-  anchor,
-  onDone,
-}: {
-  it: IssueVM
-  anchor: { x: number; y: number }
-  onDone: () => void
-}) {
-  const [q, setQ] = useStateID('')
-  // the task's OWN organization's vocabulary — a label from mine would be
-  // rejected by the attach trigger (0028/0081)
-  const all = P.orgLabels(it.org)
-  const ql = q.trim().toLowerCase()
-  const matches = ql ? all.filter((l) => matchesAllWords(l.name, ql)) : all
-  // the per-task cap on labels: a full task can only take labels off
-  const full = labelBlock(it.labels || [])
-  // creating one lands in the home org, so it is offered only there
-  const canCreate =
-    !!ql &&
-    !full &&
-    it.org === P.homeOrg &&
-    P.canWriteOrgLabels() &&
-    !all.some((l) => l.name.toLowerCase() === ql)
-  const tooLong = overLimit(LIMITS.labelName, q)
-  const create = () => {
-    // A paused create keeps the typed name in the search field, and a
-    // refused one puts it back when the field is still empty. The field
-    // clears at once otherwise, so a second Enter cannot create it twice.
-    if (tooLong) return
-    const name = q.trim()
-    const made = P.addLabel({ name })
-    if (!made) return
-    if (!(it.labels || []).includes(made.id)) P.toggleIssueLabel(it.id, made.id, made.saved)
-    setQ('')
-    void made.saved.then((saved) => {
-      if (!saved) setQ((typed) => typed || name)
-    })
-  }
-  return (
-    <AnchoredPop
-      x={anchor.x}
-      y={anchor.y}
-      width={Math.min(300, window.innerWidth - 24)}
-      onClose={onDone}
-    >
-      {/* no rule under the search row (deviation #65) — the pop is the task
-          view's own, so it loses its hairlines with the window */}
-      <div className="[display:flex] [align-items:center] [gap:8px] [padding:10px_12px_8px]">
-        <Input
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              // Only a typed search picks its one match: the empty field
-              // lists every label, so a second Enter after a create would
-              // take the organization's only label off again.
-              if (ql && matches.length === 1) {
-                if (full && !(it.labels || []).includes(matches[0].id)) return
-                P.toggleIssueLabel(it.id, matches[0].id)
-                setQ('')
-              } else if (canCreate && matches.length === 0) create()
-            }
-          }}
-          placeholder="Add labels…"
-          className="[flex:1] [min-width:0] [background:transparent] [border:none] [outline:none] [color:var(--text-1)] [font-size:var(--fs-base)] [font-family:var(--sans)] [padding:0]"
-        />
-      </div>
-      <div className="[display:flex] [flex-direction:column] [gap:2px] [max-height:240px] [overflow-y:auto] [padding:5px]">
-        {matches.map((l) => {
-          const on = (it.labels || []).includes(l.id)
-          const blocked = !on && !!full
-          return (
-            <Button
-              type="button"
-              key={l.id}
-              disabled={blocked}
-              title={blocked ? full : undefined}
-              onClick={() => P.toggleIssueLabel(it.id, l.id)}
-              className={cn(
-                'flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 py-1.5 text-left text-base text-text-1 hover:bg-hover',
-                on && 'font-semibold',
-                blocked && 'cursor-not-allowed opacity-50',
-              )}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'var(--hover)'
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent'
-              }}
-              variant="unstyled"
-            >
-              <span
-                style={{ background: l.color }}
-                className="[width:9px] [height:9px] [border-radius:50%] [flex-shrink:0]"
-              />
-              <span className="[flex:1] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                {l.name}
-              </span>
-              {on && (
-                <Icon name="check" size={16} strokeWidth={2} color="var(--muted-foreground)" />
-              )}
-            </Button>
-          )
-        })}
-        {matches.length === 0 && !canCreate && (
-          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
-            {ql ? 'No matching labels.' : 'No labels yet.'}
-          </div>
-        )}
-        {full && (
-          <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [padding:4px_5px]">
-            {full}
-          </div>
-        )}
-        {canCreate && tooLong && <PickerRefusal limit={LIMITS.labelName} />}
-        {canCreate && !tooLong && (
-          <Button
-            type="button"
-            onClick={create}
-            className={`flex w-full cursor-pointer items-center gap-2 rounded-sm border-0 bg-transparent px-2 pb-1.5 pt-2 text-left text-base text-text-1 hover:bg-hover ${matches.length ? 'mt-1.5' : ''}`}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'var(--hover)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'transparent'
-            }}
-            variant="unstyled"
-          >
-            <Icon name="plus" size={13} color="var(--text-2)" />
-            <span className="[font-weight:600]">Create new label:</span>
-            <span className="[color:var(--text-3)] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-              “{q.trim()}”
-            </span>
-          </Button>
-        )}
-      </div>
-    </AnchoredPop>
   )
 }
 
@@ -2336,6 +2182,10 @@ function IssueDetail({
   // relations take the same rule (canEdit).
   const answerEdits = answerEditorOn && !stale && !!it && P.editsFromAnswer(it.id)
   const canEdit = canLabel || answerEdits
+  // every label of the task, named from the workspace or by id
+  // (taskLabels.ts useTaskLabels), so none is hidden for not being loaded
+  const taskLabels = useTaskLabels(it)
+  const shownLabels = taskLabels.labels.filter((label) => label.state !== 'gone')
   // Comments on a task shown from its answer need edit access by both the
   // answer and the workspace, so a stale one only takes controls away. An
   // archived task takes none.
@@ -4110,23 +3960,49 @@ function IssueDetail({
                             </Button>
                           )}
                         </SectionHead>
-                        {(it.labels || []).length > 0 && (
+                        {shownLabels.length > 0 && (
                           <div className="task-labels">
-                            {it.labels.map((lid) => {
-                              const l = P.labelById[lid]
-                              if (!l) return null
+                            {shownLabels.map((label) => {
+                              // a label not named yet waits for its read; one
+                              // whose read failed can still come off by id
+                              const remove =
+                                label.state === 'ok'
+                                  ? `Remove label “${label.name}”`
+                                  : label.state === 'failed'
+                                    ? 'Remove this label'
+                                    : 'Available once this label has loaded'
                               return (
-                                <span key={lid} className="task-label">
-                                  <span className="task-label-name">{l.name}</span>
+                                <span
+                                  key={label.id}
+                                  className="task-label"
+                                  {...(label.state === 'loading'
+                                    ? { 'data-label-waiting': '' }
+                                    : label.state === 'failed'
+                                      ? { 'data-label-failed': '' }
+                                      : {})}
+                                >
+                                  <span
+                                    className={cn(
+                                      'task-label-name',
+                                      label.state !== 'ok' && 'text-text-3',
+                                    )}
+                                  >
+                                    {label.state === 'ok'
+                                      ? label.name
+                                      : label.state === 'failed'
+                                        ? "Couldn't load this label"
+                                        : 'Loading label…'}
+                                  </span>
                                   {canEdit && (
                                     <Button
                                       type="button"
                                       variant="ghost"
                                       size="icon"
                                       className="task-label-remove text-text-2"
-                                      aria-label={`Remove label “${l.name}”`}
-                                      title={`Remove label “${l.name}”`}
-                                      onClick={() => P.toggleIssueLabel(it.id, lid)}
+                                      aria-label={remove}
+                                      title={remove}
+                                      disabled={label.state === 'loading'}
+                                      onClick={() => P.toggleIssueLabel(it.id, label.id)}
                                     >
                                       <Icon name="close" size={16} />
                                     </Button>
@@ -4136,7 +4012,18 @@ function IssueDetail({
                             })}
                           </div>
                         )}
-                        {!canEdit && (it.labels || []).length === 0 && (
+                        {taskLabels.failed && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            data-labels-retry=""
+                            className="h-control-sm self-start text-sm"
+                            onClick={taskLabels.retry}
+                          >
+                            Try again
+                          </Button>
+                        )}
+                        {!canEdit && shownLabels.length === 0 && (
                           <div className="[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic]">
                             No labels.
                           </div>
