@@ -776,7 +776,10 @@ describe('New sub-project', () => {
     await openSub('sensor')
     await type(nameField(), 'Docs')
     expect(parentButton().textContent).toBe('Loading…')
-    expect(parentButton().disabled).toBe(true)
+    expect(parentButton().getAttribute('aria-disabled')).toBe('true')
+    // a press opens nothing while the check loads
+    await click(parentButton())
+    expect(has('[data-new-subproject-parents]')).toBe(false)
     expect(create().disabled).toBe(true)
     // the workspace holds the parent, so its Lead may open meanwhile
     expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false)
@@ -935,6 +938,25 @@ describe('New sub-project', () => {
     expect(create().disabled).toBe(false)
   })
 
+  it('keeps focus on the Project button after a keyboard pick while the pick is checked', async () => {
+    await load('user')
+    await openSub('beam')
+    await click(parentButton())
+    server.reads.hold(true)
+    // Enter on a row, as a keyboard user picks
+    const row = find<HTMLElement>('[data-new-subproject-parent-choice="test-b"]')
+    row.focus()
+    await click(row)
+    expect(has('[data-new-subproject-parents]')).toBe(false)
+    expect(parentButton().textContent).toBe('Loading…')
+    expect(document.activeElement).toBe(parentButton())
+    server.reads.hold(false)
+    await rerun()
+    expect(parentButton().textContent).toBe('Test #9')
+    expect(parentButton().hasAttribute('aria-disabled')).toBe(false)
+    expect(document.activeElement).toBe(parentButton())
+  })
+
   it('shows a stopped batch and the not ready and unchecked answers as such, and the empty line only at a real end', async () => {
     await load('user')
     server.listForce = { stop: 1 }
@@ -1054,7 +1076,10 @@ describe('New sub-project', () => {
     expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(true)
     // no seat is known yet, so the Lead names nobody
     expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Loading…')
-    expect(parentButton().disabled).toBe(true)
+    expect(parentButton().getAttribute('aria-disabled')).toBe('true')
+    await click(parentButton())
+    expect(has('[data-new-subproject-parents]')).toBe(false)
+    expect(askedFor('projectSettings:projects')).toEqual([])
     server.reads.hold(false)
     await rerun()
     expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false)

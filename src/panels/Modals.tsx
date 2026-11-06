@@ -894,7 +894,11 @@ function NewSubProjectModal({
    once the check answered that it may take a sub-project, "Choose a
    project…" otherwise and "Loading…" while it checks, which opens the
    server's parents in organization `org`. Its popover is modal, so its
-   list scrolls inside the modal dialog (qivo Popover). */
+   list scrolls inside the modal dialog (qivo Popover). While the check
+   loads the button is marked disabled but stays focusable, and a press
+   opens nothing. A keyboard pick starts a check as the popover closes and
+   focus returns to the button, which a disabled one would drop to the
+   page. */
 function ParentPicker({
   org,
   parent,
@@ -931,9 +935,14 @@ function ParentPicker({
           data-on={open ? '' : undefined}
           aria-label={`Project: ${named ?? 'none chosen'}`}
           aria-busy={loading || undefined}
-          disabled={loading || !org}
-          onClick={toggle}
-          className="h-control w-full max-w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1"
+          aria-disabled={loading || undefined}
+          disabled={!loading && !org}
+          onClick={(event) => {
+            // Radix's trigger opens only when the click is not prevented
+            if (loading) event.preventDefault()
+            else toggle()
+          }}
+          className="h-control w-full max-w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1 aria-disabled:cursor-progress aria-disabled:opacity-55"
         >
           <span className={named ? 'min-w-0 truncate' : 'min-w-0 truncate text-text-2'}>
             {label}
