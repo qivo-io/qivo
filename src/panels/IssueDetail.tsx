@@ -2066,9 +2066,11 @@ function IssueDetail({
   // render, and a null key would freeze "nothing unread" forever. It comes
   // from the task's inbox item, which the store reads beside the thread
   // (P.inboxItem), so it is exact also for messages the workspace never
-  // loaded, and stays pending until that read answers, while no mark
-  // shows and no read goes out. An item that is building or failed starts
-  // nowhere. …unless the surface that opened us froze it first (the inbox,
+  // loaded, and stays pending until that read's first ok, current answer,
+  // while no mark shows and no read goes out. It stays pending through a
+  // seat whose items are building and through a failure, which the store
+  // runs once more, so a read that recovers still draws the divider.
+  // …unless the surface that opened us froze it first (the inbox,
   // whose click marks the item read before this render): then that answer
   // IS the frozen one, and asking again here would only ever find nothing.
   // Frozen with it: whether the unread messages include a change, which the
@@ -2080,7 +2082,7 @@ function IssueDetail({
   })
   const shownItem = watchUuid && P.inboxItem?.task === watchUuid ? P.inboxItem : null
   if (frozen.current.key !== watchUuid || frozen.current.unread === null) {
-    const answered = shownItem && shownItem.state !== 'loading' ? shownItem : null
+    const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
     frozen.current = {
       key: watchUuid,
       unread:
@@ -2089,7 +2091,7 @@ function IssueDetail({
           : !watchUuid
             ? { ts: null, change: false }
             : answered
-              ? itemUnreadStart(answered.state === 'ok' ? answered.item : null)
+              ? itemUnreadStart(answered.item)
               : null,
     }
   }

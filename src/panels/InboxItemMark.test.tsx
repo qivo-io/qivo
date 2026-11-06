@@ -378,6 +378,60 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
   })
 })
 
+describe('a building or failed item', { timeout: 20_000 }, () => {
+  it('keeps the start pending through it, then draws the divider and reads once', async () => {
+    for (const force of ['notReady', 'failed'] as const) {
+      await load([message('task-a', 5), message('task-a', 7)])
+      double.live?.forceInbox(force, 'inbox:item')
+      await openTask()
+      await comments(range(1, 10))
+      expect(P.inboxItem?.state, force).toBe(force === 'notReady' ? 'building' : 'failed')
+      expect(thread(), force).not.toContain('New')
+      expect(itemReads(), force).toEqual([])
+      // the seat's items are ready, or the read answers again
+      await act(async () => double.live?.forceInbox(null))
+      await settle()
+      expect(thread().slice(3, 6), force).toEqual(['Check 4', 'New', 'Check 5'])
+      expect(itemReads(), force).toEqual([
+        { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(7)) },
+      ])
+      await act(async () => root.unmount())
+      root = createRoot(container)
+    }
+  })
+
+  it('runs a failed item once more by itself, and not twice', async () => {
+    await load([message('task-a', 5)])
+    const live = double.live
+    if (!live) throw new Error('the live double is not set up')
+    // the item reads the store's registry watches
+    const own = live.watch
+    let itemWatches = 0
+    live.watch = (ref, args, sharing) => {
+      if (getFunctionName(ref) === 'inbox:item') itemWatches++
+      return own(ref, args, sharing)
+    }
+    try {
+      live.forceInbox('failed', 'inbox:item')
+      await openTask()
+      await settle()
+      await settle()
+      // the window's own watch and one rerun, whose failure stays
+      expect(itemWatches).toBe(2)
+      expect(P.inboxItem?.state).toBe('failed')
+      expect(console.error).toHaveBeenCalledWith(
+        '[qivo] inbox item subscription failed:',
+        expect.anything(),
+      )
+      // nothing is read, and the badge still counts the task
+      expect(itemReads()).toEqual([])
+      expect(P.inboxSummary.answer?.unread_count).toBe(1)
+    } finally {
+      live.watch = own
+    }
+  })
+})
+
 describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
   /* Renders the Inbox as App holds it, with no task open. */
   async function openInbox() {

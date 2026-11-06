@@ -484,9 +484,11 @@ export type InboxSummaryVM =
 
 /** The open task's inbox item as the store holds it (P.inboxItem), for the
     task and organization whose thread the store watches: `loading` until
-    its first answer, `building` while the seat's items are not complete,
-    `failed` after a failure or a refusal, else `ok` with the item, null
-    for no item. `current` as for the summary (InboxSummaryVM). */
+    its first answer and while it runs again, `building` while the seat's
+    items are not complete, `failed` after a failure or a refusal, which
+    the store runs once more a visit by itself (itemNews), else `ok` with
+    the item, null for no item. `current` as for the summary
+    (InboxSummaryVM). */
 export type InboxItemVM = {
   task: string
   org: string
@@ -505,6 +507,10 @@ let summaryFresh = false
 let summaryConnection = 0
 let itemFresh = false
 let itemConnection = 0
+/* Whether the store ran the open task's failed inbox item once more this
+   visit (itemNews), which it does once. Forgotten when the thread changes
+   or stops. */
+let itemRerun = false
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer after its confirmation (P.readOnOpen). */
 let itemAnswers = 0
@@ -1069,6 +1075,7 @@ function subscribeItem(issueUuid: string, orgId: string) {
     }
     itemRead = null
     itemFresh = false
+    itemRerun = false
   }
   const args = parts.sideArgs('item')
   const watching = args?.org_id === orgId && args.issue_id === issueUuid
@@ -1077,13 +1084,14 @@ function subscribeItem(issueUuid: string, orgId: string) {
   parts.watchSide('item', api.inbox.item, { org_id: orgId, issue_id: issueUuid })
 }
 
-/* Stops the inbox item's side query, and forgets its answer and the
-   window's last read on open. */
+/* Stops the inbox item's side query, and forgets its answer, the
+   window's last read on open and its rerun. */
 function stopItem() {
   parts?.stopSide('item')
   PLANNER.inboxItem = null
   itemRead = null
   itemFresh = false
+  itemRerun = false
 }
 
 /* Asks for the watched task's history, for a window that shows All. It
@@ -1810,9 +1818,14 @@ function deriveInboxFlags(): boolean {
    items are not complete yet, an answer's item is null for no item, a task
    the seat is not shown or a check a bound stopped, and an error, such as
    the refusal of a seat that is gone from the task's organization, is
-   `failed`. None of those draws a New divider or sends a read. A news of a
-   task the store no longer watches is dropped. It emits the task window's
-   section. */
+   `failed`. None of those draws a New divider or sends a read, and the
+   window's start stays pending through them. The first failure of a visit
+   runs the item once more from a fresh subscription, which loads again,
+   since Convex runs a failed query again only when data it read changes
+   and after a reconnect; a second one stays failed, logged, and leaves the task unread, counted
+   by the badge. A seat whose items are building needs no rerun, as the
+   answer changes once they are ready. A news of a task the store no
+   longer watches is dropped. It emits the task window's section. */
 function itemNews(news: SideNews, connection: number) {
   const watched = threadWatched
   const held = PLANNER.inboxItem
@@ -1820,9 +1833,15 @@ function itemNews(news: SideNews, connection: number) {
   itemAnswers++
   const shown = { task: watched.task, org: watched.org }
   if ('error' in news) {
-    console.error('[qivo] inbox item subscription failed:', news.error)
     itemFresh = false
-    PLANNER.inboxItem = { ...shown, state: 'failed', item: null, current: false }
+    if (!itemRerun && parts?.rerunSide('item')) {
+      itemRerun = true
+      console.error('[qivo] inbox item subscription failed, running it once more:', news.error)
+      PLANNER.inboxItem = { ...shown, state: 'loading', item: null, current: false }
+    } else {
+      console.error('[qivo] inbox item subscription failed:', news.error)
+      PLANNER.inboxItem = { ...shown, state: 'failed', item: null, current: false }
+    }
   } else {
     const answer = news.value as InboxItemAnswer
     itemFresh = true
@@ -15990,6 +16009,7 @@ export function disposeDemoStore() {
   PLANNER.inboxSummary = { state: 'loading', answer: null, current: false }
   PLANNER.inboxItem = null
   itemRead = null
+  itemRerun = false
   summaryFresh = false
   summaryConnection = 0
   itemFresh = false
