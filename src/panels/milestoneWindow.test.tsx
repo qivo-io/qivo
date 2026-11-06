@@ -760,6 +760,18 @@ describe('an open editor whose row moves', { timeout: 30_000 }, () => {
       await typeInto(nameBox(), 'Step two, drafted')
       nameBox()?.focus()
       expect(document.activeElement).toBe(nameBox())
+      // A browser blurs an element it moves out of the document and back,
+      // as React moves an editor to a later place; jsdom keeps focus, so
+      // the case blurs it as a browser does, and React DOM must focus it
+      // again after the commit
+      for (const method of ['insertBefore', 'appendChild'] as const) {
+        const real = Node.prototype[method] as (this: Node, ...args: Node[]) => Node
+        vi.spyOn(Node.prototype, method).mockImplementation(function (this: Node, ...args: Node[]) {
+          const active = document.activeElement
+          if (active instanceof HTMLElement && args[0]?.contains(active)) active.blur()
+          return real.apply(this, args)
+        } as never)
+      }
       move()
       await rerun()
       expect(shown('upcoming')).toEqual(order)

@@ -3524,7 +3524,12 @@ function MilestoneRowView({
    `locked` keeps the typed text read-only once the person may no longer
    change the milestone, and `lockedNote` says why under it. The Name box
    takes focus when the editor opens, unless the person already moved focus
-   inside the window. */
+   inside the window. The window moves an open editor among its section's
+   rows as they move, and a browser blurs an element it moves, as React
+   moves the editor's own node to a later place; React DOM focuses the
+   element that held focus again after that commit, with its selection
+   (restoreSelection), so typing goes on where the person left it
+   (panels/milestoneWindow.test.tsx pins both directions). */
 function MilestoneEditor({
   m,
   storedOf,
@@ -3582,26 +3587,6 @@ function MilestoneEditor({
   }, [])
   const rootRef = useRefM<HTMLDivElement>(null)
   const nameRef = useRefM<HTMLInputElement>(null)
-  // The window moves an open editor among its section's rows as they move,
-  // and a browser blurs an element it moves: React moves this editor's own
-  // node when it goes to a later place. The control that held focus as
-  // this render began takes it back after the commit, where focus fell to
-  // the page, so typing goes on where the person left it.
-  const focusedAtRender = useRefM<HTMLElement | null>(null)
-  const activeNow = typeof document === 'undefined' ? null : document.activeElement
-  focusedAtRender.current =
-    activeNow instanceof HTMLElement && rootRef.current?.contains(activeNow) ? activeNow : null
-  useLayoutEffectM(() => {
-    const was = focusedAtRender.current
-    focusedAtRender.current = null
-    const now = document.activeElement
-    if (
-      was?.isConnected &&
-      rootRef.current?.contains(was) &&
-      (!now || now === document.body || !now.isConnected)
-    )
-      was.focus({ preventScroll: true })
-  })
   // focus moves to the Name box only while it is nowhere in particular: on
   // the page, or on the window itself, as before an opened milestone's
   // answer arrived; never away from a control the person moved to meanwhile
