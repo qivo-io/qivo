@@ -97,8 +97,9 @@ function pathOf(answer: DownloadClaim): string {
   return `${url.pathname}${url.search}`
 }
 
-/** A link of `kind` for export `exportId` minted for `minter` without a
- * claim, valid DELIVERY.tokenSeconds unless `exp` says otherwise. */
+/** A link of `kind` for export `exportId` minted for `minter`, a profile's
+ * document id as claimDownload signs it, without a claim, valid
+ * DELIVERY.tokenSeconds unless `exp` says otherwise. */
 async function mint(
   exportId: string,
   minter: string,
@@ -342,14 +343,16 @@ describe('the download link', () => {
     expect(url.pathname).toBe(`/exports/${exportId}`)
     const exp = Number(url.searchParams.get('e'))
     const token = url.searchParams.get('t') as string
-    expect(url.searchParams.get('m')).toBe(f.admin.id)
+    // the profile's document, which no later profile can take, not its uuid
+    expect(url.searchParams.get('m')).toBe(f.admin._id)
     expect(exp).toBe(START / 1000 + 1 + DELIVERY.tokenSeconds)
     expect(answer.expires_at).toBe(new Date(exp * 1000).toISOString())
-    const base = { id: exportId, minter: f.admin.id, exp, token }
+    const base = { id: exportId, minter: f.admin._id, exp, token }
     expect(await verifyFileToken({ ...base, kind: 'org_export' })).toBe(true)
     expect(await verifyFileToken({ ...base, kind: 'attachment' })).toBe(false)
     expect(await verifyFileToken({ ...base, kind: 'org_export', id: uuid() })).toBe(false)
-    expect(await verifyFileToken({ ...base, kind: 'org_export', minter: f.user.id })).toBe(false)
+    expect(await verifyFileToken({ ...base, kind: 'org_export', minter: f.user._id })).toBe(false)
+    expect(await verifyFileToken({ ...base, kind: 'org_export', minter: f.admin.id })).toBe(false)
     // the token does not open the file gateway either
     const files = await get(t, `/files/${exportId}${url.search}`)
     await expectRefused(files, 'an export token at /files/')
@@ -426,14 +429,17 @@ describe('the /exports/ route', () => {
       ['no m', without('m')],
       ['no t', without('t')],
       ['a tampered token', tampered],
-      ['an attachment token', await mint(exportId, f.admin.id, { kind: 'attachment' })],
+      ['an attachment token', await mint(exportId, f.admin._id, { kind: 'attachment' })],
       [
         'a token for another export',
-        (await mint(uuid(), f.admin.id)).replace(/^\/exports\/[^?]+/, `/exports/${exportId}`),
+        (await mint(uuid(), f.admin._id)).replace(/^\/exports\/[^?]+/, `/exports/${exportId}`),
       ],
-      ['another export', await mint(uuid(), f.admin.id)],
-      ['a member', await mint(exportId, f.user.id)],
-      ["another organization's admin", await mint(exportId, f.otherAdmin.id)],
+      ['another export', await mint(uuid(), f.admin._id)],
+      ['a member', await mint(exportId, f.user._id)],
+      ["another organization's admin", await mint(exportId, f.otherAdmin._id)],
+      // the admin's uuid, which a later profile can take, instead of the
+      // profile document the claim signs
+      ["the admin's uuid", await mint(exportId, f.admin.id)],
     ]
     for (const [label, path] of cases) await expectRefused(await get(t, path), label)
     // the good link still works
@@ -470,28 +476,38 @@ describe('the /exports/ route', () => {
         } else await ctx.db.replace(_id, seat)
       })
     }
-    // a profile created after the mint under the minter's id
-    const link = pathOf(await claim(t, f.admin, f.org.id, exportId))
-    vi.advanceTimersByTime(2000)
-    await t.run(async (ctx) => {
-      const { _id, _creationTime, ...seat } = (await ctx.db.get(f.admin._id)) as Doc<'profiles'>
-      await ctx.db.delete(_id)
-      await ctx.db.insert('profiles', seat)
-    })
-    await expectRefused(await get(t, link), 'a profile created after the mint')
+    // a profile that takes the minter's uuid after the mint, also within
+    // the second the claim rounds the mint up to
+    for (const after of [2000, 600]) {
+      const link = pathOf(await claim(t, f.admin, f.org.id, exportId))
+      vi.advanceTimersByTime(after)
+      await t.run(async (ctx) => {
+        const { _id, _creationTime, ...seat } = (await ctx.db.get(f.admin._id)) as Doc<'profiles'>
+        await ctx.db.delete(_id)
+        f.admin = (await ctx.db.get(await ctx.db.insert('profiles', seat))) as Doc<'profiles'>
+      })
+      await expectRefused(
+        await get(t, link),
+        `a profile that took the id ${after} ms after the mint`,
+      )
+      // the new profile's own link works
+      const own = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
+      expect(own.status).toBe(200)
+      await drain(t, own)
+    }
   })
 
   it('refuses a job that is not ready, past its four hours or ended by a newer archive, and an organization being deleted', async () => {
     const t = newT()
     const { f, exportId } = await ready(t)
     // a link that outlives the archive, so only the job's checks refuse it
-    const long = await mint(exportId, f.admin.id, {
+    const long = await mint(exportId, f.admin._id, {
       exp: Math.floor(Date.now() / 1000) + 6 * 3600,
     })
     expect((await get(t, long)).status).toBe(200)
     // a collecting job
     const next = await as(t, f.admin).mutation(api.orgExport.request, { org_id: f.org.id })
-    await expectRefused(await get(t, await mint(next.export_id, f.admin.id)), 'collecting')
+    await expectRefused(await get(t, await mint(next.export_id, f.admin._id)), 'collecting')
     // past expires_at before its expiry runs
     vi.setSystemTime(START + ARCHIVE_TTL_MS + 1000)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
@@ -504,7 +520,7 @@ describe('the /exports/ route', () => {
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'expired' })
     await expectRefused(await get(t, long), 'ended by a newer archive')
     // the organization's deletion begins
-    const newer = await mint(next.export_id, f.admin.id)
+    const newer = await mint(next.export_id, f.admin._id)
     expect((await get(t, newer)).status).toBe(200)
     await t.run((ctx) =>
       ctx.db.insert('org_removals', {
@@ -533,7 +549,7 @@ describe('the /exports/ route', () => {
         status: 'ready',
       }),
     )
-    const link = await mint(exportId, f.admin.id)
+    const link = await mint(exportId, f.admin._id)
     const res = await get(t, link)
     expect(res.status).toBe(200)
     await drain(t, res)
@@ -710,7 +726,7 @@ describe('what a download records', () => {
   it('holds at most DELIVERY.streams downloads of an archive at once, answering 429 past them, until one ends or its lease runs out', async () => {
     const t = newT()
     const { f, exportId } = await ready(t)
-    const long = await mint(exportId, f.admin.id, {
+    const long = await mint(exportId, f.admin._id, {
       exp: Math.floor(Date.now() / 1000) + 3 * 3600,
     })
     const first = await get(t, long)
@@ -750,7 +766,7 @@ describe('what a download records', () => {
       }),
     )
     DELIVERY.demoStreams = 1
-    const link = await mint(exportId, f.admin.id)
+    const link = await mint(exportId, f.admin._id)
     const first = await get(t, link)
     expect(first.status).toBe(200)
     // the archive's own two would allow it; the deployment's one does not
@@ -883,7 +899,7 @@ describe("the delivery inside Convex's limits", () => {
       })
     const exp = Math.floor(Date.now() / 1000) + 1 + DELIVERY.tokenSeconds
     const read = await measured(t, (ctx) =>
-      readDelivery(ctx, { export_id: exportId, minter: f.admin.id, exp }),
+      readDelivery(ctx, { export_id: exportId, minter: f.admin._id, exp }),
     )
     console.info('delivery: deliveryOf at EXPORT_LIMITS.parts data parts', {
       ranges: read.ranges,

@@ -5,12 +5,14 @@
  * (avatars/personal backgrounds) and `exp` is unix SECONDS. The gateway re-checks the MINTER's
  * access per request — exp only bounds the forwarded-link window.
  *
- * An org_export token's id is an export job's id and its minter the admin's
- * profile uuid in the job's organization (orgExport.ts claimDownload). The
- * /exports/ route checks on every request that the minter is still an
- * active admin there, as the gateway rechecks an attachment's minter, so
- * `exp` (two minutes, model/orgExports.ts DELIVERY) only bounds when a
- * forwarded link may start a download.
+ * An org_export token's id is an export job's id and its minter the Convex
+ * document id of the admin's profile in the job's organization
+ * (orgExport.ts claimDownload), not the profile's uuid, which a later
+ * profile can take once the admin is removed. The /exports/ route checks on
+ * every request that that profile is still an active admin there, as the
+ * gateway rechecks an attachment's minter, so `exp` (two minutes,
+ * model/orgExports.ts DELIVERY) only bounds when a forwarded link may start
+ * a download.
  *
  * Key: DERIVED from BETTER_AUTH_SECRET with a domain-separation label
  * (key material = SHA-256(secret + ':qivo-files-token-v1')), never the raw
@@ -188,7 +190,8 @@ export function attachmentFileUrl(p: {
 }
 
 /* The link that downloads the ready archive of export `id`
- * (http.ts /exports/), for the admin profile `minter`. */
+ * (http.ts /exports/), for the admin profile whose document id is
+ * `minter`. */
 export function exportFileUrl(p: {
   id: string
   minter: string

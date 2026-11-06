@@ -473,11 +473,13 @@ export const claimDownload = authedMutation({
     // a second past the claim's whole second, so the moment the link counts
     // as minted (exp less its lifetime, deliverable) is after every profile
     // the claim found; the link lives DELIVERY.tokenSeconds and at most one
-    // second more
+    // second more. The link names the caller's profile document, not its
+    // uuid, so a later profile that takes a removed admin's uuid within
+    // that second still matches nothing (deliverable).
     const exp = Math.floor(Date.now() / 1000) + 1 + DELIVERY.tokenSeconds
-    const token = await mintFileToken({ kind: 'org_export', id: export_id, minter: me.id, exp })
+    const token = await mintFileToken({ kind: 'org_export', id: export_id, minter: me._id, exp })
     return {
-      url: exportFileUrl({ id: export_id, minter: me.id, exp, token }),
+      url: exportFileUrl({ id: export_id, minter: me._id, exp, token }),
       expires_at: new Date(exp * 1000).toISOString(),
     }
   },
@@ -490,16 +492,19 @@ const requestOf = (ctx: QueryCtx, exportId: string, profileId: string) =>
     .withIndex('by_export_profile', (q) => q.eq('export_id', exportId).eq('profile_id', profileId))
     .first()
 
-/* The ready job `exportId` with its organization while profile `minter`
- * may still download it through a link that expires at `exp` (unix
+/* The ready job `exportId` with its organization while the profile
+ * document `minter` (its Convex id, which claimDownload signs into the
+ * link) may still download it through a link that expires at `exp` (unix
  * seconds), else null. The job is ready with an archive and has not
  * expired; the minter is an active admin of the job's organization,
- * created before the link was minted (`exp` less DELIVERY.tokenSeconds), so
- * a later profile that takes a removed admin's id gets nothing; the
- * organization is there and its deletion has not begun; and on the public
- * demo its cleanup has not begun and the minter's session still reads it
- * (model/demoUploads.ts demoCanRead). Reads the job, the profile, the
- * removal, the organization and on the demo two receipts. */
+ * created before the link was minted (`exp` less DELIVERY.tokenSeconds);
+ * the organization is there and its deletion has not begun; and on the
+ * public demo its cleanup has not begun and the minter's session still
+ * reads it (model/demoUploads.ts demoCanRead). A later profile that takes
+ * a removed admin's uuid is another document, so it never matches, also
+ * when it was created within the second the claim rounds the mint up to.
+ * Reads the job, the profile, the removal, the organization and on the
+ * demo two receipts. */
 async function deliverable(ctx: QueryCtx, exportId: string, minter: string, exp: number) {
   const job = await exportOf(ctx, exportId)
   if (
@@ -510,7 +515,8 @@ async function deliverable(ctx: QueryCtx, exportId: string, minter: string, exp:
     Date.parse(job.expires_at) <= Date.now()
   )
     return null
-  const profile = await byId(ctx, 'profiles', minter)
+  const profileId = ctx.db.normalizeId('profiles', minter)
+  const profile = profileId === null ? null : await ctx.db.get(profileId)
   if (
     profile === null ||
     profile.org_id !== job.org_id ||

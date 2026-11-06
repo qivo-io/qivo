@@ -473,12 +473,12 @@ http.route({ pathPrefix: '/background-previews/', method: 'OPTIONS', handler: pr
 
 /* ------------------------------------------------- /exports/ download route
  *
- *   GET /exports/<export uuid>?e=<exp>&m=<minter admin profile uuid>&t=<mac>
+ *   GET /exports/<export uuid>?e=<exp>&m=<minter admin profile document id>&t=<mac>
  *
  * A ready organization export as one ZIP (lib/orgExport.ts), for the link
  * orgExport.claimDownload answers an admin: an org_export token, which no
  * other route accepts and which opens no other route, minted for the
- * export's id and the admin's profile, valid model/orgExports.ts
+ * export's id and the admin's profile document, valid model/orgExports.ts
  * DELIVERY.tokenSeconds. The MAC admits the request; deliveryOf then checks
  * that the minter is still an active admin of the job's organization, that
  * the job is ready and unexpired, that the organization's deletion and a
