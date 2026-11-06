@@ -1274,13 +1274,15 @@ function placesKept(held: ReturnType<typeof heldThread>): {
   return { keep, top }
 }
 
-/* Which side a release after an arrival, or after an editor closed, takes
-   (keepThread), from the topmost place a window reported (placesKept).
-   With no place reported, or the topmost one at or below a gap or in the
-   live rows, the oldest side goes. A reader above a gap keeps the rows
-   around them, so the newer run goes from the gap down, then the end of
-   the run they read in that is farther from them. With no gap, the end
-   farther from them goes. */
+/* Which sides a release after an arrival, or after an editor closed, takes
+   (keepThread), in order, from the topmost place a window reported
+   (placesKept). With no place reported, or the topmost one at or below a
+   gap or in the live rows, the oldest side goes. A reader above a gap
+   keeps the rows around them, so the newer run goes from the gap down,
+   then the end of the run they read in that is farther from them, then its
+   other end. With no gap, the farther end and then the other. The live
+   rows never go, so they do not count toward the distance to the newest
+   end. */
 function arrivalMoves(
   held: ReturnType<typeof heldThread>,
   top: ReturnType<typeof placesKept>['top'],
@@ -1295,9 +1297,9 @@ function arrivalMoves(
   )
   if (gaps.length && top.kind.gap === null && top.ts > gapEnd) return ['top']
   const toTop = top.at
-  const toEnd = top.kind.older.length - 1 - top.at + (gaps.length ? 0 : top.kind.live.length)
-  const far: ReleaseMove = toTop > toEnd ? 'top' : 'up'
-  return gaps.length ? ['down', far] : [far]
+  const toEnd = top.kind.older.length - 1 - top.at
+  const sides: ReleaseMove[] = toTop > toEnd ? ['top', 'up'] : ['up', 'top']
+  return gaps.length ? ['down', ...sides] : sides
 }
 
 /* Lets go of the watched thread's rows past THREAD_KEEP.rows

@@ -401,6 +401,43 @@ describe('the task window keeps a bounded thread', () => {
       expect(shown()).not.toContain('comment-250')
       expect(held()).toBe(121)
     })
+
+    /* Walks back `pages` pages of 300 comments under a budget of `rows`,
+       which they fit, so no gap opens; then the pane reports `place` and
+       a comment arrives. */
+    async function arriveAt(rows: number, pages: number, place: string) {
+      budget.THREAD_KEEP.rows = rows
+      openServed(300)
+      for (let i = 0; i < pages; i++) await earlier()
+      expect(store.P.threadGap).toBeNull()
+      store.P.threadPlace(pane, place)
+      publish({ comments: range(251, 301), earlier: true })
+    }
+
+    it('with no gap lets the end farther from the reader go, by the rows of their run', async () => {
+      // 100 rows above the live window and the reader at the 75th, so the top
+      // goes
+      await arriveAt(150, 2, 'comment-224')
+      expect(shown()[0]).toBe('comment-151')
+      expect(held()).toBe(150)
+    })
+
+    it('with no gap does not count the live window toward the newest end', async () => {
+      // 151 rows above the live window and the reader at the 81st: 80 rows
+      // above them and 70 below, so the top goes, not #250 above the window
+      await arriveAt(200, 3, 'comment-180')
+      expect(shown()[0]).toBe('comment-101')
+      expect(shown()).toContain('comment-250')
+    })
+
+    it('with no gap lets the other end go when the farther one is on screen', async () => {
+      // the reader at #200, the 51st of 101: the farther end below them is
+      // on their screen, so the top goes instead
+      await arriveAt(150, 2, 'comment-200')
+      expect(shown()[0]).toBe('comment-151')
+      expect(shown()).toContain('comment-250')
+      expect(held()).toBe(150)
+    })
   })
 
   describe('drafts and edits', () => {
