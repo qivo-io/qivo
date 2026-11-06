@@ -1004,13 +1004,34 @@ describe('at the design size', () => {
   it('reads a page holding a guest who reads 200 live sub-projects, in an everyday organization', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     await fx.t.run(async (ctx) => {
+      // three sub-projects a project, the everyday value, under 67 new
+      // projects, so the organization stays within 200 live projects and
+      // 500 live sub-projects
+      const parents: string[] = []
       for (let i = 0; i < 200; i++) {
+        if (i % 3 === 0) {
+          const parent = uuid()
+          await ctx.db.insert('projects', {
+            id: parent,
+            org_id: fx.org.id,
+            type: 'meta',
+            key: `M${i / 3}`,
+            name: `Project ${String(i / 3).padStart(2, '0')}`,
+            description: '',
+            sort_order: 500 + i,
+            num: 500 + i,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+          })
+          parents.push(parent)
+        }
         const id = uuid()
         await ctx.db.insert('projects', {
           id,
           org_id: fx.org.id,
           type: 'project',
-          parent_id: fx.meta.id,
+          parent_id: parents[parents.length - 1],
           key: `S${i}`,
           name: `Sub-project ${String(i).padStart(3, '0')}`,
           description: '',

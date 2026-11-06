@@ -191,18 +191,34 @@ describe("the Users page's stand-in", () => {
   it('answers a guest who reads 200 live sub-projects in an everyday organization as the server does', async () => {
     const { t, org, nora, guest } = await northstar()
     await t.run(async (ctx) => {
-      const parent = await ctx.db
-        .query('projects')
-        .withIndex('by_org', (q) => q.eq('org_id', org.id))
-        .first()
-      if (!parent) throw new Error('no project')
+      // three sub-projects a project, the everyday value, under 67 new
+      // projects, so the organization stays within 200 live projects and
+      // 500 live sub-projects
+      const parents: string[] = []
       for (let i = 0; i < 200; i++) {
+        if (i % 3 === 0) {
+          const parent = uuid()
+          await ctx.db.insert('projects', {
+            id: parent,
+            org_id: org.id,
+            type: 'meta',
+            key: `M${i / 3}`,
+            name: `Project ${String(i / 3).padStart(2, '0')}`,
+            description: '',
+            sort_order: 500 + i,
+            num: 500 + i,
+            track_delay: false,
+            created_at: NOW,
+            window_key: newWindowKey(),
+          })
+          parents.push(parent)
+        }
         const id = uuid()
         await ctx.db.insert('projects', {
           id,
           org_id: org.id,
           type: 'project',
-          parent_id: parent.id,
+          parent_id: parents[parents.length - 1],
           key: `S${i}`,
           name: `Sub-project ${String(i).padStart(3, '0')}`,
           description: '',
