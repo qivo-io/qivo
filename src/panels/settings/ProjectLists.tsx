@@ -99,18 +99,20 @@ function orgFor(kept: string | null | undefined): string {
  * The organization a page lists, first `initial` and then what the
  * Organization select chose, held to the login's seats. Once the chosen
  * one leaves P.orgs, as when its seat is removed or deactivated while the
- * page shows, the page lists the home organization or the first at once,
- * at its first page with the search kept, and `onGone` drops what the page
- * kept for the old one. Answers the organization and the select's setter.
+ * page shows, the page lists the home organization or the first, at its
+ * first page with the search kept, and `onGone` drops what the page kept
+ * for the old one. Both happen while the page renders, so React renders it
+ * again before anything commits, and no child reads the new organization
+ * with what the page kept for the old one. `onGone` may therefore only set
+ * the page's own state. Answers the organization and the select's setter.
  */
 function useChosenOrg(initial: () => string, onGone?: () => void) {
   const [chosen, setChosen] = useStateS(initial)
   const org = orgFor(chosen)
-  React.useEffect(() => {
-    if (org === chosen) return
+  if (org !== chosen) {
     setChosen(org)
     onGone?.()
-  }, [org, chosen])
+  }
   return [org, setChosen] as const
 }
 
@@ -1003,11 +1005,19 @@ export function ArchivedProjectsPage() {
   // it when it opened, for focus
   const [deleting, setDeleting] = useStateS<ArchivedProjectRow | null>(null)
   const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
-  // a Delete window for the organization that went closes (onGone), and an
-  // entry's open sub-projects close as the organization changes (pageAt)
+  // the entry whose sub-projects show, and what they told its Restore
+  const [chipsOpen, setChipsOpen] = useStateS<string | null>(null)
+  const [chips, setChips] = useStateS<ChipsInfo | null>(null)
+  // a Delete window and an entry's open sub-projects for the organization
+  // that went close with it (onGone); the sub-projects also close as the
+  // page or the organization changes (pageAt)
   const [org, setOrg] = useChosenOrg(
     () => orgFor(null),
-    () => setDeleting(null),
+    () => {
+      setDeleting(null)
+      setChipsOpen(null)
+      setChips(null)
+    },
   )
   const [text, setText] = useStateS('')
   const search = useSettledSearch(text, LIMITS.search)
@@ -1037,9 +1047,6 @@ export function ArchivedProjectsPage() {
       else next.delete(id)
       return next
     })
-  // the entry whose sub-projects show, and what they told its Restore
-  const [chipsOpen, setChipsOpen] = useStateS<string | null>(null)
-  const [chips, setChips] = useStateS<ChipsInfo | null>(null)
   const pageAt = `${org}:${search.settled}:${page.starts.length}:${String(page.starts.at(-1))}`
   React.useEffect(() => {
     setChipsOpen(null)

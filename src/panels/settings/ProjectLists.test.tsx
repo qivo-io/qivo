@@ -657,6 +657,13 @@ describe('Settings › Projects', () => {
   it('lists the home organization from its first page once the chosen one’s seat goes while it shows', async () => {
     await load((snap) => acmeSeat(snap, 3))
     server.force = { batch: 2 }
+    // every sub-project list the page opens, with its arguments
+    const subLists: Record<string, unknown>[] = []
+    const watch = server.lists.watch
+    server.lists.watch = (name, args, next, fail) => {
+      if (name === 'projectSettings:subProjects') subLists.push(args)
+      return watch(name, args, next, fail)
+    }
     await projects()
     await select(find('[data-settings-projects-org]'), 'acme')
     await click(find('[data-settings-projects-next]'))
@@ -669,6 +676,10 @@ describe('Settings › Projects', () => {
     })
     await elsewhere(noAcmeSeat)
     expect(openLists()).toEqual([{ name: 'projects', org_id: org }])
+    // Acme rollout's list closed with Acme, never asking the home
+    // organization for it, not even for one render
+    expect(subLists).toContainEqual({ org_id: 'acme', project_id: 'acme-p' })
+    expect(subLists.filter((args) => args.org_id !== 'acme')).toEqual([])
     expect(projectNames()).toEqual(['Design #7', 'Design #8'])
     expect(has('[data-settings-projects-previous]')).toBe(false)
     expect(has('[data-settings-projects-org]')).toBe(false)
@@ -1030,21 +1041,43 @@ describe('Archived projects', () => {
   })
 
   it('lists the home organization once the chosen one’s seat goes while it shows', async () => {
-    // an admin of Acme, so Acme pilot offers Delete
+    // an admin of Acme, so Acme pilot offers Delete, with Pilot API
+    // archived with it
     await load((snap) => {
       acmeSeat(snap)
       const seat = snap.profiles.find((p) => p.id === 'me-acme')
       if (seat) seat.org_role = 'admin'
+      const pilot = snap.projects.find((p) => p.id === 'acme-old')
+      if (pilot)
+        snap.projects.push({
+          ...pilot,
+          id: 'acme-old-api',
+          num: 3,
+          name: 'Pilot API',
+          type: 'project',
+          parent_id: 'acme-old',
+        })
     })
+    // every chip list the page opens, with its arguments
+    const chipLists: Record<string, unknown>[] = []
+    const watch = server.lists.watch
+    server.lists.watch = (name, args, next, fail) => {
+      if (name === 'projectSettings:archivedSubProjects') chipLists.push(args)
+      return watch(name, args, next, fail)
+    }
     await archived()
     await select(find('[data-archived-projects-org]'), 'acme')
     expect(entries()).toEqual(['acme-old'])
+    await click(find('[data-archived-subs-toggle="acme-old"]'))
+    expect(chipLists).toEqual([{ org_id: 'acme', project_id: 'acme-old' }])
     await click(find('[data-delete-project="acme-old"]'))
     expect(text('[data-modal-shell] h2')).toBe('Delete “Acme pilot”?')
     await elsewhere(noAcmeSeat)
-    // the Delete window for Acme pilot closes with its organization
+    // the Delete window and the chips close with Acme, the chips never
+    // asking the home organization for Acme pilot, not even for one render
     expect(has('[data-modal-shell]')).toBe(false)
     expect(sent('projects:deleteDeep')).toEqual([])
+    expect(chipLists.filter((args) => args.org_id !== 'acme')).toEqual([])
     expect(openLists()).toEqual([{ name: 'archived', org_id: org }])
     expect(entries()).toEqual(['side', 'old'])
     expect(has('[data-archived-projects-org]')).toBe(false)
