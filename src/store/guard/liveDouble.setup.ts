@@ -2,6 +2,12 @@ import { type FunctionReference, getFunctionName, makeFunctionReference } from '
 import type { Value } from 'convex/values'
 import { type Seatless, splitWorkspace, type Workspace } from '../../../convex/lib/workspaceJoin'
 import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
+import {
+  type ForcedInbox,
+  INBOX_NO_ANSWER,
+  inboxItemStandIn,
+  inboxSummaryStandIn,
+} from '../inboxStandIn.setup'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
    client double with onUpdate. A test publishes the whole workspace as one
@@ -24,6 +30,15 @@ import type { LiveQueries, LiveTransition } from '../../lib/liveQueries'
    A view's own handler (onTransition `view`) hears every transition but
    starts no store generation.
 
+   The two inbox reads every store watches beside the parts, the unread
+   summary and the open task's item (convex/inbox.ts summary and item), are
+   answered from the published whole too, through their stand-in
+   (store/inboxStandIn.setup.ts), on the parts' path, so each publish
+   answers them again and a failed whole or a reconnect reaches them, and
+   no store test mocks them unless it forces a state (forceInbox). That is
+   new beside the other stand-ins, which tests wire through the client's
+   onUpdate one by one; these two run in every store.
+
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
 
@@ -40,8 +55,14 @@ type Client = {
   query?(ref: FunctionReference<'query'>, args: Record<string, unknown>): Promise<unknown>
 }
 
-/* The workspace a test publishes, which may name messagesCut false. */
-type Whole = Omit<Workspace, 'messagesCut'> & { messagesCut?: boolean }
+/* The workspace a test publishes, which may name messagesCut false, and
+   may hold messages the server keeps beyond the inbox part's cut
+   (`beyondCut`, LIMITS.inboxShown), which the inbox reads count and the
+   parts leave out, as for an Inbox past 500 messages. */
+type Whole = Omit<Workspace, 'messagesCut'> & {
+  messagesCut?: boolean
+  beyondCut?: Workspace['messages']
+}
 
 /** What a test publishes for a login whose seats a running organization
     deletion holds. The root part answers it, as it answers any seatless
@@ -68,6 +89,40 @@ const PARTS: Record<string, string> = {
   'workspace:tasks': 'tasks',
   'workspace:people': 'people',
   'workspace:projects': 'projects',
+}
+
+/* The inbox reads answered from the whole, beside the parts. */
+const INBOX_READS = new Set(['inbox:summary', 'inbox:item'])
+
+/** What the inbox read `name` with `args` answers while the server holds
+    `whole`, or INBOX_NO_ANSWER for none; throws a failure or a refusal. A
+    login with no seat holds an empty summary, and its item read is
+    refused, as the orgQuery refuses it. */
+function inboxAnswerOf(
+  whole: Published,
+  name: string,
+  args: Record<string, unknown>,
+  force: ForcedInbox | undefined,
+): unknown {
+  const w =
+    whole === null || seatless(whole)
+      ? {
+          myProfileIds: [],
+          profiles: [],
+          messages: [],
+          readMessageCount: 0,
+          unreadTruncated: false,
+          readTruncated: false,
+        }
+      : whole
+  const held =
+    'beyondCut' in w && w.beyondCut ? { ...w, messages: [...w.messages, ...w.beyondCut] } : w
+  if (name === 'inbox:summary') return inboxSummaryStandIn(held, force)
+  return inboxItemStandIn(
+    held,
+    { org_id: String(args.org_id), issue_id: String(args.issue_id) },
+    force,
+  )
 }
 
 /** What the workspace part `name` with `args` answers while the server
@@ -110,6 +165,7 @@ export function liveOver(client: Client): LiveQueries & {
   holdWindow(from: string | null): void
   failWindow(from: string | null, error?: unknown, later?: boolean): void
   reconnect(only?: readonly string[]): void
+  forceInbox(force: ForcedInbox | null, only?: 'inbox:summary' | 'inbox:item'): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // the handlers of views' own reads, which start no generation
@@ -138,7 +194,11 @@ export function liveOver(client: Client): LiveQueries & {
   // handler starts a generation, and only the newest one's watches count
   let generation = 0
 
-  const isPart = (name: string) => name === 'workspace:root' || name in PARTS
+  const isPart = (name: string) =>
+    name === 'workspace:root' || name in PARTS || INBOX_READS.has(name)
+  // the state the inbox reads answer whatever the whole says, and which of
+  // them, until forceInbox(null)
+  let inboxForce: { force: ForcedInbox; only?: string } | null = null
   // the tokens a batch() gathers, sent as one transition at its end
   let batching: Set<string> | null = null
   // the organization whose parts answer nothing until hold(null)
@@ -183,7 +243,25 @@ export function liveOver(client: Client): LiveQueries & {
         changed.add(token)
         continue
       }
-      const value = answerOf(whole.value, w.name, w.args)
+      let value: unknown
+      if (INBOX_READS.has(w.name)) {
+        const force =
+          inboxForce && (!inboxForce.only || inboxForce.only === w.name)
+            ? inboxForce.force
+            : undefined
+        try {
+          value = inboxAnswerOf(whole.value, w.name, w.args, force)
+        } catch (error) {
+          if (w.error !== undefined && w.json === `error:${String(error)}`) continue
+          w.error = error
+          w.json = `error:${String(error)}`
+          changed.add(token)
+          continue
+        }
+        // a read that never answers holds what it had: nothing, while the
+        // stand-in is told to wait from its first answer
+        if (value === INBOX_NO_ANSWER) continue
+      } else value = answerOf(whole.value, w.name, w.args)
       const json = JSON.stringify(value)
       if (json === w.json && w.error === undefined) continue
       w.json = json
@@ -367,6 +445,14 @@ export function liveOver(client: Client): LiveQueries & {
       }
       failedWindow = { from, error }
       if (later) return
+      fire(refresh())
+    },
+    /** Makes the inbox reads, or the one `only` names, answer `force`
+        whatever the whole says (store/inboxStandIn.setup.ts), from now on
+        and at once for the ones watched, and with null as the whole says
+        again. */
+    forceInbox(force, only) {
+      inboxForce = force === null ? null : { force, ...(only ? { only } : {}) }
       fire(refresh())
     },
     /** Drops the socket and connects again, as Convex does after a network

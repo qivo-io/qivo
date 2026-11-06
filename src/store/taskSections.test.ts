@@ -606,6 +606,9 @@ describe("the task window's sections in the store", () => {
     it('hides a subtask whose archive the server accepted before its delivery', async () => {
       const { P } = store
       opened()
+      // the task's inbox item answers beside its thread, a transition that
+      // would hold the archive if it came after its answer
+      await settle()
       const archived = P.archiveIssue(P.handleOf('kid-1') ?? '')
       // nothing paints while the archive is on its way
       expect(subtaskIds()).toEqual(['kid-1', 'kid-2'])

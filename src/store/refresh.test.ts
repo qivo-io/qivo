@@ -141,16 +141,19 @@ describe('planner refresh boundaries', () => {
     P.subscribe(legacy)
     const version = P.updates.workspace.getSnapshot()
     P.watchComments('task-a')
+    // the task's inbox item answers beside its thread, on the comments'
+    // channel (P.inboxItem)
+    await settle()
     publishComments([comment()])
     P.updateComment('comment-a', 'Optimistic edit')
-    expect(detail).toHaveBeenCalledTimes(3)
+    expect(detail).toHaveBeenCalledTimes(4)
     publishComments([comment('Saved edit')])
-    expect(detail).toHaveBeenCalledTimes(3)
+    expect(detail).toHaveBeenCalledTimes(4)
     resolve(null)
     await settle()
     expect(P.comments[0].body).toBe('Saved edit')
-    expect(detail).toHaveBeenCalledTimes(4)
-    expect(legacy).toHaveBeenCalledTimes(4)
+    expect(detail).toHaveBeenCalledTimes(5)
+    expect(legacy).toHaveBeenCalledTimes(5)
     expect(workspace).not.toHaveBeenCalled()
     expect(sync).not.toHaveBeenCalled()
     expect(P.updates.workspace.getSnapshot()).toBe(version)
@@ -201,6 +204,8 @@ describe('planner refresh boundaries', () => {
   it('flushes a held workspace and comment delivery together to every affected observer', async () => {
     const { P } = store
     P.watchComments('task-a')
+    // the task's inbox item answers beside its thread first
+    await settle()
     publishComments([comment()])
     P.updateComment('comment-a', 'Optimistic edit')
     const workspace = vi.fn()
@@ -242,6 +247,8 @@ describe('planner refresh boundaries', () => {
   it('restores the original comment after a refused optimistic edit without a new delivery', async () => {
     const { P } = store
     P.watchComments('task-a')
+    // the task's inbox item answers beside its thread first
+    await settle()
     publishComments([comment()])
     P.updateComment('comment-a', 'Refused edit')
     const workspace = vi.fn()

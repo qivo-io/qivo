@@ -79,6 +79,14 @@
    once. Each side is its own. Its failure never holds the workspace or
    another side.
 
+   Two sides concern the Inbox. The unread summary (convex/inbox.ts
+   summary) is watched by every registry as it starts, right after the
+   root part, so its first answer comes with the first parts, and a retry's
+   or a re-init's registry watches it again. It runs while the tab is
+   hidden, as the parts do, since the badge counts unread tasks also then.
+   The open task's inbox item (convex/inbox.ts item) rides with the thread
+   (store/planner.ts subscribeThread), with the thread's own arguments.
+
    Watching one query with the same arguments twice shares one Convex
    subscription and one token (lib/liveQueries.ts), and a watch that joins
    one hears no transition for an answer that arrived already. So a side
@@ -154,7 +162,10 @@ export const TASKS_STALLED = 'Every task did not arrive in time. Try again in a 
     P.taskDetail). `reference` reads a task a window names by a reference
     (lib/taskReference.ts) by its number, or by its uuid in one
     organization after another, until an answer names its uuid and
-    organization (store/planner.ts P.watchTaskRef). */
+    organization (store/planner.ts P.watchTaskRef). `summary` is the
+    unread summary across the login's seats (convex/inbox.ts summary),
+    which every registry watches from its start, and `item` the open
+    task's inbox item (convex/inbox.ts item), beside its thread. */
 export const SIDE_NAMES = [
   'thread',
   'history',
@@ -162,6 +173,8 @@ export const SIDE_NAMES = [
   'links',
   'attachments',
   'reference',
+  'summary',
+  'item',
 ] as const
 export type SideName = (typeof SIDE_NAMES)[number]
 
@@ -780,6 +793,9 @@ export function createLiveParts(
   })
 
   root = watch(api.workspace.root, ROOT_ARGS)
+  // the unread summary from the start, right after the root part, so its
+  // first answer comes with the first parts
+  watchSide('summary', api.inbox.summary, {})
   // the wait runs from the start, so a root that never answers fails too
   watchStall(true, false)
 
@@ -826,6 +842,15 @@ export function createLiveParts(
     /** The arguments side `name` watches with, or undefined while it does
         not run. */
     sideArgs: (name: SideName): Record<string, Value> | undefined => sides.get(name)?.args,
+    /** Runs side `name` again from a fresh subscription when its latest
+        result is a failure, as Convex never keeps a failed run. Answers
+        whether it did. */
+    rerunSide(name: SideName): boolean {
+      const slot = sides.get(name)
+      if (!slot || slot.error === undefined) return false
+      rerun([slot])
+      return true
+    },
     /** Stops the side query `name`, and keeps the others. */
     stopSide(name: SideName) {
       const slot = sides.get(name)

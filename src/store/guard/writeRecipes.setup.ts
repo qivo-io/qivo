@@ -1161,6 +1161,27 @@ export const recipes: Recipe[] = [
     },
   },
   {
+    // the item read of P.readItem, which the read on open (P.readOnOpen)
+    // sends too: the server marks every unread message of the item stored
+    // up to `through` read and prunes the item to its newest message, the
+    // one msg-1 here
+    mutation: 'messages:readItem',
+    mutator: 'sendItemRead',
+    what: "a task's inbox item read",
+    pause: 'U',
+    act: (P) =>
+      P.readItem({
+        org: ORG,
+        task: 'task-a',
+        through: Date.parse('2026-10-19T08:00:00.000Z'),
+        latestAt: '2026-10-19T08:00:00.000Z',
+      }),
+    truth: (snap) => {
+      snap.messages[0].read_at = SERVER
+      snap.readMessageCount = 2
+    },
+  },
+  {
     mutation: 'messages:markAllRead',
     mutator: 'markAllMessagesRead',
     what: 'every message read',

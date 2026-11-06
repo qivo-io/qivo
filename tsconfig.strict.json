@@ -41,6 +41,7 @@
     "src/views/roadmap/autoMoveInputs.ts",
     "src/store/boardStandIn.setup.ts",
     "src/store/entityLookup.ts",
+    "src/store/inboxStandIn.setup.ts",
     "src/store/labelPagesStandIn.setup.ts",
     "src/store/milestoneRows.ts",
     "src/store/milestoneStandIn.setup.ts",
