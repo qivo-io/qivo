@@ -523,7 +523,7 @@ export const LIMITS = {
     group: 'tasks',
     max: THREAD_ROWS,
     unit: 'comments and changes of the open task',
-    refusal: `the task window keeps at most ${grouped(THREAD_ROWS)} comments and changes of a task loaded and lets go of those farthest from where you read. Show earlier and Show newer load them again.`,
+    refusal: `the task window keeps about ${grouped(THREAD_ROWS)} comments and changes of a task loaded and lets go of those farthest from where you read. The page it loaded last and the rows on screen stay until it next lets rows go, so it can hold more for a while. Show earlier and Show newer load them again.`,
     on: ['app'],
   },
   followers: {

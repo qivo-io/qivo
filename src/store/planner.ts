@@ -620,9 +620,9 @@ let historyNext: string | null = null
    open. Server truth like commentsSnap, but not live. The store patches it
    for the person's own edits and deletes; other people's changes to these
    comments show when they load again. With the history, the newer run and
-   the live window, at most THREAD_KEEP.rows rows are held, and a loaded
-   comment stays until a release lets it go (keepThread) or the task opens
-   again. */
+   the live window, each release brings what is held back to about
+   THREAD_KEEP.rows rows, and a loaded comment stays until a release lets
+   it go (keepThread) or the task opens again. */
 let olderComments: Row<'comments'>[] = []
 /* The person's comment edits and deletes in the watched thread that the
    server accepted (null for a delete), until a live window holds the

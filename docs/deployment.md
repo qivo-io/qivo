@@ -1708,9 +1708,11 @@ trigger also deletes the session's notification row, a deleted login loses
 its notification rows, and an organization export lists the three tables
 among what it leaves out.
 
-From the release after v0.1.148, the task window keeps at most 150 comments
-and changes of the open task (`threadRows` in `convex/lib/limits.ts`), lets
-go of those farthest from where the person reads, and reads them again
+From the release after v0.1.148, the task window keeps about 150 comments
+and changes of the open task loaded (`threadRows` in
+`convex/lib/limits.ts`). It holds more only until it next lets rows go,
+since the page it loaded last and the rows on screen stay. It lets go of
+the rows farthest from where the person reads and reads them again
 through `snapshot.commentsBefore` and `snapshot.historyBefore`, anchored at
 ids the server answered for that task, which every backend from v0.1.98
 (`c8691d3d`) answers as this app asks. The release changes no server

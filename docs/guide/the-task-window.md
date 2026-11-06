@@ -53,9 +53,11 @@ discussion opens at its newest 50 comments, and fewer when they are very long.
 **Show earlier comments** above the oldest one loads up to 50 more and keeps
 your place in the thread. It disappears once the first comment is loaded. If
 loading fails, **Retry** asks again. Comments that arrive while the task is
-open add to the end. The window keeps at most 150 comments and changes of the
+open add to the end. The window keeps about 150 comments and changes of the
 task loaded, and lets go of the ones farthest from where you read
-([Limits](./limits.md#tasks-and-organizations)). As you walk back with **Show
+([Limits](./limits.md#tasks-and-organizations)). The page it loaded last and
+the comments on your screen stay until it next lets comments go, so for a
+while it can hold more. As you walk back with **Show
 earlier comments**, it lets go of comments near the newest end, and **Show
 newer comments** stands where they were. It loads up to 50 of them again
 under the comment above it, keeps your place and lets go of the oldest ones,

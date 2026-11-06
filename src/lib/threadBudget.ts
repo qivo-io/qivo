@@ -43,21 +43,23 @@
 
 import { LIMITS } from '../../convex/lib/limits'
 
-/** The most comments and changes the store keeps loaded for the task the
-    window shows (convex/lib/limits.ts threadRows): the live comment window
-    and the live history page, the earlier pages Show earlier loaded, the
-    rows that left the live window or page, and the pages Show newer read
-    back. The history counts only while a window shows All.
+/** How many comments and changes the store keeps loaded for the task the
+    window shows (convex/lib/limits.ts threadRows), which each release
+    brings what it holds back to: the live comment window and the live
+    history page, the earlier pages Show earlier loaded, the rows that left
+    the live window or page, and the pages Show newer read back. The
+    history counts only while a window shows All.
 
     The kept set can pass the figure. A release never takes the live
     window (50 comments) or the live page (50 changes), the pages the last
     press loaded (up to 50 a kind, 100 under All, where one press reads
-    both), the row the window measures to keep the reader's place, or the
-    rows on screen around the place a window reported (the reported row and
-    the 50 after it), and it never splits an instant. So under All the
-    store can hold about 200 rows, past the figure of 150, until the next
-    release, and a comment open in an editor is held besides, outside the
-    count, until its editor closes or a page holds it again.
+    both), the row the window measures to keep the reader's place, the rows
+    on screen around the place each window reported (the reported row and
+    the 50 after it), or a row at an instant a live row holds, and it never
+    splits an instant. So under All the store can hold about 200 rows,
+    past the figure of 150, until the next release, and a comment open in
+    an editor is held besides, outside the count, until its editor closes
+    or a page holds it again.
 
     Measured on 6 November 2026 with the browser benchmark's thread phase
     (scripts/benchmark-browser.mjs --thread: 4 times CPU slowdown, 100 ms
