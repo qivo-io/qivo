@@ -6,6 +6,7 @@
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
  *       [--sub-project FW] [--archived 160] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
+ *       [--api-accounts 90 --api-url http://127.0.0.1:<site port>] \
  *       [--labels 60] [--files 60]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
@@ -69,6 +70,26 @@
  * ("(scale N, try 2)", then 3), with all its calls. The seed deletes and
  * changes no credential, so the short one, and any credential a person
  * named the same way, stay as they are.
+ *
+ * `--api-accounts N --api-url <site origin>` adds up to N agents with API
+ * calls, for checking Billing's API calls by account and its two name
+ * lists past their first batch of 25 (planApiAccounts). As Nora it makes
+ * each agent through profiles:create (kind agent, role user, a palette
+ * color), named as an agent is ("Build relay 03", "Telemetry bot 04" and
+ * so on), the first with an accent ("Zoë relay 01") and the second with a
+ * word no other name holds ("Quillon importer 02"), for the lists'
+ * searches. It gives each one agent key through tokens:createAgentKey and
+ * makes 1 to 7 GET /v1/me calls with it on the local backend's site
+ * origin, so the call path itself writes the usage and the aggregates, and
+ * then sets every third agent inactive through profiles:deactivate, so at
+ * N of about 90 both Who counts toward your bill and Who does not count
+ * toward your bill hold more than 25 names. Every agent's id comes from
+ * its number. A second run adds only what is missing: an agent that is
+ * there keeps its profile, one whose usage holds all its calls gets no new
+ * key, one short of them gets a new key and only the calls it lacks, and
+ * one already inactive is left as it is. N goes up to 100 (MOST_API_ACCOUNTS),
+ * and a larger N is refused before anything is seeded. It runs after
+ * --credentials and before the tasks.
  *
  * `--labels N` adds up to N labels to Northstar, for checking Settings >
  * Labels past its first batch of 25 (LIST_BATCH). Each is made by Nora through
@@ -231,6 +252,22 @@ const MOST_CREDENTIALS = 500
 /* The most seeded labels: twenty batches of Settings > Labels, far past the
    eight it gathers before it asks for a search. */
 const MOST_LABELS = 500
+/* The most agents --api-accounts makes: four batches of Billing's API calls
+   by account, and well inside the design size's 1,000 people. */
+const MOST_API_ACCOUNTS = 100
+/* What the --api-accounts agents do, in turn, as a team names its agents.
+   The first two names are the searches' (planApiAccounts). */
+const AGENT_JOBS = [
+  'Build relay',
+  'Telemetry bot',
+  'Release notes agent',
+  'Backup checker',
+  'Support triage bot',
+  'Calendar sync agent',
+  'Report writer',
+]
+/* The --api-accounts agents' colors in turn, from the app's palette. */
+const AGENT_COLORS = ['#2563EB', '#0F766E', '#7C3AED', '#D97706', '#DB2777', '#0891B2']
 /* What seeded labels are about, in turn, as a team names its labels. */
 const LABEL_TOPICS = [
   'Field test',
@@ -283,6 +320,7 @@ export function parseSeedArgs(args) {
     archived: 0,
     inbox: 0,
     credentials: 0,
+    apiAccounts: 0,
     relations: false,
     subProject: null,
     labels: 0,
@@ -305,6 +343,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--inbox') options.inbox = Number(value())
     else if (arg === '--credentials') options.credentials = Number(value())
     else if (arg === '--api-url') options.apiUrl = value()
+    else if (arg === '--api-accounts') options.apiAccounts = Number(value())
     else if (arg === '--relations') options.relations = true
     else if (arg === '--sub-project') options.subProject = value()
     else if (arg === '--labels') options.labels = Number(value())
@@ -325,6 +364,11 @@ export function parseSeedArgs(args) {
     throw new DemoCliError(`--credentials takes a whole number from 0 to ${MOST_CREDENTIALS}.`)
   if (credentials > 0 && !isLoopbackOrigin(options.apiUrl ?? ''))
     throw new DemoCliError('--credentials needs --api-url, the local backend site origin.')
+  const apiAccounts = options.apiAccounts
+  if (!Number.isInteger(apiAccounts) || apiAccounts < 0 || apiAccounts > MOST_API_ACCOUNTS)
+    throw new DemoCliError(`--api-accounts takes a whole number from 0 to ${MOST_API_ACCOUNTS}.`)
+  if (apiAccounts > 0 && !isLoopbackOrigin(options.apiUrl ?? ''))
+    throw new DemoCliError('--api-accounts needs --api-url, the local backend site origin.')
   if (!Number.isInteger(options.labels) || options.labels < 0 || options.labels > MOST_LABELS)
     throw new DemoCliError(`--labels takes a whole number from 0 to ${MOST_LABELS}.`)
   if (!Number.isInteger(options.files) || options.files < 0 || options.files > MOST_FILES)
@@ -815,6 +859,102 @@ export async function seedCredentials(client, { key, org, actor, count, apiUrl, 
   return added
 }
 
+/** The `n`th --api-accounts agent's name: the first with an accent and the
+    second with a word no other name holds, for the lists' searches, the
+    rest named for what they do, each with its number. */
+export function seededAgentName(n) {
+  const number = String(n).padStart(2, '0')
+  if (n === 1) return `Zoë relay ${number}`
+  if (n === 2) return `Quillon importer ${number}`
+  return `${AGENT_JOBS[n % AGENT_JOBS.length]} ${number}`
+}
+
+/** The id of the `n`th --api-accounts agent of organization `org`, the same
+    for every run. */
+export const apiAccountId = (org, n) => uuidOf(`board-scale-seed api account ${org} ${n}`)
+
+/** What --api-accounts still has to do for agents 1 to `count` of
+    organization `org` (see the file comment), from `profiles`, the
+    organization's profiles by id, and `used`, the calls the usage rows hold
+    for each profile id: for each agent number, whether to make its
+    profile, the calls it lacks, made with a new key when more than 0, and
+    whether to set it inactive. Agent n makes 1 + n % 7 calls, and every
+    third is set inactive after them. An agent that is inactive already
+    gets no calls, since its key would be refused, and nothing else. */
+export function planApiAccounts({ org, count, profiles, used }) {
+  const plan = []
+  for (let n = 1; n <= count; n++) {
+    const id = apiAccountId(org, n)
+    const profile = profiles.get(id)
+    const calls = 1 + (n % 7)
+    const inactive = n % 3 === 0
+    if (profile && !profile.active) continue
+    const missing = Math.max(0, calls - (used.get(id) ?? 0))
+    const step = {
+      n,
+      id,
+      name: seededAgentName(n),
+      color: AGENT_COLORS[n % AGENT_COLORS.length],
+      create: !profile,
+      calls: missing,
+      deactivate: inactive,
+    }
+    if (step.create || step.calls > 0 || step.deactivate) plan.push(step)
+  }
+  return plan
+}
+
+/** Adds the --api-accounts agents still missing up to `count` in
+    organization `org` (planApiAccounts), acting as `actor` with the local
+    admin key `key`, and answers how many agents it changed. */
+export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, log }) {
+  // the system tables answer the admin itself, not a person it acts as
+  client.setAdminAuth(key)
+  const profiles = new Map(
+    (await tableRows(client, 'profiles'))
+      .filter((profile) => profile.org_id === org)
+      .map((profile) => [profile.id, profile]),
+  )
+  const used = new Map()
+  for (const row of await tableRows(client, 'billing_usage'))
+    if (row.org_id === org) used.set(row.profile_id, (used.get(row.profile_id) ?? 0) + row.calls)
+  const plan = planApiAccounts({ org, count, profiles, used })
+  client.setAdminAuth(key, identityOf(actor.auth_user_id))
+  const call = async (name, fields) => {
+    try {
+      await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(`${name} was refused: ${error.data?.message ?? error.message}`)
+    }
+  }
+  for (const step of plan) {
+    if (step.create)
+      await call('profiles:create', {
+        org_id: org,
+        id: step.id,
+        name: step.name,
+        org_role: 'user',
+        kind: 'agent',
+        color: step.color,
+      })
+    if (step.calls > 0) {
+      const minted = await mintCredential('qva')
+      await call('tokens:createAgentKey', {
+        org_id: org,
+        id: minted.id,
+        agent_id: step.id,
+        name: `Billing load key ${String(step.n).padStart(2, '0')}`,
+        key_prefix: `${minted.secret.slice(0, 7)}...${minted.secret.slice(-5)}`,
+        key_hash: minted.hash,
+      })
+      await callApi(apiUrl, minted.secret, step.calls)
+    }
+    if (step.deactivate) await call('profiles:deactivate', { org_id: org, id: step.id })
+  }
+  log(`${plan.length} seeded agents with API calls added or finished.`)
+  return plan.length
+}
+
 /** A date `days` from today, as the app stores due dates. */
 const day = (days) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
 
@@ -1004,6 +1144,15 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       org,
       actor,
       count: options.credentials,
+      apiUrl: new URL(options.apiUrl).origin,
+      log,
+    })
+  if (options.apiAccounts > 0)
+    await seedApiAccounts(client, {
+      key: target.key,
+      org,
+      actor,
+      count: options.apiAccounts,
       apiUrl: new URL(options.apiUrl).origin,
       log,
     })

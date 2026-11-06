@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MARKETING_DEMO } from '../convex/internal/marketingDemoData'
 import { LIMITS } from '../convex/lib/limits'
 import {
+  apiAccountId,
   fileSeedId,
   inboxCommentId,
   parseSeedArgs,
+  planApiAccounts,
   planArchive,
   planFiles,
   planInbox,
@@ -17,6 +19,7 @@ import {
   seededFileBytes,
   seededFileProject,
   seededFileText,
+  seededAgentName,
   seededLabelName,
   seededTask,
   seededTasks,
@@ -1512,5 +1515,141 @@ describe('board-scale-seed --files', () => {
       storage_id: 'storage-1',
       inline: false,
     })
+  })
+})
+
+describe('board-scale-seed --api-accounts', () => {
+  const api = ['--api-url', 'http://127.0.0.1:3215']
+
+  it('takes an agent count from 0 to 100 with the local site origin', () => {
+    expect(parseSeedArgs(local).apiAccounts).toBe(0)
+    expect(parseSeedArgs([...local, '--api-accounts', '90', ...api]).apiAccounts).toBe(90)
+    expect(parseSeedArgs([...local, '--api-accounts', '100', ...api]).apiAccounts).toBe(100)
+    for (const count of ['101', '-1', '2.5', 'many'])
+      expect(() => parseSeedArgs([...local, '--api-accounts', count, ...api])).toThrow(
+        '--api-accounts takes a whole number from 0 to 100.',
+      )
+    // its calls go to the backend's own site origin, on loopback only
+    expect(() => parseSeedArgs([...local, '--api-accounts', '5'])).toThrow(/--api-url/)
+    expect(() =>
+      parseSeedArgs([...local, '--api-accounts', '5', '--api-url', 'https://x.convex.site']),
+    ).toThrow(/--api-url/)
+  })
+
+  it('plans agents named for the searches, 1 to 7 calls each, every third set inactive', () => {
+    const plan = planApiAccounts({ org: 'org', count: 7, profiles: new Map(), used: new Map() })
+    expect(plan.map((step) => [step.name, step.calls, step.deactivate, step.create])).toEqual([
+      ['Zoë relay 01', 2, false, true],
+      ['Quillon importer 02', 3, false, true],
+      ['Backup checker 03', 4, true, true],
+      ['Support triage bot 04', 5, false, true],
+      ['Calendar sync agent 05', 6, false, true],
+      ['Report writer 06', 7, true, true],
+      ['Build relay 07', 1, false, true],
+    ])
+    // ids from their numbers, the same for every run and apart per organization
+    expect(plan[0].id).toBe(apiAccountId('org', 1))
+    expect(apiAccountId('org', 1)).not.toBe(apiAccountId('other', 1))
+    expect(new Set(plan.map((step) => step.id)).size).toBe(7)
+    // the unique word is in no other name up to the bound
+    const names = Array.from({ length: 100 }, (_, i) => seededAgentName(i + 1).toLowerCase())
+    expect(names.filter((name) => name.includes('quillon'))).toEqual(['quillon importer 02'])
+    expect(names.filter((name) => name.includes('zoë'))).toEqual(['zoë relay 01'])
+  })
+
+  it('plans only what a stopped run left missing', () => {
+    const id = (n) => apiAccountId('org', n)
+    const profiles = new Map([
+      // 1 done; 2 made with one call of its three; 3 done but still active;
+      // 6 already inactive, whatever its calls
+      [id(1), { id: id(1), active: true }],
+      [id(2), { id: id(2), active: true }],
+      [id(3), { id: id(3), active: true }],
+      [id(6), { id: id(6), active: false }],
+    ])
+    const used = new Map([
+      [id(1), 2],
+      [id(2), 1],
+      [id(3), 4],
+    ])
+    const plan = planApiAccounts({ org: 'org', count: 6, profiles, used })
+    expect(plan.map((step) => [step.n, step.create, step.calls, step.deactivate])).toEqual([
+      [2, false, 2, false],
+      [3, false, 0, true],
+      [4, true, 5, false],
+      [5, true, 6, false],
+    ])
+  })
+
+  it('makes each agent, its key and its calls as Nora, then sets every third inactive, and a rerun adds nothing', async () => {
+    fake.calls = []
+    fake.issues = []
+    fake.people = []
+    fake.usage = []
+    const fetched = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url, init) => {
+        fetched.push([url, init.headers.Authorization.slice(0, 11)])
+        return { ok: true, status: 200, headers: new Headers() }
+      }),
+    )
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    expect(fake.calls.map(([name, fields, as]) => [name, fields.name ?? fields.id, as])).toEqual([
+      ['profiles:create', 'Zoë relay 01', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 01', 'nora-login'],
+      ['profiles:create', 'Quillon importer 02', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 02', 'nora-login'],
+      ['profiles:create', 'Backup checker 03', 'nora-login'],
+      ['tokens:createAgentKey', 'Billing load key 03', 'nora-login'],
+      ['profiles:deactivate', apiAccountId('org', 3), 'nora-login'],
+    ])
+    expect(fake.calls[0][1]).toEqual({
+      org_id: 'org',
+      id: apiAccountId('org', 1),
+      name: 'Zoë relay 01',
+      org_role: 'user',
+      kind: 'agent',
+      color: expect.stringMatching(/^#[0-9A-F]{6}$/),
+    })
+    expect(fake.calls[1][1]).toMatchObject({ org_id: 'org', agent_id: apiAccountId('org', 1) })
+    // 2, 3 and 4 calls, each with its agent's new key, on the site origin
+    expect(fetched).toHaveLength(9)
+    expect(new Set(fetched.map(([url]) => url))).toEqual(new Set(['http://127.0.0.1:3215/v1/me']))
+    expect(new Set(fetched.map(([, auth]) => auth))).toEqual(new Set(['Bearer qva_']))
+
+    // a rerun finds the agents, their calls and the inactive one, and adds nothing
+    fake.people = [1, 2, 3].map((n) => ({
+      id: apiAccountId('org', n),
+      org_id: 'org',
+      kind: 'agent',
+      active: n !== 3,
+    }))
+    fake.usage = [1, 2, 3].map((n) => ({
+      org_id: 'org',
+      profile_id: apiAccountId('org', n),
+      credential_id: `agent_keys:${n}`,
+      calls: 1 + (n % 7),
+    }))
+    fake.calls = []
+    vi.stubGlobal('fetch', vi.fn())
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.people = []
+      fake.usage = []
+    }
+    expect(fake.calls).toEqual([])
   })
 })
