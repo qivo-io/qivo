@@ -1247,7 +1247,8 @@ export default defineSchema({
     cancelled_by: v.optional(v.string()), // the admin profile that cancelled it
     progress: vExportProgress,
     // where collection stands (lib/orgExport.ts vExportStep), never sent to
-    // a client; one page of parent ids at most, so a few kilobytes
+    // a client; one page of parent ids and at most EXPORT_LIMITS.unsettled
+    // Deleted items ids (model/orgExports.ts), so about 15 KB at most
     step: vExportStep,
     attempts: v.number(), // restarts since the last committed step
     // the next step, erase leg or expiry
@@ -1289,8 +1290,9 @@ export default defineSchema({
     .index('by_streaming', ['streams_until']),
 
   // One stored part of an export archive, a ZIP entry of its own: a JSON
-  // array of one table's rows (data/<table>/0001.json and on), the README or
-  // the manifest, each one complete raw DEFLATE stream. The row names its
+  // array of one table's rows (data/<table>/0001.json and on, or
+  // deleted/<table>/0001.json for Deleted items), the README or the
+  // manifest, each one complete raw DEFLATE stream. The row names its
   // file, so the orphan sweeps and attach fences treat it as in use
   // (model/fileHolds.ts storageIdReferenced). A part is a temporary copy,
   // not an upload, so it counts in no upload budget, and every teardown
