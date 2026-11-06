@@ -262,6 +262,22 @@ async function click(element: HTMLElement) {
   })
   await settle()
 }
+/* The tooltip of `element`, as a pointer over it opens it, or null when it
+   has none. */
+async function hintOf(element: Element) {
+  const trigger = element.closest<HTMLElement>('[data-tooltip-trigger]')
+  if (!trigger) return null
+  const pointer = (type: string) =>
+    Object.assign(new MouseEvent(type, { bubbles: true }), { pointerType: 'mouse' })
+  await act(async () => {
+    trigger.dispatchEvent(pointer('pointermove'))
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  })
+  const said = document.querySelector('[data-slot="tooltip-content"]')?.firstChild?.textContent
+  await act(async () => trigger.dispatchEvent(pointer('pointerleave')))
+  await settle()
+  return said ?? null
+}
 /* Types `text` in the search box, which takes focus first, as a person's
    typing gives it, and lets the search rest. */
 const search = async (text: string) => {
@@ -390,6 +406,44 @@ describe('the list', () => {
     ).toBe(true)
     // a row the store holds keeps its controls
     expect(find<HTMLSelectElement>('[data-user-role="anna"]').disabled).toBe(false)
+  })
+
+  it("turns a waiting row's invitation, project right and address off, saying so", async () => {
+    await load((s) => {
+      s.orgs[0].project_creators = 'selected'
+    })
+    await show()
+    // the server holds a pending person the store does not, whose
+    // invitation email the hourly cap held back
+    snap.profiles.push(person('abby', 'Abby Unheld', { auth_user_id: undefined }))
+    extra.deliveries.push({
+      profile_id: 'abby',
+      email: 'abby@example.test',
+      state: 'held',
+      since: new Date().toISOString(),
+      free_at: null,
+    })
+    await act(async () => server.rerun())
+    await settle()
+    expect(opened('invites:deliveries').at(-1)?.args.profile_ids).toContain('abby')
+    const again = find<HTMLButtonElement>('[data-invite-again="abby"]')
+    expect(again.disabled).toBe(true)
+    expect(again.hasAttribute('data-user-waiting')).toBe(true)
+    expect(await hintOf(again)).toBe('Loading this person…')
+    await click(again)
+    expect(sentNames()).not.toContain('invites:sendAgain')
+    const right = find<HTMLInputElement>('[data-can-create-projects="abby"]')
+    expect(right.disabled).toBe(true)
+    expect(await hintOf(right)).toBe('Loading this person…')
+    // the address line says why too
+    const address = find('[data-user-email="abby"]')
+    expect(address.hasAttribute('data-user-waiting')).toBe(true)
+    expect(address.querySelector('input')).toBeNull()
+    expect(await hintOf(address)).toBe('Loading this person…')
+    // a row the store holds keeps its checkbox, with no such hint
+    const held = find<HTMLInputElement>('[data-can-create-projects="anna"]')
+    expect(held.disabled).toBe(false)
+    expect(await hintOf(held)).toBeNull()
   })
 
   it('reads nothing while the tab is hidden, and reads again on return', async () => {

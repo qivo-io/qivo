@@ -558,7 +558,9 @@ function GuestRow({
           <span className="[min-width:0] [overflow:hidden] [text-overflow:ellipsis]">
             {u.email || u.name}
           </span>
-          {u.pending && <InviteLabel user={u} className="[margin-left:6px] [flex-shrink:0]" />}
+          {u.pending && (
+            <InviteLabel user={u} waiting={waiting} className="[margin-left:6px] [flex-shrink:0]" />
+          )}
         </div>
         <div
           data-guest-projects

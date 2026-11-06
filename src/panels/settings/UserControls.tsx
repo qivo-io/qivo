@@ -205,13 +205,16 @@ export function UserName({
     did not go out, with the reason on hover (lib/inviteDeliveries), and
     offers SendAgain when it can go again. It takes the seat's row from the
     page's one read of its pending rows (InviteRows), and says "invited"
-    until that read answers or outside such a page. */
+    until that read answers or outside such a page. `waiting` turns
+    SendAgain off with WAITING while the store does not hold the seat. */
 export function InviteLabel({
   user,
   className,
+  waiting = false,
 }: {
   user: Pick<UserVM, 'id' | 'org'>
   className?: string
+  waiting?: boolean
 }) {
   const row = useInviteRows()?.get(user.id)
   const state = row?.state
@@ -232,7 +235,7 @@ export function InviteLabel({
           {label.text}
         </span>
       </HoverTooltip>
-      <SendAgain orgId={user.org} seat={user.id} row={row} />
+      <SendAgain orgId={user.org} seat={user.id} row={row} waiting={waiting} />
     </>
   )
 }
@@ -242,41 +245,50 @@ export function InviteLabel({
     until the hour frees a send it reads "Send after HH:MM" and is disabled,
     and unlocks by itself. Nothing for any other seat. The server lets only
     an org admin or whoever caused the send use it (invites.sendAgain), the
-    people who see the seat's row. */
+    people who see the seat's row. `waiting` disables it with WAITING, for
+    a row the store does not hold. */
 function SendAgain({
   orgId,
   seat,
   row,
+  waiting = false,
 }: {
   orgId: string
   seat: string
   row: InviteDeliveryRow | undefined
+  waiting?: boolean
 }) {
   const state = row?.state
-  // a failed send waits for the hour too: it counts against the same cap
-  const waitUntil = row?.free_at ? Date.parse(row.free_at) : 0
-  const now = useRenderAt(waitUntil)
+  // a failed send waits for the hour too, since it counts against the same cap
+  const freeAt = row?.free_at ? Date.parse(row.free_at) : 0
+  const now = useRenderAt(freeAt)
   const [sending, setSending] = useStateS(false)
   if (state !== 'held' && state !== 'unsent') return null
-  const waiting = waitUntil > now
+  const capped = freeAt > now
   return (
     <HoverTooltip
       content={
-        waiting ? `Available after ${fmtTime(new Date(waitUntil))}` : 'Email the invitation again'
+        waiting
+          ? WAITING
+          : capped
+            ? `Available after ${fmtTime(new Date(freeAt))}`
+            : 'Email the invitation again'
       }
     >
       <Button
         type="button"
         variant="unstyled"
         data-invite-again={seat}
-        disabled={waiting || sending}
+        {...(waiting ? { 'data-user-waiting': '' } : {})}
+        disabled={waiting || capped || sending}
         onClick={() => {
+          if (waiting) return
           setSending(true)
           void P.sendInvitationAgain(orgId, seat).finally(() => setSending(false))
         }}
         className="[margin-left:6px] [flex-shrink:0] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--primary)] [background:none] [border:none] [padding:0] [cursor:pointer] disabled:[color:var(--text-3)] disabled:[cursor:not-allowed]"
       >
-        {waiting ? `Send after ${fmtTime(new Date(waitUntil))}` : 'Send invitation'}
+        {capped ? `Send after ${fmtTime(new Date(freeAt))}` : 'Send invitation'}
       </Button>
     </HoverTooltip>
   )
@@ -376,17 +388,25 @@ export function UserEmail({
     if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent))) draft.discard()
   }
   if (!canEdit) {
-    return (
+    const line = (
       <div
         data-user-email={user.id}
+        {...(waiting ? { 'data-user-waiting': '' } : {})}
         className="[display:flex] [align-items:baseline] [min-width:0] [padding-left:6px] [font-size:var(--fs-xs)] [color:var(--text-2)] [white-space:nowrap]"
       >
         <span className="[min-width:0] [overflow:hidden] [text-overflow:ellipsis]">
           {DEMO_MODE ? 'Fictional teammate' : user.email || 'no email address'}
         </span>
-        {user.pending && <InviteLabel user={user} className="[margin-left:6px] [flex-shrink:0]" />}
+        {user.pending && (
+          <InviteLabel
+            user={user}
+            waiting={waiting}
+            className="[margin-left:6px] [flex-shrink:0]"
+          />
+        )}
       </div>
     )
+    return waiting ? <HoverTooltip content={WAITING}>{line}</HoverTooltip> : line
   }
   return (
     <div className="min-w-0">
@@ -544,7 +564,8 @@ export function PlannableHoursInput({
    and an active org admin a ticked one that cannot be changed
    (projectRightBox). The phone's user page shows a single row without the
    header, so there the checkbox carries a visible label and the empty cell
-   is left out. */
+   is left out. `waiting` turns the checkbox off with WAITING while the
+   store does not hold the person. */
 export function ProjectRightCell({
   user,
   labelled,
@@ -578,6 +599,7 @@ export function ProjectRightCell({
             aria-label={`${user.name} can create projects`}
             checked={box === 'locked' || user.canCreateProjects}
             disabled={locked}
+            title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
               if (waiting || P.refusePausedEdit()) return
