@@ -6628,9 +6628,6 @@ async function main() {
   await relationPickersCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
-  // the Milestones window opened from the project's Overview, on a
-  // milestone of its own, while the project is active
-  await milestoneWindowCheck()
   // the Board and a task address without task windows, then the Roadmap
   // with them, while the project is active
   await tasksOnDemandCheck()
@@ -6647,6 +6644,9 @@ async function main() {
   // Settings › Projects and Archived projects on the server's lists, on a
   // project of its own
   await settingsProjectsCheck()
+  // the Milestones window opened from the project's Overview, on a
+  // milestone of its own, while the project is active
+  await milestoneWindowCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
