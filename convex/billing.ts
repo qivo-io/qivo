@@ -68,11 +68,13 @@ export const details = orgQuery({
  * storage is the organization's stored-byte totals, files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, never 0. The sample is what the current paid period's
- * storage charge uses, the same totals as the period's sample read them
- * when the period started, files in Deleted items included, and null for
- * any other bucket or while the sample has not finished. Billing's API
- * calls by account reads billing.apiAccounts for the period_key this
- * answers.
+ * storage charge uses, the same totals as the period's sample read them,
+ * normally when the period started, files in Deleted items included, with
+ * when it read them (`sampled_storage_at`, null for a sample an earlier
+ * release finished, which scanned the attachment rows and left those files
+ * out). Both are null for any other bucket or while the sample has not
+ * finished. Billing's API calls by account reads billing.apiAccounts for
+ * the period_key this answers.
  *
  * It picks the bucket by the clock when it runs (usagePeriod). Convex can
  * answer a read from its cache of an identical earlier one while nothing
