@@ -36,6 +36,7 @@
     "src/lib/viewVisibility.ts",
     "src/lib/weekDrafts.ts",
     "src/lib/workload.ts",
+    "src/views/roadmap/autoMoveInputs.ts",
     "src/store/boardStandIn.setup.ts",
     "src/store/entityLookup.ts",
     "src/store/labelPagesStandIn.setup.ts",
@@ -48,6 +49,7 @@
     "src/store/projectSettingsListsStandIn.setup.ts",
     "src/store/projectSettingsStandIn.setup.ts",
     "src/store/relationPickerStandIn.setup.ts",
+    "src/store/roadmapStandIn.setup.ts",
     "src/store/teamSyncStandIn.setup.ts",
     "src/store/updates.ts"
   ]
