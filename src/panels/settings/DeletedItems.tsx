@@ -1056,9 +1056,19 @@ export function DeletedItemsPage() {
             const { rows } = ask2
             if (planOf(rows, LIMITS.restoreBatch.max).long) {
               // the store runs it and says how it went, wherever the
-              // person is; the window closes at once
+              // person is; the window closes at once. An action that
+              // starts sets P.deletedAction before its first call, so an
+              // unchanged one means the store refused it at the press (the
+              // pause, another action) and sent nothing, so the window and
+              // the selection stay and the page says why.
+              const before = P.deletedAction
+              const started = P.restoreDeletedItems(rows, { bulk: true })
+              if (P.deletedAction === before) {
+                const outcome = await started
+                if (outcome.error !== null) toast(outcome.error, 'error')
+                return
+              }
               setSelected(new Map())
-              void P.restoreDeletedItems(rows, { bulk: true })
               closeActed()
               return
             }

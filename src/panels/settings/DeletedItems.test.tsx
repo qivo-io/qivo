@@ -842,6 +842,31 @@ describe('restoring', () => {
     expect(toasts()).toContain('Restored 61 items.')
   })
 
+  it('keeps the window and the selection when the pause refuses a long restore, and says why', async () => {
+    await open(world({ tasks: 30 }))
+    await choose(`all:${ORG}`)
+    await click(find('[data-select-all]'))
+    await click(find('[data-deleted-page-next]'))
+    await click(find('[data-select-all]'))
+    expect(text('[data-deleted-count]')).toBe('31 selected, 25 on other pages')
+    await click(button('Restore 31 selected'))
+    expect(has('[data-keep-open]')).toBe(true)
+    // Qivo goes offline while the window is open
+    const sync = await import('../../lib/syncStatus')
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    sync.syncStatus.setSocket({ connected: false, everConnected: true })
+    await wait(sync.OFFLINE_DELAY_MS)
+    await click(button('Restore 31 items'))
+    expect(restores()).toEqual([])
+    const errors = (window.showToast as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([, tone]) => tone === 'error')
+      .map(([t]) => t)
+    expect(errors).toEqual([store.OFFLINE_TEXT])
+    expect(has('[data-bulk-restore]')).toBe(true)
+    expect(text('[data-deleted-count]')).toBe('31 selected, 25 on other pages')
+    expect(text('[data-deleted-progress]')).toBe('')
+  })
+
   it('opens the whole item window for a single item selected through its hit alone', async () => {
     await open()
     await choose(LUMA)
