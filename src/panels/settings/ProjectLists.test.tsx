@@ -985,7 +985,7 @@ function byPlace(a: string, b: string) {
 
 /* --------------------------------------------------------- the design size */
 
-describe('at the design size, one figure at a time', () => {
+describe('at the design size, one figure at a time, and a read over several at their sum', () => {
   it('walks an admin’s 200 live top-level projects through eight pages and back', async () => {
     await load((snap) => {
       snap.projects = snap.projects.filter((p) => p.parent_id === undefined && !p.archived_at)
@@ -1036,6 +1036,102 @@ describe('at the design size, one figure at a time', () => {
     expect(seen.size).toBe(300)
     expect(entries().at(-1)).toBe('a-0')
     expect(has('[data-archived-projects-next]')).toBe(false)
+  })
+
+  it('searches an admin’s live projects and sub-projects at their sum, 200 and 500, to the end', async () => {
+    await load((snap) => {
+      // the fixture's four live top-level projects and 196 more, with 500
+      // live sub-projects under them, all named so one search finds them
+      const live = snap.projects.filter((p) => p.parent_id === undefined && !p.archived_at)
+      for (const p of live) p.name = `Live ${p.name}`
+      const base = live[0]
+      for (let i = live.length; i < 200; i++)
+        live.push({
+          ...base,
+          id: `p-${i}`,
+          num: 1000 + i,
+          name: `Live project ${String(i).padStart(3, '0')}`,
+          lead_id: undefined,
+        })
+      snap.projects = [...live]
+      for (let i = 0; i < 500; i++)
+        snap.projects.push({
+          ...base,
+          type: 'project',
+          id: `s-${i}`,
+          num: 2000 + i,
+          name: `Live sub ${String(i).padStart(3, '0')}`,
+          parent_id: live[i % 200]?.id,
+          lead_id: undefined,
+        })
+    })
+    await projects()
+    await type(find('[data-settings-projects-search]'), 'live')
+    await rest()
+    const shown = () =>
+      [
+        ...document.querySelectorAll<HTMLElement>(
+          '[data-settings-projects] > div > [data-project-row], [data-settings-projects] > [data-subproject-row]',
+        ),
+      ].map((row) => row.dataset.projectRow ?? row.dataset.subprojectRow ?? '')
+    const seen = new Set<string>()
+    let pages = 1
+    for (; pages <= 40; pages++) {
+      for (const id of shown()) seen.add(id)
+      expect(shown()).toHaveLength(25)
+      if (!has('[data-settings-projects-next]')) break
+      await click(find('[data-settings-projects-next]'))
+    }
+    expect(pages).toBe(28)
+    expect(seen.size).toBe(700)
+    expect(openLists()).toEqual([expect.objectContaining({ name: 'projects', search: 'live' })])
+  })
+
+  it('walks an admin’s archive at its sum, 300 archived top-level projects and 1,000 archived sub-projects of live parents, to its end', async () => {
+    await load((snap) => {
+      // the fixture's four live top-level projects and 163 more, as many as
+      // 500 live sub-projects need at 3 each, with the 1,000 archived
+      // sub-projects spread under them
+      const live = snap.projects.filter((p) => p.parent_id === undefined && !p.archived_at)
+      const base = { ...live[0], lead_id: undefined }
+      for (let i = live.length; i < 167; i++)
+        live.push({ ...base, id: `l-${i}`, num: 1000 + i, name: `Live ${i}` })
+      snap.projects = [...live]
+      // archived a minute apart, the sub-projects after the projects
+      const at = (i: number) => new Date(Date.parse(T1) + i * 60_000).toISOString()
+      for (let i = 0; i < 300; i++)
+        snap.projects.push({
+          ...base,
+          id: `a-${i}`,
+          num: 2000 + i,
+          name: `Archived ${i}`,
+          archived_at: at(i),
+        })
+      for (let i = 0; i < 1000; i++)
+        snap.projects.push({
+          ...base,
+          type: 'project',
+          id: `s-${i}`,
+          num: 3000 + i,
+          name: `Archived sub ${i}`,
+          parent_id: live[i % 167]?.id,
+          archived_at: at(300 + i),
+        })
+    })
+    await archived()
+    // newest archived first, the last sub-project
+    expect(entries()[0]).toBe('s-999')
+    const seen = new Set<string>()
+    let pages = 1
+    for (; pages <= 60; pages++) {
+      for (const id of entries()) seen.add(id)
+      expect(entries()).toHaveLength(25)
+      if (!has('[data-archived-projects-next]')) break
+      await click(find('[data-archived-projects-next]'))
+    }
+    expect(pages).toBe(52)
+    expect(seen.size).toBe(1300)
+    expect(entries().at(-1)).toBe('a-0')
   })
 
   it('reads an open project’s 30 live sub-projects in two batches', async () => {
