@@ -207,7 +207,10 @@ export const INBOX_LIMIT = 500
 
 /** The most comments and changes the task window keeps loaded for the open
  * task (threadRows), measured in the browser benchmark's thread phase
- * (scripts/benchmark-browser.mjs --thread) on 6 November 2026. */
+ * (scripts/benchmark-browser.mjs --thread) on 6 November 2026: no candidate
+ * from 100 to 1,000 kept the longest frame after a press or a delivered
+ * comment under 100 ms, so it is the rule's floor of 150, which the owner
+ * decides on (src/lib/threadBudget.ts THREAD_KEEP has the medians). */
 export const THREAD_ROWS = 150
 
 /** Days a read inbox message is kept when the person has not chosen. */

@@ -43,8 +43,23 @@ import { LIMITS } from '../../convex/lib/limits'
     release, and a comment open in an editor is held besides, outside the
     count, until its editor closes or a page holds it again.
 
-    Measured on 6 November 2026 (see the limits registry entry). Tests
-    lower it and restore it. */
+    Measured on 6 November 2026 with the browser benchmark's thread phase
+    (scripts/benchmark-browser.mjs --thread: 4 times CPU slowdown, 100 ms
+    latency, 8 Mbps, Chromium at 1440 by 1000, 5 samples on one Boat
+    sandbox at a load of 1.0 to 1.3), each case one figure raised: Comments
+    on a task with 1,000 comments, All on one with 30 comments and 1,000
+    changes. The median longest frame after a Show earlier press made at the
+    figure, Comments and All, was 333 and 393 ms at 100 rows, 400 and 310 at
+    150, 416 and 355 at 200, 481 and 372 at 300, 694 and 448 at 500 and 921
+    and 695 at 1,000; after a delivered comment 307 and 394, 291 and 273,
+    335 and 306, 386 and 326, 611 and 454, and 916 and 609. No candidate
+    keeps either under the 100 ms the coordinator's rule asks for, since
+    about 250 ms of each frame is the window's repaint whatever the rows,
+    so the figure is the rule's floor of 150, which the owner decides on.
+    With the budget built, at 150 the medians were 525 and 470 ms after
+    Show earlier, 389 and 422 after a comment and 530 and 520 after Show
+    newer, and the store held 150 rows after each. Tests lower it and
+    restore it. */
 export const THREAD_KEEP = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of

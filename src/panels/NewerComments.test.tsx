@@ -318,7 +318,9 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     // spine's scroller is the ancestor that scrolls
     const scroller = document.querySelector<HTMLElement>('[data-spine-scroll]')
     if (!scroller) throw new Error('missing the scroller')
-    let scrollTop = 7000
+    // #169 sits 200 px down the screen, not at its top, so a place kept
+    // from no measure at all would show
+    let scrollTop = 6800
     Object.defineProperties(scroller, {
       scrollTop: {
         configurable: true,
@@ -347,8 +349,9 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     await press('Show newer comments')
     await answer({ comments: range(169, 219), earlier: true })
     // #100 to #148 went above #169, and the scroller moved up by them
+    expect(before).toBe(200)
     expect(onScreen()).toBe(before)
-    expect(scrollTop).toBe(7000 - 49 * 100)
+    expect(scrollTop).toBe(6800 - 49 * 100)
     expect(document.activeElement?.closest('[data-newer-comments]')).not.toBeNull()
     // once the gap closes, focus goes to the first row that came in
     await act(async () => newerRow()?.querySelector('button')?.focus())
