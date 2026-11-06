@@ -515,9 +515,18 @@ type Delivery = {
  * reader took the end record's last slice, the next pull records the
  * delivery (recordDelivery) and closes the body; a failed record is
  * logged and changes no byte. A reader that cancels stops the reads, and
- * the download records nothing and releases its lease. An HTTP action
- * runs at most 30 minutes, so a reader slower than about 55 KB/s cannot
- * fetch a 95 MiB archive whole.
+ * the download records nothing and releases its lease.
+ *
+ * The reader is the Convex runtime, not the client. On a local backend
+ * (precompiled-2026-10-22, 6 November 2026) it pulled an 11 MB body as fast
+ * as storage gave it, whatever the client took: a download curl stopped
+ * after 18 KB was recorded within a second of its start, its lease ended
+ * then, and a file erased three seconds into a download no longer stopped
+ * it. So the record says that the backend read the whole archive into the
+ * response, not that the client received it, and the per-part checks and
+ * the lease cover that read, not the client's transfer. Convex documents
+ * at most 30 minutes for an action; whether a slow client's transfer
+ * counts toward it was not measured.
  */
 function archiveStream(
   ctx: ActionCtx,
@@ -584,7 +593,7 @@ function archiveStream(
           controller.enqueue(pending.subarray(0, at))
           return
         }
-        // the reader took the last slice
+        // the reader, the runtime, took the last slice
         pending = null
         await runMutation(internal.orgExport.recordDelivery, {
           export_id: link.export_id,

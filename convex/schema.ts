@@ -1263,7 +1263,9 @@ export default defineSchema({
     erasing_at: v.optional(v.string()),
     format_version: v.number(), // the archive format (lib/orgExport.ts ORG_EXPORT_FORMAT)
     // the first time the route served the ready archive whole, its last
-    // byte taken by the reader; a download that stopped short sets nothing
+    // byte read into the response by the runtime, which does not wait for
+    // the client (http.ts archiveStream); a refused or damaged download
+    // sets nothing
     served_at: v.optional(v.string()),
     // the leases of the downloads running now (model/orgExports.ts
     // DELIVERY.streams), each until an action's longest run unless its

@@ -83,20 +83,23 @@ export const EXPORT_LIMITS = {
  *   link may start one.
  * - streams: the downloads of one archive that may run at once, counted by
  *   a lease on the job row (orgExport.ts leaseDelivery). A download holds
- *   an HTTP action for as long as its reader reads, and Convex runs a
+ *   an HTTP action for as long as its body is read, and Convex runs a
  *   limited number of actions at once for the whole deployment (64 on its
  *   smallest plan, shared with sign-in, REST, MCP, the file gateway and the
- *   export steps), so neither a slow reader nor a leaked link may hold many.
- *   Two let an admin start again beside a download that has not ended.
+ *   export steps), so a leaked link may not start many at once. Two let an
+ *   admin start again beside a download that has not ended. The runtime
+ *   reads the body as fast as storage gives it (http.ts archiveStream), so
+ *   a lease lasts while the backend reads the archive, under a second for
+ *   11 MB on a local backend, not while a slow client downloads it.
  * - demoStreams: the downloads that may run at once on the whole public
  *   demo deployment, where every visitor is the admin of an organization of
  *   their own; a quarter of the smallest plan's actions.
  * - streamMs: how long a lease holds when its download never releases it,
  *   an action's longest run. A download that outlives it no longer counts.
  * - retrySeconds: the Retry-After of a download refused past either count.
- * - slice: the most bytes the route hands its reader at a time, so the
- *   record of a download served whole waits until the reader took the
- *   archive's last slice (http.ts archiveStream).
+ * - slice: the most bytes the route hands its reader, the runtime, at a
+ *   time, so the record of a download served whole waits until the runtime
+ *   took the archive's last slice (http.ts archiveStream).
  * A download's checks read about one range a part (orgExport.ts
  * readDelivery, 4,007 ranges at EXPORT_LIMITS.parts data parts), a handful
  * of reads before each part (canDeliver) and two small writes, the lease
@@ -279,9 +282,10 @@ export const readyJobs = (ctx: QueryCtx, orgId: string) =>
 export const jobsOf = (ctx: QueryCtx, orgId: string) =>
   ctx.db.query('org_exports').withIndex('by_org_started', (q) => q.eq('org_id', orgId))
 
-/** Records that the route served job `job`'s archive whole: the
- * organization's last export, while it is there and its deletion has not
- * begun, so a deletion reminder counts a downloaded archive
+/** Records that the route served job `job`'s archive whole, every byte
+ * read into the response (http.ts archiveStream says what that measures):
+ * the organization's last export, while it is there and its deletion has
+ * not begun, so a deletion reminder counts a downloaded archive
  * (model/orgRetention.ts), and the job's first `served_at`. The finish
  * writes neither, so an archive that was only prepared never counts. */
 export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): Promise<void> {

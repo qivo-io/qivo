@@ -1657,6 +1657,9 @@ the whole public demo, answering `429` past them. An archive served whole
 sets `organizations.last_export_at` and the job's `served_at`, so a
 deletion reminder counts a downloaded archive and not one that was only
 prepared; the browser export's `recordExport` still sets it as before.
+Served whole means the backend read every byte into the response. On a
+local backend the runtime did so within a second, whatever the client took,
+so a download the client abandons is recorded too.
 Archives are format 4, with the organization's Deleted items under
 `deleted/`, and the export reads 100 tasks a page. No app calls the link or
 the route yet. The release adds optional fields to `org_exports` and

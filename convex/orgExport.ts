@@ -61,10 +61,13 @@
  * job and the organization (deliveryOf), again before every part
  * (canDeliver), holds a lease while it streams (leaseDelivery, at most
  * DELIVERY.streams a job), and streams the stored parts as one ZIP without
- * holding the archive. Only an archive the route served whole is recorded
- * (recordDelivery): the job's first served_at and the organization's
- * last_export_at, which the deletion reminder reads, so an archive that
- * was only prepared (completed_at) never counts as a backup. A ready
+ * the function holding the archive. Only an archive the route read whole
+ * into its response is recorded (recordDelivery): the job's first
+ * served_at and the organization's last_export_at, which the deletion
+ * reminder reads, so an archive that was only prepared (completed_at)
+ * never counts as a backup. The runtime reads that response as fast as
+ * storage allows, so a download the client abandons is recorded too
+ * (http.ts archiveStream). A ready
  * archive whose file is gone fails as incomplete (failDelivery). Neither
  * the claim nor the route touches the four hours.
  *
