@@ -19,9 +19,12 @@ import { answerRoadmap } from './store/roadmapStandIn.setup'
    once one is shared with a person who landed on All projects for want of
    one. Team sync, which covers the home organization only, asks about that
    organization's projects. The phone's Roadmap gives the desktop's note for
-   every scope with nothing to schedule, and both keep showing the scope's
-   milestones, as the Overview does under its own note. The Milestones
-   window a flag opens reads its milestone from the milestone stand-in
+   every scope with nothing to schedule. A project's Roadmap keeps its
+   timeline with the milestones of its window behind the note, and the
+   phone's agenda lists the scope's milestones under it, as the Overview
+   does under its own note; My view's flags sit on its rows, so it shows
+   none, and All projects shows its note alone. The Roadmap's flags and
+   the Milestones window a flag opens read the milestone stand-in
    (store/milestoneStandIn.setup.ts). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
@@ -44,9 +47,12 @@ const ADMIN = 'Your organization has no active projects.'
 let container: HTMLDivElement
 let root: Root
 let phone = false
+// the milestone reads App subscribed, by query
+let milestoneReads: string[] = []
 
 beforeEach(() => {
   phone = false
+  milestoneReads = []
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
   Range.prototype.getBoundingClientRect = () => new DOMRect()
   Element.prototype.scrollIntoView = () => {}
@@ -115,8 +121,10 @@ async function app(snap: Snapshot, path = '/app/testbed') {
     else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
       next(answerRoadmap(server, name, args))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
-    else if (isMilestoneRead(name)) answerMilestones(server, name, args, next, fail)
-    else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
+    else if (isMilestoneRead(name)) {
+      milestoneReads.push(name)
+      answerMilestones(server, name, args, next, fail)
+    } else if (isProjectNavRead(name)) answerProjectNav(server, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
@@ -402,26 +410,42 @@ function withMilestone(snap: Snapshot, project: string, name: string): Snapshot 
 }
 
 describe('the Roadmap of a scope with nothing to schedule', () => {
-  it('keeps the flags of its milestones behind the note on a computer', async () => {
+  it("keeps a project's timeline and flags behind the note on a computer, and no flag in My view or All projects", async () => {
+    const header = () => document.querySelector('[data-workspace-view] [data-roadmap-header]')
     await app(bare(), '/app/testbed/roadmap/p/3')
     await shows('Tasks live in sub-projects.')
+    // a project keeps its frame behind any note, also without a milestone
+    expect(header()).not.toBeNull()
     expect(document.querySelector('[data-msflag]')).toBeNull()
     await reload()
     await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
     await shows('Tasks live in sub-projects.')
-    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
+    // the flags of its window, once the range read answered
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-msband] [data-msflag]')?.textContent).toBe(
+        'Bare launch',
+      ),
+    )
     expect(document.querySelector('[data-no-match]')).toBeNull()
     await reload()
+    milestoneReads = []
     await app(withMilestone(member(), 'plan', 'Plan launch'), '/app/~/roadmap/mine')
     await shows('Nothing assigned to you')
-    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Plan launch')
+    // My view keeps its frame, and with no row no flag and no read
+    expect(header()).not.toBeNull()
+    expect(document.querySelector('[data-msflag]')).toBeNull()
+    expect(milestoneReads).not.toContain('milestones:between')
     // All projects, when no project the person sees has a sub-project
     await reload()
+    milestoneReads = []
     const only = withMilestone(bare(), 'bare', 'Bare launch')
     only.access = only.access.filter((grant) => grant.project_id === 'bare')
     await app(only, '/app/~/roadmap/all')
     await shows('Tasks live in sub-projects.')
-    expect(document.querySelector('[data-msflag]')?.textContent).toBe('Bare launch')
+    // the note alone, with no frame, no flag and no read
+    expect(header()).toBeNull()
+    expect(document.querySelector('[data-msflag]')).toBeNull()
+    expect(milestoneReads).not.toContain('milestones:between')
     // and no empty heading for that project above the note
     expect(document.querySelector('[data-track]')).toBeNull()
   })
@@ -430,6 +454,7 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
     const snap = withMilestone(withMilestone(bare(), 'bare', 'Bare launch'), 'bare', 'Bare review')
     await app(snap, '/app/testbed/roadmap/p/3')
     await shows('Tasks live in sub-projects.')
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-msflag]')).toHaveLength(2))
     const flags = [...document.querySelectorAll<HTMLElement>('[data-msflag]')]
     expect(flags.map((flag) => flag.textContent)).toEqual(['Bare launch', 'Bare review'])
     expect(new Set(flags.map((flag) => flag.style.bottom)).size).toBe(2)
@@ -438,7 +463,11 @@ describe('the Roadmap of a scope with nothing to schedule', () => {
   it('opens a milestone from its flag with the keyboard', async () => {
     await app(withMilestone(bare(), 'bare', 'Bare launch'), '/app/testbed/roadmap/p/3')
     await shows('Tasks live in sub-projects.')
-    const flag = document.querySelector<HTMLElement>('[data-msflag]')
+    const flag = await vi.waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-msflag]')
+      if (!found) throw new Error('no flag yet')
+      return found
+    })
     // a button in the tab order, named by the whole name however it is cut
     expect(flag?.getAttribute('role')).toBe('button')
     expect(flag?.tabIndex).toBe(0)
