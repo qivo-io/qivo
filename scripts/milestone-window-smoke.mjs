@@ -117,23 +117,25 @@ async function pickWeek(week) {
   return iso
 }
 
-/* Removes the milestones this run made: the ids it recorded, and any row
-   named with its prefix that the server answers in the run's weeks of its
-   project, as an add the run painted before a failure. */
+/* Removes the milestones this run made that the backend still holds: the
+   ids it recorded, and any row named with its prefix that the server
+   answers in the run's weeks of its project, as an add the run painted
+   before a failure. A milestone the run already deleted stays deleted. */
 async function cleanup() {
   if (!span) return
   const context = await browser.newContext()
   try {
     const cleanupPage = await context.newPage()
     await signInDemo(cleanupPage, demo)
-    for (const row of await serverRows(cleanupPage, span.project, span.from, span.to))
-      if (row.name.startsWith(prefix)) made.add(row.id)
+    const held = await serverRows(cleanupPage, span.project, span.from, span.to)
+    for (const row of held) if (row.name.startsWith(prefix)) made.add(row.id)
+    const left = held.filter((row) => made.has(row.id)).map((row) => row.id)
     await cleanupPage.evaluate(
       async ({ ids, org }) => {
         const { convex } = await import('/src/lib/convex.ts')
         for (const id of ids) await convex.mutation('projects:removeMilestone', { org_id: org, id })
       },
-      { ids: [...made], org: span.org },
+      { ids: left, org: span.org },
     )
     await cleanupPage.evaluate(() => window.PLANNER?.signOut()).catch(() => {})
   } finally {
