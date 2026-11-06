@@ -528,19 +528,29 @@ describe('Settings › Projects', () => {
   })
 
   it('offers New sub-project… by each row’s right, never by the store’s level', async () => {
-    // the store's copy makes me Ops's lead; the server says Leo leads it
-    await load(signInAs('mira'), (copy) => {
-      const ops = copy.projects.find((p) => p.id === 'ops')
-      if (ops) ops.lead_id = 'mira'
-    })
+    // I hold a User grant on Ops, which Leo leads; the store's copy makes me
+    // its lead, and takes Design #7, which I lead, from me
+    await load(
+      (snap) => {
+        signInAs('mira')(snap)
+        snap.access.push({ project_id: 'ops', profile_id: 'mira', level: 'user' })
+      },
+      (copy) => {
+        for (const p of copy.projects) {
+          if (p.id === 'ops') p.lead_id = 'mira'
+          if (p.id === 'design7') p.lead_id = 'leo'
+        }
+      },
+    )
     await projects()
-    expect(projectNames()).toEqual(['Design', 'Plan'])
+    expect(projectNames()).toEqual(['Design', 'Ops', 'Plan'])
     expect(await projectMenu('plan')).toEqual([
       'New sub-project…',
       'Project settings',
       'Archived tasks',
     ])
     expect(await projectMenu('design7')).toContain('New sub-project…')
+    expect(await projectMenu('ops')).toEqual(['Project settings', 'Archived tasks'])
     // Leo sees Plan by a User grant, which gives no right to a sub-project
     await load(signInAs('leo'))
     await projects()
