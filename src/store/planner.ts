@@ -3467,11 +3467,16 @@ function overviewStep(step: () => void) {
    A view registers each milestone read it shows here from an effect, by
    slot, with the arguments on screen, or none while its page or the tab is
    hidden (P.watchMilestones): the Milestones window opened on a milestone
-   its `get` ('milestone:open'), and Team sync's opening its next milestone
-   and the milestones of this week and next ('milestones:sync-next',
-   'milestones:sync-ahead'). Each is a view read (watchView), with its
-   owner, attempt, key, connection and the answer it keeps while it stops,
-   and its answer's milestones are the read's anchor in milestoneRows. Every
+   its `get` ('milestone:open'), the `get` of an editor whose milestone no
+   section shows ('milestone:kept') and its Upcoming and Past sections,
+   one live read each and a Load more's on its way
+   ('milestones:window:upcoming:<n>', 'milestones:window:past:<n>',
+   views/useMilestoneSection.ts), and Team sync's opening its next
+   milestone and the milestones of this week and next
+   ('milestones:sync-next', 'milestones:sync-ahead'). Each is a view read
+   (watchView), with its owner, attempt, key, connection and the answer it
+   keeps while it stops, and its answer's milestones are the read's anchor
+   in milestoneRows. Every
    live layer's `milestones` part paints every copy of a milestone it
    changes there, and a delivery of each read that holds a copy holds the
    write, so a person's rename shows in every read at once and stays until

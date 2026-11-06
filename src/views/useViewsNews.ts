@@ -1,5 +1,9 @@
 /* How a view whose read the store owns renders its answers: the Board
-   (views/board/useBoardView.ts) and the Overview (views/Overview.tsx). */
+   (views/board/useBoardView.ts), the Overview (views/Overview.tsx), the
+   Milestones window's reads of a milestone (panels/Modals.tsx
+   useMilestoneGet) and of its sections (views/useMilestoneSection.ts), and
+   Team sync's opening and agenda (views/teamSync/TeamOpening.tsx
+   useSyncMilestoneReads, views/teamSync/useSyncMeeting.ts). */
 
 import { useEffect, useState } from 'react'
 import { P } from '../store/planner'

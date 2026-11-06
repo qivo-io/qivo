@@ -30,6 +30,7 @@ import {
 import { relativeWeek, weekToISO } from '@/lib/dates'
 import { focusAround, useFocusWhenGone } from '@/lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '@/lib/liveControls'
+import { SCROLL_ANCHORING } from '@/lib/scrollAnchoring'
 import { shownEmptyState } from '@/lib/taskFocus'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -446,15 +447,6 @@ function useStall(active: boolean, key: string): boolean {
 const listNoteClass =
   '[font-size:var(--fs-sm)] [color:var(--text-3)] [font-style:italic] [padding:4px_2px]'
 
-/* Whether the browser keeps a scroller's reading position itself when
-   content above it goes (CSS scroll anchoring). Chromium, so the desktop
-   app, and Firefox do; where it does not, as in Safari, an Overview list
-   keeps its place by hand when the cap drops its first batches (OvList). */
-const SCROLL_ANCHORING =
-  typeof CSS !== 'undefined' &&
-  typeof CSS.supports === 'function' &&
-  CSS.supports('overflow-anchor', 'auto')
-
 /** What one batch says in place, after its rows: its reads stopped, or it
     failed, with Try again (a failed Load more's Retry keeps its place). */
 function BatchNote({
@@ -740,13 +732,14 @@ function OvMilestoneRow({
   m: MilestoneVM
   next: boolean
   owner?: string | null
-  onEdit: (id: string) => void
+  /** opens the milestone, naming the project it sits on */
+  onEdit: (id: string, project: string) => void
 }) {
   const delta = relativeWeek(m.week)
   return (
     <Button
       type="button"
-      onClick={() => onEdit(m.id)}
+      onClick={() => onEdit(m.id, m.project)}
       title={`Edit “${m.name}”${owner ? `, ${owner}` : ''}`}
       data-overview-milestone={m.id}
       data-next={next ? '' : undefined}
@@ -1016,7 +1009,7 @@ type OverviewActions = {
   newProject: (init: { parent?: string; kind?: 'program' }) => void
   newMilestone: (init: { week?: number }) => void
   /** `focusAfterClose` is what takes focus as the Milestones window closes */
-  editMilestone: (id: string, focusAfterClose?: () => HTMLElement | null) => void
+  editMilestone: (id: string, focusAfterClose?: () => HTMLElement | null, project?: string) => void
   /** opens Search, on the project `searchIn` names */
   openPalette?: (searchIn?: unknown) => void
 }
@@ -1144,7 +1137,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
      with no task to show, the note the page shows instead. */
   const newMilestone = useRef<HTMLButtonElement>(null)
   const noMilestones = useRef<HTMLDivElement>(null)
-  const editMilestone = (id: string) =>
+  const editMilestone = (id: string, project?: string) =>
     actions.editMilestone(
       id,
       focusAround(
@@ -1153,6 +1146,7 @@ function Overview({ info, actions }: { info: ScopeInfo; actions: OverviewActions
         (row) => row,
         () => newMilestone.current ?? noMilestones.current ?? shownEmptyState(),
       ),
+      project,
     )
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one of those that also narrows to my own tasks. The Overview renders

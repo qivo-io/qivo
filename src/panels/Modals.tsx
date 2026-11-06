@@ -5,6 +5,7 @@ import {
   type ReactNode as ReactNodeM,
   useEffect as useEffectM,
   useId as useIdM,
+  useLayoutEffect as useLayoutEffectM,
   useRef as useRefM,
   useState as useStateM,
 } from 'react'
@@ -31,6 +32,7 @@ import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
 import { limitSentence, overLimit, sentence } from '../lib/fieldLimits'
 import { restoreFocus } from '../lib/focusVisibility'
+import { useFocusWhenGone } from '../lib/focusWhenGone'
 import { isLandscapeRoadmapOpen } from '../lib/landscape'
 import { UnsentScopeContext, useTypedUnsaved, useUnsaved, useUnsentScope } from '../lib/leaveGuard'
 import {
@@ -41,6 +43,7 @@ import {
   requestedAccess,
 } from '../lib/newProjectAccess'
 import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
+import { SCROLL_ANCHORING } from '../lib/scrollAnchoring'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
@@ -68,6 +71,7 @@ import {
   teamNoun,
 } from '../store/planner'
 import { duplicateNameTags } from '../store/viewModels'
+import { type MilestoneSection, useMilestoneSection } from '../views/useMilestoneSection'
 import { useViewsNews } from '../views/useViewsNews'
 import { type ProjectSettingsRead, useProjectSettings } from './settings/useProjectSettings'
 
@@ -266,7 +270,7 @@ function ModalShell({
         {/* the 24px bottom is INSIDE the scroller on purpose: with no rule and
             no band under it, a body scrolled to its end has to come to rest
             clear of the buttons rather than butting into them */}
-        <div className="overflow-y-auto px-5 pt-6 pb-6">
+        <div data-modal-scroll className="overflow-y-auto px-5 pt-6 pb-6">
           <UnsentScopeContext.Provider value={scope}>
             {unsent.map((what) => what && <HoldUnsent key={what} what={what} />)}
             {children}
@@ -2582,46 +2586,82 @@ function UnusedReason({
   )
 }
 
-/* ---------- Milestones (list + create + edit, one window) ----------
-   Deviation #239. The window IS the project's milestone list: the first row
-   is the new milestone (name, week, Add), "On the roadmap" lists the
-   project's milestones by week, and a row's Edit button opens it in place
-   with Delete / Cancel / Save. Every action commits where it stands and the
-   window stays open — the footer is only Done. `init.project` opens on the
-   new row, `init.week` preselecting its week.
+/* ---------- Milestones (sections + create + edit, one window) ----------
+   Deviation #239. The window lists a project's milestones in two sections
+   the server answers (milestones.section, views/useMilestoneSection.ts).
+   The first row is the new milestone (name, week, Add). Upcoming lists the
+   milestones of the current week and later, nearest first. Past, collapsed
+   whenever the window opens, lists the earlier ones, newest first, and
+   reads nothing until the person expands it; it shows once Upcoming's first
+   answer came, unless that answer says the project holds no past
+   milestone. Each section reads 25 at first and 25 more for each Load
+   more, keeps at most 100 and then moves on with Show from the start, shows
+   its search box, which searches every milestone of its side on the
+   server, once it held more than one batch, and says when it loads,
+   refreshes, fails (Retry), is refused (the server's sentence) or could
+   check only part of the list, never calling such a section empty or
+   whole. Every section is a live read of the store, so the person's own
+   writes paint over it at once and other people's arrive while it shows;
+   every read stops while the tab or desktop window hides and reads again on
+   return, and a new week starts both sections again. A row's Edit button
+   opens it in place with Delete / Cancel / Save. Every action commits where
+   it stands and the window stays open; the footer is only Done.
+   `init.project` opens on the new row, `init.week` preselecting its week.
 
    `init.id` (a roadmap diamond, an Overview row, the phone agenda) opens
    on that milestone, which the window reads from the server
    (milestones.get, P.watchMilestones) while it and the tab show. Its
    answer alone fixes the window's project and says whether the person may
-   change the milestone, so nothing but "Loading this milestone…" shows
-   before it: no list, no add row, no editor. Then the milestone shows as
-   its editor for someone who may write, else as its row, in its place in
-   the list or above it, whatever the list holds. A milestone the server
-   does not answer, for every reason alike, or refuses, says so with Done
-   only; a failure offers Retry; and once it showed, an answer of null
-   that the person's own delete did not cause closes its editor and says
-   it is no longer here. The add row and the other milestones' Edit follow
-   the answer's right while it names the milestone, and after the person's
-   own delete the right it gave last, while the store's level allows it
-   too; an answer of null for another reason gives none. An editor open
-   when its right goes stays, locked, with its draft. A failure after an
-   answer keeps that answer, and the editor its draft, under a note with
-   Retry. While the tab hides or after a reconnect the window shows its
-   last answer and its root is marked refreshing (aria-busy) until the
-   answer is current again. */
+   change the milestone. The window reads Upcoming beside it for the
+   project the opener named (init.project), and uses that read only once
+   the answer names the same project, else it asks the answer's project.
+   Until the answer and, where the store holds the project, Upcoming's
+   first answer are in, nothing but "Loading this milestone…" shows: no
+   sections, no add row, no editor. Then the milestone shows as its editor
+   for someone who may write, else as its row, in its place in Upcoming
+   where that answer holds it, else above the sections, a past one
+   included, without reading Past. A milestone the server does not answer,
+   for every reason alike, or refuses, says so with Done only; a failure
+   offers Retry; and once it showed, an answer of null that the person's
+   own delete did not cause closes its editor and says it is no longer
+   here. The add row and the other milestones' Edit follow the answer's
+   right while it names the milestone, and after the person's own delete
+   the right it gave last, while the store's level allows it too; an
+   answer of null for another reason gives none. An editor open when its
+   right goes stays, locked, with its draft. A failure after an answer
+   keeps that answer, and the editor its draft, under a note with Retry.
+   While the tab hides or after a reconnect the window shows its last
+   answer and its root is marked refreshing (aria-busy) until the answer
+   is current again.
 
-/* The store's slot of the window's read of the milestone it opened on. */
+   An open editor stays in the place it opened in, above the sections or
+   in its section, with its draft and focus, until the person saves,
+   cancels or deletes, whatever its row does meanwhile: a save's own move,
+   someone else's rename or move, a create that pushes it out of a full
+   answer, a new search or the collapse of Past. A section leaves its
+   milestone out of its rows while it shows elsewhere. An editor whose
+   milestone no section shows reads it with milestones.get under
+   milestone:kept, which gives it its stored values, its organization and
+   its right, and says when it is gone. */
+
+/* The store's slots of the window's reads: the milestone it opened on, the
+   milestone of an editor no section shows, and its two sections' asks. */
 const MILESTONE_OPEN = 'milestone:open'
-/* How many Milestones windows mounted, each one's read owner
+const MILESTONE_KEPT = 'milestone:kept'
+const MILESTONE_SECTIONS = {
+  upcoming: 'milestones:window:upcoming',
+  past: 'milestones:window:past',
+} as const
+/* How many of the window's milestone reads mounted, each one's read owner
    (P.watchMilestones). */
 let milestoneWindows = 0
 
-/** The read of milestone `id` (milestones.get) the window registers with
-    the store while it and the tab show, with Retry, or none without an id.
-    The read goes when the window closes. Renders again on the store's
-    `views` news (views/useViewsNews.ts). */
-function useOpenedMilestone(id: string | undefined) {
+/** The read of milestone `id` (milestones.get) under `slot`, which the
+    window registers with the store while it and the tab show, with Retry,
+    or none without an id. The read goes when the id changes or the window
+    closes. Renders again on the store's `views` news
+    (views/useViewsNews.ts). */
+function useMilestoneGet(slot: string, id: string | null | undefined) {
   const { visible } = useViewVisibility()
   const [attempt, setAttempt] = useStateM(0)
   // this mounted window, which owns the read while it asks
@@ -2629,16 +2669,16 @@ function useOpenedMilestone(id: string | undefined) {
   useViewsNews()
   useEffectM(() => {
     if (!id) return
-    P.watchMilestones(MILESTONE_OPEN, visible ? { kind: 'get', id } : null, owner, attempt)
-    return () => P.watchMilestones(MILESTONE_OPEN, null, owner, attempt)
-  }, [id, visible, owner, attempt])
+    P.watchMilestones(slot, visible ? { kind: 'get', id } : null, owner, attempt)
+    return () => P.watchMilestones(slot, null, owner, attempt)
+  }, [slot, id, visible, owner, attempt])
   useEffectM(() => {
     if (!id) return
-    return () => P.releaseMilestones(MILESTONE_OPEN, owner)
-  }, [id, owner])
+    return () => P.releaseMilestones(slot, owner)
+  }, [slot, id, owner])
   return {
-    // an answer for another milestone than this window's is loading
-    read: id ? P.milestoneRead(MILESTONE_OPEN, { kind: 'get', id }) : null,
+    // an answer for another milestone than this one is loading
+    read: id ? P.milestoneRead(slot, { kind: 'get', id }) : null,
     retry: () => setAttempt((n) => n + 1),
   }
 }
@@ -2679,25 +2719,30 @@ function MilestoneLine({
   )
 }
 
+/** Where an open editor stays: above the sections, or in one of them. */
+type EditorPlace = 'top' | 'upcoming' | 'past'
+
 function MilestoneModal({
   init = {},
   onClose,
   focusAfterClose,
 }: {
+  /** `project` with `id` is the project the opener shows the milestone on,
+      which only starts Upcoming's read early; the answer fixes the project */
   init?: { id?: string; week?: number; project?: string | null }
   onClose: () => void
   /** what takes focus as the window closes, for an opener whose milestone
       was deleted here */
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const opened = useOpenedMilestone(init.id)
+  const opened = useMilestoneGet(MILESTONE_OPEN, init.id)
   const read = opened.read
   const answer = shownAnswer(read)
   // the opened milestone as the answer shows it, painted with the person's
   // own writes: none before the answer, after an answer of null and after
   // the person's own delete
   const openedM = init.id ? (answer?.rows[0] ?? null) : null
-  // milestones sit on a project's roadmap (0078) — a new one needs one, and
+  // milestones sit on a project's roadmap (0078); a new one needs one, and
   // writing takes user level on it. The project is fixed when the window
   // knows it: at once for a new milestone, and from the server's first
   // answer that names the milestone when opened on one. It stays on that
@@ -2712,7 +2757,7 @@ function MilestoneModal({
     setProjectId(answer.project.id)
     setFixedName(answer.project.name)
   }
-  // the store's own project, which the add row and the list need
+  // the store's own project, which the add row and the sections need
   const project = projectId ? P.metaOf(projectId) : null
   const projectName = init.id
     ? (answer?.project?.name ?? fixedName ?? project?.name ?? null)
@@ -2757,6 +2802,45 @@ function MilestoneModal({
     : answer?.project
       ? !!answer.canWrite
       : deletedHere && namedRight && levelWrites
+
+  // The sections. `from` is the first day of the current week in the app's
+  // grid, read on each render: a new week re-anchors the grid, which moves
+  // the boundary and starts both sections again. Before the answer named
+  // the project, Upcoming reads the project the opener named.
+  const from = weekToISO(P.TODAY_WEEK)
+  const hinted = init.id && projectId === null ? (P.metaOf(init.project)?.id ?? null) : null
+  const upcomingOn = project?.id ?? hinted
+  const upcoming = useMilestoneSection(
+    MILESTONE_SECTIONS.upcoming,
+    upcomingOn ? { projects: [upcomingOn], from, side: 'upcoming' } : null,
+  )
+  // Past, collapsed whenever the window opens, reads nothing while it is
+  const [pastOpen, setPastOpen] = useStateM(false)
+  const pastOpenRef = useRefM(pastOpen)
+  pastOpenRef.current = pastOpen
+  const past = useMilestoneSection(
+    MILESTONE_SECTIONS.past,
+    project && pastOpen ? { projects: [project.id], from, side: 'past' } : null,
+  )
+  // whether Upcoming's first answer for the window's project came, failed
+  // or was refused, which the opened milestone waits for
+  const [upcomingIn, setUpcomingIn] = useStateM(false)
+  if (!upcomingIn && project && upcoming.view.state !== 'loading') setUpcomingIn(true)
+  // a past milestone the person added here, after which Past shows even
+  // where the last first answer of Upcoming said the project held none
+  const [pastAdded, setPastAdded] = useStateM(false)
+  // each section's search box, which stays once it showed
+  const [searchable, setSearchable] = useStateM({ upcoming: false, past: false })
+  for (const [side, section] of [
+    ['upcoming', upcoming],
+    ['past', past],
+  ] as const)
+    if (
+      !searchable[side] &&
+      (section.view.next !== null || section.text !== '' || section.view.dropped)
+    )
+      setSearchable({ ...searchable, [side]: true })
+
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
@@ -2766,16 +2850,6 @@ function MilestoneModal({
   const draftRef = useRefM({ name, date })
   draftRef.current = { name, date }
   const week = exactWeekForDate(date)
-  // the list needs the project in the store; without it the window shows
-  // the opened milestone alone rather than an empty list
-  const list = project
-    ? P.milestonesIn(project.id)
-        .slice()
-        .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name))
-        .filter((m) => !(gone && m.id === init.id))
-    : null
-  const next = list?.find((m) => m.week >= P.TODAY_WEEK) ?? null
-  const openedAbove = !!openedM && !list?.some((m) => m.id === openedM.id)
   const canAdd =
     canWrite &&
     !!project &&
@@ -2788,12 +2862,24 @@ function MilestoneModal({
     // and after a refusal, so a paused or refused add can be sent again.
     const added = name.trim()
     const sent = date
+    const toPast = exactWeekForDate(date) < P.TODAY_WEEK
+    const hadPast = pastAdded
+    // a past add shows Past's disclosure at once, as the paint does
+    if (toPast) setPastAdded(true)
     setAdding(true)
     void P.addMilestone({ name: added, week: exactWeekForDate(date), project: project.id }).then(
       (saved) => {
         setAdding(false)
-        if (!saved) return
-        window.showToast?.(`Milestone “${added}” added`)
+        if (!saved) {
+          if (toPast && !hadPast) setPastAdded(false)
+          return
+        }
+        // a milestone that lands in a collapsed Past says where it went
+        window.showToast?.(
+          toPast && !pastOpenRef.current
+            ? `Milestone “${added}” added to Past`
+            : `Milestone “${added}” added`,
+        )
         // a name or date changed while the add was in flight is the next one
         const draft = draftRef.current
         if (draft.name.trim() !== added || draft.date !== sent) return
@@ -2802,40 +2888,153 @@ function MilestoneModal({
       },
     )
   }
-  /* A milestone of the window: the opened one from the answer, with its
-     stored name and day as the answer holds them when asked, any other
-     from the list, the workspace's. An open editor stays, locked with its
-     draft, once the person may no longer change its milestone, and says
-     so, or says that the window can no longer tell (rightUnknown). */
-  const item = (m: MilestoneVM, own: boolean) => {
-    const right = own ? openedCanWrite : canWrite
-    const editing = m.id === editId && (!own || answered)
-    return editing ? (
+
+  // what the window says before the answer names its project and Upcoming
+  // answered, in place of its milestones
+  const waiting = !!init.id && !!project && !upcomingIn
+  const before = !!init.id && (projectId === null || waiting)
+  const inUpcoming = (id: string) => upcoming.view.rows.some((m) => m.id === id)
+  const inPast = (id: string) => pastOpen && past.view.rows.some((m) => m.id === id)
+  // where an open editor stays: where its row showed as it opened, and for
+  // the opened milestone where it first shows
+  const [editPlace, setEditPlace] = useStateM<EditorPlace | null>(null)
+  const placeOf = (id: string): EditorPlace =>
+    inUpcoming(id) ? 'upcoming' : inPast(id) ? 'past' : 'top'
+  if (editId !== null && editPlace === null && !before) setEditPlace(placeOf(editId))
+  if (editId === null && editPlace !== null) setEditPlace(null)
+  const editing = editId !== null && (editId !== init.id || answered)
+  // the milestone of an open editor that no section shows, which the window
+  // reads on its own (milestone:kept); the opened milestone has its read
+  const keptId =
+    editing && editId !== init.id && !before && !inUpcoming(editId) && !inPast(editId)
+      ? editId
+      : null
+  const kept = useMilestoneGet(MILESTONE_KEPT, keptId)
+  const keptAnswer = keptId ? shownAnswer(kept.read) : null
+  // a kept editor whose milestone the server no longer answers closes and
+  // says so, as the opened milestone's does
+  const [keptGone, setKeptGone] = useStateM(false)
+  if (keptId && kept.read?.state === 'ok' && keptAnswer?.rows.length === 0) {
+    setEditId(null)
+    setKeptGone(true)
+  }
+  // the last row an editor showed, for a kept editor before its read answers
+  const lastEdited = useRefM<MilestoneVM | null>(null)
+  // each section's last place of its editor, where it stays once its row left
+  const lastAt = useRefM<Record<EditorPlace, number>>({ top: 0, upcoming: 0, past: 0 })
+  const startEdit = (id: string) => {
+    setEditId(id)
+    setEditPlace(placeOf(id))
+    setKeptGone(false)
+  }
+  // the next milestone's phrase is emphasised on the first row of Upcoming's
+  // answer when no search narrows it and it did not move on
+  const nextId =
+    upcoming.settled === '' && !upcoming.view.dropped ? (upcoming.view.rows[0]?.id ?? null) : null
+
+  /* An open editor's milestone: the opened one from its answer, any other
+     from the section that shows it, else from its own read, else as it
+     last showed. `storedOf` reads the same source when asked, so a save
+     sends what the editor showed. */
+  const editedRow = (id: string): MilestoneVM | null =>
+    id === init.id
+      ? openedM
+      : (upcoming.view.rows.find((m) => m.id === id) ??
+        (pastOpen ? past.view.rows.find((m) => m.id === id) : undefined) ??
+        keptAnswer?.rows[0] ??
+        (lastEdited.current?.id === id ? lastEdited.current : null))
+  const storedOf = (id: string) => () =>
+    id === init.id
+      ? shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(id)
+      : (upcoming.storedOf(id) ??
+        past.storedOf(id) ??
+        shownAnswer(P.milestoneRead(MILESTONE_KEPT))?.stored.get(id))
+  /* The editor of `m`. It stays, locked with its draft, once the person may
+     no longer change its milestone, and says so, or says that the window
+     can no longer tell (rightUnknown). A kept editor takes its right from
+     its own read once it answered. */
+  const editorOf = (m: MilestoneVM) => {
+    const own = m.id === init.id
+    lastEdited.current = m
+    const keptRight = !own && keptId === m.id && keptAnswer !== null
+    const right = own ? openedCanWrite : keptRight ? !!keptAnswer?.canWrite : canWrite
+    return (
       <MilestoneEditor
         key={m.id}
         m={m}
-        storedOf={
-          own ? () => shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(m.id) : undefined
-        }
+        storedOf={storedOf(m.id)}
         locked={!right}
         lockedNote={
-          rightUnknown
+          rightUnknown && !keptRight
             ? 'This window can no longer confirm your access. Close the window and open this milestone again to change it.'
             : undefined
         }
         onClose={() => setEditId(null)}
         onDelete={own ? () => setDeletedHere(true) : undefined}
       />
-    ) : (
-      <MilestoneRowView
-        key={m.id}
-        m={m}
-        next={next?.id === m.id}
-        opened={own}
-        onEdit={right ? () => setEditId(m.id) : undefined}
-      />
     )
   }
+  const rowOf = (m: MilestoneVM, own: boolean) => (
+    <MilestoneRowView
+      key={m.id}
+      m={m}
+      next={nextId === m.id}
+      opened={own}
+      onEdit={(own ? openedCanWrite : canWrite) ? () => startEdit(m.id) : undefined}
+    />
+  )
+  /* A section's milestones: its rows in the server's order, the opened one
+     from its answer, the editor in its place where it stays here, at its
+     last place once its row left, and none of a milestone whose editor
+     shows elsewhere or that is gone. */
+  const itemsOf = (place: 'upcoming' | 'past', rows: readonly MilestoneVM[]) => {
+    const items: ReactNodeM[] = []
+    let editorAt = -1
+    for (const m of rows) {
+      if (gone && m.id === init.id) continue
+      const shown = m.id === init.id && openedM ? openedM : m
+      if (editing && m.id === editId) {
+        if (editPlace === place) {
+          editorAt = items.length
+          items.push(editorOf(shown))
+        }
+        continue
+      }
+      items.push(rowOf(shown, m.id === init.id))
+    }
+    if (editing && editId !== null && editPlace === place && editorAt < 0) {
+      const m = editedRow(editId)
+      if (m) {
+        editorAt = Math.min(lastAt.current[place], items.length)
+        items.splice(editorAt, 0, editorOf(m))
+      }
+    }
+    if (editorAt >= 0) lastAt.current[place] = editorAt
+    return items
+  }
+  // above the sections: the opened milestone where no shown section holds
+  // it, and an editor that stays here
+  const top: ReactNodeM[] = []
+  if (!before && openedM && !gone) {
+    if (editing && editId === openedM.id) {
+      if (editPlace === 'top' || !project) top.push(editorOf(openedM))
+    } else if (!project || (!inUpcoming(openedM.id) && !inPast(openedM.id)))
+      top.push(rowOf(openedM, true))
+  }
+  if (!before && editing && editId !== null && editId !== init.id && editPlace === 'top') {
+    const m = editedRow(editId)
+    if (m) top.push(editorOf(m))
+  }
+  const upcomingItems = project ? itemsOf('upcoming', upcoming.view.rows) : []
+  const pastItems = project ? itemsOf('past', pastOpen ? past.view.rows : []) : []
+  // Past shows once Upcoming's first answer came, failed or was refused,
+  // unless the last first answer said the project holds no past milestone
+  const showPast =
+    !!project &&
+    upcomingIn &&
+    (pastOpen || editPlace === 'past' || pastAdded || upcoming.view.past !== false)
+  const pastBodyId = useIdM()
+
   const openState = !init.id
     ? undefined
     : read === null || read.state === 'loading'
@@ -2845,15 +3044,14 @@ function MilestoneModal({
           ? 'gone'
           : !openedM && !answered
             ? 'unavailable'
-            : read.current
-              ? 'ok'
-              : 'refreshing'
+            : waiting
+              ? 'loading'
+              : read.current
+                ? 'ok'
+                : 'refreshing'
         : read.state === 'refused' || read.state === 'failed'
           ? read.state
           : 'loading'
-  // what the window says before the answer names its project, in place of
-  // its milestones
-  const before = init.id && projectId === null
   return (
     <ModalShell
       icon="diamond"
@@ -2898,24 +3096,22 @@ function MilestoneModal({
         ) : !init.id && !project ? (
           <div className="text-base text-text-2">Open a project to add a milestone.</div>
         ) : (
-          <>
-            {read?.state === 'failed' && (
-              <div className="mb-4">
-                <MilestoneLine state="failed" retry={opened.retry}>
-                  Couldn't load the latest version of this milestone.
-                </MilestoneLine>
-              </div>
-            )}
-            {read?.state === 'refused' && (
-              <div className="mb-4">
-                <MilestoneLine state="refused">{read.sentence}</MilestoneLine>
-              </div>
-            )}
-            {gone && (
-              <div className="mb-4">
-                <MilestoneLine state="gone">
-                  This milestone is no longer here. It was deleted, or you can no longer open it.
-                </MilestoneLine>
+          <div className="flex flex-col gap-6">
+            {(read?.state === 'failed' || read?.state === 'refused' || gone || keptGone) && (
+              <div className="flex flex-col gap-2">
+                {read?.state === 'failed' && (
+                  <MilestoneLine state="failed" retry={opened.retry}>
+                    Couldn't load the latest version of this milestone.
+                  </MilestoneLine>
+                )}
+                {read?.state === 'refused' && (
+                  <MilestoneLine state="refused">{read.sentence}</MilestoneLine>
+                )}
+                {(gone || keptGone) && (
+                  <MilestoneLine state="gone">
+                    This milestone is no longer here. It was deleted, or you can no longer open it.
+                  </MilestoneLine>
+                )}
               </div>
             )}
             {canWrite && project && (
@@ -2956,35 +3152,287 @@ function MilestoneModal({
                 </span>
               </div>
             )}
-            {/* the opened milestone where the list does not hold it */}
-            {openedM && openedAbove && (
-              <div className={cn('flex flex-col gap-1', canWrite && project && 'mt-6')}>
-                {item(openedM, true)}
-              </div>
+            {/* the opened milestone where no section holds it, and an editor
+                that stays above the sections; always here, so an editor in
+                it keeps its place */}
+            <div data-milestone-top className={cn('flex flex-col gap-1', !top.length && 'hidden')}>
+              {top}
+            </div>
+            {project && (
+              <MilestoneSectionPart
+                side="upcoming"
+                section={upcoming}
+                open
+                searchable={searchable.upcoming}
+                pastKnown={upcoming.view.past === false && !pastAdded}
+                header={
+                  <div className="mb-2 flex items-center gap-2 text-md font-semibold text-text-1">
+                    Upcoming
+                    {upcoming.view.count !== null && (
+                      <span data-milestone-count className="font-normal text-text-3">
+                        {upcoming.view.count}
+                      </span>
+                    )}
+                  </div>
+                }
+              >
+                {upcomingItems}
+              </MilestoneSectionPart>
             )}
-            {list && (
-              <>
-                <div
-                  className={cn(
-                    'mb-2 flex items-center gap-2 text-md font-semibold text-text-1',
-                    ((canWrite && project) || openedAbove) && 'mt-6',
-                  )}
-                >
-                  On the roadmap
-                  <span className="font-normal text-text-3">{list.length}</span>
-                </div>
-                <div className="flex flex-col gap-1">
-                  {list.map((m) => (m.id === openedM?.id ? item(openedM, true) : item(m, false)))}
-                  {list.length === 0 && (
-                    <div className="px-0.5 py-1 text-sm text-text-3 italic">No milestones yet.</div>
-                  )}
-                </div>
-              </>
+            {project && (showPast || pastItems.length > 0) && (
+              <MilestoneSectionPart
+                side="past"
+                section={past}
+                open={pastOpen}
+                searchable={searchable.past}
+                bodyId={pastBodyId}
+                header={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    data-milestone-past-toggle
+                    aria-expanded={pastOpen}
+                    aria-controls={pastBodyId}
+                    onClick={() => setPastOpen((open) => !open)}
+                    className="mb-2 -ml-2 gap-1.5 self-start px-2 text-md font-semibold text-text-1"
+                  >
+                    <Icon
+                      name={pastOpen ? 'chevronDown' : 'chevronRight'}
+                      size={14}
+                      color="var(--text-2)"
+                    />
+                    Past
+                    {pastOpen && past.view.count !== null && (
+                      <span data-milestone-count className="font-normal text-text-3">
+                        {past.view.count}
+                      </span>
+                    )}
+                  </Button>
+                }
+              >
+                {pastItems}
+              </MilestoneSectionPart>
             )}
-          </>
+          </div>
         )}
       </div>
     </ModalShell>
+  )
+}
+
+/* The class of a section's notes, as the Overview's lists set theirs. */
+const sectionNoteClass = 'flex flex-wrap items-center gap-2 px-0.5 py-1 text-sm text-text-2'
+
+/** One of the window's sections, Upcoming or Past: its header (Past's
+    disclosure), then, while open, its search box, the moved-on note with
+    Show from the start, its rows (`children`, keyed by milestone, in a
+    container that stays so an editor in it keeps its place), what it says
+    while loading, when it ends empty, when it stopped, failed or was
+    refused, and Load more. Load more keeps focus while its read loads;
+    where it leaves, as the section ends or its read fails, focus it left
+    nowhere goes to that note's Retry, else to the section, and Show from
+    the start and Retry leave focus in the section. When a section moves on
+    and its first rows leave, the browser's scroll anchoring keeps the rows
+    the person reads in place, and where it lacks that, as in Safari, the
+    section moves the window's scroller by hand, as the Overview's lists
+    do. */
+function MilestoneSectionPart({
+  side,
+  section,
+  open,
+  searchable,
+  pastKnown = false,
+  bodyId,
+  header,
+  children,
+}: {
+  side: 'upcoming' | 'past'
+  section: MilestoneSection
+  open: boolean
+  searchable: boolean
+  /** Upcoming's first answer said the project holds no past milestone */
+  pastKnown?: boolean
+  bodyId?: string
+  header: ReactNodeM
+  children: ReactNodeM[]
+}) {
+  const root = useRefM<HTMLElement>(null)
+  const { view } = section
+  /** `step` for a button that goes with its press, with focus on the
+      section. */
+  const inSection = (step: () => void) => () => {
+    step()
+    root.current?.focus()
+  }
+  useFocusWhenGone(
+    open && view.more !== null,
+    () => root.current?.querySelector<HTMLElement>('[data-milestone-note] button') ?? root.current,
+  )
+  // where the section moved on, the first row left on screen keeps its
+  // place in the scroller, from where it stood before the commit
+  const first = view.rows[0]?.id
+  const places = useRefM(new Map<string, number>())
+  const lastFirst = useRefM(first)
+  const scrolled = useRefM<number | null>(null)
+  useEffectM(() => {
+    const pane = root.current?.closest<HTMLElement>('[data-modal-scroll]')
+    if (SCROLL_ANCHORING || !pane) return
+    const note = () => {
+      scrolled.current = pane.scrollTop
+    }
+    pane.addEventListener('scroll', note, { passive: true })
+    return () => pane.removeEventListener('scroll', note)
+  }, [])
+  useLayoutEffectM(() => {
+    const pane = root.current?.closest<HTMLElement>('[data-modal-scroll]')
+    if (SCROLL_ANCHORING || !root.current || !pane) return
+    const top = pane.getBoundingClientRect().top - pane.scrollTop
+    const measure = () => {
+      const now = new Map<string, number>()
+      for (const element of root.current?.querySelectorAll<HTMLElement>('[data-milestone-row]') ??
+        [])
+        now.set(element.dataset.milestoneRow ?? '', element.getBoundingClientRect().top - top)
+      return now
+    }
+    const now = measure()
+    if (first !== lastFirst.current && first !== undefined && view.dropped) {
+      const was = places.current.get(first)
+      const is = now.get(first)
+      if (was !== undefined && is !== undefined && was !== is)
+        pane.scrollTop = (scrolled.current ?? pane.scrollTop) + is - was
+    }
+    lastFirst.current = first
+    places.current = measure()
+    scrolled.current = pane.scrollTop
+  })
+  const searched = section.settled !== ''
+  const empty =
+    side === 'upcoming'
+      ? searched
+        ? 'No upcoming milestones match.'
+        : pastKnown
+          ? 'No milestones yet.'
+          : 'No upcoming milestones.'
+      : searched
+        ? 'No past milestones match.'
+        : 'No past milestones.'
+  const note = view.note
+  const retry = note?.kind === 'failed' && (
+    <Button
+      type="button"
+      variant="ghost"
+      className="h-control-sm text-sm"
+      onClick={inSection(section.retry)}
+    >
+      Retry
+    </Button>
+  )
+  return (
+    <section
+      ref={root}
+      tabIndex={-1}
+      data-milestone-section={side}
+      data-milestone-section-state={open ? view.state : undefined}
+      aria-busy={(open && (view.state === 'refreshing' || view.more === 'loading')) || undefined}
+      aria-label={side === 'upcoming' ? 'Upcoming milestones' : 'Past milestones'}
+      className="flex flex-col outline-none"
+    >
+      {header}
+      <div id={bodyId} className="flex flex-col gap-2">
+        {open && searchable && (
+          <LimitedInput
+            limit={LIMITS.search}
+            data-milestone-search
+            aria-label={
+              side === 'upcoming' ? 'Search upcoming milestones' : 'Search past milestones'
+            }
+            placeholder="Search"
+            value={section.text}
+            onChange={(e) => section.setText(e.target.value)}
+            className={cn(ctlClass, 'h-control-sm text-sm')}
+          />
+        )}
+        {open && view.dropped && (
+          <div data-milestone-dropped className={sectionNoteClass}>
+            {side === 'upcoming'
+              ? 'Earlier milestones are not shown.'
+              : 'More recent milestones are not shown.'}
+            <Button
+              type="button"
+              variant="ghost"
+              data-milestone-from-start
+              className="h-control-sm text-sm"
+              onClick={inSection(section.fromStart)}
+            >
+              Show from the start
+            </Button>
+          </div>
+        )}
+        <div data-milestone-rows className="flex flex-col gap-1">
+          {children}
+        </div>
+        {open && view.state === 'loading' && (
+          <div
+            role="status"
+            data-milestone-note="loading"
+            className="px-0.5 py-1 text-sm text-text-3 italic"
+          >
+            {side === 'upcoming' ? 'Loading milestones…' : 'Loading past milestones…'}
+          </div>
+        )}
+        {open && view.empty && !children.length && (
+          <div data-milestone-note="empty" className="px-0.5 py-1 text-sm text-text-3 italic">
+            {empty}
+          </div>
+        )}
+        {open && view.stopped !== null && view.answered && (
+          <div data-milestone-note="stopped" className="px-0.5 py-1 text-sm text-text-3 italic">
+            Qivo checked part of the list. Load more continues.
+          </div>
+        )}
+        {open && note && (
+          <div
+            role="alert"
+            data-milestone-note={
+              note.kind === 'failed' && note.more
+                ? 'more-failed'
+                : note.kind === 'too_many'
+                  ? 'too-many'
+                  : note.kind
+            }
+            className={sectionNoteClass}
+          >
+            {note.kind === 'too_many'
+              ? limitSentence(LIMITS.milestoneProjects)
+              : note.kind === 'refused'
+                ? note.sentence
+                : note.more
+                  ? "Couldn't load more milestones."
+                  : view.answered
+                    ? "Couldn't load the latest milestones."
+                    : "Couldn't load milestones."}
+            {retry}
+          </div>
+        )}
+        {open && view.more !== null && (
+          // while its read loads it stays, with no action, so keyboard focus
+          // stays on it
+          <Button
+            type="button"
+            variant="outline"
+            data-milestone-more
+            aria-disabled={view.more === 'loading' || undefined}
+            aria-busy={view.more === 'loading' || undefined}
+            className={cn('self-start', view.more === 'loading' && 'pointer-events-none italic')}
+            onClick={() => {
+              if (view.more === 'ready') section.more()
+            }}
+          >
+            {view.more === 'loading' ? 'Loading…' : 'Load more'}
+          </Button>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -3134,6 +3582,26 @@ function MilestoneEditor({
   }, [])
   const rootRef = useRefM<HTMLDivElement>(null)
   const nameRef = useRefM<HTMLInputElement>(null)
+  // The window moves an open editor among its section's rows as they move,
+  // and a browser blurs an element it moves: React moves this editor's own
+  // node when it goes to a later place. The control that held focus as
+  // this render began takes it back after the commit, where focus fell to
+  // the page, so typing goes on where the person left it.
+  const focusedAtRender = useRefM<HTMLElement | null>(null)
+  const activeNow = typeof document === 'undefined' ? null : document.activeElement
+  focusedAtRender.current =
+    activeNow instanceof HTMLElement && rootRef.current?.contains(activeNow) ? activeNow : null
+  useLayoutEffectM(() => {
+    const was = focusedAtRender.current
+    focusedAtRender.current = null
+    const now = document.activeElement
+    if (
+      was?.isConnected &&
+      rootRef.current?.contains(was) &&
+      (!now || now === document.body || !now.isConnected)
+    )
+      was.focus({ preventScroll: true })
+  })
   // focus moves to the Name box only while it is nowhere in particular: on
   // the page, or on the window itself, as before an opened milestone's
   // answer arrived; never away from a control the person moved to meanwhile

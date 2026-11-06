@@ -365,16 +365,20 @@ describe('a save refused because someone changed the milestone first', () => {
   })
 })
 
-describe('a milestone the list does not hold', () => {
-  it('shows a past milestone only the read holds as its editor, above the list', async () => {
+describe('a milestone Upcoming does not hold', () => {
+  it('shows a past milestone as its editor above the sections, reading nothing of Past', async () => {
     fixture((s) => {
       s.milestones[0].week = mondayIn(-6)
     }, false)
     await start()
     await open('alpha')
     expect(nameBox()?.value).toBe('Alpha')
-    expect(q('[data-milestone-row="beta"]')).toBeNull()
-    expect(q('[data-milestone-window]')?.textContent).toContain('No milestones yet.')
+    expect(q('[data-milestone-top] [data-milestone-editor="alpha"]')).not.toBeNull()
+    // Upcoming comes from the server, which holds Beta, and Past stays
+    // collapsed with no read
+    expect(q('[data-milestone-section="upcoming"] [data-milestone-row="beta"]')).not.toBeNull()
+    expect(q('[data-milestone-past-toggle]')?.getAttribute('aria-expanded')).toBe('false')
+    expect(subs.some((s) => s.args.side === 'past')).toBe(false)
   })
 })
 
@@ -401,10 +405,12 @@ describe('a milestone that cannot be shown', () => {
       expect(!!retry).toBe(state === 'failed')
       if (!retry) return
       force = {}
-      const before = subs.length
+      const gets = () => subs.filter((s) => s.name === 'milestones:get').length
+      const before = gets()
       await act(async () => retry.click())
       await settle()
-      expect(subs.length).toBe(before + 1)
+      // one read of the milestone again; Upcoming starts once it answered
+      expect(gets()).toBe(before + 1)
       expect(nameBox()?.value).toBe('Alpha')
     },
   )
