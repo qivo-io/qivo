@@ -1030,11 +1030,21 @@ describe('Archived projects', () => {
   })
 
   it('lists the home organization once the chosen one’s seat goes while it shows', async () => {
-    await load(acmeSeat)
+    // an admin of Acme, so Acme pilot offers Delete
+    await load((snap) => {
+      acmeSeat(snap)
+      const seat = snap.profiles.find((p) => p.id === 'me-acme')
+      if (seat) seat.org_role = 'admin'
+    })
     await archived()
     await select(find('[data-archived-projects-org]'), 'acme')
     expect(entries()).toEqual(['acme-old'])
+    await click(find('[data-delete-project="acme-old"]'))
+    expect(text('[data-modal-shell] h2')).toBe('Delete “Acme pilot”?')
     await elsewhere(noAcmeSeat)
+    // the Delete window for Acme pilot closes with its organization
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(sent('projects:deleteDeep')).toEqual([])
     expect(openLists()).toEqual([{ name: 'archived', org_id: org }])
     expect(entries()).toEqual(['side', 'old'])
     expect(has('[data-archived-projects-org]')).toBe(false)

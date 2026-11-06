@@ -999,8 +999,16 @@ type ChipsInfo = { id: string; withParent: boolean; complete: boolean }
  * through that project's Restore.
  */
 export function ArchivedProjectsPage() {
-  // an entry's open sub-projects close as the organization changes (pageAt)
-  const [org, setOrg] = useChosenOrg(() => orgFor(null))
+  // the entry whose Delete window is open, and the rows on either side of
+  // it when it opened, for focus
+  const [deleting, setDeleting] = useStateS<ArchivedProjectRow | null>(null)
+  const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
+  // a Delete window for the organization that went closes (onGone), and an
+  // entry's open sub-projects close as the organization changes (pageAt)
+  const [org, setOrg] = useChosenOrg(
+    () => orgFor(null),
+    () => setDeleting(null),
+  )
   const [text, setText] = useStateS('')
   const search = useSettledSearch(text, LIMITS.search)
   const searchBox = React.useRef<HTMLInputElement>(null)
@@ -1029,10 +1037,6 @@ export function ArchivedProjectsPage() {
       else next.delete(id)
       return next
     })
-  // the entry whose Delete window is open, and the rows on either side of
-  // it when it opened, for focus
-  const [deleting, setDeleting] = useStateS<ArchivedProjectRow | null>(null)
-  const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
   // the entry whose sub-projects show, and what they told its Restore
   const [chipsOpen, setChipsOpen] = useStateS<string | null>(null)
   const [chips, setChips] = useStateS<ChipsInfo | null>(null)
