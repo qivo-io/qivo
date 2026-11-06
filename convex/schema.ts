@@ -2029,8 +2029,8 @@ export default defineSchema({
     day: v.string(),
     bytes: v.number(),
     files: v.number(),
-    // the totals row's revision when read; a later revision below it means
-    // a recount, which starts again from 0
+    // the totals row's revision when read; a recount replaces that row with
+    // one created later, which counts again from 0
     revision: v.number(),
     at: v.number(), // when the step read the totals, epoch milliseconds
     run: v.string(), // the run that took it
@@ -2064,10 +2064,11 @@ export default defineSchema({
     // without a sample: totals not complete, deletion begun, or a read that
     // failed. `revisions` adds each sampled organization's totals revision
     // less its previous sample's, the writes to its totals since then, and
-    // nothing for a first sample or after a recount. The expiry steps the
-    // run's last step started add `expired` and `expiry_steps`. The other
-    // five are what Convex's transaction metrics measured of the steps and
-    // the expiry steps, the run row's own write included.
+    // nothing for a first sample or for a totals row a recount replaced
+    // since. The expiry steps the run's last step started add `expired` and
+    // `expiry_steps`. The other five are what Convex's transaction metrics
+    // measured of the steps and the expiry steps, the run row's own write
+    // included.
     counts: v.object({
       steps: v.number(),
       restarts: v.number(),

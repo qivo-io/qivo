@@ -14,7 +14,8 @@
  *      writes nothing, one past SAMPLE_STALLED_MS resumes the run from its
  *      cursor, and the next day starts its own run.
  *   5. The run row's counters: the revisions since each previous sample,
- *      none after a recount, and Convex's transaction metrics.
+ *      none after a recount whatever revision it ends at, and Convex's
+ *      transaction metrics.
  *   6. Expiry goes a page at a time and keeps the days inside the
  *      retention.
  *   7. Teardowns: a deletion in steps and deleteOrgDeep leave none of an
@@ -33,6 +34,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import { attach as attachFn, removeAttachment as removeFn } from '../files'
+import { COUNT_PAGE } from '../internal/storageTotalsBackfill'
 import { deleteOrgDeep } from '../model/cascade'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { DAY_MS } from '../model/orgRetention'
@@ -61,6 +63,7 @@ import { plantTicket } from './uploadTickets.setup'
 
 const DEFAULT_PAGE = { ...SAMPLE_PAGE }
 const DEFAULT_EXPIRY = { ...SAMPLE_EXPIRY }
+const DEFAULT_COUNT_PAGE = { ...COUNT_PAGE }
 
 /** The day the cases start on, and its first tick at 00:20 UTC. */
 const TODAY = '2026-11-06'
@@ -75,6 +78,7 @@ beforeEach(() => {
 afterEach(() => {
   Object.assign(SAMPLE_PAGE, DEFAULT_PAGE)
   Object.assign(SAMPLE_EXPIRY, DEFAULT_EXPIRY)
+  Object.assign(COUNT_PAGE, DEFAULT_COUNT_PAGE)
   vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
@@ -518,6 +522,38 @@ describe("the run's counters", () => {
     expect(counts?.database_queries).toBeGreaterThan(2 * 4)
     expect(counts?.bytes_read).toBeGreaterThan(0)
     expect(counts?.bytes_written).toBeGreaterThan(0)
+  })
+
+  it("adds none of a recount's steps when the recount ends above the previous sample's revision", async () => {
+    // one task a recount step, so the recount ends above the three
+    // attaches' revision
+    COUNT_PAGE.tasks = 1
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) => startOrgTotals(ctx, f.org.id))
+    for (let i = 0; i < 3; i++) await attach(t, f, 10)
+    const growing = await plantOrg(t, 10)
+    await runDay(t)
+    const before = await t.run((ctx) => orgTotalsRow(ctx, f.org.id))
+
+    // later that day the recount, and two writes to the other organization
+    vi.setSystemTime(AT + 12 * 60 * 60_000)
+    expect(await recount(t, f.org.id)).toBe(true)
+    await t.run(async (ctx) => {
+      await store(ctx, growing, 1)
+      await store(ctx, growing, 1)
+    })
+    const recounted = await t.run((ctx) => orgTotalsRow(ctx, f.org.id))
+    expect(recounted).toMatchObject({ bytes: 30, files: 3 })
+    expect(recounted?.revision).toBeGreaterThan(before?.revision ?? Number.POSITIVE_INFINITY)
+    vi.setSystemTime(AT + DAY_MS)
+    await runDay(t)
+    // the other organization's two writes, and nothing for the recounted one
+    expect(await runRow(t, dayAfter(1))).toMatchObject({ counts: { written: 2, revisions: 2 } })
+    expect(await t.run((ctx) => latestSample(ctx, f.org.id))).toMatchObject({
+      day: dayAfter(1),
+      revision: recounted?.revision,
+    })
   })
 })
 

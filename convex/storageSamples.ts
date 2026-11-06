@@ -116,7 +116,9 @@ type Tally = Partial<SampleCounts>
 /* Samples organization `orgId` for `day` in run `run` at `at`, unless its
  * deletion has begun, its totals are not complete or it has the day's
  * sample already. Reads its removal, its totals row, its sample of the day
- * and its latest sample before the day, and inserts at most one row. */
+ * and its latest sample before the day, and inserts at most one row. Its
+ * `revisions` are the totals' revisions since that latest sample, none for
+ * a first sample or a totals row a recount replaced since. */
 async function sampleOrg(
   ctx: MutationCtx,
   orgId: string,
@@ -138,8 +140,12 @@ async function sampleOrg(
     at,
     run,
   })
-  // a recount starts the revision again from 0, so a lower one adds nothing
-  const grown = before === null ? 0 : totals.revision - before.revision
+  // A recount deletes the totals row and counts the organization again in a
+  // new one from revision 0, so a row created after the previous sample adds
+  // nothing, whatever revision its count ended at. The two creation times
+  // follow the order Convex inserted the rows in, which `at` could tie.
+  const recounted = before !== null && totals._creationTime > before._creationTime
+  const grown = before === null || recounted ? 0 : totals.revision - before.revision
   return { written: 1, revisions: Math.max(0, grown) }
 }
 
