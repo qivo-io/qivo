@@ -1629,7 +1629,7 @@ a late run takes after the organization's sample of a later day, so each
 raise counts once. A dry run of the storage totals backfill in the same
 window gives the cost of a reconciliation.
 
-From the release after v0.1.145, `pickers.mentions` answers the editor's @
+From the release after v0.1.151, `pickers.mentions` answers the editor's @
 mention popup 8 people of the editor's organization at a time in name
 order, with the popup's match over names, initials and email, for any seat
 of that organization. The task label picker reads `labels.picker` and the
