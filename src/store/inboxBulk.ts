@@ -1,17 +1,21 @@
 /* A bulk Inbox action, Mark all as read or Remove all read, as the store
-   runs it (planner.ts bulkInboxAction): its state, which the Inbox shows,
-   and the sentences of its progress line and its toasts. */
+   runs it (planner.ts bulkInboxAction, on the shared runner of
+   lib/batchRunner.ts): its state, which the Inbox shows, and the sentences
+   of its progress line and its toasts. */
 
 import type { FunctionArgs } from 'convex/server'
 import type { api } from '../../convex/_generated/api'
+import { KEEP_OPEN, LANES_AT_ONCE } from '../lib/batchRunner'
 
 /** Mark all as read (`read`) or Remove all read (`remove`). */
 export type BulkAction = FunctionArgs<typeof api.messages.bulkReach>['action']
 
-/** The most seats a bulk Inbox action sends batches to at once. Each seat's
-    batches go one after another, so the action has at most this many
-    writes in flight however many organizations the person belongs to. */
-export const BULK_SEATS = 2
+/** The most seats a bulk Inbox action sends batches to at once, the shared
+    runner's lanes (lib/batchRunner.ts). Each seat's batches go one after
+    another, so the action has at most this many writes in flight however
+    many organizations the person belongs to, and a long one shares them
+    with every other large action. */
+export const BULK_SEATS = LANES_AT_ONCE
 
 /** A seat a refusal stopped: its organization's id, the rows its accepted
     batches confirmed, the refusal's sentence, and whether the refusal was
@@ -89,7 +93,7 @@ export function bulkNoticeText(bulk: InboxBulk): string {
     bulk.why === 'seats'
       ? `${name} covers ${covers} in ${bulk.seats} organizations and runs in steps.`
       : `${name} covers many ${covers} and runs in steps.`
-  return `${why} Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.`
+  return `${why} ${KEEP_OPEN}`
 }
 
 /** The Inbox's progress line while `bulk` runs, such as "Marking messages

@@ -65,6 +65,7 @@ import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
+import { LANE_POOL, runLanes } from '../lib/batchRunner'
 import { convex, live } from '../lib/convex'
 import {
   clampBarDrag,
@@ -8922,10 +8923,12 @@ function dropStopToast(key: string) {
    (P.hostInboxNotice). Then the `messages` it reached when pressed show
    `paint`, under one umbrella layer per seat, and the `flags` it clears
    under one more; rows that arrived later stay as they are, as the press's
-   cutoff leaves them out. At most BULK_SEATS seats send `batch` at once,
-   each until an answer has no more, every Mark all as read batch with its
-   seat's cutoff from the press, and each batch keeps a layer, `named`, for
-   the rows its answer names (`keep`).
+   cutoff leaves them out. The seats run on the shared runner
+   (lib/batchRunner.ts runLanes), at most BULK_SEATS at once, a long action
+   on the app's shared lanes: each sends `batch` until an answer has no
+   more, every Mark all as read batch with its seat's cutoff from the
+   press, and each batch keeps a layer, `named`, for the rows its answer
+   names (`keep`).
    A seat's umbrella goes when its batches end, so a refused or paused batch
    takes back only the rows no accepted batch named, and the seat stops
    while the others go on. The pause (refusedAsPaused) stops every seat,
@@ -9021,56 +9024,45 @@ async function bulkInboxAction<R extends { ids: string[]; hasMore: boolean }>(
     setInboxBulk(bulk)
     const keep = (answer: R) => a.named(answer.ids)
     const stops: BulkStop[] = []
-    const finished: string[] = []
-    // the pause's sentence once a batch met it, which stops every seat
-    // before its next batch
-    let paused: string | null = null
-    let running = plan.seats.length
+    // the rows each seat's accepted batches confirmed
+    const doneIn = new Map<string, number>()
     let last: Layer | null = null
-    const runSeat = async (seat: BulkSeat) => {
-      let previous: R | null = null
-      let done = 0
-      try {
-        while (live()) {
-          if (paused !== null) {
-            stops.push({ org: seat.org, done, reason: paused, paused: true })
-            bulk = { ...bulk, stops: [...stops] }
-            return setInboxBulk(bulk)
-          }
-          previous = await batch(seat, previous, keep)
-          if (!live()) return
-          done += a.count(previous)
-          bulk = {
-            ...bulk,
-            long: bulk.long || previous.hasMore,
-            done: bulk.done + a.count(previous),
-            seatsDone: bulk.seatsDone + (previous.hasMore ? 0 : 1),
-          }
-          setInboxBulk(bulk)
-          if (!previous.hasMore) return void finished.push(seat.org)
+    const ran = await runLanes<BulkSeat, R>({
+      lanes: plan.seats,
+      // a long action shares the app's lanes with every other large action
+      pool: plan.long ? LANE_POOL : undefined,
+      live,
+      send: (seat, previous) => batch(seat, previous, keep),
+      more: (_seat, answer) => answer.hasMore,
+      pauseOf: (error) => (refusedAsPaused(error) ? refusalPauseText(error) : null),
+      reasonOf: refusalSentence,
+      onAnswer: (seat, answer) => {
+        const count = a.count(answer)
+        doneIn.set(seat.org, (doneIn.get(seat.org) ?? 0) + count)
+        bulk = {
+          ...bulk,
+          long: bulk.long || answer.hasMore,
+          done: bulk.done + count,
+          seatsDone: bulk.seatsDone + (answer.hasMore ? 0 : 1),
         }
-      } catch (error) {
-        if (!live()) return
+        setInboxBulk(bulk)
+      },
+      onStop: ({ lane: seat, reason, paused }) => {
+        // the first stop takes the flags back
         if (stops.length === 0) endUmbrella(flag, false)
-        const pause = refusedAsPaused(error)
-        const reason = refusalSentence(error)
-        if (pause) paused ??= reason
-        stops.push({ org: seat.org, done, reason, paused: pause })
+        stops.push({ org: seat.org, done: doneIn.get(seat.org) ?? 0, reason, paused })
         bulk = { ...bulk, stops: [...stops] }
         setInboxBulk(bulk)
-      } finally {
+      },
+      onLaneEnd: (seat, lastSeat) => {
         const umbrella = umbrellas.get(seat.org)
-        if (--running > 0) {
-          if (live() && umbrella) endUmbrella(umbrella, false)
-        } else last = umbrella ?? null
-      }
-    }
-    const queue = [...plan.seats]
-    const worker = async () => {
-      for (let seat = queue.shift(); seat && live(); seat = queue.shift()) await runSeat(seat)
-    }
-    await Promise.all(Array.from({ length: Math.min(BULK_SEATS, queue.length) }, worker))
-    if (!live()) return
+        // the last seat's umbrella ends with the flags in one repaint
+        if (lastSeat) last = umbrella ?? null
+        else if (umbrella) endUmbrella(umbrella, false)
+      },
+    })
+    if (ran === null) return
+    const finished = ran.finished.map((seat) => seat.org)
     together(() => {
       if (last) endUmbrella(last, false)
       endUmbrella(flag, stops.length === 0)
