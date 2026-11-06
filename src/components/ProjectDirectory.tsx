@@ -190,7 +190,8 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
   const say = (line: string) => setStatus((was) => ({ text: line, n: (was?.n ?? 0) + 1 }))
 
   // the one expanded top-level project, collapsed by a page move, a new
-  // search, or its row leaving the page for any reason
+  // search, or its row leaving the page for any reason; a page move or a
+  // new search also scrolls the list to its top
   const [expanded, setExpanded] = useState<NavProject | null>(null)
   const place = `${key} ${String(page.starts[page.starts.length - 1])}`
   const placed = useRef(place)
@@ -198,6 +199,9 @@ export function ProjectDirectory({ actions }: { actions: Actions }) {
     if (placed.current === place) return
     placed.current = place
     setExpanded(null)
+    // a new page or search starts at its top, and an older note goes
+    setStatus(null)
+    if (directory.current) directory.current.scrollTop = 0
   }, [place])
   const lost =
     expanded !== null &&
@@ -647,7 +651,10 @@ function SubProjects({
           <BatchNote list={list} batch={batch} last={i === list.batches.length - 1} />
         </div>
       ))}
-      <div ref={marker} aria-hidden="true" className="h-px" />
+      {/* the marker comes with the first rows, below them, so it is not
+         taken as in view from before they landed, which would load the
+         next batch at once */}
+      {list.rows.length > 0 && <div ref={marker} aria-hidden="true" className="h-px" />}
       <ChildrenEnd list={list} end={end} onMore={more} />
     </div>
   )
