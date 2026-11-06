@@ -69,7 +69,7 @@
       "slug": "planning-against-real-capacity",
       "title": "Planning against real capacity",
       "order": 9,
-      "description": "Plan on roadmap opens the timeline and highlights the task. From All projects it opens the task's project. The task stays on the timeline for the session…"
+      "description": "Plan on roadmap opens the timeline and highlights the task. From All projects it opens the task's top-level project. The task stays on the timeline for the session…"
     },
     {
       "file": "the-task-window.md",

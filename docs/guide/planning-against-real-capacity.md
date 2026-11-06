@@ -1,10 +1,11 @@
 ## Plan on roadmap
 
 **Plan on roadmap** opens the timeline and highlights the task. From **All
-projects** it opens the task's project. The task stays on the timeline for the
-session whatever the filters, and the Roadmap moves its window to the task
-first if needed. Unscheduled tasks receive a starter bar. A Backlog task must
-first move to another status; trying to plan it leaves its dates unchanged.
+projects** it opens the task's top-level project. The task stays on the
+timeline for the session whatever the filters, and the Roadmap moves its
+window to the task first if needed. Unscheduled tasks receive a starter bar.
+A Backlog task must first move to another status; trying to plan it leaves
+its dates unchanged.
 Done tasks can still be planned. When the task cannot show on that Roadmap,
 for example because the project is past the Roadmap's 1,000-task limit, Qivo
 says why and starts no session. If the task leaves the Roadmap during the

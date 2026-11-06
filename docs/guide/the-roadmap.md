@@ -29,11 +29,11 @@ subtasks and each subtask, across the project or sub-project with its filters
 and window, or My view. A selection past that, or one Qivo could not read
 within the Roadmap's limits, shows no tasks and says so instead of showing
 part of it. Choose one of the sub-projects it offers or narrow your filters,
-such as Priority or the text filter. A shorter window does not help, as
-unfinished tasks show whatever their dates
-([Limits](./limits.md)). When you move the window, the Roadmap keeps its
-timeline, marked as refreshing, until the new weeks have loaded; a new filter
-shows **Loading tasks…** until its tasks arrive.
+such as Priority or the text filter. A shorter window rarely helps, as
+unfinished tasks show whatever their dates and only Done tasks follow the
+window ([Limits](./limits.md)). When you move the window or type more of the
+text filter, the Roadmap keeps its timeline until the new answer arrives;
+another filter shows **Loading tasks…** until its tasks arrive.
 
 ## A window you control
 
