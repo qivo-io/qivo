@@ -129,7 +129,8 @@ async function northstar(o: { teams?: number; people?: number } = {}) {
   if (!nora) throw new Error('no Nora')
   const planted = await t.run(async (ctx) => {
     const people: Doc<'profiles'>[] = []
-    const extra = Math.max(0, (o.people ?? 0) - profiles.length - PLANTED.length)
+    // the guest planted below is one of the organization's people too
+    const extra = Math.max(0, (o.people ?? 0) - profiles.length - PLANTED.length - 1)
     const names = [
       ...PLANTED,
       ...Array.from({ length: extra }, (_, i) => `Person ${String(i).padStart(4, '0')} Example`),
@@ -175,6 +176,26 @@ async function northstar(o: { teams?: number; people?: number } = {}) {
         team_id: teams[0].id,
         profile_id: person.id,
         is_leader: i === 3,
+      })
+    // a guest's stale membership there, which no list shows or counts
+    const guest = await ctx.db.insert('profiles', {
+      id: uuid(),
+      org_id: org.id,
+      name: 'Gus Guest',
+      initials: 'GG',
+      color: '#7a7ad0',
+      org_role: 'guest',
+      active: true,
+      kind: 'person',
+      auth_user_id: 'auth_planted_guest',
+      created_at: NOW,
+    })
+    const stale = await ctx.db.get(guest)
+    if (stale)
+      await ctx.db.insert('team_members', {
+        team_id: teams[0].id,
+        profile_id: stale.id,
+        is_leader: false,
       })
     return { people, teams }
   })
