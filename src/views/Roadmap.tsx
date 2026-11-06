@@ -234,7 +234,16 @@ function Roadmap({
      Roadmap's read from the request on (`planAsk`), so the answer it waits
      for keeps the task past the filter row. */
   type Requests<T> = { plan: T | null; reveal: T | null }
-  const [pending, setPending] = useStateR<Requests<PendingRequest>>(NO_REQUESTS)
+  const [pending, setPendingState] = useStateR<Requests<PendingRequest>>(NO_REQUESTS)
+  /* The requests as the latest change left them. A request taken in the
+     same commit as an older one resolves replaces it here before the
+     render holds it, so the effect that resolves requests acts only on
+     the one each slot still holds. */
+  const pendingRef = useRefR<Requests<PendingRequest>>(NO_REQUESTS)
+  const setPending = (next: Requests<PendingRequest>) => {
+    pendingRef.current = next
+    setPendingState(next)
+  }
   const [resolved, setResolved] =
     useStateR<Requests<{ req: PendingRequest; id: string }>>(NO_REQUESTS)
   const acted = useRefR<Set<number>>(new Set())
@@ -353,7 +362,7 @@ function Roadmap({
        project I hold no task in, each labelled with that project's whole
        remaining hours. The answer names them (held_sub_projects); null
        wherever the scope narrows nothing.
-     · `bucket` — which of them hold a task the answer shows that also passes
+     · `bucket`, which of them hold a task the answer shows that also passes
        the TOOLBAR filters on screen, and which tasks those are. */
   const held = view.held
   // the rows show while an answer for this scope is on screen; any note
@@ -1035,7 +1044,7 @@ function Roadmap({
     if (req.kind === 'plan' && req.uuid && req.project)
       setPlanAsk({ id: req.uuid, project_id: req.project })
     panTo(req.start, req.end ?? req.start)
-    setPending((was) => ({ ...was, [req.kind]: req }))
+    setPending({ ...pendingRef.current, [req.kind]: req })
   }
   useEffectR(() => {
     if (!revealTask) return
@@ -1073,8 +1082,10 @@ function Roadmap({
      the roadmap any more. Meanwhile it waits. */
   useEffectR(() => {
     for (const req of [pending.plan, pending.reveal]) {
-      if (!req) continue
-      const done = () => setPending((was) => ({ ...was, [req.kind]: null }))
+      // A request taken since this render replaced this one, and the next
+      // render resolves that one instead.
+      if (!req || pendingRef.current[req.kind] !== req) continue
+      const done = () => setPending({ ...pendingRef.current, [req.kind]: null })
       const it = view.tasks.find((t) => (req.uuid ? t.uuid === req.uuid : t.id === req.id))
       if (it) {
         done()
@@ -1117,6 +1128,7 @@ function Roadmap({
       req.kind === 'plan' ? onFocusConsumed?.(req.n) : onRevealConsumed?.(req.n)
     const it = taskOf(id)
     if (!it) {
+      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
       consumed()
       return
     }
@@ -1317,9 +1329,16 @@ function Roadmap({
             variant="quiet"
             className="rounded-sm"
             data-auto-correct
-            // why Auto-move has no moves to offer, where its inputs are not
-            // there or a write is on its way
-            data-auto-move={autoMoveBlock ? view.deps.autoMove.state : undefined}
+            // why Auto-move offers no moves, the dependency read's state
+            // where its inputs are not there, or waiting while a write is
+            // on its way
+            data-auto-move={
+              autoMoveUnavailable(view.deps)
+                ? view.deps.autoMove.state
+                : autoMoveBlock
+                  ? 'waiting'
+                  : undefined
+            }
             onClick={() => autoArrange()}
             disabled={moves.length === 0}
             title={
@@ -1470,9 +1489,9 @@ function Roadmap({
 
   /* ---------- Team utilization: people owning work in the visible window ----------
      Membership follows what the roadmap displays: the shown tasks with a
-     start and an owner that meet the window (collapsed tracks still count —
-     folding a track hides its rows, it doesn't remove them from the
-     roadmap). Each person's load comes from the owner-load cache, registered
+     start and an owner that meet the window. Collapsed tracks still count,
+     as folding a track hides its rows but doesn't remove them from the
+     roadmap. Each person's load comes from the owner-load cache, registered
      under the Roadmap's own slot with how many shown rows they own, so a
      guest's or Viewer's capped calls keep the people with the most rows. */
   const team: TeamPerson[] = []
@@ -1540,7 +1559,7 @@ function Roadmap({
        Overview reach the same state through their own `scoped.length === 0`.)
        Asked of the SCOPE's own set, the answer's held sub-projects, never of
        `tracks`: since deviation #50 a toolbar filter can empty the rail too,
-       and that has its own note — one the Clear button can actually act on.
+       and that has its own note, one the Clear button can actually act on.
        Only a current answer says so, never a wait or a refusal. */
     emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
   }
