@@ -16,10 +16,12 @@ import { ITEM_UNREAD_CAP } from './messages'
 
 /** The bounds of one catch-up. It examines at most `items` unread items
  * across the seats, and asks how much the transaction has read before each
- * `batch` of steps (an item, a task check, a message read or a record
- * read), starting none once more than `room` of any of Convex's limits is
- * used, as the unread summary does (model/inboxReads.ts SUMMARY). Past
- * either it answers `stopped`, never a summary it could not confirm.
+ * `batch` of steps (an item, a task check, a message read, a page of an
+ * item's unread messages or a record read), starting none once more than
+ * `room` of any of Convex's limits is used, as the unread summary does
+ * (model/inboxReads.ts SUMMARY). Past either it answers `stopped`, also
+ * after it found activity, never a summary it could not confirm or whose
+ * records it could not complete.
  *
  * The slowest case at the design size is the project figure behind a
  * hint: 1,000 unread items after the checkpoint (800 open and 200 Done
@@ -65,16 +67,21 @@ async function newestUnread(ctx: QueryCtx, item: Doc<'inbox_items'>): Promise<Ev
   return { key: newest.id, at: newest.created_at }
 }
 
-/* The keys of item `item`'s unread events after `from`. These are its
- * unread messages after it, newest first and at most ITEM_UNREAD_CAP of
- * them, the most an item keeps unread (model/messages.ts), read in one
- * index range, and its wake when that is after `from`. */
+/* The keys of item `item`'s unread events after `from`, or null when the
+ * budget `step` ran out first. These are all its unread messages after it,
+ * newest first, read in one index range whose every page of
+ * ITEM_UNREAD_CAP messages is a step, and its wake when that is after
+ * `from`. The read is whole, since an item holds more unread messages than
+ * the cap while a fan-out's background trim waits (model/messages.ts
+ * ItemTrims), and the cap serves only as the page size. */
 async function unreadKeysAfter(
   ctx: QueryCtx,
   item: Doc<'inbox_items'>,
   from: string,
-): Promise<string[]> {
-  const messages = await ctx.db
+  step: () => Promise<boolean>,
+): Promise<string[] | null> {
+  if (!(await step())) return null
+  const messages = ctx.db
     .query('messages')
     .withIndex('by_recipient_issue_read_order', (q) =>
       q
@@ -84,8 +91,11 @@ async function unreadKeysAfter(
         .gt('created_at', from),
     )
     .order('desc')
-    .take(ITEM_UNREAD_CAP)
-  const keys = messages.map((m) => m.id)
+  const keys: string[] = []
+  for await (const m of messages) {
+    if (keys.length > 0 && keys.length % ITEM_UNREAD_CAP === 0 && !(await step())) return null
+    keys.push(m.id)
+  }
   if (item.woke_at !== undefined && item.woke_at > from)
     keys.push(`${item.issue_id}:${item.woke_at}`)
   return keys
@@ -93,8 +103,8 @@ async function unreadKeysAfter(
 
 /* Whether item `item` holds an unread event after `from`, other than
  * `newest`, that `recorded` does not hold, or null when the budget `step`
- * ran out first. The read of the keys and each key's record check are a
- * step each, and the first key without a record ends it. */
+ * ran out first. The keys' read (unreadKeysAfter) and each key's record
+ * check are steps, and the first key without a record ends it. */
 async function missedBelow(
   ctx: QueryCtx,
   item: Doc<'inbox_items'>,
@@ -103,8 +113,9 @@ async function missedBelow(
   recorded: (key: string) => Promise<boolean>,
   step: () => Promise<boolean>,
 ): Promise<boolean | null> {
-  if (!(await step())) return null
-  for (const key of await unreadKeysAfter(ctx, item, from)) {
+  const keys = await unreadKeysAfter(ctx, item, from, step)
+  if (keys === null) return null
+  for (const key of keys) {
     if (key === newest) continue
     if (!(await step())) return null
     if (!(await recorded(key))) return true
@@ -142,16 +153,18 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  *
  * The first eligible item decides `found`. The read then goes on only
  * through items newer than `recent`, in every seat, so `keys` holds every
- * unread event of that last stretch of each eligible item, its unread
+ * unread event of that last stretch of each eligible item, all its unread
  * messages and its wake there, not only the newest. Marking only the
  * newest read then leaves no older one unrecorded, which a later catch-up
- * reading back over the stretch would count again. A key may already hold
- * a record, which a second record does not change.
+ * reading back over the stretch would count again or a live claim would
+ * grant. A key may already hold a record, which a second record does not
+ * change.
  *
  * It answers `none` when every seat was read to its end and nothing was
- * eligible, and `stopped` when the budget (CATCH_UP), a seat that is not
- * ready or a check of the seat's access that a bound stopped
- * (lib/access.ts accessUnchecked) ended it before it found one.
+ * eligible, and `stopped` when a seat that is not ready or a check of the
+ * seat's access that a bound stopped (lib/access.ts accessUnchecked) ended
+ * it before it found one, or when the budget (CATCH_UP) ended it at any
+ * point, so `found` always comes with the keys of its whole last stretch.
  *
  * It reads each seat's readiness (two ranges at most) and its items after
  * `after`, a project check for each project, the task of each item its
@@ -159,8 +172,8 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  * its records, one or two ranges, when that newest event holds a record
  * the item's unread messages after `after` and their records until one
  * has none, and for each eligible item in the last stretch its unread
- * messages there, one range. Measured reads at the design size are in
- * CATCH_UP's docstring.
+ * messages there, one range read whole. Measured reads at the design size
+ * are in CATCH_UP's docstring.
  */
 export async function missedActivity(
   ctx: QueryCtx,
@@ -176,10 +189,15 @@ export async function missedActivity(
   const keys: string[] = []
   let items = 0
   let found = false
+  // a seat not ready or a stopped check of its access, after which an item
+  // found elsewhere still answers found
   let stopped = false
+  // the budget ran out, which may leave the last stretch's keys incomplete,
+  // so it answers stopped even after a find
+  let spent = false
   walk: for (const me of ordered) {
     if (!(await step())) {
-      stopped = true
+      spent = true
       break
     }
     if (!(await seatReady(ctx, me.id))) {
@@ -199,24 +217,24 @@ export async function missedActivity(
       for await (const item of unread) {
         if (found && item.sort_at <= recentAt) break
         if (items === CATCH_UP.items || !(await step())) {
-          stopped = true
+          spent = true
           break walk
         }
         items += 1
         if (item.project_id !== undefined && !(await scope.holdsItems(item.project_id))) continue
         if (!(await step())) {
-          stopped = true
+          spent = true
           break walk
         }
         if ((await scope.shownTask(item.issue_id)) === null) continue
         if (!(await step())) {
-          stopped = true
+          spent = true
           break walk
         }
         const event = await newestUnread(ctx, item)
         if (event === null || event.at <= afterAt) continue
         if (!(await step())) {
-          stopped = true
+          spent = true
           break walk
         }
         const alerted = await recorded(event.key)
@@ -225,7 +243,7 @@ export async function missedActivity(
           // event a session alerted, and nobody alerted it
           const missed = await missedBelow(ctx, item, afterAt, event.key, recorded, step)
           if (missed === null) {
-            stopped = true
+            spent = true
             break walk
           }
           if (!missed) continue
@@ -233,17 +251,17 @@ export async function missedActivity(
         found = true
         if (event.at <= recentAt) continue
         if (!alerted) keys.push(event.key)
-        if (!(await step())) {
-          stopped = true
+        const stretch = await unreadKeysAfter(ctx, item, recentAt, step)
+        if (stretch === null) {
+          spent = true
           break walk
         }
-        for (const key of await unreadKeysAfter(ctx, item, recentAt))
-          if (key !== event.key) keys.push(key)
+        for (const key of stretch) if (key !== event.key) keys.push(key)
       }
     } catch (e) {
       if (!isAccessUnchecked(e)) throw e
       stopped = true
     }
   }
-  return { state: found ? 'found' : stopped ? 'stopped' : 'none', keys }
+  return { state: spent ? 'stopped' : found ? 'found' : stopped ? 'stopped' : 'none', keys }
 }

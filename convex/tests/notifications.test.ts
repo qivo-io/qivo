@@ -12,6 +12,7 @@ import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { createAuth } from '../auth'
 import { OWN_READS } from '../lib/access'
+import { INLINE_TRIMS, ITEM_UNREAD_CAP, newItemTrims, postMessage } from '../model/messages'
 import { CATCH_UP } from '../model/notificationCatchup'
 import { EXPIRY, NOTIFY } from '../model/notificationSessions'
 import * as notifications from '../notifications'
@@ -1291,6 +1292,60 @@ describe('claimSummary', () => {
     expect(await unreadOf(t, f, task)).toHaveLength(1)
     clock(6)
     expect(await resume(s)).toEqual({ state: 'none' })
+  })
+
+  it('records every unread message of an item past the cap while its trim waits', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    // a fan-out past its inline trims leaves one more unread message than
+    // the cap on the item, all in the summary's last minute, until its
+    // background trim runs
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await t.run(async (ctx) => {
+      for (let i = 0; i <= ITEM_UNREAD_CAP; i++)
+        await postMessage(ctx, {
+          org_id: f.org.id,
+          recipient_id: f.guest.id,
+          issue_id: task.id,
+          kind: 'change',
+          body: `Busy ${i}`,
+          actor_id: f.admin.id,
+          now: new Date(START + 0.25 * MINUTE + i * 100).toISOString(),
+          trims: { ...newItemTrims(), inline: INLINE_TRIMS },
+        })
+    })
+    const unread = await unreadOf(t, f, task)
+    expect(unread).toHaveLength(ITEM_UNREAD_CAP + 1)
+    clock(0.75)
+    expect(await resume(s)).toEqual({ state: 'summary' })
+    expect((await records(t)).map((r) => r.key).sort()).toEqual(unread.map((m) => m.id).sort())
+    // so the oldest is refused live, and a later summary counts nothing
+    const oldest = unread.reduce((a, b) => (a.created_at < b.created_at ? a : b))
+    expect(await claim(s, [eventOf(oldest)])).toEqual({
+      state: 'granted',
+      keys: [],
+      limited: false,
+    })
+    clock(1)
+    expect(await resume(s)).toEqual({ state: 'none' })
+  })
+
+  it('answers unchecked and records nothing when its budget ends the last minute after it found activity', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    // three new items in the summary's last minute, of which the budget
+    // lets it read two
+    const news = []
+    for (const minute of [0.2, 0.3, 0.4]) news.push(eventOf((await newsAt(t, f, minute)).message))
+    clock(0.5)
+    await beat(s)
+    CATCH_UP.items = 2
+    expect(await summary(s)).toEqual({ state: 'unchecked' })
+    expect(await records(t)).toEqual([])
+    // so no summary announced them, and each is still alerted live
+    expect(await claim(s, news)).toMatchObject({ keys: news.map((e) => e.key) })
   })
 
   it('stops reading back once the records of what it would pass may be gone', async () => {
