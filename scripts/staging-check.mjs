@@ -1164,10 +1164,13 @@ export function authCorsProblems(preflight, session, appOrigin) {
 async function checkAuthRoutes() {
   const api = cfg.apiOrigin
   try {
+    // The probe's message names every route that failed and how, and quotes
+    // no body or header value, so it stays whole instead of being cut to the
+    // 200 characters describe() keeps of an unexpected error.
     await probeAuthRoutes(api, {
       local: cfg.target.target === 'local',
       log: (line) => console.log(redact(line)),
-    })
+    }).catch((error) => fail(String(error?.message ?? error).split('\n')[0]))
     const preflight = await request(
       `${api}/api/auth/sign-in/email`,
       {
