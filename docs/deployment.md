@@ -211,7 +211,7 @@ file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.129. It then makes a
+backend from before the release after v0.1.135. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
@@ -968,7 +968,7 @@ removes it adds it to the Instant Rollback list above. The period's storage
 sample still scans the attachment rows. There is no schema change, no
 backfill and no release step.
 
-From the release after v0.1.129, an app upload of an attachment or
+From the release after v0.1.135, an app upload of an attachment or
 description image outside the private demo goes through an upload ticket,
 as REST and MCP uploads do. `files.uploadUrl` takes the file's `size` and
 `name` and answers an upload URL on Qivo's API origin that stores one file
