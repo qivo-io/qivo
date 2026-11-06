@@ -16,6 +16,7 @@ import {
   peopleSettingsServer,
   type StandInKey,
 } from '../../store/peopleSettingsStandIn.setup'
+import { WHOLE } from '../../store/guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store, its people read from the server
@@ -64,6 +65,7 @@ let server: ReturnType<typeof peopleSettingsServer>
 let force: ForcedPeopleSettings
 let extra: { keys: StandInKey[]; deliveries: InviteDeliveryRow[] }
 let pending: Pending[]
+let publish: (value: Snapshot) => void
 let container: HTMLDivElement
 let root: Root
 
@@ -125,6 +127,7 @@ async function load(build: (s: Snapshot) => void = () => {}) {
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isPeopleSettingsRead(name)) return server.watch(name, args, next, fail)
+    if (name === WHOLE) publish = next
     next(structuredClone(snap))
     return () => {}
   })
@@ -250,12 +253,21 @@ async function type(input: HTMLInputElement, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
+/* Presses `element` as a pointer does in a browser: focus moves to it
+   first, then the click. */
 async function click(element: HTMLElement) {
-  await act(async () => element.click())
+  await act(async () => {
+    element.focus()
+    element.click()
+  })
   await settle()
 }
+/* Types `text` in the search box, which takes focus first, as a person's
+   typing gives it, and lets the search rest. */
 const search = async (text: string) => {
-  await type(find<HTMLInputElement>('[data-users-search]'), text)
+  const box = find<HTMLInputElement>('[data-users-search]')
+  await act(async () => box.focus())
+  await type(box, text)
   await rest()
 }
 
@@ -453,11 +465,23 @@ describe('kept rows', () => {
   it('keeps a drafted name, address and hours through a search and a page move, and lets them go once settled', async () => {
     await load((s) => s.profiles.push(...people(30)))
     await show()
+    const over = 'x'.repeat(LIMITS.personName.max + 1)
+    // a name over the limit and hours out of range stay typed when their
+    // field loses focus, refused
     const name = find<HTMLInputElement>('input[data-user-name="p00"]')
     await act(async () => name.focus())
-    await type(name, 'Paula Draft')
-    await type(find<HTMLInputElement>('input[data-user-email="anna"]'), 'anna.new@example.test')
-    await type(find<HTMLInputElement>('[data-plannable-for="p01"]'), '30')
+    await type(name, over)
+    const hours = find<HTMLInputElement>('[data-plannable-for="p01"]')
+    await act(async () => hours.focus())
+    await type(hours, '500')
+    // an address changed elsewhere while it is typed waits for Use saved or
+    // Keep mine
+    const email = find<HTMLInputElement>('input[data-user-email="anna"]')
+    await act(async () => email.focus())
+    await type(email, 'anna.new@example.test')
+    const anna = snap.profiles.find((p) => p.id === 'anna')
+    if (anna) anna.email = 'anna.other@example.test'
+    await act(async () => publish(structuredClone(snap)))
     await search('planner')
     expect(pageRows()).toEqual([me.id])
     expect(keptRows().sort()).toEqual(
@@ -469,23 +493,24 @@ describe('kept rows', () => {
     )
     // the same fields, with their text
     expect(find<HTMLInputElement>('input[data-user-name="p00"]')).toBe(name)
-    expect(name.value).toBe('Paula Draft')
+    expect(name.value).toBe(over)
     expect(find<HTMLInputElement>('input[data-user-email="anna"]').value).toBe(
       'anna.new@example.test',
     )
-    expect(find<HTMLInputElement>('[data-plannable-for="p01"]').value).toBe('30')
+    expect(find<HTMLInputElement>('[data-plannable-for="p01"]').value).toBe('500')
     expect(find('[data-user-row="p00"] [data-kept-note]').textContent).toBe('Not on this page')
+    expect(sentNames()).not.toContain('profiles:update')
     await search('')
     expect(keptRows()).toEqual([])
     await click(find('[data-users-next]'))
-    expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe('Paula Draft')
+    expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe(over)
     // a kept row stays while its field holds focus, also as its text passes
     // through the saved name
     const kept = find<HTMLInputElement>('input[data-user-name="p00"]')
     await act(async () => kept.focus())
     await type(kept, 'Person 00')
     expect(keptRows().map(([id]) => id)).toContain('p00')
-    await type(kept, 'Paula Draft')
+    await type(kept, over)
     // Escape puts the saved name back, and the row is no longer kept
     await act(async () =>
       find('input[data-user-name="p00"]').dispatchEvent(
