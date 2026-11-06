@@ -114,8 +114,9 @@ projects you can choose, and a sub-project past them offers its Board. A
 meeting that grows past its limits while it is open stays as it last
 fitted, marked as no longer updating since a given time, and keeps what
 you typed. Its Remaining, status, pause and owner controls, on people's
-pages and in the team summary, are off until the meeting fits again, and
-**@** mentions still send.
+pages and in the team summary, are off until the meeting fits again, an
+owner list or reviewer picker that was open closes, and **@** mentions
+still send.
 
 The people list starts with the team summary, then people by name, then agents.
 It includes owners of To Do, In Progress or In Review tasks without subtasks.

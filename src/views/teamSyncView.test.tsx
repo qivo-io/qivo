@@ -42,6 +42,11 @@ beforeEach(() => {
   Element.prototype.getAnimations = () => []
   // jsdom lays nothing out: each step opens at its top by a scroll
   Element.prototype.scrollTo = () => {}
+  // the owner lists (cmdk) and the status menu (Radix Select) scroll their
+  // rows and capture the pointer
+  Element.prototype.scrollIntoView = () => {}
+  Element.prototype.hasPointerCapture = () => false
+  Element.prototype.releasePointerCapture = () => {}
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal(
     'ResizeObserver',
@@ -799,6 +804,79 @@ describe('a meeting that stops fitting', () => {
           'This meeting stopped updating. Choose a smaller team or project.',
         )
       }
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'closes an owner list open at the refusal, whose rows then write nothing',
+    async () => {
+      const { board, P } = await open(
+        people({ status: 'review', reviewer_id: undefined }),
+        (snap) => ({ scope: `project:${meta(snap)}`, step: 'team' }),
+      )
+      await click(
+        document.querySelector(
+          `[data-sync-needs-reviewer="${P.syncTask('t1')?.id ?? ''}"] [data-assignee-edit]`,
+        ),
+      )
+      const row = [...document.querySelectorAll<HTMLElement>('[cmdk-item]')].find((item) =>
+        item.textContent?.includes('Aisha Rahman'),
+      )
+      expect(row).toBeDefined()
+      board.server.sync.force = { state: 'over_budget' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      expect(document.querySelector('[cmdk-item]')).toBeNull()
+      // a pick on the row the list showed writes nothing
+      const sent = network.mutation.mock.calls.length
+      await click(row)
+      await settle()
+      expect(network.mutation.mock.calls.length).toBe(sent)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'closes the reviewer prompt a move into In Review opened, at the refusal, and it writes nothing',
+    async () => {
+      const { board, P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const handle = P.syncTask('t1')?.id ?? ''
+      const status = card(handle)?.querySelector('[data-fieldselect]')
+      await act(async () =>
+        status?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
+      )
+      await click(
+        [...document.querySelectorAll('[role="option"]')].find(
+          (option) => option.textContent === 'In Review',
+        ),
+      )
+      await settle()
+      const prompt = () => document.querySelector(`[data-sync-reviewer-prompt="${handle}"]`)
+      expect(prompt()).not.toBeNull()
+      const row = [...(prompt()?.querySelectorAll<HTMLElement>('[cmdk-item]') ?? [])].find((item) =>
+        item.textContent?.includes('Aisha Rahman'),
+      )
+      expect(row).toBeDefined()
+      board.server.sync.force = { state: 'over_budget' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      expect(prompt()).toBeNull()
+      const sent = network.mutation.mock.calls.length
+      await click(row)
+      await settle()
+      expect(network.mutation.mock.calls.length).toBe(sent)
+      // the next ok answer does not bring the prompt back
+      board.server.sync.force = {}
+      await board.answer()
+      await settle()
+      expect(state()).toBe('ok')
+      expect(prompt()).toBeNull()
     },
     BOARD_TEST_TIMEOUT,
   )

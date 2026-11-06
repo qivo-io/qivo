@@ -66,7 +66,9 @@ export type PageCtx = {
   stamp: () => void
   /** a change was made from this row: stamp the page owner and tick it */
   touched: (it: IssueVM) => void
-  /** the row whose reviewer prompt is open, after a move into In Review */
+  /** the row whose reviewer prompt is open, after a move into In Review;
+      the page clears it, and the card hides it, while the meeting is stale
+      (`frozen`) */
   prompt: string | null
   setPrompt: (handle: string | null) => void
   onOpenTask: (handle: string) => void
@@ -76,7 +78,8 @@ export type PageCtx = {
   cards: Map<UnsentScope, SyncCardPlace>
   /** while the meeting stopped updating (state stale), the title of the
       task controls it turns off (stoppedTitle), else null: the cards'
-      typed text stays and a mention still sends */
+      typed text stays and a mention still sends, while an owner list or
+      the reviewer prompt open before it closes and writes nothing */
   frozen: string | null
 }
 
@@ -746,7 +749,10 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
             </span>
           </div>
         </div>
-        {ctx.prompt === it.id && <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />}
+        {/* a stale meeting writes nothing, so the prompt goes with it */}
+        {ctx.prompt === it.id && ctx.frozen === null && (
+          <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />
+        )}
       </div>
     </UnsentScopeContext.Provider>
   )

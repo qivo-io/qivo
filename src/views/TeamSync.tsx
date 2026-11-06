@@ -603,8 +603,12 @@ export function TeamSync({
     onClose()
   }
 
-  // a stale meeting's task controls are off, their title saying why
+  // a stale meeting's task controls are off, their title saying why, and
+  // the reviewer prompt a move into In Review opened closes with them
   const frozen = meeting.state === 'stale' ? stoppedTitle(meeting.note) : null
+  useEffect(() => {
+    if (frozen !== null) setPrompt(null)
+  }, [frozen])
   const ctxFor = (owner: SyncPerson): PageCtx => {
     // P.syncStamp sends nothing for a viewer who is not staff (the server's
     // rule), so a read-only visitor earns no refusal toasts

@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* The owner picker on the real store: a pick counts on the Team sync row
-   (onPick) only once the server saves it. Each task write is answered by
-   hand. */
+   (onPick) only once the server saves it, and a list that may no longer
+   write (`off`) writes nothing and asks to close. Each task write is
+   answered by hand. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -31,6 +32,10 @@ let container: HTMLDivElement
 let root: Root
 let writes: Answer[]
 let onPick: ReturnType<typeof vi.fn<() => void>>
+/* Renders the list again with `off`, as Team sync's stale meeting does,
+   with a close that keeps it mounted, as in the render before it closes;
+   answers how often it asked to close. */
+let renderOff: (off: string) => Promise<ReturnType<typeof vi.fn>>
 
 beforeEach(async () => {
   vi.resetModules()
@@ -93,6 +98,17 @@ beforeEach(async () => {
       </TooltipProvider>,
     ),
   )
+  renderOff = async (off) => {
+    const onClose = vi.fn()
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <OwnerPickList issue={task} onClose={onClose} onPick={onPick} off={off} />
+        </TooltipProvider>,
+      ),
+    )
+    return onClose
+  }
 })
 
 afterEach(async () => {
@@ -117,6 +133,21 @@ describe('the owner picker', () => {
     expect(onPick).not.toHaveBeenCalled()
     await act(async () => writes[0].resolve(null))
     expect(onPick).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes nothing while it may not write, its rows saying why, and asks to close', async () => {
+    const why = 'This meeting stopped updating. Choose a smaller team or project.'
+    const onClose = await renderOff(why)
+    expect(onClose).toHaveBeenCalledTimes(1)
+    const rows = [...container.querySelectorAll<HTMLElement>('[cmdk-item]')]
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(row.getAttribute('aria-disabled')).toBe('true')
+      expect(row.title).toBe(why)
+    }
+    await unassign()
+    expect(writes).toHaveLength(0)
+    expect(onPick).not.toHaveBeenCalled()
   })
 
   it('leaves onPick out when the server refuses the pick', async () => {
