@@ -8907,11 +8907,15 @@ export type UserPatch = Partial<{
     `seen` holds the values the draft began from, by the row's field names,
     such as `max_attachment_mb`, which go out as the write's `expected` in
     place of the row on screen. keepDraft and keepUnsaved run when a sent
-    save fails (SendOptions). Without them a save checks the values on screen. */
+    save fails (SendOptions). Without them a save checks the values on screen.
+    onSettled runs once the server answered a sent save, either way, after
+    keepDraft or keepUnsaved, for a field that tells its list while its save
+    waits (P.updateUser's hours). */
 export type FieldSave = {
   seen?: Record<string, unknown>
   keepDraft?: SendOptions<unknown>['keepDraft']
   keepUnsaved?: () => void
+  onSettled?: () => void
 }
 
 /** A project as a page that read it from the server showed it
@@ -8931,6 +8935,7 @@ const fieldSendOptions = (save: FieldSave) => ({
   keepDraft: save.keepDraft,
   keepUnsaved: save.keepUnsaved,
   ...(save.keepDraft ? { notice: { keepMine: true } } : {}),
+  ...(save.onSettled ? { onSettled: save.onSettled } : {}),
 })
 /** What a new personal token may do and the instant it stops working (UTC
     ISO 8601). Both are fixed when it is created; no expiresAt means never. */

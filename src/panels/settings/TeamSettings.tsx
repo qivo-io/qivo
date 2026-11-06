@@ -20,8 +20,10 @@
    that write through those rows wait. Delete, Remove and Add wait for the
    store's team, as the removal and the add take its organization from it.
    The pages keep, for this visit, the teams created here, the members
-   added here and the member rows that hold unsaved hours, beside the
-   loaded rows in one keyed list, so a search never drops typed hours. */
+   added here and the member rows that hold unsaved hours or an hours save
+   the server has not answered, beside the loaded rows in one keyed list,
+   so a search never drops typed hours, nor the field a refused save
+   brings them back in. */
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -438,7 +440,7 @@ function TeamFields({
   })
   const loaded = new Map(list.rows.map((row) => [row.id, row]))
   // the members this visit added, by id with their names, and the rows
-  // holding unsaved hours
+  // holding unsaved hours or an hours save on its way (PlannableHoursInput)
   const [added, setAdded] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [drafts, setDrafts] = useState<ReadonlySet<string>>(() => new Set())
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {

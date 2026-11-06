@@ -698,7 +698,55 @@ describe("a team's page", () => {
     await act(async () => field.blur())
     await settle()
     expect(requests.map((r) => r.name)).toEqual(['profiles:setPlannableHours'])
+    // the store painted the hours, but the row waits for the server's answer
+    expect(memberIds()).toEqual(['leo', 'bot'])
     await answer('profiles:setPlannableHours', 'accept')
+    expect(memberIds()).toEqual(['bot'])
+  })
+
+  it('keeps a row whose hours save waits through a search, and shows the refused hours and the conflict in it', async () => {
+    await load()
+    await teamPage()
+    const field = find<HTMLInputElement>('[data-plannable-for="leo"]')
+    await act(async () => field.focus())
+    await type(field, '30')
+    await act(async () => field.blur())
+    await settle()
+    expect(requests.map((r) => r.name)).toEqual(['profiles:setPlannableHours'])
+    // the search starts while the save waits, its paint reading as saved
+    await type(find<HTMLInputElement>('[data-team-members-search]'), 'relay')
+    await rest()
+    expect(memberIds()).toEqual(['leo', 'bot'])
+    expect(find('[data-settings-team-member="leo"] [data-team-member-kept]').textContent).toBe(
+      'Not in this list',
+    )
+    // someone else set 36 first, so the server refuses the save over it
+    const leo = server.snap.profiles.find((p) => p.id === 'leo')
+    if (leo) leo.plannable_hours = 36
+    await act(async () =>
+      server.publish({ ...server.snap, delivered_at: '2026-09-15T09:00:00.000Z' }),
+    )
+    const request = requests.find((r) => r.name === 'profiles:setPlannableHours')
+    await act(async () =>
+      request?.reject(
+        new ConvexError({
+          code: 'conflict',
+          reason: 'field_changed',
+          message: 'plannable_hours changed since you read it',
+          changes: [{ record: 'profile', id: 'leo', field: 'plannable_hours', by: null, at: NOW }],
+        }),
+      ),
+    )
+    await settle()
+    // the same field holds the typed hours, with the value the server keeps
+    expect(memberIds()).toEqual(['leo', 'bot'])
+    expect(find<HTMLInputElement>('[data-plannable-for="leo"]')).toBe(field)
+    expect(field.value).toBe('30')
+    expect(find('[data-settings-team-member="leo"] [data-draft-conflict]').textContent).toContain(
+      'Changed elsewhere to “36”.',
+    )
+    // Use saved lets the draft go, and the row with it
+    await click(find('[data-settings-team-member="leo"] [data-draft-use-saved]'))
     expect(memberIds()).toEqual(['bot'])
   })
 
