@@ -1458,6 +1458,16 @@ export const recipes: Recipe[] = [
     act: (P) => P.unarchiveProject('work2'),
   },
   {
+    mutation: 'projects:unarchive',
+    mutator: 'unarchiveProject',
+    what: 'a project restored from Archived projects, which names its organization',
+    pause: 'P',
+    seed: (snap) => {
+      snap.projects[2].archived_at = '2026-10-10T08:00:00.000Z'
+    },
+    act: (P) => P.unarchiveProject('work2', { orgId: ORG }),
+  },
+  {
     mutation: 'projects:deleteDeep',
     mutator: 'removeProject',
     what: 'a deleted sub-project',

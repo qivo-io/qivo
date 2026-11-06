@@ -43,10 +43,6 @@
     "count": 2,
     "reason": "persisted label colors"
   },
-  "src/panels/settings/ProjectSettings.tsx": {
-    "count": 1,
-    "reason": "permission-derived field opacity"
-  },
   "src/panels/settings/TeamSettings.tsx": {
     "count": 3,
     "reason": "team member colors and protected/deleting row emphasis"

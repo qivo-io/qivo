@@ -733,6 +733,75 @@ describe('the benchmark server', () => {
     ])
   }, 60_000)
 
+  it("answers Settings' project lists from the workspace, with the archive, the hidden projects and the states the page asks for", async () => {
+    /** What list `name` answers with `args` on a workspace with page
+        parameters `params`, and the snapshot. */
+    const ask = async (params, name, args = {}) => {
+      const at = await server(`tasks=60&latency=0&mbps=100000&${params}`)
+      await at.send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(at.posted.find((m) => m.to === 'snap').text)
+      await at.send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, ...args },
+      })
+      const answer = at.posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    // 60 live and 60 archived programs of three sub-projects
+    const world = 'programs=120&subprojects=3&archivedprojects=60'
+    const live = await ask(world, 'projectSettings:projects')
+    expect(live.answer).toMatchObject({ state: 'ready', stopped: false })
+    expect(live.answer.rows).toHaveLength(25)
+    expect(live.answer.rows[0]).toMatchObject({ parent: null, can_create_sub_project: false })
+    const metas = live.snap.projects.filter((p) => p.type === 'meta')
+    expect(metas.filter((p) => p.archived_at)).toHaveLength(60)
+    // no task of an archived program is in the workspace
+    const archivedIds = new Set(live.snap.projects.filter((p) => p.archived_at).map((p) => p.id))
+    expect(live.snap.issues.some((t) => archivedIds.has(t.project_id))).toBe(false)
+    const old = await ask(world, 'projectSettings:archived')
+    expect(old.answer.rows).toHaveLength(25)
+    // newest first, and no sub-project beneath an archived program is an
+    // entry, also one archived on its own before it
+    expect(old.answer.rows.every((r) => r.parent === null && r.has_sub_projects)).toBe(true)
+    const times = old.answer.rows.map((r) => r.archived_at)
+    expect([...times].sort().reverse()).toEqual(times)
+    const first = old.answer.rows[0]
+    const chips = await ask(world, 'projectSettings:archivedSubProjects', { project_id: first.id })
+    expect(chips.answer.rows.map((c) => c.with_parent).sort()).toEqual([false, true, true])
+    // an admin also lists the hidden program the workspace leaves out
+    const asAdmin = await ask('role=admin&hidden=4', 'projectSettings:projects')
+    const hiddenRow = asAdmin.answer.rows.find((r) => r.name === 'Hidden program')
+    expect(hiddenRow).toMatchObject({ can_create_sub_project: true })
+    expect(asAdmin.snap.projects.some((p) => p.id === hiddenRow.id)).toBe(false)
+    const page = await ask('role=admin&hidden=4', 'projectSettings:get', { id: hiddenRow.id })
+    expect(page.answer).toMatchObject({ state: 'ok', project: { name: 'Hidden program' } })
+    const subs = await ask('role=admin&hidden=4', 'projectSettings:subProjects', {
+      project_id: hiddenRow.id,
+    })
+    expect(subs.answer.rows).toHaveLength(4)
+    // anyone else lists none of it
+    const asUser = await ask('hidden=4', 'projectSettings:projects')
+    expect(asUser.answer.rows.some((r) => r.name === 'Hidden program')).toBe(false)
+    // the forced states
+    expect((await ask('projectlists=not-ready', 'projectSettings:archived')).answer).toEqual({
+      state: 'not_ready',
+    })
+    expect((await ask('projectlists=unchecked', 'projectSettings:projects')).answer).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    expect((await ask('projectlists=error', 'projectSettings:projects')).answer.error).toContain(
+      'fails',
+    )
+    const stopped = await ask(`${world}&projectlists=stopped`, 'projectSettings:projects')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(10)
+    const small = await ask(`${world}&projectlists=small`, 'projectSettings:archived')
+    expect(small.answer.rows).toHaveLength(5)
+  }, 60_000)
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open

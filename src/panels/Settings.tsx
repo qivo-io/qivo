@@ -17,7 +17,8 @@ import { DeletedItemsPage } from './settings/DeletedItems'
 import { DesktopSettingsPage } from './settings/DesktopSettings'
 import { OrgLabelsPage } from './settings/LabelsSettings'
 import { OrgGeneralPage } from './settings/OrganizationSettings'
-import { ArchivedProjectsPage, OrgProjectsPage, ProjectPage } from './settings/ProjectSettings'
+import { ArchivedProjectsPage, OrgProjectsPage } from './settings/ProjectLists'
+import { ProjectPage } from './settings/ProjectSettings'
 import { OrgTeamsPage, TeamPage } from './settings/TeamSettings'
 import { OrgUsersPage } from './settings/UsersSettings'
 import { useProjectSettings } from './settings/useProjectSettings'
@@ -45,7 +46,15 @@ function SettingsScreen({
   onBackPage?: (page: string) => void
   onExit: () => void
   onNewProject: () => void
-  onNewSubProject: (parent: string, focusAfterClose?: () => HTMLElement | null) => void
+  /** opens New sub-project; `onCreated` hears the id of the sub-project
+      it created and whether the server stored it, which Settings ›
+      Projects keeps in its open list until a loaded batch holds it or,
+      once stored, tells that it does not */
+  onNewSubProject: (
+    parent: string,
+    focusAfterClose?: () => HTMLElement | null,
+    onCreated?: (id: string, saved: Promise<boolean>) => void,
+  ) => void
   /** the project Archived tasks opens on, or null for the current scope's */
   archivedTasksProject?: string | null
   /** opens Archived tasks on one project, from a project row's menu */

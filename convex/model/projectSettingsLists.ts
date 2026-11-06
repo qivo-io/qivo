@@ -73,9 +73,10 @@
  * read archive_state and name_key. A list that names a project answers
  * `unavailable` alike for every project the seat may not list under.
  *
- * No app calls these yet. t3/limits-project-admin-ui moves Settings ›
- * Projects, Archived projects and the New sub-project dialog's parents
- * onto them. */
+ * Settings › Projects, Archived projects and a project page's Sub-projects
+ * section read them (src/panels/settings/ProjectLists.tsx and
+ * ProjectSettings.tsx), and t3/limits-project-dialogs moves the New
+ * sub-project dialog's parents onto them. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

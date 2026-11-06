@@ -134,9 +134,15 @@ access.
 
 ## Managing projects and accounts
 
-**Settings → Projects → All projects** lists accessible projects by
-organization. Expand a project to see its sub-projects, or use its **…** menu
-to open settings. Org admins, and standard users the organization allows
+**Settings → Projects → All projects** lists 25 projects a page in name
+order, with **Previous** and **Next**, and a search that finds projects and
+sub-projects, each sub-project with the project it is in. Organization
+admins see every project of the organization; everyone else sees the
+projects they can see. With seats in several organizations, you choose the
+organization at the top, your own first. Open a project to see its
+sub-projects, which load 25 at a time as you scroll, or use its **…** menu
+to open settings or to create a sub-project, which leads and organization
+admins can. Org admins, and standard users the organization allows
 ([Who can create projects](./organization-and-team-settings.md#who-can-create-projects)),
 can choose **New project** and set its name, lead and optional team/user
 shares ([Creating projects and sub-projects](./who-sees-what-the-access-model.md#creating-projects-and-sub-projects)).

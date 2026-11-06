@@ -82,10 +82,12 @@ import {
   parseHash,
   parsePath,
   pathMatchesState,
+  projectPagesRev,
   type Route,
   sameTask,
   scopeForIssueOn,
   scopeTaskOf,
+  subscribeProjectPages,
   syncPlaceOf,
   type UiState,
   viewBehindTask,
@@ -1206,6 +1208,10 @@ function App() {
   const refRev = useSyncExternalStore(P.updates.comments.subscribe, () =>
     isTaskRef(openIssue) ? P.updates.comments.getSnapshot() : null,
   )
+  // A project settings page names the organization of a project the
+  // workspace does not hold once its read answers (lib/router.ts
+  // noteProjectPage), which the address follows in place.
+  const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
   // The Roadmap and Team sync need every task: they ask for them as they
   // mount (TasksLoadingView) and wait until the workspace holds them
   const tasksLoading = !P.tasksHeld()
@@ -1305,7 +1311,19 @@ function App() {
     if (replaceNextHistory.current || inPlace) history.replaceState(history.state, '', p)
     else pushPage({ qivoPrevious: location.pathname }, p)
     replaceNextHistory.current = false
-  }, [scope, view, openIssue, settingsPage, inboxOpen, projectsOpen, sync, rev, refRev, settled])
+  }, [
+    scope,
+    view,
+    openIssue,
+    settingsPage,
+    inboxOpen,
+    projectsOpen,
+    sync,
+    rev,
+    refRev,
+    pagesRev,
+    settled,
+  ])
   // the task the boot, Back or Forward named by a reference, once its
   // answer names its project: its scope, unless the page moved meanwhile
   useEffect(() => {
@@ -1592,14 +1610,22 @@ function App() {
     })
 
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
-  // (sidebar header +, palette) opens the project one, everything else —
-  // always parented — opens the sub-project one
-  const openNewProject = (init, focusAfterClose?: () => HTMLElement | null) => {
+  // (sidebar header +, palette) opens the project one, everything else,
+  // always parented, opens the sub-project one. `onCreated` hears the id
+  // of a sub-project the dialog creates and whether the server stored it,
+  // as Settings › Projects keeps it in its open list until its loaded
+  // batches hold it or, once stored, tell that they do not.
+  const openNewProject = (
+    init,
+    focusAfterClose?: () => HTMLElement | null,
+    onCreated?: (id: string, saved: Promise<boolean>) => void,
+  ) => {
     createdProject.current = null
     setModal({
       kind: init && init.kind === 'program' ? 'program' : 'subproject',
       init: { ...init },
       focusAfterClose,
+      onCreated,
     })
   }
   /* The control that stands for project `id` once App shows it: its row in
@@ -1968,9 +1994,15 @@ function App() {
     // Projects and sub-projects are led by people and shared through explicit grants.
     if (p.type === 'meta') p.access = p.access || {}
     const placeAtCreate = placeRef.current
+    // whether the server stored it, for the dialog's opener (onCreated)
+    let answered: (stored: boolean) => void = () => {}
+    const saved = new Promise<boolean>((resolve) => {
+      answered = resolve
+    })
     const id = P.addProject(
       p,
       () => {
+        answered(true)
         if (withStarter) {
           P.addIssue({
             title: p.name,
@@ -2000,6 +2032,7 @@ function App() {
         focusAfterMove.current = () => projectTarget(id)
       },
       () => {
+        answered(false)
         // the refusal takes away the sub-project's row, which the dialog gave
         // focus to as it closed (afterNewSubProject), and its parent stays
         const { parent } = p
@@ -2007,6 +2040,7 @@ function App() {
       },
     )
     createdProject.current = id ?? null
+    if (id) modal?.onCreated?.(id, saved)
     setModal(null)
   }
 
@@ -2156,8 +2190,8 @@ function App() {
                   }
                   onExit={exitSettings}
                   onNewProject={() => openNewProject({ kind: 'program' })}
-                  onNewSubProject={(parent, focusAfterClose) =>
-                    openNewProject({ parent }, focusAfterClose)
+                  onNewSubProject={(parent, focusAfterClose, onCreated) =>
+                    openNewProject({ parent }, focusAfterClose, onCreated)
                   }
                   archivedTasksProject={archiveProject || scopeMeta}
                   onOpenArchivedTask={(task) =>

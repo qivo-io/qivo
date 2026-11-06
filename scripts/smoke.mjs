@@ -1887,11 +1887,21 @@ try {
 
   // The list is the sidebar's tree (deviation #251): a project row opens its
   // branch and lights up, and its "…" menu is the way to the project's page.
-  const firstProject = pageA.locator('[data-project-row]').first()
+  // The rows and an opened project's sub-projects come from the server's
+  // lists (projectSettings.projects and subProjects), so the leg waits for
+  // them.
+  const firstProject = pageA.locator('[data-settings-projects] [data-project-row]').first()
+  await firstProject.waitFor({ timeout: 30000 })
   await firstProject.click()
   if (!(await firstProject.evaluate((el) => el.hasAttribute('data-on'))))
     await fail('Opening a project row on the Projects page did not light it')
-  if ((await pageA.locator('[data-subproject-row]').count()) === 0)
+  const subprojectRow = pageA.locator('[data-subproject-list] [data-subproject-row]').first()
+  if (
+    !(await subprojectRow.waitFor({ timeout: 15000 }).then(
+      () => true,
+      () => false,
+    ))
+  )
     await fail('Opening a project row on the Projects page revealed no sub-project rows')
   await firstProject.getByRole('button', { name: 'Project actions', exact: true }).click()
   await pageA.getByRole('button', { name: 'Project settings', exact: true }).click()

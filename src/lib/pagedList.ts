@@ -4,10 +4,16 @@
    Billing's Storage by project (panels/BillingStorage.tsx, largest
    first), the removal window's Reassign picker, the task window's
    relation pickers, the shared project picker
-   (components/ProjectPicker.tsx), and later Settings' teams and people
-   (the limits plan's "Settings team list
-   loading"). It holds only what the page shows, in the page, and drops it
-   when the page is left. It imports nothing from the store.
+   (components/ProjectPicker.tsx), the expanded sub-project lists and an
+   archived project's sub-projects in Settings
+   (panels/settings/ProjectLists.tsx), and later Settings' teams and people
+   (the limits plan's "Settings team list loading"). Beside it, a page
+   mode (usePagedPages, at the end of this file) shows one page at a time,
+   which Previous and Next replace, as Settings › Projects and Archived
+   projects read theirs, and useMoreOnScroll loads the next batch of a
+   list as its end scrolls into view. It holds only what the page shows,
+   in the page, and drops it when the page is left. It imports nothing
+   from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 
@@ -68,9 +74,11 @@
    is never an end (listEnd). */
 
 import type { FunctionReference } from 'convex/server'
-import { ConvexError, type Value } from 'convex/values'
-import { useEffect, useReducer, useRef } from 'react'
+import { ConvexError, compareValues, type Value } from 'convex/values'
+import { useCallback, useEffect, useReducer, useRef } from 'react'
 import { LIST_BATCH, type Limit } from '../../convex/lib/limits'
+import { nameKey } from '../../convex/lib/nameKey'
+import { allWordsMatcher } from '../../convex/lib/search'
 import { overLimit } from './fieldLimits'
 import { watchLive } from './liveView'
 import { useRested } from './useRested'
@@ -203,6 +211,26 @@ export function listEnd(
   if (list.partial || list.stopped) return 'partial'
   if (list.rows.length === 0 && searching) return 'none'
   return 'end'
+}
+
+/* The place of a row with `name` and `id` in the server's name order. */
+const placeOf = (name: string, id: string) => [nameKey(name), id]
+
+/** Whether `list`, in the server's name key order tied by the id, tells
+    that it does not hold the row with `name` and `id`: its batches reached
+    past that place, or the list ended, with no batch stopped or failed,
+    under a search that would show the row. */
+export function listPassed<A, Row extends { id: string; name: string }>(
+  list: PagedList<A, Row>,
+  search: string,
+  name: string,
+  id: string,
+): boolean {
+  if (!allWordsMatcher(nameKey(search))(nameKey(name))) return false
+  if (list.phase !== 'ready' || list.partial || list.settling || list.stopped) return false
+  if (!list.next) return true
+  const last = list.rows.at(-1)
+  return !!last && compareValues(placeOf(last.name, last.id), placeOf(name, id)) > 0
 }
 
 /** A search box's text as a list asks the server with it: `typed`, the
@@ -826,4 +854,511 @@ export function usePagedList<A, Row>(o: PagedListOptions<A, Row>): PagedList<A, 
     [],
   )
   return { ...e.view(), more: () => e.more(), retry: (id) => e.retry(id) }
+}
+
+/* ------------------------------------------------------------- the pages */
+
+/** The bounds of a list shown a page at a time (usePagedPages), which
+    tests lower and set back: `starts`, the page starts Previous keeps, as
+    Archived tasks keeps them; past it the oldest is dropped, so Previous
+    stops at the oldest page still held. */
+export const PAGE_LIMITS = { starts: 1000 }
+
+/** What a page asks of usePagedPages. */
+export type PagedPagesOptions<A, Row> = {
+  /** the list's identity, such as its organization and settled search; a
+      new key starts at the first page, or at `starts`, and null reads
+      nothing */
+  key: string | null
+  query: FunctionReference<'query'>
+  /** the query's arguments for the page that starts after `after` (null
+      for the first), in a fixed key order with empty fields left out */
+  args: (after: string | null) => Record<string, Value>
+  /** the batch an answer holds, or null for an answer with no rows, such
+      as not ready or a refusal, which the page shows as `held` */
+  batch: (answer: A) => ListBatch<Row> | null
+  /** the page starts a new key opens on, the first page's null first, as
+      a page remembers where it was; a start refused for its position goes
+      back to the first page */
+  starts?: readonly (string | null)[]
+}
+
+/** What a list shown a page at a time holds now. */
+export type PagedPages<A, Row> = {
+  /** the rows of the page on screen */
+  rows: readonly Row[]
+  /** the answer on screen, with rows or held, null before the first and
+      beside a failure */
+  answer: A | null
+  /** `first` until the first page answers; `held` for an answer with no
+      rows; `failed` when the page on screen failed or the list did;
+      `moving` while Next or Previous reads; else `ready` */
+  phase: 'first' | 'ready' | 'moving' | 'failed' | 'held'
+  /** the move that reads now */
+  moving: 'next' | 'previous' | null
+  /** the move that failed last, which kept the page on screen */
+  failedMove: 'next' | 'previous' | null
+  /** whether a page follows (the page's `next`), for Next */
+  hasNext: boolean
+  /** whether a page comes before, for Previous */
+  hasPrevious: boolean
+  /** whether the page's read stopped before it was full */
+  stopped: boolean
+  /** whether the page's read stopped without moving past its start, so
+      Next would read the same page; the page shows its note with Retry */
+  stuck: boolean
+  /** whether the list waits for a fresh answer to its page, after the
+      page showed again or the socket reconnected */
+  refreshing: boolean
+  /** the page starts walked to, the first page's null first and the page
+      on screen last, for a page that remembers where it was */
+  starts: readonly (string | null)[]
+  /** Next: the page after this one, while `hasNext` and no move reads */
+  next: () => void
+  /** Previous: the page before this one, while `hasPrevious` and no move
+      reads */
+  previous: () => void
+  /** Reads again what failed: the move that failed, the page on screen, or
+      the list from its first page when it failed as a whole. A failed
+      move that cannot start from the page on screen, as Next beside a
+      page that failed too, reads that page first and starts once it can. */
+  retry: () => void
+}
+
+type PagesState<A, Row> = Omit<PagedPages<A, Row>, 'next' | 'previous' | 'retry'>
+
+/** The engine under usePagedPages, on the rules in its docstring. */
+function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: () => void) {
+  /* One page's read: its start, the way to stop it, its latest result
+     with the connection it came on, and whether that result came from the
+     read open now. */
+  type Read = {
+    after: string | null
+    stop: (() => void) | null
+    held: { value?: A; error?: unknown; connection: number | null } | null
+    fresh: boolean
+  }
+  /* What the page on screen shows: rows, an answer with none, or a
+     failure beside the rows it showed. */
+  type Shown =
+    | { kind: 'ok'; answer: A; batch: ListBatch<Row> }
+    | { kind: 'held'; answer: A }
+    | { kind: 'error'; rows: readonly Row[] }
+
+  let key: string | null = null
+  let visible = true
+  let connection = 0
+  let starts: (string | null)[] = [null]
+  let page: Read | null = null
+  let shown: Shown | null = null
+  let move: { to: 'next' | 'previous'; read: Read } | null = null
+  let failedMove: 'next' | 'previous' | null = null
+  // the failed move Retry starts again once the page on screen, read
+  // again first, shows rows; a move that starts clears it
+  let resume: 'next' | 'previous' | null = null
+  // the key a position refusal sent back to the first page, and whether a
+  // second one failed the list
+  let restarted: string | null = null
+  let failed = false
+  let settling = false
+
+  /** Whether read `r`'s result came from the read open now, on the
+      connection the socket holds now. */
+  const current = (r: Read) =>
+    r.fresh && (r.held?.connection === null || r.held?.connection === connection)
+
+  /** Opens read `r` while the page shows, replacing any before. */
+  function watch(r: Read) {
+    r.stop?.()
+    r.stop = null
+    r.fresh = false
+    const o = options()
+    if (!visible || key === null) return
+    r.stop = watchLive<A>(
+      o.query,
+      o.args(r.after),
+      (result, at) => {
+        r.held =
+          'value' in result
+            ? { value: result.value, connection: at }
+            : { error: result.error, connection: at }
+        r.fresh = true
+        if (at !== null && at > connection) connection = at
+        later()
+      },
+      (at) => {
+        if (at <= connection) return
+        connection = at
+        changed()
+      },
+    )
+  }
+
+  function unwatch(r: Read | null) {
+    r?.stop?.()
+    if (r) r.stop = null
+  }
+
+  function readAt(after: string | null): Read {
+    const r: Read = { after, stop: null, held: null, fresh: false }
+    watch(r)
+    return r
+  }
+
+  function stopAll() {
+    unwatch(page)
+    unwatch(move?.read ?? null)
+    page = null
+    shown = null
+    move = null
+    failedMove = null
+    resume = null
+  }
+
+  /** Opens the list on the page starts `at`, the last one on screen. */
+  function openAt(at: readonly (string | null)[]) {
+    stopAll()
+    failed = false
+    starts = at.length > 0 && at[0] === null ? [...at] : [null]
+    if (key !== null) page = readAt(starts[starts.length - 1] ?? null)
+  }
+
+  /* Settles once the transition that brought a result is over. */
+  function later() {
+    if (settling) return
+    settling = true
+    queueMicrotask(() => {
+      settling = false
+      settle()
+    })
+  }
+
+  /** Whether read `r` failed for its position, as after the server's
+      secret rotated. */
+  const refusedPosition = (r: Read) =>
+    r.held?.error !== undefined && codeOf(r.held.error) === 'bad_request' && r.after !== null
+
+  /** Answers a position refusal: the first page once for the key, then
+      the list's failure. */
+  function refused() {
+    if (restarted === key) {
+      stopAll()
+      failed = true
+    } else {
+      restarted = key
+      openAt([null])
+    }
+    changed()
+  }
+
+  /** The rows the page on screen shows. */
+  const rowsNow = (): readonly Row[] =>
+    shown?.kind === 'ok' ? shown.batch.rows : shown?.kind === 'error' ? shown.rows : []
+
+  /** What read `r`'s latest result shows, or undefined before it has one.
+      A failure keeps the rows on screen. */
+  function shownOf(r: Read): Shown | undefined {
+    const held = r.held
+    if (held === null) return undefined
+    if ('error' in held && held.error !== undefined) return { kind: 'error', rows: rowsNow() }
+    const answer = held.value as A
+    const batch = options().batch(answer)
+    return batch === null ? { kind: 'held', answer } : { kind: 'ok', answer, batch }
+  }
+
+  function isStuck() {
+    return (
+      shown?.kind === 'ok' &&
+      shown.batch.stopped &&
+      shown.batch.next !== null &&
+      shown.batch.next === page?.after
+    )
+  }
+
+  /** Takes the latest results in, as the hook's docstring says. */
+  function settle() {
+    if (failed || key === null) return
+    if (move !== null) {
+      const target = move.read
+      if (refusedPosition(target)) return refused()
+      if (target.held?.error !== undefined) {
+        // a failed move keeps the page on screen, with the failure beside it
+        failedMove = move.to
+        unwatch(target)
+        move = null
+      } else if (target.held !== null && current(target)) {
+        // the new page replaces the old one in one step
+        const to = move.to
+        unwatch(page)
+        page = target
+        move = null
+        failedMove = null
+        if (to === 'next') {
+          starts.push(target.after)
+          if (starts.length > PAGE_LIMITS.starts) starts.shift()
+        } else starts.pop()
+        shown = shownOf(target) ?? null
+        changed()
+        return
+      }
+    }
+    if (page !== null) {
+      if (refusedPosition(page)) return refused()
+      const next = shownOf(page)
+      if (next !== undefined) shown = next
+      // the page Retry read again has answered. The failed move starts
+      // where it can from that answer, stays failed beside another
+      // failure, and is over where it cannot, as Next from an answer with
+      // no rows or from a page now at its end
+      if (resume !== null && page.held !== null && current(page)) {
+        const to = resume
+        resume = null
+        if (startOf(to) !== undefined) return go(to)
+        if (shown?.kind !== 'error') failedMove = null
+      }
+    }
+    changed()
+  }
+
+  /** Where the move `to` starts from the page on screen, or undefined
+      while it cannot move that way. */
+  function startOf(to: 'next' | 'previous'): string | null | undefined {
+    if (to === 'previous')
+      return starts.length < 2 ? undefined : (starts[starts.length - 2] ?? null)
+    if (shown?.kind !== 'ok' || shown.batch.next === null || shown.batch.next === page?.after)
+      return undefined
+    return shown.batch.next
+  }
+
+  /** Starts the move `to`, which replaces the page once it answered. */
+  function go(to: 'next' | 'previous') {
+    if (key === null || failed || move !== null || page === null) return
+    const at = startOf(to)
+    if (at === undefined) return
+    failedMove = null
+    resume = null
+    move = { to, read: readAt(at) }
+    changed()
+  }
+
+  return {
+    open(next: string | null) {
+      key = next
+      restarted = null
+      openAt(options().starts ?? [null])
+      changed()
+    },
+    show(next: boolean) {
+      if (next === visible) return
+      visible = next
+      // while hidden the reads stop and the answers stay; once shown the
+      // same pages read again
+      for (const r of [page, move?.read ?? null]) {
+        if (r === null) continue
+        if (visible) watch(r)
+        else unwatch(r)
+      }
+      changed()
+    },
+    stop() {
+      stopAll()
+      failed = false
+    },
+    next: () => go('next'),
+    previous: () => go('previous'),
+    retry() {
+      if (key === null) return
+      if (failed || page === null) {
+        restarted = null
+        openAt([null])
+        changed()
+        return
+      }
+      // a failed move leaves no move running, and a move clears it
+      if (failedMove !== null && startOf(failedMove) !== undefined) return go(failedMove)
+      if (shown?.kind === 'error' || shown?.kind === 'held' || isStuck()) {
+        // the page on screen reads again, and a failed move that cannot
+        // start from it, such as Next beside a failed page, follows once
+        // it shows rows (settle)
+        resume = failedMove
+        page.held = null
+        watch(page)
+        changed()
+        return
+      }
+      // a failed move with nowhere to go now, as from a page that became
+      // the last, is over
+      if (failedMove !== null) {
+        failedMove = null
+        changed()
+      }
+    },
+    view(): PagesState<A, Row> {
+      const ok = shown?.kind === 'ok' ? shown : null
+      const phase: PagedPages<A, Row>['phase'] =
+        key === null || (!failed && shown === null)
+          ? 'first'
+          : failed || shown?.kind === 'error'
+            ? 'failed'
+            : shown?.kind === 'held'
+              ? 'held'
+              : move !== null
+                ? 'moving'
+                : 'ready'
+      return {
+        rows: key === null ? [] : rowsNow(),
+        answer: shown && shown.kind !== 'error' ? shown.answer : null,
+        phase,
+        moving: move?.to ?? null,
+        failedMove,
+        hasNext: !failed && !!ok && ok.batch.next !== null && ok.batch.next !== page?.after,
+        hasPrevious: !failed && starts.length > 1,
+        stopped: !!ok && ok.batch.stopped,
+        stuck: isStuck(),
+        refreshing: visible && page !== null && page.held !== null && !current(page),
+        starts: [...starts],
+      }
+    },
+  }
+}
+
+/**
+ * A list the server answers a page at a time, one page on screen, which
+ * Next and Previous replace, as Settings › Projects and Archived projects
+ * read theirs (the limits plan's "Settings project list" and "Archived
+ * project list loading"). It reads on the live engine's rules (the module
+ * header), with these of its own:
+ *
+ * - One page is on screen, read live and open (no `through`), so a row
+ *   added before its end moves its last row to the next page, and a row
+ *   that leaves, such as a restored one, is filled from the next. Next
+ *   reads at the page's live `next`, so no row falls between two pages, and
+ *   Previous at the start below it in a stack of page starts, at most
+ *   PAGE_LIMITS.starts, past which the oldest is dropped.
+ * - The page on screen keeps its rows until the new page answered on the
+ *   connection the socket holds now, and the new one then replaces it in
+ *   one step, so the list never flashes empty. A move that fails keeps the
+ *   page, with `failedMove`, and Retry tries it again. Where the page on
+ *   screen failed too, Retry reads it first and then a failed Next, which
+ *   starts from that page's answer; a failed Previous starts at once. An
+ *   answer with no rows, such as not ready or a refusal, shows as `held` in
+ *   place of the page, whichever page it answers.
+ * - A page that stopped before it was full offers Next and is never the
+ *   end; one that stopped without moving past its start is `stuck`, with
+ *   Retry.
+ * - A start refused for its position goes back to the first page once for
+ *   one key; a second refusal is the list's failure, and Retry starts from
+ *   the first page. A new key starts at the first page, or at the starts a
+ *   page remembered for it.
+ * - While the tab or the desktop window is hidden the reads stop and the
+ *   answer stays; on return the page reads again and is `refreshing` until
+ *   it answered on the current connection.
+ *
+ * It holds what it read in the hook and drops it when the page unmounts.
+ */
+export function usePagedPages<A, Row>(o: PagedPagesOptions<A, Row>): PagedPages<A, Row> {
+  const { visible } = useViewVisibility()
+  const [, changed] = useReducer((n: number) => n + 1, 0)
+  const latest = useRef(o)
+  latest.current = o
+  const engine = useRef<ReturnType<typeof pagesEngine<A, Row>> | null>(null)
+  if (engine.current === null) engine.current = pagesEngine(() => latest.current, changed)
+  const e = engine.current
+  // the key the engine opened, so a page that shows again or a parent's
+  // render opens nothing new
+  const opened = useRef<{ key: string | null } | null>(null)
+  useEffect(() => {
+    e.show(visible)
+    if (opened.current === null || opened.current.key !== o.key) {
+      opened.current = { key: o.key }
+      e.open(o.key)
+    }
+  }, [o.key, visible])
+  useEffect(
+    () => () => {
+      opened.current = null
+      e.stop()
+    },
+    [],
+  )
+  return { ...e.view(), next: e.next, previous: e.previous, retry: e.retry }
+}
+
+/** Which line ends a page of a list shown a page at a time, one of:
+    - `loading`, the first page on its way;
+    - `held`, an answer with no rows;
+    - `failed`, a failure of the page on screen or of the list;
+    - `stuck`, a page whose read stopped without moving, with Retry;
+    - `more`, Next, with `stopped` beside it;
+    - `none`, a search with no match on its first page;
+    - `empty`, no row on the first page without a search;
+    - `nomore`, no row on a later page at the list's end, as after a
+      restore or an archive elsewhere emptied it;
+    - `end`, the list's end after the rows. */
+export type PageEnd =
+  | 'loading'
+  | 'held'
+  | 'failed'
+  | 'stuck'
+  | 'more'
+  | 'none'
+  | 'empty'
+  | 'nomore'
+  | 'end'
+
+/** The line that ends `page`, where `searching` says a search is active.
+    It never answers `none`, `empty` or `nomore` where the page stopped or
+    failed, nor `none` or `empty` for a later page. */
+export function pageEnd(
+  page: Pick<PagedPages<unknown, unknown>, 'phase' | 'hasNext' | 'hasPrevious' | 'stuck' | 'rows'>,
+  searching: boolean,
+): PageEnd {
+  if (page.phase === 'first') return 'loading'
+  if (page.phase === 'held') return 'held'
+  if (page.phase === 'failed') return 'failed'
+  if (page.stuck) return 'stuck'
+  if (page.hasNext) return 'more'
+  if (page.rows.length > 0) return 'end'
+  if (page.hasPrevious) return 'nomore'
+  return searching ? 'none' : 'empty'
+}
+
+/**
+ * Load more as a list's end scrolls into view, as the limits plan's
+ * expanded lists load more names as the person scrolls. The answer is a
+ * ref for a marker after the list's last row: while it is in view and
+ * `armed`, which a page sets while Load more may read (its end is `more`
+ * and no read is on its way), `more` runs, also again once a batch has
+ * landed with the marker still in view. Where IntersectionObserver is
+ * absent nothing runs, and the page's Load more button reads instead, as it
+ * does for the keyboard.
+ */
+export function useMoreOnScroll(
+  more: () => void,
+  armed: boolean,
+): (marker: Element | null) => void {
+  const seen = useRef<{ observer: IntersectionObserver | null; inView: boolean }>({
+    observer: null,
+    inView: false,
+  })
+  const latest = useRef({ more, armed })
+  latest.current = { more, armed }
+  const attach = useCallback((marker: Element | null) => {
+    seen.current.observer?.disconnect()
+    seen.current.observer = null
+    seen.current.inView = false
+    if (marker === null || typeof IntersectionObserver === 'undefined') return
+    const observer = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1]
+      seen.current.inView = !!entry?.isIntersecting
+      if (seen.current.inView && latest.current.armed) latest.current.more()
+    })
+    observer.observe(marker)
+    seen.current.observer = observer
+  }, [])
+  useEffect(() => {
+    if (armed && seen.current.inView) more()
+  }, [armed])
+  useEffect(() => () => seen.current.observer?.disconnect(), [])
+  return attach
 }

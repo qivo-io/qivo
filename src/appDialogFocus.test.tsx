@@ -8,6 +8,7 @@ import { TooltipProvider } from './components/ui/tooltip'
 import { CONFIRM_IGNORE_MS } from './lib/useConfirmArm'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
    on App and the real store. The Planner leads Plan. New sub-project opens
@@ -121,8 +122,11 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
      store takes for a delivery that holds the write, which this double
      never sends, and the paint would end. */
   let wrote = false
+  // Settings › Projects reads the server's lists, which hold Plan
+  const lists = projectListsServer(() => snap)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)

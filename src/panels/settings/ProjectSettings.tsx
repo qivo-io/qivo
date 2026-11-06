@@ -1,22 +1,23 @@
-/* Visible project navigation, archived projects and a project's settings.
-   A project's Settings page reads the project, its parent, its lead and
-   every right from the server (projectSettings.get, useProjectSettings),
-   its access lists and pickers too (components/ProjectAccessEditor.tsx),
-   and sends every write with what it showed, so it works the same for a
-   project the workspace does not hold. It reads the workspace only for the
-   Sub-projects section, the names the removal window and the Archive or
-   delete window give, and the avatars. */
+/* A project's Settings page. It reads the project, its parent, its lead
+   and every right from the server (projectSettings.get,
+   useProjectSettings), its access lists and pickers too
+   (components/ProjectAccessEditor.tsx), and a top-level project's live
+   sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
+   sends every write with what it showed, so it works the same for a
+   project the workspace does not hold, whose address then names it by its
+   uuid (lib/router.ts noteProjectPage). It reads the workspace only to
+   know whether it holds the project, for the address and the page a
+   delete returns to, for the names the removal window and the Archive or
+   delete window give, and for the avatars. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
-import { HoverTooltip } from '@/components/ui/tooltip'
-import { cn } from '@/lib/utils'
 import { LIMITS } from '../../../convex/lib/limits'
 import { roundReviewHours } from '../../../convex/lib/review'
-import { navRowDiv } from '../../components/navRow'
+import type { NavChildRow } from '../../../convex/model/projectNavReads'
 import { LeadPicker, ProjectAccessEditor } from '../../components/ProjectAccessEditor'
-import { Icon, MenuItem, Popover, ProjectName } from '../../components/qivo'
+import { Icon } from '../../components/qivo'
 import {
   FieldHint,
   PageTitle,
@@ -24,452 +25,23 @@ import {
   SettingsGroup,
   SettingsSection,
 } from '../../components/settingsPage'
-import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence, sentence } from '../../lib/fieldLimits'
-import {
-  focusAround,
-  menuTrigger,
-  useFocusAfterRender,
-  useFocusWhenGone,
-} from '../../lib/focusWhenGone'
+import { focusAround } from '../../lib/focusWhenGone'
 import { useUnsaved } from '../../lib/leaveGuard'
+import { listEnd } from '../../lib/pagedList'
+import { noteProjectPage } from '../../lib/router'
 import { REVIEW_HOURS, useSavedDraft } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
-import type { AccessLevel, ArchivedProjectVM, ProjectVM } from '../../store/planner'
+import type { AccessLevel } from '../../store/planner'
 import { grantRemoval, P } from '../../store/planner'
 import { ArchiveOrDeleteProjectModal } from '../Modals'
 import { useAccessRemoval } from '../useAccessRemoval'
 import { BackLink, DemoCapabilityNotice, DraftConflictLine, TextField, Toggle } from './controls'
+import { BatchNotes, SubProjectsEnd, TaggedName } from './ProjectLists'
+import { tagsOf, useLoadMore, useSubProjects } from './projectListReads'
 import { InviteOutcome } from './UserControls'
 import { type ProjectSettingsRead, type SettingsOk, useProjectSettings } from './useProjectSettings'
-
-// Show home projects first, then foreign organizations. Remember one expanded
-// project for this browser session; access settings determine visibility.
-let lastOpenProject: string | null = null
-const rememberOpenProject = (id: string | null) => {
-  lastOpenProject = id
-}
-
-export function OrgProjectsPage({
-  setPage,
-  onNewProject,
-  onNewSubProject,
-  onOpenArchivedTasks,
-}: {
-  setPage: (page: string) => void
-  onNewProject: () => void
-  /** opens New sub-project; `focusAfterClose` is what takes focus as it closes */
-  onNewSubProject: (parent: string, focusAfterClose?: () => HTMLElement | null) => void
-  onOpenArchivedTasks: (projectId: string) => void
-}) {
-  const visible = P.visibleProjects()
-  const canCreate = P.canCreateProject()
-  const [open, setOpen] = useStateS<string | null>(lastOpenProject)
-  const toggle = (id: string) => {
-    const next = open === id ? null : id
-    rememberOpenProject(next)
-    setOpen(next)
-  }
-  const foreignOrgs: string[] = []
-  visible.forEach((m) => {
-    if (m.org !== P.homeOrg && !foreignOrgs.includes(m.org)) foreignOrgs.push(m.org)
-  })
-  const menuButton = (label: string) => (t: () => void) => (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className="w-control-xs h-control-xs"
-      aria-label={label}
-      onClick={(e) => {
-        e.stopPropagation()
-        t()
-      }}
-    >
-      <Icon name="more" size={16} />
-    </Button>
-  )
-  const projectRow = (m: ProjectVM) => {
-    const isOpen = open === m.id
-    const subs = (m.children || []).map((c) => P.project(c)).filter((sp) => !!sp && P.canSee(sp.id))
-    const lead = P.levelOn(m.id) === 'lead'
-    return (
-      <div key={m.id} className="[margin-bottom:2px]">
-        <div
-          data-project-row={m.id}
-          data-on={isOpen ? '' : undefined}
-          className={cn(navRowDiv, 'gap-1 font-semibold')}
-          onClick={() => toggle(m.id)}
-        >
-          <Button
-            variant="unstyled"
-            type="button"
-            aria-expanded={isOpen}
-            onClick={(e) => {
-              e.stopPropagation()
-              toggle(m.id)
-            }}
-            className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
-          >
-            <ProjectName project={m} />
-          </Button>
-          <Popover width={196} align="right" button={menuButton('Project actions')}>
-            {(close) => (
-              <>
-                {lead && (
-                  <MenuItem
-                    onClick={(e) => {
-                      const trigger = menuTrigger(e.currentTarget)
-                      close()
-                      onNewSubProject(m.id, () => trigger)
-                    }}
-                  >
-                    <Icon name="plus" size={16} />
-                    New sub-project…
-                  </MenuItem>
-                )}
-                <MenuItem
-                  onClick={() => {
-                    close()
-                    setPage(`project:${m.id}`)
-                  }}
-                >
-                  <Icon name="cog" size={16} />
-                  Project settings
-                </MenuItem>
-                <MenuItem
-                  onClick={() => {
-                    close()
-                    onOpenArchivedTasks(m.id)
-                  }}
-                >
-                  <Icon name="inbox" size={14} />
-                  Archived tasks
-                </MenuItem>
-              </>
-            )}
-          </Popover>
-        </div>
-        {isOpen &&
-          subs.map((sp) => (
-            <div
-              key={sp.id}
-              data-subproject-row={sp.id}
-              onClick={() => setPage(`project:${sp.id}`)}
-              className={cn(navRowDiv, 'planner-subproject relative pl-6')}
-            >
-              <Button
-                variant="unstyled"
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setPage(`project:${sp.id}`)
-                }}
-                className="min-w-0 flex-1 truncate border-0 bg-transparent p-0 text-left"
-              >
-                <ProjectName project={sp} wrap />
-              </Button>
-              <Popover width={206} align="right" button={menuButton('Sub-project actions')}>
-                {(close) => (
-                  <>
-                    <MenuItem
-                      onClick={() => {
-                        close()
-                        setPage(`project:${sp.id}`)
-                      }}
-                    >
-                      <Icon name="cog" size={16} />
-                      Sub-project settings
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        close()
-                        onOpenArchivedTasks(sp.id)
-                      }}
-                    >
-                      <Icon name="inbox" size={14} />
-                      Archived tasks
-                    </MenuItem>
-                  </>
-                )}
-              </Popover>
-            </div>
-          ))}
-        {isOpen && subs.length === 0 && lead && (
-          <Button
-            type="button"
-            onClick={() => onNewSubProject(m.id)}
-            variant="ghost"
-            className="[margin:8px_0_8px_24px] h-control-sm [font-size:var(--fs-sm)] [color:var(--text-3)]"
-          >
-            <Icon name="plus" size={16} />
-            Add sub-project
-          </Button>
-        )}
-      </div>
-    )
-  }
-  const section = (metas: ProjectVM[]) => (
-    <div className="[max-width:480px]">{metas.map(projectRow)}</div>
-  )
-  return (
-    <>
-      <PageTitle
-        action={
-          canCreate ? (
-            <Button type="button" data-new-settings-project onClick={onNewProject}>
-              <Icon name="plus" size={16} />
-              New project
-            </Button>
-          ) : undefined
-        }
-      >
-        Projects
-      </PageTitle>
-      <SettingsSection title="Projects">
-        <div data-settings-projects>
-          {section(visible.filter((m) => m.org === P.homeOrg))}
-          {visible.filter((m) => m.org === P.homeOrg).length === 0 && foreignOrgs.length === 0 && (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]">
-              You don’t have access to any project yet.
-            </div>
-          )}
-          {foreignOrgs.map((oid) => {
-            const o = P.orgs.find((x) => x.id === oid)
-            const name = o?.name || 'Shared with you'
-            return (
-              <div key={oid} className="[margin-top:12px]">
-                {/* the same small header the sidebar puts over a foreign
-                  organization's projects */}
-                <HoverTooltip content={`Shared with you by ${name}`}>
-                  <div
-                    data-settings-group={name}
-                    className="[display:flex] [align-items:center] [gap:8px] [padding:12px_8px_4px] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--text-3)]"
-                  >
-                    <Icon name="people" size={12} />
-                    {name}
-                  </div>
-                </HoverTooltip>
-                {section(visible.filter((m) => m.org === oid))}
-              </div>
-            )
-          })}
-        </div>
-      </SettingsSection>
-    </>
-  )
-}
-
-// Archived-project headers remain in the snapshot. Children archived with a
-// parent restore together; independently archived children stay archived.
-export function ArchivedProjectsPage() {
-  const [busy, setBusy] = useStateS(() => new Set<string>())
-  // the project whose Delete window is open
-  const [deleting, setDeleting] = useStateS<ArchivedProjectVM | null>(null)
-  // the rows on either side of it when the window opened, for focus
-  const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
-  const all = P.archivedProjects
-  // rows = what a person can act on: every archived project, plus the
-  // sub-projects whose own project is still active. The rest are chips.
-  const rows = all.filter((r) => !r.parentArchived)
-  const askDelete = (r: ArchivedProjectVM) => {
-    const at = rows.findIndex((row) => row.id === r.id)
-    deleteSides.current = { next: rows[at + 1]?.id, previous: rows[at - 1]?.id }
-    setDeleting(r)
-  }
-  /* Where focus goes when the Delete window closes. That is the row's Delete
-     while the row is there, else the next row's first button, the previous
-     row's, or the page heading, so focus never falls to the page body. */
-  const afterDelete = (id: string) => {
-    const own = document.querySelector<HTMLElement>(`[data-delete-project="${id}"]`)
-    if (own) return own
-    const buttonOf = (row?: string) =>
-      row === undefined
-        ? null
-        : document.querySelector<HTMLElement>(
-            `[data-archived-project="${row}"] button:not(:disabled)`,
-          )
-    const { next, previous } = deleteSides.current
-    return (
-      buttonOf(next) ??
-      buttonOf(previous) ??
-      document.querySelector<HTMLElement>('.settings-page-title h1')
-    )
-  }
-  /* The project whose Restore was pressed last, with where focus goes once
-     its row has left: the next row's first button, the previous row's, or
-     the page heading. The row leaves with the delivery that restores it,
-     and its Restore, disabled while it waits, has left focus nowhere. */
-  const [restored, setRestored] = useStateS<{ id: string; focus: () => HTMLElement | null }>()
-  useFocusWhenGone(
-    !!restored && rows.some((row) => row.id === restored.id),
-    () => restored?.focus() ?? null,
-  )
-  // a restore whose row has left is done, so a later change that lists the
-  // project and takes it away again moves nothing
-  React.useLayoutEffect(() => {
-    if (restored && !rows.some((row) => row.id === restored.id)) setRestored(undefined)
-  })
-  const focusAfterRender = useFocusAfterRender()
-  const restore = (r: ArchivedProjectVM) => {
-    if (busy.has(r.id)) return
-    setRestored({
-      id: r.id,
-      focus: focusAround(
-        'data-archived-project',
-        r.id,
-        (row) => row.querySelector<HTMLElement>('button:not(:disabled)'),
-        () => document.querySelector<HTMLElement>('.settings-page-title h1'),
-      ),
-    })
-    setBusy((s: Set<string>) => new Set(s).add(r.id))
-    void P.unarchiveProject(r.id).then((ok: boolean) => {
-      setBusy((s: Set<string>) => {
-        const n = new Set(s)
-        n.delete(r.id)
-        return n
-      })
-      if (ok) {
-        window.showToast?.(`Restored “${r.name}”`)
-        return
-      }
-      // the row stays, so a later change that takes it away moves nothing,
-      // and its Restore takes back the focus it lost while disabled
-      setRestored((shown) => (shown?.id === r.id ? undefined : shown))
-      focusAfterRender(() =>
-        document.querySelector<HTMLElement>(`[data-restore-project="${r.id}"]`),
-      )
-    })
-  }
-  // the window waits for the server, so a refusal leaves it open
-  const del = async (r: ArchivedProjectVM, reason: string) => {
-    if (!(await P.removeProject(r.id, reason))) return false
-    setDeleting(null)
-    window.showToast?.(`Deleted “${r.name}”`)
-    return true
-  }
-  return (
-    <>
-      <PageTitle>Archived projects</PageTitle>
-      <SettingsSection title="Archived projects">
-        <div data-archived-projects className="[display:flex] [flex-direction:column] [gap:8px]">
-          {rows.map((r) => {
-            const kids = r.type === 'meta' ? all.filter((c) => c.parent === r.id) : []
-            return (
-              <div
-                key={r.id}
-                data-archived-project={r.id}
-                className="[border:1px_solid_var(--border)] [border-radius:var(--r-md)] [background:var(--surface-1)] [padding:8px]"
-              >
-                <div className="[display:flex] [align-items:center] [gap:8px]">
-                  <div className="[flex:1] [min-width:0]">
-                    <div className="[font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
-                      <ProjectName project={r} />
-                      {r.type !== 'meta' && (
-                        <span className="[margin-left:7px] [font-size:var(--fs-xs)] [font-weight:500] [color:var(--text-2)]">
-                          sub-project
-                          {r.parentName && r.parent
-                            ? ` of ${P.projectLabel({ id: r.parent, name: r.parentName })}`
-                            : ''}
-                        </span>
-                      )}
-                    </div>
-                    <HoverTooltip content={deletedAtFull(new Date(r.archivedAt))}>
-                      <div
-                        data-archived-when
-                        className="[font-size:var(--fs-xs)] [color:var(--text-2)] !font-mono"
-                      >
-                        archived {dayInSentence(new Date(r.archivedAt), new Date())}
-                      </div>
-                    </HoverTooltip>
-                  </div>
-                  {r.manage ? (
-                    <>
-                      <Button
-                        type="button"
-                        data-restore-project={r.id}
-                        disabled={busy.has(r.id)}
-                        title={
-                          r.type === 'meta' && kids.some((k) => k.withParent)
-                            ? `Restore “${r.name}” and the sub-projects archived with it`
-                            : `Restore “${r.name}”`
-                        }
-                        onClick={() => restore(r)}
-                      >
-                        <Icon name="rotateCcw" size={16} />
-                        {busy.has(r.id) ? 'Restoring…' : 'Restore'}
-                      </Button>
-                      <Button
-                        type="button"
-                        data-delete-project={r.id}
-                        className="text-danger"
-                        onClick={() => askDelete(r)}
-                      >
-                        <Icon name="trash" size={16} />
-                        Delete
-                      </Button>
-                    </>
-                  ) : (
-                    <span className="[font-size:var(--fs-xs)] [color:var(--text-2)] [font-style:italic]">
-                      only the project's lead can restore it
-                    </span>
-                  )}
-                </div>
-                {kids.length > 0 && (
-                  <div className="[display:flex] [flex-wrap:wrap] [gap:8px] [margin-top:8px]">
-                    {kids.map((k) => (
-                      <HoverTooltip
-                        content={
-                          k.withParent
-                            ? `Comes back when “${r.name}” is restored`
-                            : 'Archived separately. Restore the project first, then restore this sub-project.'
-                        }
-                        key={k.id}
-                      >
-                        <span
-                          data-archived-sub={k.id}
-                          style={{
-                            color: k.withParent ? 'var(--text-1)' : 'var(--text-2)',
-                            borderStyle: k.withParent ? 'solid' : 'dashed',
-                          }}
-                          className="inline-flex h-6 items-center [font-size:var(--fs-xs)] [padding:0_8px] [border-radius:var(--r-sm)] [border:1px_solid_var(--border)] [background:var(--surface-1)]"
-                        >
-                          <ProjectName project={k} />
-                        </span>
-                      </HoverTooltip>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-          {rows.length === 0 && (
-            <div className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]">
-              No archived projects.
-            </div>
-          )}
-        </div>
-        {rows.length > 0 && (
-          <FieldHint>
-            Sub-projects archived separately need to be restored separately. Deleting a project
-            deletes its sub-projects and tasks.
-          </FieldHint>
-        )}
-      </SettingsSection>
-      {deleting && (
-        <ArchiveOrDeleteProjectModal
-          key={deleting.id}
-          project={deleting}
-          deleteOnly
-          onClose={() => setDeleting(null)}
-          onDelete={(reason) => del(deleting, reason)}
-          focusAfterClose={() => afterDelete(deleting.id)}
-        />
-      )}
-    </>
-  )
-}
 
 /** What the Archive or delete window holds of the project it opened with,
     from the page's answer. */
@@ -569,6 +141,18 @@ export function ProjectPage({
     )
   }
   const answer = read.answer
+  /* The address names a project the workspace does not hold by its uuid
+     under the organization this read found it in, so a reload, Back and
+     Forward open it again (lib/router.ts noteProjectPage). The note stays
+     as it was while the Archive or delete window is open, so the address
+     under the window does not change. A project the workspace does not
+     hold keeps its uuid there, and a held one that leaves meanwhile keeps
+     its number until the window closes. */
+  const unheldIn = answer && !gone && !P.project(answer.project.id) ? answer.project.org_id : null
+  const holding = removing !== null
+  React.useEffect(() => {
+    if (answer && !holding) noteProjectPage(answer.project.id, unheldIn ? { org: unheldIn } : null)
+  }, [answer?.project.id, unheldIn, holding])
   return (
     <div
       data-project-settings-state={read.state}
@@ -717,16 +301,24 @@ function ProjectSettingsFields({
   const [leadChosen, setLeadChosen] = useStateS<{ id: string; name: string } | null>(null)
   const accessHeading = React.useRef<HTMLDivElement>(null)
   const isMeta = project.type === 'meta'
-  // the workspace's copy, read only for the Sub-projects section until
-  // t3/limits-project-admin-ui reads it from the server
-  const held = P.project(project.id)
-  const visibleChildren =
-    held && isMeta
-      ? (held.children || [])
-          .map((id) => P.project(id))
-          .filter((child) => !!child && P.canSee(child.id))
-      : []
-  const subCount = visibleChildren.length
+  // a top-level project lists its live sub-projects from the server, held
+  // by the workspace or not; a legacy project of type meta under another
+  // has none to list (convex/lib/access.ts inMetaTree)
+  const topLevel = isMeta && answer.parent === null
+  const subs = useSubProjects(topLevel ? { org: project.org_id, project: project.id } : null)
+  const subsEnd = listEnd(subs, false)
+  // the archive sentence counts only a list read to its real end
+  const subCount = subsEnd === 'end' ? subs.rows.length : null
+  const subsMore = useLoadMore(
+    subs,
+    subsEnd,
+    (id) => document.querySelector<HTMLElement>(`[data-project-subproject="${id}"]`),
+    () => accessHeading.current,
+  )
+  const subTags = tagsOf(
+    project.org_id,
+    subs.rows.map((r) => ({ ...r, parent: project.id })),
+  )
   const trackDelay = delayChosen ?? project.track_delay
   const lead = leadChosen ?? (answer.lead ? { id: answer.lead.id, name: answer.lead.name } : null)
   const grant = (kind: 'team' | 'user', id: string) =>
@@ -872,40 +464,40 @@ function ProjectSettingsFields({
           />
         </SettingsField>
       </SettingsSection>
-      {isMeta && (
+      {topLevel && (
         <SettingsSection title="Sub-projects">
-          <div className="[display:flex] [flex-direction:column] [gap:6px]">
-            {visibleChildren.map((sp) => (
-              <Button
-                type="button"
-                key={sp.id}
-                onClick={() => setPage(`project:${sp.id}`)}
-                title={`Open settings for ${sp.name}`}
-                className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [text-align:left] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [cursor:pointer] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)]"
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--hover)'
-                  e.currentTarget.style.borderColor = 'var(--border-strong)'
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'var(--surface-1)'
-                  e.currentTarget.style.borderColor = 'var(--border)'
-                }}
-                variant="unstyled"
-              >
-                <span className="[font-size:var(--fs-base)] [font-weight:500] [flex:1] [min-width:0]">
-                  <ProjectName project={sp} />
-                </span>
-                <Icon name="chevronRight" size={16} color="var(--text-2)" />
-              </Button>
+          <div
+            data-project-subprojects=""
+            className="[display:flex] [flex-direction:column] [gap:6px]"
+          >
+            {subs.batches.map((batch, i) => (
+              <React.Fragment key={batch.id}>
+                {batch.rows.map((sp) => (
+                  <ProjectSubProject
+                    key={sp.id}
+                    sp={sp}
+                    tag={subTags.get(sp.id)}
+                    onOpen={() => setPage(`project:${sp.id}`)}
+                  />
+                ))}
+                <BatchNotes
+                  list={subs}
+                  batch={batch}
+                  last={i === subs.batches.length - 1}
+                  what="sub-projects"
+                />
+              </React.Fragment>
             ))}
-            {visibleChildren.length === 0 && (
-              <div
-                data-project-subprojects-none=""
-                className="[font-size:var(--fs-sm)] [color:var(--text-2)] [font-style:italic]"
-              >
-                {held ? 'No sub-projects yet.' : "Sub-projects can't be listed here yet."}
-              </div>
-            )}
+            <div ref={subsMore.marker} aria-hidden="true" className="h-px" />
+            <SubProjectsEnd
+              list={subs}
+              end={subsEnd}
+              place="page"
+              shown={subs.rows.length > 0}
+              onMore={subsMore.more}
+              hooks={{ end: 'data-project-subprojects-end', more: 'data-project-subprojects-more' }}
+              emptyLine="No sub-projects yet."
+            />
           </div>
         </SettingsSection>
       )}
@@ -966,11 +558,7 @@ function ProjectSettingsFields({
       <SettingsSection title="Archive or delete" data-project-removal={project.id}>
         <div className="flex items-center gap-4">
           <p className="min-w-0 flex-1 text-sm leading-normal text-text-2">
-            {answer.can_archive && isMeta && held && subCount
-              ? `Archive hides it and its ${subCount} sub-project${subCount === 1 ? '' : 's'}. Delete moves them and their tasks to Deleted items.`
-              : isMeta && (!answer.can_archive || !held)
-                ? 'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.'
-                : 'Archive hides it. Delete moves it and its tasks to Deleted items.'}
+            {archiveSentence(topLevel, answer.can_archive, subCount)}
           </p>
           <Button
             ref={removeButton}
@@ -988,6 +576,55 @@ function ProjectSettingsFields({
         </div>
       </SettingsSection>
     </>
+  )
+}
+
+/** What the Archive or delete section says the archive takes along: a
+    top-level project names how many sub-projects go with it only once its
+    list read to its real end, with nothing stopped or failed, and only for
+    someone who may archive it; else it says "its sub-projects". Anything
+    else, a sub-project included, goes alone. */
+function archiveSentence(topLevel: boolean, canArchive: boolean, count: number | null): string {
+  const alone = 'Archive hides it. Delete moves it and its tasks to Deleted items.'
+  if (!topLevel || (canArchive && count === 0)) return alone
+  if (canArchive && count !== null)
+    return `Archive hides it and its ${count} sub-project${count === 1 ? '' : 's'}. Delete moves them and their tasks to Deleted items.`
+  return 'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.'
+}
+
+/* One sub-project in a project page's Sub-projects section: a bordered
+   button that opens its page. */
+function ProjectSubProject({
+  sp,
+  tag,
+  onOpen,
+}: {
+  sp: NavChildRow
+  tag?: string
+  onOpen: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      data-project-subproject={sp.id}
+      onClick={onOpen}
+      title={`Open settings for ${sp.name}`}
+      className="[display:flex] [align-items:center] [gap:8px] [padding:8px] [border-radius:var(--r-md)] [text-align:left] [border:1px_solid_var(--border)] [background:var(--surface-1)] [color:var(--text-1)] [cursor:pointer] [transition:background-color_var(--dur-fast)_var(--ease-out),_border-color_var(--dur-fast)_var(--ease-out)] [font-family:var(--sans)]"
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'var(--hover)'
+        e.currentTarget.style.borderColor = 'var(--border-strong)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'var(--surface-1)'
+        e.currentTarget.style.borderColor = 'var(--border)'
+      }}
+      variant="unstyled"
+    >
+      <span className="[font-size:var(--fs-base)] [font-weight:500] [flex:1] [min-width:0]">
+        <TaggedName name={sp.name} tag={tag} />
+      </span>
+      <Icon name="chevronRight" size={16} color="var(--text-2)" />
+    </Button>
   )
 }
 

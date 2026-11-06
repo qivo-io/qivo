@@ -70,10 +70,12 @@ import {
   addressedTask,
   buildPath,
   issueLink,
+  noteProjectPage,
   ORG_NONE,
   parseHash,
   parsePath,
   pathMatchesState,
+  projectPagesRev,
   sameTask,
   scopeForIssue,
   scopeForIssueOn,
@@ -284,6 +286,25 @@ describe('parsePath — scopes and pages', () => {
     })
   })
 
+  it('reads a project page’s uuid without the workspace, and a number or other segment through it', () => {
+    const far = '7E1C2A4E-0000-4000-8000-0000000000AA'
+    // the page's own read decides what a uuid shows, held or not
+    expect(parsePath(`/app/home/settings/project/${far}`)).toEqual({
+      settings: `project:${far.toLowerCase()}`,
+    })
+    expect(parsePath(`/app/~/settings/project/${far}`)).toEqual({
+      settings: `project:${far.toLowerCase()}`,
+    })
+    // under a slug this login cannot resolve, nothing past the page
+    expect(parsePath(`/app/nowhere/settings/project/${far}`)).toEqual({ settings: 'account' })
+    // a number the workspace lacks, and a segment that is neither
+    expect(parsePath('/app/home/settings/project/99')).toEqual({ settings: 'account' })
+    expect(parsePath('/app/home/settings/project/not-a-project')).toEqual({ settings: 'account' })
+    expect(parseHash(`#/o/home/settings/project/${far}`)).toEqual({
+      settings: `project:${far.toLowerCase()}`,
+    })
+  })
+
   it('opens Settings › Archived tasks at the old Archive address, rewritten in place', () => {
     const page = { settings: 'projects-archived-tasks' }
     expect(parsePath('/app/~/archive')).toEqual(page)
@@ -347,6 +368,44 @@ describe('buildPath', () => {
     expect(
       pathMatchesState('/app/acme/settings/project/2', { settingsPage: 'project:p-acme-1' }),
     ).toBe(false)
+  })
+
+  it('names a page whose project the workspace does not hold by its uuid under the organization its read named, in place', () => {
+    const far = '7e1c2a4e-0000-4000-8000-0000000000bb'
+    const page = { settingsPage: `project:${far}` }
+    const rev = projectPagesRev()
+    // before its read answers, by its id under no organization
+    expect(buildPath(page)).toBe(`/app/~/settings/project/${far}`)
+    noteProjectPage(far, { org: ACME })
+    expect(projectPagesRev()).toBe(rev + 1)
+    // the same note again changes nothing
+    noteProjectPage(far, { org: ACME })
+    expect(projectPagesRev()).toBe(rev + 1)
+    expect(buildPath(page)).toBe(`/app/acme/settings/project/${far}`)
+    // the new address replaces the old one, whose org segment alone differs
+    expect(pathMatchesState(`/app/~/settings/project/${far}`, page)).toBe(true)
+    // and parses back to the same page, so a reload and Back open it again
+    expect(parsePath(`/app/acme/settings/project/${far}`)).toEqual({ settings: page.settingsPage })
+    noteProjectPage(far, null)
+    expect(buildPath(page)).toBe(`/app/~/settings/project/${far}`)
+  })
+
+  it('moves a held page whose project left the workspace to its uuid once its read names it', () => {
+    const near = '7e1c2a4e-0000-4000-8000-0000000000cc'
+    let held = true
+    const live = store.project
+    store.project = (id: string) =>
+      id === near ? (held ? project(near, 3, ACME) : undefined) : live(id)
+    const page = { settingsPage: `project:${near}` }
+    expect(buildPath(page)).toBe('/app/acme/settings/project/3')
+    // it leaves the workspace and stays readable; while a window holds the
+    // page nothing notes it, and the number stays
+    held = false
+    expect(buildPath(page)).toBe('/app/acme/settings/project/3')
+    noteProjectPage(near, { org: ACME })
+    expect(buildPath(page)).toBe(`/app/acme/settings/project/${near}`)
+    expect(pathMatchesState('/app/acme/settings/project/3', page)).toBe(true)
+    noteProjectPage(near, null)
   })
 
   it('the org settings pages ARE about an organization, so they name it', () => {
