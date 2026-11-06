@@ -44,11 +44,12 @@
  * opens only for the list, arguments and search it came from.
  *
  * A project's Settings page in the app reads all six
- * (src/panels/settings/ProjectSettings.tsx); t3/limits-project-admin-ui
- * moves Settings › Projects and Archived projects onto the project lists,
- * and t3/limits-project-dialogs the New project and New sub-project dialogs
- * onto candidates, leadCandidates and the sub-project parents. The writes
- * stay in projects.ts. */
+ * (src/panels/settings/ProjectSettings.tsx) and subProjects for its
+ * Sub-projects section; Settings › Projects and Archived projects read the
+ * four project lists (src/panels/settings/ProjectLists.tsx), and
+ * t3/limits-project-dialogs moves the New project and New sub-project
+ * dialogs onto candidates, leadCandidates and the sub-project parents. The
+ * writes stay in projects.ts. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgQuery } from './lib/functions'
