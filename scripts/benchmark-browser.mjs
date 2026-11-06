@@ -876,6 +876,14 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     }),
   )
   assert.equal(await page.evaluate(() => window.PLANNER.issues.length), tasks + 1)
+  // At whole thousands the new task takes the top-level project the app
+  // opens past the Roadmap's 1,000 tasks, the design size, and a build that
+  // reads the Roadmap from the server shows its ceiling note there instead
+  // of rows. Its creator deletes it again, untimed, on both builds, so the
+  // phases after it time the Roadmap with its rows as before.
+  await page.evaluate(() => window.__perf.deliverDelete())
+  await page.waitForFunction((count) => window.PLANNER.issues.length === count, tasks)
+  await shows(page, '[data-roadmap-task-open]')
   phase('remoteProjectRename')
   metrics.remoteProjectRename.push(
     await timed(async () => {

@@ -435,6 +435,41 @@ describe('the benchmark server', () => {
       expect(viewer.deps.auto_move.editable_projects).toEqual([])
   }, 60_000)
 
+  it('takes the Roadmap past its ceiling with a remote task at 1,000 tasks, and back when it goes', async () => {
+    const { posted, send } = await server('latency=0&mbps=100000&tasks=1000')
+    await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+    const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+    const program = snap.projects.find((p) => p.type === 'meta')
+    // a window over every task's weeks, which start within 3 weeks of today
+    const from = new Date()
+    from.setUTCDate(from.getUTCDate() - 7 * 3)
+    const to = new Date(from)
+    to.setUTCDate(to.getUTCDate() + 7 * 12)
+    const args = {
+      scope: { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id },
+      filters: { mine: false, owners: [], priority: null, search: '' },
+      window: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    }
+    let n = 0
+    const roadmap = async () => {
+      n++
+      await send({ type: 'query', id: `roadmap${n}`, name: 'tasks:roadmap', args })
+      return JSON.parse(posted.find((m) => m.to === `roadmap${n}`).text)
+    }
+    const at = await roadmap()
+    expect(at.state).toBe('ok')
+    expect(at.rows).toHaveLength(1000)
+    await send({ type: 'scenario', id: 'create', name: 'deliverCreate', args: [] })
+    expect((await roadmap()).state).toBe('over_ceiling')
+    await send({ type: 'scenario', id: 'delete', name: 'deliverDelete', args: [] })
+    const back = await roadmap()
+    expect(back.state).toBe('ok')
+    expect(back.rows.map((row) => row.id)).toEqual(at.rows.map((row) => row.id))
+    // nothing more of its own to delete
+    await send({ type: 'scenario', id: 'again', name: 'deliverDelete', args: [] })
+    expect((await roadmap()).rows).toHaveLength(1000)
+  }, 60_000)
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

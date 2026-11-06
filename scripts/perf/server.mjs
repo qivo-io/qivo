@@ -1790,6 +1790,8 @@ async function mutate(name, args) {
 
 /* What the benchmark asks the server to do, each answering once its
    results are sent. */
+/* The ids of the tasks deliverCreate made, oldest first. */
+const created = []
 const scenarios = {
   /* Delivers `n` new unread messages for the signed-in person, one per task,
      for the bulk-read scenario. */
@@ -1829,6 +1831,7 @@ const scenarios = {
   deliverCreate() {
     const n = tasks.length + hiddenTasks.length
     const row = taskRow(n, id('4', 900000 + n), projects[0], undefined)
+    created.push(row.id)
     tasks.push(row)
     allTasks.push(row)
     shown.add(row.id)
@@ -1838,6 +1841,30 @@ const scenarios = {
     snapshot.orgs = [
       { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
     ]
+    settleTasks()
+    return emitWorkspace()
+  },
+  /* That person deletes the task deliverCreate made last, so the
+     top-level project the app opens holds the tasks it held before. At
+     whole thousands the create takes that project past the Roadmap's
+     1,000 tasks, the design size, where the Roadmap shows its ceiling
+     note instead of rows. */
+  deliverDelete() {
+    const gone = created.pop()
+    if (gone === undefined) return null
+    tasks.splice(
+      tasks.findIndex((row) => row.id === gone),
+      1,
+    )
+    allTasks.splice(
+      allTasks.findIndex((row) => row.id === gone),
+      1,
+    )
+    shown.delete(gone)
+    wireRows.delete(gone)
+    loadRows.delete(gone)
+    const [org] = snapshot.orgs
+    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }]
     settleTasks()
     return emitWorkspace()
   },
