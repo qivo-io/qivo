@@ -950,33 +950,37 @@ describe('the REST upload', () => {
     expect(uploadReadMs(2048)).toBe(5 * 60_000 + 63)
     expect(uploadReadMs(5 * MiB)).toBe(5 * 60_000 + 160_000)
     expect(uploadReadMs(20 * MiB)).toBe(8 * 60_000)
-    // a body that sends nothing more, for an up_to ticket that takes 20 MiB,
-    // is still read once a small file's time has passed, and refused at 8
-    const stalled = {
-      headers: { get: () => null },
-      body: {
-        getReader: () => ({
-          read: () => new Promise<never>(() => {}),
-          cancel: async () => {},
-          releaseLock: () => {},
-        }),
-      },
-    } as unknown as Request
+    // a body that sends nothing more, declared at 20 MiB or for an up_to
+    // ticket that takes 20 MiB, is still read once a small file's time has
+    // passed, and refused at 8
+    const stalled = () =>
+      ({
+        headers: { get: () => null },
+        body: {
+          getReader: () => ({
+            read: () => new Promise<never>(() => {}),
+            cancel: async () => {},
+            releaseLock: () => {},
+          }),
+        },
+      }) as unknown as Request
     vi.useFakeTimers()
     try {
-      let settled = false
-      const outcome = readUpTo(stalled, 20 * MiB)
-        .then(
-          () => 'read',
-          (e: ConvexError<Refusal>) => e.data.message,
-        )
-        .finally(() => {
-          settled = true
-        })
+      const settled: string[] = []
+      const outcome = (path: string, read: Promise<unknown>) =>
+        read
+          .then(
+            () => 'read',
+            (e: ConvexError<Refusal>) => e.data.message,
+          )
+          .finally(() => settled.push(path))
+      const declared = outcome('declared', readExactly(stalled(), 20 * MiB))
+      const upTo = outcome('up_to', readUpTo(stalled(), 20 * MiB))
       await vi.advanceTimersByTimeAsync(uploadReadMs(2048))
-      expect(settled).toBe(false)
+      expect(settled).toEqual([])
       await vi.advanceTimersByTimeAsync(8 * 60_000 - uploadReadMs(2048))
-      expect(await outcome).toBe(UPLOAD_TOO_SLOW)
+      expect(await declared).toBe(UPLOAD_TOO_SLOW)
+      expect(await upTo).toBe(UPLOAD_TOO_SLOW)
     } finally {
       vi.useRealTimers()
     }
