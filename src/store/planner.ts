@@ -13583,7 +13583,7 @@ export const PLANNER = {
         ),
     )
   },
-  /* Back to unread — the same column, the other way. Nothing is pruned by
+  /* Back to unread, the same column the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
      server's prune asks. Marking the open task's messages unread holds off
      its read on open for the rest of the visit (holdUnreadOf). */
@@ -13680,7 +13680,7 @@ export const PLANNER = {
     PLANNER.deleteMessages([id])
   },
   /* Snooze an item until an ISO instant, or bring it back now (null). Both
-     leave it UNREAD — a reminder returns bold. The ids name the item; the
+     leave it UNREAD, as a reminder returns bold. The ids name the item; the
      server stamps every row of the (recipient, task) pair, so the paint
      walks the loaded rows of the same pairs rather than just the ids. The
      timed return is the server's scheduled wake (messages.wake), never a
