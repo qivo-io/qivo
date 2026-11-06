@@ -1,5 +1,6 @@
 import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { billingDate, storageSampleLine } from '../../src/lib/billingDisplay'
 import { api, internal } from '../_generated/api'
 import type { Id } from '../_generated/dataModel'
 import {
@@ -1026,6 +1027,71 @@ describe('provider state, retries and billing snapshots', () => {
     await t.mutation(apply, { payload: remote(f.org.id, { modified_at: iso(100) }) })
     await sample(t)
     expect(await periodAt(t, START)).toMatchObject({ storage_bytes: 100, storage_blocks: 0 })
+  })
+
+  it('measures a sample that waited when it is taken, files stored during the wait included, and Billing names its date', async () => {
+    const { t, f } = await fixture()
+    await attachFile(t, f, 100)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // a period that started an hour ago, while a recount leaves the totals
+    // not complete
+    const start = new Date(Date.parse(NOW) - 60 * 60_000).toISOString()
+    const end = addCalendarMonths(start, 1)
+    const recount = recountOf(t, f.org.id)
+    expect(await recount()).toBeNull()
+    await t.mutation(apply, {
+      payload: remote(f.org.id, { current_period_start: start, current_period_end: end }),
+    })
+    await sample(t)
+    const waiting = await periodAt(t, start)
+    if (waiting?.storage_run === undefined) throw new Error('expected a waiting sample')
+    expect(waiting).not.toHaveProperty('storage_sampled_at')
+
+    // a file stored during the wait, which the recount counts
+    await attachFile(t, f, 20)
+    let counted = await recount()
+    while (counted === null) counted = await recount()
+    expect(counted).toEqual({ bytes: 120, files: 2 })
+    // an operator starts the sample again two days into the period
+    const later = Date.parse(NOW) + 2 * 24 * 60 * 60_000
+    vi.setSystemTime(later)
+    expect(await t.mutation(restartStorage, { period: waiting._id })).toBe(true)
+    await sample(t)
+    const taken = await periodAt(t, start)
+    expect(taken).toMatchObject({ storage_bytes: 120, storage_blocks: 0 })
+    const at = taken?.storage_sampled_at ?? ''
+    expect(Date.parse(at)).toBeGreaterThanOrEqual(later)
+    expect(Date.parse(at)).toBeLessThan(later + 60_000)
+    vi.setSystemTime(later + 60_000)
+    const usage = await as(t, f.admin).query(usageFigures, { org_id: f.org.id })
+    expect(usage).toMatchObject({
+      period_kind: 'paid',
+      period_start: start,
+      sampled_storage_bytes: 120,
+      sampled_storage_at: at,
+    })
+    expect(storageSampleLine(usage, 'active')).toBe(`120 B measured on ${billingDate(at)}.`)
+
+    // the next period's sample, taken at its renewal, reads as its start
+    const renewal = Date.parse(end) + 60_000
+    vi.setSystemTime(renewal)
+    await t.mutation(apply, {
+      payload: remote(f.org.id, {
+        current_period_start: end,
+        current_period_end: addCalendarMonths(end, 1),
+        modified_at: new Date(renewal).toISOString(),
+      }),
+      event_id: 'renewal',
+    })
+    await sample(t)
+    vi.setSystemTime(renewal + 60_000)
+    const renewed = await as(t, f.admin).query(usageFigures, { org_id: f.org.id })
+    expect(renewed).toMatchObject({
+      period_start: end,
+      sampled_storage_bytes: 120,
+      sampled_storage_at: expect.any(String),
+    })
+    expect(storageSampleLine(renewed, 'active')).toBe('120 B measured at the start of this period.')
   })
 
   it('reads the same documents for an organization with 1,500 project totals rows as for one with one file', async () => {

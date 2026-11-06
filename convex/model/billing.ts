@@ -307,30 +307,37 @@ export async function periodHead(
   }
 }
 
-/** What the sample at the start of the paid period `head` shows measured
- * for organization `orgId`, whose subscription is `sub`: the bytes of its
- * billing_periods row (billingSync.ts storageStep), the organization's
- * stored-byte totals when the sample read them, files in Deleted items
- * included, found by the provider subscription id and the period's start,
- * which the period's storage charge uses. Null for a calendar month or a
- * pending interval, a subscription without a provider id, a period without
- * a row or of another organization, and a sample that is running or
- * stopped. One read at most. */
+/** The storage sample of the paid period `head` for organization `orgId`,
+ * whose subscription is `sub`, as its billing_periods row holds it
+ * (billingSync.ts storageStep), found by the provider subscription id and
+ * the period's start. It answers the bytes the period's storage charge
+ * uses, the organization's stored-byte totals when the sample read them,
+ * files in Deleted items included, and when it read them. Both are null
+ * for a calendar month or a pending interval, a subscription without a
+ * provider id, a period without a row or of another organization, and a
+ * sample that is running or stopped. The time is null too for a sample an
+ * earlier release finished, which measured the period's start. One read at
+ * most. */
 async function sampledStorage(
   ctx: QueryCtx,
   orgId: string,
   sub: Doc<'billing_subscriptions'> | null,
   head: Pick<BillingPeriodHead, 'period_kind' | 'period_key'>,
-): Promise<number | null> {
+): Promise<Pick<BillingUsageFigures, 'sampled_storage_bytes' | 'sampled_storage_at'>> {
+  const none = { sampled_storage_bytes: null, sampled_storage_at: null }
   const subscriptionId = sub?.polar_subscription_id
-  if (head.period_kind !== 'paid' || !subscriptionId) return null
+  if (head.period_kind !== 'paid' || !subscriptionId) return none
   const period = await ctx.db
     .query('billing_periods')
     .withIndex('by_subscription_period', (q) =>
       q.eq('subscription_id', subscriptionId).eq('period_start', head.period_key),
     )
     .unique()
-  return period?.org_id === orgId ? (period.storage_bytes ?? null) : null
+  if (period?.org_id !== orgId || period.storage_bytes === undefined) return none
+  return {
+    sampled_storage_bytes: period.storage_bytes,
+    sampled_storage_at: period.storage_sampled_at ?? null,
+  }
 }
 
 /** Billing's usage figures for organization `orgId`
@@ -340,7 +347,8 @@ async function sampledStorage(
  * in their place, current storage from the stored-byte totals, files in
  * Deleted items included until they are deleted for good, or null while
  * they are not complete, and the bytes the current paid period's sample
- * measured from the same totals at the period's start (sampledStorage).
+ * measured from the same totals, normally at the period's start, with when
+ * it measured them (sampledStorage).
  * It reads at most one usage row (the ranked check), the month's shards or
  * the bucket's totals row, two single reads, and no account, profile
  * beyond the allowance's or attachment row. */
@@ -352,7 +360,7 @@ export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<Bill
     ...head,
     calls: await periodCalls(ctx, orgId, head.period_key),
     storage_bytes: totals?.bytes ?? null,
-    sampled_storage_bytes: await sampledStorage(ctx, orgId, sub, head),
+    ...(await sampledStorage(ctx, orgId, sub, head)),
   }
 }
 

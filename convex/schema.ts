@@ -824,14 +824,21 @@ export default defineSchema({
     seats: v.number(),
     // Local membership evidence, never profiles from another tenant.
     profile_ids: v.array(v.string()),
-    // The storage sampled at period start and the blocks over the allowance
-    // it charges. Both are absent until the sample finishes, and stay absent
-    // while it waits for the organization's stored-byte totals or after it
-    // stopped (billingSync.ts storageStep). The sample reads the totals,
-    // files in Deleted items included; one an earlier release finished
-    // scanned the attachment rows of live tasks and left those files out.
+    // The storage the period's sample measured, normally at its start, and
+    // the blocks over the allowance it charges. Both are absent until the
+    // sample finishes, and stay absent while it waits for the
+    // organization's stored-byte totals or after it stopped (billingSync.ts
+    // storageStep). The sample reads the totals, files in Deleted items
+    // included; one an earlier release finished scanned the attachment rows
+    // of live tasks and left those files out.
     storage_bytes: v.optional(v.number()),
     storage_blocks: v.optional(v.number()),
+    // When the sample read the totals, set with storage_bytes. That is
+    // normally within a second of the renewal, and later for a sample that
+    // waited for the totals or was started again, which measures storage
+    // when it runs. Absent on a sample an earlier release finished, which
+    // counted the attachment rows stored before the period's row.
+    storage_sampled_at: v.optional(v.string()),
     // The running sample's id, which its step checks before it reads, and
     // when the sample last started. Both are cleared when it finishes.
     storage_run: v.optional(v.string()),

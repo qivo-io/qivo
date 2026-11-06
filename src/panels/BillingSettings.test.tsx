@@ -73,6 +73,7 @@ const USAGE: BillingUsageFigures = {
   included_calls: null,
   storage_bytes: 2_500_000,
   sampled_storage_bytes: null,
+  sampled_storage_at: null,
   included_storage_bytes: null,
   api_overage_cents: 0,
   storage_overage_cents: 0,

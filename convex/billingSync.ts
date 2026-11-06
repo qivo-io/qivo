@@ -696,18 +696,22 @@ export const restartStorage = internalMutation({
  * the renewal. They count every task file the organization stores, files
  * in Deleted items included until they are deleted for good, the figure
  * Billing shows as current storage. A file stored after that waits for the
- * next period. It records the bytes and the blocks over the plan's
- * allowance for the period's seats. When there are blocks and the period
- * starts after any complimentary grant, it also adds the storage charge,
- * which is collected with the period's metered usage on its closing
- * invoice and never recurs.
+ * next period. It records the bytes, when it read them
+ * (storage_sampled_at) and the blocks over the plan's allowance for the
+ * period's seats. When there are blocks and the period starts after any
+ * complimentary grant, it also adds the storage charge, which is collected
+ * with the period's metered usage on its closing invoice and never recurs.
  *
  * While the totals are not complete, as while an operator's recount runs,
  * the step logs a warning and writes nothing, never 0, and the sample
  * waits. Apply starts it again STORAGE_STALL_MS after its start, stops it
  * after STORAGE_ATTEMPTS starts and retries it STORAGE_RETRY_MS later, and
- * a sample started again measures the totals when it runs. A step whose
- * period is gone, or whose run was started again, does nothing
+ * a sample started again measures the totals when it runs, so it also
+ * counts the files stored while it waited. Billing names its date when
+ * that is a day or more after the period's start (src/lib/billingDisplay.ts
+ * storageSampleLine). Taking a late sample from the daily sample nearest
+ * the period's start (storageSamples.ts) is later work. A step whose period
+ * is gone, or whose run was started again, does nothing
  * (takeStorageSample). */
 export const storageStep = internalMutation({
   args: storageStepArgs,
@@ -764,10 +768,10 @@ async function dropStallCheck(ctx: MutationCtx, sub: Doc<'billing_subscriptions'
     await ctx.db.patch(sub._id, { sync_due_at: due, sync_safety: safety || undefined })
 }
 
-/* The end of a storage sample, with the `bytes` it measured. It records
- * them and the blocks over the allowance, adds the period's storage charge
- * when one is due and drops the organization's stall check
- * (dropStallCheck). */
+/* The end of a storage sample, with the `bytes` it measured now. It
+ * records them, when it measured them and the blocks over the allowance,
+ * adds the period's storage charge when one is due and drops the
+ * organization's stall check (dropStallCheck). */
 async function finishStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
@@ -780,6 +784,7 @@ async function finishStorageSample(
   await ctx.db.patch(period._id, {
     storage_bytes: bytes,
     storage_blocks: blocks,
+    storage_sampled_at: isoNow(),
     storage_run: undefined,
     storage_run_at: undefined,
     storage_attempts: undefined,

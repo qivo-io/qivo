@@ -70,7 +70,7 @@ export function usageHints(
     }
   return {
     api: `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to the invoice at the end of this period.`,
-    storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to the invoice at the end of this period.`,
+    storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on the storage measured for this period. Added to the invoice at the end of this period.`,
   }
 }
 
@@ -115,22 +115,37 @@ export const STORAGE_COUNTING = 'Being counted. Check again later.'
     (billing.usageFigures answers null), in place of a figure, never 0. */
 export const CALLS_COUNTING = 'Being counted. Check again later.'
 
+/** How long after its period's start a sample still reads as measured at
+    the start. A sample normally finishes within a second of the renewal. */
+export const SAMPLE_AT_START_MS = 24 * 60 * 60_000
+
 /** The line under current storage that names the storage the paid
-    period's sample measured at its start, which the period's storage
-    charge uses. The sample reads the same stored-byte totals as current
-    storage, files in Deleted items included (convex/billingSync.ts
-    storageStep), so the two differ only by what changed since the period
-    started. The words name no files, so they stay true of a sample an
-    earlier backend took from the attachment rows of live tasks. Null
-    outside a paid period, and for a trial, which never gets a sample
+    period's sample measured, which the period's storage charge uses. The
+    sample reads the same stored-byte totals as current storage, files in
+    Deleted items included (convex/billingSync.ts storageStep), so the two
+    differ only by what changed since it was taken, normally at the start
+    of the period. A sample that waited, as while the totals were counted
+    again, or that was started again later measures storage when it runs,
+    so when that was SAMPLE_AT_START_MS or more after the start the line
+    names its date. A sample without a time, which an earlier backend
+    finished or an older backend answers without one, measured the start.
+    The words name no files, so they stay true of a sample an earlier
+    backend took from the attachment rows of live tasks. Null outside a
+    paid period, and for a trial, which never gets a sample
     (convex/billingSync.ts apply records a period only for an active or
     past-due subscription). `status` is the details'. */
 export function storageSampleLine(
-  usage: Pick<BillingUsageFigures, 'period_kind' | 'sampled_storage_bytes'>,
+  usage: Pick<
+    BillingUsageFigures,
+    'period_kind' | 'period_start' | 'sampled_storage_bytes' | 'sampled_storage_at'
+  >,
   status: BillingDetails['status'] | undefined,
 ): string | null {
   if (usage.period_kind !== 'paid' || status === 'trialing') return null
-  return usage.sampled_storage_bytes === null
-    ? 'Not measured yet for this period.'
-    : `${billingBytes(usage.sampled_storage_bytes)} measured at the start of this period.`
+  const bytes = usage.sampled_storage_bytes
+  if (bytes === null) return 'Not measured yet for this period.'
+  const at = usage.sampled_storage_at
+  return at == null || Date.parse(at) - Date.parse(usage.period_start) < SAMPLE_AT_START_MS
+    ? `${billingBytes(bytes)} measured at the start of this period.`
+    : `${billingBytes(bytes)} measured on ${billingDate(at)}.`
 }

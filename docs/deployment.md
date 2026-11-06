@@ -1520,7 +1520,13 @@ while its charge can still land, so such a period records no storage rather
 than 0. Once a recount (`internal/storageTotalsBackfill` with `"recount":
 true`) has ended, an operator can start a waiting or stopped sample at once
 with `billingSync:restartStorage` and the period the audit row names, as
-that function's docstring shows. Billing is off on every hosted
+that function's docstring shows. Each sample records when it read the
+totals in the new optional field `billing_periods.storage_sampled_at`. One
+that waited or was started again measures them when it runs, files stored
+meanwhile included, and Billing says it was "measured on" its date when
+that was a day or more after the period's start, and "measured at the start
+of this period" otherwise. Taking a late sample from the daily sample
+nearest the period's start is later work. Billing is off on every hosted
 deployment, so none should hold a paid period whose sample this release
 could change, and every period that records storage starts after it.
 Before publishing it, check that billing is still off on production or
@@ -1546,21 +1552,28 @@ The release removes `billing.usageReport`, with its internal
 adds them to the Instant Rollback list above. An app from before v0.1.145,
 also a tab that was open when this release deploys, shows Billing's error
 in place of its details and usage until it reloads. An app from v0.1.135 up
-to this release says a paid period's sample was measured "without files in
-Deleted items", which a sample from this release does not leave out; no
-paid period exists yet, so nobody sees it. This release's app reads nothing
-new and works against any backend from the floor above.
+to this release says a paid period's sample was measured at the start of the
+period "without files in Deleted items", which a sample from this release
+does not leave out and may have measured later; no paid period exists yet,
+so nobody sees it. This release's app reads `sampled_storage_at`, which
+`billing.usageFigures` answers from this release on, and an answer without
+it reads as a sample measured at the start, so the app works against any
+backend from the floor above.
 
-The release adds two tables and no field to an existing table, so Convex
-deploys a commit before it, keeps the new tables' rows and drops their
-indexes, which the deploy forward builds again; a disposable local backend
-showed both on 2026-11-06. That earlier code samples a new paid
-period by the scan again, which leaves out files in Deleted items, records
-no daily sample and leaves the samples of an organization it deletes
-behind. This release is therefore the backend's newest floor. From it on,
-never return the backend to a commit before it; roll forward instead. There
-is no backfill, since the totals keep no history. Samples start with the
-first run after the deploy, and the days the job does not run have none.
+The release adds two tables and the optional field
+`billing_periods.storage_sampled_at`. While no period row holds that field,
+Convex deploys a commit before it, keeps the new tables' rows and drops
+their indexes, which the deploy forward builds again; a disposable local
+backend showed both on 2026-11-06. That earlier code lists `billing_periods`
+without the field, so it does not accept a row that holds it, and once a
+finished sample has written one, a backend from before the release fails to
+deploy. It would also sample a new paid period by the scan again, which
+leaves out files in Deleted items, record no daily sample and leave the
+samples of an organization it deletes behind. This release is therefore the
+backend's newest floor. From it on, never return the backend to a commit
+before it; roll forward instead. There is no backfill, since the totals keep
+no history. Samples start with the first run after the deploy, and the days
+the job does not run have none.
 
 The owner decides on daily storage billing from what the job costs on
 staging, a hosted read that needs the owner's approval:

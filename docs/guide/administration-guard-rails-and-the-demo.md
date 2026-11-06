@@ -286,7 +286,10 @@ at the start of the period and collects its extra charge, plus API overages, on
 the invoice at the end of the period. That is the renewal invoice, or the final
 one when a cancelled subscription ends. The sample counts the same files as
 current storage, files in Deleted items included, and Billing shows it beside
-current storage, which changes during the period.
+current storage, which changes during the period. A sample that is delayed,
+for example while Qivo counts the organization's storage again, measures
+storage when it is taken, files added meanwhile included. When that is a day
+or more after the period started, Billing shows the date it was measured.
 Polar handles checkout taxes and recurring payments.
 
 Without a paid billing period, for example during free access, before you

@@ -128,17 +128,23 @@ export type BillingPeriodHead = {
  * stored-byte totals (model/storageTotals.ts), files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, which the page shows as being counted too.
- * `sampled_storage_bytes` is what a paid period's sample measured at its
- * start, which the period's storage charge uses. It is the totals when
- * the sample read them, files in Deleted items included, or null for any
- * other bucket and for a period whose sample has not finished. A sample an
- * earlier release finished scanned the attachment rows of live tasks and
- * left those files out. It holds no account; billing.apiAccounts lists
- * the bucket's accounts 25 at a time. */
+ * `sampled_storage_bytes` is what a paid period's sample measured, which
+ * the period's storage charge uses. It is the totals when the sample read
+ * them, files in Deleted items included, or null for any other bucket and
+ * for a period whose sample has not finished. `sampled_storage_at` is when
+ * the sample read them, normally within a second of the period's start. A
+ * sample that waited, as while the totals were counted again, or that was
+ * started again later measures storage when it runs, files stored during
+ * the wait included. It is null without a sample and for one an earlier
+ * release finished, which scanned the attachment rows of live tasks stored
+ * before the period began and left the files in Deleted items out. The
+ * answer holds no account; billing.apiAccounts lists the bucket's accounts
+ * 25 at a time. */
 export type BillingUsageFigures = BillingPeriodHead & {
   calls: number | null
   storage_bytes: number | null
   sampled_storage_bytes: number | null
+  sampled_storage_at: string | null
 }
 
 /* One project of Billing's Storage by project list
