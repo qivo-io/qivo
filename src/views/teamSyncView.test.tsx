@@ -1201,21 +1201,37 @@ describe('the design size, one figure at a time', () => {
     expect(document.querySelector('[data-sync-person]')).not.toBeNull()
   }, 60_000)
 
-  it('shows one person’s page of a sub-project of 300 open and 150 Done tasks', async () => {
+  /** Opens one person's page of a sub-project of `openN` In Progress tasks
+      and `doneN` tasks finished since the person's last sync, and checks
+      what it seeded. */
+  async function personPage(openN: number, doneN: number) {
     const finished = new Date(Date.now() - 3_600_000).toISOString()
-    await open(
+    const { snapshot } = await open(
       (snap) => {
-        for (let n = 1; n <= 450; n++)
+        for (let n = 1; n <= openN + doneN; n++)
           snap.issues.push({
-            ...taskRow(snap, `t${n}`, n <= 300 ? 'progress' : 'done', n),
+            ...taskRow(snap, `t${n}`, n <= openN ? 'progress' : 'done', n),
             title: `${'An ordinary task title of about eighty characters, '.repeat(1)}number ${n}`,
-            ...(n > 300 ? { done_at: finished } : {}),
+            ...(n > openN ? { done_at: finished } : {}),
           })
       },
       (snap) => ({ scope: `project:${sub(snap)}`, step: me(snap) }),
     )
+    const of = (status: 'progress' | 'done') =>
+      snapshot.issues.filter((it) => it.project_id === sub(snapshot) && it.status === status).length
+    expect([of('progress'), of('done')]).toEqual([openN, doneN])
     expect(state()).toBe('ok')
+  }
+
+  it('shows one person’s page of a sub-project of 300 open tasks', async () => {
+    await personPage(300, 20)
     expect(document.querySelectorAll('[data-sync-card]')).toHaveLength(300)
+    expect(document.querySelectorAll('[data-sync-done-row]')).toHaveLength(20)
+  }, 60_000)
+
+  it('shows one person’s page of a sub-project of 150 tasks Done since the last sync', async () => {
+    await personPage(30, 150)
+    expect(document.querySelectorAll('[data-sync-card]')).toHaveLength(30)
     expect(document.querySelectorAll('[data-sync-done-row]')).toHaveLength(150)
   }, 60_000)
 
