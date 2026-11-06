@@ -1,5 +1,6 @@
-/* The one queue every file URL mint of the app goes through
-   (files.mintUrls). It bounds the calls: at most MINT_QUEUE.batch ids a
+/* The one queue every file URL mint of the store goes through
+   (files.mintUrls); the browser export (lib/orgExport.ts) mints its one
+   file a call itself. It bounds the calls: at most MINT_QUEUE.batch ids a
    call, at most MINT_QUEUE.inFlight calls at once, attachments and
    pictures never in one call, and attachment calls before picture calls,
    so an image someone is looking at overtakes the roster's pictures. The
@@ -10,7 +11,7 @@
 /** The queue's bounds, an object the tests lower. A call that has not
     answered after `timeout` ms answers failed for its ids and keeps its
     slot until it settles, so the server never holds more than `inFlight`
-    of the app's mints at once. */
+    of the store's mints at once, apart from calls a clear() let go. */
 export const MINT_QUEUE = { batch: 100, inFlight: 2, timeout: 15_000 }
 
 /** One file to mint: an attachment, or a profile's picture, through

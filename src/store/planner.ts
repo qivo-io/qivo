@@ -7506,14 +7506,14 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    per `avatar:<profileId>:<storageId>`. Renewing an unchanged portrait checks
    access without dropping its source or downloading its bytes again.
 
-   Every mint goes through one queue (lib/mintQueue.ts): at most 100 ids a
-   call, two calls at once, attachments and pictures never in one call and
-   attachment calls first. The inline images of descriptions and comments
-   load through one loader (lib/inlineImages.ts) near view, four at a
-   time, behind P.attachmentUrl's row gate. Pictures download six at a
-   time within a byte budget (lib/avatarSources.ts AVATAR_SOURCES) and
-   repaint the store once a frame, and while the page is hidden nothing
-   renews or downloads and no held picture is released.
+   Every mint of the store goes through one queue (lib/mintQueue.ts): at
+   most 100 ids a call, two calls at once, attachments and pictures never
+   in one call and attachment calls first. The inline images of
+   descriptions and comments load through one loader (lib/inlineImages.ts)
+   near view, four at a time, behind P.attachmentUrl's row gate. Pictures
+   download six at a time within a byte budget (lib/avatarSources.ts
+   AVATAR_SOURCES) and repaint the store once a frame, and while the page
+   is hidden nothing renews or downloads and no held picture is released.
 
    mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
    subscribed: exp comes from Date.now(), which is not a reactive dependency —
