@@ -31,8 +31,8 @@ import { internalAction, internalMutation, internalQuery } from './_generated/se
 import { canManageProjectUsers } from './lib/access'
 import { byId } from './lib/db'
 import { isDemoDeployment, refuseDemoFeature } from './lib/demo'
-import { forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import { INVITE_NOT_HELD, INVITE_SENDING, LIMITS } from './lib/limits'
+import { badRequest, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
+import { BY_IDS_MAX, INVITE_NOT_HELD, INVITE_SENDING, LIMITS } from './lib/limits'
 import { sendInviteEmail } from './mail'
 import { audit } from './model/admin'
 import { newUuid } from './model/orgs'
@@ -419,24 +419,52 @@ export type InviteDeliveryRow = {
   free_at?: string | null
 }
 
+/* The pending seats deliveries() reports on: with `ids`, each distinct one
+ * that names a profile of organization `orgId`, looked up by id, else every
+ * seat of the organization without a login. The caller keeps the
+ * invitations among them (isInvitation). */
+async function* deliverySeats(
+  ctx: QueryCtx,
+  orgId: string,
+  ids: readonly string[] | undefined,
+): AsyncGenerator<Doc<'profiles'>> {
+  if (ids === undefined) {
+    yield* ctx.db
+      .query('profiles')
+      .withIndex('by_org_auth', (q) => q.eq('org_id', orgId).eq('auth_user_id', undefined))
+    return
+  }
+  for (const id of new Set(ids)) {
+    const seat = await byId(ctx, 'profiles', id)
+    if (seat !== null && seat.org_id === orgId) yield seat
+  }
+}
+
 /** The newest invitation email to each pending seat's current address in
  * the caller's organization, so the app can say when one was not delivered.
  * An org admin sees every pending seat. Anyone else sees only the sends
  * their own change caused, such as a project lead's guest invitation. Seats
  * with no invitation email recorded are left out. Each seat reads only its
- * invitation rows, newest first, so other audit entries cannot hide one. */
+ * invitation rows, newest first, so other audit entries cannot hide one.
+ *
+ * With `profile_ids`, it reports on those seats alone, each looked up by id
+ * under the same rules, so a page asks for the pending rows it shows
+ * (Settings › Users) or the seat it just made (a project's invite form):
+ * an id of another organization, a claimed seat and an unknown id are left
+ * out, an empty list answers nothing, and more than BY_IDS_MAX (100) ids
+ * are refused. Without it, it walks every pending seat, for apps from
+ * before the argument. */
 export const deliveries = orgQuery({
-  args: {},
-  handler: async (ctx): Promise<InviteDeliveryRow[]> => {
+  args: { profile_ids: v.optional(v.array(v.string())) },
+  handler: async (ctx, { profile_ids }): Promise<InviteDeliveryRow[]> => {
+    if (profile_ids !== undefined && profile_ids.length > BY_IDS_MAX)
+      throw badRequest(`profile_ids must name at most ${BY_IDS_MAX} seats`)
     if (isDemoDeployment()) return []
     const admin = ctx.me.org_role === 'admin'
-    const pending = ctx.db
-      .query('profiles')
-      .withIndex('by_org_auth', (q) => q.eq('org_id', ctx.me.org_id).eq('auth_user_id', undefined))
     const out: InviteDeliveryRow[] = []
     // read once, for the first send that can go again
     let freeAt: Promise<string | null> | undefined
-    for await (const seat of pending) {
+    for await (const seat of deliverySeats(ctx, ctx.me.org_id, profile_ids)) {
       if (!isInvitation(seat, false) || seat.email === undefined) continue
       const newest = await newestSend(ctx, seat.id, seat.email)
       if (newest === undefined || (!admin && newest.detail.by !== ctx.me.id)) continue

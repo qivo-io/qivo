@@ -573,6 +573,49 @@ describe('whoever caused an app invitation sees whether it went out', () => {
     expect(await inviteRows(t)).toHaveLength(before + 1)
   })
 
+  it('reports on the seats a page names alone, under the same rules', async () => {
+    const t = newAuthT()
+    const f = await withOrg(t)
+    const ask = (who: typeof f.admin, profile_ids: string[]) =>
+      as(t, who).query(api.invites.deliveries, { org_id: f.org.id, profile_ids })
+    const added = person(f.org.id, 'one@example.se')
+    const other = person(f.org.id, 'two@example.se')
+    await as(t, f.admin).mutation(api.profiles.create, added)
+    await as(t, f.admin).mutation(api.profiles.create, other)
+    const { id: guest } = await as(t, f.user).mutation(api.projects.inviteGuest, {
+      org_id: f.org.id,
+      project_id: f.meta.id,
+      email: 'guest.new@example.se',
+      level: 'viewer',
+    })
+    // a pending seat of another organization, with a send of its own
+    const foreign = person(f.otherOrg.id, 'far@example.se')
+    await as(t, f.otherAdmin).mutation(api.profiles.create, foreign)
+    await flush(t)
+    const seats = (rows: { profile_id: string }[]) => rows.map((r) => r.profile_id).sort()
+
+    expect(seats(await ask(f.admin, [added.id]))).toEqual([added.id])
+    expect(seats(await ask(f.admin, [added.id, guest, added.id]))).toEqual([added.id, guest].sort())
+    // a lead sees only the sends their own change caused
+    expect(seats(await ask(f.user, [added.id, guest]))).toEqual([guest])
+    expect(await ask(f.viewer, [guest])).toEqual([])
+    // another organization's seat, a claimed seat and an unknown id are
+    // left out, and an empty list walks nothing
+    expect(await ask(f.admin, [foreign.id, f.user.id, uuid()])).toEqual([])
+    expect(await ask(f.admin, [])).toEqual([])
+    await expectRefusal(
+      ask(
+        f.admin,
+        Array.from({ length: 101 }, () => added.id),
+      ),
+      'bad_request',
+    )
+    // without ids, every pending seat, as apps from before the argument read
+    expect(
+      seats(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id })),
+    ).toEqual([added.id, other.id, guest].sort())
+  })
+
   it('tells a send in flight, a held-back one and an uncertain one apart, for the current address only', async () => {
     const t = newAuthT()
     const f = await withOrg(t)
