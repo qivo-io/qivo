@@ -5107,6 +5107,9 @@ async function settingsTeamsCheck() {
       'GET /v1/teams/{id} still answers the team',
     )
     return `found ${team.name} by search with ${TEAMS_EXPECTED.none}, added ${std.name} through Add member to ${TEAMS_EXPECTED.one}, renamed it, removed the agent and deleted it from the list`
+  })
+}
+
 /** The step that checks Settings › Users (settingsUsersCheck). */
 export const SETTINGS_USERS_STEP = 'ui/settings-users'
 
