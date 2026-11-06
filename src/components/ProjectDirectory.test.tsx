@@ -71,6 +71,7 @@ let ORG: string
 let ME: string
 let PARTNER: string
 let directory: typeof import('./ProjectDirectory')
+let pickLib: typeof import('../lib/projectPick')
 let version: typeof import('../store/usePlannerVersion')
 let store: typeof import('../store/planner')
 let actions: Record<string, ReturnType<typeof vi.fn<(...args: unknown[]) => void>>>
@@ -195,6 +196,7 @@ async function load(next: Snapshot) {
   store = await import('../store/planner')
   await store.initStore()
   directory = await import('./ProjectDirectory')
+  pickLib = await import('../lib/projectPick')
   version = await import('../store/usePlannerVersion')
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 }
@@ -258,7 +260,7 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   Reflect.deleteProperty(document, 'visibilityState')
-  if (directory) Object.assign(directory.DIRECTORY_MOST, { children: 100 })
+  if (pickLib) Object.assign(pickLib.DIRECTORY_MOST, { children: 100 })
   vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
@@ -749,7 +751,7 @@ describe('the expanded list', { timeout: 60_000 }, () => {
     await load(next0)
     // batches of two, and a cap of two sub-projects
     force.batch = 2
-    directory.DIRECTORY_MOST.children = 2
+    pickLib.DIRECTORY_MOST.children = 2
     await render()
     expect(rowIds()).toEqual([ids[0], ids[1]])
     await click(find('[data-directory-expand]', row(ids[0])))

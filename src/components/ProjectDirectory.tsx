@@ -31,8 +31,8 @@
      leaves the page goes to the star now at its place.
    - A top-level row's Sub-projects button lists its sub-projects
      (projectNav.children), 25 at first and 25 more as the list's end
-     scrolls into view or Load more is pressed, at most DIRECTORY_MOST
-     .children, then a search. One project is expanded at a time, and a
+     scrolls into view or Load more is pressed, at most 100
+     (lib/projectPick.ts DIRECTORY_MOST), then a search. One project is expanded at a time, and a
      new search, a page move or the row leaving the page collapses it,
      which stops its read.
    - A press on a name opens the project as the sidebar does
@@ -82,6 +82,7 @@ import {
   usePagedPages,
   useSettledSearch,
 } from '../lib/pagedList'
+import { DIRECTORY_MOST } from '../lib/projectPick'
 import { P, type ProjectSettingsAnswer } from '../store/planner'
 import { duplicateNameTags, type TaggableProject } from '../store/viewModels'
 import { type HeldLine, PageFold } from './pageFold'
@@ -91,11 +92,6 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 
 type Actions = Record<string, (...args: unknown[]) => void>
-
-/** The most sub-projects an expanded project gathers, which tests lower
-    and set back: four batches, past the design size's 30 live
-    sub-projects under one project. Past it the list asks for a search. */
-export const DIRECTORY_MOST = { children: 100 }
 
 /** A row of the shown page: a browsed top-level project, or a search's
     project or sub-project. */
