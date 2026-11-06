@@ -1603,14 +1603,19 @@ retained are the samples the runs of the last 400 days wrote, which is
 days, or every `written` less every `expired` in reports kept since the job
 began. Deleting an organization removes its samples without a counter, so
 after a deletion both figures exceed the rows left. Divide by `orgs` for a
-figure per organization and day.
-`revisions` counts the writes to the organizations' totals since their
-previous samples, one for each attach, removal, move, rename or purge that
-changed them, each writing up to three totals rows. It counts nothing for
-an organization's first sample, for one recounted since its previous
-sample, or for a sample a late run takes after the organization's sample
-of a later day, so each write counts once. A dry run of the storage totals
-backfill in the same window gives the cost of a reconciliation.
+figure per organization and day. `revisions` counts the raises of the
+organizations' totals revisions since their previous samples. An attach or
+a removal of one file raises it once and writes three totals rows, the
+task's, the project's and the organization's. A purge raises it once for
+each file it deletes, with the same three writes, and a rename once, with
+two. A move raises it once whatever it moves, and writes one row for each
+task it moves with files, one for each project they leave, one for the
+project they enter and the organization's, so `revisions` alone does not
+bound the writes to the totals. It counts nothing for an organization's
+first sample, for one recounted since its previous sample, or for a sample
+a late run takes after the organization's sample of a later day, so each
+raise counts once. A dry run of the storage totals backfill in the same
+window gives the cost of a reconciliation.
 
 ## Node.js version
 
