@@ -6689,8 +6689,6 @@ async function main() {
   // the Board and a task address without task windows, then the Roadmap
   // with them, while the project is active
   await tasksOnDemandCheck()
-  // Team sync on the deployment's agenda, with a task of its own
-  await teamSyncCheck()
   // Settings › Labels with a label of its own on a fixture task
   await settingsLabelsCheck()
   // the removal window and its Reassign picker on a sub-project of its own
@@ -6707,6 +6705,9 @@ async function main() {
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()
+  // Team sync on the deployment's agenda, with a task of its own, while
+  // the project is active
+  await teamSyncCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
