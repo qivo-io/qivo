@@ -969,6 +969,28 @@ describe('claimSummary', () => {
     expect(await resume(s)).toEqual({ state: 'none' })
   })
 
+  it('records every unread message of an item it counted in its last minute, so reading the newest repeats nothing', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    // two unread messages about one task in the summary's last minute
+    const { task, message: older } = await newsAt(t, f, 0.2)
+    const newer = (await post(t, f, { to: f.guest, task, minute: 0.4 })) as Doc<'messages'>
+    clock(0.5)
+    expect(await resume(s)).toEqual({ state: 'summary' })
+    expect((await records(t)).map((r) => r.key).sort()).toEqual([older.id, newer.id].sort())
+    // the newest alone is marked read, which leaves the older one the item's
+    // newest unread event inside the next summary's read back
+    await as(t, f.guest).mutation(api.messages.markRead, { org_id: f.org.id, ids: [newer.id] })
+    expect(await unreadOf(t, f, task)).toHaveLength(1)
+    clock(0.75)
+    expect(await resume(s)).toEqual({ state: 'none' })
+    // a new message about the same task is a new gap
+    await post(t, f, { to: f.guest, task, minute: 0.8 })
+    clock(1)
+    expect(await resume(s)).toEqual({ state: 'summary' })
+  })
+
   it('stops reading back once the records of what it would pass may be gone', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)

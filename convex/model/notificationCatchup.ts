@@ -3,14 +3,16 @@
  * from the stored inbox items (schema.ts inbox_items) under the rule
  * inbox.summary counts by (model/inboxReads.ts inboxScope), never from a
  * client's word or a difference of counts. It answers a state, and the
- * keys of the eligible events it read in the last NOTIFY.lag_ms for
- * claimSummary to record, never a task or a count, and writes nothing. */
+ * keys of the unread events of each item it counted in the last
+ * NOTIFY.lag_ms for claimSummary to record, never a task or a count, and
+ * writes nothing. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { isAccessUnchecked } from '../lib/access'
 import { seatReady } from './inboxItems'
 import { inboxScope, stepBudget } from './inboxReads'
+import { ITEM_UNREAD_CAP } from './messages'
 
 /** The bounds of one catch-up. It examines at most `items` unread items
  * across the seats, and asks how much the transaction has read before each
@@ -63,8 +65,35 @@ async function newestUnread(ctx: QueryCtx, item: Doc<'inbox_items'>): Promise<Ev
   return { key: newest.id, at: newest.created_at }
 }
 
-/** A catch-up's answer and the keys of the eligible events it read after
- * `recent`, for the summary records (notifications.ts claimSummary). */
+/* The keys of item `item`'s unread events after `from`: its unread
+ * messages after it, newest first, at most ITEM_UNREAD_CAP of them, the
+ * most an item keeps unread (model/messages.ts), in one index read, and its
+ * wake when that is after `from`. */
+async function unreadKeysAfter(
+  ctx: QueryCtx,
+  item: Doc<'inbox_items'>,
+  from: string,
+): Promise<string[]> {
+  const messages = await ctx.db
+    .query('messages')
+    .withIndex('by_recipient_issue_read_order', (q) =>
+      q
+        .eq('recipient_id', item.recipient_id)
+        .eq('issue_id', item.issue_id)
+        .eq('read_at', undefined)
+        .gt('created_at', from),
+    )
+    .order('desc')
+    .take(ITEM_UNREAD_CAP)
+  const keys = messages.map((m) => m.id)
+  if (item.woke_at !== undefined && item.woke_at > from)
+    keys.push(`${item.issue_id}:${item.woke_at}`)
+  return keys
+}
+
+/** A catch-up's answer and the keys of the unread events after `recent` of
+ * the items it counted, for the summary records (notifications.ts
+ * claimSummary). */
 export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
 
 /**
@@ -90,17 +119,23 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  *
  * The first eligible item decides `found`. The read then goes on only
  * through items newer than `recent`, in every seat, so `keys` holds every
- * eligible event of that last stretch. It answers `none` when every seat
- * was read to its end and nothing was eligible, and `stopped` when the
- * budget (CATCH_UP), a seat that is not ready or a check of the seat's
- * access that a bound stopped (lib/access.ts accessUnchecked) ended it
- * before it found one.
+ * unread event of that last stretch of each eligible item: its unread
+ * messages and its wake there, not only the newest. Marking only the
+ * newest read then leaves no older one unrecorded, which a later catch-up
+ * reading back over the stretch would count again. A key may already hold
+ * a record, which a second record does not change.
+ *
+ * It answers `none` when every seat was read to its end and nothing was
+ * eligible, and `stopped` when the budget (CATCH_UP), a seat that is not
+ * ready or a check of the seat's access that a bound stopped
+ * (lib/access.ts accessUnchecked) ended it before it found one.
  *
  * It reads each seat's readiness (two ranges at most) and its items after
  * `after`, a project check for each project, the task of each item its
- * project lets through, and for each shown item its newest unread message
- * and its records, one or two ranges. Measured reads at the design size
- * are in CATCH_UP's docstring.
+ * project lets through, for each shown item its newest unread message and
+ * its records, one or two ranges, and for each eligible item in the last
+ * stretch its unread messages there, one range. Measured reads at the
+ * design size are in CATCH_UP's docstring.
  */
 export async function missedActivity(
   ctx: QueryCtx,
@@ -161,7 +196,14 @@ export async function missedActivity(
         }
         if (await recorded(event.key)) continue
         found = true
-        if (event.at > recentAt) keys.push(event.key)
+        if (event.at <= recentAt) continue
+        keys.push(event.key)
+        if (!(await step())) {
+          stopped = true
+          break walk
+        }
+        for (const key of await unreadKeysAfter(ctx, item, recentAt))
+          if (key !== event.key) keys.push(key)
       }
     } catch (e) {
       if (!isAccessUnchecked(e)) throw e
