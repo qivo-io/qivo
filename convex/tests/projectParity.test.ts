@@ -670,7 +670,8 @@ describe('creating projects and sub-projects', () => {
       expect(await projectRow(fx.t, id), String(sort_order)).toBeNull()
     }
     // a top-level project and a sub-project of TBED stored with NaN, as an
-    // older backend stored a create's place as sent, past every finite one
+    // older backend stored a create's place as sent; the next creates land
+    // one past the finite places alone
     await plantProject(fx.t, { org_id: fx.org.id, sort_order: Number.NaN })
     await plantProject(fx.t, {
       org_id: fx.org.id,
