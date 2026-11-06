@@ -11,6 +11,7 @@ import type { WithoutSystemFields } from 'convex/server'
 import { describe, expect, test } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { OWN_READS } from '../lib/access'
 import { LIMITS } from '../lib/limits'
 import { sha256hex } from '../machine/auth'
 import {
@@ -2189,6 +2190,42 @@ describe('write tools', () => {
       'not_found',
       /^task "QN-999999" not found \(or not visible to you\)$/,
     )
+  })
+
+  test("update_user: a leader's check past its bound answers its own sentence", async () => {
+    const fx = await machineOrg()
+    const most = OWN_READS.teams
+    // the admin is in Hardware, which the user leads, and one team more
+    OWN_READS.teams = 1
+    try {
+      await fx.t.run(async (ctx) => {
+        const id = uuid()
+        await ctx.db.insert('teams', {
+          id,
+          org_id: fx.org.id,
+          name: 'Second crew',
+          track_delay_default: true,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: id,
+          profile_id: fx.admin.id,
+          is_leader: false,
+        })
+      })
+      await expectRefusal(
+        fx.t.mutation(internal.machine.mcp.updateUser, {
+          callerId: fx.user.id,
+          access: 'write',
+          user_id: fx.admin.id,
+          plannable_hours: 20,
+        }),
+        'rule',
+        /^Qivo could not finish checking this person's teams in one request\. Ask an organization admin to change these hours\.$/,
+      )
+    } finally {
+      OWN_READS.teams = most
+    }
   })
 
   test('update_user: rights, agent fence, range, roster answer', async () => {
