@@ -62,7 +62,13 @@ export const DEMO_ARCHIVE_BYTES = 2 * 1024 * 1024
  *   while it read them (step.unsettled, model/orgExportRead.ts readBatch),
  *   which its items section then calls partial. 256 ids of 36 characters
  *   take about 10 KB of the job row. Past them the job fails with
- *   `deleted_changing` rather than call a changed item complete. */
+ *   `deleted_changing` rather than call a changed item complete;
+ * - leftOut: the Deleted items the job may name in its step as having
+ *   records it left out (step.left_out_items, orgExport.ts noteLeftOut),
+ *   about 10 KB more. Which records are left out depends on the data, not
+ *   on when the export runs, so past them the job does not fail, since a
+ *   new export would fail the same way: it keeps no names and calls every
+ *   item it would call complete partial (step.left_out_more). */
 export const EXPORT_LIMITS = {
   archive: MAX_ARCHIVE_BYTES,
   demoArchive: DEMO_ARCHIVE_BYTES,
@@ -71,6 +77,7 @@ export const EXPORT_LIMITS = {
   parts: 4000,
   erase: 128,
   unsettled: 256,
+  leftOut: 256,
 }
 
 /** The delivery's own budgets (orgExport.ts claimDownload and the

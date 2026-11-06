@@ -965,6 +965,106 @@ describe("the Deleted items section reads only the organization's own rows", () 
     expect(JSON.stringify(archive.tables)).not.toContain(f.otherOrg.id)
   })
 
+  it('calls an item partial once a record it kept names a label or team deleted after it, and every item once more items lose records than the job may name', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const org_id = f.org.id
+    // a task with a label, deleted before its label
+    const labeled = await plantIssue(t, { org_id, project_id: f.hidden.id })
+    const labelId = uuid()
+    const admin = as(t, f.admin)
+    await admin.mutation(api.labels.create, {
+      org_id,
+      id: labelId,
+      name: 'Bench',
+      color: '#ffcc00',
+    })
+    await as(t, f.user).mutation(api.labels.toggle, {
+      org_id,
+      issue_id: labeled.id,
+      label_id: labelId,
+      on: true,
+    })
+    await deleteTask(t, f, labeled.id)
+    // a project shared with a team, deleted before the team
+    const teamId = uuid()
+    await admin.mutation(api.teams.create, { org_id, id: teamId, name: 'Bench crew' })
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: teamId,
+        level: 'user',
+      }),
+    )
+    await deleteProject(t, f, f.meta.id)
+    // and a task item that keeps every record
+    const plain = await plantIssue(t, { org_id, project_id: f.hidden.id })
+    await deleteTask(t, f, plain.id)
+    await settle(t)
+    // the normal deletes of the label and the team leave the stored rows
+    await admin.mutation(api.labels.remove, { org_id, id: labelId })
+    await admin.mutation(api.teams.deleteDeep, { org_id, id: teamId })
+    await settle(t)
+    const [labeledItem, sharedItem, plainItem] = [
+      await itemFor(t, labeled.id),
+      await itemFor(t, f.meta.id),
+      await itemFor(t, plain.id),
+    ]
+    for (const [item, table] of [
+      [labeledItem, 'issue_labels'],
+      [sharedItem, 'project_team_access'],
+    ] as const)
+      expect(
+        (
+          await t.run((ctx) =>
+            ctx.db
+              .query('deleted_rows')
+              .withIndex('by_item_table_owner', (q) => q.eq('item_id', item.id).eq('table', table))
+              .collect(),
+          )
+        ).length,
+        table,
+      ).toBe(1)
+    later()
+    const first = await exportAs(t, f.admin, org_id)
+    const archive = await archiveOf(t, first)
+    expect(archive.tables['deleted/task_labels']).toEqual([])
+    expect(archive.tables['deleted/project_team_access']).toEqual([])
+    expect(archive.manifest.deleted_items?.left_out).toEqual({
+      'deleted/task_labels': 1,
+      'deleted/project_team_access': 1,
+    })
+    for (const item of [labeledItem, sharedItem])
+      expect(itemRow(archive, item.id)).toMatchObject({
+        state: 'ready',
+        export_rows: 'partial',
+        export_reason: 'rows_left_out',
+        deleted_during_export: false,
+      })
+    expect(itemRow(archive, plainItem.id)).toMatchObject({ export_rows: 'complete' })
+    expect(itemRow(archive, plainItem.id)).not.toHaveProperty('export_reason')
+    expect(archive.manifest.deleted_items?.items).toEqual({ complete: 1, partial: 2 })
+    expect((await jobOf(t, first))?.step.left_out_items?.sort()).toEqual(
+      [labeledItem.id, sharedItem.id].sort(),
+    )
+
+    // past the names the job keeps, every item is partial, also one that
+    // kept every record
+    EXPORT_LIMITS.leftOut = 1
+    later()
+    const second = await exportAs(t, f.admin, org_id)
+    const capped = await archiveOf(t, second)
+    for (const item of [labeledItem, sharedItem, plainItem])
+      expect(itemRow(capped, item.id)).toMatchObject({
+        export_rows: 'partial',
+        export_reason: 'rows_left_out',
+      })
+    expect(capped.manifest.deleted_items?.items).toEqual({ complete: 0, partial: 3 })
+    const step = (await jobOf(t, second))?.step
+    expect(step?.left_out_more).toBe(true)
+    expect(step?.left_out_items).toBeUndefined()
+  })
+
   it('says format 4 in the README and manifest, with the Deleted items tables, tallies and the skipped tasks', async () => {
     const t = newT()
     const f = await withOrg(t)

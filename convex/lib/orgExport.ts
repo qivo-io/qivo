@@ -199,8 +199,13 @@ the archive holds every record the item kept, and partial when it may lack
 some; export_reason then says why: purging (being deleted for good), restored
 (restored after part of it was read), moving, restoring or stuck (records
 still on their way to or from Deleted items, or stopped partway), changed
-during export, or deleted during export. deleted_during_export is true for an
-item deleted after the export began. Its records can also be in data/, as
+during export, deleted during export, or rows left out (records the item
+kept that name something the organization no longer has, such as a label or
+team deleted after the item, or another organization, which the archive
+leaves out and manifest.json counts under deleted_items.left_out). When more
+items lost records that way than the export can name, every item it would
+call complete is partial with rows left out. deleted_during_export is true for
+an item deleted after the export began. Its records can also be in data/, as
 the active tables read them before it was deleted; the export leaves out of
 deleted/ the records that data/ already holds for certain, those that existed
 before the export read their table and were deleted only after it, when no
@@ -510,6 +515,14 @@ export const vExportStep = v.object({
   // stored records left out by job section key, those that named another
   // organization or nothing they belong to
   left_out: v.optional(v.record(v.string(), v.number())),
+  // the Deleted items any of whose stored records were left out, at most
+  // model/orgExports.ts EXPORT_LIMITS.leftOut; the items section calls them
+  // partial (orgExport.ts noteLeftOut)
+  left_out_items: v.optional(v.array(v.string())),
+  // true once more items had records left out than left_out_items may
+  // name, which it then no longer holds; the items section then calls
+  // every item it would call complete partial
+  left_out_more: v.optional(v.boolean()),
   // the items the items section called complete and partial so far
   items: v.optional(v.object({ complete: v.number(), partial: v.number() })),
 })

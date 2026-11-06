@@ -43,9 +43,10 @@
  * itemsBatch). The step keeps when each live section ended and which of
  * them found a deleted item in flight, the items seen changing (at most
  * EXPORT_LIMITS.unsettled, past which the job fails with
- * `deleted_changing`), the stored rows left out and the item tallies, for
- * the manifest. A job collecting at the deploy of format 4 goes on into
- * the Deleted items section and finishes as format 4.
+ * `deleted_changing`), the stored rows left out with the items that held
+ * them (noteLeftOut) and the item tallies, for the manifest. A job
+ * collecting at the deploy of format 4 goes on into the Deleted items
+ * section and finishes as format 4.
  *
  * The reads are live, not a snapshot of one moment (lib/orgExport.ts
  * LIVE_READ_WARNING). The archive is data only: no step reads an
@@ -757,6 +758,12 @@ const vDeletedStep = {
   items: v.optional(v.object({ complete: v.number(), partial: v.number() })),
 }
 
+const noteLeftOutRef = makeFunctionReference<
+  'mutation',
+  { export_id: string; n: number; items: string[] },
+  null
+>('orgExport:noteLeftOut')
+
 const commitPartRef = makeFunctionReference<
   'mutation',
   {
@@ -894,7 +901,9 @@ async function finish(
  * each read saw changing, the stored rows it left out and the items it
  * called complete or partial for its commit. It stops reading once the
  * unsettled items pass EXPORT_LIMITS.unsettled, and the commit then fails
- * the job. */
+ * the job. The items whose stored rows its reads left out it names to the
+ * job just before its commit (noteLeftOut), one more than
+ * EXPORT_LIMITS.leftOut at most. */
 export const step = internalAction({
   args: { export_id: v.string() },
   handler: async (ctx, { export_id }): Promise<null> => {
@@ -912,8 +921,11 @@ export const step = internalAction({
       in_flight: job.step.in_flight ?? [],
       unsettled: known,
     }
-    // the items this step saw changing that the job did not know yet
+    // the items this step saw changing, and the items whose records its
+    // reads left out, that the job did not know yet
     const unsettled = new Set<string>()
+    const knownShort = new Set(job.step.left_out_items ?? [])
+    const short = new Set<string>()
     let leftOut = 0
     const items = { complete: 0, partial: 0 }
     const encoder = new TextEncoder()
@@ -942,6 +954,11 @@ export const step = internalAction({
       }
       if (batch.in_flight) inFlight = true
       for (const id of batch.unsettled ?? []) if (!known.includes(id)) unsettled.add(id)
+      // one past the names the job keeps is enough for noteLeftOut to stop
+      if (job.step.left_out_more !== true)
+        for (const id of batch.left_out_items ?? [])
+          if (!knownShort.has(id) && knownShort.size + short.size <= EXPORT_LIMITS.leftOut)
+            short.add(id)
       leftOut += batch.left_out ?? 0
       items.complete += batch.items?.complete ?? 0
       items.partial += batch.items?.partial ?? 0
@@ -963,6 +980,8 @@ export const step = internalAction({
       records > 0 || (done && job.step.part === 1)
         ? await store(ctx, jsonArray(chunks.splice(0), records))
         : undefined
+    if (short.size > 0)
+      await ctx.runMutation(noteLeftOutRef, { export_id, n: job.step.n, items: [...short] })
     const committed = await ctx.runMutation(commitPartRef, {
       export_id,
       n: job.step.n,
@@ -979,6 +998,33 @@ export const step = internalAction({
   },
 })
 
+/** Names to collecting job `export_id` the Deleted items `items`, any of
+ * whose stored records a read of its step `n` left out
+ * (model/orgExportRead.ts storedBatch), in step.left_out_items, so the
+ * items section calls each partial (rows_left_out). Past EXPORT_LIMITS.leftOut names it keeps none
+ * and sets step.left_out_more, and the items section then calls every item
+ * it would call complete partial, since it can no longer tell which. The
+ * step runs it just before its commit, so a commit that another took
+ * leaves names a read found, which can only call an item partial. Changes
+ * nothing when the job is not collecting or has moved past step `n`. */
+export const noteLeftOut = internalMutation({
+  args: { export_id: v.string(), n: v.number(), items: v.array(v.string()) },
+  handler: async (ctx, { export_id, n, items }): Promise<null> => {
+    const job = await exportOf(ctx, export_id)
+    if (job === null || job.state !== 'collecting' || job.step.n !== n) return null
+    if (job.step.left_out_more === true) return null
+    const { left_out_items: known, ...rest } = job.step
+    const names = [...new Set([...(known ?? []), ...items])]
+    await ctx.db.patch(job._id, {
+      step:
+        names.length > EXPORT_LIMITS.leftOut
+          ? { ...rest, left_out_more: true }
+          : { ...rest, left_out_items: names },
+    })
+    return null
+  },
+})
+
 /** Commits one step's part and read state, and schedules the next step.
  * Answers false, changing nothing, when the job is not collecting, another
  * commit took this step or the part's file is gone. Ends the job as failed
@@ -990,7 +1036,7 @@ export const step = internalAction({
  * live section's read ended (step.ended) and a live section any of whose
  * reads found a deleted item in flight (step.in_flight), and adds a
  * Deleted items step's unsettled items, left-out rows and item tallies to
- * the step. */
+ * the step, keeping the items noteLeftOut named. */
 export const commitPart = internalMutation({
   args: {
     export_id: v.string(),
@@ -1070,6 +1116,8 @@ export const commitPart = internalMutation({
       ...(inFlight === undefined ? {} : { in_flight: inFlight }),
       ...(unsettled.length === 0 ? {} : { unsettled }),
       ...(leftOut === undefined ? {} : { left_out: leftOut }),
+      ...(job.step.left_out_items === undefined ? {} : { left_out_items: job.step.left_out_items }),
+      ...(job.step.left_out_more === undefined ? {} : { left_out_more: job.step.left_out_more }),
       ...(items === undefined ? {} : { items }),
     }
     const next: ExportStep = a.done

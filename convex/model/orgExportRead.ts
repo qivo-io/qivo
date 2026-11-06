@@ -41,7 +41,7 @@ import {
   type OrgExportSection,
 } from '../lib/orgExport'
 import { descriptionOf, descriptionsOf } from './descriptions'
-import { EXPORT_LIMITS } from './orgExports'
+import { collectingJob, EXPORT_LIMITS } from './orgExports'
 import { countersOf } from './orgs'
 import { stampRow } from './syncStamps'
 
@@ -415,9 +415,11 @@ export type ExportBatch = {
   retry?: 'narrow'
   in_flight?: true
   // a Deleted items batch: the items seen changing (storedBatch), the
-  // stored rows it left out, and the items it called complete and partial
+  // stored rows it left out with the items that held them, and the items
+  // it called complete and partial
   unsettled?: string[]
   left_out?: number
+  left_out_items?: string[]
   items?: { complete: number; partial: number }
 }
 
@@ -803,18 +805,23 @@ async function storedEndOwned(
  * leaves out. It leaves out, and counts in `left_out`, a row whose item is
  * gone or another organization's, whose document names another
  * organization, or whose second endpoint is not the organization's
- * (storedEndOwned). It also leaves out the rows the live sections exported
- * for certain: a row of an item deleted after its table's live section
- * ended, which existed before that section began and was stored after it
- * ended, so it sat in its live table for the whole read (`job.ended`), when
- * no read of that section found a deleted item in flight (`job.in_flight`).
- * Only an item in flight leaves a live row under an absent task or project,
- * which the live read never reaches, or a live link to a task under an
- * absent project, which it drops (hasOwnedEndpoint); such a row, stored
- * later by an item deleted after the read, was never exported, so after a
- * read that found an item in flight the rule keeps every row, at worst a
- * flagged duplicate. Every other row of an item deleted during the export
- * goes out, and the items section flags that item.
+ * (storedEndOwned), such as a label assignment whose label was deleted
+ * after its task, or a share whose team was. The answer's `left_out_items`
+ * names the organization's items whose rows it left out so, which the items
+ * section then calls partial (itemStatus); a row whose item is gone or
+ * another organization's names none. It also leaves out the rows the live
+ * sections exported for certain: a row of an item deleted after its table's
+ * live section ended, which existed before that section began and was
+ * stored after it ended, so it sat in its live table for the whole read
+ * (`job.ended`), when no read of that section found a deleted item in
+ * flight (`job.in_flight`). Only an item in flight leaves a live row under
+ * an absent task or project, which the live read never reaches, or a live
+ * link to a task under an absent project, which it drops
+ * (hasOwnedEndpoint); such a row, stored later by an item deleted after the
+ * read, was never exported, so after a read that found an item in flight
+ * the rule keeps every row, at worst a flagged duplicate. Every other row
+ * of an item deleted during the export goes out, and the items section
+ * flags that item.
  *
  * The answer's `unsettled` names the items whose records may be on both
  * sides or were stored again while the export ran: every item moving or
@@ -870,6 +877,7 @@ async function storedBatch(
   const startedMs = Date.parse(job.started_at)
   const rows: OrgExportRow[] = []
   let leftOut = 0
+  const short = new Set<string>()
   for (const stored of page.page) {
     const item = await once(items, stored.item_id, () => byId(ctx, 'deleted_items', stored.item_id))
     if (item === null || item.org_id !== orgId) {
@@ -889,12 +897,12 @@ async function storedBatch(
     )
       continue
     const { doc } = stored.row
-    if ('org_id' in doc && doc.org_id !== undefined && doc.org_id !== orgId) {
+    if (
+      ('org_id' in doc && doc.org_id !== undefined && doc.org_id !== orgId) ||
+      !(await storedEndOwned(ctx, stored, orgId))
+    ) {
       leftOut += 1
-      continue
-    }
-    if (!(await storedEndOwned(ctx, stored, orgId))) {
-      leftOut += 1
+      short.add(item.id)
       continue
     }
     const row = exportRow(doc, table)
@@ -908,6 +916,7 @@ async function storedBatch(
     skipped: 0,
     unsettled: [...unsettled],
     left_out: leftOut,
+    ...(short.size === 0 ? {} : { left_out_items: [...short] }),
   }
 }
 
@@ -921,20 +930,27 @@ type ItemReason =
   | 'stuck'
   | 'deleted_during_export'
   | 'changed_during_export'
+  | 'rows_left_out'
+
+/** The items whose stored records the job's stored sections left out
+ * (storedBatch): those its step names (step.left_out_items), or every item
+ * once more did than it may name (step.left_out_more). */
+type LeftOut = { items: ReadonlySet<string>; all: boolean }
 
 /** How much of `item` the archive holds: complete only when it is ready,
- * was deleted before collection began and is not among the job's
- * unsettled items, else partial with the first reason that applies:
- * purging, restored (a restoring project item whose root project is live
- * again, whose stored rows itemReads left out), its state (moving,
- * restoring, stuck), deleted during the export, changed during the export.
- * There is no third value: rows of a purging or restored item read while
- * it was still ready stay in the archive, so none of them is "not
- * included". */
+ * was deleted before collection began, is not among the job's unsettled
+ * items and kept no record the stored sections left out, else partial with
+ * the first reason that applies: purging, restored (a restoring project
+ * item whose root project is live again, whose stored rows itemReads left
+ * out), its state (moving, restoring, stuck), deleted during the export,
+ * changed during the export, rows left out (`leftOut`). There is no third
+ * value: rows of a purging or restored item read while it was still ready
+ * stay in the archive, so none of them is "not included". */
 async function itemStatus(
   item: ItemView,
   job: BatchJob,
   unsettled: ReadonlySet<string>,
+  leftOut: LeftOut,
   projectLive: (id: string) => Promise<boolean>,
 ): Promise<{ complete: boolean; reason?: ItemReason; during: boolean }> {
   const during = item.deleted_at >= job.started_at
@@ -949,7 +965,9 @@ async function itemStatus(
             ? 'deleted_during_export'
             : unsettled.has(item.id)
               ? 'changed_during_export'
-              : undefined
+              : leftOut.all || leftOut.items.has(item.id)
+                ? 'rows_left_out'
+                : undefined
   return reason === undefined ? { complete: true, during } : { complete: false, reason, during }
 }
 
@@ -961,9 +979,12 @@ async function itemStatus(
  * whose metadata the archive holds, and leaving out a personal token's or
  * connected app's, which the archive leaves out with the personal
  * credentials (COMMON_EXCLUSIONS); then export_rows, export_reason and
- * deleted_during_export (itemStatus). The answer tallies complete and
- * partial items. Reads the page and a restoring project item's root
- * project, under 3 MiB. */
+ * deleted_during_export (itemStatus). The items whose records the stored
+ * sections left out come from the organization's collecting job, at most
+ * one (step.left_out_items, orgExport.ts noteLeftOut), not from `job`. The
+ * answer tallies complete and partial items. Reads the page, the job row,
+ * at most about 30 KB, and a restoring project item's root project, under
+ * 3 MiB. */
 async function itemsBatch(
   ctx: QueryCtx,
   orgId: string,
@@ -983,10 +1004,15 @@ async function itemsBatch(
   const projectLive = (id: string) =>
     once(projects, id, async () => (await byId(ctx, 'projects', id))?.org_id === orgId)
   const unsettled = new Set(job.unsettled)
+  const step = (await collectingJob(ctx, orgId))?.step
+  const leftOut: LeftOut = {
+    items: new Set(step?.left_out_items ?? []),
+    all: step?.left_out_more === true,
+  }
   const items = { complete: 0, partial: 0 }
   const rows: OrgExportRow[] = []
   for (const item of page.page) {
-    const status = await itemStatus(item, job, unsettled, projectLive)
+    const status = await itemStatus(item, job, unsettled, leftOut, projectLive)
     const { _id, _creationTime, via, purge_after, restore_by, ...fields } = item
     rows.push({
       ...fields,
