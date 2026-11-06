@@ -1687,6 +1687,21 @@ which Convex builds at deploy with no backfill, adds no table and needs no
 backfill. The release whose app first calls `claimDownload` makes this
 release that app's backend floor, and its own paragraph says so.
 
+From the release after v0.1.148, `notifications.settings`, `setDelivery`,
+`beat`, `end`, `claimAlerts` and `claimSummary` hold each login's
+Notification delivery setting, its signed-in sessions, its delivery records
+and its catch-up checkpoint, and the cron `notification record expiry`
+deletes what has expired every 10 minutes. No app calls them yet, so that
+release sets no rollback floor and needs no step, and returning the backend
+to a commit before it stays safe until an app reads them. The release whose
+app first calls them makes this release the backend's floor for that app,
+and its own paragraph here says so. The release adds the tables
+`account_notifications`, `notification_sessions` and
+`notification_deliveries`, with no backfill. From it on, the session delete
+trigger also deletes the session's notification row, a deleted login loses
+its notification rows, and an organization export lists the three tables
+among what it leaves out.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -2405,6 +2420,24 @@ among its own, of projects it sees anyway. A Northstar reset under the
 earlier code keeps its seats and recreates its projects with the same ids
 and names, so its seats' earlier stars would show again; reset Northstar
 once more after the roll forward.
+
+Each login's Notification delivery setting and catch-up checkpoint are rows
+in `account_notifications`, its signed-in sessions are rows in
+`notification_sessions`, and the alerts granted are rows in
+`notification_deliveries`, which only `notifications.ts` writes; no app
+calls it yet. The tables start empty and need no backfill. A session's row
+goes with its Better Auth session in the session delete trigger, a login's
+rows with the login (`notifications:forgetLogin`) and the demo's in its
+cleanup, and the cron `notification record expiry` deletes records 15
+minutes old and session rows not beaten for 8 days. A rollback past the
+release that added the tables deploys, because Convex leaves the rows of
+tables the schema does not list alone, but the earlier code deletes no
+session row at sign-out, a ban or expiry, and no row of a deleted login.
+After rolling forward the cron deletes the session rows not beaten for 8
+days and the records expire within 15 minutes. What stays is the account
+row of a login deleted meanwhile, or deleted outside Better Auth's API and
+the console, such as by a raw component delete, which names a login id
+Better Auth never gives again and which nothing reads.
 
 The nightly archive of Done tasks reads only the tasks whose Done time passed
 the 30-day threshold since its last finished run, which the one
