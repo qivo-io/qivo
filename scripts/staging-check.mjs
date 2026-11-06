@@ -95,17 +95,18 @@
  * deployment's pickers (projectSettings.leadCandidates and candidates
  * without a project), it makes a project of its own led by the Standard
  * agent, shared with its team as Viewer and with Nora as User, and in New
- * sub-project from that project's sidebar menu, after its parent check
- * (projectSettings.get), a sub-project it picks the parent of from the
- * deployment's sub_project_parents list, led by the Standard agent and
- * without a starter task, each checked over REST (ui/project-dialogs). It
- * makes a sub-project of its own under its project with one task, uploads a
- * file there over REST and opens Billing, whose current storage must show a
- * figure rather than Being counted (billing.currentUsage) and whose Storage
- * by project, searched for its run tag and the word storage, must list that
- * sub-project alone with the file's size (billing.storageProjects), then
- * deletes the file (ui/billing-storage). It makes a project of its own with
- * two sub-projects, finds it by its run tag in Settings › Projects from the
+ * sub-project opened from its first project's sidebar menu, after that
+ * parent's check (projectSettings.get), a sub-project under the new
+ * project, picked from the deployment's sub_project_parents list, led by
+ * the Standard agent and without a starter task, each checked over REST
+ * (ui/project-dialogs). It makes a sub-project of its own under its
+ * project with one task, uploads a file there over REST and opens Billing,
+ * whose current storage must show a figure rather than Being counted
+ * (billing.currentUsage) and whose Storage by project, searched for its run
+ * tag and the word storage, must list that sub-project alone with the
+ * file's size (billing.storageProjects), then deletes the file
+ * (ui/billing-storage). It makes a project of its own with two
+ * sub-projects, finds it by its run tag in Settings › Projects from the
  * deployment's list (projectSettings.projects) and opens its sub-projects
  * (subProjects), archives one sub-project alone and then the project over
  * REST, finds the project in Archived projects (archived), shows its
@@ -4908,11 +4909,13 @@ export const PROJECT_DIALOGS_EXPECTED = { team: 'viewer', nora: 'user' }
  *  the server offers since she is not the lead, as User, then presses
  *  Create project. Over REST the project's lead must be the agent, the
  *  team's share Viewer and Nora's grant User. Then it opens New
- *  sub-project from that project's sidebar menu, waits for the parent
- *  check, names it `<tag> Dialogs sub`, picks the project again from the
- *  Project popover's search of the run's tag, picks the agent as lead,
+ *  sub-project from the sidebar menu of the run's project M, waits for
+ *  M's parent check, names it `<tag> Dialogs sub`, picks the new project
+ *  from the Project popover's search of the run's tag, waits until the
+ *  Project button names it after its check, picks the agent as lead,
  *  clears Create a starter task and presses Create sub-project. Over REST
- *  the sub-project's parent must be the project and its lead the agent.
+ *  the sub-project's parent must be the new project, not M, and its lead
+ *  the agent.
  *  The project goes in the cleanup with its sub-project, and the sweep
  *  finds both by their tag. It needs the run's team, and a backend from the
  *  release after v0.1.138 on, which takes a create without a sort_order. */
@@ -4974,24 +4977,26 @@ async function projectDialogsCheck() {
       PROJECT_DIALOGS_EXPECTED.nora,
       "Nora's grant",
     )
-    // New sub-project from the project's sidebar menu
-    const row = app.locator(`aside [data-project-row="${project.id}"]`)
+    // New sub-project from the sidebar menu of the run's project M, so the
+    // dialog starts on M and only a pick from the list can make it D
+    const { M } = run.projects
+    const row = app.locator(`aside [data-project-row="${M.id}"]`)
     await row.waitFor({ timeout: 30_000 })
     await row.hover()
     await row.getByRole('button', { name: 'Project actions', exact: true }).click()
     await app.getByRole('button', { name: 'New sub-project…', exact: true }).click()
     const sub = app.getByRole('dialog', { name: 'New sub-project', exact: true })
-    const parent = sub.locator(`[data-new-subproject-parent="${project.id}"]`)
-    // the parent check
-    await parent.waitFor({ timeout: 30_000 })
+    const opened = sub.locator(`[data-new-subproject-parent="${M.id}"]`)
+    // M's parent check
+    await opened.waitFor({ timeout: 30_000 })
     await sub.getByRole('textbox', { name: 'Name', exact: true }).fill(subName)
-    // the parent again, from the server's sub_project_parents list
-    await parent.click()
+    // D from the server's sub_project_parents list, then D's check
+    await opened.click()
     await app.locator('[data-new-subproject-parent-search]').fill(run.tag)
     await app
       .locator(`[data-new-subproject-parent-choice="${project.id}"]`)
       .click({ timeout: 30_000 })
-    await parent.waitFor({ timeout: 30_000 })
+    await sub.locator(`[data-new-subproject-parent="${project.id}"]`).waitFor({ timeout: 30_000 })
     await sub.locator('[data-project-lead-picker]').click()
     await app.locator('[data-lead-picker-search]').fill(std.name)
     await app.locator(`[data-lead-choice="${std.id}"]`).click({ timeout: 30_000 })

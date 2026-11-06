@@ -213,6 +213,19 @@ describe('staging check REST contract', () => {
     expect(check.indexOf('await projectDialogsCheck()')).toBeGreaterThan(
       check.indexOf('await projectSettingsCheck()'),
     )
+    // New sub-project opens on the run's project M and picks the step's
+    // own project from the list, so only a pick that changes the parent
+    // passes
+    const step = check.slice(
+      check.indexOf('async function projectDialogsCheck()'),
+      check.indexOf('export const BILLING_STORAGE_STEP'),
+    )
+    expect(step).toContain(`app.locator(\`aside [data-project-row="\${M.id}"]\`)`)
+    expect(step).toContain(`sub.locator(\`[data-new-subproject-parent="\${M.id}"]\`)`)
+    expect(step.indexOf(`[data-new-subproject-parent-choice="\${project.id}"]`)).toBeLessThan(
+      step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
+    )
+    expect(step).toContain(`eq(madeSub.parent_id, project.id, "the sub-project's parent")`)
     // its project goes in the cleanup
     expect(check).toContain(
       'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
