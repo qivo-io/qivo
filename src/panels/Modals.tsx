@@ -2601,12 +2601,13 @@ function UnusedReason({
    milestone of its side on the server, once it held more than one batch,
    and says when it loads, refreshes, fails (Retry), is refused (the
    server's sentence) or could check only part of the list, never calling
-   such a section empty or whole. Every section is a live read of the store, so the person's own
-   writes paint over it at once and other people's arrive while it shows;
-   every read stops while the tab or desktop window hides and reads again on
-   return, and a new week starts both sections again. A row's Edit button
-   opens it in place with Delete / Cancel / Save. Every action commits where
-   it stands and the window stays open; the footer is only Done.
+   such a section empty or whole. Every section is a live read of the store,
+   so the person's own writes paint over it at once and other people's
+   arrive while it shows; every read stops while the tab or desktop window
+   hides and reads again on return, and a new week starts both sections
+   again. A row's Edit button opens it in place with Delete / Cancel / Save.
+   Every action commits where it stands and the window stays open; the
+   footer is only Done.
    `init.project` opens on the new row, `init.week` preselecting its week.
 
    `init.id` (a roadmap diamond, an Overview row, the phone agenda) opens
@@ -2628,15 +2629,15 @@ function UnusedReason({
    A milestone the server does not answer, for every reason alike, or
    refuses, says so with Done only; a failure offers Retry; and once it
    showed, an answer of null that the person's own delete did not cause
-   closes its editor and says it is no longer here. The add row and the other milestones' Edit follow the answer's
-   right while it names the milestone, and after the person's own delete
-   the right it gave last, while the store's level allows it too; an
-   answer of null for another reason gives none. An editor open when its
-   right goes stays, locked, with its draft. A failure after an answer
-   keeps that answer, and the editor its draft, under a note with Retry.
-   While the tab hides or after a reconnect the window shows its last
-   answer and its root is marked refreshing (aria-busy) until the answer
-   is current again.
+   closes its editor and says it is no longer here. The add row and the
+   other milestones' Edit follow the answer's right while it names the
+   milestone, and after the person's own delete the right it gave last,
+   while the store's level allows it too; an answer of null for another
+   reason gives none. An editor open when its right goes stays, locked, with
+   its draft. A failure after an answer keeps that answer, and the editor
+   its draft, under a note with Retry. While the tab hides or after a
+   reconnect the window shows its last answer and its root is marked
+   refreshing (aria-busy) until the answer is current again.
 
    An open editor stays in the place it opened in, above the sections or
    in its section, with its draft and focus, until the person saves,
