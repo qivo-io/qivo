@@ -96,7 +96,11 @@
  *   or that answer's floor when it held none, never a clock. A claim with
  *   no events is a baseline. A freshly started target takes one with its
  *   first feed answer's `through` and never offers that answer's events,
- *   so no summary counts what it held. Send no events otherwise.
+ *   so no later summary counts what it held. In 'recent' that claim answers
+ *   `summarize_first` when another session moved the checkpoint last or
+ *   reported activity after it. The summary it then calls counts what
+ *   arrived since that checkpoint, that answer's events included, and the
+ *   baseline claim follows. Send a claim with no events at no other time.
  * - After a resume or a reconnect it beats, then calls claimSummary, then
  *   claims, so its gap is summarized before a claim moves the checkpoint;
  *   a claim from a session past liveness answers `not_target`. It calls
