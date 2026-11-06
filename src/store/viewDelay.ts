@@ -26,7 +26,13 @@
    rule (ownerItemsOf): the cache's spans with each one's project and the
    person's paused tasks, with the work of every task this person's rows
    hold taken from those rows, so a task counts once whichever list holds
-   it. viewLoadOf's answers, which the delays read, stay as they were. */
+   it. viewLoadOf's answers, which the delays read, stay as they were.
+
+   The rows that stand in for the cache's spans are only those of views
+   whose rows still hear every change (ViewDelayCtx inView). A stopped
+   read's rows, as a kept Board's behind the Roadmap, never do: the cache's
+   span of such a task is the newer, so it counts at its hours now, and not
+   at all once the task is Done. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'

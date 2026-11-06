@@ -6,14 +6,16 @@ import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
+import type { RoadmapRequest } from './Roadmap'
 
 /* Team utilization under the Roadmap (views/Resources.tsx): its people are
    the owners of the Roadmap's shown tasks, and each person's hours come
    from the owner-load cache (planning.ownerLoads) reconciled with the rows
-   on screen. A person whose load is on its way shows "…", one whose load
-   could not be read or is past a guest's cap shows unknown, and neither
-   ever shows a figure that reads as free time. The store boots without the
-   workspace's tasks, as the app does. */
+   on screen, never with a stopped read's kept rows. A person whose load is
+   on its way shows "…", one whose load could not be read or is past a
+   guest's cap shows unknown, and neither ever shows a figure that reads as
+   free time. The store boots without the workspace's tasks, as the app
+   does. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -122,15 +124,23 @@ const twoPeople =
     snap.issues.push({ ...taskRow(snap, 'theirs', 'todo', 2), assignee_id: OTHER, ...dated })
   }
 
-async function renderRoadmap(board: Board) {
+/** Renders the Roadmap of the board's scope with `filters`, planning the
+    task `focusPlan` names. */
+async function renderRoadmap(
+  board: Board,
+  {
+    filters = ROW,
+    focusPlan = null,
+  }: { filters?: IssueFilters; focusPlan?: RoadmapRequest | null } = {},
+) {
   const { Roadmap } = await import('./Roadmap')
   await board.renderView(root, (info) => (
     <Roadmap
       info={info}
-      filters={ROW}
+      filters={filters}
       actions={new Proxy({}, { get: () => () => {} }) as never}
       filterControls={() => null}
-      focusPlan={null}
+      focusPlan={focusPlan}
     />
   ))
 }
@@ -320,5 +330,57 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
       expect(cell.text).not.toMatch(/\d/)
     }
     expect(cells('person-01').find((c) => c.week === TODAY_WEEK)?.unknown).toBe(false)
+  })
+
+  it("counts a task only a stopped Board holds at its owner's load now, and not once it is Done", async () => {
+    // two-1, of high priority, this week alone, which the Roadmap's filter
+    // leaves out
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { priority: 'high', start_week: week(0), end_week: week(0) })
+      },
+      { scope: 'plan' },
+    )
+    const me = board.snapshot.profiles[0].id
+    // the Board's answer holds two-1 at 3 hours; the Roadmap takes its
+    // place, which stops the Board's read and keeps its rows
+    await board.render(root)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(board.card('two-1')).not.toBeNull()
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board, {
+      filters: { ...ROW, priority: 'medium' },
+      focusPlan: {
+        id: 'QN-1',
+        n: 1,
+        key: 'QN-1',
+        uuid: 'one-1',
+        project: board.snapshot.projects[0].id,
+        start: TODAY_WEEK,
+        end: TODAY_WEEK + 1,
+      },
+    })
+    await act(async () => {})
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(3)
+    expect(board.P.viewTask('roadmap', 'two-1')).toBeUndefined()
+    const thisWeek = () => cells(me).find((c) => c.week === TODAY_WEEK)?.hours
+    const panel = () => document.querySelector('[data-plan-card]')?.textContent ?? ''
+    expect(thisWeek()).toBe('4')
+    expect(panel()).toMatch(/Two\s*3h/)
+    // someone gives two-1 28 hours, and its owner's load answers so: the
+    // stopped Board's row still says 3
+    const two = board.snapshot.issues[1]
+    two.remaining_hours = 28
+    await board.answer()
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(3)
+    expect(thisWeek()).toBe('29')
+    expect(panel()).toMatch(/Two\s*28h/)
+    // and once it is Done its load has no span of it, so it counts no more
+    two.status = 'done'
+    await board.answer()
+    expect(thisWeek()).toBe('1')
+    expect(panel()).not.toMatch(/Two\s*\d/)
   })
 })
