@@ -254,6 +254,14 @@ describe('what a section shows', () => {
     expect(sectionView(plan, ok(answerWith(rowsOf(2), { past: false })), null).past).toBe(false)
   })
 
+  it('forgets a false past once the answer shown has none, and keeps it while the next read loads', () => {
+    const plan: SectionPlan = { ...startPlan(KEY, '', 1), past: false }
+    // a moved-on answer carries no past, and the read that said false is released
+    expect(sectionView(plan, ok(answerWith(rowsOf(2))), null).past).toBeUndefined()
+    expect(sectionView(plan, { state: 'failed', kept: null }, null).past).toBeUndefined()
+    expect(sectionView(plan, { state: 'loading' }, null).past).toBe(false)
+  })
+
   it('shows a painted answer longer or shorter than its limit as painted, each id once', () => {
     const plan = startPlan(KEY, '', 1)
     const longer = answerWith(rowsOf(26))

@@ -261,6 +261,15 @@ async function typeInto(box: HTMLInputElement | null, text: string) {
   })
 }
 
+/** Picks `day`, a Monday, in the open editor's calendar, paging back from
+    the month it opens on. */
+async function pickInEditor(day: string) {
+  await press(q('[data-milestone-editor] .datectl'))
+  for (let i = 0; i < 3 && !q(`[data-cal-day="${day}"]`); i++)
+    await press(q('[data-calendar] button[aria-label="Previous month"]'))
+  await press(q(`[data-cal-day="${day}"]`))
+}
+
 /** Moves milestone `id` on the server to `week`, as someone else does. */
 function moveOnServer(id: string, week: string) {
   const row = server.milestones.find((m) => m.id === id)
@@ -644,6 +653,61 @@ describe("the person's writes", { timeout: 30_000 }, () => {
     expect(q('[data-milestone-dropped]')).not.toBeNull()
     await typeInto(q('[data-milestone-new]') as HTMLInputElement, 'Kickoff')
     await press(button('Add'))
+    expect(q('[data-milestone-past-toggle]')).not.toBeNull()
+  })
+
+  it.each([
+    [
+      'someone else moves',
+      async () => {
+        moveOnServer('u4', mondayIn(-2))
+        await rerun()
+      },
+    ],
+    [
+      'the person saves',
+      async () => {
+        await press(q('[data-milestone-row="u4"] button[aria-label^="Edit"]'))
+        await pickInEditor(mondayIn(-2))
+        await press(button('Save'))
+      },
+    ],
+  ])(
+    "shows Past's disclosure where %s a milestone into the past after Upcoming moved on",
+    async (_, move) => {
+      fixture({ up: 6 })
+      await start({ batch: 2, rows: 4 })
+      await open({ project: 'plan' })
+      // a project with no history hides Past, also once Load more grew Upcoming
+      await press(q('[data-milestone-more]'))
+      expect(shown('upcoming')).toEqual(['u1', 'u2', 'u3', 'u4'])
+      expect(q('[data-milestone-past-toggle]')).toBeNull()
+      await press(q('[data-milestone-more]'))
+      expect(q('[data-milestone-dropped]')).not.toBeNull()
+      await move()
+      expect(shown('upcoming')).toEqual(['u3', 'u5', 'u6'])
+      expect(q('[data-milestone-past-toggle]')).not.toBeNull()
+    },
+  )
+
+  it("shows Past's disclosure once the person saves a milestone into the past while Upcoming loads", async () => {
+    fixture({ up: 3 })
+    await start({ batch: 2, rows: 4 })
+    await open({ project: 'plan' })
+    expect(q('[data-milestone-past-toggle]')).toBeNull()
+    await press(q('[data-milestone-row="u2"] button[aria-label^="Edit"]'))
+    // a new search's read, which would say whether Past holds any, is held
+    force.upcoming = 'loading'
+    await typeInto(
+      q('[data-milestone-section="upcoming"] [data-milestone-search]') as HTMLInputElement,
+      'step',
+    )
+    await searchSettles()
+    expect(stateOf('upcoming')).toBe('loading')
+    expect(q('[data-milestone-past-toggle]')).toBeNull()
+    await pickInEditor(mondayIn(-2))
+    await press(button('Save'))
+    expect(q('[data-milestone-editor]')).toBeNull()
     expect(q('[data-milestone-past-toggle]')).not.toBeNull()
   })
 

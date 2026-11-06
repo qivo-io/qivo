@@ -2593,8 +2593,9 @@ function UnusedReason({
    milestones of the current week and later, nearest first. Past, collapsed
    whenever the window opens, lists the earlier ones, newest first, and
    reads nothing until the person expands it; it shows once Upcoming's first
-   answer came, unless that answer says the project holds no past
-   milestone. Each section reads 25 at first and 25 more for each Load
+   answer came, unless the answer Upcoming shows says the project holds no
+   past milestone and the person made none here. An Upcoming that moved on
+   can no longer tell, so Past shows then. Each section reads 25 at first and 25 more for each Load
    more, keeps at most 100 and then moves on with Show from the start, shows
    its search box, which searches every milestone of its side on the
    server, once it held more than one batch, and says when it loads,
@@ -2842,9 +2843,20 @@ function MilestoneModal({
   // or was refused, which the opened milestone waits for
   const [upcomingIn, setUpcomingIn] = useStateM(false)
   if (!upcomingIn && project && upcoming.view.state !== 'loading') setUpcomingIn(true)
-  // a past milestone the person added here, after which Past shows even
-  // where the last first answer of Upcoming said the project held none
-  const [pastAdded, setPastAdded] = useStateM(false)
+  // a past milestone the person added here, or moved into a past week with
+  // its editor, after which Past shows even where the last first answer of
+  // Upcoming said the project held none
+  const [pastMade, setPastMade] = useStateM(false)
+  /** Marks a past milestone made here at once, as the paint shows it, and
+      answers what runs once the server answered, which takes the mark back
+      after a refusal unless an earlier write set it. */
+  const makePast = () => {
+    const had = pastMade
+    setPastMade(true)
+    return (saved: boolean) => {
+      if (!saved && !had) setPastMade(false)
+    }
+  }
   // each section's search box, which stays once it showed
   const [searchable, setSearchable] = useStateM({ upcoming: false, past: false })
   for (const [side, section] of [
@@ -2879,17 +2891,14 @@ function MilestoneModal({
     const added = name.trim()
     const sent = date
     const toPast = exactWeekForDate(date) < P.TODAY_WEEK
-    const hadPast = pastAdded
     // a past add shows Past's disclosure at once, as the paint does
-    if (toPast) setPastAdded(true)
+    const settled = toPast ? makePast() : undefined
     setAdding(true)
     void P.addMilestone({ name: added, week: exactWeekForDate(date), project: project.id }).then(
       (saved) => {
         setAdding(false)
-        if (!saved) {
-          if (toPast && !hadPast) setPastAdded(false)
-          return
-        }
+        settled?.(saved)
+        if (!saved) return
         // a milestone that lands in a collapsed Past says where it went
         window.showToast?.(
           toPast && !pastOpenRef.current
@@ -2997,6 +3006,7 @@ function MilestoneModal({
         }
         onClose={() => setEditId(null)}
         onDelete={own ? () => setDeletedHere(true) : undefined}
+        onPastMove={makePast}
       />
     )
   }
@@ -3054,11 +3064,12 @@ function MilestoneModal({
   const upcomingItems = project ? itemsOf('upcoming', upcoming.view.rows) : []
   const pastItems = project ? itemsOf('past', pastOpen ? past.view.rows : []) : []
   // Past shows once Upcoming's first answer came, failed or was refused,
-  // unless the last first answer said the project holds no past milestone
+  // unless Upcoming knows the project holds no past milestone (its `past`,
+  // unknown once it moved on) and the person made none here
   const showPast =
     !!project &&
     upcomingIn &&
-    (pastOpen || editPlace === 'past' || pastAdded || upcoming.view.past !== false)
+    (pastOpen || editPlace === 'past' || pastMade || upcoming.view.past !== false)
   const pastBodyId = useIdM()
 
   const openState = !init.id
@@ -3206,7 +3217,7 @@ function MilestoneModal({
                 section={upcoming}
                 open
                 searchable={searchable.upcoming}
-                pastKnown={upcoming.view.past === false && !pastAdded}
+                pastKnown={upcoming.view.past === false && !pastMade}
                 header={
                   <div className="mb-2 flex items-center gap-2 text-md font-semibold text-text-1">
                     Upcoming
@@ -3579,6 +3590,7 @@ function MilestoneEditor({
   lockedNote = 'You can no longer change this milestone.',
   onClose,
   onDelete,
+  onPastMove,
 }: {
   m: MilestoneVM
   storedOf?: () => { name: string; week: string } | undefined
@@ -3587,6 +3599,9 @@ function MilestoneEditor({
   onClose: () => void
   /** runs as the person deletes the milestone here */
   onDelete?: () => void
+  /** runs as a save moves the milestone into a past week, and answers what
+      runs with whether the server saved it */
+  onPastMove?: () => (saved: boolean) => void
 }) {
   // the name and day stored when the editor opened, which the save sends as
   // what the person saw. After a save refused over someone else's change,
@@ -3668,12 +3683,9 @@ function MilestoneEditor({
       if (!takeStored()) rebase.current = true
       return true
     }
-    void P.updateMilestone(
-      m.id,
-      { name: name.trim(), week: exactWeekForDate(date) },
-      seen,
-      keepDraft,
-    ).then((saved) => {
+    const moved = week !== m.week && week < P.TODAY_WEEK ? onPastMove?.() : undefined
+    void P.updateMilestone(m.id, { name: name.trim(), week }, seen, keepDraft).then((saved) => {
+      moved?.(saved)
       setSaving(false)
       if (!saved) return
       window.showToast?.('Milestone updated')

@@ -76,7 +76,7 @@ export type SlotPlan = {
 
 /** A section's plan: the base and search it asks for (`base` is
     sectionKey's), the slot that shows, a Load more's slot on its way, and
-    the last `past` a first upcoming answer gave. */
+    the last `past` the section showed (sectionView). */
 export type SectionPlan = {
   base: string
   search: string
@@ -192,7 +192,9 @@ export type SectionNote =
       rows kept, and `too_many`;
     - `rows` in the server's order, painted, each id once;
     - `next` and `stopped` of the answer shown;
-    - `past`, the last value a first upcoming answer gave;
+    - `past`, whether the projects hold a past milestone, from the answer
+      shown, else true if a first upcoming answer said so, else unknown,
+      and while the next read loads the last value;
     - `whole`, an answer with no `next`, no `stopped` and no `after`;
     - `dropped`, a section moved on, whose first rows are not shown;
     - `more`, Load more ready, or loading while its read is on its way;
@@ -238,7 +240,13 @@ export function sectionView<R extends { id: string }>(
     seen.add(row.id)
     return true
   })
-  const past = answer?.past ?? plan.past
+  // A first upcoming answer says whether the projects hold a past
+  // milestone. Once the answer shown carries no `past`, as one that moved
+  // on, the read that said false is released and hears no change, so only
+  // a true one is kept and false becomes unknown. While the next read
+  // loads, the last value stands until its answer.
+  const kept = plan.past === true ? true : undefined
+  const past = answer ? (answer.past ?? kept) : shown.state === 'loading' ? plan.past : kept
   const dropped = plan.shown.after !== undefined
   const whole = !!answer && answer.next === null && answer.stopped === null && !dropped
   const base = {
