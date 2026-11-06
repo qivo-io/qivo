@@ -1236,7 +1236,9 @@ const loadRow = (row) => {
 }
 /* The `images` parameter's inline images of the first task, the first
    `bigimages` of them 4,096 pixels square, and the description that shows
-   them, one a paragraph with text between. */
+   them, one a paragraph with about 100 characters of text between, so 100
+   of them stay inside the description's 20,000 characters, past which the
+   app shows a description as plain text. */
 const descriptionImages = Array.from({ length: imageCount }, (_, k) => ({
   id: id('e', k),
   issue_id: tasks[0]?.id,
@@ -1250,7 +1252,7 @@ const descriptionImages = Array.from({ length: imageCount }, (_, k) => ({
 }))
 if (imageCount && tasks[0])
   tasks[0].description = descriptionImages
-    .map((image, k) => `${prose(240)}\n\n![Bench photo ${k + 1}](att:${image.id})`)
+    .map((image, k) => `${prose(100)}\n\n![Bench photo ${k + 1}](att:${image.id})`)
     .join('\n\n')
 const wireRows = new Map(tasks.map((row) => [row.id, wireTask(row)]))
 const loadRows = new Map(allTasks.map((row) => [row.id, loadRow(row)]))

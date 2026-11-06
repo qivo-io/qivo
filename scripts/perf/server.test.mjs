@@ -2111,8 +2111,10 @@ describe('files on the benchmark page', () => {
     expect(images.filter((a) => a.mime === 'image/png')).toHaveLength(3)
     const shown = [...first.description.matchAll(/!\[[^\]]*\]\(att:([^)]+)\)/g)].map((m) => m[1])
     expect(shown).toEqual(images.map((a) => a.id))
-    // text between the images, one a paragraph
+    // text between the images, one a paragraph, inside the description's
+    // 20,000 characters, past which the app shows it as plain text
     expect(first.description.split('\n\n')).toHaveLength(200)
+    expect(first.description.length).toBeLessThanOrEqual(20_000)
   })
 
   it('answers files:mintUrls with perf.invalid URLs for what the workspace holds, pictures with their version', async () => {
