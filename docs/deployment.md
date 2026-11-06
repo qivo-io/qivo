@@ -237,7 +237,16 @@ the task from the deployment's preview (`accessRemovals.preview`), chooses
 Nora in the **Reassign** picker's search (`accessRemovals.reassignChoices`)
 and saves, then checks over REST that the task is Nora's and the agent's
 grant is gone (`ui/removal-window`). Against a backend from before the
-removal window's release that step fails. After that it checks
+removal window's release that step fails. It then makes a sub-project of
+its own under its project, uploads one file of 2,048 bytes over REST to a
+task there, opens **Billing**, checks that current storage shows a figure
+rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
+1 file** by searching **Storage by project** for its run tag and the word
+storage, and deletes the file over REST, also after a failure
+(`ui/billing-storage`). That shows the deployment's stored-byte totals are
+counted and that the page reads them (`billing.currentUsage` and
+`billing.storageProjects`). Against a backend from before those queries
+that step fails. After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
@@ -935,6 +944,22 @@ release step and no new rollback floor. An older app works against its
 backend, and this app works against any backend from v0.1.102 on, which
 the removal window's floor (the release after v0.1.120) already holds.
 
+Billing reads its usage from `billing.currentUsage` and its Storage by
+project list from `billing.storageProjects`, once on opening and on each
+Refresh and never subscribed, which the release after v0.1.134 first ships
+together with the app that reads them. Current storage comes from the
+stored-byte totals, files in Deleted items included, and Billing shows the
+paid period's storage sample beside it. An app from that release, against
+a backend before it, says on Billing that usage could not be refreshed,
+also in a tab that was open when the backend went back, until the backend
+rolls forward. From that release on, never return the backend to a commit
+before it; roll forward instead. Returning the app alone to an earlier
+release is safe while the backend keeps `billing.usageReport`, which this
+release keeps with its scan for tabs loaded before it, and the release that
+removes it adds it to the Instant Rollback list above. The period's storage
+sample still scans the attachment rows. There is no schema change, no
+backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
@@ -1242,9 +1267,12 @@ deletes its last row for good takes it out, and a move between projects
 shifts it. Each project and task row names its organization and its
 project's or task's number, which the organization never gives another, so
 a task or project that takes the id of a purged one, in any organization,
-counts in a row of its own and never changes another's. Nothing reads
-the totals yet. Billing samples and the Billing page still scan the
-attachment rows. A new organization starts counted at zero. An
+counts in a row of its own and never changes another's. From the release
+after v0.1.134, Billing's current storage and its Storage by project list
+read the totals (`billing.currentUsage` and `billing.storageProjects`).
+The storage sample at the start of a paid period and the legacy
+`billing.usageReport` still scan the attachment rows. A new organization
+starts counted at zero. An
 organization created before the release that added them has no totals
 until the one-time `internal/storageTotalsBackfill` counts it, and a reader
 must treat it as not counted until then. Run the backfill on every hosted

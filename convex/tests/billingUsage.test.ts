@@ -91,9 +91,9 @@ const orgBuckets = async (t: T) => {
 }
 /* [period_start, calls] for every bucket, sorted. */
 const buckets = async (t: T) => (await orgBuckets(t)).map(([, period, calls]) => [period, calls])
-/* The admin Billing page's usage report at the mocked clock. */
+/* Billing's usage (billing.currentUsage) at the mocked clock. */
 const report = (t: T, f: Pick<OrgFixture, 'admin' | 'org'>) =>
-  as(t, f.admin).action(api.billing.usageReport, { org_id: f.org.id })
+  as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
 const at = (iso: string) => vi.mocked(Date.now).mockReturnValue(Date.parse(iso))
 const patchSub = (
   t: T,

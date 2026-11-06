@@ -1,8 +1,10 @@
 /* model/billing.ts storageUsage, the attachment bytes an organization
- * stores in total and per project, read in one transaction. The admin
- * Billing page reads the same figures page by page
- * (billing.usageReport, through storagePage), as each new billing period's
- * sample does (covered in billing.test.ts).
+ * stores in total and per project, read in one transaction. The legacy
+ * usage report (billing.usageReport, through storagePage), which tabs
+ * loaded before billing.currentUsage shipped still read, reads the same
+ * figures page by page, as each new billing period's sample does (covered
+ * in billing.test.ts). Billing's current figures come from the stored-byte
+ * totals instead (billingStorage.test.ts).
  *
  *   1. It reads the organization's attachment rows in one index range and
  *      counts each in its task's project, reading each task once and
@@ -10,15 +12,16 @@
  *   2. Every move of a task (the app, REST and MCP) moves its usage, and so
  *      do the subtasks a move to another top-level project carries, without
  *      writing an attachment row.
- *   3. The Billing page's paged report gives the same figures at any page
- *      size, and past the size one query can read.
+ *   3. The legacy paged report gives the same figures at any page size, and
+ *      past the size one query can read, with a number storage_bytes and
+ *      the projects an older app renders.
  *
  * The fixtures insert rows directly, in the shape attachFileCore stores. */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
-import type { BillingUsage } from '../lib/billingTypes'
+import type { BillingUsageReport } from '../lib/billingTypes'
 import { billingUsageHead, STORAGE_PAGE, storageUsage } from '../model/billing'
 import {
   as,
@@ -232,16 +235,16 @@ describe('moving a task', () => {
   })
 })
 
-describe("the Billing page's paged report", () => {
+describe('the legacy paged usage report', () => {
   const defaults = { page: { ...STORAGE_PAGE } }
   afterEach(() => {
     Object.assign(STORAGE_PAGE, defaults.page)
   })
 
-  const report = (t: T, f: OrgFixture): Promise<BillingUsage> =>
+  const report = (t: T, f: OrgFixture): Promise<BillingUsageReport> =>
     as(t, f.admin).action(api.billing.usageReport, { org_id: f.org.id })
   /* The same report read in one transaction, storageUsage for its storage. */
-  const oneQuery = (t: T, f: OrgFixture): Promise<BillingUsage> =>
+  const oneQuery = (t: T, f: OrgFixture): Promise<BillingUsageReport> =>
     t.run(async (ctx) => {
       const storage = await storageUsage(ctx, f.org.id)
       const head = await billingUsageHead(ctx, f.org.id)
@@ -264,6 +267,28 @@ describe("the Billing page's paged report", () => {
       Object.assign(STORAGE_PAGE, defaults.page, page)
       expect(await report(t, f)).toEqual(expected)
     }
+    // the answer an app from before billing.currentUsage renders: a number
+    // storage_bytes and the projects, with no field of the new answer
+    const legacy = await report(t, f)
+    expect(typeof legacy.storage_bytes).toBe('number')
+    expect(Object.keys(legacy).sort()).toEqual(
+      [
+        'api_overage_cents',
+        'calls',
+        'delivery_unconfirmed',
+        'included_calls',
+        'included_storage_bytes',
+        'period_end',
+        'period_key',
+        'period_kind',
+        'period_start',
+        'projects',
+        'storage_bytes',
+        'storage_overage_cents',
+        'users',
+        'waived',
+      ].sort(),
+    )
   })
 
   it('refuses anyone but an organization admin', async () => {

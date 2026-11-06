@@ -391,7 +391,7 @@ describe('who the page speaks to', () => {
     await open('admin')
     await deliver([task(1)])
     expect(text('.settings-page-title')).toContain(
-      'Tasks and projects deleted in your organization.',
+      'Tasks and projects deleted in your organization. Their files count toward its storage until they are deleted for good.',
     )
     expect(has('[data-deleted-by]')).toBe(true)
 
@@ -410,6 +410,8 @@ describe('who the page speaks to', () => {
     await deliver([task(1, { deleter: ME })])
     expect(text('.settings-page-title')).toContain('Tasks and projects you deleted.')
     expect(text('.settings-page-title')).not.toContain('organization')
+    // only admins, who see Billing and alone delete for good, read about storage
+    expect(text('.settings-page-title')).not.toContain('storage')
     expect(has('[data-deleted-by]')).toBe(false)
   })
 
@@ -1157,7 +1159,7 @@ describe('Delete now', () => {
     // this one cannot be undone, so the whole window is red
     expect(find('[data-modal-shell]').className).toContain('var(--danger)')
     expect(text('[data-purge]')).toBe(
-      'Deletes QN-155 Show battery level in the status bar and its comments and attachments. This cannot be undone.',
+      'Deletes QN-155 Show battery level in the status bar and its comments and attachments. This cannot be undone. Its files then stop counting toward your organization’s storage.',
     )
     expect(calls('deletedItems:purge')).toEqual([])
     await click(button('Delete for good'))
@@ -1176,7 +1178,7 @@ describe('Delete now', () => {
     await click(find('[data-delete-now]'))
     expect(text('[data-modal-shell] h2')).toBe('Delete Field trial Q3 for good?')
     expect(text('[data-purge]')).toBe(
-      'Deletes Field trial Q3, its 2 sub-projects and 48 tasks with their comments and attachments. This cannot be undone.',
+      'Deletes Field trial Q3, its 2 sub-projects and 48 tasks with their comments and attachments. This cannot be undone. Its files then stop counting toward your organization’s storage.',
     )
     await click(button('Cancel'))
     expect(calls('deletedItems:purge')).toEqual([])
@@ -1222,23 +1224,25 @@ describe('Delete now', () => {
       task(1, { can_purge: true }),
     ])
     expect(await purgeText('item-trial')).toBe(
-      'Deletes Field trial Q3. It also deletes 3 items deleted from the project earlier. This cannot be undone.',
+      'Deletes Field trial Q3. It also deletes 3 items deleted from the project earlier. This cannot be undone. Its files then stop counting toward your organization’s storage.',
     )
     expect(await purgeText('item-blog')).toBe(
-      'Deletes Blog migration. It also deletes 1 item deleted from the project earlier. This cannot be undone.',
+      'Deletes Blog migration. It also deletes 1 item deleted from the project earlier. This cannot be undone. Its files then stop counting toward your organization’s storage.',
     )
     // a capped list may not hold them all, and a stuck row no longer says what it waits for
     await deliver([empty, task(1, { can_purge: true })], true)
     const unsure =
-      'Deletes Field trial Q3. It also deletes any items deleted from the project earlier. This cannot be undone.'
+      'Deletes Field trial Q3. It also deletes any items deleted from the project earlier. This cannot be undone. Its files then stop counting toward your organization’s storage.'
     expect(await purgeText('item-trial')).toBe(unsure)
     expect(await purgeText('item-1')).toBe(
-      'Deletes QN-1 Task 1 and its comments and attachments. This cannot be undone.',
+      'Deletes QN-1 Task 1 and its comments and attachments. This cannot be undone. Its files then stop counting toward your organization’s storage.',
     )
     await deliver([empty, task(8, { state: 'stuck', can_restore: false, can_purge: true })])
     expect(await purgeText('item-trial')).toBe(unsure)
     await deliver([empty, task(1, { can_purge: true })])
-    expect(await purgeText('item-trial')).toBe('Deletes Field trial Q3. This cannot be undone.')
+    expect(await purgeText('item-trial')).toBe(
+      'Deletes Field trial Q3. This cannot be undone. Its files then stop counting toward your organization’s storage.',
+    )
   })
 })
 

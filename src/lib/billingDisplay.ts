@@ -1,5 +1,5 @@
 import { ConvexError } from 'convex/values'
-import type { BillingUsage } from '../../convex/lib/billingTypes'
+import type { BillingSummary, BillingUsage, StorageProjectRow } from '../../convex/lib/billingTypes'
 
 export function billingError(cause: unknown): string {
   if (cause instanceof ConvexError) {
@@ -67,4 +67,40 @@ export function usageHints(
     api: `Extra API charges recorded this period: ${billingMoney(usage.api_overage_cents, currency)}. Added to the invoice at the end of this period.`,
     storage: `Extra storage charge recorded this period: ${billingMoney(usage.storage_overage_cents, currency)}, based on storage measured at the start of the period. Added to the invoice at the end of this period.`,
   }
+}
+
+/** The most rows Billing's Storage by project gathers with Load more, 80
+    batches; past it, a search narrows the list. It is above the 1,500
+    projects with files the design size allows (500 live and 1,000 archived
+    sub-projects), so every project inside it is reachable without
+    searching. Tests lower it. */
+export const STORAGE_LIST = { most: 2000 }
+
+/** A Storage by project row's id: its project id and number, which name
+    one totals row, since a project id can come back under another number. */
+export const storageRowId = (row: StorageProjectRow) => `${row.project_id}:${row.num ?? ''}`
+
+/** What Billing's current storage counts, under its figure. */
+export const STORAGE_COUNTS =
+  'Task attachments and description images, files in Deleted items included until they are deleted for good. Profile pictures and backgrounds are part of the base price.'
+
+/** What Billing shows while the organization's stored-byte totals are
+    being counted, in place of a figure, never 0. */
+export const STORAGE_COUNTING = 'Being counted. Check again later.'
+
+/** The line under current storage that names the storage the paid
+    period's sample measured at its start, which the period's storage
+    charge uses and which leaves files in Deleted items out, so the page
+    never implies the charge counts them. Null outside a paid period, and
+    for a trial, which never gets a sample (convex/billingSync.ts apply
+    records a period only for an active or past-due subscription).
+    `status` is the summary's. */
+export function storageSampleLine(
+  usage: Pick<BillingUsage, 'period_kind' | 'sampled_storage_bytes'>,
+  status: BillingSummary['status'] | undefined,
+): string | null {
+  if (usage.period_kind !== 'paid' || status === 'trialing') return null
+  return usage.sampled_storage_bytes === null
+    ? 'Not measured yet for this period.'
+    : `${billingBytes(usage.sampled_storage_bytes)} measured at the start of this period, without files in Deleted items.`
 }

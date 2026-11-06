@@ -240,18 +240,25 @@ organization ([Limits](./limits.md)).
 
 Billing lists active and inactive accounts and guests with their own billing.
 It also shows shared storage and API allowances, API usage by account, each
-with **View credentials**, and storage by project. **Refresh** reads current usage. Files in
-Deleted items are not billed as storage
-([Deleted items](./how-work-is-organized.md#deleted-items)). In the private
-demo, they still count toward its 50 MiB upload allowance until they are
-deleted for good with **Delete now…**
-([Private demo](./qivo-in-one-minute.md#private-demo)).
+with **View credentials**, and current storage. Current storage counts task
+attachments and description images, files in Deleted items included until
+they are deleted for good
+([Deleted items](./how-work-is-organized.md#deleted-items)). Profile pictures
+and backgrounds are part of the base price and do not count. **Storage by
+project** lists projects largest first, 25 at a time with **Load more**, with
+a search of project names across the whole list, and labels archived
+projects, projects in Deleted items and removed ones. Usage can change while
+you browse. **Refresh** reads current usage and starts the list over,
+keeping its search. In the private demo, files in Deleted items also count
+toward its 50 MiB upload allowance until they are deleted for good with
+**Delete now…** ([Private demo](./qivo-in-one-minute.md#private-demo)).
 
 API calls accumulate during each paid subscription period. Qivo samples storage
 at the start of the period and collects its extra charge, plus API overages, on
 the invoice at the end of the period. That is the renewal invoice, or the final
-one when a cancelled subscription ends. Current storage can differ from that
-sample. Polar handles checkout taxes and recurring payments.
+one when a cancelled subscription ends. The sample leaves out files in Deleted
+items, and Billing shows it beside current storage, which can differ from it.
+Polar handles checkout taxes and recurring payments.
 
 Without a paid billing period, for example during free access, before you
 subscribe or after a subscription ends, Billing counts API calls per calendar

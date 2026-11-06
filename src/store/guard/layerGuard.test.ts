@@ -413,8 +413,9 @@ describe('Convex writes outside the store', () => {
     // snapshot health), so they do not pause or paint
     'src/panels/OrganizationDeletion.tsx': ['orgRemovals:keep', 'orgRemovals:request'],
     'src/panels/OrganizationExport.tsx': ['orgRemovals:recordExport'],
+    // Billing's usage and Storage by project are one-shot queries
+    // (billing.currentUsage, billing.storageProjects), not writes
     'src/panels/BillingSettings.tsx': [
-      'billing:usageReport',
       'billingActions:cancelSubscription',
       'billingActions:checkout',
       'billingActions:portal',

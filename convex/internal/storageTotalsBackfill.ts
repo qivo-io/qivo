@@ -2,11 +2,12 @@
  * organization's task attachments and description images, in the live
  * tables and in Deleted items, into its stored-byte totals (schema.ts
  * storage_org_totals, storage_project_totals and storage_task_totals, kept
- * by model/storageTotals.ts). Nothing reads the totals in this release, and
- * a later reader uses an organization's totals only once it is counted
- * (storageTotalsOf), so an organization that is not counted yet reads as
- * not counted, never as empty. Organizations created since this release
- * are counted from their start (model/orgs.ts insertOrgRows).
+ * by model/storageTotals.ts). Billing's current storage and Storage by
+ * project read the totals (billing.currentUsage and billing.storageProjects),
+ * and only once an organization is counted (storageTotalsOf), so an
+ * organization that is not counted yet reads as not counted, never as empty.
+ * Organizations created since this release are counted from their start
+ * (model/orgs.ts insertOrgRows).
  *
  * A count runs in steps, each its own transaction, in task number order
  * across issues and deleted_tasks (index by_org_num), so tasks in Deleted

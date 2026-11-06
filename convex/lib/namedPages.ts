@@ -28,7 +28,9 @@
  * name-ordered list reads, or descending. The Inbox's pages
  * (model/inboxPage.ts) read a list keyed by time, newest or oldest first,
  * and Archived projects (model/projectSettingsLists.ts) one keyed by
- * archive time, newest first, through the same functions. The direction is
+ * archive time, newest first, through the same functions, and Billing's
+ * Storage by project (model/billingStorage.ts) one with a constant key and
+ * a tie of stored bytes, largest first. The direction is
  * an option of indexAfter,
  * inGroup, mergeNamed, readBatch and listBatch, ascending by default, and
  * each compares positions with compareIn. readBatch throws when a stream
@@ -60,8 +62,11 @@
  * A batch (readBatch) reads rows in order and keeps those its caller wants,
  * under a read guard (readGuard) that counts every index range and document
  * the batch reads, the caller's own reads for each row included, against a
- * ceiling (namedCeiling). These lists are subscription queries that run again
- * on every change of what they read, so one call keeps to NAMED_READ. Past it
+ * ceiling (namedCeiling). Most of these lists are subscription queries that
+ * run again on every change of what they read, so one call keeps to
+ * NAMED_READ. Lists the app reads once keep to a share of their own, API
+ * access's person filter to its page's and Storage by project to
+ * NAMED_READ's. Past it
  * the batch stops at the position it reached: a search that matches little
  * answers part of the list and goes on from there, and a batch never answers
  * an end of list it did not reach.
@@ -628,9 +633,10 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * it, as model/labels.ts labelBatch does. The project settings lists and
  * pickers (model/projectSettings.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
- * (model/projectSettingsLists.ts) and the REST and MCP lists in name order
- * (lib/listCursor.ts namedListPage) answer through it. `o.order` is the
- * direction `stream` reads in, ascending by default (readBatch). */
+ * (model/projectSettingsLists.ts), the REST and MCP lists in name order
+ * (lib/listCursor.ts namedListPage) and Billing's Storage by project
+ * (model/billingStorage.ts) answer through it. `o.order` is the direction
+ * `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
   ask: BatchAsk,

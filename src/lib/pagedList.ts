@@ -1,16 +1,19 @@
 /* A list the server answers a batch at a time in its own order, with a
    search over the whole list and Load more, as Settings' lists and the
-   pickers read them: API access's person filter, Settings › Labels, the
-   removal window's Reassign picker, the task window's relation pickers,
-   the shared project picker (components/ProjectPicker.tsx), and later
-   Settings' teams and people (the limits plan's "Settings team list
+   pickers read them: API access's person filter, Settings › Labels,
+   Billing's Storage by project (panels/BillingStorage.tsx, largest
+   first), the removal window's Reassign picker, the task window's
+   relation pickers, the shared project picker
+   (components/ProjectPicker.tsx), and later Settings' teams and people
+   (the limits plan's "Settings team list
    loading"). It holds only what the page shows, in the page, and drops it
    when the page is left. It imports nothing from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access and the removal window's Reassign picker read everything. Load
+     access, Billing's Storage by project and the removal window's Reassign
+     picker read everything. Load
      more reads after the last batch's `next`; one read runs at a time, so a
      second press or a Retry while one runs reads nothing. A failed batch
      keeps the rows and the place, and Retry reads it again, or starts again

@@ -1,8 +1,19 @@
 import { FieldHint, SettingsField, SettingsGroup, SettingsSection } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
 import type { ApiAccessEntry } from '@/lib/apiAccess'
-import { billingBytes, billingDate, usageHints } from '@/lib/billingDisplay'
-import type { BillingUsage as BillingUsageData } from '../../convex/lib/billingTypes'
+import {
+  billingBytes,
+  billingDate,
+  STORAGE_COUNTING,
+  STORAGE_COUNTS,
+  storageSampleLine,
+  usageHints,
+} from '@/lib/billingDisplay'
+import type {
+  BillingSummary,
+  BillingUsage as BillingUsageData,
+} from '../../convex/lib/billingTypes'
+import { BillingStorage } from './BillingStorage'
 
 /** The period line: a paid period's dates, a UTC calendar month, or the start
  * of an interval whose end is not known yet. */
@@ -14,30 +25,41 @@ function periodLabel(usage: BillingUsageData): string {
     : `From ${billingDate(usage.period_start)}`
 }
 
-/** Usage for the bucket API calls are recorded in now. `currency` is the
- * plan's; amounts are only shown for a charged period, which always has one.
- * Each account shows its total, and View credentials hands `onViewCredentials`
- * the organization `orgId` the report was read for, the account and the
- * report's period, for API access to open on. */
+/** Usage for the bucket API calls are recorded in now (billing.currentUsage).
+ * `currency` is the plan's; amounts are only shown for a charged period,
+ * which always has one, and `status` is the summary's, which says whether a
+ * paid period gets a storage sample. Current storage is the server's
+ * stored-byte totals, files in Deleted items included, shown as being
+ * counted while they are not complete, never as 0, with the paid period's
+ * sample on a line of its own. Each account shows its total, and View
+ * credentials hands `onViewCredentials` the organization `orgId` the usage
+ * was read for, the account and the period, for API access to open on.
+ * Storage by project reads its own batches (BillingStorage) and starts
+ * over when `refresh`, the page's Refresh count, changes. */
 export function BillingUsage({
   usage,
   currency,
+  status,
   measuredAt,
   orgId,
+  refresh,
   onViewCredentials,
 }: {
   usage: BillingUsageData
   currency: string | undefined
+  status: BillingSummary['status'] | undefined
   measuredAt: number
   orgId: string
+  refresh: number
   onViewCredentials: (entry: ApiAccessEntry) => void
 }) {
   const month = usage.period_kind === 'month'
   const hints = usageHints(usage, currency)
+  const sample = storageSampleLine(usage, status)
   return (
     <SettingsSection
       title="Usage"
-      description={`Measured ${new Date(measuredAt).toLocaleString()}.${
+      description={`Measured ${new Date(measuredAt).toLocaleString()}. Usage can change while you browse. Refresh shows the current figures and lists.${
         usage.included_calls === null ? '' : ' Allowances are shared across your organization.'
       }`}
       data-billing-usage=""
@@ -66,13 +88,22 @@ export function BillingUsage({
         </p>
         <FieldHint>{hints.api}</FieldHint>
       </SettingsField>
-      <SettingsField label="Attachment storage" width={550}>
-        <p className="text-base">
-          {billingBytes(usage.storage_bytes)}
-          {usage.included_storage_bytes === null
-            ? ' stored'
-            : ` of ${billingBytes(usage.included_storage_bytes)} included`}
+      <SettingsField label="Current storage" width={550}>
+        <p className="text-base" data-billing-storage-bytes="">
+          {usage.storage_bytes === null
+            ? STORAGE_COUNTING
+            : `${billingBytes(usage.storage_bytes)}${
+                usage.included_storage_bytes === null
+                  ? ' stored'
+                  : ` of ${billingBytes(usage.included_storage_bytes)} included`
+              }`}
         </p>
+        <FieldHint>{STORAGE_COUNTS}</FieldHint>
+        {sample !== null && (
+          <p className="mt-2 text-sm text-text-1" data-billing-storage-sample="">
+            {sample}
+          </p>
+        )}
         <FieldHint>{hints.storage}</FieldHint>
       </SettingsField>
       <SettingsGroup
@@ -112,22 +143,7 @@ export function BillingUsage({
           </dl>
         )}
       </SettingsGroup>
-      <SettingsGroup legend="Storage by project">
-        {usage.projects.length === 0 ? (
-          <p className="text-sm text-text-2">No stored attachments.</p>
-        ) : (
-          <dl className="space-y-2">
-            {[...usage.projects]
-              .sort((a, b) => b.storage_bytes - a.storage_bytes)
-              .map((project) => (
-                <div key={project.project_id} className="flex flex-wrap justify-between gap-2">
-                  <dt className="min-w-0 break-words text-sm">{project.name}</dt>
-                  <dd className="text-sm text-text-2">{billingBytes(project.storage_bytes)}</dd>
-                </div>
-              ))}
-          </dl>
-        )}
-      </SettingsGroup>
+      <BillingStorage orgId={orgId} refresh={refresh} />
     </SettingsSection>
   )
 }
