@@ -67,7 +67,7 @@ export const lineItem = (line: Line): DeletedRow => (line.kind === 'item' ? line
 export const lineKey = (line: Line): string =>
   line.kind === 'item' ? line.row.id : `${line.item.id}:${line.hit.key}`
 
-/** The lines of `page` in the server's order: an entry without a task is
+/** The lines of `page` in the server's order. An entry without a task is
     its item's line, one with a task a hit line. An entry whose item the
     page's `items` lacks is left out, never shown without its row. */
 export function linesOf(
@@ -101,7 +101,7 @@ export function andList(parts: string[]): string {
 const STORAGE = 'Their files count toward its storage until they are deleted for good.'
 
 /**
- * The page's subtitle for the roles of the seats it reads: one seat's, or
+ * The page's subtitle for the roles of the seats it reads, one seat's, or
  * with a scope its organization's, or for several seats of different roles
  * one sentence for all. Empty while no role is known.
  */
@@ -550,7 +550,7 @@ export const DEFERRED_MOST = 25
     of ids, in the order they go. */
 export type DeletedLane = Readonly<{ org_id: string; calls: readonly (readonly string[])[] }>
 
-/** How an action runs: one lane an organization, every id once, and
+/** How an action runs, one lane an organization, every id once, and
     whether it takes more than one round of the shared runner
     (lib/batchRunner.ts roundsOf), which asks the person to keep Qivo open
     before it starts. */

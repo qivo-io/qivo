@@ -58,7 +58,7 @@
  * three tasks under the live top-level project that holds the fewest
  * sub-projects and deletes it whole as Nora through projects:deleteDeep, so
  * the list holds a project item and its tasks. A run deletes only what is
- * still live: it reads the tasks Deleted items stores (deleted_tasks), which
+ * still live. It reads the tasks Deleted items stores (deleted_tasks), which
  * also keeps the tasks seeding from making them again, and makes the
  * sub-project only while no row or used id holds its id. Northstar's own
  * tasks stay as they are.

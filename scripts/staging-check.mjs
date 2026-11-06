@@ -6051,7 +6051,7 @@ export const DELETED_ITEMS_MARKS = {
   along: 'data-purge-along',
 }
 
-/** What the step restores, and what it sees: one action of two calls. */
+/** What the step restores and sees, one action of two calls. */
 export const DELETED_ITEMS_EXPECTED = {
   tasks: 26,
   selected: '26 selected, 25 on other pages',

@@ -9,7 +9,7 @@ import {
   runLanes,
 } from './batchRunner'
 
-/* The shared runner with fake lanes: each send waits until the test
+/* The shared runner with fake lanes. Each send waits until the test
    answers or refuses it, so the order and the number of sends in flight
    are the test's to see. A lane is an organization's name, and its
    answers count its batches, `more` while fewer than its plan. */

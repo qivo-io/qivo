@@ -77,7 +77,7 @@ export function roundsOf(calls: readonly number[], atOnce = LANES_AT_ONCE): numb
   return Math.max(...places)
 }
 
-/** Where lanes take their turn: at most `size` lanes run at once, and a
+/** Where lanes take their turn. At most `size` lanes run at once, and a
     lane that waits starts once one ends, the first to wait first. `take`
     answers the way to give the place back, at once while one is free, so
     the first batch goes out in the same turn, else once one frees. */
