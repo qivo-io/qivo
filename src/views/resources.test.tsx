@@ -369,8 +369,8 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     const panel = () => document.querySelector('[data-plan-card]')?.textContent ?? ''
     expect(thisWeek()).toBe('4')
     expect(panel()).toMatch(/Two\s*3h/)
-    // someone gives two-1 28 hours, and its owner's load answers so: the
-    // stopped Board's row still says 3
+    // someone gives two-1 28 hours, and its owner's load answers so, while
+    // the stopped Board's row still says 3
     const two = board.snapshot.issues[1]
     two.remaining_hours = 28
     await board.answer()

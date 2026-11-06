@@ -610,7 +610,7 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     }
     await renderRoadmap(board)
     const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
-    // two-1 starts before its blocker ends, in Two: nothing to move
+    // two-1 starts before its blocker ends, in Two, so nothing moves
     expect(move()?.disabled).toBe(true)
     // someone moves two-1 to One, its dates, status and links as they were
     const two = board.snapshot.issues[1]
@@ -998,8 +998,8 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
   })
 
   it("switches an open session to a task the filters hide, which the read then names, and keeps the first one's saved dates", async () => {
-    // one-1 and one-3 pass no filter: only a session or a request sends
-    // them with the read
+    // one-1 and one-3 pass no filter, so only a session or a request
+    // sends them with the read
     const board = await loadBoard(
       network,
       (snap) => {
@@ -1041,8 +1041,8 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(planCard('QN-3')).not.toBeNull()
     expect(planCard('QN-1')).toBeNull()
     expect(rows().sort()).toEqual(['QN-2', 'QN-3'])
-    // one-1 keeps the dates its session saved: nothing restores them, and
-    // no sentence says a task left or is not on the roadmap
+    // one-1 keeps the dates its session saved, as nothing restores them,
+    // and no sentence says a task left or is not on the roadmap
     expect(datesSent('one-1')).toEqual(saved)
     expect(window.showToast).not.toHaveBeenCalled()
     expect(consumedPlans).toHaveBeenCalledWith(2)

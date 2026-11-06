@@ -30,9 +30,9 @@
 
    The rows that stand in for the cache's spans are only those of views
    whose rows still hear every change (ViewDelayCtx inView). A stopped
-   read's rows, as a kept Board's behind the Roadmap, never do: the cache's
-   span of such a task is the newer, so it counts at its hours now, and not
-   at all once the task is Done. */
+   read's rows, as a kept Board's behind the Roadmap, never do, so the
+   cache's span of such a task, the newer, counts at its hours now, and the
+   task counts not at all once it is Done. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'

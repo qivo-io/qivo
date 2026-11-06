@@ -312,7 +312,7 @@ function Roadmap({
   const NW = w1 - w0 + 1
   /* What the Roadmap shows, from the server's answer for the selection, the
      filter row and this window. Planning can bypass the toolbar filters,
-     but never the roadmap's status rule: the task a plan request names, or
+     but never the roadmap's status rule. The task a plan request names, or
      else the session's task, goes with the read (`planned`), by its current
      sub-project, and skips the filters on screen too. A request taken while
      a session is open sends its own task, so the answer it waits for holds
@@ -1058,7 +1058,7 @@ function Roadmap({
     setPending({ ...pendingRef.current, [req.kind]: req })
   }
   /** Stops sending the task of plan request `req` with the read, once it
-      resolved, unless a newer request sends its own: an open session then
+      resolved, unless a newer request sends its own, so an open session
       sends its task again. */
   const dropPlanAsk = (req: PendingRequest) =>
     setPlanAsk((was) => (was && was.id === req.uuid ? null : was))

@@ -3855,7 +3855,7 @@ const viewLends = (slot: ViewSlot) => viewLive(slot) && !viewReads.get(slot)?.be
     kept Board's behind the Roadmap, and the rows a live read kept past a
     refusal or a failure, as Team sync's stale meeting keeps, hear no
     change made since, so the cache's spans of those tasks, which stay live
-    while some view reads their owner, are the newer: a task such a read
+    while some view reads their owner, are the newer. So a task such a read
     still holds counts at its hours now, and not at all once it is Done.
     Which copies lead in lookups and which reads hold a write stay with the
     live reads (viewLive, viewPartHeld). */
@@ -3879,10 +3879,10 @@ const viewDelayCtx: ViewDelayCtx = {
 }
 
 /* What reconciling a person's work for Team utilization and the planning
-   panel reads from the store (store/viewDelay.ts ownerItemsOf): the delay
-   context's rows, so only a live, current view's rows replace the cache's
-   spans (viewLends). Its `filed` holds while the rows hold still, until
-   the next reshape. */
+   panel reads from the store (store/viewDelay.ts ownerItemsOf). It reads
+   the delay context's rows, so only a live, current view's rows replace
+   the cache's spans (viewLends). Its `filed` holds while the rows hold
+   still, until the next reshape. */
 const ownerItemsCtx: OwnerItemsCtx = {
   held: viewDelayCtx.held,
   inView: viewDelayCtx.inView,
