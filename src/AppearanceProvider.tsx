@@ -1,10 +1,24 @@
 import type { FunctionReturnType } from 'convex/server'
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { api } from '../convex/_generated/api'
 import { type CanvasImageState, createCanvasImageLoader, decodeCanvasImage } from './lib/appearance'
-import { AppearanceContext, type DailyImage } from './lib/appearanceContext'
+import {
+  AppearanceContext,
+  type BackgroundPreview,
+  type DailyImage,
+  NO_PREVIEW,
+} from './lib/appearanceContext'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from './lib/backendUrl'
 import {
+  BackgroundChanged,
   type BackgroundSelection,
   backgroundCacheScope,
   createBackgroundImageCache,
@@ -13,75 +27,99 @@ import { watchCanvasWeek } from './lib/canvasWeek'
 import { convex } from './lib/convex'
 import { watchDemoCanvas } from './lib/demoCanvas'
 import { DEMO_MODE } from './lib/demoMode'
+import { useViewVisibility, watchVisibility } from './lib/viewVisibility'
 import { type AppearancePreferences, P } from './store/planner'
 
 type ImageLease = NonNullable<FunctionReturnType<typeof api.appearance.mintCustomUrl>>
 
+/* The custom background's lease, renewed a minute before it ends. While
+   the page is hidden its timer stops (lib/viewVisibility.ts, by visibility
+   and not focus), and on return it renews once if it is due. A lease
+   already shown stays for display while its renewal is due or on its way,
+   past its end too, so the background never goes away for a renewal, and
+   the provider starts no new fetch with its URL once it has ended. A
+   refusal, no image or another image, drops it. */
 function usePrivateImage(imageId: string | null, previewVersion: number | null) {
   const [lease, setLease] = useState<(ImageLease & { previewVersion: number | null }) | null>(null)
   const [failed, setFailed] = useState(false)
+  const shown = useRef<string | null>(null)
   useEffect(() => {
     setFailed(false)
     if (!imageId) {
+      shown.current = null
       setLease(null)
       return
     }
     let active = true
     let renewing = false
+    let hidden = false
     let expiresAt = 0
     let timer: ReturnType<typeof setTimeout> | undefined
     // A new or regenerated derivative remints the lease for the same image;
     // keep its valid original URL painted while the new pair is resolved.
+    if (shown.current !== imageId) shown.current = null
     setLease((current) => (current?.image_id === imageId ? current : null))
+    const schedule = (ms: number) => {
+      clearTimeout(timer)
+      if (!hidden) timer = setTimeout(() => void renew(), ms)
+    }
     const renew = async () => {
-      if (!active || renewing) return
+      if (!active || renewing || hidden) return
       renewing = true
       clearTimeout(timer)
       try {
         const result = await P.mintAppearanceImageUrl()
         if (!active) return
         if (!result || result.image_id !== imageId) {
+          shown.current = null
           setLease(null)
           setFailed(true)
           return
         }
         expiresAt = result.expires_at
+        shown.current = imageId
         setLease({ ...result, previewVersion })
         setFailed(false)
-        timer = setTimeout(() => void renew(), Math.max(1000, expiresAt - Date.now() - 60_000))
+        schedule(Math.max(1000, expiresAt - Date.now() - 60_000))
       } catch {
         if (!active) return
-        setLease(null)
-        setFailed(true)
-        expiresAt = 0
-        timer = setTimeout(() => void renew(), 60_000)
+        if (shown.current !== imageId) {
+          setLease(null)
+          setFailed(true)
+          expiresAt = 0
+        }
+        schedule(60_000)
       } finally {
         renewing = false
       }
     }
-    const resume = () => {
-      if (document.visibilityState === 'visible' && expiresAt < Date.now() + 60_000) void renew()
-    }
-    document.addEventListener('visibilitychange', resume)
-    window.addEventListener('focus', resume)
-    void renew()
+    const stop = watchVisibility(({ visible }) => {
+      hidden = !visible
+      if (hidden) clearTimeout(timer)
+      else if (expiresAt < Date.now() + 60_000) void renew()
+      else schedule(Math.max(1000, expiresAt - Date.now() - 60_000))
+    })
     return () => {
       active = false
       clearTimeout(timer)
-      document.removeEventListener('visibilitychange', resume)
-      window.removeEventListener('focus', resume)
+      stop()
     }
   }, [imageId, previewVersion])
-  return {
-    // oxlint-disable-next-line react/purity -- a lease past its expiry stops counting at the next render
-    lease: lease?.image_id === imageId && lease.expires_at > Date.now() ? lease : null,
-    failed,
-  }
+  return { lease: lease?.image_id === imageId ? lease : null, failed }
 }
 
 /** Mounted after socket authentication, before workspace initialization, and
  * kept mounted through loading, view, scope and settings changes. The weekly
- * image follows UTC week boundaries without reloading the planner. */
+ * image follows UTC week boundaries without reloading the planner.
+ *
+ * It also serves Settings › Appearance's preview of the selected background
+ * (lib/appearanceContext.ts usePreview), read only while Settings asks: the
+ * shared cache's copy of the derivative, else the derivative fetched into
+ * it with a signal that detaches Settings alone when it closes, or for a
+ * weekly image without a derivative the image the canvas shows. It never
+ * fetches an original for a preview. While the page is hidden the weekly
+ * image's read (the demo's public feed poll in the demo) and the custom
+ * lease's renewal pause, keeping the background and the last answer. */
 export function AppearanceProvider({
   children,
   accountId,
@@ -91,6 +129,9 @@ export function AppearanceProvider({
 }) {
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   useEffect(() => watchCanvasWeek(setDate), [])
+  // the weekly image's read and the custom lease pause while the page is
+  // hidden; the background and the last answer stay
+  const { visible: pageVisible } = useViewVisibility()
   const [preferences, setPreferences] = useState<AppearancePreferences | null>(null)
   const [preferencesFailed, setPreferencesFailed] = useState(false)
   const [dailyImage, setDailyImage] = useState<DailyImage | null>(null)
@@ -192,6 +233,8 @@ export function AppearanceProvider({
       setDailyLoaded(false)
       return
     }
+    // hidden: no subscription (nor the demo's poll), the last answer stays
+    if (!pageVisible) return
     let active = true
     let unsubscribe: (() => void) | undefined
     const receive = (value: DailyImage | null) => {
@@ -218,7 +261,7 @@ export function AppearanceProvider({
       active = false
       unsubscribe?.()
     }
-  }, [date, usesDaily])
+  }, [date, usesDaily, pageVisible])
 
   const customId =
     !preferencesFailed && preferences?.image_source === 'custom'
@@ -318,6 +361,96 @@ export function AppearanceProvider({
           : candidate
             ? background.status
             : 'unavailable'
+  // Settings' preview of the selection, read while someone asks for it
+  const [previewAsks, setPreviewAsks] = useState(0)
+  const [previewAttempt, setPreviewAttempt] = useState(0)
+  const [preview, setPreview] = useState<BackgroundPreview>(NO_PREVIEW)
+  const wantPreview = useCallback(() => {
+    setPreviewAsks((n) => n + 1)
+    return () => setPreviewAsks((n) => n - 1)
+  }, [])
+  const retryPreview = useCallback(() => setPreviewAttempt((n) => n + 1), [])
+  const previewWanted = previewAsks > 0
+  const previewKey = selection?.key ?? null
+  const previewVersion = selection?.previewVersion ?? null
+  const customPreview = previewKey?.startsWith('custom:') ?? false
+  // the custom lease of this derivative version, else none yet
+  const customLease =
+    customPreview &&
+    privateImage &&
+    privateImage.previewVersion === (preferences?.custom_image?.preview_version ?? null)
+      ? privateImage
+      : null
+  const derivative = customPreview
+    ? (customLease?.preview_url ?? null)
+    : (dailyImage?.preview_url ?? null)
+  const leaseEnd = customLease?.expires_at ?? null
+  const canvasUrl = visible && visible.key === previewKey ? visible.url : null
+  useEffect(() => {
+    if (!previewWanted) {
+      setPreview(NO_PREVIEW)
+      return
+    }
+    const show = (status: BackgroundPreview['status'], url: string | null) =>
+      setPreview({ status, url, key: previewKey, previewVersion })
+    if (selection === undefined) return show('loading', null)
+    if (!previewKey) return show('unavailable', null)
+    if (customPreview) {
+      if (privateFailed) return show('unavailable', null)
+      // the lease of this version is on its way, or its renewal is due
+      if (!customLease || (leaseEnd !== null && leaseEnd <= Date.now()))
+        return show('loading', null)
+    }
+    if (!derivative) {
+      // A weekly image without a derivative shows the image the canvas
+      // shows; Settings never fetches an original for a preview.
+      if (!customPreview && canvasUrl) return show('ready', canvasUrl)
+      return show(
+        !customPreview && backgroundStatus === 'loading' ? 'loading' : 'unavailable',
+        null,
+      )
+    }
+    // the demo keeps no cache: the derivative itself
+    if (!cache) return show('ready', derivative)
+    const selected = { key: previewKey, previewVersion }
+    const controller = new AbortController()
+    let active = true
+    show('loading', null)
+    void (async () => {
+      const restored = await cache.restorePreview().catch(() => null)
+      if (!active) return
+      if (restored?.key === previewKey && restored.previewVersion === previewVersion)
+        return show('ready', restored.url)
+      try {
+        const url = await cache.resolve(derivative, selected, 'preview', controller.signal)
+        if (active) show('ready', url)
+      } catch (error) {
+        if (!active || controller.signal.aborted || error instanceof BackgroundChanged) return
+        // Storage or fetch restrictions must not hide a preview the page
+        // can load as a plain image: the derivative, never the original.
+        show('ready', derivative)
+      }
+    })()
+    return () => {
+      active = false
+      controller.abort()
+    }
+    // previewAttempt asks again after a failure
+  }, [
+    previewWanted,
+    previewAttempt,
+    selection,
+    previewKey,
+    previewVersion,
+    customPreview,
+    privateFailed,
+    customLease,
+    leaseEnd,
+    derivative,
+    canvasUrl,
+    backgroundStatus,
+    cache,
+  ])
   useLayoutEffect(() => {
     const root = document.documentElement
     root.dataset.appearance = mode
@@ -354,6 +487,9 @@ export function AppearanceProvider({
         backgroundQuality,
         backgroundUrl: visible?.url ?? null,
         dailyImage: displayedDaily,
+        preview,
+        wantPreview,
+        retryPreview,
       }}
     >
       <div className="appearance-background" aria-hidden="true" data-background-date={date}>

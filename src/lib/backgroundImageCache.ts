@@ -44,6 +44,14 @@ function bounded<T>(work: Promise<T>, timeout = STORAGE_TIMEOUT_MS): Promise<T> 
   })
 }
 
+/** What a request for an image of a selection that is no longer the
+    current one, or of a disposed cache, rejects with. */
+export class BackgroundChanged extends Error {
+  constructor() {
+    super('Background changed')
+  }
+}
+
 export function backgroundCacheScope(deployment: string, accountId: string) {
   return JSON.stringify([deployment, accountId])
 }
@@ -153,7 +161,12 @@ export function createBackgroundImageCache(
   let disposed = false
   let writes = Promise.resolve()
   const urls = new Map<Blob, string>()
-  const pending = new Map<string, Promise<string>>()
+  // a request by identity, its transfer, and how many callers that may
+  // leave still wait for it
+  const pending = new Map<
+    string,
+    { request: Promise<string>; transfer: AbortController; waiting: number }
+  >()
   let controller = new AbortController()
   const validBlob = (blob: unknown, maxBytes: number): blob is Blob =>
     blob instanceof Blob && blob.type.startsWith('image/') && blob.size > 0 && blob.size <= maxBytes
@@ -223,6 +236,78 @@ export function createBackgroundImageCache(
     return { ...record.selection, url: urlFor(record[quality] as Blob) }
   }
 
+  /* The request behind resolve for `identity`, through `transfer`. It
+     keeps its answer under `identity` until the selection changes, and
+     forgets a failed one. */
+  const fetchFor = (
+    url: string,
+    quality: 'preview' | 'full',
+    identity: string,
+    transfer: AbortController,
+  ): Promise<string> => {
+    const version = generation
+    const parentSignal = controller.signal
+    const cancel = () => transfer.abort()
+    parentSignal.addEventListener('abort', cancel, { once: true })
+    const signal = transfer.signal
+    let transient: Blob | null = null
+    const request = bounded(
+      (async () => {
+        await loaded
+        if (disposed || generation !== version || signal.aborted) throw new BackgroundChanged()
+        reconcile()
+        const cached = record?.[quality]
+        if (cached) {
+          const cachedUrl = urlFor(cached)
+          try {
+            await validate(cachedUrl)
+            if (disposed || generation !== version || signal.aborted) throw new BackgroundChanged()
+            return cachedUrl
+          } catch {
+            if (disposed || generation !== version || signal.aborted) throw new BackgroundChanged()
+            delete record![quality]
+            revokeUrl(cachedUrl)
+            urls.delete(cached)
+            save(version)
+          }
+        }
+        const response = await fetchImage(url, { credentials: 'omit', signal })
+        if (!response.ok) throw new Error('Background unavailable')
+        const blob = await response.blob()
+        if (disposed || generation !== version || signal.aborted) throw new BackgroundChanged()
+        if (!blob.type.startsWith('image/') || !blob.size) throw new Error('Invalid background')
+        const resolved = urlFor(blob)
+        transient = blob
+        await validate(resolved)
+        if (disposed || generation !== version || signal.aborted) throw new BackgroundChanged()
+        // Bound persisted bytes as well as the number of selected images.
+        if (blob.size <= (quality === 'preview' ? MAX_PREVIEW_BYTES : MAX_IMAGE_BYTES)) {
+          record = { ...record!, [quality]: blob }
+          save(version)
+        }
+        transient = null
+        return resolved
+      })(),
+      30_000,
+    ).finally(() => {
+      transfer.abort()
+      parentSignal.removeEventListener('abort', cancel)
+      // A timeout can settle before decoding does. Release this unpublished
+      // request's bytes now; its late completion is fenced by signal.aborted.
+      if (transient) {
+        const transientUrl = urls.get(transient)
+        if (transientUrl) revokeUrl(transientUrl)
+        urls.delete(transient)
+        transient = null
+      }
+    })
+    pending.set(identity, { request, transfer, waiting: 0 })
+    request.catch(() => {
+      if (pending.get(identity)?.request === request) pending.delete(identity)
+    })
+    return request
+  }
+
   return {
     /** undefined authority means startup is still pending; null is withdrawal. */
     select(selection: BackgroundSelection | null) {
@@ -245,80 +330,47 @@ export function createBackgroundImageCache(
     async restoreFull() {
       return restore('full')
     },
-    async resolve(url: string, selection: BackgroundSelection, quality: 'preview' | 'full') {
-      if (disposed || !same(selected ?? null, selection)) throw new Error('Background changed')
-      const version = generation
+    /** The selection's bytes of `quality` as a blob URL, from the cache or
+        fetched from `url`, one request an identity shared by its callers.
+        A caller's `signal` detaches that caller only: its promise rejects,
+        and the transfer stops once every caller with a signal has left and
+        none without one joined. The canvas passes none, so Settings'
+        preview leaving never stops the canvas's request. */
+    async resolve(
+      url: string,
+      selection: BackgroundSelection,
+      quality: 'preview' | 'full',
+      signal?: AbortSignal,
+    ): Promise<string> {
+      if (disposed || !same(selected ?? null, selection)) throw new BackgroundChanged()
+      if (signal?.aborted) throw new DOMException('Background request left', 'AbortError')
       const identity = `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`
-      const existing = pending.get(identity)
-      if (existing) return existing
-      const parentSignal = controller.signal
-      const transfer = new AbortController()
-      const cancel = () => transfer.abort()
-      parentSignal.addEventListener('abort', cancel, { once: true })
-      const signal = transfer.signal
-      let transient: Blob | null = null
-      const request = bounded(
-        (async () => {
-          await loaded
-          if (disposed || generation !== version || signal.aborted)
-            throw new Error('Background changed')
-          reconcile()
-          const cached = record?.[quality]
-          if (cached) {
-            const cachedUrl = urlFor(cached)
-            try {
-              await validate(cachedUrl)
-              if (disposed || generation !== version || signal.aborted)
-                throw new Error('Background changed')
-              return cachedUrl
-            } catch {
-              if (disposed || generation !== version || signal.aborted)
-                throw new Error('Background changed')
-              delete record![quality]
-              revokeUrl(cachedUrl)
-              urls.delete(cached)
-              save(version)
-            }
-          }
-          const response = await fetchImage(url, { credentials: 'omit', signal })
-          if (!response.ok) throw new Error('Background unavailable')
-          const blob = await response.blob()
-          if (disposed || generation !== version || signal.aborted)
-            throw new Error('Background changed')
-          if (!blob.type.startsWith('image/') || !blob.size) throw new Error('Invalid background')
-          const resolved = urlFor(blob)
-          transient = blob
-          await validate(resolved)
-          if (disposed || generation !== version || signal.aborted)
-            throw new Error('Background changed')
-          // Bound persisted bytes as well as the number of selected images.
-          if (blob.size <= (quality === 'preview' ? MAX_PREVIEW_BYTES : MAX_IMAGE_BYTES)) {
-            record = { ...record!, [quality]: blob }
-            save(version)
-          }
-          transient = null
-          return resolved
-        })(),
-        30_000,
-      ).finally(() => {
-        transfer.abort()
-        parentSignal.removeEventListener('abort', cancel)
-        // A timeout can settle before decoding does. Release this unpublished
-        // request's bytes now; its late completion is fenced by signal.aborted.
-        if (transient) {
-          const transientUrl = urls.get(transient)
-          if (transientUrl) revokeUrl(transientUrl)
-          urls.delete(transient)
-          transient = null
-        }
-      })
-      pending.set(identity, request)
-      try {
-        return await request
-      } catch (error) {
-        if (pending.get(identity) === request) pending.delete(identity)
-        throw error
+      if (!pending.has(identity)) fetchFor(url, quality, identity, new AbortController())
+      const entry = pending.get(identity) as NonNullable<ReturnType<typeof pending.get>>
+      if (!signal) {
+        // a caller without a signal never leaves, so the transfer runs on
+        entry.waiting = Number.POSITIVE_INFINITY
+        return await entry.request
       }
+      entry.waiting++
+      return await new Promise<string>((resolve, reject) => {
+        const leave = () => {
+          entry.waiting--
+          if (entry.waiting === 0) entry.transfer.abort()
+          reject(new DOMException('Background request left', 'AbortError'))
+        }
+        signal.addEventListener('abort', leave, { once: true })
+        entry.request.then(
+          (value) => {
+            signal.removeEventListener('abort', leave)
+            resolve(value)
+          },
+          (error: unknown) => {
+            signal.removeEventListener('abort', leave)
+            reject(error)
+          },
+        )
+      })
     },
     reject(selection: BackgroundSelection, quality: 'preview' | 'full') {
       if (disposed || !same(selected ?? null, selection) || !record) return
