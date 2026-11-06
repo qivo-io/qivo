@@ -259,6 +259,22 @@ describe("a project's writes with what its Settings page showed", () => {
     P.archiveProject(plan, { orgId: org })
     expect(P.project(plan)).toBeUndefined()
   })
+
+  it("restores a project the workspace does not hold in the page's organization, and a held one in its own", async () => {
+    const restored = P.unarchiveProject('away', { orgId: AWAY_ORG })
+    expect(last('projects:unarchive')).toEqual({ org_id: AWAY_ORG, id: 'away' })
+    await settle('projects:unarchive')
+    expect(await restored).toBe(true)
+    // the workspace's row decides for a project it holds, whatever was shown
+    const held = P.unarchiveProject(plan, { orgId: AWAY_ORG })
+    expect(last('projects:unarchive')).toEqual({ org_id: org, id: plan })
+    await settle('projects:unarchive', new ConvexError({ code: 'forbidden', message: 'no' }))
+    expect(await held).toBe(false)
+    // without `shown`, one the workspace does not hold sends nothing
+    const count = sent.length
+    expect(await P.unarchiveProject('away')).toBe(false)
+    expect(sent).toHaveLength(count)
+  })
 })
 
 describe("a grant's removal from the Settings page", () => {

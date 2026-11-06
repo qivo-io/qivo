@@ -12593,12 +12593,17 @@ export const PLANNER = {
 
   /** Restore an archived project. Awaited rather than optimistic: its tasks
       are not in this client at all, and the snapshot pulls them back in
-      reactively. Resolves false when the write was refused (toasted). */
-  unarchiveProject: async (id: string): Promise<boolean> => {
-    const row = rows.projects.get(id)
-    if (!row) return false
+      reactively. Resolves false when the write was refused (toasted).
+      `shown` names the organization a page that read the project from the
+      server showed it in (ProjectShown, as Archived projects reads it), so
+      a project the workspace does not hold restores too; the workspace's
+      own row decides where it holds one. Without either it sends nothing
+      and resolves false. */
+  unarchiveProject: async (id: string, shown?: ProjectShown): Promise<boolean> => {
+    const org = rows.projects.get(id)?.org_id ?? shown?.orgId
+    if (!org) return false
     try {
-      await sendAwaited(api.projects.unarchive, { org_id: row.org_id, id }, 'none')
+      await sendAwaited(api.projects.unarchive, { org_id: org, id }, 'none')
     } catch (e) {
       console.error('[qivo] restore failed:', e)
       toast(restoreErrorText(e))
