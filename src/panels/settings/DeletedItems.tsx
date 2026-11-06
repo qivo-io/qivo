@@ -9,7 +9,8 @@
    Someone) and Assigned to go to the server as the page's filters, their
    people read 25 at a time from deletedItems.people while a popover is
    open. The subtitle and whether Deleted by shows come from each seat's
-   role (deletedItems.roles), and Delete now's count from
+   role (deletedItems.roles), whose answer drops a Deleted by choice once it
+   takes the control away, and Delete now's count from
    deletedItems.purgeSummary. The page never sorts, filters, groups or
    counts entries itself, and its notes say what the answer says, never an
    empty or complete list the server did not answer.
@@ -206,6 +207,16 @@ export function DeletedItemsPage() {
   const listOrg = scope?.org_id ?? (P.orgs.length === 1 ? (P.orgs[0]?.id ?? null) : null)
   const shownRoles = (seats ?? []).filter((r) => scope === undefined || r.org_id === scope.org_id)
   const showsBy = shownRoles.some((r) => r.role !== 'user')
+
+  /* A roles answer that takes Deleted by away, as when a lead's last lead
+     role ends, also drops its choice, which no control could clear then,
+     and the page starts again without it. A read that waits, fails or
+     stops while the tab is hidden keeps the roles it knew, and the choice. */
+  useEffect(() => {
+    if (roles.value === undefined || showsBy) return
+    setBy(ANYONE)
+    setWay('any')
+  }, [roles.value, showsBy])
 
   /* The list's ask, in a fixed key order with empty fields left out. */
   const ask = {

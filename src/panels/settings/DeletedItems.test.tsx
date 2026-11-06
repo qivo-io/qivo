@@ -738,6 +738,34 @@ describe('the filters', () => {
     expect(text('[data-deleted-assignee]')).toBe('Assigned to anyone')
   })
 
+  it('drops a Deleted by choice once the roles take Deleted by away, and keeps it while they read again', async () => {
+    await load(world({ role: 'user' }))
+    fx.seats[0].role = 'lead'
+    await open(undefined, undefined, true)
+    await click(find('[data-deleted-by]'))
+    await click(find(`[data-deleted-person="${DANIEL}"]`))
+    expect(pageReads()[0].args).toEqual({ deleted_by: DANIEL })
+    // a hidden tab, then roles that wait and fail on return, keep the choice
+    await setVisibility('hidden')
+    holdReads = (sub) => sub.name === 'deletedItems:roles'
+    await setVisibility('visible')
+    const roles = () => subs.filter((s) => s.open && s.name === 'deletedItems:roles')
+    expect(text('[data-deleted-by]')).toBe('Deleted by Daniel Berg')
+    await act(async () => roles()[0].fail(new Error('offline')))
+    await settle()
+    expect(text('[data-deleted-by]')).toBe('Deleted by Daniel Berg')
+    expect(pageReads()[0].args).toEqual({ deleted_by: DANIEL })
+    // the person's last lead role ends
+    holdReads = null
+    fx.seats[0].role = 'user'
+    await act(async () => {
+      for (const sub of roles()) answer(sub)
+    })
+    await settle()
+    expect(has('[data-deleted-by]')).toBe(false)
+    expect(pageReads().map((s) => s.args)).toEqual([{}])
+  })
+
   it('names each row’s organization when a page holds two', async () => {
     await open(world({ partner: true }))
     expect(lineKeys()).toHaveLength(2)
