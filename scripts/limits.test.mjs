@@ -43,7 +43,11 @@ describe('the limits registry for Node scripts', () => {
         .map((name) => join(dir, name)),
     )
     const found = scripts.filter((file) => importsTs.test(readFileSync(file, 'utf8')))
-    expect(found).toEqual([
+    // each loads after limits.mjs checked the Node, for the scripts that
+    // need the app's code: the Inbox badge's rule for the staging check,
+    // the live parts and the workspace's join
+    expect([...found].sort()).toEqual([
+      'scripts/inboxBadge.mjs',
       'scripts/limits.mjs',
       'scripts/liveParts.mjs',
       'scripts/workspaceJoin.mjs',

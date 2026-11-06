@@ -289,6 +289,19 @@
 //                        projectsettings the second person, an admin, leads
 //                        the first program, so its sub-projects show an
 //                        inherited lead
+//   unread (0)           unread messages for the signed-in person at the
+//                        start, one per task, a minute apart, so the Inbox
+//                        badge counts them (unread=12 shows 12)
+//   inbox                a state the Inbox's unread summary and the open
+//                        task's inbox item (inbox:summary and inbox:item)
+//                        answer whatever the messages say, for screenshots
+//                        of the badge's states a seeded backend cannot
+//                        reach (src/store/inboxStandIn.setup.ts): loading
+//                        (neither ever answers), failed (both fail),
+//                        incomplete (the count is a lower bound, so unread=12
+//                        shows 12+), more (more than 99) or notready (the
+//                        seat's items are not complete, so the count is a
+//                        lower bound and the item answers building)
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -347,6 +360,12 @@
 // tasks in the projects the change reaches as the lost holdings and every
 // person who can hold work as the choices, and answers a chosen person's
 // holder_eligible by that rule, without the server's rules.
+// So are the Inbox's unread summary and the open task's inbox item
+// (inbox:summary and inbox:item), through the stand-in the jsdom tests use
+// (src/store/inboxStandIn.setup.ts), folded from the messages held here,
+// and a write sends them again with the parts it changed. Its read of one
+// item (messages:readItem) marks the item's unread messages up to its
+// `through` read and prunes the item, as messages:markRead does.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the
@@ -361,6 +380,11 @@ import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import {
+  INBOX_NO_ANSWER,
+  inboxItemStandIn,
+  inboxSummaryStandIn,
+} from '../../src/store/inboxStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
@@ -524,6 +548,13 @@ const viewer = parameters.get('role') === 'viewer'
 const admin = parameters.get('role') === 'admin'
 const unheldCount = option('unheld', 0)
 const forcedWindow = parameters.get('window') ?? undefined
+/* The inbox reads' forced state (the `inbox` parameter), as the stand-in's
+   `force` takes it. */
+const forcedInbox = (() => {
+  const state = parameters.get('inbox')
+  if (state === 'notready') return 'notReady'
+  return ['loading', 'failed', 'incomplete', 'more'].includes(state) ? state : undefined
+})()
 /* The milestone reads' forced states (the `milestones` parameter), as the
    stand-in's `force` takes them; sync-too-many is the page's
    (scripts/perf/entry.tsx). */
@@ -1257,6 +1288,23 @@ const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
 const comments = []
 let messageCount = 0
+/* The unread messages the `unread` parameter asks for at the start, one
+   per task, a minute apart, each telling of a change. */
+{
+  const start = Date.now() - 60 * 60_000
+  const unread = Math.min(option('unread', 0), count)
+  snapshot.messages = Array.from({ length: unread }, (_, n) => ({
+    id: id('6', messageCount++),
+    org_id: org,
+    recipient_id: me.id,
+    issue_id: id('4', n),
+    issue_title: `Testbed task ${n + 1}`,
+    kind: 'change',
+    actor_id: profiles[1].id,
+    detail: 'Status changed',
+    created_at: new Date(start + n * 60_000).toISOString(),
+  }))
+}
 const roadmapCounts = new Map()
 /* The windows of the workspace's parts, as the app chooses them from the
    counts (src/store/liveParts.ts), kept from the first read, so a window
@@ -1538,6 +1586,20 @@ const read = (name, args = {}) => {
       },
     )
   if (name.startsWith('taskWindow:')) return readTaskWindow(name, args)
+  // the Inbox's unread summary and the open task's item
+  // (src/store/inboxStandIn.setup.ts), which answer nothing under
+  // inbox=loading
+  if (name === 'inbox:summary' || name === 'inbox:item') {
+    const answer =
+      name === 'inbox:summary'
+        ? inboxSummaryStandIn(snapshot, forcedInbox)
+        : inboxItemStandIn(
+            snapshot,
+            { org_id: args.org_id ?? org, issue_id: args.issue_id },
+            forcedInbox,
+          )
+    return answer === INBOX_NO_ANSWER ? NO_ANSWER : answer
+  }
   switch (name) {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()
@@ -1841,6 +1903,28 @@ async function mutate(name, args) {
     markRead(marked, at)
     for (const issue of new Set(marked.map((m) => m.issue_id))) pruneItem(issue)
     await settleInbox()
+    return null
+  }
+  if (name === 'messages:readItem') {
+    // as convex/messages.ts readItem does: the unread messages of the
+    // caller's item stored up to `through`, then the prune. The rows held
+    // here carry no _creationTime, so their created_at stands for it, as
+    // the stand-in's `through` takes it
+    const at = new Date().toISOString()
+    const through = args.through ?? Number.POSITIVE_INFINITY
+    const marked = snapshot.messages.filter(
+      (m) =>
+        m.issue_id === args.issue_id &&
+        m.org_id === args.org_id &&
+        !m.read_at &&
+        Date.parse(m.created_at) <= through,
+    )
+    markRead(marked, at)
+    if (marked.length) {
+      pruneItem(args.issue_id)
+      await settleInbox()
+    }
+    writes++
     return null
   }
   if (name === 'messages:markAllRead') {

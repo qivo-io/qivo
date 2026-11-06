@@ -856,6 +856,17 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     (items) => window.PLANNER.unreadMessages >= items,
     Math.min(messages, tasks),
   )
+  // and, on a build whose badge counts from the server's unread summary,
+  // the summary's count of them, exact to 99 and then more than 99
+  await page.waitForFunction(
+    (items) => {
+      const summary = window.PLANNER.inboxSummary
+      if (!summary) return true
+      if (summary.state !== 'ok' || !summary.current) return false
+      return summary.answer.unread_more || summary.answer.unread_count >= items
+    },
+    Math.min(messages, tasks, 100),
+  )
   phase('markAllRead')
   metrics.markAllRead.push(
     await timed(async () => {
@@ -907,6 +918,16 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     }),
   )
   assert.equal(await page.evaluate(() => window.PLANNER.unreadMessages), 1)
+  // on a build whose badge counts from the unread summary, the summary
+  // counts the one message and the top bar's chip says so, untimed
+  await page.waitForFunction(() => {
+    const summary = window.PLANNER.inboxSummary
+    if (!summary) return true
+    const chip = document.querySelector('[data-inbox-badge]')?.textContent ?? null
+    return summary.state === 'ok' && summary.current && summary.answer.unread_count === 1
+      ? chip === null || chip === '1'
+      : false
+  })
   phase('remoteStamp')
   metrics.remoteStamp.push(
     await timed(async () => {

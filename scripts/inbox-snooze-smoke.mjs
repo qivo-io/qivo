@@ -33,7 +33,42 @@ const groups = (page) =>
       ids: g.ids,
     })),
   )
-const unreadBadge = (page) => page.evaluate(() => window.PLANNER.unreadMessages)
+/* The badge's count: the unread summary's (P.inboxSummary) once it is
+   current, which the top bar's chip must show, as lib/inboxBadge.ts says. */
+const unreadBadge = async (page) => {
+  await page.waitForFunction(
+    () => window.PLANNER.inboxSummary.state === 'ok' && window.PLANNER.inboxSummary.current,
+    undefined,
+    { timeout: 30000 },
+  )
+  const { count, more, complete, chip } = await page.evaluate(() => {
+    const { answer } = window.PLANNER.inboxSummary
+    return {
+      count: answer.unread_count,
+      more: answer.unread_more,
+      complete: answer.complete,
+      chip: document.querySelector('[data-inbox-badge]')?.textContent ?? null,
+    }
+  })
+  const plus = complete ? '' : '+'
+  const shown = count === 0 ? (complete ? null : '…') : `${count}${plus}`
+  const want = more ? '99+' : shown
+  if (chip !== want) fail(`the badge shows ${chip ?? 'nothing'} for ${count} unread`)
+  return count
+}
+/* Waits until the summary counts `count`, as it does once the server
+   answered a write. */
+const badgeReaches = (page, count) =>
+  page
+    .waitForFunction(
+      (n) => {
+        const summary = window.PLANNER.inboxSummary
+        return summary.state === 'ok' && summary.current && summary.answer.unread_count === n
+      },
+      count,
+      { timeout: 10000 },
+    )
+    .catch(() => {})
 const openInbox = async (page) => {
   await page.goto(`${BASE}/app/~/inbox`, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('h1:has-text("Inbox")', { timeout: 30000 })
@@ -85,6 +120,7 @@ try {
     fail(`snoozedUntil is not ~2 days out: ${snoozed.snoozedUntil}`)
   if (snoozed.read) fail('the snoozed row is not unread')
   if ((await A.locator('[data-msg-menu]').count()) !== 0) fail('the menu stayed open after Snooze')
+  await badgeReaches(A, badgeBefore - (target.read ? 0 : 1))
   const badgeAfter = await unreadBadge(A)
   if (badgeAfter !== badgeBefore - (target.read ? 0 : 1))
     fail(`badge went ${badgeBefore} → ${badgeAfter}`)
