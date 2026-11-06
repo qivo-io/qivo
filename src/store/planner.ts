@@ -1843,10 +1843,11 @@ function deriveInboxFlags(): boolean {
    window's start stays pending through them. The first failure of a visit
    runs the item once more from a fresh subscription, which loads again,
    since Convex runs a failed query again only when data it read changes
-   and after a reconnect; a second one stays failed, logged, and leaves the task unread, counted
-   by the badge. A seat whose items are building needs no rerun, as the
-   answer changes once they are ready. A news of a task the store no
-   longer watches is dropped. It emits the task window's section. */
+   and after a reconnect. A second one stays failed, logged, and leaves the
+   task unread, counted by the badge. A seat whose items are building needs
+   no rerun, as the answer changes once they are ready. A news of a task
+   the store no longer watches is dropped. It emits the task window's
+   section. */
 function itemNews(news: SideNews, connection: number) {
   const watched = threadWatched
   const held = PLANNER.inboxItem
@@ -13683,7 +13684,7 @@ export const PLANNER = {
      server stamps every row of the (recipient, task) pair, so the paint
      walks the loaded rows of the same pairs rather than just the ids. The
      timed return is the server's scheduled wake (messages.wake), never a
-     client timer — every device shows it at the same instant. Since both
+     client timer, so every device shows it at the same instant. Since both
      leave it unread, either on the open task holds off its read on open
      for the rest of the visit (holdUnreadOf). */
   snoozeMessages: (ids: string[], until: string | null) => {
