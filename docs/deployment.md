@@ -1031,6 +1031,18 @@ backend keeps every function it calls. The release changes no server
 function, so it has no server change and no release step. The New project
 and New sub-project dialogs still read the workspace.
 
+From the release after v0.1.136, the Milestones window opens a milestone
+through `milestones.get`, and Team sync's opening reads its next milestone
+and the milestones of this week and next through `milestones.section` and
+`milestones.between`, which v0.1.97 (`92434062`) first shipped. The
+release changes no server function, so it has no server change, no release
+step and no new rollback floor. An older app works against its backend,
+and this app works against any backend from v0.1.97 on, which the floors
+above already hold. v0.1.103 (`fbcf0214`) made the reads refuse with
+`access_unchecked` where a bound of the caller's own access reads stops a
+check; against an earlier backend such a check fails as an error, which
+the app shows as a failure with Retry, so it fails closed either way.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
