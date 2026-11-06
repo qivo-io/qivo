@@ -7,7 +7,7 @@
  *       [--sub-project FW] [--archived 160] [--deleted 70] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
  *       [--api-accounts 90 --api-url http://127.0.0.1:<site port>] \
- *       [--labels 60] [--files 60] [--thread 300]
+ *       [--labels 60] [--files 60] [--projects 200] [--thread 300]
  *
  * It takes the same loopback-only target as `marketing-demo.mjs --local`, and
  * the same refusals: no deploy key, no staging, production or demo
@@ -185,6 +185,23 @@
  * archived ones as they are, restoring and recreating none, and says how
  * many of the task's subtasks and linked tasks that leaves out.
  *
+ * `--projects N` makes Northstar hold up to N live top-level projects in
+ * all, for checking the All projects directory at the design size's 200
+ * (planProjects): Northstar's three, --relations' Partner pilot and every
+ * other live top-level project count toward N, and Nora makes the rest
+ * through projects:create, each led by her, with no sub-project. Their
+ * names read as rollouts a team would plan ("Office pilot 03"), the first
+ * with an accent ("Café network pilot") and the second with a word no other
+ * name holds ("Vantorre depot trial"), for the directory's search. Every
+ * id comes from its number, and an id the backend holds anywhere, archived
+ * or in Deleted items included, or keeps taken, counts as made, so a
+ * second run adds only what is missing and makes no project again that a
+ * check archived or deleted. It then stars three of them for Nora through
+ * projectNav:setFavorite (PROJECT_STARS), which a repeated star leaves as
+ * it is. N goes up to 200 (MOST_PROJECTS). --files and --deleted keep
+ * their sub-projects under Northstar's own top-level projects, never under
+ * these. It runs after --relations and before --files.
+ *
  * `--thread N` gives one task N comments and about N changes in its
  * history, for checking how the task window keeps a long thread
  * (src/lib/threadBudget.ts THREAD_KEEP) and reads it back (planThread). The
@@ -354,6 +371,24 @@ const LABEL_TOPICS = [
    size's figure for one project (docs/limits-plan.md in the private
    companion). */
 const SUBS_PER_PROJECT = 30
+/* The most live top-level projects --projects makes Northstar hold, the
+   design size's figure for one organization. */
+const MOST_PROJECTS = 200
+/* What the --projects projects are, in turn, as a team names its
+   rollouts. The first two names are the search's (seededProjectName). */
+const PROJECT_TOPICS = [
+  'Office pilot',
+  'Retail rollout',
+  'Clinic air study',
+  'School deployment',
+  'Warehouse sensors',
+  'Hotel trial',
+  'Lab retrofit',
+  'Campus survey',
+]
+/** The --projects numbers Nora stars: one on the first page of the
+    directory's other projects, and two further on. */
+export const PROJECT_STARS = [2, 77, 150]
 /* The most sub-projects --files makes, what Northstar holds. Its three
    live top-level projects hold 12 sub-projects, which leaves 78 places at
    SUBS_PER_PROJECT under one, three batches of Storage by project and
@@ -396,6 +431,7 @@ export function parseSeedArgs(args) {
     labels: 0,
     files: 0,
     thread: 0,
+    projects: 0,
   }
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -421,6 +457,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--labels') options.labels = Number(value())
     else if (arg === '--files') options.files = Number(value())
     else if (arg === '--thread') options.thread = Number(value())
+    else if (arg === '--projects') options.projects = Number(value())
     else throw new DemoCliError(`Unknown option ${arg}.`)
   }
   if (options.target !== 'local')
@@ -449,6 +486,12 @@ export function parseSeedArgs(args) {
   const most = LIMITS.comments.max
   if (!Number.isInteger(options.thread) || options.thread < 0 || options.thread > most)
     throw new DemoCliError(`--thread takes a whole number from 0 to ${most}, the comment cap.`)
+  if (
+    !Number.isInteger(options.projects) ||
+    options.projects < 0 ||
+    options.projects > MOST_PROJECTS
+  )
+    throw new DemoCliError(`--projects takes a whole number from 0 to ${MOST_PROJECTS}.`)
   return options
 }
 
@@ -524,6 +567,56 @@ export function planThread(count, { task, present, posters, history, labels }) {
 
 /** The id of --relations row `what`, such as "project" or "link 40". */
 export const relationId = (what) => uuidOf(`board-scale-seed relations ${what}`)
+
+/** The id of --projects project number `n`, from 0, the same for every
+    run. */
+export const projectSeedId = (n) => uuidOf(`board-scale-seed projects ${n}`)
+
+/* Every --projects id, which --files and --deleted never put a
+   sub-project under. */
+const SCALE_PROJECTS = new Set(Array.from({ length: MOST_PROJECTS }, (_, n) => projectSeedId(n)))
+
+/** The name of --projects project `n`, from 0: an accented one first, a
+    word no other name has second, then a rollout and a number, such as
+    "Office pilot 03". */
+export function seededProjectName(n) {
+  if (n === 0) return 'Café network pilot'
+  if (n === 1) return 'Vantorre depot trial'
+  const topic = PROJECT_TOPICS[n % PROJECT_TOPICS.length]
+  return `${topic} ${String(Math.floor(n / PROJECT_TOPICS.length) + 1).padStart(2, '0')}`
+}
+
+/**
+ * The --projects work in organization `org` to hold `count` live top-level
+ * projects in all: `projects`, the projects:create calls of the projects
+ * missing, numbered from 0 and skipping each number whose id `present`
+ * holds (in any table or as a used id), led by the caller, Nora; and
+ * `stars`, the ids of PROJECT_STARS among the --projects projects that
+ * will be live. `tops` holds the ids of the organization's live top-level
+ * projects now, which count toward `count` whatever made them.
+ */
+export function planProjects({ org, count, tops, present }) {
+  const plan = { projects: [], stars: [] }
+  let missing = Math.max(0, count - tops.length)
+  const live = new Set(tops)
+  for (let n = 0; n < MOST_PROJECTS && missing > 0; n++) {
+    const id = projectSeedId(n)
+    if (present.has(id) || live.has(id)) continue
+    plan.projects.push({
+      id,
+      org_id: org,
+      type: 'meta',
+      key: `SC${String(n).padStart(3, '0')}`,
+      name: seededProjectName(n),
+      description: `Seeded by board-scale-seed --projects as project ${n + 1}.`,
+      sort_order: 200 + n,
+    })
+    live.add(id)
+    missing--
+  }
+  for (const n of PROJECT_STARS) if (live.has(projectSeedId(n))) plan.stars.push(projectSeedId(n))
+  return plan
+}
 
 /** The id of the --files sub-project, task or file (`what`) number `n`,
     from 0, the same for every run. */
@@ -1355,7 +1448,8 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   // admin reads them here
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
-  const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id) : null
+  const stored =
+    options.files > 0 || options.projects > 0 ? await storedIdsOf(client, actor.org_id) : null
   // what Deleted items holds, which no run seeds again, archives or
   // deletes, whatever its flags
   const inTrash = await deletedTasksOf(client, actor.org_id)
@@ -1370,7 +1464,10 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const issues = joined('issues')
   // --files plans before anything is seeded, so a count that does not fit
   // refuses with nothing made
-  const files = stored === null ? null : planFileSeed(options.files, { org, joined, stored })
+  const files =
+    options.files > 0 && stored !== null
+      ? planFileSeed(options.files, { org, joined, stored })
+      : null
   // the sub-projects that hold tasks, each with the owners its tasks have
   const owners = new Map()
   for (const project of joined('projects'))
@@ -1499,6 +1596,20 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       target,
       log,
     })
+  if (options.projects > 0 && stored !== null) {
+    const tops = joined('projects')
+      .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+      .map((p) => p.id)
+    await seedProjects(
+      planProjects({ org, count: options.projects, tops, present: stored.projects }),
+      {
+        client,
+        org,
+        target,
+        log,
+      },
+    )
+  }
   if (files !== null) await seedFiles(files, { client, org, target, log })
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
@@ -1704,7 +1815,7 @@ async function seedDeleted(
   }
   client.setAdminAuth(key, identityOf(actor.auth_user_id))
   const tops = projects
-    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at && !SCALE_PROJECTS.has(p.id))
     .map((top) => ({
       id: top.id,
       subs: projects.filter((p) => p.parent_id === top.id && !p.archived_at).length,
@@ -1796,7 +1907,7 @@ async function storedIdsOf(client, org) {
 function planFileSeed(count, { org, joined, stored }) {
   const projects = joined('projects')
   const tops = projects
-    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at && !SCALE_PROJECTS.has(p.id))
     .sort((a, b) => a.sort_order - b.sort_order || a.id.localeCompare(b.id))
     .map((top) => ({
       id: top.id,
@@ -1807,6 +1918,25 @@ function planFileSeed(count, { org, joined, stored }) {
     stored.rows.tasks.add(task.id)
   }
   return planFiles({ org, count, tops, present: stored, rows: stored.rows })
+}
+
+/** Makes the --projects projects of `plan` (planProjects) as Nora, then
+    stars its stars for her. */
+async function seedProjects(plan, { client, org, target, log }) {
+  log(`${plan.projects.length} top-level projects to add for --projects.`)
+  const call = async (name, fields, what) => {
+    try {
+      return await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(`${name} refused ${what}: ${error.data?.message ?? error.message}`)
+    }
+  }
+  for (const fields of plan.projects) await call('projects:create', fields, `"${fields.name}"`)
+  for (const id of plan.stars)
+    await call('projectNav:setFavorite', { org_id: org, project_id: id, favorite: true }, id)
+  log(
+    `Done: ${plan.projects.length} top-level projects added and ${plan.stars.length} starred in Northstar on ${target.url}.`,
+  )
 }
 
 /** Makes the --files sub-projects, tasks and files of `plan` (planFiles)

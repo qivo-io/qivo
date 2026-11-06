@@ -1142,9 +1142,7 @@ try {
   const originalViewport = pageA.viewportSize()
   const noPhonePageSearch = async (where, root = pageA) => {
     const fields = await root
-      .locator(
-        'input[placeholder="Find a project…"], input[placeholder="Filter messages…"], input[placeholder="Filter tasks…"]',
-      )
+      .locator('input[placeholder="Filter messages…"], input[placeholder="Filter tasks…"]')
       .count()
     if (fields) await fail(`Phone ${where} still mounts a page-level search field`)
   }
@@ -1365,7 +1363,12 @@ try {
   const projectsURL = `${BASE}/app/~/projects`
   await pageA.waitForURL(projectsURL)
   await pageA.locator('.mobile-project-directory').waitFor({ state: 'visible' })
-  await noPhonePageSearch('Projects')
+  // the directory searches the server, so the phone keeps its field, which
+  // takes no focus as the page opens
+  const directorySearch = pageA.locator('[data-directory-search]')
+  if ((await directorySearch.count()) !== 1) await fail('Phone Projects has no search')
+  if (await directorySearch.evaluate((field) => field === document.activeElement))
+    await fail('Phone Projects gives its search focus as it opens')
   await pageA
     .locator('.mobile-project-card')
     .first()

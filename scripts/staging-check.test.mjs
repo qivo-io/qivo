@@ -47,6 +47,7 @@ import {
   LIST_REFUSALS,
   MILESTONE_STEP,
   newerWalk,
+  NOT_LOADED_YET,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
@@ -57,6 +58,8 @@ import {
   PICKER_STEP,
   PROJECT_DIALOGS_EXPECTED,
   PROJECT_DIALOGS_STEP,
+  PROJECT_DIRECTORY_MARKS,
+  PROJECT_DIRECTORY_STEP,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
   pace,
@@ -315,6 +318,28 @@ describe('staging check REST contract', () => {
     // its project goes in the cleanup with its sub-projects
     expect(check).toContain(
       'if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)',
+    )
+  })
+  it('checks the All projects directory on its own marks and words, after Settings › Projects', () => {
+    const page = readFileSync(
+      new URL('../src/components/ProjectDirectory.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(PROJECT_DIRECTORY_STEP).toBe('ui/project-directory')
+    for (const mark of Object.values(PROJECT_DIRECTORY_MARKS)) expect(page).toContain(mark)
+    // the note for a project the workspace has not delivered, which the
+    // step waits out
+    expect(page).toContain(`${NOT_LOADED_YET}. Try again in a moment.`)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
+      check.indexOf('await settingsProjectsCheck()'),
+    )
+    expect(check.indexOf('await projectDirectoryCheck()')).toBeLessThan(
+      check.indexOf('await deletedItemsCheck()'),
+    )
+    // its project goes in the cleanup with its sub-projects
+    expect(check).toContain(
+      'if (run.projects.Y) await deleteProjectInApp(c.writeToken, run.projects.Y)',
     )
   })
   it("checks Settings › Users and the creators line in the pages' own words", () => {
