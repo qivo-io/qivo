@@ -813,10 +813,15 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     // the first load fits the end once: 100 hours over 32-hour weeks, less
     // two-1's 1.5 hours a week, end in the fourth week
     expect(datesSent('one-1')).toEqual([starter, { end_week: week(3) }])
-    // a later answer leaves the dates alone
+    // a later answer leaves the dates alone, though a fit to it would end
+    // later: two-1 now takes 30 hours a week
+    const two = board.snapshot.issues.find((t) => t.id === 'two-1')
+    if (!two) throw new Error('no two-1')
+    two.remaining_hours = 60
     await board.answer()
     await settle()
     await flush()
+    expect(planCard()?.textContent).toMatch(/Two\s*60h/)
     expect(datesSent('one-1')).toHaveLength(2)
   })
 
