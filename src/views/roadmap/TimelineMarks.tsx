@@ -277,6 +277,7 @@ export function FlagBand({
   height,
   lanes,
   scrolls,
+  busy = false,
   onView,
   children,
 }: {
@@ -284,6 +285,8 @@ export function FlagBand({
   height: number
   lanes: number
   scrolls: boolean
+  /** whether the flags' read is on its way, so the band is aria-busy */
+  busy?: boolean
   onView: (view: FlagView | null) => void
   children: ReactNode
 }) {
@@ -305,6 +308,7 @@ export function FlagBand({
       ref={ref}
       data-msband
       data-msband-scrolls={scrolls || undefined}
+      aria-busy={busy || undefined}
       onScroll={read}
       style={{ width, height }}
       className={`[position:absolute] [left:0] [bottom:0] ${
@@ -320,8 +324,10 @@ export function FlagBand({
   )
 }
 
-/* draggable milestone diamond in the header, in the row, on the side and
-   with the room that layoutFlags (flagLanes.ts) gave it. The flag is as
+/* draggable milestone diamond in the header, or in a track row of My view,
+   in the row, on the side and with the room that layoutFlags or
+   layoutTrackFlags (flagLanes.ts) gave it, its diamond nudged right of its
+   week's line where the place says (`shift`). The flag is as
    wide as its label, so only the diamond and the name it shows take the
    pointer, and Enter or Space opens it as a click does. A label cut short
    still has the full name as its accessible name, and the tooltip shows it
@@ -394,7 +400,7 @@ export function MilestoneFlag({
     e.preventDefault()
     onEdit?.(m.id, m.project)
   }
-  const x = (week - w0) * weekW
+  const x = (week - w0) * weekW + (place.shift ?? 0)
   const left = place.side === 'left'
   return (
     <HoverTooltip content={`${m.name}, ${P.weekLabel(week)}`}>

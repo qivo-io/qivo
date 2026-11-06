@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   FLAG_LABEL_MAX_W,
+  FLAG_LANE_H,
   flagBandHeight,
   flagLanesShown,
   labelWidth,
   layoutFlags,
+  layoutTrackFlags,
+  TRACK_FLAG_LANES,
+  TRACK_FLAGS_H,
 } from './flagLanes'
+import { ROW_H } from './layout'
 
 /* The Roadmap header's milestone flags: no two flags of one week share a
    row, no label runs into the next flag of its row, a label near the
@@ -191,5 +196,77 @@ describe('flagLanesShown', () => {
     expect(flagLanesShown(6, 8, band)).toEqual({ lo: 1, hi: 1 })
     expect(flagLanesShown(6, 2 * 16, band)).toEqual({ lo: 2, hi: 3 })
     expect(flagLanesShown(3, 0, flagBandHeight(3))).toEqual({ lo: 0, hi: 2 })
+  })
+})
+
+/* My view's flags on a track row: the rows of flags its height holds,
+   names cut short rather than run into the next flag, and every flag of a
+   crowded week in sight and apart. */
+describe('layoutTrackFlags', () => {
+  const row = { w0: 0, weekW: WEEK_W, end: 20 * WEEK_W }
+  /** Each flag's diamond box, [from, to] in pixels, and its bottom. */
+  const diamonds = (flags: ReturnType<typeof flag>[], over: Partial<typeof row> = {}) => {
+    const g = { ...row, ...over }
+    const places = layoutTrackFlags(flags, g)
+    return flags.map((f) => {
+      const p = places.get(f.id)
+      if (!p) throw new Error(`no place for ${f.id}`)
+      const x = (f.week - g.w0) * g.weekW + (p.shift ?? 0)
+      return { id: f.id, from: x - 4.5, to: x + 4.5, bottom: p.bottom, lane: p.lane, room: p.room }
+    })
+  }
+
+  it('holds the two rows of flags a track row has room for', () => {
+    expect(TRACK_FLAG_LANES).toBe(2)
+    expect(TRACK_FLAGS_H).toBeLessThanOrEqual(ROW_H.track)
+    // must fail: a third row would not fit the row
+    expect(flagBandHeight(TRACK_FLAG_LANES + 1)).toBeGreaterThan(ROW_H.track)
+  })
+
+  it('puts two long names of neighbouring weeks in two rows, each whole', () => {
+    const a = 'Supplier contract review signed off'
+    const b = 'Pilot batch ready for the field test'
+    const places = layoutTrackFlags([flag('a', 3, a), flag('b', 4, b)], row)
+    expect(places.get('a')?.lane).not.toBe(places.get('b')?.lane)
+    expect(places.get('a')?.room).toBeGreaterThanOrEqual(wants(a))
+    expect(places.get('b')?.room).toBeGreaterThanOrEqual(wants(b))
+  })
+
+  it('cuts a third nearby name short in a shared row, never past the row', () => {
+    const long = 'A milestone with a long name'
+    const flags = [flag('a', 3, long), flag('b', 4, long), flag('c', 5, long)]
+    const places = layoutTrackFlags(flags, row)
+    const lanes = [...places.values()].map((p) => p.lane)
+    expect(Math.max(...lanes)).toBeLessThan(TRACK_FLAG_LANES)
+    expect([...places.values()].some((p) => p.room < wants(long))).toBe(true)
+    // no label runs into the next flag of its row
+    for (const lane of boxes(flags, { maxLanes: TRACK_FLAG_LANES }))
+      for (let i = 1; i < lane.length; i++) expect(lane[i - 1][1]).toBeLessThanOrEqual(lane[i][0])
+  })
+
+  it('keeps each of three milestones of one week in sight, apart and inside its week', () => {
+    const week = [
+      flag('a', 4, 'Pilot batch ready'),
+      flag('b', 4, 'Cloud beta'),
+      flag('c', 4, 'Audit'),
+    ]
+    for (const weekW of [WEEK_W, 24]) {
+      const shown = diamonds(week, { weekW })
+      for (const d of shown) {
+        expect(d.bottom).toBeGreaterThanOrEqual(0)
+        expect(d.bottom + FLAG_LANE_H).toBeLessThanOrEqual(TRACK_FLAGS_H)
+        expect(d.lane).toBeLessThan(TRACK_FLAG_LANES)
+        // within the week's column
+        expect(d.from).toBeGreaterThanOrEqual(4 * weekW - 4.5)
+        expect(d.to).toBeLessThanOrEqual(5 * weekW)
+      }
+      // must fail: two diamonds stacked on one spot, where one hides the other
+      const spots = shown.map((d) => `${d.from}|${d.bottom}`)
+      expect(new Set(spots).size).toBe(3)
+      // the nudged ones show their diamonds alone, beside the one in the top row
+      const top = shown.filter((d) => d.lane === TRACK_FLAG_LANES - 1)
+      expect(top).toHaveLength(2)
+      expect(top.every((d) => d.room === 9)).toBe(true)
+    }
   })
 })

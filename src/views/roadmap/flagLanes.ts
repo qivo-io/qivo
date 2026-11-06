@@ -12,7 +12,16 @@
    dragged flag keeps to the rows in sight, the layout counts the flags out
    of sight for the band's "+N more" signs, and labels end before a
    scrollbar that takes space. Rows and sides still come from the whole
-   timeline, so a scrollbar never moves a flag, at most cuts a name short. */
+   timeline, so a scrollbar never moves a flag, at most cuts a name short.
+
+   In My view each milestone sits on its own project's track row instead
+   (layoutTrackFlags), in the rows of flags the row's height holds
+   (TRACK_FLAG_LANES), which never scroll. A week with more milestones of
+   one project than those rows, which only a guest organization's week
+   start or milestones stored before the weekly rule cause, draws the rest
+   in the top row, each diamond nudged sideways within its week. */
+
+import { ROW_H } from './layout'
 
 /** Height of one row of flags, diamond and one line of label. */
 export const FLAG_LANE_H = 16
@@ -51,6 +60,9 @@ export type FlagPlace = {
   room: number
   /** The flag's offset from the band's bottom edge, in pixels. */
   bottom: number
+  /** How far right of its week's line the diamond stands, in pixels, for
+      a flag a track row nudges within its week (layoutTrackFlags). */
+  shift?: number
 }
 type Grid = { w0: number; weekW: number; end: number }
 /** What a scrolling band shows: its rows `lo` to `hi` whole, and `bar`
@@ -253,4 +265,60 @@ export function layoutFlags(
     above: view ? lanesOf.filter((lane) => lane > view.hi).length : 0,
     below: view ? lanesOf.filter((lane) => lane < view.lo).length : 0,
   }
+}
+
+/** The rows of flags a Roadmap track row holds, as many as its height
+    leaves room for beside the band's padding: two. */
+export const TRACK_FLAG_LANES = Math.floor((ROW_H.track - BAND_PAD) / FLAG_LANE_H)
+
+/** The height of the box a track row draws its flags in, at its bottom. */
+export const TRACK_FLAGS_H = flagBandHeight(TRACK_FLAG_LANES)
+
+/**
+ * Each flag's row, side, room and bottom in a Roadmap track row of My view
+ * (TRACK_FLAG_LANES rows, a box TRACK_FLAGS_H tall), for flags on `grid`
+ * as layoutFlags places them in those rows. A flag that layoutFlags gives a
+ * row past them, one of more milestones in one week than the rows hold,
+ * draws in the top row instead, its diamond nudged right of its week's
+ * line and kept within the week, with its name in its tooltip only, so
+ * every diamond shows and takes a click. The flag of that week already in
+ * the top row then shows its diamond alone too, so no name runs under the
+ * nudged ones. A dragged flag keeps the place layoutFlags gave it.
+ */
+export function layoutTrackFlags(flags: Flag[], grid: Grid): Map<string, FlagPlace> {
+  const lanes = TRACK_FLAG_LANES
+  const top = lanes - 1
+  const { places } = layoutFlags(flags, { ...grid, maxLanes: lanes })
+  const out = new Map<string, FlagPlace>()
+  // the flags of each week past the row's rows, in the order of their rows
+  const past = new Map<number, { id: string; lane: number }[]>()
+  for (const flag of flags) {
+    const place = places.get(flag.id)
+    if (!place) continue
+    const lane = Math.min(place.lane, top)
+    out.set(flag.id, { ...place, lane, bottom: laneBottom(lanes, lane) })
+    const dragged = flag.live !== undefined && flag.live !== flag.week
+    if (place.lane > top && !dragged)
+      past.set(flag.week, [...(past.get(flag.week) ?? []), { id: flag.id, lane: place.lane }])
+  }
+  for (const [week, extra] of past) {
+    extra.sort((a, b) => a.lane - b.lane)
+    // the room right of the week's line, shared by the nudged diamonds
+    const step = Math.min(DIAMOND_W + 2, Math.max(1, grid.weekW - DIAMOND_W) / extra.length)
+    for (const flag of flags) {
+      const place = out.get(flag.id)
+      if (flag.week === week && place && places.get(flag.id)?.lane === top)
+        out.set(flag.id, { ...place, room: DIAMOND_W })
+    }
+    extra.forEach(({ id }, k) => {
+      out.set(id, {
+        lane: top,
+        side: 'right',
+        room: DIAMOND_W,
+        bottom: laneBottom(lanes, top),
+        shift: (k + 1) * step,
+      })
+    })
+  }
+  return out
 }
