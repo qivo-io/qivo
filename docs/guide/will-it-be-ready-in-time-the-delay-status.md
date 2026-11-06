@@ -79,6 +79,11 @@ due date.
   view that shows it, and follows as they change. Without one, as when that
   view is hidden behind another page, it says **Delay unknown**, or
   **Overdue** once the due date has passed.
+- **Team sync** shows the same banner as a Board card on its rows, **Delay
+  unknown** included, judged on the server with each owner's other work.
+  Where Qivo could not read someone's other work, the team summary's
+  projected misses and slipping counts read **unknown**, never 0
+  ([Team sync](./planning-against-real-capacity.md#team-sync)).
 - **Overview** includes projected misses in **Overdue & at risk**, which
   Qivo works out on the server with each owner's other work. A row says
   **risk unknown** where Qivo could not read that work, so the task may not

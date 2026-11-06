@@ -80,11 +80,15 @@ The page belongs to your current organization. Its scope and each step have
 shareable addresses. Browser Back leaves the page; it does not step through
 the meeting. Escape does not close the page. Task windows open over it.
 
-Rows update live as participants make changes. On a phone, **Sync** or a plain
-`…/sync` link opens your own page if you own work in scope. A link naming a
-step opens that step; a scoped link without a step opens the team summary.
+Rows update live as participants make changes. Qivo reads each meeting
+from the server, so the page opens without loading every task. While its
+browser tab or desktop window is hidden or minimized it stops updating, and
+when you return it asks again, showing the meeting it had meanwhile. On a
+phone, **Sync** or a plain `…/sync` link opens your own page if you own work
+in scope, once you have chosen a scope. A link naming a step opens that step;
+a scoped link without a step opens the team summary.
 
-**Scope.** Your selection is saved with your account:
+**Scope.** The scope you pick is saved with your account:
 
 - **All projects** includes visible projects in your organization, excluding
   projects shared from another organization.
@@ -92,10 +96,25 @@ step opens that step; a scoped link without a step opens the team summary.
 - **A project** includes the project and its sub-projects. A link can also
   select one sub-project.
 
-A deleted or inaccessible team or project falls back to All projects.
+The first time, and when a saved or linked team or project is no longer
+available to you, the page asks you to choose a team or project. **All
+projects** is one of the choices, and Qivo never chooses it for you.
 When you can see no project of your organization, the page says so and who can
 give you access. If you also belong to another organization, it names the
 organization the page covers.
+
+**Limits.** A meeting holds at most 1,000 tasks, counting each once among
+its open tasks, the Backlog tasks Needs an owner lists and the tasks people
+finished since their last sync ([Limits](./limits.md)). Past it the page says
+"This selection exceeds Team sync's 1,000-task limit." and asks you to
+choose a smaller team or project. A meeting the server cannot read within
+its limits says "This selection could not be loaded within Team sync's
+limits." Neither shows part of a meeting. Both offer the smaller teams or
+projects you can choose, and a sub-project past them offers its Board. A
+meeting that grows past its limits while it is open stays as it last
+fitted, marked as no longer updating since a given time, and keeps what
+you typed. Its rows' Remaining, status, pause and owner controls are off
+until the meeting fits again, and **@** mentions still send.
 
 The people list starts with the team summary, then people by name, then agents.
 It includes owners of To Do, In Progress or In Review tasks without subtasks.
@@ -105,8 +124,12 @@ excluded from people's pages.
 
 **The team summary** shows overdue, projected-to-miss, slipping, blocked and
 paused tasks, plus upcoming milestones. Projected misses and slipping counts
-include only projects with delay tracking. It also lists people at **90% or
-more** capacity this week and milestones for this week and next.
+include only projects with delay tracking. Where Qivo could not read
+someone's other work, they read **unknown**, never 0, and the sentence above
+them says Qivo could not work out every projected delay. It also lists
+people at **90% or more** capacity this week, and says for how many people
+the load is unknown where Qivo could not read it, and milestones for this
+week and next.
 
 The summary reads the next milestone and the milestones of this week and
 next from the server, for the top-level projects of the scope, and shows
@@ -138,8 +161,12 @@ new owner's page. Task titles open the task window.
 
 **A person's page** shows this week's load across the organization, regardless
 of sync scope. For organization admins and users, this includes hidden-project
-hours and can exceed the Team strip's visible-project total. Organization
-viewers see load from visible projects and tasks they own.
+hours and can exceed the Team strip's visible-project total, and changes you
+make on the page count at once. Organization viewers see the load of the
+person on screen from the projects they can see, which shows **…** while it
+loads and **unknown** where Qivo cannot read it. For them the team summary's
+capacity list says the load is unknown, and its projected misses and
+slipping counts read unknown wherever they need someone's other work.
 
 The page has three columns, which stack on phones:
 
@@ -162,8 +189,9 @@ start week, then due date, then task number. Undated tasks come last for each
 date sort.
 
 Rows show the title, task ID, sub-project, plan and due date, with delay or
-pause marks when applicable. They also flag **no estimate**, **no reviewer**
-and visible unfinished blockers.
+pause marks when applicable. A row says **Delay unknown** where Qivo could
+not read its owner's other work. They also flag **no estimate**, **no
+reviewer** and visible unfinished blockers.
 
 Time marks use the person's last sync. **untouched since** means nobody has
 edited an In Progress task or commented on it since then. Adding or removing a
@@ -180,9 +208,9 @@ Qivo sends no new **Ready for your review** message, and a moved Done task
 appears in Done since again.
 
 Time marks need each task's latest comment, which Qivo checks for every
-person the page shows. If one person holds so many open tasks that a single
-check cannot cover them all, some of their rows show no time mark, and the
-page says so below the rows.
+person the page shows. If Qivo cannot check all of one person's open tasks at
+once, some of their rows show no time mark, and the page says so below the
+rows.
 
 A review has no recorded hand-off if it was handed over before Qivo recorded
 hand-offs, or if it has had subtasks since the hand-off. Such a review shows no
