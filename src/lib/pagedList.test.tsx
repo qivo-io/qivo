@@ -874,6 +874,11 @@ describe('a list shown a page at a time', () => {
     expect(page().failedMove).toBe('next')
     expect(page().phase).toBe('failed')
     expect(shown()[0]).toBe('a00')
+    // a Retry whose page read fails once more keeps Next failed beside it
+    await act(async () => page().retry())
+    await publish()
+    expect(page().failedMove).toBe('next')
+    expect(page().moving).toBe(null)
     const watches = transport.watches.size
     server.fail = null
     await act(async () => page().retry())
@@ -888,6 +893,26 @@ describe('a list shown a page at a time', () => {
     expect(page().failedMove).toBe(null)
     expect(page().phase).toBe('ready')
     expect(shown()[0]).toBe('a25')
+  })
+
+  it('ends a failed Next on Retry once the page on screen has become the last', async () => {
+    plant('a', 30)
+    await show({ listKey: 'k' })
+    await publish()
+    server.fail = (args) => (args.after ? new Error('offline') : null)
+    await act(async () => page().next())
+    await publish()
+    expect(page().failedMove).toBe('next')
+    // the rows past the page leave, so it is the last
+    for (let i = 25; i < 30; i++) server.labels.delete(`a-${i}`)
+    await publish()
+    expect(page().hasNext).toBe(false)
+    const watches = transport.watches.size
+    await act(async () => page().retry())
+    // Retry has nowhere to go, so the failed Next is over and reads nothing
+    expect(page().failedMove).toBe(null)
+    expect(page().moving).toBe(null)
+    expect(transport.watches.size).toBe(watches)
   })
 
   it('goes back to the first page once for a refused start, then fails, and Retry starts again', async () => {
