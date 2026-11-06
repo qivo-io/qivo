@@ -29,7 +29,7 @@
  *
  * Settings › Users reads the keys of the agents it shows with agentKeys,
  * once for the key lines and once for a panel that opens, and again after
- * a key write, never as a subscription: machine auth stamps last_used_at
+ * a key write, never as a subscription. Machine auth stamps last_used_at
  * on every call, so a live read of key rows would run again on each API
  * call of each agent on screen. listAgentKeys, which the app read before,
  * stays for one release, deprecated. */
@@ -137,13 +137,13 @@ async function myAgentKey(
   return { key, agent }
 }
 
-/** How many keys of one agent agentKeys answers, the newest first: up to
- * `most`, and `more` when the agent holds another. Organization › API
+/** How many keys of one agent agentKeys answers, the newest first, up to
+ * `most`, with `more` when the agent holds another. Organization › API
  * access lists every key. Tests lower it. */
 export const AGENT_KEYS = { most: 50 }
 
-/** One agent's keys as agentKeys answers them: in pubKey's shape, revoked
- * ones included, newest first, and `more` when a key past AGENT_KEYS.most
+/** One agent's keys as agentKeys answers them, in pubKey's shape, revoked
+ * ones included, newest first, with `more` when a key past AGENT_KEYS.most
  * exists. */
 export type AgentKeysRow = { agent_id: string; keys: ReturnType<typeof pubKey>[]; more: boolean }
 
@@ -160,7 +160,7 @@ export type AgentKeysRow = { agent_id: string; keys: ReturnType<typeof pubKey>[]
  * a person, or another organization's agent) is left out, a definite
  * answer, as myAgentKey treats such a target alike. It reads one
  * organization, where listAgentKeys read every organization the caller
- * administers: at most 25 lookups and 25 ranges of 51 keys.
+ * administers, at most 25 lookups and 25 ranges of 51 keys.
  */
 export const agentKeys = orgQuery({
   args: { agent_ids: v.array(v.string()) },
@@ -207,9 +207,9 @@ export async function agentKeysOf(
  * keys on Settings › Users, and a later release removes it and adds it to
  * the Instant Rollback list in docs/deployment.md.
  *
- * P.listAgentKeys before then: one flat fetch for the whole page (grouped
- * by agentId client-side), across every org where the caller is an
- * admin. */
+ * Before then P.listAgentKeys read it in one flat fetch for the whole
+ * page (grouped by agentId client-side), across every org where the caller
+ * is an admin. */
 export const listAgentKeys = authedQuery({
   args: {},
   handler: async (ctx) => {

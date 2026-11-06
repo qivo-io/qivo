@@ -1127,8 +1127,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     state: 'orgQuery',
     recordExport: 'authedMutation',
   },
-  // projectCreators: Organization › General's creators line, for an org
-  // admin (checked in the handler).
+  // projectCreators answers Organization › General's creators line, for an
+  // org admin (checked in the handler).
   orgs: { update: 'adminMutation', setSlug: 'adminMutation', projectCreators: 'orgQuery' },
   // The Overview's summary, delays, lists and health table: any signed-in
   // login reads a project scope with its seat in that organization, or My

@@ -59,7 +59,7 @@ import { type ListArgs, orderedListAsk, type PersonRow, personRow } from './proj
 
 /* ------------------------------------------------------------- the rules */
 
-/* The marks that put the page's groups in one order: every position's key
+/* The marks that put the page's groups in one order. Every position's key
  * starts with its group's mark, so people and agents come before guests
  * (lib/namedPages.ts compareNamed compares the marks first). */
 export const PEOPLE_MARK = '0'
@@ -90,22 +90,22 @@ export const NOT_PEOPLE_CURSOR =
 /** The list name that seals the page's cursors. */
 export const PEOPLE_LIST = 'people.settings'
 
-/** How many of a guest's projects a row names: up to `shown`, and `more`
+/** How many of a guest's projects a row names, up to `shown`, with `more`
  * when its leads or grants hold more than it read. Tests lower it. */
 export const GUEST_PROJECTS = { shown: 10 }
 
 /** The most creators the creators line names in full, and how far it
- * counts the others: two named and 100 counted, and one more to know that
- * there are more (projectCreatorsOf). */
+ * counts the others. It names two and counts 100, and reads one more to
+ * know that there are more (projectCreatorsOf). */
 export const CREATORS = { named: 2, counted: 100 }
 
 /* ------------------------------------------------------------- the rows */
 
-/** One of a guest's projects as a guest row names it: a project the guest
+/** One of a guest's projects as a guest row names it, a project the guest
  * leads (`lead`) or holds a grant on, with the grant's level. */
 export type GuestProject = { id: string; name: string; level: GrantLevel | 'lead' }
 
-/** A person as Settings › Users shows them: the person row
+/** A person as Settings › Users shows them, the person row
  * (model/projectSettings.ts PersonRow) with what the row's controls need,
  * the address (null for an agent and for a guest without one), the
  * per-user project right (`can_create_projects`, which counts only for a
@@ -121,14 +121,14 @@ export type SettingsPersonRow = PersonRow & {
   guest: { projects: GuestProject[]; more: boolean } | null
 }
 
-/** What people.settingsPage answers: `not_ready` while the organization's
+/** What people.settingsPage answers, `not_ready` while the organization's
  * rows are not all name keyed, else one page with `admins`, the
  * organization's active admins counted up to two. */
 export type PeoplePageAnswer =
   | { state: 'not_ready' }
   | ({ state: 'ready'; admins: number } & ListBatch<SettingsPersonRow>)
 
-/** What people.get answers: `unavailable` alike for an unknown id and a
+/** What people.get answers, `unavailable` alike for an unknown id and a
  * profile of another organization, else the person with `admins`, as the
  * page counts them. */
 export type PersonSettingsAnswer =
@@ -140,11 +140,11 @@ export type PersonSettingsAnswer =
  * shownAvatarColor) and the stored initials (people.byIds). */
 export type PersonFaceRow = PersonRow & { color: string; initials: string }
 
-/** One creator the creators line names: `agent` for an agent, which the
- * line marks. */
+/** One creator the creators line names, with `agent` set for an agent,
+ * which the line marks. */
 export type CreatorRow = { id: string; name: string; agent: boolean }
 
-/** What orgs.projectCreators answers: `unavailable` when the read budget
+/** What orgs.projectCreators answers, `unavailable` when the read budget
  * ended the walk before it knew the line, else the saved setting it counted
  * under and, with three creators or fewer, every one in `creators`; with
  * more, the first two in `creators`, `others` the rest counted up to 100,
@@ -163,8 +163,8 @@ export type ProjectCreatorsAnswer =
 
 /* --------------------------------------------------------- the readers */
 
-/* A guest's first projects, as a guest row names them: the projects they
- * lead (projects.by_lead), then those they hold a grant on
+/* A guest's first projects, as a guest row names them, the projects they
+ * lead (projects.by_lead) and then those they hold a grant on
  * (project_access.by_profile), each range in creation order and read to at
  * most GUEST_PROJECTS.shown + 1 rows, each grant's project looked up once.
  * A project counts when it is in the guest's organization and live (no
@@ -234,14 +234,14 @@ function assertManagesPeople(me: Doc<'profiles'>, refusal: string): void {
   if (me.org_role !== 'admin' || !me.active) throw forbidden(refusal)
 }
 
-/** The arguments of people.settingsPage: an optional search, and the
+/** The arguments of people.settingsPage, an optional search and the
  * cursors of the page's start (`after`) and, for the shape the Settings
  * lists share, its end (`through`), which no app caller sends, since the
  * page mode reads one page open (src/lib/pagedList.ts usePagedPages). */
 export type PeoplePageArgs = ListArgs
 
 /**
- * people.settingsPage for `me`: one page of Settings › Users, LIST_BATCH
+ * people.settingsPage for `me`, one page of Settings › Users of LIST_BATCH
  * records across both groups, the organization's people and agents (the
  * admin, user and viewer ranges merged) in name key byte order with the id
  * breaking ties, then its guests in the same order, so a changed search
@@ -291,10 +291,10 @@ export async function settingsPeopleOf(
 }
 
 /**
- * people.get for `me`: person `id` of `me`'s organization as Settings ›
- * Users shows them, whether or not a loaded page holds them, with `admins`
- * as the page counts them. Refused with PEOPLE_ADMINS_ONLY unless `me` is
- * an organization admin, before any read. An unknown id and a profile of
+ * people.get for `me`, which answers person `id` of `me`'s organization as
+ * Settings › Users shows them, whether or not a loaded page holds them,
+ * with `admins` as the page counts them. Refused with PEOPLE_ADMINS_ONLY
+ * unless `me` is an organization admin, before any read. An unknown id and a profile of
  * another organization answer `unavailable` alike. A guest's projects read
  * under the call's own guard.
  */
@@ -312,11 +312,11 @@ export async function settingsPersonOf(
 }
 
 /**
- * people.byIds for `me`, any active seat: the person rows, with their
- * faces, of the profiles of `me`'s organization among `ids`, each once.
- * Every profile of the organization answers, switched-off and pending ones
- * included, each with its `active` and `pending`, so a reference to a
- * person who left keeps its name. An unknown id and a profile of another
+ * people.byIds for `me`, any active seat, which answers the person rows,
+ * with their faces, of the profiles of `me`'s organization among `ids`,
+ * each once. Every profile of the organization answers, switched-off and
+ * pending ones included, each with its `active` and `pending`, so a
+ * reference to a person who left keeps its name. An unknown id and a profile of another
  * organization are left out, a definite answer, since each was looked up.
  * More than BY_IDS_MAX ids are refused on the raw length, repeats
  * included.
@@ -338,12 +338,12 @@ export async function peopleByIdsOf(
 }
 
 /**
- * orgs.projectCreators for `me`: who can create top-level projects in
- * `me`'s organization under its saved setting, by the rule projects.create
- * enforces (lib/projectCreators.ts canCreateProjects), active seats only,
- * pending invitations and Standard user agents included. Refused with
- * CREATORS_ADMINS_ONLY unless `me` is an organization admin, before any
- * read.
+ * orgs.projectCreators for `me`, which answers who can create top-level
+ * projects in `me`'s organization under its saved setting, by the rule
+ * projects.create enforces (lib/projectCreators.ts canCreateProjects),
+ * active seats only, pending invitations and Standard user agents
+ * included. Refused with CREATORS_ADMINS_ONLY unless `me` is an
+ * organization admin, before any read.
  *
  * It walks profiles.by_org_role_name's admin range and then, unless the
  * setting is Org admins, its user range, each in name key order, and stops

@@ -419,9 +419,9 @@ export type InviteDeliveryRow = {
   free_at?: string | null
 }
 
-/* The pending seats deliveries() reports on: with `ids`, each distinct one
- * that names a profile of organization `orgId`, looked up by id, else every
- * seat of the organization without a login. The caller keeps the
+/* The pending seats deliveries() reports on. With `ids` they are each
+ * distinct one that names a profile of organization `orgId`, looked up by
+ * id, else every seat of the organization without a login. The caller keeps the
  * invitations among them (isInvitation). */
 async function* deliverySeats(
   ctx: QueryCtx,

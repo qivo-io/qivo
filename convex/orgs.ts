@@ -8,9 +8,9 @@
  * Billing owns the subscription independently of organization settings.
  *
  * projectCreators answers Organization › General's line under "Who can
- * create new projects?" from the server, for an organization admin: two
- * creators named and the rest counted exactly up to 100, under the saved
- * setting (model/peopleSettings.ts projectCreatorsOf). */
+ * create new projects?" from the server, for an organization admin, with
+ * two creators named and the rest counted exactly up to 100, under the
+ * saved setting (model/peopleSettings.ts projectCreatorsOf). */
 
 import { v } from 'convex/values'
 import { literals } from 'convex-helpers/validators'
@@ -46,7 +46,7 @@ const vWeekOneRule = literals('jan1', 'first4day', 'firstfull')
  * Organization › General's creators line, for organization admins only. */
 
 /** Who can create top-level projects in the organization under its saved
- * setting, by projects.create's rule: with three or fewer, every one in
+ * setting, by projects.create's rule. With three or fewer, every one is in
  * `creators`; with more, the first two, admins first and then standard
  * users, each in name key order, `others` the rest counted up to 100,
  * `more` whether one past those exists and `agents` the agents among the

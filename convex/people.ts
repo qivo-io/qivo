@@ -3,21 +3,21 @@
  * readers and their rules are in model/peopleSettings.ts; the writes stay
  * in profiles.ts.
  *
- * - settingsPage: one page of Settings › Users, the organization's people
- *   and agents and then its guests, 25 records a page across both groups
- *   in name order, with a search over every person's name and address on
- *   the server, for an organization admin. The app subscribes to each page
- *   it shows (src/panels/settings/UsersSettings.tsx).
- * - get: one person by id as the page shows them, for an organization
+ * - settingsPage reads one page of Settings › Users, the organization's
+ *   people and agents and then its guests, 25 records a page across both
+ *   groups in name order, with a search over every person's name and
+ *   address on the server, for an organization admin. The app subscribes to
+ *   each page it shows (src/panels/settings/UsersSettings.tsx).
+ * - get reads one person by id as the page shows them, for an organization
  *   admin, whether or not a loaded page holds them. The app subscribes
  *   while a `user:` page shows, for the phone's user page and Settings'
  *   check that the page is still valid
  *   (src/panels/settings/usePersonSettings.ts).
- * - byIds: the person rows, with their faces, of up to 100 profiles of the
- *   organization by id, for any active seat, guests and viewers included,
- *   as the workspace's people part sends every seat the whole roster today.
- *   No page reads it yet; the roster cache and the pickers will, for people
- *   a batch does not hold.
+ * - byIds reads the person rows, with their faces, of up to 100 profiles
+ *   of the organization by id, for any active seat, guests and viewers
+ *   included, as the workspace's people part sends every seat the whole
+ *   roster today. No page reads it yet; the roster cache and the pickers
+ *   will, for people a batch does not hold.
  *
  * Each is an orgQuery, so the caller is an active seat of `org_id`, and
  * reads one organization, no task, team, membership or key, and no grant
@@ -38,7 +38,7 @@ import {
 } from './model/peopleSettings'
 
 /** One page of Settings › Users (model/peopleSettings.ts
- * settingsPeopleOf): 25 records across the people and agents and then the
+ * settingsPeopleOf), 25 records across the people and agents and then the
  * guests, in name key order with the id breaking ties, each with what its
  * row's controls need and a guest with their first projects, and
  * `admins`. `search` keeps a person when every word of it is in their name
@@ -64,9 +64,9 @@ export const get = orgQuery({
 })
 
 /** The profiles of the organization among `ids`, each once, as person rows
- * with their faces: `id`, `name`, `org_role`, `kind`, `active`, `pending`,
- * `color`, the avatar color as the workspace sends it (gray for an older
- * non-hex value), and `initials`, as stored. Switched-off and pending
+ * with their faces, which carry `id`, `name`, `org_role`, `kind`, `active`,
+ * `pending`, `color`, the avatar color as the workspace sends it (gray for
+ * an older non-hex value), and `initials`, as stored. Switched-off and pending
  * profiles answer too. An unknown id and a profile of another organization
  * are left out, a definite answer, since each was looked up. More than
  * BY_IDS_MAX (100) ids are refused (model/peopleSettings.ts peopleByIdsOf).
