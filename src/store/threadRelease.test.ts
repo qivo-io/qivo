@@ -375,6 +375,32 @@ describe('the task window keeps a bounded thread', () => {
       expect(P.pinnedComments).toEqual([])
     })
 
+    it('holds the comment open in an editor apart when the thread starts over', async () => {
+      const { P } = store
+      openServed(300)
+      await earlier()
+      P.holdComment(pane, 'comment-210')
+      // more arrived than the window holds, so it meets nothing loaded
+      publish({ comments: range(400, 450), earlier: true })
+      expect(shown()).toEqual(['comment-210', ...ids(400, 450)])
+      expect(P.pinnedComments).toEqual(['comment-210'])
+      expect(P.commentsEarlier).toBe('more')
+      // with a gap open, the one in the run below it stays too
+      serve = { comments: range(0, 600), history: [] }
+      P.holdComment(pane, null)
+      publish({ comments: range(550, 600), earlier: true })
+      for (let i = 0; i < 3; i++) await earlier()
+      expect(P.commentsNewer).toBe('more')
+      publish({ comments: range(551, 601), earlier: true })
+      expect(shown()).toContain('comment-550')
+      P.holdComment(pane, 'comment-550')
+      publish({ comments: range(700, 750), earlier: true })
+      expect(shown()).toEqual(['comment-550', ...ids(700, 750)])
+      // its editor closes, and it goes
+      P.holdComment(pane, null)
+      expect(shown()).toEqual(ids(700, 750))
+    })
+
     it("forgets my accepted edit of a released comment, which comes back with the server's text", async () => {
       const { P } = store
       openServed(300)

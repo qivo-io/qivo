@@ -928,6 +928,15 @@ function dropHistoryGap() {
   historyNewerLoad = 'idle'
 }
 
+/* Holds apart (pinnedComments) the comments among `gone`, rows the store
+   lets go, that a window has open in its editor, so no editor unmounts
+   with its draft. */
+function pinEditing(gone: readonly Row<'comments'>[]) {
+  if (commentHolds.size === 0) return
+  const editing = new Set(commentHolds.values())
+  for (const row of gone) if (editing.has(row.id)) pinnedComments.set(row.id, row)
+}
+
 /* Records a delivery of the watched thread's live window, oldest first in
    thread order, and whether the thread holds earlier comments. Comments that
    left the window at its old end join the run just above it, the newer run
@@ -943,8 +952,10 @@ function dropHistoryGap() {
    id meets the run above, so the gap closes), and in the run above that
    run up to it with no gap. When the window no longer meets what was
    loaded, because more comments arrived between two deliveries than it
-   holds, the thread starts over from the window, with no gap. A comment
-   held apart for an editor stays through every one of these. */
+   holds, the thread starts over from the window, with no gap, and a
+   comment open in an editor among the comments it lets go is held apart
+   (pinEditing). A comment held apart for an editor stays through every one
+   of these. */
 function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
@@ -977,6 +988,9 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
         commentsGap = before
       } else if (inGap === 0) dropCommentsGap()
       else {
+        // starting over lets go of loaded comments that still exist, so
+        // the one open in an editor is held apart
+        if (kept === -1) pinEditing([...olderComments, ...newerComments])
         dropCommentsGap()
         olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
         if (kept === -1) threadStart = false
@@ -1280,16 +1294,13 @@ function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
     budget: THREAD_KEEP.rows,
   })
   if (!after) return false
-  const editing = new Set(commentHolds.values())
   const c = after.comments
   olderComments = c.older.map((h) => h.row)
   newerComments = c.newer.map((h) => h.row)
   commentsGap = c.gap
   if (c.fromTop) threadStart = false
-  for (const h of c.released) {
-    acceptedCommentChanges.delete(h.id)
-    if (editing.has(h.id)) pinnedComments.set(h.id, h.row)
-  }
+  for (const h of c.released) acceptedCommentChanges.delete(h.id)
+  pinEditing(c.released.map((h) => h.row))
   const e = after.history
   if (e && historySnap !== null) {
     olderEvents = e.older.map((h) => h.row)
@@ -1309,9 +1320,8 @@ function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
    earlier reads on from them. A comment open in an editor among the rows
    that go is held apart. */
 function dropAboveGap() {
-  const editing = new Set(commentHolds.values())
   if (commentsGap !== null) {
-    for (const row of olderComments) if (editing.has(row.id)) pinnedComments.set(row.id, row)
+    pinEditing(olderComments)
     olderComments = newerComments
     threadStart = false
     dropCommentsGap()
