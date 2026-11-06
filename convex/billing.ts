@@ -66,7 +66,7 @@ export const details = orgQuery({
 
 /**
  * @deprecated The app reads billing.details and billing.accountList since
- * the release after v0.1.141. This query stays, with its reads and its
+ * the release after v0.1.144. This query stays, with its reads and its
  * answer, through that release, so tabs and desktop windows loaded before
  * it still load Billing, and a later release removes it and adds it to the
  * Instant Rollback list in docs/deployment.md.
@@ -133,7 +133,7 @@ export const usageFigures = orgQuery({
 
 /**
  * @deprecated The app reads billing.usageFigures and billing.apiAccounts
- * since the release after v0.1.141. This query stays, with its answer,
+ * since the release after v0.1.144. This query stays, with its answer,
  * through that release, so tabs and desktop windows loaded before it
  * still load Billing, and a later release removes it and adds it to the
  * Instant Rollback list in docs/deployment.md.
@@ -281,7 +281,7 @@ export const storageNowPage = internalQuery({
 /**
  * @deprecated The app stopped reading this report in the release after
  * v0.1.134, which reads billing.currentUsage and billing.storageProjects
- * instead; from the release after v0.1.141 it reads billing.usageFigures in
+ * instead; from the release after v0.1.144 it reads billing.usageFigures in
  * place of currentUsage. This report stays, with its scan and its answer,
  * through the release after v0.1.134, so tabs and desktop windows loaded
  * before it still load Billing, and a later release removes it with
