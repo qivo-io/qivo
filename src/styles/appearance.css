@@ -457,6 +457,21 @@ html[data-appearance][data-background-state="ready"]
     background-image: linear-gradient(var(--hover), var(--hover));
   }
 }
+/* Its group headings, notes and page line stand on the photograph too, so
+   each sits on the same panel material, as wide as its words. */
+html[data-appearance][data-background-state="ready"]
+:is(
+  .mobile-project-directory > .directory-group,
+  .mobile-project-directory > .directory-note:not(.sr-only),
+  .mobile-project-directory > .settings-page-fold
+) {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: var(--r-md);
+  background-color: var(--workspace-panel);
+  -webkit-backdrop-filter: var(--workspace-panel-blur);
+  backdrop-filter: var(--workspace-panel-blur);
+}
 
 /* Light: the toast, the roadmap plan card and the editor's mention and link
    menus take the white popover and the float rim like every other menu,

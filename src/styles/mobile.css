@@ -66,6 +66,27 @@
   height: auto;
   min-height: 44px;
 }
+/* The All projects directory's Sub-projects button, in the place and the
+   look of the disclosure summary it replaced, and its group headings. */
+.directory-expand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.directory-expand:focus-visible:where(html:not([data-focus-modality="pointer"]) *) {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.directory-group {
+  margin: 0;
+  padding: 0 4px;
+}
 
 @media (max-width: 760px) {
   :root {
