@@ -2018,12 +2018,15 @@ try {
     if (first.state !== 'ready') await fail(`Billing's ${kind} list answered ${first.state}`)
     await pageA.getByText(summary, { exact: true }).click()
     const list = pageA.locator(`[data-billing-names-list="${kind}"]`)
+    // the list mounts as it opens, so wait for it to be there and loaded
     await pageA
       .waitForFunction(
-        (k) =>
-          document
+        (k) => {
+          const end = document
             .querySelector(`[data-billing-names-list="${k}"]`)
-            ?.getAttribute('data-billing-names-end') !== 'loading',
+            ?.getAttribute('data-billing-names-end')
+          return end !== undefined && end !== 'loading'
+        },
         kind,
         { timeout: 15000 },
       )
