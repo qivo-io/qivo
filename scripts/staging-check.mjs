@@ -72,7 +72,13 @@
  * its run tag over REST and puts it on a fixture task, opens Settings ›
  * Labels on the deployment's live batches (labels.settingsPage), finds the
  * label by search with its count of active tasks, renames it in place and
- * deletes it in its window (ui/settings-labels). It makes a sub-project of
+ * deletes it in its window (ui/settings-labels). It makes a team with its
+ * run tag over REST, finds it by search on Settings › Teams' live batches
+ * (teams.settingsPage) with 0 members, adds the Standard agent on its page
+ * through Add member's search (teams.get, members and addable), checks the
+ * count over REST and on both pages, renames the team in place, removes
+ * the agent and deletes the team from the list (ui/settings-teams). It
+ * makes a sub-project of
  * its own under its second project with a task of the Standard agent's,
  * removes the agent's grant there in the app, whose removal window lists
  * the task from the deployment's preview (accessRemovals.preview), and
@@ -4707,6 +4713,128 @@ async function settingsLabelsCheck() {
   })
 }
 
+/** The step that checks Settings › Teams and a team's page
+ *  (settingsTeamsCheck). */
+export const TEAMS_STEP = 'ui/settings-teams'
+
+/** What Settings › Teams and the run's team page say of its members
+ *  (settingsTeamsCheck): none, and the Standard agent alone. */
+export const TEAMS_EXPECTED = { none: '0 members', one: '1 member' }
+
+/** Settings › Teams and a team's page on the deployment's reads
+ *  (teams.settingsPage, get, members and addable): the run makes
+ *  `<tag> Settings team` over REST, a team with no shares, so no removal
+ *  window opens. In the app Settings › Teams reaches its ok state, and a
+ *  search for the team's full name lists its row with TEAMS_EXPECTED.none,
+ *  from the deployment's answer rather than kept in the page; `<tag> team`
+ *  is listed too while it lives, so the step looks for its own row. On the
+ *  team's page Add member's search finds the Standard agent and Add adds
+ *  them, which GET /teams/{id} then counts and its members page holds, and
+ *  the page's count line and the list's row read TEAMS_EXPECTED.one. It
+ *  renames the team in place, which GET /teams/{id} names, removes the
+ *  agent with two presses and no window, which leaves a count of 0, and
+ *  deletes the team from the list with two presses, after which GET
+ *  /teams/{id} answers 404. The sweep finds a team a failure left by its
+ *  tag. It runs after ui/settings-labels, and needs a backend from the
+ *  release whose app reads the team pages from the server or later.
+ *  Against an older one Settings › Teams cannot load, and the step fails
+ *  waiting for its ok state. */
+async function settingsTeamsCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  await check(TEAMS_STEP, async () => {
+    const team = await restOk(w, 'POST', '/teams', { name: `${run.tag} Settings team` })
+    const text = async (locator) => ((await locator.first().textContent()) ?? '').trim()
+    const summary = () => restOk(w, 'GET', `/teams/${team.id}`)
+    /** Settings › Teams searched for `name`, and the run's team's row. */
+    const listed = async (name) => {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-teams`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app.locator('[data-org-teams][data-teams-state="ok"]').waitFor({ timeout: 60_000 })
+      await app.locator('[data-teams-search]').fill(name)
+      const row = app.locator(`[data-org-teams] [data-team-row="${team.id}"]`)
+      expect(
+        await until(async () => (await row.count()) === 1),
+        `a search for ${name} does not list it`,
+      )
+      eq(await row.locator('[data-team-kept]').count(), 0, 'kept rows')
+      return row
+    }
+    /** The run's team's page, opened from its row in the list. */
+    const opened = async (row) => {
+      await row.locator('[data-team-open]').click()
+      await app.locator('[data-team-settings-state="ok"]').waitFor({ timeout: 60_000 })
+      await app
+        .locator('[data-team-members][data-team-members-state="ok"]')
+        .waitFor({ timeout: 60_000 })
+    }
+    let row = await listed(team.name)
+    expect(
+      await until(
+        async () => (await text(row.locator('[data-team-count]'))) === TEAMS_EXPECTED.none,
+      ),
+      `its count reads ${short(await text(row.locator('[data-team-count]')))}, not ${TEAMS_EXPECTED.none}`,
+    )
+    await opened(row)
+    await app.locator('[data-team-member-picker]').click()
+    await app.locator('[data-team-member-picker-search]').fill(std.name)
+    const choice = app.locator(`[data-team-member-choice="${std.id}"]`)
+    await choice.waitFor({ timeout: 30_000 })
+    await choice.click()
+    await app.locator('[data-team-member-add]').click()
+    expect(
+      await until(async () => (await summary()).member_count === 1),
+      'GET /v1/teams/{id} does not count the agent',
+    )
+    expect(
+      (await restRows(w, `/teams/${team.id}/members`, 'members')).some((m) => m.id === std.id),
+      'its members page does not hold the agent',
+    )
+    const line = app.locator('[data-team-member-count]')
+    expect(
+      await until(async () => (await text(line)) === TEAMS_EXPECTED.one),
+      `its page's count reads ${short(await text(line))}, not ${TEAMS_EXPECTED.one}`,
+    )
+    row = await listed(team.name)
+    expect(
+      await until(
+        async () => (await text(row.locator('[data-team-count]'))) === TEAMS_EXPECTED.one,
+      ),
+      `its row's count reads ${short(await text(row.locator('[data-team-count]')))}, not ${TEAMS_EXPECTED.one}`,
+    )
+    await opened(row)
+    const renamed = `${run.tag} Settings team renamed`
+    const name = app.locator('input[aria-label="Team name"]')
+    await name.fill(renamed)
+    await name.press('Enter')
+    expect(
+      await until(async () => (await summary()).name === renamed),
+      'GET /v1/teams/{id} does not name it renamed',
+    )
+    const member = app.locator(`[data-settings-team-member="${std.id}"]`)
+    await confirmTwice(
+      member.locator('[data-team-member-remove]'),
+      member.locator('[data-team-member-remove][aria-label="Click again to confirm"]'),
+    )
+    expect(
+      await until(async () => (await summary()).member_count === 0),
+      'GET /v1/teams/{id} still counts the agent',
+    )
+    eq(await app.locator('[data-access-removal]').count(), 0, 'removal windows')
+    row = await listed(renamed)
+    await confirmTwice(
+      row.locator('[data-team-delete]'),
+      row.locator('[data-team-delete][aria-label="Click again to delete this team"]'),
+    )
+    expect(
+      await until(async () => (await rest(w, 'GET', `/teams/${team.id}`)).status === 404),
+      'GET /v1/teams/{id} still answers the team',
+    )
+    return `found ${team.name} by search with ${TEAMS_EXPECTED.none}, added ${std.name} through Add member to ${TEAMS_EXPECTED.one}, renamed it, removed the agent and deleted it from the list`
+  })
+}
+
 /** The step that checks the removal window (removalWindowCheck). */
 export const REMOVAL_STEP = 'ui/removal-window'
 
@@ -4732,7 +4860,7 @@ export const REMOVAL_EXPECTED = {
  *  N it makes a tagged top-level project of its own (run.projects.R), which
  *  the cleanup deletes and the sweep finds by its tag. The task goes to
  *  run.created. It runs while the run's projects are active, after
- *  ui/settings-labels, and needs a backend from the release of the
+ *  ui/settings-teams, and needs a backend from the release of the
  *  removal window or later. Against an older one the press cannot read
  *  the preview, so the window never opens and the step fails waiting for
  *  it. */
@@ -6894,6 +7022,9 @@ async function main() {
   await tasksOnDemandCheck()
   // Settings › Labels with a label of its own on a fixture task
   await settingsLabelsCheck()
+  // Settings › Teams and a team's page on the server's reads, with a team
+  // of its own
+  await settingsTeamsCheck()
   // the removal window and its Reassign picker on a sub-project of its own
   await removalWindowCheck()
   // a project's Settings page on the server's reads, on a sub-project of its own

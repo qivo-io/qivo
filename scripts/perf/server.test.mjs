@@ -724,6 +724,63 @@ describe('the benchmark server', () => {
     expect((await page('')).answer.error).toContain('only organization admins')
   }, 60_000)
 
+  it("answers Settings › Teams and a team's page from the workspace, with the states the page asks for", async () => {
+    /** What `name` answers with `args` on a workspace with page parameters
+        `params`, and the workspace. */
+    const read = async (params, name, args = {}) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'read', name, args: { org_id: snap.orgs[0].id, ...args } })
+      const answer = posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const admin = await read('role=admin', 'teams:settingsPage')
+    expect(admin.answer.rows.map((r) => r.name)).toEqual(
+      [...admin.snap.teams].map((t) => t.name).sort(),
+    )
+    expect(admin.answer).toMatchObject({ state: 'ready', next: null, teams: 3 })
+    expect(admin.answer.rows.every((r) => r.member_count === 10)).toBe(true)
+    // a user leads the first team only, and reads it alone
+    const user = await read('', 'teams:settingsPage')
+    expect(user.answer.rows.map((r) => r.id)).toEqual([user.snap.teams[0].id])
+    const team = admin.snap.teams[0].id
+    expect((await read('role=admin', 'teams:get', { id: team })).answer).toMatchObject({
+      state: 'ok',
+      member_count: 10,
+      can_manage: true,
+    })
+    expect((await read('role=admin', 'teams:members', { team_id: team })).answer.rows).toHaveLength(
+      10,
+    )
+    // every person outside the team may join it
+    expect((await read('role=admin', 'teams:addable', { team_id: team })).answer.rows).toHaveLength(
+      25,
+    )
+    // the forced states
+    const uncounted = await read('role=admin&teamsettings=uncounted', 'teams:settingsPage')
+    expect(uncounted.answer.rows.filter((r) => r.member_count === null)).toHaveLength(2)
+    const stopped = await read('role=admin&teamsettings=stopped', 'teams:settingsPage')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(2)
+    const small = await read('role=admin&teamsettings=batch-2', 'teams:settingsPage')
+    expect(small.answer.rows).toHaveLength(2)
+    expect(small.answer.next).not.toBeNull()
+    expect(
+      (await read('role=admin&teamsettings=not-ready', 'teams:members', { team_id: team })).answer,
+    ).toEqual({ state: 'not_ready' })
+    expect(
+      (await read('role=admin&teamsettings=error', 'teams:settingsPage')).answer.error,
+    ).toContain('fails')
+    expect(
+      (await read('role=admin&teamsettings=get-error', 'teams:get', { id: team })).answer.error,
+    ).toContain('fails')
+    // a Viewer cannot open the list
+    expect((await read('role=viewer', 'teams:settingsPage')).answer).toMatchObject({
+      state: 'refused',
+    })
+  }, 60_000)
+
   it('answers the milestone reads from the workspace, with the states the page asks for', async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */
