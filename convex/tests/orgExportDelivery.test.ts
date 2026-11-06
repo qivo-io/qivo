@@ -732,6 +732,8 @@ describe('what a download records', () => {
     const [readme] = await partsOf(t, exportId)
     expect(read).toBeLessThanOrEqual(readme.stored_bytes)
     expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
+    // the body that errored let go of its lease
+    expect((await jobOf(t, exportId))?.streams).toBeUndefined()
   })
 
   it("errors a part whose file is not its stored size, though the row's figures agree", async () => {
@@ -755,10 +757,13 @@ describe('what a download records', () => {
     })
     const res = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect(res.status).toBe(200)
+    expect((await jobOf(t, exportId))?.streams).toHaveLength(1)
     const { bytes, error } = await drain(t, res)
     expect(error).not.toBeNull()
     expect(bytes.length).toBeLessThan(Number(res.headers.get('Content-Length')))
     expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
+    // the body that errored let go of its lease
+    expect((await jobOf(t, exportId))?.streams).toBeUndefined()
   })
 
   it('holds at most DELIVERY.streams downloads of an archive at once, answering 429 past them, until one ends or its lease runs out', async () => {
