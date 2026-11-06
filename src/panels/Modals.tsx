@@ -2498,8 +2498,8 @@ function MilestoneModal({
   if (deletedHere && openedM) setDeletedHere(false)
   const gone = !!init.id && answered && !openedM && !deletedHere && read?.state === 'ok' && !!answer
   if (gone && editId === init.id) setEditId(null)
-  // whether the person may change the opened milestone: what the answer
-  // says, and nothing once it names no milestone
+  // whether the person may change the opened milestone, which is what the
+  // answer says, and no right once it names no milestone
   const openedCanWrite = !!answer?.canWrite
   // the window cannot tell the person's right on the project once the
   // answer names no project for a reason other than their own delete,

@@ -179,8 +179,8 @@ export function createMilestoneRows(o: {
   }
 
   /** Whether `anchor`'s read is known to lack a milestone other than `id`
-      that it would list (reaches) before position `pos`: one the store
-      holds (`known`) or another read's answer holds, which this answer
+      that it would list (reaches) before position `pos`, meaning one that
+      the store (`known`) or another read's answer holds and this answer
       does not. */
   function lacksBefore(anchor: Anchor, id: string, pos: MilestonePosition): boolean {
     const { ask, take } = anchor
