@@ -1058,7 +1058,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // Settings > Labels (settingsPage, organization admins only) and the task
   // label picker (picker, every seat) read the labels a batch at a time in
-  // name order; byIds looks up the labels a task shows that no batch holds.
+  // name order; byIds looks up the labels a task carries that the app's
+  // catalogue does not hold (src/panels/taskLabels.ts).
   labels: {
     create: 'orgMutation',
     update: 'orgMutation',

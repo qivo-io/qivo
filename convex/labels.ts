@@ -11,7 +11,9 @@
  * Settings > Labels (settingsPage) and the task label picker (picker) read
  * the labels a batch at a time in name order, with search over the whole
  * list on the server (model/labels.ts labelBatch), and byIds looks up the
- * labels a task shows that no batch holds.
+ * labels a task carries that the app's catalogue does not hold, for the
+ * task window's chips and the picker's first rows
+ * (src/panels/taskLabels.ts).
  *
  * Narration is asymmetric on purpose (T8): create and delete write an
  * activity row, update writes NONE. toggle narrates against the ISSUE
@@ -89,10 +91,13 @@ export const picker = orgQuery({
 
 /* ------------------------------------------------------------------- byIds */
 
-/** The labels of the organization among `ids`, each once, for labels a task
- * shows that no batch holds. An id of another organization, an unknown id
- * and a deleted label are left out, a definite answer, since each was looked
- * up. More than BY_IDS_MAX ids are refused. */
+/** The labels of the organization among `ids`, each once. The task window
+ * reads it live, while it shows a task, for the labels the task carries
+ * that the app's catalogue does not hold, which its chips and the label
+ * picker's first rows name (src/panels/taskLabels.ts useTaskLabels). An id
+ * of another organization, an unknown id and a deleted label are left out,
+ * a definite answer, since each was looked up. More than BY_IDS_MAX ids are
+ * refused. */
 export const byIds = orgQuery({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }): Promise<{ rows: LabelRow[] }> => {
