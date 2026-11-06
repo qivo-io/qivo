@@ -230,8 +230,8 @@ export async function reserveDemoPreview(
   })
 }
 
-/** How many demo backgrounds without a preview one sweep checks for room
- * (retrySkippedPreview). Tests lower it. */
+/** How many demo backgrounds without a preview one run of the minute sweep
+ * checks for room (retrySkippedPreview). Tests lower it. */
 export const PREVIEW_RETRY = { checks: 4 }
 
 /**

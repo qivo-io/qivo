@@ -22,6 +22,7 @@ import {
   DEMO_STORAGE_BYTES,
   DEMO_UPLOAD_ROWS,
   demoStorageFull,
+  PREVIEW_RETRY,
 } from '../model/demoUploads'
 import { as, expectRefusal, newT, plantIssue, type T, uuid, withOrg } from './helpers.setup'
 import { runSteps } from './trash.setup'
@@ -787,6 +788,33 @@ describe("a demo background's preview", () => {
     jobs = await generates(d)
     expect(jobs).toHaveLength(before + 2)
     expect(jobs.at(-1)?.args[0]).toEqual(second)
+  })
+
+  it('reaches a waiting preview behind one whose demo stays full', async () => {
+    const d = await setup()
+    // the first background fills its demo for good
+    const full = await background(d, DEMO_STORAGE_BYTES)
+    expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, full)).toBeNull()
+    vi.setSystemTime(Date.now() + 1000)
+    const waiting = await skippedBackground(d, await otherLogin(d), d.fx.otherAdmin.id)
+    vi.setSystemTime(Date.now() + 11 * 60_000)
+    const before = (await generates(d)).length
+    const checks = PREVIEW_RETRY.checks
+    PREVIEW_RETRY.checks = 1
+    try {
+      // a run that checks one background finds the full demo's and moves it
+      // to the back
+      await d.t.mutation(internal.demoUploads.sweep, {})
+      expect(await generates(d)).toHaveLength(before)
+      // so the next run reaches the other one
+      vi.setSystemTime(Date.now() + 60_000)
+      await d.t.mutation(internal.demoUploads.sweep, {})
+      const jobs = await generates(d)
+      expect(jobs).toHaveLength(before + 1)
+      expect(jobs.at(-1)?.args[0]).toEqual(waiting)
+    } finally {
+      PREVIEW_RETRY.checks = checks
+    }
   })
 })
 
