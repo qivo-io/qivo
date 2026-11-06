@@ -86,14 +86,19 @@ async function load() {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   network.mutation.mockReset()
   network.query.mockReset()
   network.onUpdate.mockReset()
 })
 
+/** Lets the store's answers and their callbacks run, also under a case's
+    fake timers. */
 const settle = async () => {
-  for (let i = 0; i < 8; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+  for (let i = 0; i < 8; i++)
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0)
+    else await new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 /** `n` task items of organization `org`, numbered from `from`. */
@@ -560,6 +565,60 @@ describe('items a restore deferred', () => {
     expect(watchOf(task.id)).toEqual([])
     expect(P.deletedWaiting.size).toBe(0)
     expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+  })
+
+  it('waits out the save pause that refuses its second send, and sends it once Qivo is back', async () => {
+    const { task } = await deferOne()
+    vi.useFakeTimers()
+    const sync = await import('../lib/syncStatus')
+    const probes: (() => void)[] = []
+    sync.syncStatus.setProbe(() => new Promise<void>((resolve) => probes.push(resolve)))
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    probes.at(-1)?.()
+    await settle()
+    // the socket drops, and once OFFLINE_DELAY_MS passes edits pause
+    sync.syncStatus.setSocket({ connected: false, everConnected: true })
+    vi.advanceTimersByTime(sync.OFFLINE_DELAY_MS)
+    await settle()
+    expect(P.editsPaused()).toBe(true)
+    watchOf(task.id)[0].next(row(task.id, { can_restore: true, blocked: undefined }))
+    await settle()
+    // nothing went out, nothing was refused, and the watch goes on
+    expect(calls).toEqual([])
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+    expect(watchOf(task.id)).toHaveLength(1)
+    // the socket is back, but edits wait for the server's answer
+    sync.syncStatus.setSocket({ connected: true, everConnected: true })
+    await settle()
+    expect(calls).toEqual([])
+    probes.at(-1)?.()
+    await settle()
+    expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
+    await answerNext()
+    expect(watchOf(task.id)).toEqual([])
+    expect(P.deletedWaiting.size).toBe(0)
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+  })
+
+  it('keeps watching when the pause refuses its second send in flight, and sends it again', async () => {
+    const { task } = await deferOne()
+    const ready = row(task.id, { can_restore: true, blocked: undefined })
+    watchOf(task.id)[0].next(ready)
+    await settle()
+    expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
+    // edits pause while the call is in flight, which refuses it
+    calls.shift()?.reject(new ConvexError({ code: 'paused', message: 'Qivo is offline.' }))
+    await settle()
+    expect(toastTexts().filter((text) => text.startsWith("Couldn't restore"))).toEqual([])
+    expect(watchOf(task.id)).toHaveLength(1)
+    expect(P.deletedWaiting.has(task.id)).toBe(true)
+    // the row's next answer sends it again
+    watchOf(task.id)[0].next(ready)
+    await settle()
+    expect(calls.map((c) => c.args)).toEqual([{ org_id: A, ids: [task.id] }])
+    await answerNext()
+    expect(watchOf(task.id)).toEqual([])
+    expect(P.deletedWaiting.size).toBe(0)
   })
 
   it('lets a new action run beside the watch, whose second send skips the busy rule', async () => {
