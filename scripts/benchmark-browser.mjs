@@ -924,9 +924,9 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     const summary = window.PLANNER.inboxSummary
     if (!summary) return true
     const chip = document.querySelector('[data-inbox-badge]')?.textContent ?? null
-    return summary.state === 'ok' && summary.current && summary.answer.unread_count === 1
-      ? chip === null || chip === '1'
-      : false
+    return (
+      summary.state === 'ok' && summary.current && summary.answer.unread_count === 1 && chip === '1'
+    )
   })
   phase('remoteStamp')
   metrics.remoteStamp.push(
