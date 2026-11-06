@@ -2,10 +2,10 @@
  * DELETED_PAGE.rows entries, project entries first and then task entries,
  * each part newest first, with the type, deleter, search and assignee
  * filters applied before the page is cut, and a sealed next_cursor that
- * continues after its last entry. It replaces deletedItems.list and
- * matches (model/deletedItemsList.ts) once the app reads it, and builds its
- * rows with that module's rowOf, so it shows nothing the list would not
- * show the same caller.
+ * continues after its last entry. The app reads it in place of
+ * deletedItems.list and matches (model/deletedItemsList.ts) from the release
+ * after v0.1.141, and it builds its rows with that module's rowOf, so it
+ * shows nothing the list would not show the same caller.
  *
  * Scope. Without one the page reads every active seat of the login and
  * lists project entries only, and says that task entries need a scope
