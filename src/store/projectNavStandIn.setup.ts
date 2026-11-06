@@ -37,9 +37,14 @@
    bad_request. The workspace carries no favorites, and the stand-in reads
    no read budget and no readiness stamp, so favorites, `not_ready`, the
    access_unchecked refusal, a stopped batch, a failing read and a smaller
-   batch answer only when `force` asks for them.
-   src/store/projectNavParity.test.ts compares it with the real reads. It
-   imports nothing the benchmark's worker cannot load. */
+   batch answer only when `force` asks for them. `force.favorites` may be a
+   set the caller keeps, which setFavoriteStandIn changes as
+   projectNav.setFavorite changes a seat's rows (model/projectFavorites.ts
+   setFavoriteCore), so the reads' next answers move a starred project
+   between their groups, for the All projects directory's jsdom tests and
+   the benchmark's star.
+   src/store/projectNavParity.test.ts compares it with the real reads and
+   the real star. It imports nothing the benchmark's worker cannot load. */
 
 import { ConvexError, compareValues } from 'convex/values'
 import { LIMITS, LIST_BATCH, overText } from '../../convex/lib/limits'
@@ -77,14 +82,15 @@ export type NavWorkspace = Pick<
     after this many projects looked at (`stop`, at least one, as the server
     always reads its first), a read that fails (`fail`), a smaller batch
     (`batch`), and the top-level projects that are favorites of their
-    seat (`favorites`, by id). */
+    seat (`favorites`, by id), read at every answer, so a set the caller
+    keeps and setFavoriteStandIn changes moves a project at the next. */
 export type ForcedProjectNav = {
   notReady?: boolean
   unchecked?: string
   stop?: number
   fail?: boolean
   batch?: number
-  favorites?: readonly string[]
+  favorites?: Iterable<string>
 }
 
 /** The access_unchecked refusal's sentence, as convex/lib/access.ts
@@ -157,6 +163,18 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
   /* The live sub-projects of `parent` in its organization. */
   const liveChildren = (parent: Project) =>
     w.projects.filter((c) => c.parent_id === parent.id && live(c) && c.org_id === parent.org_id)
+  /** Whether `me` sees `p` at all through ordinary access, as a star
+      asks (lib/access.ts accessOf visible): a level of its own, or for a
+      top-level meta one on any of its sub-projects, live or archived. */
+  const visible = (me: Profile, p: Project): boolean => {
+    if (p.org_id !== me.org_id) return false
+    if (levelOf(me, p) !== null) return true
+    return (
+      p.parent_id === undefined &&
+      p.type === 'meta' &&
+      w.projects.some((c) => c.parent_id === p.id && levelOf(me, c) !== null)
+    )
+  }
   /** Whether `me` sees `p` for navigation by the reads' rule. */
   const sees = (me: Profile, p: Project): boolean => {
     if (p.org_id !== me.org_id || !live(p)) return false
@@ -174,6 +192,7 @@ function navRule(w: NavWorkspace, favorites: ReadonlySet<string>) {
     seats,
     seatIn,
     sees,
+    visible,
     liveChildren,
     nav,
     starred: (p: Project) => favorites.has(p.id),
@@ -427,6 +446,47 @@ export function projectNavStandIn(
 /** Whether `name` is one of the four reads. */
 export const isProjectNavRead = (name: string): name is ProjectNavRead =>
   (PROJECT_NAV_READS as readonly string[]).includes(name)
+
+/** The star's name, as the app sends it. */
+export const PROJECT_NAV_STAR = 'projectNav:setFavorite'
+
+/** The refusals of a star (model/projectFavorites.ts), which
+    src/store/projectNavParity.test.ts holds to the server's own. */
+export const NAV_NOT_FOUND = 'project not found'
+export const NAV_TOP_LEVEL_ONLY = 'only a top-level project can be a favorite'
+
+/**
+ * What projectNav.setFavorite does to `favorites`, the starred top-level
+ * projects by id, for `args` while the server holds `workspace`, by
+ * setFavoriteCore's rule: a star of an unknown project, one of another
+ * organization or one the seat does not see through ordinary access is
+ * refused alike with not_found, one of a sub-project the seat sees with
+ * bad_request; an unstar always goes through. A login without a seat in
+ * `org_id` is refused as orgMutation refuses it. It knows no billing
+ * state, so a read-only refusal comes from the caller's double. Answers
+ * null, as the server does.
+ */
+export function setFavoriteStandIn(
+  workspace: NavWorkspace,
+  favorites: Set<string>,
+  args: { org_id: string; project_id: string; favorite: boolean },
+): null {
+  const rule = navRule(workspace, favorites)
+  const seat = rule.seatIn(args.org_id)
+  if (!seat)
+    throw new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
+  if (!args.favorite) {
+    favorites.delete(args.project_id)
+    return null
+  }
+  const p = rule.byId.get(args.project_id)
+  if (!p || !rule.visible(seat, p))
+    throw new ConvexError({ code: 'not_found', message: NAV_NOT_FOUND })
+  if (p.parent_id !== undefined)
+    throw new ConvexError({ code: 'bad_request', message: NAV_TOP_LEVEL_ONLY })
+  favorites.add(p.id)
+  return null
+}
 
 /** Answers a test double's subscription to one of the four reads with
     `args` over `workspace` through `next`, or through `fail` where the
