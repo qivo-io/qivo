@@ -5145,21 +5145,39 @@ export function creatorsLine(creators) {
   return `${name(creators[0])}, ${name(creators[1])}${tail}`
 }
 
+/** The ways the creators line may start under Selected users, given the
+ *  active admins in name order. The line names the admins first, and REST
+ *  does not say which standard users were chosen, so only the admins it
+ *  names are known, the first two, joined as creatorPhrase joins them
+ *  whatever follows. One admin starts "A can create", "A and " or "A, ";
+ *  two start "A and B can create" or "A, B and "; more start "A, B and ". */
+export function selectedCreatorsStarts(admins) {
+  const [first, second] = admins.map((a) => a.name)
+  if (first === undefined) return []
+  if (second === undefined)
+    return [`${first}${SETTINGS_USERS_EXPECTED.creators}`, `${first} and `, `${first}, `]
+  return [
+    `${first}, ${second} and `,
+    ...(admins.length === 2 ? [`${first} and ${second}${SETTINGS_USERS_EXPECTED.creators}`] : []),
+  ]
+}
+
 /** Settings › Users and Organization › General on the deployment's reads
- *  (people.settingsPage, tokens.agentKeys and orgs.projectCreators): as
- *  Nora the page reaches its ok state, a search for the run's Standard
+ *  (people.settingsPage, tokens.agentKeys and orgs.projectCreators). As
+ *  Nora the page reaches its ok state, and a search for the run's Standard
  *  agent by its full name lists it alone, with the fingerprint of its
  *  named key, its only active key once the run revoked its Default key,
  *  from the deployment's one-shot key read; its key panel lists that key.
  *  Then Organization › General's creators line names and counts what GET
- *  /v1/users implies for the fixture's setting: the active admins, and
- *  under Standard users every active standard user, each in name order,
+ *  /v1/users implies for the fixture's setting, the active admins and,
+ *  under Standard users, every active standard user, each in name order,
  *  agents marked. REST does not carry the per-user right, so under
- *  Selected users the step checks the line's first name only, an admin,
- *  and says so. It runs after ui/settings-labels, while the run's agents
- *  hold their keys, and needs a backend from the release whose app reads
- *  Settings › Users from the server; against an older one the page cannot
- *  load and the step fails waiting for it. */
+ *  Selected users the step checks the admins the line names, the first
+ *  two (selectedCreatorsStarts), and says so. It runs after
+ *  ui/settings-labels, while the run's agents hold their keys, and needs a
+ *  backend from the release whose app reads Settings › Users from the
+ *  server; against an older one the page cannot load and the step fails
+ *  waiting for it. */
 async function settingsUsersCheck() {
   const w = run.creds.writeToken
   const std = run.agents.std
@@ -5193,11 +5211,12 @@ async function settingsUsersCheck() {
     )
     const text = ((await summary.textContent()) ?? '').trim()
     if (setting === 'selected') {
+      const starts = selectedCreatorsStarts(admins)
       expect(
-        text.startsWith(admins[0]?.name ?? '\u0000'),
-        `the line ${short(text)} does not start with an admin`,
+        starts.some((start) => text.startsWith(start)),
+        `the line ${short(text)} does not start with the admins it names, ${short(starts.join(' or '))}`,
       )
-      return `found ${std.name} alone with its key ${fingerprint}, and under Selected users checked the creators line's first name only, which REST cannot check further`
+      return `found ${std.name} alone with its key ${fingerprint}, and under Selected users checked the admins the creators line names, which is all REST can check`
     }
     const creators = setting === 'admins' ? admins : [...admins, ...standard]
     const want = `${creatorsLine(creators)}${SETTINGS_USERS_EXPECTED.creators}`
