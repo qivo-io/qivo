@@ -222,8 +222,9 @@ age, and its project and sub-project once the task has loaded into the
 workspace, which it does once every task has loaded for a page that needs
 them. Until then a row shows the title its message stored, not a later
 rename. New updates refresh that row and increase its unread
-counter. Opening the row or the task marks its messages read and leaves only
-the latest message in the inbox. Further updates start the unread counter
+counter. Opening the row or the task marks its messages read, also older
+ones the list does not load, and leaves only the latest message in the
+inbox. Further updates start the unread counter
 again on the same row. A row keeps at most 50 unread updates. Beyond that,
 Qivo drops the oldest ones but keeps the first unread update and the newest
 mention, comment and change. On a task with many subscribers it does so
@@ -233,10 +234,14 @@ and history still show what those updates were about. The Inbox loads up to
 500 messages, unread ones first. When older ones exist, the list ends with
 **Older messages are not listed**, and names **Mark all as read** or **Remove
 all read** when that action reaches them. Neither reaches snoozed
-messages.
+messages. The badge still counts the tasks the list does not show.
 
-The Inbox badge counts tasks with unread updates and shows **99+** above 99.
-Read state follows you across devices. Sort by newest or oldest, or filter for unread,
+The Inbox badge counts the tasks with unread updates you have not snoozed,
+across all your organizations, also those the list does not load, and shows
+**99+** above 99. While Qivo is counting, or can't count right now, it shows
+**…** instead of a number, never 0. When it could count only part of them, it
+shows the count it reached with a plus, such as **12+**. Read state follows
+you across devices. Sort by newest or oldest, or filter for unread,
 snoozed, mention, comment or change messages. Desktop search includes the
 messages grouped in each row, and their task IDs and project names once
 every task has loaded. Typing a search starts that load, and until it ends
@@ -261,7 +266,8 @@ The address follows the selected task, such as `/app/<org>/inbox/tasks/qn-14`,
 so saved links and reloads reopen it. **Esc** closes a pop-out first, then the
 selected task, then the inbox. New updates on an open task are marked read as
 they arrive. A **New** divider marks unread comments and stays in place while
-you read. Unread changes without comments show a note instead.
+you read. It marks where the unread part starts also for updates the list
+does not load. Unread changes without comments show a note instead.
 
 On phones, use **Unread / Mentions / All** and **Filter**. Tap a row to open
 the full task, including **Details**. **Back to inbox** restores your list
@@ -289,12 +295,14 @@ The Inbox toolbar and context menu also offer:
 - **Remove all read notifications**, with the same scope. It preserves
   unread updates, including those on a task with older read messages.
 
-Each action is available while your inbox shows matching updates. It also
-stays available when Qivo could not check all your messages, which can
-happen when many of them are about tasks you cannot see. Unchecked messages
-that are snoozed do not keep it available, because both actions skip them.
-Both actions cover messages you cannot see, about archived tasks or tasks
-you lost access to.
+Each action is available while you have messages it would change in any of
+your organizations, also messages about archived tasks or tasks you lost
+access to, which the list does not show, and while Qivo is still counting
+them. Snoozed messages do not keep it available, because both actions skip
+them. So **Mark all as read** can be available while every row looks read,
+and pressing it then marks those hidden messages read without changing
+anything on screen. **Remove all read** stays available after an archive,
+which marks the messages about the archived tasks read.
 These actions leave tasks, comments and open drafts intact. The list's
 context menu offers them even when a filter shows no messages.
 
