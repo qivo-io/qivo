@@ -74,6 +74,21 @@
 //                        gathers at most), error (every read fails) and
 //                        favorites (the first two programs starred);
 //                        several joined by commas
+//   roadmap              a state the Roadmap's reads (tasks:roadmap and
+//                        tasks:roadmapDependencies) answer whatever the
+//                        tasks say, for screenshots of states a seeded
+//                        backend cannot reach: over_ceiling, over_budget,
+//                        unavailable and access_unchecked (both reads),
+//                        counting and remaining-budget (the headings'
+//                        Remaining), deps-budget (the dependency read past
+//                        its budget), automove-budget (Auto-move's inputs
+//                        past their size) and error (the Roadmap's read
+//                        fails); several joined by commas
+//   loads                a state the owner loads (planning:ownerLoads)
+//                        answer for screenshots of Team utilization, the
+//                        planning panel and the delays: unavailable (every
+//                        owner past the reader's bounds) or loading (no
+//                        answer)
 //   labelpage            a state Settings › Labels' batches answer whatever
 //                        the labels say, for screenshots of states a seeded
 //                        backend cannot reach: counting (every count being
@@ -235,9 +250,14 @@
 // Board's query (tasks:board), through the one stand-in the jsdom tests use
 // (src/store/boardStandIn.setup.ts): the Board's rules over the workspace
 // held here, with no access or read budget, and the ceiling of 1,000 tasks.
-// So are the owner loads the delays of tasks only the Board's answer brings
-// read (planning:ownerLoads, src/store/ownerLoadsStandIn.setup.ts), from the
-// same workspace, with no bounds. So are the Overview's queries
+// So are the Roadmap's two reads (tasks:roadmap and tasks:roadmapDependencies),
+// through the stand-in the jsdom tests use (src/store/roadmapStandIn.setup.ts):
+// the Roadmap's rules over the workspace held here, with no access or read
+// budget, the ceiling of 1,000 rows and every project editable but for
+// role=viewer. So are the owner loads the delays of tasks only a view's
+// answer brings and Team utilization read (planning:ownerLoads,
+// src/store/ownerLoadsStandIn.setup.ts), from the same workspace, with no
+// bounds. So are the Overview's queries
 // (overview:summary, risk, attention, paused and health), through the
 // stand-in the jsdom tests use (src/store/overviewStandIn.setup.ts), with no
 // access or read budget. So are Settings › Labels' batches
@@ -288,6 +308,7 @@ import {
 import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
+import { dependenciesStandIn, roadmapStandIn } from '../../src/store/roadmapStandIn.setup'
 import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
@@ -324,6 +345,13 @@ const subprojectCount = Math.max(1, option('subprojects', 10))
 const doneShare = parameters.has('done') ? Math.min(1, Math.max(0, option('done', 0))) : null
 const titleLength = parameters.has('titles') ? Math.max(1, option('titles', 40)) : null
 const forcedBoard = parameters.get('board') ?? undefined
+/* The Roadmap's forced states (the `roadmap` parameter): those its
+   stand-in's `force` takes, and whether its read fails. */
+const roadmapStates = (parameters.get('roadmap') ?? '').split(',').filter(Boolean)
+const forcedRoadmap = roadmapStates.filter((state) => state !== 'error')
+const roadmapFails = roadmapStates.includes('error')
+/* The owner loads' forced state (the `loads` parameter). */
+const forcedLoads = parameters.get('loads') ?? null
 /* The Overview's forced states (the `overview` parameter), as the
    stand-in's `force` takes them. */
 const forcedOverview = (() => {
@@ -1378,6 +1406,15 @@ const read = (name, args = {}) => {
       return searchPage(args)
     case 'tasks:board':
       return boardStandIn(snapshot, args, { force: forcedBoard })
+    // the Roadmap's reads (src/store/roadmapStandIn.setup.ts)
+    case 'tasks:roadmap':
+      if (roadmapFails) throw new Error("the Roadmap's read fails, as roadmap=error asks")
+      return roadmapStandIn(snapshot, args, { force: forcedRoadmap })
+    case 'tasks:roadmapDependencies':
+      return dependenciesStandIn(snapshot, args, {
+        force: forcedRoadmap,
+        canEdit: () => !viewer,
+      })
     case 'labels:settingsPage': {
       const { uncounted, ...force } = forcedLabels
       return labelSettingsStandIn(snapshot, args, {
@@ -1407,7 +1444,11 @@ const read = (name, args = {}) => {
     // the owner loads the delays of tasks only the Board's answer brings
     // read (src/store/ownerLoadsStandIn.setup.ts)
     case 'planning:ownerLoads':
-      return ownerLoadsStandIn(snapshot, args)
+      // loads=loading never answers
+      if (forcedLoads === 'loading') return NO_ANSWER
+      return ownerLoadsStandIn(snapshot, args, {
+        unavailable: forcedLoads === 'unavailable' ? args.owner_ids : [],
+      })
     // the removal window's reads (src/store/removalStandIn.setup.ts)
     case 'accessRemovals:preview':
       return removalPreviewStandIn(snapshot, args.change, forcedRemoval, args.reassign_to)
@@ -1749,6 +1790,8 @@ async function mutate(name, args) {
 
 /* What the benchmark asks the server to do, each answering once its
    results are sent. */
+/* The ids of the tasks deliverCreate made, oldest first. */
+const created = []
 const scenarios = {
   /* Delivers `n` new unread messages for the signed-in person, one per task,
      for the bulk-read scenario. */
@@ -1788,6 +1831,7 @@ const scenarios = {
   deliverCreate() {
     const n = tasks.length + hiddenTasks.length
     const row = taskRow(n, id('4', 900000 + n), projects[0], undefined)
+    created.push(row.id)
     tasks.push(row)
     allTasks.push(row)
     shown.add(row.id)
@@ -1797,6 +1841,30 @@ const scenarios = {
     snapshot.orgs = [
       { ...org, next_issue_num: org.next_issue_num + 1, active_tasks: org.active_tasks + 1 },
     ]
+    settleTasks()
+    return emitWorkspace()
+  },
+  /* That person deletes the task deliverCreate made last, so the
+     top-level project the app opens holds the tasks it held before. At
+     whole thousands the create takes that project past the Roadmap's
+     1,000 tasks, the design size, where the Roadmap shows its ceiling
+     note instead of rows. */
+  deliverDelete() {
+    const gone = created.pop()
+    if (gone === undefined) return null
+    tasks.splice(
+      tasks.findIndex((row) => row.id === gone),
+      1,
+    )
+    allTasks.splice(
+      allTasks.findIndex((row) => row.id === gone),
+      1,
+    )
+    shown.delete(gone)
+    wireRows.delete(gone)
+    loadRows.delete(gone)
+    const [org] = snapshot.orgs
+    snapshot.orgs = [{ ...org, active_tasks: org.active_tasks - 1 }]
     settleTasks()
     return emitWorkspace()
   },

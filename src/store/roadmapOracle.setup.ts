@@ -1,13 +1,17 @@
-/* The Roadmap's rows, headings, tracks and dependency inputs as the app's
- * Roadmap derives them from the workspace's tasks (src/views/Roadmap.tsx,
- * src/views/MobileRoadmap.tsx), and Team utilization's hours and paused
- * weeks as its strip derives them (src/views/Resources.tsx), kept as the
- * oracle store/roadmapParity.test.ts compares the server's Roadmap reads
- * (convex/lib/roadmap.ts) and planning.ownerLoads' answers with, and which
- * the Roadmap view stage's stand-in can use. It reads the workspace's tasks
- * of a store that holds every task, and stays until t3/limits-roadmap-view
- * moves the Roadmap onto the server's reads. The test imports it after the
- * store it boots, so it reads that store. */
+/* The Roadmap's rows, headings, tracks and dependency inputs, and Team
+ * utilization's hours and paused weeks, by the store's own rules over the
+ * workspace's tasks (P.scopedIssues, P.passesFilters, isRoadmapTaskVisible,
+ * P.isDone, P.remainingByGroups, the solver over every task), as the app
+ * derived them before it read the server. The Roadmap reads tasks.roadmap
+ * and planning.ownerLoads now (src/views/roadmap/useRoadmapView.ts), but
+ * still applies these rules on screen when it narrows an answer, so this
+ * oracle stays the pin store/roadmapParity.test.ts holds the server's
+ * Roadmap reads (convex/lib/roadmap.ts), the owner loads and the Roadmap
+ * stand-in (store/roadmapStandIn.setup.ts) to. It reads the workspace's
+ * tasks of a store that holds every task, which the tests' default boot
+ * holds, and t3/limits-retire-task-windows ends or rewrites it with the
+ * store's whole-list reads. The test imports it after the store it boots,
+ * so it reads that store. */
 
 import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { type AutoMove, autoMoves, type DepPair, dependencyPairs } from '../lib/schedule'

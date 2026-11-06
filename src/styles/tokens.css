@@ -144,6 +144,9 @@
   --roadmap-bar-done: #55e978;
   --roadmap-bar-behind: #ffcd41;
   --roadmap-bar-late: #ff6362;
+  /* a bar whose delay is unknown, its owner's load unread: no hue that
+     reads as on track or under pressure */
+  --roadmap-bar-unknown: #9aa4b2;
   --roadmap-bar-fill: 52%;
   /* Yellow only reads as yellow when it is light: a thinner tint over a dark
      ground turns it olive, so slipping bars lay on more. */
@@ -337,6 +340,7 @@
   --roadmap-bar-done-rim: #27a84e;
   --roadmap-bar-behind-rim: #d49a00;
   --roadmap-bar-late-rim: #e04448;
+  --roadmap-bar-unknown-rim: #6b7684;
   --heat-near-fill: color-mix(in oklab, var(--roadmap-bar-behind) 50%, transparent);
   --heat-over-fill: color-mix(in oklab, var(--roadmap-bar-late) 28%, transparent);
   --heat-empty-fill: rgba(25, 39, 56, 0.03);

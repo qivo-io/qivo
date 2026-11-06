@@ -10,6 +10,7 @@ import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setu
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
+import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
    on App and the real store. The Planner leads Plan. New sub-project opens
@@ -108,6 +109,13 @@ async function press(button: HTMLElement) {
   await settle()
 }
 
+/** Whether the Roadmap read's `args` name My view or a project `snap`
+    holds. */
+const knownScope = (snap: Snapshot, args: unknown) => {
+  const { scope } = args as { scope: { kind: string; project_id?: string } }
+  return scope.kind === 'mine' || snap.projects.some((p) => p.id === scope.project_id)
+}
+
 /** Boots App on Plan, with what `prepare` adds. */
 async function boot(prepare: (snap: Snapshot) => void = () => {}) {
   vi.resetModules()
@@ -141,6 +149,15 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
+    // the Roadmap's reads answer whenever they subscribe, for a project the
+    // server holds: a milestone's write paints the workspace's rows, which
+    // their answers do not hold, and a project still being created stays on
+    // its way, as this double never commits it
+    else if (
+      (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') &&
+      knownScope(snap, args)
+    )
+      next(answerRoadmap(snap, name, args))
     return () => {}
   })
   network.query.mockResolvedValue(null)

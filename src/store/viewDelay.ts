@@ -20,7 +20,23 @@
    task's own spans never count, whichever list holds them, since the
    projection leaves them out by uuid (convex/lib/workload.ts), so a task
    the window shows from its answer, painted with the person's pending
-   edits (store/taskDetail.ts), needs no span of its own here. */
+   edits (store/taskDetail.ts), needs no span of its own here.
+
+   Team utilization and the planning panel read a person's work by the same
+   rule (ownerItemsOf): the cache's spans with each one's project and the
+   person's paused tasks, with the work of every task this person's rows
+   hold taken from those rows, so a task counts once whichever list holds
+   it. viewLoadOf's answers, which the delays read, stay as they were.
+
+   The rows that stand in for the cache's spans are those of views whose
+   rows still hear every change (ViewDelayCtx inView). A stopped read's
+   rows, as a kept Board's behind the Roadmap, do not, so the cache's span
+   of such a task, the newer, counts at its hours now, and the task counts
+   not at all once it is Done. A row of a task that a write of the
+   person's own still waits on stands in from any view, a stopped one too,
+   as the write shows in every view's row of the task and maybe not yet in
+   the cache's spans. So its pending hours, dates, pause or owner count at
+   once, until the server answers it (store/planner.ts viewDelayCtx). */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
@@ -29,7 +45,7 @@ import type { ViewRow } from '../../convex/lib/viewReads'
 import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import { DELAY_UNKNOWN, type DelayInfo, type DelayIssue, delayBeforeLoads } from '../lib/delay'
-import type { LoadSpan } from '../lib/workload'
+import type { LoadItem, LoadSpan } from '../lib/workload'
 import type { OwnerLoad } from './ownerLoadCache'
 import type { IssueVM } from './viewModels'
 
@@ -41,13 +57,15 @@ export type ViewDelayCtx = {
   held: (uuid: string) => boolean
   /** whether a view's rows hold task `uuid` (its row on screen), among the
       views whose rows still hear every change, so none whose read stopped
-      or kept its rows past a refusal or a failure (store/planner.ts
+      or kept its rows past a refusal or a failure, or among every view for
+      a task a write of the person's own still waits on (store/planner.ts
       viewDelayCtx) */
   inView: (uuid: string) => boolean
   /** the spans of owner `owner`'s tasks the workspace holds, pending edits
       included (taskIndex.ts shownSpans) */
   heldSpans: (owner: string) => LoadSpan[]
-  /** every row those views hold that the workspace does not, painted */
+  /** every row those views hold that the workspace does not, painted,
+      then the other views' rows of the tasks such a write waits on */
   viewRows: () => Iterable<ViewRow>
   /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf) */
   capacity: (id: string) => number
@@ -176,6 +194,176 @@ export function viewLoadOf(
   }
   spans.push(...(filed.get(`${org}\u0000${owner}`) ?? []))
   return canonicalLoad(spans)
+}
+
+/** One piece of a person's work as Team utilization and the planning panel
+    spread it (store/planner.ts P.ownerItems), on the week grid of now:
+    a task's uuid, or null for busy time in a project the reader cannot
+    see, its project, null for such busy time, its weeks, its hours left
+    and the week they were measured, and whether it is paused, which adds
+    no hours and marks its weeks. */
+export type OwnerItem = {
+  uuid: string | null
+  project: string | null
+  start: number
+  end: number
+  remaining: number
+  remainingSet: number | null
+  paused: boolean
+}
+
+/** What reconciling a person's work reads from the store. */
+export type OwnerItemsCtx = Pick<
+  ViewDelayCtx,
+  'held' | 'inView' | 'viewRows' | 'projectLive' | 'orgOf'
+> & {
+  /** the work of owner `owner`'s tasks the workspace holds, pending edits
+      included (taskIndex.ts shownItems) */
+  heldItems: (owner: string) => OwnerItem[]
+  /** the work the views' rows file, by organization and owner, kept
+      while the rows hold still; filedItems fills it */
+  filed?: Map<string, OwnerItem[]>
+}
+
+/** The work each of the views' rows that the workspace does not hold
+    files, by organization and owner, by the server's rules: a load span
+    (convex/lib/loadRows.ts loadRowFor) with its project, or for a paused
+    leaf with dates that is not Done, in a live project, a paused item
+    (convex/planning.ts OwnerPausedSpan). Each task once. */
+export function filedItems(ctx: OwnerItemsCtx): Map<string, OwnerItem[]> {
+  const out = new Map<string, OwnerItem[]>()
+  const seen = new Set<string>()
+  const file = (org: string, owner: string, item: OwnerItem) => {
+    const key = `${org}\u0000${owner}`
+    const list = out.get(key)
+    if (list) list.push(item)
+    else out.set(key, [item])
+  }
+  for (const row of ctx.viewRows()) {
+    if (seen.has(row.id)) continue
+    seen.add(row.id)
+    const facts = {
+      isGroup: row.has_subtasks,
+      projectLive: ctx.projectLive(row.project_id),
+      ownerInOrg: (id: string) => ctx.orgOf(id) === row.org_id,
+      visible: true,
+      staff: false,
+      meId: '',
+    }
+    const filed = loadRowFor(row, facts)
+    if (filed) {
+      const start = isoToWeek(filed.start_week)
+      file(row.org_id, filed.owner_id, {
+        uuid: row.id,
+        project: row.project_id,
+        start,
+        end: Math.max(start, isoToWeek(filed.end_week)),
+        remaining: filed.remaining != null ? Number(filed.remaining) : 0,
+        remainingSet: filed.remaining_set_at != null ? tsToWeek(filed.remaining_set_at) : null,
+        paused: false,
+      })
+      continue
+    }
+    const owner = taskOwnerId(row)
+    if (
+      !row.paused ||
+      row.has_subtasks ||
+      row.status === 'done' ||
+      owner === undefined ||
+      !facts.ownerInOrg(owner) ||
+      !facts.projectLive ||
+      row.start_week === undefined ||
+      row.end_week === undefined
+    )
+      continue
+    const start = isoToWeek(row.start_week)
+    file(row.org_id, owner, {
+      uuid: row.id,
+      project: row.project_id,
+      start,
+      end: Math.max(start, isoToWeek(row.end_week)),
+      remaining: 0,
+      remainingSet: null,
+      paused: true,
+    })
+  }
+  return out
+}
+
+/**
+ * Owner `owner` of organization `org`'s work for Team utilization and the
+ * planning panel: the cache's spans and paused tasks `load` (its `team`),
+ * with the work of every task this person's rows hold taken from those
+ * rows instead, as viewLoadOf takes the spans, so a task counts once
+ * whichever list holds it, a pending hours, dates, pause or owner edit
+ * counts at once, and a task given to another owner leaves the first and
+ * joins the second. Spans without a task stay, with no project: Team
+ * leaves them out and the planning panel shows them as Other projects.
+ * Empty without `team`, which the caller reads as unknown first.
+ */
+export function ownerItemsOf(
+  org: string,
+  owner: string,
+  load: Extract<OwnerLoad, { state: 'ok' }>,
+  ctx: OwnerItemsCtx,
+): OwnerItem[] {
+  const team = load.team
+  if (!team) return []
+  const shown = (uuid: string | null) => !!uuid && (ctx.held(uuid) || ctx.inView(uuid))
+  const out: OwnerItem[] = []
+  load.spans.forEach((span, i) => {
+    if (shown(span.issueUuid)) return
+    out.push({
+      uuid: span.issueUuid,
+      project: span.issueUuid ? (team.projects[i] ?? null) : null,
+      start: span.start,
+      end: Math.max(span.start, span.end),
+      remaining: span.remaining,
+      remainingSet: span.remainingSet ?? null,
+      paused: false,
+    })
+  })
+  for (const paused of team.paused)
+    if (!shown(paused.issueUuid))
+      out.push({
+        uuid: paused.issueUuid,
+        project: paused.project,
+        start: paused.start,
+        end: paused.end,
+        remaining: 0,
+        remainingSet: null,
+        paused: true,
+      })
+  out.push(...ctx.heldItems(owner))
+  let filed = ctx.filed
+  if (!filed) {
+    filed = filedItems(ctx)
+    ctx.filed = filed
+  }
+  out.push(...(filed.get(`${org}\u0000${owner}`) ?? []))
+  return out
+}
+
+/** The planning panel's work items from a person's reconciled work
+    (ownerItemsOf): every item with hours, a task the reader is shown under
+    its project, named by `projectName`, and busy time elsewhere as Other
+    projects (lib/workload.ts loadByProject). Paused work adds no hours. */
+export function planItemsOf(
+  items: readonly OwnerItem[],
+  projectName: (id: string) => string | null,
+): LoadItem[] {
+  return items
+    .filter((item) => !item.paused)
+    .map((item) => ({
+      issueUuid: item.uuid,
+      projectId: item.project,
+      projectName: item.project ? projectName(item.project) : null,
+      start: item.start,
+      end: item.end,
+      remaining: item.remaining,
+      remainingSet: item.remainingSet,
+      visible: item.uuid !== null && item.project !== null,
+    }))
 }
 
 /** What a group's verdict knows besides the task: whether its dates are

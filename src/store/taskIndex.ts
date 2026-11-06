@@ -23,6 +23,7 @@
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
+import { taskOwnerId } from '../../convex/lib/review'
 import { canonicalLoad } from '../../convex/lib/workload'
 import { isoToWeek, TODAY_ISO, TODAY_WEEK, tsToWeek } from '../lib/dates'
 import type { DelayInfo } from '../lib/delay'
@@ -32,6 +33,7 @@ import type { LoadSpan } from '../lib/workload'
 import type { RowMap } from './rowMap'
 import type { Row } from './rows'
 import { sameData } from './stable'
+import type { OwnerItem } from './viewDelay'
 import { type AttachmentVM, type IssueVM, shapeAttachment, shapeIssue } from './viewModels'
 
 /** One organization-wide load row as the snapshot sends it: one of a task
@@ -127,8 +129,12 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
   // by task and by owner
   let loadByOwner = new Map<string, LoadSpan[]>()
   let hiddenLoad = new Map<string, LoadSpan[]>()
-  const shownLoad = new Map<string, { owner: string; span: LoadSpan }>()
+  const shownLoad = new Map<string, { owner: string; span: LoadSpan; project: string }>()
   const shownLoadOf = new Map<string, Set<string>>()
+  // each shown paused task's work for Team utilization (shownItems), by
+  // task and by owner
+  const shownPaused = new Map<string, { owner: string; item: OwnerItem }>()
+  const shownPausedOf = new Map<string, Set<string>>()
   // the live projects and each person's organization, as the fence reads them
   const liveProjects = new Set<string>()
   const orgOf = new Map<string, string>()
@@ -314,18 +320,75 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
             meId: '',
           })
         : null
+    filePaused(uuid, row && it ? pausedItemOf(row, it) : null)
     const before = shownLoad.get(uuid)
     const span = next && spanOf(next)
-    if (before && next && before.owner === next.owner_id && sameData(before.span, span)) return
+    if (
+      before &&
+      next &&
+      before.owner === next.owner_id &&
+      before.project === row?.project_id &&
+      sameData(before.span, span)
+    )
+      return
     if (before) {
       drop(shownLoadOf, before.owner, uuid)
       shownLoad.delete(uuid)
       moved.add(before.owner)
     }
-    if (next && span) {
-      shownLoad.set(uuid, { owner: next.owner_id, span })
+    if (next && span && row) {
+      shownLoad.set(uuid, { owner: next.owner_id, span, project: row.project_id })
       add(shownLoadOf, next.owner_id, uuid)
       moved.add(next.owner_id)
+    }
+  }
+
+  /** Shown task `row`'s paused work, by the rule of the server's paused list
+      (convex/planning.ts OwnerPausedSpan): a paused task without subtasks,
+      with dates, not Done, owned by a person of its organization, in a live
+      project. Null otherwise. */
+  function pausedItemOf(
+    row: Row<'issues'>,
+    it: IssueVM,
+  ): { owner: string; item: OwnerItem } | null {
+    const owner = taskOwnerId(row)
+    if (
+      !row.paused ||
+      isIssueGroup(it) ||
+      row.status === 'done' ||
+      owner === undefined ||
+      orgOf.get(owner) !== row.org_id ||
+      !liveProjects.has(row.project_id) ||
+      row.start_week === undefined ||
+      row.end_week === undefined
+    )
+      return null
+    const start = isoToWeek(row.start_week)
+    return {
+      owner,
+      item: {
+        uuid: row.id,
+        project: row.project_id,
+        start,
+        end: Math.max(start, isoToWeek(row.end_week)),
+        remaining: 0,
+        remainingSet: null,
+        paused: true,
+      },
+    }
+  }
+
+  /** Files shown task `uuid`'s paused work `next`, or none. */
+  function filePaused(uuid: string, next: { owner: string; item: OwnerItem } | null) {
+    const before = shownPaused.get(uuid)
+    if (before && next && before.owner === next.owner && sameData(before.item, next.item)) return
+    if (before) {
+      drop(shownPausedOf, before.owner, uuid)
+      shownPaused.delete(uuid)
+    }
+    if (next) {
+      shownPaused.set(uuid, next)
+      add(shownPausedOf, next.owner, uuid)
     }
   }
 
@@ -486,6 +549,33 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       return out
     },
 
+    /** Owner `owner`'s work on the tasks the workspace holds, as Team
+        utilization and the planning panel spread it (store/viewDelay.ts
+        OwnerItem): the span of each shown task with load, with its project,
+        and each shown paused task, pending edits included (fileLoad). */
+    shownItems(owner: string): OwnerItem[] {
+      const out: OwnerItem[] = []
+      for (const uuid of shownLoadOf.get(owner) ?? []) {
+        const own = shownLoad.get(uuid)
+        if (!own) continue
+        const { span } = own
+        out.push({
+          uuid,
+          project: own.project,
+          start: span.start,
+          end: Math.max(span.start, span.end),
+          remaining: span.remaining,
+          remainingSet: span.remainingSet ?? null,
+          paused: false,
+        })
+      }
+      for (const uuid of shownPausedOf.get(owner) ?? []) {
+        const paused = shownPaused.get(uuid)
+        if (paused) out.push(paused.item)
+      }
+      return out
+    },
+
     /** Builds everything from `from`. A task keeps its view model while
         it, its delay and every task above, below and linked to it hold the
         same data. Answers the handles that moved, old to new. */
@@ -531,6 +621,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
       hiddenLoad = hiddenIndex()
       shownLoad.clear()
       shownLoadOf.clear()
+      shownPaused.clear()
+      shownPausedOf.clear()
       const loaded = new Set<string>(hiddenLoad.keys())
       for (const uuid of byUuid.keys()) fileLoad(uuid, loaded)
       loadByOwner = new Map()
@@ -847,6 +939,8 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
         hiddenLoad,
         shownLoad,
         shownLoadOf,
+        shownPaused,
+        shownPausedOf,
         orgOf,
       ] as Map<string, unknown>[])
         map.clear()

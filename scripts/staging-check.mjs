@@ -64,10 +64,11 @@
  * Overview, which opens the Milestones window on the deployment's answer
  * (milestones.get), and renames and deletes it there, each of which REST
  * then shows (ui/milestones). It records the frames the
- * page sends on its sync socket and opens its project's Board and a fixture
- * task's address in fresh loads, neither of which may subscribe the
- * workspace's task windows (workspace.tasks), then the Roadmap, which must
- * subscribe them and show the task's row (ui/tasks-on-demand), so the
+ * page sends on its sync socket and opens its project's Board, a fixture
+ * task's address and its project's Roadmap in fresh loads, none of which may
+ * subscribe the workspace's task windows (workspace.tasks), the Roadmap
+ * subscribing its own read (tasks.roadmap) and showing the task's row with
+ * no read of planning.assigneeLoad (ui/tasks-on-demand), so the
  * deployment's app loads every task only for a page that needs them. It
  * makes a task of the Standard agent's in Alpha over REST and opens Team
  * sync on its project in a fresh load, which must subscribe Team sync's
@@ -4149,6 +4150,15 @@ export const ON_DEMAND_STEP = 'ui/tasks-on-demand'
  *  once a page that needs every task asks for them (src/store/liveParts.ts). */
 export const TASK_WINDOWS_QUERY = 'workspace:tasks'
 
+/** The Roadmap's own read (convex/tasks.ts roadmap), which it subscribes
+ *  for its tasks in place of the task windows. */
+export const ROADMAP_QUERY = 'tasks:roadmap'
+
+/** The planning panel's one-shot read before it read the owner loads,
+ *  which no page of the app may ask for now (planning.ts assigneeLoad, kept
+ *  for older apps). */
+export const ASSIGNEE_LOAD_QUERY = 'planning:assigneeLoad'
+
 /** Whether a frame `text` the page sent on its sync socket subscribes the
  *  query `udfPath`: a ModifyQuerySet with an Add of it. Any other frame,
  *  also one that is no JSON, does not. */
@@ -4170,9 +4180,11 @@ export function addsQuery(text, udfPath) {
  *  load of the run project's Board by its address, as ui/board reads it,
  *  reaches its ok state without subscribing a task window
  *  (TASK_WINDOWS_QUERY), a fresh load of run.t0's address shows its title
- *  without one, and the Roadmap, opened from the view switch, subscribes
- *  them and shows run.t0's row once every task has loaded (an unscheduled
- *  To Do task has one). It reads only, and leaves the saved view on the
+ *  without one, and a fresh load of the run project's Roadmap by its
+ *  address reaches its ok state and shows run.t0's row (an unscheduled To
+ *  Do task has one) without one either, having subscribed its own read
+ *  (ROADMAP_QUERY) and never the planning panel's old read
+ *  (ASSIGNEE_LOAD_QUERY). It reads only, and leaves the saved view on the
  *  Board for the steps after it. It runs before the run archives M. */
 async function tasksOnDemandCheck() {
   const { M } = run.projects
@@ -4187,7 +4199,8 @@ async function tasksOnDemandCheck() {
         sent = []
         await app.goto(url, { waitUntil: 'domcontentloaded' })
       }
-      const taskWindows = () => sent.filter((f) => addsQuery(f, TASK_WINDOWS_QUERY)).length
+      const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
+      const taskWindows = () => adds(TASK_WINDOWS_QUERY)
       await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`)
       await app
         .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
@@ -4201,21 +4214,23 @@ async function tasksOnDemandCheck() {
         `the window of ${run.t0.key} does not show its title`,
       )
       eq(taskWindows(), 0, 'a task address subscribed task windows')
-      // the window closes, and the Roadmap asks for every task
-      await app.keyboard.press('Escape')
-      await title.waitFor({ state: 'detached', timeout: 10_000 })
-      const view = (name) =>
-        app.locator('[data-view-switch]').getByRole('radio', { name, exact: true })
-      await view('Roadmap').click()
-      expect(await until(async () => taskWindows() > 0, 60_000), 'the Roadmap did not ask')
+      // the Roadmap reads its tasks from the server, asking for no task
+      await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/roadmap/p/${M.num}`)
+      await app
+        .locator('[data-workspace-view] [data-roadmap-root][data-roadmap-state="ok"]')
+        .waitFor({ timeout: 60_000 })
       await app
         .locator('[data-roadmap-task-open]')
         .filter({ hasText: run.t0.title })
         .first()
-        .waitFor({ timeout: 120_000 })
-      const asked = taskWindows()
+        .waitFor({ timeout: 60_000 })
+      eq(taskWindows(), 0, 'the Roadmap subscribed task windows')
+      expect(adds(ROADMAP_QUERY) > 0, 'the Roadmap did not subscribe its read')
+      eq(adds(ASSIGNEE_LOAD_QUERY), 0, "the Roadmap asked for the planning panel's old read")
+      const view = (name) =>
+        app.locator('[data-view-switch]').getByRole('radio', { name, exact: true })
       await view('Board').click()
-      return `opened the Board and ${run.t0.key} without task windows, and the Roadmap with ${asked} of them`
+      return `opened the Board, ${run.t0.key} and the Roadmap without task windows, the Roadmap on its own read`
     } finally {
       app.off('websocket', record)
     }

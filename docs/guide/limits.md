@@ -64,6 +64,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Tasks one Board shows | 1,000 tasks, subtasks included, across the project or sub-project with its filters, or My view | This selection exceeds the Board's 1,000-task limit. |
 | Projects whose milestones one view reads | 200 top-level projects | The app reads the milestones of at most 200 projects at once. Choose fewer projects. |
 | Tasks one Team sync meeting holds | 1,000 tasks across the meeting, each counted once, among its open tasks without subtasks in scope, the Backlog tasks Needs an owner lists and the recently done tasks each person's Done since can show | This selection exceeds Team sync's 1,000-task limit. |
+| Tasks one Roadmap shows | 1,000 tasks, each task with subtasks and each subtask counted, across the project or sub-project with its filters and window, or My view | This selection exceeds the Roadmap's 1,000-task limit. |
 | Active billable users with online billing | 1,000 users | Online billing supports up to 1,000 active billable users. Email support@qivo.io to arrange billing for a larger organization. |
 
 ## Numbers and settings

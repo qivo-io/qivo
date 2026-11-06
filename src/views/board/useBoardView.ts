@@ -136,7 +136,7 @@ function passes(info: ScopeInfo, filters: IssueFilters, it: IssueVM) {
 /* The search text of task `key` (convex/lib/search.ts taskSearchText)
    from the fields a row of the answer sends: without its description and
    labels. */
-const shownText = (
+export const shownText = (
   key: string,
   t: { title: string; status: ViewRow['status']; priority: ViewRow['priority'] },
   group: boolean,
@@ -215,7 +215,7 @@ const numOf = (it: IssueVM) => Number(it.key.slice(it.key.lastIndexOf('-') + 1))
 
 /** Whether `a` comes before `b` in the answer's order: by number, then
     organization and id (convex/lib/board.ts BoardAnswer). */
-const before = (a: IssueVM, b: IssueVM) =>
+export const before = (a: IssueVM, b: IssueVM) =>
   (numOf(a) - numOf(b) || (a.org < b.org ? -1 : a.org > b.org ? 1 : a.uuid < b.uuid ? -1 : 1)) < 0
 
 /** The store's view slot each variant's read and rows live under
@@ -225,7 +225,8 @@ export const BOARD_SLOTS: Record<BoardVariant, string> = {
   phone: 'board:phone',
 }
 
-/** `active` once it held for STALL.ms under the same `key`. Team sync's
+/** `active` once it held for STALL.ms under the same `key`. The Roadmap
+    waits the same way (views/roadmap/useRoadmapView.ts), and Team sync's
     meeting waits the same way for the tasks its answer names
     (views/teamSync/useSyncMeeting.ts). */
 export function useStall(active: boolean, key: string): boolean {

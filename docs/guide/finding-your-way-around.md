@@ -45,19 +45,19 @@ Create tasks from the Board controls described in [Creating a task](./how-work-i
 
 ## All projects
 
-**All projects** shows the Roadmap across every project you can access,
-including projects shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
+**All projects** covers every project you can access, including projects
+shared by other organizations ([Guest access](./who-sees-what-the-access-model.md#people-outside-your-organization)).
 
-Roadmap tracks represent projects and contain collapsible sub-project bands.
-The Board and the Overview show one project at a time
+The Board, the Overview and the Roadmap show one project at a time
 ([Which tasks a Board shows](./the-board.md#which-tasks-a-board-shows),
-[The Overview](./the-overview-project-health-at-a-glance.md)), so in All
-projects they list your top-level projects, and choosing one opens its
-Board or its Overview. A task link that names no project, such as
-`…/tasks/qn-12`, opens the Board or the Overview of the task's sub-project
-instead when it would open on All projects. A link that names All projects,
-such as `…/board/all/tasks/qn-12`, keeps it, with the task's window over the
-list.
+[The Overview](./the-overview-project-health-at-a-glance.md),
+[The Roadmap](./the-roadmap.md)), so in All projects they list your
+top-level projects, and choosing one opens its Board, its Overview or its
+Roadmap. **My view** shows your own tasks across every project on all
+three. A task link that names no project, such as `…/tasks/qn-12`, opens
+the Board, the Overview or the Roadmap of the task's sub-project instead
+when it would open on All projects. A link that names All projects, such as
+`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
 
 To create a task, open its project first. On a desktop, the Board's project
 list and empty states offer no way to create a task; on a phone, **New

@@ -22,7 +22,9 @@ type Props = {
   row: Row
   top: number
   h: number
-  remH: number
+  /** a heading's Remaining in hours, or why it has no figure (the
+      Roadmap's answer is still counting, or its counts did not fit) */
+  remH: number | 'counting' | 'unknown'
   open: boolean
   planning: boolean
   revealing: boolean
@@ -250,12 +252,32 @@ function TimelineRowView({
                     <ProjectName project={row.proj} />
                   </span>
                 </Button>
-                {remH > 0 && (
-                  <HoverTooltip content={`${remH}h remaining on unfinished tasks`}>
-                    <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] !font-mono [white-space:nowrap]">
-                      {remH}h
+                {remH === 'counting' ? (
+                  <HoverTooltip content="Qivo is still counting the remaining hours of this heading's unfinished tasks">
+                    <span
+                      data-remaining="counting"
+                      className="[font-size:var(--fs-xs)] [color:var(--text-3)] [white-space:nowrap]"
+                    >
+                      Counting…
                     </span>
                   </HoverTooltip>
+                ) : remH === 'unknown' ? (
+                  <HoverTooltip content="The remaining hours of this heading's unfinished tasks could not be counted within the Roadmap's limits">
+                    <span
+                      data-remaining="unknown"
+                      className="[font-size:var(--fs-xs)] [color:var(--text-3)] [font-style:italic] [white-space:nowrap]"
+                    >
+                      unknown
+                    </span>
+                  </HoverTooltip>
+                ) : (
+                  remH > 0 && (
+                    <HoverTooltip content={`${remH}h remaining on unfinished tasks`}>
+                      <span className="[font-size:var(--fs-xs)] [color:var(--text-3)] !font-mono [white-space:nowrap]">
+                        {remH}h
+                      </span>
+                    </HoverTooltip>
+                  )
                 )}
               </>
             ) : (
@@ -370,7 +392,8 @@ function TimelineRowView({
 
 // Local drag state recreates layout records, but unchanged rows keep their
 // tooltip/popover trees. A task's view model keeps its identity while it, its
-// delay and its family stay the same (P.issues), and P.contextVersion covers
+// delay and its family stay the same (the workspace's model, or the one the
+// store shaped from the Roadmap's answer), and P.contextVersion covers
 // what else a row reads: permissions, dates and owner portraits. Guide
 // identity covers everything renderGuides reads.
 export const TimelineRow = memo(TimelineRowView, (before, after) => {

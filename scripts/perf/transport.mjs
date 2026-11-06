@@ -209,6 +209,8 @@ window.__perf = {
   deliverRemote: (n) => scenario('deliverRemote', n),
   /* Another person creates a task in the first project. */
   deliverCreate: () => scenario('deliverCreate'),
+  /* That person deletes the task again (untimed in the benchmark). */
+  deliverDelete: () => scenario('deliverDelete'),
   /* Another person renames the first project. */
   deliverProjectRename: () => scenario('deliverProjectRename'),
   /* One new message for the signed-in person arrives. */

@@ -222,12 +222,13 @@ answer. That needs a backend from the release that added `overview.health`
 or later, whose organization counts are whole, as
 `internal/overviewCountsBackfill` left them. Against an older backend, or
 while the counts read **Counting…**, the step fails. It then records the
-frames the page sends on its sync socket and opens its project's Board and
-one fixture task's address in fresh loads, neither of which may subscribe
-the workspace's task windows (`workspace:tasks`), and then the Roadmap from
-the view switch, which must subscribe them and show that task's row once
-every task has loaded (`ui/tasks-on-demand`). It reads only, and an app
-from before tasks on demand fails it. Next it makes a label
+frames the page sends on its sync socket and opens its project's Board,
+one fixture task's address and its project's Roadmap in fresh loads, none
+of which may subscribe the workspace's task windows (`workspace:tasks`).
+The Roadmap must reach its ok state and show that task's row, having
+subscribed its own read (`tasks:roadmap`) and never the planning panel's
+old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
+and an app from before the Roadmap read the server fails it. Next it makes a label
 with its run tag over REST, puts it on one of its fixture tasks, opens
 **Settings → Labels** on the deployment's batches (`labels.settingsPage`),
 finds the label by search with **1 active task**, renames it in place and
@@ -713,11 +714,11 @@ never shows and keeps its project, where the seat sees it, in the list of
 the rest.
 
 The Roadmap's server reads, `tasks.roadmap` and
-`tasks.roadmapDependencies`, first ship in the release after v0.1.119. No
-app calls them yet, so that release sets no floor, and returning the
-backend to an earlier commit stays safe until the Roadmap view switches to
-them. The release that switches it makes the release that shipped them the
-backend's floor for that app. The Board's filter read moved into
+`tasks.roadmapDependencies`, first ship in the release after v0.1.119
+(v0.1.120). No app of that release calls them, so it sets no floor of its
+own. The app reads them from the release after v0.1.139, whose paragraph
+below names v0.1.125, which holds them, as the backend that app needs,
+already held by the upload floor v0.1.136. The Board's filter read moved into
 `convex/lib/viewFilters.ts` with `tasks.board`'s answers unchanged. There
 is no schema change, no backfill and no release step.
 
@@ -783,10 +784,11 @@ other owner's delay stays as it was. In a staff call the paused reads also
 spend the call's room, so an owner can come back `not_read` sooner and the
 cache asks for it again in a call of its own. `planning.assigneeLoad`, the
 REST and MCP workload pages and delays and the Overview ask nothing about
-paused tasks' projects or subtasks, and read and answer as before. The
-release whose Roadmap view reads the fields makes this release the
-backend's floor for that app, and its own paragraph here says so. There is
-no schema change and no backfill.
+paused tasks' projects or subtasks, and read and answer as before. The app
+reads the fields from the release after v0.1.139, whose paragraph below
+names this release (v0.1.125) as the backend that app needs, already held
+by the upload floor v0.1.136. There is no schema
+change and no backfill.
 
 From the release after v0.1.125, a member's task history in the task
 window, over REST and over MCP checks each project its rows name instead of
@@ -1062,6 +1064,28 @@ task first, and `teamSync.lastComments` keeps its arguments. Such an app
 reads the older `syncScope` key, which this release no longer writes, so
 it opens the scope it last saved. The release changes no server function
 and needs no step.
+
+From the release after v0.1.139, the app's Roadmap, the phone's agenda and
+landscape timeline read which tasks they show from `tasks.roadmap` and their
+dependency arrows and Auto-move from `tasks.roadmapDependencies`, which
+v0.1.120 (`c9a0a748`) first shipped, and Team utilization and the planning
+panel read people's loads from `planning.ownerLoads` with each span's
+`project_id` and each owner's `paused` list, which v0.1.125 (`fdb4d232`)
+first shipped. The Roadmap no longer asks for every task
+(`workspace:tasks`), and the app no longer calls `planning.assigneeLoad`.
+An app from this release, against a backend before v0.1.120, says on every
+Roadmap that it could not be loaded, and against a backend before v0.1.125
+shows every Team utilization cell and the planning panel's workload as
+unknown, also in a tab that was open when the backend went back, until the
+backend rolls forward. So this app needs a backend from v0.1.125
+(`fdb4d232`) on. The upload floor above, v0.1.136 (`31f3e45f`), already
+holds that, so this release sets no new floor. From it on, as from that
+one, never return the backend to a commit before v0.1.136; roll forward
+instead. Returning the
+app alone to an earlier release is safe against a later backend, because
+that app derives the Roadmap from the workspace's tasks, and
+`planning.assigneeLoad`, which this release no longer calls, stays for it.
+The release changes no server function and needs no step.
 
 ## Node.js version
 

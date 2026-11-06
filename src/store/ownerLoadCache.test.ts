@@ -217,6 +217,19 @@ describe('the owner-load cache', () => {
           remainingSet: null,
         },
       ],
+      // what Team utilization reads beside the spans: each span's project,
+      // none for busy time without its task, and the paused tasks
+      team: {
+        projects: ['fw', null],
+        paused: [
+          {
+            issueUuid: 'task-2',
+            project: 'fw',
+            start: isoToWeek('2026-09-14'),
+            end: isoToWeek('2026-09-21'),
+          },
+        ],
+      },
     })
     expect(s.cache.loadOf('org', 'p1')).toEqual({ state: 'unavailable' })
     expect(s.changes()).toBeGreaterThan(0)
@@ -301,7 +314,7 @@ describe('the owner-load cache', () => {
     expect(s.cache.loadOf('org', 'p0')).toEqual({ state: 'waiting' })
   })
 
-  it('keeps no paused list, so a change to paused work alone tells the views nothing', () => {
+  it('keeps the paused list, so a change to paused work alone tells the views once and moves no span', () => {
     const s = setup(true)
     s.cache.register('board', needs(2))
     const [call] = s.calls()
@@ -316,16 +329,23 @@ describe('the owner-load cache', () => {
     s.answer(call.token, answer([pausedSpan('b')]))
     const after = s.changes()
     const load = s.cache.loadOf('org', 'p0')
-    expect(load.state).toBe('ok')
-    // another paused task, and one whose weeks moved, change nothing
+    if (load.state !== 'ok') throw new Error('not ok')
+    // another paused task, and one whose weeks moved, tell them once, and
+    // the spans the delays read stay as they were
     s.answer(call.token, answer([pausedSpan('b', '2026-09-21'), pausedSpan('c')]))
-    expect(s.changes()).toBe(after)
-    expect(s.cache.loadOf('org', 'p0')).toBe(load)
+    expect(s.changes()).toBe(after + 1)
+    const paused = s.cache.loadOf('org', 'p0')
+    if (paused.state !== 'ok') throw new Error('not ok')
+    expect(paused.spans).toEqual(load.spans)
+    expect(paused.team?.paused.map((p) => p.issueUuid)).toEqual(['b', 'c'])
+    // the same answer again tells them nothing
+    s.answer(call.token, answer([pausedSpan('b', '2026-09-21'), pausedSpan('c')]))
+    expect(s.changes()).toBe(after + 1)
+    expect(s.cache.loadOf('org', 'p0')).toBe(paused)
     s.answer(call.token, answer([]))
-    expect(s.changes()).toBe(after)
-    expect(s.cache.loadOf('org', 'p0')).toBe(load)
+    expect(s.changes()).toBe(after + 2)
     // a visible task moved to another sub-project with the same weeks tells
-    // them once, and its load reads the same
+    // them once, and its spans read the same, its project Team's alone
     s.answer(call.token, {
       hidden: 'counted',
       owners: [
@@ -333,8 +353,11 @@ describe('the owner-load cache', () => {
         { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
       ],
     })
-    expect(s.changes()).toBe(after + 1)
-    expect(s.cache.loadOf('org', 'p0')).toEqual(load)
+    expect(s.changes()).toBe(after + 3)
+    const moved = s.cache.loadOf('org', 'p0')
+    if (moved.state !== 'ok') throw new Error('not ok')
+    expect(moved.spans).toEqual(load.spans)
+    expect(moved.team?.projects).toEqual(['pcb', null])
     // a change to a span's hours tells them once
     s.answer(call.token, {
       hidden: 'counted',
@@ -343,11 +366,12 @@ describe('the owner-load cache', () => {
         { owner_id: 'p1', state: 'ok', spans: [], paused: [] },
       ],
     })
-    expect(s.changes()).toBe(after + 2)
-    expect(s.cache.loadOf('org', 'p0')).not.toEqual(load)
+    expect(s.changes()).toBe(after + 4)
+    const hours = s.cache.loadOf('org', 'p0')
+    expect(hours.state === 'ok' && hours.spans).not.toEqual(load.spans)
   })
 
-  it('reads an answer of a backend before the paused list and the span projects as one with them', () => {
+  it('reads an answer of a backend before the paused list and the span projects with the same spans and no Team figures', () => {
     const loads = (answer: OwnerLoadsJson) => {
       const s = setup(true)
       s.cache.register('board', needs(2))
@@ -380,9 +404,26 @@ describe('the owner-load cache', () => {
         { owner_id: 'p1', state: 'ok', spans: [older('c', 3)] },
       ],
     } as unknown as OwnerLoadsJson)
-    expect(before).toEqual(now)
+    // the delays read the same spans either way
+    const spans = (all: ReturnType<typeof loads>) =>
+      all.map((load) => (load?.state === 'ok' ? load.spans : load))
+    expect(spans(before)).toEqual(spans(now))
     expect(now[0]?.state).toBe('ok')
-    // a span's project changes nothing the views read
+    // only a backend from v0.1.125 on gives Team utilization its figures;
+    // without them it shows the person as unknown
+    expect(now.every((load) => load?.state === 'ok' && load.team !== undefined)).toBe(true)
+    expect(before.every((load) => load?.state === 'ok' && load.team === undefined)).toBe(true)
+    // the answer is read whole: one span without its project is an older
+    // backend's answer for all of them
+    const mixed = loads({
+      hidden: 'counted',
+      owners: [
+        { owner_id: 'p0', state: 'ok', spans: [span('a'), older(null, 2)], paused: [] },
+        { owner_id: 'p1', state: 'ok', spans: [span('c', 3, 'pcb')], paused: [] },
+      ],
+    } as unknown as OwnerLoadsJson)
+    expect(mixed[0]?.state === 'ok' && mixed[0].team).toBeUndefined()
+    // a span's project changes nothing the delays read
     const moved = loads({
       hidden: 'counted',
       owners: [
@@ -390,7 +431,7 @@ describe('the owner-load cache', () => {
         { owner_id: 'p1', state: 'ok', spans: [span('c', 3, 'fw')], paused: [] },
       ],
     })
-    expect(moved).toEqual(now)
+    expect(spans(moved)).toEqual(spans(now))
   })
 
   it('shares an owner two views need, and stops a call only once neither needs it', () => {

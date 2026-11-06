@@ -18,14 +18,18 @@ import {
 export const BAR_RING = 4
 
 // Done and delayed states choose the hue. Theme tokens set tint and rim;
-// paused work adds stripes without hiding that state.
+// paused work adds stripes without hiding that state. A task whose delay is
+// unknown, its owner's load unread (P.delayUnknown), takes the neutral hue,
+// never the planned blue that reads as on track.
 const roadmapBarPaint = (it: IssueVM) => {
   const pressure = P.delayColor(it) && P.delayOf(it)?.status
   const state = P.isDone(it)
     ? 'done'
     : pressure === 'late' || pressure === 'behind'
       ? pressure
-      : 'planned'
+      : P.delayUnknown(it)
+        ? 'unknown'
+        : 'planned'
   const color = `var(--roadmap-bar-${state})`
   const fill = `var(--roadmap-bar-${state}-fill, var(--roadmap-bar-fill))`
   const tint = `color-mix(in oklab, ${color} ${fill}, transparent)`
@@ -133,7 +137,15 @@ export function Bar({
   // Hover help includes on-track status even when paint shows no pressure.
   const delay = P.tracksDelay(it) ? P.delayOf(it) : null
   const delayNote = P.tracksDelay(it)
-    ? `, ${delay ? P.DELAY_LABELS[delay.status] : P.isDone(it) ? 'complete' : 'no delay signal'}`
+    ? `, ${
+        delay
+          ? P.DELAY_LABELS[delay.status]
+          : P.isDone(it)
+            ? 'complete'
+            : P.delayUnknown(it)
+              ? 'Delay unknown'
+              : 'no delay signal'
+      }`
     : ''
   const drag = useRefR<{
     mode: 'move' | 'start' | 'end'

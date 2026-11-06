@@ -369,6 +369,113 @@ describe('the benchmark server', () => {
     }
   })
 
+  it("answers the Roadmap's two reads for the selection the app opens, with the states the page asks for", async () => {
+    /** What tasks:roadmap and tasks:roadmapDependencies answer for the
+        first program on a workspace with page parameters `params`. */
+    const roadmap = async (params, filters = {}) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      const scope = { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id }
+      const args = {
+        scope,
+        filters: { mine: false, owners: [], priority: null, search: '', ...filters },
+        window: { from: '2026-09-07', to: '2026-11-02' },
+      }
+      await send({ type: 'query', id: 'roadmap', name: 'tasks:roadmap', args })
+      await send({ type: 'query', id: 'deps', name: 'tasks:roadmapDependencies', args: { scope } })
+      const read = (to) => {
+        const answer = posted.find((m) => m.to === to)
+        return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+      }
+      return { answer: read('roadmap'), deps: read('deps') }
+    }
+    const ok = await roadmap('tasks=300')
+    expect(ok.answer.state).toBe('ok')
+    expect(ok.answer.rows.length).toBeGreaterThan(0)
+    expect(ok.answer.projects).toHaveLength(10)
+    expect(ok.answer.remaining.state).toBe('ok')
+    expect(ok.answer.rows.every((row) => row.description === undefined)).toBe(true)
+    expect(ok.deps.state).toBe('ok')
+    expect(ok.deps.auto_move.state).toBe('ok')
+    // the forced states, several at once
+    expect((await roadmap('tasks=100&roadmap=over_ceiling')).answer).toMatchObject({
+      state: 'over_ceiling',
+      ceiling: 1000,
+    })
+    expect((await roadmap('tasks=100&roadmap=over_budget')).answer.state).toBe('over_budget')
+    const both = await roadmap('tasks=100&roadmap=counting,deps-budget')
+    expect(both.answer.remaining).toEqual({ state: 'unavailable', reason: 'counting' })
+    expect(both.deps).toEqual({ state: 'over_budget' })
+    const auto = await roadmap('tasks=100&roadmap=remaining-budget,automove-budget')
+    expect(auto.answer.remaining).toEqual({ state: 'unavailable', reason: 'budget' })
+    expect(auto.deps.auto_move).toEqual({ state: 'over_budget' })
+    expect((await roadmap('tasks=100&roadmap=access_unchecked')).answer).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    expect((await roadmap('tasks=100&roadmap=error')).answer.error).toContain('roadmap=error')
+    // the owner loads answer every owner unavailable, or not at all
+    const loads = async (params) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&tasks=100&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const args = { org_id: snap.orgs[0].id, owner_ids: [snap.profiles[0].id] }
+      await send({ type: 'query', id: 'loads', name: 'planning:ownerLoads', args })
+      const answer = posted.find((m) => m.to === 'loads')
+      return answer ? JSON.parse(answer.text) : null
+    }
+    expect((await loads('loads=unavailable')).owners[0].state).toBe('unavailable')
+    expect(await loads('loads=loading')).toBeNull()
+    expect((await loads('')).owners[0].state).toBe('ok')
+    // an organization Viewer may edit no project of a part
+    const viewer = await roadmap('tasks=300&role=viewer')
+    if (viewer.deps.state === 'ok' && viewer.deps.auto_move.state === 'ok')
+      expect(viewer.deps.auto_move.editable_projects).toEqual([])
+  }, 60_000)
+
+  it('shows a remote task on the Roadmap, and the same rows again once it goes', async () => {
+    // at everyday tasks, as the forced state's case above reaches the ceiling
+    const { posted, send } = await server('latency=0&mbps=100000&tasks=100')
+    await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+    const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+    const program = snap.projects.find((p) => p.type === 'meta')
+    // a window over every task's weeks, which start within 3 weeks of today
+    const from = new Date()
+    from.setUTCDate(from.getUTCDate() - 7 * 3)
+    const to = new Date(from)
+    to.setUTCDate(to.getUTCDate() + 7 * 12)
+    const args = {
+      scope: { kind: 'project', org_id: snap.orgs[0].id, project_id: program.id },
+      filters: { mine: false, owners: [], priority: null, search: '' },
+      window: { from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) },
+    }
+    let n = 0
+    const roadmap = async () => {
+      n++
+      await send({ type: 'query', id: `roadmap${n}`, name: 'tasks:roadmap', args })
+      return JSON.parse(posted.find((m) => m.to === `roadmap${n}`).text)
+    }
+    const at = await roadmap()
+    expect(at.state).toBe('ok')
+    expect(at.rows.length).toBeGreaterThan(0)
+    const before = at.rows.map((row) => row.id)
+    await send({ type: 'scenario', id: 'create', name: 'deliverCreate', args: [] })
+    const grown = await roadmap()
+    expect(grown.state).toBe('ok')
+    expect(grown.rows).toHaveLength(before.length + 1)
+    const made = grown.rows.map((row) => row.id).filter((id) => !before.includes(id))
+    expect(made).toHaveLength(1)
+    await send({ type: 'scenario', id: 'delete', name: 'deliverDelete', args: [] })
+    const back = await roadmap()
+    expect(back.state).toBe('ok')
+    expect(back.rows.map((row) => row.id)).toEqual(before)
+    // nothing more of its own to delete
+    await send({ type: 'scenario', id: 'again', name: 'deliverDelete', args: [] })
+    expect((await roadmap()).rows.map((row) => row.id)).toEqual(before)
+  }, 60_000)
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

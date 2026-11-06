@@ -4,7 +4,14 @@ import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import { DELAY_UNKNOWN } from '../lib/delay'
 import type { LoadSpan } from '../lib/workload'
 import type { OwnerLoad } from './ownerLoadCache'
-import { viewDelay as judge, type ViewDelayCtx, viewLoadOf } from './viewDelay'
+import {
+  viewDelay as judge,
+  type OwnerItem,
+  type OwnerItemsCtx,
+  ownerItemsOf,
+  type ViewDelayCtx,
+  viewLoadOf,
+} from './viewDelay'
 
 /** The verdict's status, null or DELAY_UNKNOWN. */
 const viewDelay = (...args: Parameters<typeof judge>) => {
@@ -151,5 +158,101 @@ describe("a view task's delay", () => {
     expect(viewDelay(group, ctx([group], {}))).toBe('late')
     const done = { ...group, group_done: true }
     expect(viewDelay(done, ctx([done], {}))).toBeNull()
+  })
+})
+
+describe("a person's work for Team utilization and the planning panel", () => {
+  /** Ana's cache answer with `spans`, each span's project, and `paused`. */
+  const teamLoad = (
+    spans: LoadSpan[],
+    projects: (string | null)[],
+    paused: { issueUuid: string; project: string; start: number; end: number }[] = [],
+  ) =>
+    ({ state: 'ok', spans, hidden: 'counted', team: { projects, paused } }) as Extract<
+      OwnerLoad,
+      { state: 'ok' }
+    >
+  /** The reconciler's store: `views` rows the workspace does not hold, and
+      the workspace's own `held` items of each owner. */
+  const itemsCtx = (views: ViewRow[], held: Record<string, OwnerItem[]> = {}): OwnerItemsCtx => {
+    const heldIds = new Set(
+      Object.values(held)
+        .flat()
+        .map((item) => item.uuid),
+    )
+    return {
+      held: (uuid) => heldIds.has(uuid),
+      inView: (uuid) => views.some((r) => r.id === uuid),
+      viewRows: () => views,
+      projectLive: () => true,
+      orgOf: () => 'org',
+      heldItems: (owner) => held[owner] ?? [],
+    }
+  }
+  const byTask = (items: OwnerItem[]) =>
+    items.map((item) => [item.uuid, item.project, item.remaining, item.paused])
+
+  it('counts a task once whichever list holds it, from its row, its project and pause with it', () => {
+    // the server's load of Ana: t in work (10 h before an edit), h held by
+    // the workspace, busy time she is not shown, and a paused task p
+    const t = row('t', 'ana', { remaining_hours: 12 })
+    const load = teamLoad(
+      [span('t', 10), span('h', 3), span(null, 7)],
+      ['work', 'pcb', null],
+      [{ issueUuid: 'p', project: 'fw', start: TODAY_WEEK, end: TODAY_WEEK }],
+    )
+    const held: OwnerItem = {
+      uuid: 'h',
+      project: 'pcb',
+      start: TODAY_WEEK,
+      end: TODAY_WEEK + 1,
+      remaining: 5,
+      remainingSet: null,
+      paused: false,
+    }
+    const items = ownerItemsOf('org', 'ana', load, itemsCtx([t], { ana: [held] }))
+    const order = (a: unknown[], b: unknown[]) => (String(a[0]) < String(b[0]) ? -1 : 1)
+    expect(byTask(items).sort(order)).toEqual(
+      [
+        [null, null, 7, false],
+        ['p', 'fw', 0, true],
+        ['h', 'pcb', 5, false],
+        ['t', 'work', 12, false],
+      ].sort(order),
+    )
+    // a version that also kept the server's spans of shown tasks counts
+    // them twice
+    expect(items.filter((item) => item.uuid === 't')).toHaveLength(1)
+    expect(items.filter((item) => item.uuid === 'h')).toHaveLength(1)
+  })
+
+  it('moves a task between owners at once, and takes a shown task’s own pause over the server’s', () => {
+    // a pending owner change gave t to Bo; the server still files it under Ana
+    const t = row('t', 'bo')
+    const ana = teamLoad([span('t', 10)], ['work'])
+    const bo = teamLoad([], [])
+    expect(byTask(ownerItemsOf('org', 'ana', ana, itemsCtx([t])))).toEqual([])
+    expect(byTask(ownerItemsOf('org', 'bo', bo, itemsCtx([t])))).toEqual([['t', 'work', 10, false]])
+    // the server says p is paused; the person resumed it
+    const p = row('p', 'ana', { remaining_hours: 4 })
+    const paused = teamLoad(
+      [],
+      [],
+      [{ issueUuid: 'p', project: 'work', start: TODAY_WEEK, end: TODAY_WEEK + 1 }],
+    )
+    expect(byTask(ownerItemsOf('org', 'ana', paused, itemsCtx([p])))).toEqual([
+      ['p', 'work', 4, false],
+    ])
+    // and the other way: a pause painted on a row the server still loads
+    const nowPaused = row('p', 'ana', { paused: true })
+    const loaded = teamLoad([span('p', 10)], ['work'])
+    expect(byTask(ownerItemsOf('org', 'ana', loaded, itemsCtx([nowPaused])))).toEqual([
+      ['p', 'work', 0, true],
+    ])
+  })
+
+  it('answers nothing for an answer from a backend that sent no projects or paused list', () => {
+    const load = ok([span('t', 10)]) as Extract<OwnerLoad, { state: 'ok' }>
+    expect(ownerItemsOf('org', 'ana', load, itemsCtx([]))).toEqual([])
   })
 })

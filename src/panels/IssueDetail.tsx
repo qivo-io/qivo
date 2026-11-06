@@ -64,6 +64,7 @@ import {
 } from '../lib/leaveGuard'
 import { parentBlock, subtaskBlock } from '../lib/relationCandidates'
 import { remainingPatchFromInput, remainingValue } from '../lib/remaining'
+import { DONE_WITHOUT_DATES, doneWithoutDates } from '../lib/roadmapVisibility'
 import { buildPath, issueLink, sameTask } from '../lib/router'
 import { matchesAllWords } from '../lib/search'
 import { mergeSpine, spineWindow, type UnreadStart, unreadMark, unreadStart } from '../lib/spine'
@@ -3969,6 +3970,7 @@ function IssueDetail({
                           const dueWeek = it.due ? P.isoToWeek(it.due) : null
                           const scheduled = it.start != null && it.end != null
                           const group = P.isGroup(it)
+                          const nothingToPlan = !group && doneWithoutDates(it)
                           const planTip = group ? 'Dates come from subtasks' : roTip
                           const rejectPastDue = () => {
                             window.showToast?.("The end date can't be after the due date", 'error')
@@ -4050,24 +4052,29 @@ function IssueDetail({
                               {/* plan in context: jumps to the roadmap with this issue
                           spotlit. An unscheduled issue gets a starter bar there
                           (capped at the due week) to drag into place. A group
-                          is only shown there, read-only. */}
+                          is only shown there, read-only. A Done task without
+                          dates is not on the roadmap at all, so its button is
+                          off and says why. */}
                               <div className="task-plan-actions">
-                                {/* the Roadmap opens once every task has loaded and
-                                    spotlights the task, also one shown from a
-                                    current answer, whoever looks; an archived one
-                                    says why its fields are off */}
+                                {/* the Roadmap opens at once, asks the server to
+                                    keep the task past its filters and spotlights
+                                    it once its answer holds it, also one shown
+                                    from a current answer, whoever looks; an
+                                    archived one says why its fields are off */}
                                 <Button
                                   type="button"
                                   variant="ghost"
                                   data-plan-on-roadmap
                                   className="text-text-1 h-control-sm"
-                                  disabled={!held && (archived || stale)}
+                                  disabled={(!held && (archived || stale)) || nothingToPlan}
                                   title={
-                                    held || !(archived || stale)
-                                      ? undefined
-                                      : archived
+                                    !held && (archived || stale)
+                                      ? archived
                                         ? roTip
                                         : WAITS_FOR_CHECK
+                                      : nothingToPlan
+                                        ? DONE_WITHOUT_DATES
+                                        : undefined
                                   }
                                   onClick={() => onPlanOnRoadmap?.(it.id)}
                                 >

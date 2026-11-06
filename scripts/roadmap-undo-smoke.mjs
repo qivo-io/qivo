@@ -1,7 +1,11 @@
 /* Roadmap undo regression against the Northstar development demo.
  * Usage: node scripts/roadmap-undo-smoke.mjs [baseURL]
  * Requires the matching backend and a running dev server. Creates only
- * temporary tasks/milestones; finally removes them, never seeds or resets. */
+ * temporary tasks/milestones; finally removes them, never seeds or resets.
+ * It asks for every task (P.askTasks, reason script) and looks its tasks up
+ * in the workspace, so it drives the Roadmap's writes of held tasks; the
+ * writes of tasks only the Roadmap's answer brings are the jsdom suites'
+ * (src/store/roadmapWrites.test.ts, src/views/roadmapView.test.tsx). */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'

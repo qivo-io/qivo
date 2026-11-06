@@ -15,6 +15,7 @@ import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, STORAGE_COUNTING } from '../src/lib/billingDisplay'
 import {
   AGENDA_QUERY,
+  ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
   BILLING_STORAGE_EXPECTED,
@@ -51,6 +52,7 @@ import {
   REMOVAL_EXPECTED,
   REMOVAL_STEP,
   REST_BODY_FIELDS,
+  ROADMAP_QUERY,
   rateLimitWait,
   redact,
   request,
@@ -223,6 +225,8 @@ describe('staging check REST contract', () => {
   it('tells a frame that subscribes the task windows from every other frame', () => {
     expect(ON_DEMAND_STEP).toBe('ui/tasks-on-demand')
     expect(TASK_WINDOWS_QUERY).toBe('workspace:tasks')
+    expect(ROADMAP_QUERY).toBe('tasks:roadmap')
+    expect(ASSIGNEE_LOAD_QUERY).toBe('planning:assigneeLoad')
     // the registry subscribes the workspace's task windows by that name
     const parts = readFileSync(new URL('../src/store/liveParts.ts', import.meta.url), 'utf8')
     expect(parts).toContain('tasks: api.workspace.tasks')

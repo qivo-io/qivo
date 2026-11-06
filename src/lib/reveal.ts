@@ -9,8 +9,27 @@ export const REVEAL_MS = 2400
     over the pane (the crumb on a phone closes it), so the ring's time runs
     from the start and no later window holds it. `key` is the task's key as
     surfaces render it, for the sentence a view says when it does not hold
-    the task (views/Roadmap.tsx). */
-export type RevealRequest = { id: string; n: number; atOnce?: boolean; key?: string }
+    the task (views/Roadmap.tsx). `place` is what the source knows of the
+    task, its uuid, sub-project and weeks, so the Roadmap pans to it and
+    finds it in its answer before it shows it. */
+export type RevealRequest = {
+  id: string
+  n: number
+  atOnce?: boolean
+  key?: string
+} & Partial<TaskPlace>
+
+/** Where a task is, as a view that sends it to the Roadmap knows it: its
+    uuid, its sub-project and its weeks on the grid of now. */
+export type TaskPlace = { uuid: string; project: string; start: number | null; end: number | null }
+
+/** Task `it`'s place (TaskPlace), from its view model. */
+export const taskPlaceOf = (it: {
+  uuid: string
+  project: string
+  start: number | null
+  end: number | null
+}): TaskPlace => ({ uuid: it.uuid, project: it.project, start: it.start, end: it.end })
 
 /** The state update for a request that a view took, given its nonce `n`:
     it drops the request unless a newer one replaced it, which a kept view

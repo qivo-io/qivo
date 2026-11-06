@@ -651,7 +651,6 @@ describe.each([
       await back(`/app/${org}/settings/${address}`)
       const scope = page ? `[data-settings-page="${page}"] ` : ''
       await waitFor(() => document.querySelector(`${scope}${shows}`), address)
-      expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
     }
     // the press asks the server, which lists the held task that has not arrived
     network.query.mockImplementation(async (ref, args) =>
@@ -697,7 +696,6 @@ describe.each([
     )
     expect(dialog.textContent).toContain('QN-2')
     expect(dialog.textContent).toContain('Run the soak test')
-    expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
   })
 
   it("opens Labels at once with the server's counts, though the task that carries a label is still to arrive", async () => {
@@ -721,7 +719,6 @@ describe.each([
         ),
       'the Labels row',
     )
-    expect(document.querySelector('[data-tasks-loading-view]')).toBeNull()
     expect(count.textContent).toBe('1 active task')
   })
 
@@ -740,7 +737,6 @@ describe.each([
     await back(`/app/${org}/settings/projects-archived-tasks`)
     const page = '[data-settings-page="projects-archived-tasks"]'
     await waitFor(() => document.querySelector(`${page} [data-archived-tasks]`), 'Archived tasks')
-    expect(document.querySelector(`${page} [data-tasks-loading-view]`)).toBeNull()
     await act(async () =>
       document.querySelector<HTMLElement>(`${page} [data-archive-project]`)?.click(),
     )

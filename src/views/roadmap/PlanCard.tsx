@@ -45,30 +45,41 @@ function PlanSwitch({
   )
 }
 
-// Roadmap owns this session. Load belongs to the effective owner and grid epoch.
-// Only a leaf is planned, since a group's dates come from its subtasks.
+// Roadmap owns this session. Only a leaf is planned, since a group's dates
+// come from its subtasks. The session names its task by handle, uuid and key,
+// with the sub-project it was in when the session began, which the Roadmap's
+// read keeps it in past the filter row until the task's model says another.
 export type PlanSession = {
   issueId: string
+  uuid: string
+  key: string
+  project: string
   autoFit: boolean
+  /** whether the first valid load still places an unscheduled task's end */
   fitOnLoad: boolean
   orig: ReturnType<typeof captureWeekDates>
-  loadOwner: string | null
-  loadEpoch: number
-  load: LoadItem[] | null
-  loading: boolean
 }
+
+/** The planning owner's load as the panel shows it: still loading, the
+    owner's work with hours (`items`, null where it is unavailable), and
+    whether it counts only the projects the reader can see. */
+export type PlanLoad = { loading: boolean; items: LoadItem[] | null; ownOnly: boolean }
 
 // Confirm keeps the planned dates; Cancel restores the captured originals.
 // Hidden-project workload remains in the anonymous Other projects bucket.
+// The load is the owner's, read live from the owner-load cache, so it is
+// always the current owner's on the week grid of now.
 export function PlanCard({
   issue,
   session,
+  load: planLoad,
   onToggleAutoFit,
   onConfirm,
   onCancel,
 }: {
   issue: IssueVM
   session: PlanSession
+  load: PlanLoad | null
   onToggleAutoFit: () => void
   onConfirm: () => void
   onCancel: () => void
@@ -85,13 +96,10 @@ export function PlanCard({
       ? Math.max(issue.start, issue.remainingSet)
       : issue.start
   const fitDur = scheduled ? Math.max(1, issue.end - fitStart + 1) : 0
-  const loadCurrent =
-    session.loadOwner === (issue.owner ?? null) && session.loadEpoch === P.gridEpoch
-  const loading = session.loading || !loadCurrent
+  const loading = !planLoad || planLoad.loading
+  const load = planLoad?.items ?? null
   const buckets =
-    loadCurrent && session.load && scheduled
-      ? loadByProject(session.load, fitStart, issue.end, issue.uuid)
-      : []
+    !loading && load && scheduled ? loadByProject(load, fitStart, issue.end, issue.uuid) : []
   const committedInWindow = buckets.reduce((s, b) => s + b.hours, 0)
   // Use the same owner for capacity and existing commitments.
   const cap = plannableHoursOf(owner)
@@ -176,7 +184,7 @@ export function PlanCard({
             <div className="text-md font-semibold text-text-1">{first}’s load in this window</div>
             {loading ? (
               <div className="[font-size:var(--fs-sm)] [color:var(--text-3)]">Loading…</div>
-            ) : !session.load ? (
+            ) : !load ? (
               <div className="text-sm text-text-3">
                 Workload is unavailable. Auto-fit is paused.
               </div>
@@ -209,8 +217,8 @@ export function PlanCard({
             <div className="[font-size:var(--fs-xs)] [color:var(--text-3)] [margin-top:2px]">
               {loading
                 ? 'Checking available time…'
-                : !session.load
-                  ? 'Reopen planning to try again.'
+                : !load
+                  ? 'Qivo shows it again once it can read the workload.'
                   : bounded
                     ? '~' +
                       Math.round(freePerWk) +
@@ -221,6 +229,13 @@ export function PlanCard({
                       'h plannable'
                     : 'No weekly capacity limit for auto-fit'}
             </div>
+            {/* a guest or Viewer reads another person's load without the
+                projects they cannot see, so the free time may be less */}
+            {!loading && load && planLoad?.ownOnly && (
+              <div data-plan-own-only className="[font-size:var(--fs-xs)] [color:var(--text-3)]">
+                Counts only projects you can see.
+              </div>
+            )}
           </div>
         )}
       </div>

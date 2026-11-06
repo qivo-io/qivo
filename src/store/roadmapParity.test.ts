@@ -1,17 +1,22 @@
 /* The Roadmap's server reads (convex/tasks.ts roadmap and
- * roadmapDependencies) against the app's own rules. Each case boots the
- * real store from the caller's real workspace, as boardParity.test.ts does,
- * and compares what the queries answer for the same caller, selection,
- * window and filter row with what the app's Roadmap derives in the browser
- * (store/roadmapOracle.setup.ts), the rows, the phone agenda's set
+ * roadmapDependencies) against the app's own rules, and the stand-in the
+ * jsdom tests and the benchmark answer with (store/roadmapStandIn.setup.ts)
+ * against the server's reads. Each case boots the real store from the
+ * caller's real workspace, as boardParity.test.ts does, and compares what
+ * the queries answer for the same caller, selection, window and filter row
+ * with the stand-in's answer, and with what the store's own rules derive
+ * from every task it holds (store/roadmapOracle.setup.ts), which the
+ * Roadmap still applies on screen when it narrows: the rows, the phone
+ * agenda's set
  * (scopedIssues, isRoadmapTaskVisible, passesFilters), each group row's
  * Done and span, the shown parents and a group row's other shown
  * descendants, each sub-project's heading Remaining in tenths, My view's
  * tracks (Roadmap.tsx held), and for the dependency inputs the arrows'
  * pairs, the parts of the dependency graph over every task the workspace
- * holds, the write levels, and Auto-move's moves over the answer against
- * its moves over the workspace within those parts, and the planning
- * session's task, which skips the filter row alone. Northstar runs as Nora
+ * holds, the write levels, and Auto-move's moves over the answer, through
+ * the app's own builder (views/roadmap/autoMoveInputs.ts), against its
+ * moves over the workspace within those parts, and the planning session's
+ * task, which skips the filter row alone. Northstar runs as Nora
  * (admin), Leo and Ben over every selection; the small fixture runs every
  * access shape for a user, a guest and a viewer, and the admin. Cases that
  * must fail if a rule drifts compare a drifted rule with the server's
@@ -19,11 +24,11 @@
  *
  * Team utilization's inputs come the same way. planning.ownerLoads for
  * every person of the organization, asked as the owner-load cache asks
- * and compared with the stand-in, read as the Roadmap view stage reads
- * them (spans with a task id by their project, the paused list as paused
- * work), give each person's hours a week and paused weeks that the strip
- * derives from the workspace, under All projects and This project, in the
- * default window and over 52 weeks. */
+ * and compared with the stand-in, read through the app's own reconciler
+ * (store/viewDelay.ts ownerItemsOf), with no task held and with the
+ * store's rows of every task, give each person's hours a week and paused
+ * weeks that the store's rules derive from the workspace, under All
+ * projects and This project, in the default window and over 52 weeks. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../convex/_generated/api'
@@ -35,6 +40,7 @@ import type {
   RoadmapFilters,
   RoadmapScope,
 } from '../../convex/lib/roadmap'
+import type { ViewRow } from '../../convex/lib/viewReads'
 import type { OwnerLoadsJson } from '../../convex/planning'
 import { SHAPES } from '../../convex/tests/accessShapes.setup'
 import { projectScope } from '../../convex/tests/board.setup'
@@ -55,7 +61,7 @@ import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
 import { countOrg } from '../../convex/tests/overviewCounts.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import { dependenciesFor, NO_ROADMAP_FILTERS, roadmapFor } from '../../convex/tests/roadmap.setup'
-import type { LoadIssue } from '../lib/workload'
+import type { LoadIssue, LoadItem } from '../lib/workload'
 import { CALL_OWNERS } from './ownerLoadCache'
 import { ownerLoadsStandIn } from './ownerLoadsStandIn.setup'
 import type { Snapshot } from './plannerFixture.setup'
@@ -97,6 +103,13 @@ async function start(snap: Snapshot) {
     dates: await import('../lib/dates'),
     oracle: await import('./roadmapOracle.setup'),
     schedule: await import('../lib/schedule'),
+    // the app's own builders and the stand-in, of the store's module
+    // instances, whose week grid is the store's
+    autoMove: await import('../views/roadmap/autoMoveInputs'),
+    views: { ...(await import('./viewDelay')), ...(await import('./ownerLoadCache')) },
+    standIn: await import('./roadmapStandIn.setup'),
+    workload: await import('../lib/workload'),
+    probe: store.__layerProbe,
     snapshot: snap,
   })
 }
@@ -270,41 +283,120 @@ function expectDependencies(
     .filter((m) => inParts.has(m.id))
   const byId = (a: { id: string }, b: { id: string }) => (a.id < b.id ? -1 : 1)
   expect([...moves].sort(byId), `${label}: moves`).toEqual([...expected].sort(byId))
+  // each part task's links in the order the app lists them (its window's
+  // and the workspace's model, lib/taskSections.ts linkViews), which the
+  // Roadmap builds from the pairs' order
+  const links = partLinks(P, answer.auto_move)
+  for (const [uuid, built] of Object.entries(links)) {
+    const it = Object.values(P.issueById).find((t) => t.uuid === uuid)
+    if (!it) continue
+    const own = (it.links ?? [])
+      .filter((l) => l.type === 'blocks' || l.type === 'blocked_by')
+      .map((l) => ({ type: l.type, id: uuidOf(l.id) }))
+      .filter((l) => inParts.has(l.id))
+    expect(built, `${label}: ${it.key}'s links`).toEqual(own)
+  }
+  // the pairs in another order build another order of links, which this
+  // comparison catches
+  const reversed = partLinks(P, {
+    ...answer.auto_move,
+    pairs: [...answer.auto_move.pairs].reverse(),
+  })
+  orderChecks.push(JSON.stringify(reversed) !== JSON.stringify(links))
   return moves.length
 }
 
-/** Auto-move over `inputs` as a view would build the solver's tasks from
- * them, with weeks on the store's grid, children from parent ids and each
- * task's links from the pairs in their order. */
+/* For each comparison of a selection's parts with a task of more than one
+   link, whether the pairs in reverse order built other links. */
+const orderChecks: boolean[] = []
+
+/** Auto-move over `inputs` as the Roadmap builds the solver's tasks from
+ * them (views/roadmap/autoMoveInputs.ts), with weeks on the store's grid,
+ * children from parent ids and each task's links from the pairs in their
+ * order. */
 function movesOf(P: Store, inputs: AutoMoveInputs) {
-  const week = (iso: string | undefined) => (iso === undefined ? null : P.dates.isoToWeek(iso))
-  const issues = inputs.tasks.map((row) => {
-    const start = row.has_subtasks ? week(row.span?.start_week) : week(row.start_week)
-    const endWeek = row.has_subtasks ? week(row.span?.end_week) : week(row.end_week)
-    const end = row.has_subtasks || endWeek === null ? endWeek : Math.max(start ?? endWeek, endWeek)
-    const links: { type: string; id: string }[] = []
-    for (const p of inputs.pairs) {
-      if (p.blocker === row.id) links.push({ type: 'blocks', id: p.blocked })
-      else if (p.blocked === row.id) links.push({ type: 'blocked_by', id: p.blocker })
-    }
-    return {
-      id: row.id,
-      status: row.status,
-      project: row.project_id,
-      isGroup: row.has_subtasks,
-      children: inputs.tasks.filter((kid) => kid.parent_id === row.id).map((kid) => kid.id),
-      start,
-      end,
-      links,
-    }
-  })
-  const editable = new Set(inputs.editable_projects)
-  return P.schedule.autoMoves({
-    issues,
-    byId: Object.fromEntries(issues.map((it) => [it.id, it])),
-    canWrite: (it) => editable.has(it.project),
-  })
+  return P.autoMove.autoMoveMoves(inputs, P.autoMove.autoMoveTasks(inputs, P.dates.isoToWeek))
 }
+
+/** Each part task's links as the Roadmap builds them from `inputs`, by
+ * uuid, in their order, for the tasks with more than one link. */
+function partLinks(P: Store, inputs: AutoMoveInputs) {
+  return Object.fromEntries(
+    P.autoMove
+      .autoMoveTasks(inputs, P.dates.isoToWeek)
+      .filter((t) => (t.links?.length ?? 0) > 1)
+      .map((t) => [t.id, t.links]),
+  )
+}
+
+/** The facts of view rows `rows` a Roadmap reads, by id in order. */
+const rowFacts = (rows: readonly ViewRow[]) =>
+  rows.map((row) => [
+    row.id,
+    row.has_subtasks,
+    row.has_hidden_subtasks,
+    row.parent_id ?? null,
+    row.group_done ?? null,
+    row.span ?? null,
+    row.start_week ?? null,
+    row.end_week ?? null,
+    row.status,
+  ])
+
+/** Compares the stand-in's answer `stood` with the server's `answer`, as
+ * boardParity.test.ts compares the Board's: the state, every row,
+ * parent and subtask in order with its facts, My view's sub-projects, a
+ * project selection's sub-projects in any order, and each sub-project's
+ * Remaining in tenths, an absent key 0. */
+function expectStandIn(stood: RoadmapAnswer, answer: RoadmapAnswer, label: string) {
+  expect(stood.state, `${label}: stand-in state`).toBe(answer.state)
+  if (answer.state !== 'ok' || stood.state !== 'ok') {
+    expect(stood, `${label}: stand-in`).toEqual(answer)
+    return
+  }
+  expect(rowFacts(stood.rows), `${label}: stand-in rows`).toEqual(rowFacts(answer.rows))
+  expect(rowFacts(stood.parents), `${label}: stand-in parents`).toEqual(rowFacts(answer.parents))
+  expect(rowFacts(stood.subtasks), `${label}: stand-in subtasks`).toEqual(rowFacts(answer.subtasks))
+  expect(stood.held_sub_projects, `${label}: stand-in tracks`).toEqual(answer.held_sub_projects)
+  expect(sorted(stood.projects ?? []), `${label}: stand-in projects`).toEqual(
+    sorted(answer.projects ?? []),
+  )
+  if (answer.remaining.state !== 'ok' || stood.remaining.state !== 'ok') {
+    expect(stood.remaining, `${label}: stand-in Remaining`).toEqual(answer.remaining)
+    return
+  }
+  const want = answer.remaining.tenths
+  const got = stood.remaining.tenths
+  for (const id of new Set([...Object.keys(want), ...Object.keys(got)]))
+    expect(got[id] ?? 0, `${label}: stand-in Remaining of ${id}`).toBe(want[id] ?? 0)
+}
+
+/** Compares the dependency stand-in's answer `stood` with the server's
+ * `answer`: the arrows' pairs and the parts' pairs in order, the parts'
+ * tasks in order with their facts, and the write levels. */
+function expectDependencyStandIn(stood: DependencyAnswer, answer: DependencyAnswer, label: string) {
+  if (answer.state !== 'ok' || stood.state !== 'ok') {
+    expect(stood, `${label}: dependency stand-in`).toEqual(answer)
+    return
+  }
+  expect(stood.pairs, `${label}: stand-in arrows`).toEqual(answer.pairs)
+  if (answer.auto_move.state !== 'ok' || stood.auto_move.state !== 'ok') {
+    expect(stood.auto_move, `${label}: stand-in Auto-move`).toEqual(answer.auto_move)
+    return
+  }
+  expect(stood.auto_move.tasks, `${label}: stand-in part tasks`).toEqual(answer.auto_move.tasks)
+  expect(stood.auto_move.pairs, `${label}: stand-in part pairs`).toEqual(answer.auto_move.pairs)
+  expect(stood.auto_move.editable_projects, `${label}: stand-in write levels`).toEqual(
+    answer.auto_move.editable_projects,
+  )
+}
+
+/** What the stand-in reads besides the workspace for store `P`: whether
+ * its person sees a project and may edit it, as the store says. */
+const standInOptions = (P: Store) => ({
+  sees: (id: string) => P.canSee(id),
+  canEdit: (id: string) => P.canWrite(id),
+})
 
 /** A filter row named for a case's label. */
 type Filters = [label: string, filters: Partial<RoadmapFilters>]
@@ -342,14 +434,30 @@ async function compareAll(
       for (const [filterLabel, partial] of i < 2 ? rows : rows.slice(0, 1)) {
         const f = { ...NO_ROADMAP_FILTERS, ...partial }
         const { server } = deskFilters(P, storeScope, f)
-        const answer = await roadmapFor(t, profile, scope, server, windowOf(P, weeks))
+        const window = windowOf(P, weeks)
+        const answer = await roadmapFor(t, profile, scope, server, window)
         const label = `${profile.name}, ${scopeLabel}, ${windowLabel}, ${filterLabel}`
+        expectStandIn(
+          P.standIn.roadmapStandIn(
+            P.snapshot,
+            { scope, filters: server, window },
+            standInOptions(P),
+          ),
+          answer,
+          label,
+        )
         const ids = expectRows(P, answer, storeScope, weeks, f, label)
         found.set(filterLabel, (found.get(filterLabel) ?? 0) + ids.size)
       }
+    const dependencies = await dependenciesFor(t, profile, scope)
+    expectDependencyStandIn(
+      P.standIn.dependenciesStandIn(P.snapshot, { scope }, standInOptions(P)),
+      dependencies,
+      `${profile.name}, ${scopeLabel}`,
+    )
     moves += expectDependencies(
       P,
-      await dependenciesFor(t, profile, scope),
+      dependencies,
       storeScope,
       `${profile.name}, ${scopeLabel}, dependencies`,
     )
@@ -413,6 +521,8 @@ describe('Northstar', () => {
         for (const [label] of rows) expect(result.found.get(label), label).toBeGreaterThan(0)
     }
     console.log('Auto-move moves compared over Northstar:', moves)
+    // a reading that drops the pairs' order fails somewhere
+    expect(orderChecks.some(Boolean)).toBe(true)
   })
 })
 
@@ -799,6 +909,9 @@ describe('the planning session', () => {
 /** One owner of planning.ownerLoads' answers that is not `not_read`. */
 type OwnerAnswer = Exclude<OwnerLoadsJson['owners'][number], { state: 'not_read' }>
 
+/** Every owner's answer, with what the calls said of hidden work. */
+type OwnerAnswers = readonly OwnerAnswer[] & { hidden: OwnerLoadsJson['hidden'] }
+
 /** planning.ownerLoads' answers for every person of `ids`, asked as the
  * owner-load cache asks for `profile`, at most CALL_OWNERS a call for a
  * staff seat, the not_read ones again, and one a call for a guest or
@@ -823,42 +936,66 @@ async function ownerLoadsFor(t: T, P: Store, profile: Doc<'profiles'>, ids: read
     if (notRead.length === batch.length) throw new Error(`${profile.name}: no owner read`)
     ask = [...notRead, ...ask.slice(batch.length)]
   }
-  return out
+  return Object.assign(out, { hidden: staff ? ('counted' as const) : ('own_only' as const) })
 }
 
 /** What a reading of the answers leaves out or ignores, for the cases
- * that must fail. */
-type Drift = { keepHidden?: boolean; dropPaused?: boolean }
+ * that must fail: spans without a task kept as a project's, the paused
+ * list dropped, or the spans' projects dropped, as a backend before
+ * v0.1.125 sends them. */
+type Drift = { keepHidden?: boolean; dropPaused?: boolean; dropProjects?: boolean }
+
+/** How the reconciler reads a person's rows: none held, so every span and
+ * paused task comes from the answer, or the store's rows of every task,
+ * which then come from the rows instead (store/viewDelay.ts ownerItemsOf). */
+type Held = 'none' | 'store'
 
 /** The tasks Team utilization spreads from `owners`' answers on store
- * `P`'s grid, as the Roadmap view stage reads them. Each span with a task
- * id as a task of its project, the weeks by isoToWeek with the end at
- * least the start as an IssueVM's, its hours and their measurement week,
- * not paused; each paused span as a paused task; spans without a task id
- * left out, as the strip counts visible projects. */
-function teamTasksOf(P: Store, owners: readonly OwnerAnswer[], drift: Drift = {}): LoadIssue[] {
-  const weeks = (s: { start_week: string; end_week: string }) => {
-    const start = P.dates.isoToWeek(s.start_week)
-    return { start, end: Math.max(start, P.dates.isoToWeek(s.end_week)) }
-  }
+ * `P`'s grid, through the app's own cache reading (ownerLoadOf) and
+ * reconciler (ownerItemsOf), with the rows `held` names. Work without a
+ * project, busy time the reader is not shown, stays out, as the strip
+ * leaves it out (views/Resources.tsx). */
+function teamTasksOf(
+  P: Store,
+  owners: OwnerAnswers,
+  drift: Drift = {},
+  held: Held = 'none',
+): LoadIssue[] {
+  const { hidden } = owners
   const out: LoadIssue[] = []
   for (const one of owners) {
     if (one.state !== 'ok') throw new Error(`${one.owner_id} is ${one.state}`)
-    for (const span of one.spans) {
-      if (span.issue_id === null && !drift.keepHidden) continue
+    const sent = {
+      ...one,
+      paused: drift.dropPaused ? [] : one.paused,
+      spans: one.spans.map((span) => (drift.dropProjects ? { ...span, project_id: null } : span)),
+    }
+    const load = P.views.ownerLoadOf(sent, hidden)
+    if (load?.state !== 'ok') throw new Error(`${one.owner_id} read as ${load?.state}`)
+    const org = P.snapshot.profiles.find((p) => p.id === one.owner_id)?.org_id ?? ''
+    const items =
+      held === 'store' && P.probe
+        ? P.probe.ownerItems(org, one.owner_id, load)
+        : P.views.ownerItemsOf(org, one.owner_id, load, {
+            held: () => false,
+            inView: () => false,
+            viewRows: () => [],
+            projectLive: () => true,
+            orgOf: () => org,
+            heldItems: () => [],
+          })
+    for (const item of items) {
+      if (item.project === null && !drift.keepHidden) continue
       out.push({
         owner: one.owner_id,
-        project: span.project_id ?? 'hidden',
-        ...weeks(span),
-        remaining: span.remaining,
-        remainingSet:
-          span.remaining_set_at === null ? null : P.dates.tsToWeek(span.remaining_set_at),
-        paused: false,
+        project: item.project ?? 'hidden',
+        start: item.start,
+        end: item.end,
+        remaining: item.remaining,
+        remainingSet: item.remainingSet,
+        paused: item.paused,
       })
     }
-    if (!drift.dropPaused)
-      for (const span of one.paused)
-        out.push({ owner: one.owner_id, project: span.project_id, ...weeks(span), paused: true })
   }
   return out
 }
@@ -915,14 +1052,12 @@ function teamWindows(P: Store): [string, Weeks][] {
  * derives, for every selection of `scopes`, both modes where the strip
  * offers them and every window. Answers how many hours, paused weeks and
  * paused people the comparison saw. */
-function expectTeam(
-  P: Store,
-  owners: readonly OwnerAnswer[],
-  scopes: readonly string[],
-  label: string,
-) {
+function expectTeam(P: Store, owners: OwnerAnswers, scopes: readonly string[], label: string) {
   const people = owners.map((o) => o.owner_id)
   const tasks = teamTasksOf(P, owners)
+  // the same figures where the rows of every task the store holds stand in
+  // for the answer's spans, each task counted once
+  const fromRows = teamTasksOf(P, owners, {}, 'store')
   const seen = { hours: 0, paused: 0, pausedPeople: new Set<string>() }
   for (const scopeId of scopes) {
     const info = P.scopeInfo(scopeId)
@@ -940,6 +1075,10 @@ function expectTeam(
           teamFigures(P.oracle.teamLoad(info, mode, ...weeks, tasks), people, weeks),
           what,
         ).toEqual(want)
+        expect(
+          teamFigures(P.oracle.teamLoad(info, mode, ...weeks, fromRows), people, weeks),
+          `${what}, from the store's rows`,
+        ).toEqual(want)
         for (const [id, f] of Object.entries(want)) {
           seen.hours += f.hours.filter((h) => h > 0).length
           seen.paused += f.paused.length
@@ -955,7 +1094,7 @@ function expectTeam(
  * `P` derives anywhere in `scopes`. */
 function teamDiffers(
   P: Store,
-  owners: readonly OwnerAnswer[],
+  owners: OwnerAnswers,
   scopes: readonly string[],
   drift: Drift,
   mode: TeamMode,
@@ -1102,9 +1241,71 @@ describe('Team utilization', () => {
       // as in the selection under This project
       expect(teamDiffers(P, owners, scopes, { dropPaused: true }, 'all')).toBe(true)
       expect(teamDiffers(P, owners, scopes, {}, 'scope', 'all')).toBe(true)
+      // spans read without their projects, as from a backend before
+      // v0.1.125, lose This project's work
+      expect(teamDiffers(P, owners, scopes, { dropProjects: true }, 'scope')).toBe(true)
       // and the answers read as built match everywhere
       expect(teamDiffers(P, owners, scopes, {}, 'all')).toBe(false)
       expect(teamDiffers(P, owners, scopes, {}, 'scope')).toBe(false)
+    }
+  })
+
+  it("gives the planning panel the figures planning.assigneeLoad gave, from the owner loads through the app's reconciler", async () => {
+    const t = newT()
+    const { org, profiles } = await plantNorthstar(t)
+    await withReach(t)
+    const people = await orgPeople(t, org.id)
+    const now = Date.parse('2026-09-09T18:00:00.000Z')
+    for (const key of ['nora', 'leo']) {
+      const id = await northstarId(`person:${key}`)
+      const profile = profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`no ${key}`)
+      const P = await storeOf(t, profile, now)
+      const owners = await ownerLoadsFor(t, P, profile, people)
+      const { w0, w1 } = P.dates.resolveWin(P.dates.DEFAULT_WIN)
+      const name = (projectId: string) => P.project(projectId)?.name ?? null
+      let compared = 0
+      for (const one of owners) {
+        if (one.state !== 'ok') continue
+        // the rows the panel read before, unestimated ones kept
+        const rows = await as(t, profile).query(api.planning.assigneeLoad, {
+          assignee_id: one.owner_id,
+        })
+        const before: LoadItem[] = rows.map((r) => ({
+          issueUuid: r.issue_id || null,
+          projectId: r.project_id || null,
+          projectName: r.project_name || null,
+          start: P.dates.isoToWeek(r.start_week),
+          end: P.dates.isoToWeek(r.end_week),
+          remaining: r.remaining != null ? Number(r.remaining) : 0,
+          remainingSet: r.remaining_set_at != null ? P.dates.tsToWeek(r.remaining_set_at) : null,
+          visible: !!r.visible,
+        }))
+        const load = P.views.ownerLoadOf(one, owners.hidden)
+        if (load?.state !== 'ok') throw new Error(`${one.owner_id} read as ${load?.state}`)
+        const items = P.views.ownerItemsOf(profile.org_id, one.owner_id, load, {
+          held: () => false,
+          inView: () => false,
+          viewRows: () => [],
+          projectLive: () => true,
+          orgOf: () => profile.org_id,
+          heldItems: () => [],
+        })
+        const after = P.views.planItemsOf(items, name)
+        const buckets = (list: typeof before) =>
+          P.workload
+            .loadByProject(list, w0, w1)
+            .map((b) => [b.projectId, b.name, Math.round(b.hours * 1e6) / 1e6])
+        expect(buckets(after), `${profile.name}: ${one.owner_id}'s panel`).toEqual(buckets(before))
+        // auto-fit places the same end against either
+        for (const hours of [8, 40, 120])
+          expect(
+            P.workload.fitEndWeekAgainst(after, null, P.dates.TODAY_WEEK, hours, 40),
+            `${profile.name}: ${one.owner_id}'s fit of ${hours} h`,
+          ).toBe(P.workload.fitEndWeekAgainst(before, null, P.dates.TODAY_WEEK, hours, 40))
+        if (before.length > 0) compared++
+      }
+      expect(compared, profile.name).toBeGreaterThan(0)
     }
   })
 

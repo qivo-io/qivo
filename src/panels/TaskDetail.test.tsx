@@ -996,6 +996,27 @@ describe('the task window on a task the workspace does not hold', { timeout: 30_
     expect(item('Archive or delete…')).toBeUndefined()
   })
 
+  it('turns Plan on roadmap off for a Done task without dates, saying why, and on once it has dates', async () => {
+    await load()
+    const row = far({ status: 'done' })
+    await openWindow(await noteTask(row))
+    await answer('taskWindow:task', okAnswer(row))
+    const roadmap = () => document.querySelector<HTMLButtonElement>('[data-plan-on-roadmap]')
+    expect(roadmap()?.textContent).toBe('Plan on roadmap')
+    expect(roadmap()?.disabled).toBe(true)
+    expect(await hintOf(roadmap())).toBe(
+      'A Done task without dates has nothing to plan on the Roadmap.',
+    )
+    // the same task once someone gives it dates
+    const { TODAY_WEEK, weekToISO } = await import('../lib/dates')
+    await answer(
+      'taskWindow:task',
+      okAnswer({ ...row, start_week: weekToISO(TODAY_WEEK), end_week: weekToISO(TODAY_WEEK + 1) }),
+    )
+    expect(roadmap()?.disabled).toBe(false)
+    expect(await hintOf(roadmap())).toBeNull()
+  })
+
   it("shows a group's Progress, Remaining and Plan from a complete list, and unknown from an incomplete one", async () => {
     await load()
     const handle = await noteTask(far())

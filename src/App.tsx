@@ -35,7 +35,7 @@ import {
 } from './components/MobileWorkspace'
 import { navRow, navRowDiv } from './components/navRow'
 import { Icon, MenuItem, Popover, ProjectName, Seg } from './components/qivo'
-import { TasksLoadingBar, TasksLoadingView } from './components/TasksLoading'
+import { TasksLoadingBar } from './components/TasksLoading'
 import { ViewBoundary } from './components/ViewBoundary'
 import { ViewFilters } from './components/viewFilters'
 import {
@@ -72,7 +72,7 @@ import {
   whenQuiet,
 } from './lib/pageHistory'
 import { createPopRefusal } from './lib/popRefusal'
-import { type RevealRequest, withoutTaken } from './lib/reveal'
+import { type RevealRequest, type TaskPlace, taskPlaceOf, withoutTaken } from './lib/reveal'
 import {
   ARCHIVED_TASKS_PAGE,
   buildPath,
@@ -828,7 +828,7 @@ function useTasksLoadingNews() {
   useEffect(() => {
     if (state === 'arriving') {
       said.current = true
-      announce('Loading every task. Pages that need them open once they are in.')
+      announce('Loading every task. What asked for them continues once they are in.')
     } else if (state === 'failed') {
       said.current = true
       announce(`${TASKS_FAILED_TEXT} ${reason}`)
@@ -864,11 +864,12 @@ function App() {
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
-  // On the Board, which has no All projects selection, a saved All projects
-  // gives way to the issue's sub-project too (scopeForIssueOn). A task over
-  // Team sync is the exception: the page names its own scope, and the one
-  // underneath stays the saved one. A task the workspace does not hold
-  // keeps the saved scope until its answer names its project (pendingTask).
+  // On the Board, the Overview and the Roadmap, which have no All projects
+  // selection, a saved All projects gives way to the issue's sub-project
+  // too (scopeForIssueOn). A task over Team sync is the exception, as that
+  // page names its own scope, and the one underneath stays the saved one.
+  // A task the workspace does not hold keeps the saved scope until its
+  // answer names its project (pendingTask).
   const r0Scope =
     r0 && !r0.sync
       ? r0.scope ||
@@ -934,16 +935,18 @@ function App() {
   // "Plan on roadmap": spotlight an issue on the roadmap after jumping there
   // from the issue window. { id, n } — n is a nonce so re-planning the same
   // issue re-triggers the spotlight even when the id is unchanged.
-  const [focusPlan, setFocusPlan] = useState<{ id: string; n: number; key?: string } | null>(null)
+  const [focusPlan, setFocusPlan] = useState<
+    ({ id: string; n: number; key?: string; status?: string } & Partial<TaskPlace>) | null
+  >(null)
   const focusN = useRef(0)
   // Show a task in the view: its bar on the Roadmap (Team sync's jump, a
   // parent's Plan on roadmap), or its card on the Board behind its task
   // window (Team sync, the Inbox, the task crumb, search). { id, n } like
   // focusPlan; the nonce comes from the same counter.
   const [revealTask, setRevealTask] = useState<RevealRequest | null>(null)
-  const reveal = (id: string, atOnce = false, key?: string) => {
+  const reveal = (id: string, atOnce = false, key?: string, place?: TaskPlace) => {
     focusN.current += 1
-    setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}) })
+    setRevealTask({ id, n: focusN.current, atOnce, ...(key ? { key } : {}), ...place })
   }
   /* The nonce of a reveal planOnRoadmap asked for, dropped with the plan
      request once another page covers the Roadmap (below roadmapActive). */
@@ -1042,6 +1045,12 @@ function App() {
     if (boardKept) return
     for (const slot of Object.values(BOARD_SLOTS)) P.releaseView(slot)
   }, [boardKept])
+  // and so does a Roadmap page, its two reads and the owners Team
+  // utilization and the planning panel registered
+  const roadmapKept = keep.pages.includes('roadmap')
+  useEffect(() => {
+    if (!roadmapKept) P.releaseRoadmap()
+  }, [roadmapKept])
   // and so does an Overview page, its reads and the rows of its lists
   const overviewKept = keep.pages.includes('overview')
   useEffect(() => {
@@ -1119,12 +1128,12 @@ function App() {
   useLayoutEffect(() => {
     P.roadmapContext(roadmapActive, !!openIssue)
   }, [roadmapActive, openIssue])
-  /* A Plan on roadmap request waits while the Roadmap waits for every task
-     (TasksLoadingView). It holds only while the Roadmap stays on screen.
-     Another view, or the Inbox, Projects, Settings or Team sync page over
-     the Roadmap, drops the plan request and the reveal planOnRoadmap asked
-     for, so a later visit starts no planning session and writes no dates
-     the person no longer asked for. */
+  /* A Plan on roadmap request waits while the Roadmap waits for an answer
+     that holds its task (views/Roadmap.tsx). It holds only while the
+     Roadmap stays on screen. Another view, or the Inbox, Projects, Settings
+     or Team sync page over the Roadmap, drops the plan request and the
+     reveal planOnRoadmap asked for, so a later visit starts no planning
+     session and writes no dates the person no longer asked for. */
   useEffect(() => {
     if (roadmapActive) return
     setFocusPlan(null)
@@ -1225,10 +1234,8 @@ function App() {
   // workspace does not hold once its read answers (lib/router.ts
   // noteProjectPage), which the address follows in place.
   const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
-  // The Roadmap needs every task: it asks for them as it mounts
-  // (TasksLoadingView) and waits until the workspace holds them. Team sync
-  // reads its meeting from the server and waits for none.
-  const tasksLoading = !P.tasksHeld()
+  // The Roadmap and Team sync read their tasks from the server, so no page
+  // waits for every task
   useTasksLoadingNews()
 
   // date rendering follows the organization's format setting; set during
@@ -1666,8 +1673,12 @@ function App() {
   // A group's dates come from its subtasks, so it gets the read-only reveal
   // instead. That opens no session and writes nothing, and a group's dormant
   // status never stops it as Backlog. A task the window shows from its own
-  // answer plans the same way (P.taskShown): the Roadmap waits for every
-  // task, then spotlights it, or says it is not on the roadmap any more.
+  // answer plans the same way (P.taskShown). The request carries the task's
+  // uuid, sub-project and weeks (TaskPlace) and its status. The Roadmap pans
+  // to those weeks, asks the server to keep the task past the filter row,
+  // waits for an answer that holds it, then spotlights it, or says it is
+  // not on the roadmap any more or why it cannot plan it there, as for a
+  // Done task without dates, whose window's button is off.
   const planOnRoadmap = (id) => {
     const it = P.taskShown(id)
     if (!it) return
@@ -1678,15 +1689,20 @@ function App() {
     }
     const meta = P.metaOf(it.project)
     if (!meta) return
+    const place = taskPlaceOf(it)
     move(
       { view: 'roadmap', projectsOpen: false, inboxOpen: false, sync: null, openIssue: null },
       () => {
-        /* All projects already carries this issue's track — planning from there
-           stays there rather than dropping the user into one project. My view
-           carries it only when it IS mine: spotlighting somebody else's task from
-           there would open a planning session over a bar the view doesn't render. */
+        /* All projects has no Roadmap of its own (it asks to choose a
+           project), so planning from there opens the task's top-level
+           project. A Roadmap that holds the task's sub-project, that
+           sub-project's or its top-level project's, stays. My view carries
+           it only when it IS mine: spotlighting somebody else's task from
+           there would open a planning session over a bar the view doesn't
+           render. */
         const cur = scopeRef.current
-        if (!(P.isAllScope(cur) || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
+        const holds = cur === it.project || cur === meta.id
+        if (!(holds || (P.isMineScope(cur) && P.isMine(it)))) setScope(meta.id)
         // a reveal does not bypass the toolbar filters, so clear them as Team
         // sync's jump does (Focus stays)
         if (group) clearFilters()
@@ -1696,11 +1712,11 @@ function App() {
         setSync(null)
         setOpenIssue(null)
         if (group) {
-          reveal(id, false, it.key)
+          reveal(id, false, it.key, place)
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
-          setFocusPlan({ id, n: focusN.current, key: it.key })
+          setFocusPlan({ id, n: focusN.current, key: it.key, status: it.status, ...place })
         }
       },
     )
@@ -1801,9 +1817,8 @@ function App() {
     })
   }
   /* A row's Board or Roadmap jump: leave the page for that view, scoped so
-     the task is on it (the Roadmap's All projects when the sync covers all
-     projects, else the task's own sub-project, which the Board always
-     takes, as it has no All projects selection). Filters left from before the sync are
+     the task is on it: the task's own sub-project, as neither view has an
+     All projects selection. Filters left from before the sync are
      cleared, Focus kept, since nothing on the sync could show why the task
      is missing. The Board opens the task window over it, as showOnBoard
      does, and reveals its card behind it; the Roadmap reveals its bar
@@ -1814,7 +1829,7 @@ function App() {
   const showTaskOn = (v: 'kanban' | 'roadmap', handle: string) => {
     const it = P.anyTask(handle)
     if (!it) return
-    const to = v === 'roadmap' && sync?.scope === 'all' ? P.ALL_SCOPE : it.project
+    const to = it.project
     const task = v === 'kanban' ? P.openTarget(handle) : null
     move({ sync: null, scope: to, view: v, openIssue: task }, () => {
       clearFilters()
@@ -1822,14 +1837,16 @@ function App() {
       setScope(to)
       setView(v)
       setOpenIssue(task)
-      reveal(handle)
+      reveal(handle, false, v === 'roadmap' ? it.key : undefined, taskPlaceOf(it))
     })
   }
   /* A person header's Board or Roadmap jump: leave the page for that view
      filtered to the person (the filters match the task's owner, the rule
      the sync's rows follow) over the view scope nearest the sync's: one
      project stays that project; all projects and a team (views have no team
-     scope) become All projects, never My view, which drops the filter. */
+     scope) become All projects, never My view, which drops the filter. There
+     the Board and the Roadmap ask to choose a project, and then show that
+     person's tasks. */
   const showPersonOn = (v: 'kanban' | 'roadmap', profileId: string) => {
     const place = parseSyncScope(sync?.scope)
     const to = place.kind === 'project' && P.project(place.id) ? place.id : P.ALL_SCOPE
@@ -2002,13 +2019,13 @@ function App() {
     setModal(null)
     window.showToast?.(`Created ${P.issueById[key]?.key || key}`)
     const curProj = P.project(scope)
-    /* All projects already shows it — jumping out of the widest scope to a
-       single sub-project would be a demotion, not a "so you can see it" —
-       except on the Board, whose All projects asks to choose a project. My
-       view shows it only if it landed on me; a task created from a side-board's
-       + is unassigned, so that one still jumps to its sub-project. */
+    /* All projects shows the task on no view, as the Board, the Overview
+       and the Roadmap each ask to choose a project there, so a create from
+       it moves to the task's sub-project, as from a project that does not
+       hold it. My view shows it only if it landed on me; a task created
+       from a side-board's + is unassigned, so that one still jumps to its
+       sub-project. */
     const inScope =
-      (P.isAllScope(scope) && view !== 'kanban') ||
       (P.isMineScope(scope) && P.isMine(P.issueById[key])) ||
       (curProj &&
         (curProj.id === issue.project || (curProj.children || []).includes(issue.project)))
@@ -2326,9 +2343,8 @@ function App() {
         return <Overview info={scopeInfo} actions={actions} />
       case 'roadmap':
         if (!scopeInfo) return null
-        return tasksLoading ? (
-          <TasksLoadingView what="The roadmap" reason="roadmap" />
-        ) : (
+        // its tasks, arrows and Team's loads come from the server
+        return (
           /* The roadmap's toolbar row is its own — the window controls and
              the Auto-move count are both local to it and cannot be handed up
              to the bar. So the bar hands the FILTERS
@@ -2389,15 +2405,12 @@ function App() {
         )
     }
   }
-  /** What a kept page holds besides data: the layout, the loading notice
-      in place of the page, and the place it shows where that is the page's
-      own (the Inbox's task, Team sync's step). A page shown again for
-      another one renders it at once, and the Inbox drops its task pane as
-      it hides. */
+  /** What a kept page holds besides data: the layout, and the place it
+      shows where that is the page's own (the Inbox's task, Team sync's
+      step). A page shown again for another one renders it at once, and the
+      Inbox drops its task pane as it hides. */
   const pageVariant = (page: MainPage) => {
-    // the page that waits for every task shows a notice until then
-    const waits = tasksLoading && page === 'roadmap'
-    const layout = `${mobile ? 'phone' : 'desktop'}${waits ? ':loading' : ''}`
+    const layout = mobile ? 'phone' : 'desktop'
     if (page === 'inbox') return `${layout}:${inboxTask ?? ''}`
     if (page === 'sync')
       return `${layout}:${syncPlace ? `${syncPlace.scope}:${syncPlace.step}` : ''}`
