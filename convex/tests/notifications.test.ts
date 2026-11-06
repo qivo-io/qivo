@@ -1220,6 +1220,26 @@ describe('claimSummary', () => {
     expect(await resume(s)).toEqual({ state: 'none' })
   })
 
+  it('counts a notice stored late under a newer message of its item that was alerted, once', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    // B is alerted live and moves the checkpoint
+    const { task, message: b } = await newsAt(t, f, 1)
+    clock(1.25)
+    await beat(s)
+    expect(await claim(s, [eventOf(b)], eventOf(b).at)).toMatchObject({ keys: [b.id] })
+    // a background step stores A about the same task after the claim, with
+    // its write's earlier time in the minute before the checkpoint, so B
+    // stays the item's newest unread event and nobody alerted A
+    const a = (await post(t, f, { to: f.guest, task, minute: 0.75 })) as Doc<'messages'>
+    clock(1.5)
+    expect(await resume(s)).toEqual({ state: 'summary' })
+    expect((await records(t)).map((r) => r.key).sort()).toEqual([a.id, b.id].sort())
+    clock(1.75)
+    expect(await resume(s)).toEqual({ state: 'none' })
+  })
+
   it('records every unread message of an item it counted in its last minute, so reading the newest repeats nothing', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)

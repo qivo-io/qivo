@@ -91,6 +91,27 @@ async function unreadKeysAfter(
   return keys
 }
 
+/* Whether item `item` holds an unread event after `from`, other than
+ * `newest`, that `recorded` does not hold, or null when the budget `step`
+ * ran out first. The read of the keys and each key's record check are a
+ * step each, and the first key without a record ends it. */
+async function missedBelow(
+  ctx: QueryCtx,
+  item: Doc<'inbox_items'>,
+  from: string,
+  newest: string,
+  recorded: (key: string) => Promise<boolean>,
+  step: () => Promise<boolean>,
+): Promise<boolean | null> {
+  if (!(await step())) return null
+  for (const key of await unreadKeysAfter(ctx, item, from)) {
+    if (key === newest) continue
+    if (!(await step())) return null
+    if (!(await recorded(key))) return true
+  }
+  return false
+}
+
 /** A catch-up's answer and the keys of the unread events after `recent` of
  * the items it counted, for the summary records (notifications.ts
  * claimSummary). */
@@ -100,12 +121,14 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  * Whether the seats `seats`, the caller's, hold eligible unread activity
  * after `after`: an unread, unsnoozed item whose newest unread event (its
  * newest unread message, or its wake) is later than `after`, about a task
- * the seat is shown, and whose event `recorded` does not hold. `recorded`
- * answers whether a session already alerted or summarized the event
- * (model/notificationSessions.ts recorded), so the read can reach back
- * before the checkpoint for items stored late without counting what was
- * announced. Times are epoch milliseconds, compared with the items' ISO
- * times.
+ * the seat is shown, with an unread event after `after` that `recorded`
+ * does not hold. That is its newest event, or when a session alerted that
+ * one, an earlier one, such as a notice a background step stored late with
+ * its write's earlier time. `recorded` answers whether a session already
+ * alerted or summarized the event (model/notificationSessions.ts
+ * recorded), so the read can reach back before the checkpoint for items
+ * stored late without counting what was announced. Times are epoch
+ * milliseconds, compared with the items' ISO times.
  *
  * Seats go in organization id order. A seat that is not ready
  * (model/inboxItems.ts seatReady) is noted and skipped. Each ready seat's
@@ -133,9 +156,11 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  * It reads each seat's readiness (two ranges at most) and its items after
  * `after`, a project check for each project, the task of each item its
  * project lets through, for each shown item its newest unread message and
- * its records, one or two ranges, and for each eligible item in the last
- * stretch its unread messages there, one range. Measured reads at the
- * design size are in CATCH_UP's docstring.
+ * its records, one or two ranges, when that newest event holds a record
+ * the item's unread messages after `after` and their records until one
+ * has none, and for each eligible item in the last stretch its unread
+ * messages there, one range. Measured reads at the design size are in
+ * CATCH_UP's docstring.
  */
 export async function missedActivity(
   ctx: QueryCtx,
@@ -194,10 +219,20 @@ export async function missedActivity(
           stopped = true
           break walk
         }
-        if (await recorded(event.key)) continue
+        const alerted = await recorded(event.key)
+        if (alerted) {
+          // a notice stored late with an earlier time can sit under a newer
+          // event a session alerted, and nobody alerted it
+          const missed = await missedBelow(ctx, item, afterAt, event.key, recorded, step)
+          if (missed === null) {
+            stopped = true
+            break walk
+          }
+          if (!missed) continue
+        }
         found = true
         if (event.at <= recentAt) continue
-        keys.push(event.key)
+        if (!alerted) keys.push(event.key)
         if (!(await step())) {
           stopped = true
           break walk

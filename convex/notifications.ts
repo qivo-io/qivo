@@ -91,7 +91,9 @@
  *   key is the message id, or `${issue_id}:${woke_at}` with woke_at as
  *   stored, the ISO string the app tags notifications with today, never
  *   its epoch milliseconds (model/notificationCatchup.ts newestUnread
- *   builds the same key).
+ *   builds the same key). It offers every new event, an item's earlier
+ *   unread messages too, not only its newest, since a catch-up counts an
+ *   unread event that no claim or summary recorded.
  * - `through` is the newest event time of the feed answer the claim covers,
  *   or that answer's floor when it held none, never a clock. A claim with
  *   no events is a baseline. A freshly started target takes one with its
