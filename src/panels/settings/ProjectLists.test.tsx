@@ -517,14 +517,15 @@ describe('Settings › Projects', () => {
     expect(openLists()).toEqual([{ name: 'projects', org_id: org, search: 'o' }])
     await click(find('[data-subproject-row="work"] > button'))
     expect(setPage).toHaveBeenLastCalledWith('project:work')
-    await type(find('[data-settings-projects-search]'), 'zebra')
-    await rest()
-    expect(projectsEnd().textContent).toBe('No projects match.')
     // past the search limit the last list stays, with the limit's sentence
     await type(find('[data-settings-projects-search]'), `o${'x'.repeat(500)}`)
     await rest()
+    expect(projectsEnd().dataset.settingsProjectsEnd).toBe('too_long')
     expect(projectsEnd().textContent).toMatch(/search/i)
-    expect(projectNames()).toEqual([])
+    expect(projectNames()).toEqual(['Docs in Plan', 'Ops', 'Ops board in Ops', 'Work in Plan'])
+    await type(find('[data-settings-projects-search]'), 'zebra')
+    await rest()
+    expect(projectsEnd().textContent).toBe('No projects match.')
   })
 
   it('offers New sub-project… by each row’s right, never by the store’s level', async () => {
@@ -812,6 +813,11 @@ describe('Archived projects', () => {
   })
 
   it('restores with the page’s organization; the row leaves with the live answer and focus goes to the next one', async () => {
+    // the store's copy leaves Side out, so only the page's organization
+    // can name it
+    await load(undefined, (copy) => {
+      copy.projects = copy.projects.filter((p) => p.id !== 'side')
+    })
     await archived()
     const restore = find<HTMLButtonElement>('[data-restore-project="side"]')
     await press(restore)
@@ -837,6 +843,12 @@ describe('Archived projects', () => {
   })
 
   it('opens Delete’s window with the entry’s organization', async () => {
+    // the store's copy leaves Old platform and its sub-projects out, so
+    // only the page's organization can name them
+    await load(undefined, (copy) => {
+      const gone = new Set(['old', 'old-api', 'old-app'])
+      copy.projects = copy.projects.filter((p) => !gone.has(p.id))
+    })
     await archived()
     await click(find('[data-delete-project="old"]'))
     expect(text('[data-modal-shell] h2')).toBe('Delete “Old platform”?')

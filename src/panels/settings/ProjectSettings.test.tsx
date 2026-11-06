@@ -1301,17 +1301,25 @@ describe("a project page's Sub-projects section", () => {
   })
 
   it('never counts a partial list nor says none where the list stopped, failed or is held', async () => {
-    server.listForce = { stop: 1, batch: 1 }
     await load((snap) =>
       snap.projects.push({ ...snap.projects[1], id: 'spec', num: 9, name: 'Spec' }),
     )
-    server.listForce = { batch: 1 }
+    const partial =
+      'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.'
+    // a batch the server stopped after one row
+    server.listForce = { stop: 1 }
     await open()
     expect(subProjects()).toEqual(['Spec'])
-    expect(text('[data-project-subprojects-end]')).toBe('Load more')
-    expect(archiveLine()).toBe(
-      'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.',
+    expect(text('[data-project-subprojects-end]')).toBe(
+      'Qivo checked part of the list. Load more continues.Load more',
     )
+    expect(archiveLine()).toBe(partial)
+    // a whole batch with more after it
+    server.listForce = { batch: 1 }
+    await rerun()
+    expect(subProjects()).toEqual(['Spec'])
+    expect(text('[data-project-subprojects-end]')).toBe('Load more')
+    expect(archiveLine()).toBe(partial)
     server.listForce = { notReady: true }
     await rerun()
     expect(text('[data-project-subprojects-end]')).toBe(
