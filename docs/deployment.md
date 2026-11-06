@@ -1145,8 +1145,8 @@ recipients 25 at a time in name order, with a search, from the same rules as
 the writes. `taskOwners` lists the people `issues.update` accepts as the
 task's new assignee or reviewer, `syncRecipients` the active people, not
 agents, who see the task and so hear a comment's mention of them, the caller
-left out, and `canOwn` answers, for up to 100 people by id, each one's row
-and whether they could be chosen now. No app calls them yet, so that release
+left out, and `canOwn` answers, for up to 100 ids, each person's row and
+whether they could be chosen now. No app calls them yet, so that release
 sets no rollback floor and needs no step, and returning the backend to a
 commit before it stays safe until an app reads them. The release whose app
 first calls them makes this release the backend's floor for that app, and
