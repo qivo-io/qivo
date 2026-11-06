@@ -1534,9 +1534,11 @@ and database work in `storage_sample_runs`. It skips an organization whose
 totals are not complete or whose deletion has begun, writes at most one
 sample per organization and day, keeps both tables 400 days and bills
 nothing; daily storage billing stays off. A run that stalls resumes at the
-next hourly call, so its remaining samples come at most about 75 minutes
-late, and the demo deployment records none. A recount makes the job skip
-the organization until it ends.
+first hourly call 15 minutes after its last step, so its remaining samples
+come at most about 75 minutes late within its UTC day. A run still
+unfinished when its day ends is not resumed, and its remaining
+organizations have no sample that day. The demo deployment records none. A
+recount makes the job skip the organization until it ends.
 
 The release removes `billing.usageReport`, with its internal
 `billing.usageHead` and `billing.storageNowPage`, and `billing.summary` and
@@ -1583,9 +1585,10 @@ retained are the samples written in the last 400 days less those expired
 (`expired`). Divide by `orgs` for a figure per organization and day.
 `revisions` counts the writes to the organizations' totals since their
 previous samples, one for each attach, removal, move, rename or purge that
-changed them, each writing up to three totals rows. A dry run of the
-storage totals backfill in the same window gives the cost of a
-reconciliation.
+changed them, each writing up to three totals rows. It counts nothing for
+an organization's first sample or for one recounted since its previous
+sample. A dry run of the storage totals backfill in the same window gives
+the cost of a reconciliation.
 
 ## Node.js version
 
