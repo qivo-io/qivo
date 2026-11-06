@@ -68,7 +68,9 @@
 // the longest animation frame from the press or the delivery on
 // (*LongestFrameMs), and records the heap and the page's elements after
 // them. The figures take turns in each sample, so every figure runs under
-// the same load. --phone runs the same at the phone's 390 by 844.
+// the same load. --phone runs the same with the window at the phone's 390
+// by 844, which it narrows to once the task is open, as the phone phases
+// above do.
 import assert from 'node:assert/strict'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -311,9 +313,7 @@ const summarized = (tasks, metrics) => ({
     `query`, throttled and on the slow network. Its `timed` adds the running
     phase's numbers to `metrics`. */
 async function openPage(origin, tasks, metrics, query = '') {
-  const context = await browser.newContext({
-    viewport: phone ? { width: 390, height: 844 } : { width: 1440, height: 1000 },
-  })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
   const page = await context.newPage()
   page.setDefaultTimeout(timeout)
   const errors = []
@@ -1376,6 +1376,8 @@ async function runThreadSample(origin, figure, kind, metrics) {
     await page.getByRole('radio', { name: 'All', exact: true }).click()
     await page.waitForFunction(() => window.PLANNER.historyLoaded)
   }
+  // the phone's window, on its Activity tab
+  if (phone) await page.setViewportSize({ width: 390, height: 844 })
   await page.locator('[data-earlier-comments]').waitFor()
   await settle()
   // Show earlier until the store holds the figure, then the press made
