@@ -267,7 +267,8 @@ counted and that the page reads them (`billing.usageFigures` and
 `billing.storageProjects`). Against a backend from before the release after
 v0.1.141, whose Billing page reads `billing.details` and
 `billing.usageFigures`, that step fails. It then calls `GET /v1/me` once
-with each of the run's agent keys, opens **Billing** again, checks that
+with each of the run's two agent keys still in use, the Standard agent's
+named key and the Viewer agent's key, opens **Billing** again, checks that
 **API calls** shows a figure rather than **Being counted**, finds the
 run's Standard and Viewer agents alone by searching **API calls by
 account** for its run tag, each with at least one call, opens **View

@@ -103,14 +103,15 @@
  * (billing.usageFigures) and whose Storage by project, searched for its run
  * tag and the word storage, must list that sub-project alone with the
  * file's size (billing.storageProjects), then deletes the file
- * (ui/billing-storage). It calls GET /v1/me once with each of its agents'
- * keys and opens Billing again, whose API calls must show a figure rather
- * than Being counted (billing.usageFigures) and whose API calls by
- * account, searched for its run tag, must list its two agents alone with
- * their calls (billing.apiAccounts); the Standard agent's View credentials
- * must open API access on that agent and Billing's period, and Who counts
- * toward your bill, searched for the run tag, must list both agents
- * (billing.accountList) (ui/billing-accounts). It makes a project of its own with two
+ * (ui/billing-storage). It calls GET /v1/me once with each of its two
+ * agent keys still in use, the Standard agent's named key and the Viewer
+ * agent's key, and opens Billing again, whose API calls must show a
+ * figure rather than Being counted (billing.usageFigures) and whose API
+ * calls by account, searched for its run tag, must list its two agents
+ * alone with their calls (billing.apiAccounts); the Standard agent's View
+ * credentials must open API access on that agent and Billing's period,
+ * and Who counts toward your bill, searched for the run tag, must list
+ * both agents (billing.accountList) (ui/billing-accounts). It makes a project of its own with two
  * sub-projects, finds it by its run tag in Settings › Projects from the
  * deployment's list (projectSettings.projects) and opens its sub-projects
  * (subProjects), archives one sub-project alone and then the project over
