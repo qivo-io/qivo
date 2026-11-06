@@ -401,6 +401,46 @@ describe('a milestone that cannot be shown', () => {
   })
 })
 
+describe('a failure or refusal after an answer', () => {
+  it.each([
+    ['failed', { get: 'error' }, "Couldn't load the latest version of this milestone."],
+    ['refused', { get: 'refused' }, MILESTONE_TOO_LARGE.slice(1)],
+  ] as const)(
+    'keeps the answer and the draft under the %s note until the read answers again',
+    async (state, forced, text) => {
+      fixture()
+      await start()
+      await open('alpha')
+      const box = nameBox()
+      if (!box) throw new Error('no editor')
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, 'Al 2')
+        box.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      force = forced
+      await rerun()
+      expect(line()?.getAttribute('data-milestone-open')).toBe(state)
+      expect(line()?.textContent).toContain(text)
+      // the editor keeps the draft, and the person may still save it
+      expect(nameBox()?.value).toBe('Al 2')
+      expect(nameBox()?.readOnly).toBe(false)
+      expect(q('[data-milestone-row="beta"]')).not.toBeNull()
+      const retry = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Retry')
+      expect(!!retry).toBe(state === 'failed')
+      force = {}
+      if (retry) {
+        const before = subs.length
+        await act(async () => retry.click())
+        await settle()
+        expect(subs.length).toBe(before + 1)
+      } else await rerun()
+      expect(line()).toBeNull()
+      expect(windowState()).toBe('ok')
+      expect(nameBox()?.value).toBe('Al 2')
+    },
+  )
+})
+
 describe('a milestone that goes away', () => {
   it('closes its editor and says so, keeping the window and its list', async () => {
     fixture()
