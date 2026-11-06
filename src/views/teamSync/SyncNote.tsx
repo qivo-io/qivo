@@ -1,8 +1,9 @@
 /* What Team sync says in place of its meeting when it cannot show one
    (views/teamSync/useSyncMeeting.ts): the picker for a scope it does not
    have or the server cannot honour, the loading frame, the meeting's
-   limits, tasks that have not arrived and a failed read, and above a
-   meeting that stopped fitting, the note that says so. Each full note is an
+   limits and a failed read; and above a meeting it shows, the note of one
+   that stopped fitting or failed to read, and the note of one some of
+   whose tasks have not reached the page. Each full note is an
    empty state (data-empty-state), where focus goes once a task window
    closes over it (lib/taskFocus.ts). Its choices come from the person's
    own lists and widen nothing, as the server answers every scope; none
@@ -222,17 +223,6 @@ export function SyncNote({
         />
       )
     }
-    case 'incomplete':
-      return (
-        <ViewNote
-          hooks="sync"
-          phone={false}
-          icon="alert"
-          title="Some of this meeting's tasks have not reached the page"
-          hint="Qivo shows the meeting once every task it names has arrived."
-          action={{ label: 'Try again', onClick: meeting.retry }}
-        />
-      )
     case 'error':
       return (
         <ViewNote
@@ -259,6 +249,34 @@ export function SyncNote({
     default:
       return null
   }
+}
+
+/** The note above a meeting some of whose tasks had no model to show
+    STALL.ms after its answer named them (state incomplete): the meeting
+    below leaves them out, and its counts with them. Try again asks only for
+    the agenda, so the note says so rather than promise the tasks, as the
+    Board's does (views/board/BoardNote.tsx IncompleteNote). */
+export function IncompleteNote({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      data-sync-incomplete
+      role="status"
+      className="mb-5 flex flex-col gap-2 rounded-lg border border-border bg-surface-2 p-4"
+    >
+      <div className="text-base font-semibold text-text-1">
+        Some of this meeting's tasks have not reached the page
+      </div>
+      <div className="text-sm text-text-2">
+        The meeting below leaves them out, and its counts with them. Try again asks the server for
+        this meeting once more. If the tasks still do not show, reload the page.
+      </div>
+      <div>
+        <Button type="button" onClick={onRetry}>
+          Try again
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 /** The note above a meeting that stopped fitting, or whose read failed, as

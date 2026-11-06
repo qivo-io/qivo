@@ -17,7 +17,9 @@
      server cannot honour, the page asks to choose, never All projects. A
      meeting past its limits says so in place of the meeting, and one that
      stops fitting while it is open stays as it last fitted, marked as no
-     longer updating, so its cards keep their unsent text.
+     longer updating, so its cards keep their unsent text. One some of whose
+     tasks have not reached the page shows without its counts, and STALL.ms
+     later under a note that says so.
    · Every change made from a card (Remaining, status, pause, owner, a
      mention) stamps the page owner (P.syncStamp) and ticks the row. The tick
      alone stamps nothing, and naming someone from the team opening stamps
@@ -60,9 +62,14 @@ import { useViewVisibility } from '@/lib/viewVisibility'
 import { type IssueVM, P } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
-import { StaleNote, SyncNote } from './teamSync/SyncNote'
+import { IncompleteNote, StaleNote, SyncNote } from './teamSync/SyncNote'
 import { TeamOpening } from './teamSync/TeamOpening'
-import { type SyncMeeting, useSyncFigures, useSyncMeeting } from './teamSync/useSyncMeeting'
+import {
+  type SyncMeeting,
+  stoppedTitle,
+  useSyncFigures,
+  useSyncMeeting,
+} from './teamSync/useSyncMeeting'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
 import '../styles/mobile-views.css'
@@ -135,7 +142,9 @@ function SyncCol({
 }: {
   id: 'done' | 'onit' | 'next'
   title: string
-  count: number
+  /** the column's count, or null, "…", while some task the meeting names
+      has not reached the page */
+  count: number | null
   className?: string
   bodyClassName?: string
   children: ReactNode
@@ -146,7 +155,7 @@ function SyncCol({
       className={cn('flex min-w-0 flex-col rounded-lg border border-border', className)}
     >
       <h3 className="m-0 flex items-baseline gap-2 border-b border-border px-3 py-2 text-base font-semibold text-text-1">
-        {title} <span className="text-sm font-normal text-text-3">{count}</span>
+        {title} <span className="text-sm font-normal text-text-3">{count ?? '…'}</span>
       </h3>
       <div className={cn('flex flex-col gap-2 p-2', bodyClassName)}>{children}</div>
     </div>
@@ -203,6 +212,8 @@ function PersonColumns({
   const waiting = waitingOnReview(person.id, meeting.rows)
   const done = doneSince(person.id, meeting.tasks, meeting.subIds, ctx.since)
   const sinceLabel = dayLabel(ctx.since, ctx.now)
+  // the counts wait while some task the meeting names has not arrived
+  const count = (n: number) => (meeting.counted ? n : null)
   return (
     <div className="@container">
       <div
@@ -215,7 +226,7 @@ function PersonColumns({
         <SyncCol
           id="done"
           title={`Done since ${sinceLabel}`}
-          count={done.length}
+          count={count(done.length)}
           className={cn(!ctx.mobile && '@min-[560px]:col-span-2 @min-[820px]:col-span-1')}
           bodyClassName={cn(
             !ctx.mobile &&
@@ -233,7 +244,7 @@ function PersonColumns({
           ))}
           {!done.length && <Empty>Nothing finished since {sinceLabel}</Empty>}
         </SyncCol>
-        <SyncCol id="onit" title="On it" count={onIt.length}>
+        <SyncCol id="onit" title="On it" count={count(onIt.length)}>
           {onIt.map((it) => card(it))}
           {!onIt.length && <Empty>Nothing under way</Empty>}
           {waiting.length > 0 && (
@@ -254,7 +265,7 @@ function PersonColumns({
             </div>
           )}
         </SyncCol>
-        <SyncCol id="next" title="Next" count={week.length + later.length}>
+        <SyncCol id="next" title="Next" count={count(week.length + later.length)}>
           {week.map((it) => card(it))}
           {!week.length && !later.length && <Empty>Nothing planned</Empty>}
           {later.length > 0 && (
@@ -372,9 +383,11 @@ function AgentsPage({
               <span className="text-base font-semibold text-text-1">{a.name}</span>
               <LoadChip load={figures.load(a)} />
               <span className="text-sm text-text-3">
-                {count(['progress', 'review'])} on it, {count(['week', 'later'])} next
+                {meeting.counted
+                  ? `${count(['progress', 'review'])} on it, ${count(['week', 'later'])} next`
+                  : '…'}
               </span>
-              {unknown ? (
+              {!meeting.counted ? null : unknown ? (
                 <span data-sync-agent-delays="unknown" className="text-sm text-text-3">
                   Delays unknown
                 </span>
@@ -493,7 +506,7 @@ export function TeamSync({
   const walkers = new Set([...humans, ...agents].map((u) => u.id))
   // the footer's total: every row on some page of the walk (the Waiting on
   // review foot and the Done column are not rows)
-  const counted = meeting.rows.filter((it) => walkers.has(it.owner))
+  const walked = meeting.rows.filter((it) => walkers.has(it.owner))
 
   /* The step `place` asks for, as the walk can show it: an agent's id opens
      the agents step; the person just shown who has left the walk (their last
@@ -590,7 +603,8 @@ export function TeamSync({
     onClose()
   }
 
-  const frozen = meeting.state === 'stale'
+  // a stale meeting's task controls are off, their title saying why
+  const frozen = meeting.state === 'stale' ? stoppedTitle(meeting.note) : null
   const ctxFor = (owner: SyncPerson): PageCtx => {
     // P.syncStamp sends nothing for a viewer who is not staff (the server's
     // rule), so a read-only visitor earns no refusal toasts
@@ -619,7 +633,7 @@ export function TeamSync({
 
   const person = humans.find((u) => u.id === step) || null
   // the owners with a counted task still to review, found once per render
-  const unfinished = new Set(counted.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
+  const unfinished = new Set(walked.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
   const allDone = (uid: string) => !unfinished.has(uid)
   const today = new Date(now)
   const last = idx >= steps.length - 1
@@ -703,6 +717,8 @@ export function TeamSync({
         verdictOf={meeting.verdict}
         blockedOf={meeting.blockedBy}
         loadOf={meeting.load}
+        counted={meeting.counted}
+        frozen={frozen}
       />
     )
   }
@@ -712,7 +728,7 @@ export function TeamSync({
       ref={setPane}
       data-sync-page
       data-sync-state={meeting.state}
-      data-sync-stale={frozen ? '' : undefined}
+      data-sync-stale={frozen !== null ? '' : undefined}
       aria-busy={meeting.busy || undefined}
       data-scroll
       data-screen-label="Team sync"
@@ -761,12 +777,15 @@ export function TeamSync({
               />
             </div>
             {!seesNoProject(P.homeOrg) && (
-              <StaleNote
-                meeting={meeting}
-                scopeKey={scopeKey}
-                onPick={pickScope}
-                onShowBoard={onShowBoard}
-              />
+              <>
+                <StaleNote
+                  meeting={meeting}
+                  scopeKey={scopeKey}
+                  onPick={pickScope}
+                  onShowBoard={onShowBoard}
+                />
+                {meeting.state === 'incomplete' && <IncompleteNote onRetry={meeting.retry} />}
+              </>
             )}
             {body}
             {meeting.shows && marksCut.length > 0 && (
@@ -776,9 +795,11 @@ export function TeamSync({
             )}
             {meeting.shows && (
               <div className="mt-6 flex items-center gap-2 border-t border-border pt-4">
+                {/* no total while tasks the answer names have not arrived:
+                    a total of 0 shows none */}
                 <WalkFooter
-                  reviewed={reviewed.count(counted)}
-                  total={counted.length}
+                  reviewed={reviewed.count(walked)}
+                  total={meeting.counted ? walked.length : 0}
                   atStart={idx <= 0}
                   last={last}
                   onPrev={() => go(steps[Math.max(0, idx - 1)])}

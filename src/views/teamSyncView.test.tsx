@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { UnsentScope } from '../lib/leaveGuard'
+import { ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { SyncPlace } from './TeamSync'
@@ -146,6 +147,22 @@ const sub = (snap: Snapshot) => snap.projects[0].id
 const meta = (snap: Snapshot) => snap.projects[0].parent_id ?? ''
 const asked = (board: Awaited<ReturnType<typeof loadBoard>>) =>
   board.server.sync.asked.map((args) => args.scope)
+
+/** The hover text of control `element`, which its tooltip shows. */
+async function hintOf(element: Element | null | undefined) {
+  const trigger = element?.closest<HTMLElement>('[data-tooltip-trigger]')
+  if (!trigger) return null
+  const pointer = (type: string) =>
+    Object.assign(new MouseEvent(type, { bubbles: true }), { pointerType: 'mouse' })
+  await act(async () => {
+    trigger.dispatchEvent(pointer('pointermove'))
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  })
+  const tip = document.querySelector('[data-slot="tooltip-content"]')
+  const text = tip?.firstChild?.textContent ?? null
+  await act(async () => trigger.dispatchEvent(pointer('pointerleave')))
+  return text
+}
 
 /** Sets the page's visibility, as the browser does when a tab hides. */
 async function setVisibility(value: 'visible' | 'hidden') {
@@ -328,6 +345,66 @@ describe('the notes', () => {
   )
 
   it(
+    'shows a meeting some of whose tasks have no model without its counts, and STALL.ms later under a note that says so',
+    async () => {
+      const { board, P } = await open(people({ due_date: '2001-01-01' }, {}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: 'team',
+      }))
+      expect(state()).toBe('ok')
+      expect(document.querySelectorAll('[data-sync-fact="waiting"]')).toHaveLength(0)
+      expect(document.querySelector('[data-sync-progress]')?.textContent).toContain('of 2 tasks')
+      const { STALL } = await import('../store/liveParts')
+      const stall = STALL.ms
+      STALL.ms = 40
+      // the answer names t2, which has no model to show
+      const syncTask = P.syncTask
+      const gone = vi
+        .spyOn(P, 'syncTask')
+        .mockImplementation((uuid) => (uuid === 't2' ? undefined : syncTask(uuid)))
+      try {
+        await board.answer()
+        await settle()
+        expect(state()).toBe('loading')
+        expect(page()?.getAttribute('aria-busy')).toBe('true')
+        // the meeting it has shows, with no count that would read as whole
+        expect(document.querySelector('[data-sync-opening]')).not.toBeNull()
+        expect(document.querySelectorAll('[data-sync-fact="waiting"]')).toHaveLength(5)
+        expect(document.querySelector('[data-sync-facts]')?.textContent).not.toContain('Overdue1')
+        expect(document.querySelector('[data-sync-progress]')?.textContent).toBe('')
+        expect(document.querySelector('[data-sync-incomplete]')).toBeNull()
+        await act(async () => await new Promise((r) => setTimeout(r, 100)))
+        expect(state()).toBe('incomplete')
+        expect(page()?.hasAttribute('aria-busy')).toBe(false)
+        const note = document.querySelector('[data-sync-incomplete]')
+        expect(note?.textContent).toContain(
+          "Some of this meeting's tasks have not reached the page",
+        )
+        expect(document.querySelectorAll('[data-sync-fact="waiting"]')).toHaveLength(5)
+        expect(document.querySelector('[data-sync-sentence]')?.textContent).not.toContain(
+          'No task is overdue',
+        )
+        // Try again asks once more, and once every task has a model the
+        // note and the counts' wait end
+        gone.mockRestore()
+        const before = board.server.sync.asked.length
+        await click(
+          [...(note?.querySelectorAll('button') ?? [])].find((b) => b.textContent === 'Try again'),
+        )
+        await settle()
+        expect(board.server.sync.asked.length).toBeGreaterThan(before)
+        expect(state()).toBe('ok')
+        expect(document.querySelector('[data-sync-incomplete]')).toBeNull()
+        expect(document.querySelector('[data-sync-facts]')?.textContent).toContain('Overdue1')
+      } finally {
+        gone.mockRestore()
+        STALL.ms = stall
+      }
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'says it could not load, with Try again, which asks once more',
     async () => {
       const { board } = await open(
@@ -472,6 +549,30 @@ describe('a card only the agenda brings', () => {
   )
 
   it(
+    'draws no banner for a held task the agenda finds on track, whatever the workspace says',
+    async () => {
+      const { P } = await open(
+        (snap) => {
+          snap.projects[0].track_delay = true
+          people({ due_date: '2001-01-01' })(snap)
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
+        { tasks: true },
+        (b) => {
+          b.server.sync.edit = rowsEdit({ 1: { delay: null } })
+        },
+      )
+      const handle = P.handleOf('t1') ?? ''
+      expect(handle).not.toBe('')
+      // the workspace holds the task and judges it late, past its due date
+      expect(P.delayOf(P.issueById[handle])?.status).toBe('late')
+      expect(card(handle)).not.toBeNull()
+      expect(card(handle)?.querySelector('[data-delay]')).toBeNull()
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'shows no row the answer does not name',
     async () => {
       await open(
@@ -594,6 +695,13 @@ describe('the opening', () => {
       expect(document.querySelector('[data-sync-capacity-unknown]')?.textContent).toBe(
         'Load unknown for 1 person',
       )
+      // the heading counts no list that leaves someone out, as a 0 there
+      // would read as whole
+      const heading = [...document.querySelectorAll('h3')].find((h) =>
+        h.textContent?.startsWith('Near or over capacity'),
+      )
+      expect(heading).toBeDefined()
+      expect(heading?.querySelector('span')).toBeNull()
       expect(document.body.textContent).not.toContain('Everyone is under 90% this week')
       expect(document.body.textContent).not.toContain('0%')
     },
@@ -625,6 +733,9 @@ describe('a meeting that stops fitting', () => {
       expect(field.value).toBe('Still typing')
       const box = card(handle)?.querySelector<HTMLInputElement>('[data-sync-input]')
       expect(box?.readOnly).toBe(true)
+      expect(await hintOf(box)).toBe(
+        'This meeting stopped updating. Choose a smaller team or project.',
+      )
       await click(document.querySelector(`[data-sync-mention-person="${AISHA}"]`))
       expect(document.querySelector<HTMLButtonElement>('[data-sync-mention-send]')?.disabled).toBe(
         false,
@@ -632,6 +743,72 @@ describe('a meeting that stops fitting', () => {
       // a narrower scope from the note asks about the card's unsent note
       await click(document.querySelector(`[data-sync-choice="project:${sub(board.snapshot)}"]`))
       expect(calls.places.at(-1)?.closes?.length).toBeGreaterThan(0)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'turns the opening’s owner and reviewer pickers off too, as the cards’',
+    async () => {
+      const { board, P } = await open(
+        people(
+          { status: 'review', reviewer_id: undefined },
+          // open, urgent and unowned, so Needs an owner lists it
+          { status: 'todo', assignee_id: undefined, priority: 'urgent' },
+        ),
+        (snap) => ({ scope: `project:${meta(snap)}`, step: 'team' }),
+      )
+      const trigger = (hook: string, n: number) =>
+        document.querySelector<HTMLButtonElement>(
+          `[${hook}="${P.syncTask(`t${n}`)?.id ?? ''}"] [data-assignee-edit]`,
+        )
+      expect(trigger('data-sync-needs-reviewer', 1)?.disabled).toBe(false)
+      expect(trigger('data-sync-needs-owner', 2)?.disabled).toBe(false)
+      board.server.sync.force = { state: 'over_budget' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      for (const [hook, n] of [
+        ['data-sync-needs-reviewer', 1],
+        ['data-sync-needs-owner', 2],
+      ] as const) {
+        expect(trigger(hook, n)?.disabled, hook).toBe(true)
+        expect(await hintOf(trigger(hook, n)), hook).toBe(
+          'This meeting stopped updating. Choose a smaller team or project.',
+        )
+      }
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
+    'says it stopped updating when the tab hid, not when the refusal arrived on return',
+    async () => {
+      const { board } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      expect(state()).toBe('ok')
+      // the same local day throughout, so the meeting's day does not move
+      const at = (hours: number) => {
+        const d = new Date()
+        d.setHours(hours, 0, 0, 0)
+        return d
+      }
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(at(9))
+      await setVisibility('hidden')
+      await settle()
+      expect(board.server.sync.open.size).toBe(0)
+      vi.setSystemTime(at(15))
+      board.server.sync.force = { state: 'over_ceiling' }
+      await setVisibility('visible')
+      await settle()
+      expect(state()).toBe('stale')
+      const note = document.querySelector('[data-sync-stale-note="over_ceiling"]')?.textContent
+      expect(note).toContain('The meeting below stopped updating at 09:00.')
+      // the time the refusal arrived would say the cards are newer than they are
+      expect(note).not.toContain('15:00')
     },
     BOARD_TEST_TIMEOUT,
   )
@@ -657,9 +834,13 @@ describe('a meeting that stops fitting', () => {
       expect(state()).toBe('stale')
       expect(document.querySelector('[data-sync-stale-note="error"]')).not.toBeNull()
       expect(card(handle)).not.toBeNull()
-      // a blur in the stale box writes nothing and keeps the hours typed
+      // a blur in the stale box writes nothing and keeps the hours typed,
+      // and its title points to the note's Try again, not a smaller scope
       const sent = network.mutation.mock.calls.length
       expect(box()?.readOnly).toBe(true)
+      expect(await hintOf(box())).toBe(
+        'This meeting stopped updating. Try again from the note above.',
+      )
       await act(async () => box()?.blur())
       await settle()
       expect(network.mutation.mock.calls.length).toBe(sent)
@@ -717,12 +898,30 @@ describe('a hidden page', () => {
 
 describe("an organization Viewer's page", () => {
   it(
-    'reads the person on screen through the owner-load cache, "…" while it waits and unknown when it cannot',
+    'reads the person on screen through the owner-load cache, with "…" and no mark while it waits, the week and the judged delay once it answers, and unknown when it cannot',
     async () => {
-      const { board, P, snapshot } = await open(
+      // 100 hours from this week's Monday, due next week's Friday. Only the
+      // owner's load tells that a 40-hour week finishes it late
+      const d = new Date()
+      d.setDate(d.getDate() - ((d.getDay() + 6) % 7))
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const iso = (x: Date) => `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`
+      const monday = iso(d)
+      d.setDate(d.getDate() + 11)
+      const friday = iso(d)
+      // the cache's calls, answered when the test says
+      const calls: { args: Parameters<typeof ownerLoadsStandIn>[1]; next: (v: unknown) => void }[] =
+        []
+      const { board, P } = await open(
         (snap) => {
           snap.profiles[0].org_role = 'viewer'
-          people({ remaining_hours: 4 })(snap)
+          snap.projects[0].track_delay = true
+          people({
+            remaining_hours: 100,
+            start_week: monday,
+            end_week: monday,
+            due_date: friday,
+          })(snap)
           snap.access.push({
             project_id: snap.projects[0].id,
             profile_id: snap.profiles[0].id,
@@ -730,18 +929,46 @@ describe("an organization Viewer's page", () => {
           } as Snapshot['access'][number])
         },
         (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
+        {},
+        () => {
+          const real = network.onUpdate.getMockImplementation()
+          network.onUpdate.mockImplementation((ref, args, next, fail) => {
+            if (getFunctionName(ref) !== 'planning:ownerLoads') return real?.(ref, args, next, fail)
+            calls.push({ args, next })
+            return () => {}
+          })
+        },
       )
       expect(state()).toBe('ok')
       expect(P.syncRead().value).toMatchObject({ hidden: 'own_only' })
+      const answer = P.syncRead().value
+      if (answer?.state !== 'ok') throw new Error('no meeting')
+      // the agenda reads no load for a Viewer, so it leaves the verdict unknown
+      expect(answer.rows[0]?.delay).toBe('unknown')
+      const handle = P.syncTask('t1')?.id ?? ''
       const chip = () => document.querySelector('[data-sync-person] [data-sync-load]')
-      // the stand-in's owner loads answer at once
+      const banner = () => card(handle)?.querySelector('[data-delay]')
+      // one owner a call, while it waits: "…" and no mark, as a Board card
+      expect(calls.map((c) => c.args.owner_ids)).toEqual([[me(board.snapshot)]])
+      expect(chip()?.getAttribute('data-sync-load')).toBe('waiting')
+      expect(chip()?.textContent).toContain('…')
+      expect(banner()).toBeNull()
+      const answerCalls = (unavailable: string[]) =>
+        act(async () => {
+          for (const c of calls) c.next(ownerLoadsStandIn(board.snapshot, c.args, { unavailable }))
+        })
+      await answerCalls([])
+      await settle()
+      expect(chip()?.getAttribute('data-sync-load')).not.toBe('waiting')
       expect(chip()?.getAttribute('data-sync-load')).not.toBe('unknown')
       expect(chip()?.textContent).not.toContain('unknown')
-      board.server.unavailable = [me(snapshot)]
-      await board.answer()
+      expect(banner()?.getAttribute('data-delay')).toBe('late')
+      // a load it cannot read says unknown, never 0
+      await answerCalls([me(board.snapshot)])
       await settle()
       expect(chip()?.getAttribute('data-sync-load')).toBe('unknown')
       expect(chip()?.textContent).not.toContain('0%')
+      expect(banner()?.getAttribute('data-delay')).toBe('unknown')
     },
     BOARD_TEST_TIMEOUT,
   )

@@ -270,7 +270,7 @@ describe('memoized task rows', () => {
       prompt: null as string | null,
       since: 0,
       now: Date.now(),
-      frozen: false,
+      frozen: null as string | null,
       verdicts: {} as Record<string, 'late' | 'behind' | 'unknown' | null>,
       blocked: { one: ['QN-2'] } as Record<string, readonly string[]>,
     }
@@ -337,7 +337,11 @@ describe('memoized task rows', () => {
     expect(await rerenderedBy(() => (page.verdicts = { two: 'unknown' }))).toEqual(['two'])
     expect(document.querySelector('[data-delay="unknown"]')).not.toBeNull()
     // a meeting that stops updating renders every card read-only
-    expect(await rerenderedBy(() => (page.frozen = true))).toEqual(['one', 'three', 'two'])
+    expect(await rerenderedBy(() => (page.frozen = 'This meeting stopped updating.'))).toEqual([
+      'one',
+      'three',
+      'two',
+    ])
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 

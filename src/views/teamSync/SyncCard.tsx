@@ -74,10 +74,10 @@ export type PageCtx = {
   /** each mounted card's scope of unsent text, with its task and section's
       person, which a scope switch asks about */
   cards: Map<UnsentScope, SyncCardPlace>
-  /** whether the meeting stopped updating (state stale): the cards' task
-      controls turn read-only, their typed text stays, a mention still
-      sends */
-  frozen: boolean
+  /** while the meeting stopped updating (state stale), the title of the
+      task controls it turns off (stoppedTitle), else null: the cards'
+      typed text stays and a mention still sends */
+  frozen: string | null
 }
 
 /** The scope of the text typed in one card, inside the page's, registered
@@ -96,8 +96,6 @@ function useCardScope(ctx: PageCtx, uuid: string) {
 
 /* The task window's words for every control a read-only viewer finds off. */
 const READ_ONLY = 'Read-only project access'
-/* The words of a task control a stale meeting turns off. */
-export const STOPPED = 'This meeting stopped updating. Choose a smaller team or project.'
 
 const firstName = (name: string) => name.split(' ')[0]
 
@@ -615,8 +613,8 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
   // the project's level decides (the projects part holds every level a
   // card reads), and a stale meeting turns the task controls off
   const canWrite = P.canWrite(it.project)
-  const editable = canWrite && !ctx.frozen
-  const offTitle = canWrite ? STOPPED : READ_ONLY
+  const editable = canWrite && ctx.frozen === null
+  const offTitle = canWrite ? (ctx.frozen ?? READ_ONLY) : READ_ONLY
   const marks = rowMarks(it, {
     person: ctx.owner,
     since: ctx.since,
@@ -721,13 +719,11 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
                 it={it}
                 title={
                   canWrite
-                    ? ctx.frozen
-                      ? STOPPED
-                      : 'Remaining hours. Leave empty for no estimate'
+                    ? (ctx.frozen ?? 'Remaining hours. Leave empty for no estimate')
                     : READ_ONLY
                 }
                 disabled={!canWrite}
-                readOnly={ctx.frozen}
+                readOnly={ctx.frozen !== null}
                 onCommit={ctx.touched}
                 className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}
               />
@@ -738,7 +734,7 @@ function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
                   issue={it}
                   variant="chevron"
                   backLayer
-                  offTitle={ctx.frozen ? STOPPED : undefined}
+                  offTitle={ctx.frozen ?? undefined}
                   onPick={() => ctx.touched(it)}
                 />
               </span>

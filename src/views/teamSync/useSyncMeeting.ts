@@ -16,8 +16,9 @@
      sections at once, while nothing the answer does not name appears. A
      task whose project the projects part no longer shows (P.canSee) drops
      at once, which only narrows. A task the answer names with no model yet
-     keeps the page loading, and STALL.ms later says some tasks have not
-     arrived, never a meeting with tasks left out as whole.
+     keeps the page loading, the meeting shown without its counts, and
+     STALL.ms later a note above it says some tasks have not arrived, so a
+     meeting with tasks left out never shows as whole.
    - The walk's people, their stamps and weeks, each row's blockers and
      verdict are the answer's, never the workspace's. A person's week is
      the answer's with the person's own pending edits re-counted by task
@@ -61,7 +62,7 @@ export type SyncState =
   /** no scope to ask for: nothing chosen, or an address the app cannot resolve */
   | 'choose'
   /** the first answer for this meeting is on its way, or a task it names
-      has no model to show yet */
+      has no model to show yet: the meeting shows without its counts */
   | 'loading'
   /** the meeting the read kept, or the same meeting's answer of another
       day, while the answer for these arguments is on its way */
@@ -70,13 +71,24 @@ export type SyncState =
   /** a meeting that stopped fitting or failed to read, shown as it last
       fitted under the note (`note`) */
   | 'stale'
-  /** a task the answer names still had no model to show STALL.ms later */
+  /** a task the answer names still had no model to show STALL.ms later:
+      the meeting shows without its counts under a note that says so */
   | 'incomplete'
   | 'over_ceiling'
   | 'over_budget'
   /** the server cannot honour the scope: the page asks to choose */
   | 'unavailable'
   | 'error'
+
+/** The words of a task control a stale meeting turns off, by what stopped
+    it (SyncMeeting note): past its limits it asks for a smaller scope, and
+    after a failed read it points to the note's Try again, as that note
+    does (views/teamSync/SyncNote.tsx StaleNote). */
+export function stoppedTitle(note: SyncMeeting['note']): string {
+  return note === 'error'
+    ? 'This meeting stopped updating. Try again from the note above.'
+    : 'This meeting stopped updating. Choose a smaller team or project.'
+}
 
 /** An ok agenda. */
 export type SyncAgenda = Extract<AgendaAnswer, { state: 'ok' }>
@@ -93,9 +105,16 @@ export type SyncMeeting = {
   message: string | null
   /** whether the page waits for an answer (its root's aria-busy) */
   busy: boolean
-  /** whether a meeting shows: ok, refreshing or stale */
+  /** whether a meeting shows, as ok, refreshing or stale, and as loading
+      or incomplete while a task the answer names has no model yet */
   shows: boolean
-  /** when a stale meeting stopped updating (ms) */
+  /** whether the meeting's counts may show, as every task the answer
+      names has a model, so the opening's figures and the footer's total
+      are whole */
+  counted: boolean
+  /** when a stale meeting stopped being the server's current answer (ms),
+      the earliest of its read stopping, its connection going and the
+      refusal or failure arriving (P.syncRead fitted.until) */
   stoppedAt: number | null
   /** Asks the server afresh (Try again). */
   retry: () => void
@@ -206,15 +225,6 @@ function useSyncRead(key: string | null) {
   return { read: P.syncRead(), retry: () => setAttempt((n) => n + 1) }
 }
 
-/** The moment `on` (a key) last became non-null, or null. */
-function useSince(on: string | null): number | null {
-  const [at, setAt] = useState<{ on: string; at: number } | null>(null)
-  useEffect(() => {
-    setAt((was) => (on === null ? null : was?.on === on ? was : { on, at: Date.now() }))
-  }, [on])
-  return on !== null && at?.on === on ? at.at : null
-}
-
 /** What Team sync shows for the scope key `scopeKey` at `now` (ms). */
 export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
   const request = syncRequest(scopeKey)
@@ -243,7 +253,6 @@ export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
   const okAnswer = value?.state === 'ok' ? value : refused && fitted ? fitted.value : null
   const okKey = value?.state === 'ok' ? (read.key ?? '') : (fitted?.key ?? '')
   const stale = !!refused && !!fitted
-  const stoppedAt = useSince(stale && fitted ? `${fitted.key}\n${refused}` : null)
 
   const facts = okAnswer ? shown(okAnswer, okKey) : null
   // each task the answer names, once, as the page shows it
@@ -294,12 +303,13 @@ export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
     load: () => ({ state: 'unknown' }) as const,
     since: (person: Pick<SyncPerson, 'stamp'>) =>
       syncSince(person.stamp, now, P.org.weekStart ?? 1),
-  } satisfies Omit<SyncMeeting, 'state' | 'busy' | 'shows'>
+  } satisfies Omit<SyncMeeting, 'state' | 'busy' | 'shows' | 'counted'>
   const note = (state: SyncState, extra: Partial<SyncMeeting> = {}): SyncMeeting => ({
     ...base,
     state,
     busy: !current,
     shows: false,
+    counted: false,
     ...extra,
   })
 
@@ -326,8 +336,9 @@ export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
     state,
     busy,
     shows: true,
+    counted: missing === 0,
     note: stale ? refused : null,
-    stoppedAt: stale ? (stoppedAt ?? now) : null,
+    stoppedAt: stale ? (fitted?.until ?? now) : null,
     answer: okAnswer,
     tasks,
     rows,
@@ -376,7 +387,10 @@ export function useSyncFigures(meeting: SyncMeeting, owners: readonly string[]) 
     .map((it) => it.uuid)
   const judged = P.syncViewerVerdicts(unknown)
   return {
-    verdict: (uuid: string): SyncVerdict => judged.get(uuid) ?? meeting.verdict(uuid),
+    // a judged null is no mark while the load is on its way, never the
+    // agenda's unknown
+    verdict: (uuid: string): SyncVerdict =>
+      judged.has(uuid) ? (judged.get(uuid) ?? null) : meeting.verdict(uuid),
     load: (person: Pick<SyncPerson, 'id' | 'week' | 'plannableHours' | 'isAgent'>): SyncLoad => {
       if (!on.has(person.id)) return meeting.load(person)
       const load = P.syncPersonLoad(person.id)
