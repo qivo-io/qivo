@@ -486,6 +486,108 @@ describe('the benchmark server', () => {
     expect(answer('history')).toEqual({ events: [], earlier: false, next: null })
   })
 
+  it("pages the opened task's long thread as the server does, and refuses another task's ids", async () => {
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&thread=120&threadchanges=75',
+    )
+    const args = { issue_id: TASK_1 }
+    let n = 0
+    const ask = async (name, extra = {}, task = args) => {
+      const id = `q${n++}`
+      await send({ type: 'query', id, name, args: { ...task, ...extra } })
+      const message = posted.find((m) => m.to === id)
+      return message.error ? { refused: message.data ?? message.error } : JSON.parse(message.text)
+    }
+    // the newest 50 comments, oldest first, and the 50 before the first
+    const live = await ask('snapshot:threadComments')
+    expect(live.comments).toHaveLength(50)
+    expect(live.earlier).toBe(true)
+    const before = await ask('snapshot:commentsBefore', { before: live.comments[0].id })
+    expect(before.comments).toHaveLength(50)
+    expect(before.earlier).toBe(true)
+    expect(before.comments.at(-1).created_at < live.comments[0].created_at).toBe(true)
+    const start = await ask('snapshot:commentsBefore', { before: before.comments[0].id })
+    expect(start.comments).toHaveLength(20)
+    expect(start.earlier).toBe(false)
+    // every comment once, in thread order, with times in that order
+    const thread = [...start.comments, ...before.comments, ...live.comments]
+    expect(new Set(thread.map((c) => c.id)).size).toBe(120)
+    const times = thread.map((c) => c.created_at)
+    expect(times).toEqual([...times].sort())
+    // ordinary text: a few sentences, some with a list, a link or a mention
+    expect(thread.every((c) => c.body.length > 100 && c.body.length < 1200)).toBe(true)
+    expect(thread.some((c) => c.body.includes('\n- '))).toBe(true)
+    expect(thread.some((c) => c.body.includes('](https://'))).toBe(true)
+    expect(thread.some((c) => c.body.startsWith('@['))).toBe(true)
+    // the history in pages of 50 with `next`, the oldest row each read
+    const history = await ask('snapshot:threadHistory')
+    expect(history.events).toHaveLength(50)
+    expect(history).toMatchObject({ earlier: true, next: history.events[0].id })
+    const older = await ask('snapshot:historyBefore', { before: history.next })
+    expect(older.events).toHaveLength(25)
+    expect(older).toMatchObject({ earlier: false, next: null })
+    const rows = [...older.events, ...history.events]
+    expect(rows.every((row) => row.target_id === TASK_1 && row.target_type === 'issue')).toBe(true)
+    expect(rows.map((row) => row.ts)).toEqual(rows.map((row) => row.ts).toSorted())
+    // a `before` that is no row of this task refuses as the server does
+    const other = { issue_id: id('4', 2) }
+    expect(await ask('snapshot:commentsBefore', { before: live.comments[0].id }, other)).toEqual({
+      refused: { code: 'bad_request', message: 'before must be the id of a comment on this task' },
+    })
+    expect(await ask('snapshot:historyBefore', { before: 'nothing' })).toEqual({
+      refused: {
+        code: 'bad_request',
+        message: "before must be the id of a row in this task's history",
+      },
+    })
+    // other tasks hold no thread
+    expect(await ask('snapshot:threadComments', {}, other)).toEqual({
+      comments: [],
+      earlier: false,
+    })
+  })
+
+  it('fails or holds the thread reads that threadstate names, and only those', async () => {
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&thread=200&threadstate=newer-error',
+    )
+    const args = { issue_id: TASK_1 }
+    let n = 0
+    const ask = async (extra) => {
+      const id = `q${n++}`
+      await send({
+        type: 'query',
+        id,
+        name: 'snapshot:commentsBefore',
+        args: { ...args, ...extra },
+      })
+      return posted.find((m) => m.to === id)
+    }
+    await send({ type: 'query', id: 'live', name: 'snapshot:threadComments', args })
+    const live = JSON.parse(posted.find((m) => m.to === 'live').text)
+    // Show earlier walks back: each read asks before an older comment
+    const first = JSON.parse((await ask({ before: live.comments[0].id })).text)
+    const second = JSON.parse((await ask({ before: first.comments[0].id })).text)
+    expect(second.comments).toHaveLength(50)
+    // a read before a later comment, as Show newer asks, fails
+    expect((await ask({ before: live.comments[10].id })).error).toContain('newer-error')
+    // and an earlier one still answers
+    expect((await ask({ before: second.comments[0].id })).text).toBeTruthy()
+    // earlier-error fails the first read already
+    const failing = await server(
+      'tasks=20&latency=0&mbps=100000&thread=200&threadstate=earlier-error',
+    )
+    await failing.send({ type: 'query', id: 'live', name: 'snapshot:threadComments', args })
+    const shown = JSON.parse(failing.posted.find((m) => m.to === 'live').text)
+    await failing.send({
+      type: 'query',
+      id: 'e',
+      name: 'snapshot:commentsBefore',
+      args: { ...args, before: shown.comments[0].id },
+    })
+    expect(failing.posted.find((m) => m.to === 'e').error).toContain('earlier-error')
+  })
+
   it("answers the task window's own lists from the workspace, each whole", async () => {
     const { posted, send } = await server(
       'tasks=40&latency=0&mbps=100000&links=1&attachments=1&subtasks=0.2',

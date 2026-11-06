@@ -356,6 +356,29 @@
 //                        shows 12+), more (more than 99) or notready (the
 //                        seat's items are not complete, so the count is a
 //                        lower bound and the item answers building)
+//   thread (0)           comments of ordinary text, a few sentences each,
+//                        some with a list, a link or a mention, on the task
+//                        the benchmark opens, the first task whose thread or
+//                        history the page asks for
+//   threadchanges (0)    changes in that task's history, their times spread
+//                        over the same weeks as its comments
+//   threadstate          a state the thread's earlier reads
+//                        (snapshot:commentsBefore and historyBefore) answer,
+//                        for screenshots: earlier-error (a read before the
+//                        oldest row any read asked before fails),
+//                        newer-error (a read before a later row fails, as
+//                        Show newer comments asks) or newer-loading (such a
+//                        read never answers); several joined by commas
+//   threadkeep           the comments and changes the task window keeps
+//                        loaded (the page lowers src/lib/threadBudget.ts
+//                        THREAD_KEEP, scripts/perf/entry.tsx)
+//
+// The task window's thread is paged as the server pages it
+// (convex/snapshot.ts): its live page holds the newest 50 comments and says
+// whether earlier ones exist, commentsBefore answers the 50 before a comment
+// of the task and refuses any other id as the server does, and the
+// history's pages hold 50 rows with `earlier` and `next`. A delivered
+// comment sends the newest page again.
 //
 // Main Search (search:page) is a stand-in too (searchPage): it matches the
 // visible tasks and projects with the server's word rules and ranks them
@@ -1486,6 +1509,151 @@ let writes = 0
 const listeners = new Map()
 const delay = () => new Promise((resolve) => setTimeout(resolve, latency))
 const comments = []
+/* The task window's thread on the task the benchmark opens (the thread,
+   threadchanges and threadstate parameters): the task, its history oldest
+   first in insertion order, and per kind the oldest place an earlier read
+   asked before, which tells Show earlier's reads from Show newer's. */
+const THREAD_PAGE = 50
+const threadComments = Math.max(0, Math.floor(option('thread', 0)))
+const threadChanges = Math.max(0, Math.floor(option('threadchanges', 0)))
+const threadStates = new Set((parameters.get('threadstate') ?? '').split(',').filter(Boolean))
+let threadTask = null
+const history = []
+const oldestAsked = { comments: Number.POSITIVE_INFINITY, history: Number.POSITIVE_INFINITY }
+/* Sentences in the voice of a product team's task thread, which the
+   thread's comments are made of, in turn, so the text is ordinary and the
+   same on every run. */
+const THREAD_SENTENCES = [
+  'I went through the onboarding flow again on a fresh account and the second step still asks for the workspace name twice.',
+  'The copy on the pricing page reads well now, but the yearly toggle hides the per-seat price on small screens.',
+  'Support saw three tickets about this since Monday, all from teams that invited people before verifying their domain.',
+  'Can we keep the old export until the end of the quarter? Two customers run a script against it every night.',
+  'I measured the dashboard on the slow laptop in the office and it opens in a little under two seconds.',
+  'Design signed off on the empty state, so the illustration and the shorter heading can go in with this change.',
+  'The release notes should say that archived projects keep their history and come back with every task.',
+  'Let us not block the launch on the import wizard; a manual import for the first ten customers is fine.',
+  'I talked to the pilot team this morning and they want reminders on Mondays rather than at the end of the week.',
+  'The analytics event fires twice when someone opens the task from a notification, which inflates the funnel.',
+  'Marketing wants the screenshot with real-looking data, so I put the sample project from the demo in the deck.',
+  'QA found the date picker skips a week when the organization starts its weeks on Sunday.',
+]
+const THREAD_LISTS = [
+  '\n\n- update the help article\n- tell the two pilot teams\n- check the mobile layout',
+  '\n\n1. reproduce on staging\n2. write down the steps\n3. attach the screen recording',
+]
+/** The `n`th comment's text: two to four of the thread's sentences, every
+    fifth with a short list, every seventh with a link and every eleventh
+    with a mention of a colleague. */
+function threadBody(n) {
+  const sentences = Array.from(
+    { length: 2 + (n % 3) },
+    (_, k) => THREAD_SENTENCES[(n * 5 + k * 7) % THREAD_SENTENCES.length],
+  )
+  let text = sentences.join(' ')
+  if (n % 11 === 3) {
+    const colleague = profiles[1 + (n % (profiles.length - 1 || 1))] ?? profiles[0]
+    text = `@[${colleague.name}](user:${colleague.id}) ${text}`
+  }
+  if (n % 7 === 2) text += ' The notes are in [the planning doc](https://example.com/notes/launch).'
+  if (n % 5 === 4) text += THREAD_LISTS[n % THREAD_LISTS.length]
+  return text
+}
+/* The changes a task's history holds, in turn, as the app logs them. */
+const THREAD_VERBS = [
+  ['moved', 'To Do → In Progress'],
+  ['reprioritized', 'Medium → High'],
+  ['assigned', 'Planner 2'],
+  ['added label', 'Launch'],
+  ['removed label', 'Launch'],
+  ['rescheduled', 'Week 46 → Week 47'],
+  ['moved', 'In Progress → Review'],
+]
+/** Gives task `issueId` the thread the page asks for, once: the comments
+    and changes spread over the 30 days before the page loaded, each kind
+    in its own thread order, so their times run with that order. */
+function threadOf(issueId) {
+  if (threadTask !== null || (!threadComments && !threadChanges)) return
+  threadTask = issueId
+  const task = snapshot.issues.find((row) => row.id === issueId)
+  const span = 30 * 24 * 60 * 60_000
+  const start = Date.parse(now) - span - 60_000
+  for (let n = 0; n < threadComments; n++)
+    comments.push({
+      id: id('8', n),
+      issue_id: issueId,
+      author: profiles[1 + (n % Math.max(1, profiles.length - 1))]?.id ?? me.id,
+      body: threadBody(n),
+      created_at: new Date(start + Math.round(((n + 0.5) / threadComments) * span)).toISOString(),
+    })
+  for (let n = 0; n < threadChanges; n++) {
+    const [verb, detail] = THREAD_VERBS[n % THREAD_VERBS.length]
+    history.push({
+      id: id('9', n),
+      org_id: task?.org_id ?? org,
+      ts: new Date(start + Math.round(((n + 0.25) / threadChanges) * span)).toISOString(),
+      actor_id: profiles[1 + (n % Math.max(1, profiles.length - 1))]?.id ?? me.id,
+      verb,
+      target_type: 'issue',
+      target_id: issueId,
+      label: task ? `QN-${task.num}` : 'QN-1',
+      detail,
+    })
+  }
+}
+/** A refusal of a thread read's `before`, as convex/model/comments.ts
+    commentAnchor and convex/lib/activityVisibility.ts historyAnchor refuse
+    it: a bad_request, whatever the id names. */
+function badAnchor(message) {
+  return Object.assign(new Error(message), { data: { code: 'bad_request', message } })
+}
+/** Answers a thread read before the row at `place` of `kind` as
+    threadstate asks: NO_ANSWER for a read that never answers, a thrown
+    failure, or nothing for an answer. A read before the oldest row any
+    read of its kind asked before is an earlier read; a read before a
+    later row is a newer read. */
+function threadState(kind, place) {
+  const newer = place > oldestAsked[kind]
+  if (!newer) oldestAsked[kind] = place
+  if (newer && threadStates.has('newer-loading')) return NO_ANSWER
+  if (newer && threadStates.has('newer-error'))
+    throw new Error("the thread's newer read fails, as threadstate=newer-error asks")
+  if (!newer && threadStates.has('earlier-error'))
+    throw new Error("the thread's earlier read fails, as threadstate=earlier-error asks")
+  return undefined
+}
+/** The comments of task `issueId`, oldest first in thread order. */
+const commentsOf = (issueId) => comments.filter((comment) => comment.issue_id === issueId)
+/** The live page of task `issueId`'s comments (snapshot:threadComments),
+    or the page before comment `before` (snapshot:commentsBefore). */
+function commentPage(issueId, before) {
+  threadOf(issueId)
+  const thread = commentsOf(issueId)
+  let end = thread.length
+  if (before !== undefined) {
+    end = thread.findIndex((comment) => comment.id === before)
+    if (end === -1) throw badAnchor('before must be the id of a comment on this task')
+    const state = threadState('comments', end)
+    if (state !== undefined) return state
+  }
+  const from = Math.max(0, end - THREAD_PAGE)
+  return { comments: thread.slice(from, end), earlier: from > 0 }
+}
+/** The live page of task `issueId`'s history (snapshot:threadHistory), or
+    the page before its row `before` (snapshot:historyBefore). */
+function historyPage(issueId, before) {
+  threadOf(issueId)
+  const rows = history.filter((row) => row.target_id === issueId)
+  let end = rows.length
+  if (before !== undefined) {
+    end = rows.findIndex((row) => row.id === before)
+    if (end === -1) throw badAnchor("before must be the id of a row in this task's history")
+    const state = threadState('history', end)
+    if (state !== undefined) return state
+  }
+  const from = Math.max(0, end - THREAD_PAGE)
+  const events = rows.slice(from, end)
+  return { events, earlier: from > 0, next: from > 0 ? events[0].id : null }
+}
 let messageCount = 0
 /* The unread messages the `unread` parameter asks for at the start, one
    per task, a minute apart, each telling of a change. */
@@ -1841,12 +2009,13 @@ const read = (name, args = {}) => {
         current_period_end: null,
       }
     case 'snapshot:threadComments':
-      return {
-        comments: comments.filter((comment) => comment.issue_id === args.issue_id),
-        earlier: false,
-      }
+      return commentPage(args.issue_id)
+    case 'snapshot:commentsBefore':
+      return commentPage(args.issue_id, args.before)
     case 'snapshot:threadHistory':
-      return { events: [], earlier: false, next: null }
+      return historyPage(args.issue_id)
+    case 'snapshot:historyBefore':
+      return historyPage(args.issue_id, args.before)
     case 'teamSync:lastComments':
       return { rows: [], complete: true }
     case 'teamSync:agenda':

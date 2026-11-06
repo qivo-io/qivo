@@ -38,6 +38,17 @@ async function boot() {
     for (const module of Object.values(found))
       Object.assign(module.MILESTONE_SECTION, { batch: cap, rows: 2 * cap })
   }
+  // threadkeep=<n>: the task window keeps at most n comments and changes
+  // of the open task (src/lib/threadBudget.ts), so the benchmark's thread
+  // phase can measure each candidate figure. A baseline from before that
+  // module has none, so it is found through a glob too
+  const keep = Number(parameters.get('threadkeep'))
+  if (keep > 0) {
+    const found = import.meta.glob<{ THREAD_KEEP: { rows: number } }>('@perf/lib/threadBudget.ts', {
+      eager: true,
+    })
+    for (const module of Object.values(found)) module.THREAD_KEEP.rows = keep
+  }
   await planner.initStore()
   createRoot(document.getElementById('root')!).render(
     <TooltipProvider>
