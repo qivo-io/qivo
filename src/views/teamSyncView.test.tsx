@@ -432,6 +432,70 @@ describe('the notes', () => {
   )
 
   it(
+    'shows Waiting on review and Later without their counts, and no one done on the rail, while a task has no model',
+    async () => {
+      const BEN = 'ben'
+      const { board, P } = await open(
+        (snap) => {
+          snap.profiles.push({
+            ...snap.profiles[0],
+            id: BEN,
+            name: 'Ben Okafor',
+            auth_user_id: 'account-ben',
+          })
+          people(
+            {},
+            // Aisha's one task, which will have no model
+            { assignee_id: AISHA },
+            // unplanned and not due, so Later holds it
+            { status: 'todo' },
+            // the person's, waiting on Ben's review
+            { status: 'review', reviewer_id: BEN },
+          )(snap)
+        },
+        (snap) => ({ scope: `project:${meta(snap)}`, step: me(snap) }),
+      )
+      const waiting = () =>
+        document.querySelector('[data-sync-waiting-foot] > div')?.textContent?.trim()
+      const later = () =>
+        document.querySelector(`[data-sync-later="${me(board.snapshot)}"]`)?.textContent?.trim()
+      const done = () => document.querySelectorAll('[data-sync-rail] [data-sync-done]')
+      expect(state()).toBe('ok')
+      expect(waiting()).toBe('Waiting on review 1')
+      expect(later()).toBe('Later 1')
+      const { STALL } = await import('../store/liveParts')
+      const stall = STALL.ms
+      STALL.ms = 40
+      const syncTask = P.syncTask
+      const gone = vi
+        .spyOn(P, 'syncTask')
+        .mockImplementation((uuid) => (uuid === 't2' ? undefined : syncTask(uuid)))
+      try {
+        await board.answer()
+        await settle()
+        await act(async () => await new Promise((r) => setTimeout(r, 100)))
+        expect(state()).toBe('incomplete')
+        // counts of a list that may lack a task would read as whole
+        expect(waiting()).toBe('Waiting on review …')
+        expect(later()).toBe('Later …')
+        // Aisha's only row is the one missing, which she has not reviewed
+        expect(document.querySelector(`[data-sync-jump="${AISHA}"]`)).not.toBeNull()
+        expect(done()).toHaveLength(0)
+        gone.mockRestore()
+        await board.answer()
+        await settle()
+        expect(state()).toBe('ok')
+        expect(waiting()).toBe('Waiting on review 1')
+        expect(later()).toBe('Later 1')
+      } finally {
+        gone.mockRestore()
+        STALL.ms = stall
+      }
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'says it could not load, with Try again, which asks once more',
     async () => {
       const { board } = await open(

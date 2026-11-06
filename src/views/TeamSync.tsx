@@ -250,7 +250,8 @@ function PersonColumns({
           {waiting.length > 0 && (
             <div data-sync-waiting-foot className="mt-1 flex flex-col gap-1.5">
               <div className="px-1 text-sm font-semibold text-text-2">
-                Waiting on review <span className="font-normal text-text-3">{waiting.length}</span>
+                Waiting on review{' '}
+                <span className="font-normal text-text-3">{count(waiting.length) ?? '…'}</span>
               </div>
               {waiting.map((w) => (
                 <WaitingItem
@@ -279,7 +280,7 @@ function PersonColumns({
               className="gap-1.5 self-start px-1.5 text-sm font-semibold"
             >
               <Icon name={laterOpen ? 'chevronDown' : 'chevronRight'} size={14} />
-              Later <span className="font-normal text-text-3">{later.length}</span>
+              Later <span className="font-normal text-text-3">{count(later.length) ?? '…'}</span>
             </Button>
           )}
           {laterOpen && later.map((it) => card(it, true))}
@@ -636,9 +637,11 @@ export function TeamSync({
   }
 
   const person = humans.find((u) => u.id === step) || null
-  // the owners with a counted task still to review, found once per render
+  // the owners with a counted task still to review, found once per render;
+  // no one reads as done while some task the meeting names has not
+  // arrived, as the missing one may be theirs
   const unfinished = new Set(walked.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
-  const allDone = (uid: string) => !unfinished.has(uid)
+  const allDone = (uid: string) => meeting.counted && !unfinished.has(uid)
   const today = new Date(now)
   const last = idx >= steps.length - 1
   // the scope the menu names: none where the page asks to choose

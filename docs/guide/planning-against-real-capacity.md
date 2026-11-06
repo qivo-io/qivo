@@ -258,7 +258,8 @@ menu or picker before leaving Team sync.
 
 **Review progress.** Row changes also mark a task reviewed. The footer counts
 reviewed rows across people and agents, excluding Done since and Waiting on
-review. A portrait gets a checkmark when all its rows are reviewed. Use
+review. A portrait gets a checkmark when all its rows are reviewed, once
+every task of the meeting has loaded. Use
 **Previous**, **Next** or the people list to navigate. The last **Done** button
 returns to where you opened Team sync. Review ticks, open **Later** lists and
 expanded agents last until that **Done**, also while you visit other pages.
