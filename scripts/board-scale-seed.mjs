@@ -84,10 +84,16 @@
  * then sets every third agent inactive through profiles:deactivate, so at
  * N of about 90 both Who counts toward your bill and Who does not count
  * toward your bill hold more than 25 names. Every agent's id comes from
- * its number. A second run adds only what is missing: an agent that is
- * there keeps its profile, one whose usage holds all its calls gets no new
- * key, one short of them gets a new key and only the calls it lacks, and
- * one already inactive is left as it is. N goes up to 100 (MOST_API_ACCOUNTS),
+ * its number, and so does its keys' name ("Billing load key 01"). A
+ * second run adds only what is missing. It counts toward an agent's calls
+ * only those its own keys made in the bucket Billing shows now
+ * (billing.usageFigures' period_key, read as Nora), never those of an
+ * earlier month or period or of another credential, such as one
+ * --credentials gave it. An agent that is there keeps its profile, one
+ * with all its calls gets no new key, one short of them gets a new key and
+ * only the calls it lacks, so a run in a later month gives each active
+ * agent a new key and its calls there, and one already inactive is left
+ * as it is, with no calls in a later bucket. N goes up to 100 (MOST_API_ACCOUNTS),
  * and a larger N is refused before anything is seeded. It runs after
  * --credentials and before the tasks.
  *
@@ -873,10 +879,15 @@ export function seededAgentName(n) {
     for every run. */
 export const apiAccountId = (org, n) => uuidOf(`board-scale-seed api account ${org} ${n}`)
 
+/** The name of the keys the seed gives the `n`th --api-accounts agent, by
+    which it finds their calls in the usage rows. */
+const apiAccountKeyName = (n) => `Billing load key ${String(n).padStart(2, '0')}`
+
 /** What --api-accounts still has to do for agents 1 to `count` of
     organization `org` (see the file comment), from `profiles`, the
-    organization's profiles by id, and `used`, the calls the usage rows hold
-    for each profile id: for each agent number, whether to make its
+    organization's profiles by id, and `used`, by profile id the calls each
+    agent's own keys made in the bucket Billing shows now: for each agent
+    number, whether to make its
     profile, the calls it lacks, made with a new key when more than 0, and
     whether to set it inactive. Agent n makes 1 + n % 7 calls, and every
     third is set inactive after them. An agent that is inactive already
@@ -915,10 +926,7 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
       .filter((profile) => profile.org_id === org)
       .map((profile) => [profile.id, profile]),
   )
-  const used = new Map()
-  for (const row of await tableRows(client, 'billing_usage'))
-    if (row.org_id === org) used.set(row.profile_id, (used.get(row.profile_id) ?? 0) + row.calls)
-  const plan = planApiAccounts({ org, count, profiles, used })
+  const usage = (await tableRows(client, 'billing_usage')).filter((row) => row.org_id === org)
   client.setAdminAuth(key, identityOf(actor.auth_user_id))
   const call = async (name, fields) => {
     try {
@@ -927,6 +935,19 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
       throw new DemoCliError(`${name} was refused: ${error.data?.message ?? error.message}`)
     }
   }
+  // the bucket Billing shows now, which the calls below are recorded in
+  const { period_key: period } = await client.query(ref('billing:usageFigures'), { org_id: org })
+  const numbers = new Map(
+    Array.from({ length: count }, (_, i) => [apiAccountId(org, i + 1), i + 1]),
+  )
+  // the calls each agent's own keys made in that bucket
+  const used = new Map()
+  for (const row of usage) {
+    const n = numbers.get(row.profile_id)
+    if (n && row.period_start === period && row.credential_name === apiAccountKeyName(n))
+      used.set(row.profile_id, (used.get(row.profile_id) ?? 0) + row.calls)
+  }
+  const plan = planApiAccounts({ org, count, profiles, used })
   for (const step of plan) {
     if (step.create)
       await call('profiles:create', {
@@ -943,7 +964,7 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
         org_id: org,
         id: minted.id,
         agent_id: step.id,
-        name: `Billing load key ${String(step.n).padStart(2, '0')}`,
+        name: apiAccountKeyName(step.n),
         key_prefix: `${minted.secret.slice(0, 7)}...${minted.secret.slice(-5)}`,
         key_hash: minted.hash,
       })

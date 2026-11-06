@@ -34,7 +34,8 @@ import {
    a seed mark, the description rows `fake.texts` holds beside one of that
    organization's, the personal
    tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
-   `fake.usage` hold, and every mutation it receives, with the login it came
+   `fake.usage` hold, Billing's current bucket `fake.period`, and every
+   mutation it receives, with the login it came
    as. A comment whose id `fake.comments` holds is refused as taken, so is
    a project or task create whose id `fake.usedRows` (the used_ids table)
    holds, as the server refuses it, and an archive marks its task in
@@ -49,6 +50,8 @@ const fake = vi.hoisted(() => ({
   tokens: [],
   keys: [],
   usage: [],
+  // the bucket billing.usageFigures answers
+  period: 'month:2026-11',
   // the sub-projects the workspace holds, the one below when null
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
@@ -70,6 +73,9 @@ vi.mock('convex/browser', () => ({
       // a system table answers the admin itself, never a person it acts as
       if (name === '_system/cli/tableData' && this.login)
         throw new Error("You don't have permission to perform this operation.")
+      // Billing's figures answer an admin only
+      if (name === 'billing:usageFigures' && this.login !== 'nora-login')
+        throw Object.assign(new Error('forbidden'), { data: { message: 'admin only' } })
       if (name === '_system/cli/tableData' && args.table === 'issues') {
         const rows = [
           ...fake.archived,
@@ -130,6 +136,7 @@ vi.mock('convex/browser', () => ({
           orgs: [{ id: 'org' }],
         },
         'workspace:catalog': { state: 'ok', teams: [], labels: [] },
+        'billing:usageFigures': { period_kind: 'month', period_key: fake.period },
         'workspace:people': { state: 'ok', profiles: [], teamMembers: [] },
         'workspace:projects': {
           state: 'ok',
@@ -1636,6 +1643,8 @@ describe('board-scale-seed --api-accounts', () => {
       org_id: 'org',
       profile_id: apiAccountId('org', n),
       credential_id: `agent_keys:${n}`,
+      credential_name: `Billing load key 0${n}`,
+      period_start: fake.period,
       calls: 1 + (n % 7),
     }))
     fake.calls = []
@@ -1651,5 +1660,58 @@ describe('board-scale-seed --api-accounts', () => {
       fake.usage = []
     }
     expect(fake.calls).toEqual([])
+  })
+
+  it('counts only the calls its own keys made in the bucket Billing shows now', async () => {
+    const id = (n) => apiAccountId('org', n)
+    fake.calls = []
+    fake.issues = []
+    fake.people = [1, 2].map((n) => ({ id: id(n), org_id: 'org', kind: 'agent', active: true }))
+    fake.usage = [
+      // agent 1 made both its calls last month and 1 of them so far this month
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:1',
+        credential_name: 'Billing load key 01',
+        period_start: 'month:2026-10',
+        calls: 2,
+      },
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:2',
+        credential_name: 'Billing load key 01',
+        period_start: fake.period,
+        calls: 1,
+      },
+      // agent 2's 3 calls this month came from a key --credentials gave it
+      {
+        org_id: 'org',
+        profile_id: id(2),
+        credential_id: 'agent_keys:3',
+        credential_name: 'Build relay (scale 4)',
+        period_start: fake.period,
+        calls: 3,
+      },
+    ]
+    const fetched = vi.fn(async () => ({ ok: true, status: 200, headers: new Headers() }))
+    vi.stubGlobal('fetch', fetched)
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '2', ...api], {
+        env,
+        log: () => {},
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.people = []
+      fake.usage = []
+    }
+    // each gets a new key with only the calls the current bucket lacks
+    expect(fake.calls.map(([name, fields]) => [name, fields.name, fields.agent_id])).toEqual([
+      ['tokens:createAgentKey', 'Billing load key 01', id(1)],
+      ['tokens:createAgentKey', 'Billing load key 02', id(2)],
+    ])
+    expect(fetched).toHaveBeenCalledTimes(1 + 3)
   })
 })
