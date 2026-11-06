@@ -131,9 +131,10 @@ export const TEAM_ROW_MAX_BYTES = 4 * 1024
 export const DEFAULT_PAGE_SIZE = 50
 
 /** The most projects one of the app's milestone reads names (milestones.ts
- * section and between). It is exported for the app, which is to cut the
- * projects of a view to this many and say when the view holds more once
- * its views read their milestones there. */
+ * section and between). The app asks nothing for a view of more top-level
+ * projects and says so with LIMITS.milestoneProjects's sentence, rather
+ * than cut the projects and show a next milestone that may not be the next
+ * one (src/store/planner.ts P.watchMilestones). */
 export const MILESTONE_READ_PROJECTS = 200
 
 /** The most a task row takes as Convex counts a document without the
@@ -599,6 +600,17 @@ export const LIMITS = {
     max: BOARD_TASKS,
     unit: 'tasks, subtasks included, across the project or sub-project with its filters, or My view',
     refusal: `this selection exceeds the Board's ${grouped(BOARD_TASKS)}-task limit.`,
+    on: ['app'],
+  },
+  // A view of more top-level projects than one milestone read names asks
+  // nothing and says this (src/store/planner.ts P.watchMilestones), as Team
+  // sync's opening does; milestones.ts refuses more ids with bad_request.
+  milestoneProjects: {
+    label: 'Projects whose milestones one view reads',
+    group: 'tasks',
+    max: MILESTONE_READ_PROJECTS,
+    unit: 'top-level projects',
+    refusal: `the app reads the milestones of at most ${grouped(MILESTONE_READ_PROJECTS)} projects at once. Choose fewer projects.`,
     on: ['app'],
   },
   restoreBatch: {

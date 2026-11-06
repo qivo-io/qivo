@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 
@@ -17,7 +18,9 @@ import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
    one. Team sync, which covers the home organization only, asks about that
    organization's projects. The phone's Roadmap gives the desktop's note for
    every scope with nothing to schedule, and both keep showing the scope's
-   milestones, as the Overview does under its own note. */
+   milestones, as the Overview does under its own note. The Milestones
+   window a flag opens reads its milestone from the milestone stand-in
+   (store/milestoneStandIn.setup.ts). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => ({
@@ -108,6 +111,7 @@ async function app(snap: Snapshot, path = '/app/testbed') {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
+    else if (isMilestoneRead(name)) answerMilestones(server, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)

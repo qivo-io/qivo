@@ -40,11 +40,14 @@ import { listEnd, usePagedList, useSettledSearch } from '../lib/pagedList'
 import { useUpdateBlocker } from '../lib/updateSafety'
 import { useConfirmArm } from '../lib/useConfirmArm'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
+import { useViewVisibility } from '../lib/viewVisibility'
 import { exactWeekForDate } from '../lib/weekDrafts'
 import {
   type AccessRemoval,
   andList,
   type IssueVM,
+  type MilestoneAnswer,
+  type MilestoneRead,
   type MilestoneVM,
   type NewIssueInput,
   type NewProjectInput,
@@ -59,6 +62,7 @@ import {
   type TeamAccessLevel,
   teamNoun,
 } from '../store/planner'
+import { useViewsNews } from '../views/useViewsNews'
 
 const ctlClass = 'h-control w-full bg-surface-1 text-base font-sans'
 
@@ -2341,9 +2345,98 @@ function UnusedReason({
    is the new milestone (name, week, Add), "On the roadmap" lists the
    project's milestones by week, and a row's Edit button opens it in place
    with Delete / Cancel / Save. Every action commits where it stands and the
-   window stays open — the footer is only Done. `init.id` opens with that
-   row's editor open (a roadmap diamond, an Overview row, the phone agenda);
-   `init.project` opens on the new row, `init.week` preselecting its week. */
+   window stays open — the footer is only Done. `init.project` opens on the
+   new row, `init.week` preselecting its week.
+
+   `init.id` (a roadmap diamond, an Overview row, the phone agenda) opens
+   on that milestone, which the window reads from the server
+   (milestones.get, P.watchMilestones) while it and the tab show. Its
+   answer alone fixes the window's project and says whether the person may
+   change the milestone, so nothing but "Loading this milestone…" shows
+   before it: no list, no add row, no editor. Then the milestone shows as
+   its editor for someone who may write, else as its row, in its place in
+   the list or above it, whatever the list holds. A milestone the server
+   does not answer, for every reason alike, or refuses, says so with Done
+   only; a failure offers Retry; and once it showed, an answer of null
+   that the person's own delete did not cause closes its editor and says
+   it is no longer here. The add row and the other milestones' Edit follow
+   the answer's right while it names the milestone, and after the person's
+   own delete the right it gave last, while the store's level allows it
+   too; an answer of null for another reason gives none. An editor open
+   when its right goes stays, locked, with its draft. A failure after an
+   answer keeps that answer, and the editor its draft, under a note with
+   Retry. While the tab hides or after a reconnect the window shows its
+   last answer and its root is marked refreshing (aria-busy) until the
+   answer is current again. */
+
+/* The store's slot of the window's read of the milestone it opened on. */
+const MILESTONE_OPEN = 'milestone:open'
+/* How many Milestones windows mounted, each one's read owner
+   (P.watchMilestones). */
+let milestoneWindows = 0
+
+/** The read of milestone `id` (milestones.get) the window registers with
+    the store while it and the tab show, with Retry, or none without an id.
+    The read goes when the window closes. Renders again on the store's
+    `views` news (views/useViewsNews.ts). */
+function useOpenedMilestone(id: string | undefined) {
+  const { visible } = useViewVisibility()
+  const [attempt, setAttempt] = useStateM(0)
+  // this mounted window, which owns the read while it asks
+  const [owner] = useStateM(() => ++milestoneWindows)
+  useViewsNews()
+  useEffectM(() => {
+    if (!id) return
+    P.watchMilestones(MILESTONE_OPEN, visible ? { kind: 'get', id } : null, owner, attempt)
+    return () => P.watchMilestones(MILESTONE_OPEN, null, owner, attempt)
+  }, [id, visible, owner, attempt])
+  useEffectM(() => {
+    if (!id) return
+    return () => P.releaseMilestones(MILESTONE_OPEN, owner)
+  }, [id, owner])
+  return {
+    // an answer for another milestone than this window's is loading
+    read: id ? P.milestoneRead(MILESTONE_OPEN, { kind: 'get', id }) : null,
+    retry: () => setAttempt((n) => n + 1),
+  }
+}
+
+/** The answer a milestone read shows: its current or kept answer, also
+    beside a failure or refusal, or null. */
+function shownAnswer(read: MilestoneRead | null): MilestoneAnswer | null {
+  if (!read) return null
+  if (read.state === 'ok') return read.answer
+  return read.state === 'failed' || read.state === 'refused' ? read.kept : null
+}
+
+/* A line the window shows in place of, or above, its milestones. */
+function MilestoneLine({
+  state,
+  children,
+  retry,
+}: {
+  state: 'loading' | 'unavailable' | 'refused' | 'failed' | 'gone'
+  children: ReactNodeM
+  retry?: () => void
+}) {
+  return (
+    <div
+      data-milestone-open={state}
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-1 text-base',
+        state === 'loading' ? 'text-text-3' : 'text-text-2',
+      )}
+    >
+      <span className="min-w-0">{children}</span>
+      {retry && (
+        <Button type="button" variant="ghost" size="sm" onClick={retry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function MilestoneModal({
   init = {},
   onClose,
@@ -2355,19 +2448,73 @@ function MilestoneModal({
       was deleted here */
   focusAfterClose?: () => HTMLElement | null
 }) {
+  const opened = useOpenedMilestone(init.id)
+  const read = opened.read
+  const answer = shownAnswer(read)
+  // the opened milestone as the answer shows it, painted with the person's
+  // own writes: none before the answer, after an answer of null and after
+  // the person's own delete
+  const openedM = init.id ? (answer?.rows[0] ?? null) : null
   // milestones sit on a project's roadmap (0078) — a new one needs one, and
   // writing takes user level on it. The project is fixed when the window
-  // opens: opened on a milestone, it stays on that milestone's project after
-  // the milestone itself is deleted here.
-  const [projectId] = useStateM(() => {
-    const opened = init.id ? P.milestones.find((m) => m.id === init.id) : null
-    return (opened ? P.metaOf(opened.project) : P.metaOf(init.project))?.id ?? null
-  })
+  // knows it: at once for a new milestone, and from the server's first
+  // answer that names the milestone when opened on one. It stays on that
+  // project after the milestone itself is deleted here.
+  const [projectId, setProjectId] = useStateM<string | null>(() =>
+    init.id ? null : (P.metaOf(init.project)?.id ?? null),
+  )
+  // the name the answer gave the project as it fixed it, which the badge
+  // keeps once the milestone is gone and its answer names no project
+  const [fixedName, setFixedName] = useStateM<string | null>(null)
+  if (init.id && projectId === null && openedM && answer?.project) {
+    setProjectId(answer.project.id)
+    setFixedName(answer.project.name)
+  }
+  // the store's own project, which the add row and the list need
   const project = projectId ? P.metaOf(projectId) : null
-  const canWrite = !!project && ['lead', 'user'].includes(P.levelOn(project.id) || '')
-  // the row editor opens only for someone who may write: a read-only flag or
-  // row opens the list with that milestone in view
-  const [editId, setEditId] = useStateM<string | null>(canWrite ? (init.id ?? null) : null)
+  const projectName = init.id
+    ? (answer?.project?.name ?? fixedName ?? project?.name ?? null)
+    : (project?.name ?? null)
+  // the person's level on the project in the store: User access or more
+  const levelWrites = !!project && ['lead', 'user'].includes(P.levelOn(project.id) || '')
+  // the right the last answer that named the project gave, which the add
+  // row and the other milestones keep after the person's own delete
+  const [namedRight, setNamedRight] = useStateM(false)
+  if (init.id && answer?.project && !!answer.canWrite !== namedRight)
+    setNamedRight(!!answer.canWrite)
+  // the editor opens on init.id once the answer says the person may write;
+  // a read-only flag or row opens the window with that milestone as its row
+  const [editId, setEditId] = useStateM<string | null>(init.id ?? null)
+  const [answered, setAnswered] = useStateM(!init.id)
+  if (!answered && openedM && answer) {
+    setAnswered(true)
+    if (!answer.canWrite) setEditId(null)
+  }
+  // whether the opened milestone showed, and whether the person deleted it
+  // here, after which its answer of null says nothing
+  const [deletedHere, setDeletedHere] = useStateM(false)
+  // a delete the server refused brings the milestone back, and a later
+  // answer of null is news again
+  if (deletedHere && openedM) setDeletedHere(false)
+  const gone = !!init.id && answered && !openedM && !deletedHere && read?.state === 'ok' && !!answer
+  if (gone && editId === init.id) setEditId(null)
+  // whether the person may change the opened milestone, which is what the
+  // answer says, and no right once it names no milestone
+  const openedCanWrite = !!answer?.canWrite
+  // the window cannot tell the person's right on the project once the
+  // answer names no project for a reason other than their own delete,
+  // since a deleted milestone and lost access answer alike
+  const rightUnknown = !!init.id && !answer?.project && !deletedHere
+  // whether they may add milestones and change the others. Opened on a
+  // milestone, that is what the answer says while it names the project,
+  // and after their own delete of the milestone what the last such answer
+  // said while the store still gives them User access. No right while the
+  // window cannot tell (rightUnknown). Else their level on the project.
+  const canWrite = !init.id
+    ? levelWrites
+    : answer?.project
+      ? !!answer.canWrite
+      : deletedHere && namedRight && levelWrites
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
@@ -2377,14 +2524,22 @@ function MilestoneModal({
   const draftRef = useRefM({ name, date })
   draftRef.current = { name, date }
   const week = exactWeekForDate(date)
+  // the list needs the project in the store; without it the window shows
+  // the opened milestone alone rather than an empty list
   const list = project
     ? P.milestonesIn(project.id)
         .slice()
         .sort((a, b) => a.week - b.week || a.name.localeCompare(b.name))
-    : []
-  const next = list.find((m) => m.week >= P.TODAY_WEEK) ?? null
+        .filter((m) => !(gone && m.id === init.id))
+    : null
+  const next = list?.find((m) => m.week >= P.TODAY_WEEK) ?? null
+  const openedAbove = !!openedM && !list?.some((m) => m.id === openedM.id)
   const canAdd =
-    canWrite && name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !adding
+    canWrite &&
+    !!project &&
+    name.trim().length > 0 &&
+    !overLimit(LIMITS.milestoneName, name) &&
+    !adding
   const add = () => {
     if (!canAdd || !project) return
     // The typed name and date stay until the server creates the milestone,
@@ -2405,6 +2560,58 @@ function MilestoneModal({
       },
     )
   }
+  /* A milestone of the window: the opened one from the answer, with its
+     stored name and day as the answer holds them when asked, any other
+     from the list, the workspace's. An open editor stays, locked with its
+     draft, once the person may no longer change its milestone, and says
+     so, or says that the window can no longer tell (rightUnknown). */
+  const item = (m: MilestoneVM, own: boolean) => {
+    const right = own ? openedCanWrite : canWrite
+    const editing = m.id === editId && (!own || answered)
+    return editing ? (
+      <MilestoneEditor
+        key={m.id}
+        m={m}
+        storedOf={
+          own ? () => shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(m.id) : undefined
+        }
+        locked={!right}
+        lockedNote={
+          rightUnknown
+            ? 'This window can no longer confirm your access. Close the window and open this milestone again to change it.'
+            : undefined
+        }
+        onClose={() => setEditId(null)}
+        onDelete={own ? () => setDeletedHere(true) : undefined}
+      />
+    ) : (
+      <MilestoneRowView
+        key={m.id}
+        m={m}
+        next={next?.id === m.id}
+        opened={own}
+        onEdit={right ? () => setEditId(m.id) : undefined}
+      />
+    )
+  }
+  const openState = !init.id
+    ? undefined
+    : read === null || read.state === 'loading'
+      ? 'loading'
+      : read.state === 'ok'
+        ? gone
+          ? 'gone'
+          : !openedM && !answered
+            ? 'unavailable'
+            : read.current
+              ? 'ok'
+              : 'refreshing'
+        : read.state === 'refused' || read.state === 'failed'
+          ? read.state
+          : 'loading'
+  // what the window says before the answer names its project, in place of
+  // its milestones
+  const before = init.id && projectId === null
   return (
     <ModalShell
       icon="diamond"
@@ -2413,7 +2620,7 @@ function MilestoneModal({
       // a new milestone's name, typed and not added yet
       unsent={[!!name.trim() && 'milestone name']}
       // the shell's chip is set in mono for task keys; a project name is prose
-      badge={project && <span className="font-sans">{project.name}</span>}
+      badge={projectName && <span className="font-sans">{projectName}</span>}
       onClose={onClose}
       focusAfterClose={focusAfterClose}
       width={600}
@@ -2426,76 +2633,115 @@ function MilestoneModal({
         </>
       )}
     >
-      {!project ? (
-        <div className="text-base text-text-2">Open a project to add a milestone.</div>
-      ) : (
-        <>
-          {canWrite && (
-            <div className="flex flex-wrap items-center gap-3">
-              <LimitedInput
-                limit={LIMITS.milestoneName}
-                aria-label="New milestone"
-                placeholder="New milestone"
-                data-milestone-new
-                data-autofocus={init.id ? undefined : ''}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') add()
-                }}
-                wrapperClassName="min-w-[160px] flex-1"
-                className={cn(ctlClass, 'font-medium')}
-              />
-              {/* the week and Add stay together when a phone wraps the row */}
-              <span className="flex shrink-0 items-center gap-3">
-                <DateSelect
-                  value={week}
-                  onChange={(w) => {
-                    if (w != null) setDate(weekToISO(w))
+      <div
+        data-milestone-window
+        data-milestone-open-state={openState}
+        aria-busy={openState === 'refreshing' || undefined}
+      >
+        {before ? (
+          openState === 'refused' && read?.state === 'refused' ? (
+            <MilestoneLine state="refused">{read.sentence}</MilestoneLine>
+          ) : openState === 'failed' ? (
+            <MilestoneLine state="failed" retry={opened.retry}>
+              Couldn't open this milestone.
+            </MilestoneLine>
+          ) : openState === 'unavailable' ? (
+            <MilestoneLine state="unavailable">
+              This milestone can't be opened. It may have been deleted, or you may not have access
+              to it.
+            </MilestoneLine>
+          ) : (
+            <MilestoneLine state="loading">Loading this milestone…</MilestoneLine>
+          )
+        ) : !init.id && !project ? (
+          <div className="text-base text-text-2">Open a project to add a milestone.</div>
+        ) : (
+          <>
+            {read?.state === 'failed' && (
+              <div className="mb-4">
+                <MilestoneLine state="failed" retry={opened.retry}>
+                  Couldn't load the latest version of this milestone.
+                </MilestoneLine>
+              </div>
+            )}
+            {read?.state === 'refused' && (
+              <div className="mb-4">
+                <MilestoneLine state="refused">{read.sentence}</MilestoneLine>
+              </div>
+            )}
+            {gone && (
+              <div className="mb-4">
+                <MilestoneLine state="gone">
+                  This milestone is no longer here. It was deleted, or you can no longer open it.
+                </MilestoneLine>
+              </div>
+            )}
+            {canWrite && project && (
+              <div className="flex flex-wrap items-center gap-3">
+                <LimitedInput
+                  limit={LIMITS.milestoneName}
+                  aria-label="New milestone"
+                  placeholder="New milestone"
+                  data-milestone-new
+                  data-autofocus={init.id ? undefined : ''}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') add()
                   }}
-                  title="Milestone date"
-                  className="h-control w-[150px] rounded-md font-sans text-base"
+                  wrapperClassName="min-w-[160px] flex-1"
+                  className={cn(ctlClass, 'font-medium')}
                 />
-                <Button
-                  type="button"
-                  variant={canAdd ? 'primary' : 'default'}
-                  disabled={!canAdd}
-                  onClick={add}
-                  className="font-semibold"
+                {/* the week and Add stay together when a phone wraps the row */}
+                <span className="flex shrink-0 items-center gap-3">
+                  <DateSelect
+                    value={week}
+                    onChange={(w) => {
+                      if (w != null) setDate(weekToISO(w))
+                    }}
+                    title="Milestone date"
+                    className="h-control w-[150px] rounded-md font-sans text-base"
+                  />
+                  <Button
+                    type="button"
+                    variant={canAdd ? 'primary' : 'default'}
+                    disabled={!canAdd}
+                    onClick={add}
+                    className="font-semibold"
+                  >
+                    Add
+                  </Button>
+                </span>
+              </div>
+            )}
+            {/* the opened milestone where the list does not hold it */}
+            {openedM && openedAbove && (
+              <div className={cn('flex flex-col gap-1', canWrite && project && 'mt-6')}>
+                {item(openedM, true)}
+              </div>
+            )}
+            {list && (
+              <>
+                <div
+                  className={cn(
+                    'mb-2 flex items-center gap-2 text-md font-semibold text-text-1',
+                    ((canWrite && project) || openedAbove) && 'mt-6',
+                  )}
                 >
-                  Add
-                </Button>
-              </span>
-            </div>
-          )}
-          <div
-            className={cn(
-              'mb-2 flex items-center gap-2 text-md font-semibold text-text-1',
-              canWrite && 'mt-6',
+                  On the roadmap
+                  <span className="font-normal text-text-3">{list.length}</span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  {list.map((m) => (m.id === openedM?.id ? item(openedM, true) : item(m, false)))}
+                  {list.length === 0 && (
+                    <div className="px-0.5 py-1 text-sm text-text-3 italic">No milestones yet.</div>
+                  )}
+                </div>
+              </>
             )}
-          >
-            On the roadmap
-            <span className="font-normal text-text-3">{list.length}</span>
-          </div>
-          <div className="flex flex-col gap-1">
-            {list.map((m) =>
-              canWrite && m.id === editId ? (
-                <MilestoneEditor key={m.id} m={m} onClose={() => setEditId(null)} />
-              ) : (
-                <MilestoneRowView
-                  key={m.id}
-                  m={m}
-                  next={next?.id === m.id}
-                  onEdit={canWrite ? () => setEditId(m.id) : undefined}
-                />
-              ),
-            )}
-            {list.length === 0 && (
-              <div className="px-0.5 py-1 text-sm text-text-3 italic">No milestones yet.</div>
-            )}
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </ModalShell>
   )
 }
@@ -2503,14 +2749,17 @@ function MilestoneModal({
 /* One milestone on the list: the diamond, the name, the Overview's relative
    phrase and the roadmap's week label, and an Edit button when the caller may
    write. Past milestones are dimmed; the next one's phrase is emphasised. On
-   a phone the two labels drop under the name. */
+   a phone the two labels drop under the name. The milestone the window
+   opened on carries data-milestone-opened. */
 function MilestoneRowView({
   m,
   next,
+  opened = false,
   onEdit,
 }: {
   m: MilestoneVM
   next: boolean
+  opened?: boolean
   onEdit?: () => void
 }) {
   const mobile = useMobile()
@@ -2531,6 +2780,7 @@ function MilestoneRowView({
   return (
     <div
       data-milestone-row={m.id}
+      data-milestone-opened={opened ? '' : undefined}
       className="flex min-h-control flex-wrap items-center gap-x-3 gap-y-0.5 rounded-md pr-1 pl-2"
     >
       <span
@@ -2574,16 +2824,44 @@ function MilestoneRowView({
 
 /* The row, opened: name and week on the lit material of an on-state, then
    Delete / Cancel / Save on a second line. Enter saves; Escape cancels the
-   edit and leaves the window open (data-escape-owner, see ModalShell). */
-function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }) {
+   edit and leaves the window open (data-escape-owner, see ModalShell).
+   `storedOf` answers the milestone's stored name and day as the row it
+   renders from holds them now (a milestone read's answer,
+   MilestoneAnswer.stored), else the editor reads the store's
+   (P.milestoneRow); the save sends them as what the person saw, and a
+   refused save rebases on them as they are once the store took its paint
+   back.
+   `locked` keeps the typed text read-only once the person may no longer
+   change the milestone, and `lockedNote` says why under it. The Name box
+   takes focus when the editor opens, unless the person already moved focus
+   inside the window. */
+function MilestoneEditor({
+  m,
+  storedOf,
+  locked = false,
+  lockedNote = 'You can no longer change this milestone.',
+  onClose,
+  onDelete,
+}: {
+  m: MilestoneVM
+  storedOf?: () => { name: string; week: string } | undefined
+  locked?: boolean
+  lockedNote?: string
+  onClose: () => void
+  /** runs as the person deletes the milestone here */
+  onDelete?: () => void
+}) {
   // the name and day stored when the editor opened, which the save sends as
   // what the person saw. After a save refused over someone else's change,
   // the draft stays and their version becomes it once it shows (rebase), so
-  // a second Save replaces it on purpose.
-  const [seen, setSeen] = useStateM(() => P.milestoneRow(m.id) ?? undefined)
+  // a second Save replaces it on purpose. Read when asked, never as of the
+  // last render: a refusal's keepDraft runs right after the store took the
+  // person's paint back, before React renders again.
+  const storedNow = () => (storedOf ? storedOf() : P.milestoneRow(m.id)) ?? undefined
+  const [seen, setSeen] = useStateM(storedNow)
   const rebase = useRefM(false)
   const takeStored = () => {
-    const row = P.milestoneRow(m.id)
+    const row = storedNow()
     if (!row || (row.name === seen?.name && row.week === seen?.week)) return false
     rebase.current = false
     setSeen(row)
@@ -2601,7 +2879,8 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   // a save in flight: the editor stays open, its fields read-only, until
   // the server answers
   const [saving, setSaving] = useStateM(false)
-  const canSave = name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !saving
+  const canSave =
+    !locked && name.trim().length > 0 && !overLimit(LIMITS.milestoneName, name) && !saving
   // an answer that comes after this editor closed, for example because
   // another milestone's editor opened, closes nothing
   const mounted = useRefM(true)
@@ -2612,6 +2891,15 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     }
   }, [])
   const rootRef = useRefM<HTMLDivElement>(null)
+  const nameRef = useRefM<HTMLInputElement>(null)
+  // focus moves to the Name box only while it is nowhere in particular: on
+  // the page, or on the window itself, as before an opened milestone's
+  // answer arrived; never away from a control the person moved to meanwhile
+  useEffectM(() => {
+    const active = document.activeElement
+    if (!active?.isConnected || active === document.body || active.hasAttribute('data-modal-shell'))
+      nameRef.current?.focus()
+  }, [])
   const closeRef = useRefM(onClose)
   closeRef.current = onClose
   // Escape is read here, on the document in the capture phase, because that
@@ -2660,7 +2948,8 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
   const armDel = deletion.armed !== null
   const remove = () =>
     deletion.press('delete', () => {
-      if (P.refusePausedEdit()) return
+      if (locked || P.refusePausedEdit()) return
+      onDelete?.()
       void P.removeMilestone(m.id, seen).then((saved) => {
         if (saved) window.showToast?.('Milestone removed')
       })
@@ -2670,6 +2959,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
     <div
       ref={rootRef}
       data-milestone-editor={m.id}
+      data-milestone-locked={locked ? '' : undefined}
       data-escape-owner
       className="rounded-md bg-lit p-2 shadow-card"
     >
@@ -2679,12 +2969,12 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           className="size-[9px] shrink-0 rotate-45 rounded-[var(--r-2xs)] bg-[var(--milestone)]"
         />
         <LimitedInput
+          ref={nameRef}
           limit={LIMITS.milestoneName}
           aria-label="Name"
           data-autofocus
-          autoFocus
           value={name}
-          readOnly={saving}
+          readOnly={saving || locked}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') save()
@@ -2694,7 +2984,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
         />
         <DateSelect
           value={week}
-          disabled={saving}
+          disabled={saving || locked}
           onChange={(w) => {
             if (w != null) setDate(weekToISO(w))
           }}
@@ -2702,6 +2992,11 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           className="h-control w-[150px] rounded-md font-sans text-base"
         />
       </div>
+      {locked && (
+        <p data-milestone-locked-note className="mt-2 mb-0 pl-6 text-sm text-text-2">
+          {lockedNote}
+        </p>
+      )}
       <div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
         <span className="text-xs text-text-3">Week {P.weekNumberOf(week).num}</span>
         <div className="flex-1" />
@@ -2709,6 +3004,7 @@ function MilestoneEditor({ m, onClose }: { m: MilestoneVM; onClose: () => void }
           type="button"
           variant="ghost"
           size="sm"
+          disabled={locked}
           style={{ background: armDel ? 'var(--danger-soft)' : undefined }}
           className="[color:var(--danger)]"
           onClick={remove}

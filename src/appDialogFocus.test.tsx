@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { CONFIRM_IGNORE_MS } from './lib/useConfirmArm'
+import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
@@ -116,26 +117,46 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
   ]
   prepare(snap)
-  /* The workspace is delivered once and never again, so a write's paint is
-     the only copy of what it changed. The Overview's reads answer from it
-     until the first write: an answer after one would be a transition the
-     store takes for a delivery that holds the write, which this double
-     never sends, and the paint would end. */
+  /* The workspace is delivered once, and again only as a milestone's
+     delete changes it (projects.removeMilestone, or roadmap.change during
+     a Roadmap visit), before the delete answers, as Convex delivers a
+     write; any other write's paint is the only copy of what it changed.
+     The Overview's reads answer from it until the first write: an answer
+     after one would be a transition the store takes for a delivery that
+     holds the write, which this double does not send, and the paint would
+     end. The Milestones window's read of the milestone it opens on
+     (milestones.get) answers from it at any time, so a window opened after
+     a delete reads its milestone; that transition is a delivery that holds
+     the delete, which the workspace delivered already. */
   let wrote = false
   // Settings › Projects reads the server's lists, which hold Plan
   const lists = projectListsServer(() => snap)
+  let publish: ((value: Snapshot) => void) | null = null
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    if (name === 'workspace:whole') {
+      publish = next
+      next(structuredClone(snap))
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
+    else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
     return () => {}
   })
   network.query.mockResolvedValue(null)
-  network.mutation.mockImplementation((ref) => {
+  network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     if (name !== 'identity:claimMySeats') wrote = true
+    // a delete from the window, or from it during a Roadmap visit
+    const operations = (args.operations ?? []) as { kind: string; id: string }[]
+    const removed =
+      name === 'projects:removeMilestone'
+        ? [args.id]
+        : operations.filter((o) => o.kind === 'milestone_remove').map((o) => o.id)
+    if (removed.length) {
+      snap.milestones = snap.milestones.filter((m) => !removed.includes(m.id))
+      publish?.(structuredClone(snap))
+    }
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
         saved = () => resolve({ num: 2, key: 'DOCS' })
@@ -399,6 +420,11 @@ describe('Milestones', { timeout: 30_000 }, () => {
       })
       await settle()
     } else await press(row)
+    // the window reads its milestone, and shows its editor once it answers
+    await waitFor(
+      () => document.querySelector('[data-milestone-window][data-milestone-open-state="ok"]'),
+      "the window's answer",
+    )
     const del = await find(
       'Delete',
       await waitFor(() => document.querySelector('[data-milestone-editor]'), 'the editor'),

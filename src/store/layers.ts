@@ -37,19 +37,25 @@ export type Paint = () => void
     thread is watched; `view` paints the task rows the open views' answers
     bring (store/viewRows.ts), every copy of a task it changes; `detail`
     paints the task window's own answer of task `task` (convex/taskWindow.ts
-    task), and runs only while that task is watched and its answer held. A
-    write on a task the workspace does not hold paints `view`, `detail` and
-    `workspace`, whose paint skips until the workspace holds the task, so
-    the write shows from whichever source the screen takes the task from. */
+    task), and runs only while that task is watched and its answer held;
+    `milestones` paints the milestones the store's milestone reads hold
+    (store/milestoneRows.ts), every copy of a milestone it changes, and
+    once the server accepted it only the copies of the reads that have not
+    delivered it (store/planner.ts milestoneNeeds). A write on a task the
+    workspace does not hold paints `view`, `detail` and `workspace`, whose
+    paint skips until the workspace holds the task, so the write shows
+    from whichever source the screen takes the task from, and a milestone
+    write paints `workspace` and `milestones` alike. */
 export type View = {
   workspace?: Paint
   thread?: { task: string; paint: Paint }
   view?: Paint
   detail?: { task: string; paint: Paint }
+  milestones?: Paint
 }
 
 /** Which rows a paint changes. */
-export type Part = 'workspace' | 'thread' | 'view' | 'detail'
+export type Part = 'workspace' | 'thread' | 'view' | 'detail' | 'milestones'
 
 /** The values on screen for the fields one write changes, before its paint:
     the row's table and id, and each field's value. The store sends them as
@@ -70,8 +76,9 @@ export type Over = {
     (a Roadmap batch) or covers several writes (an umbrella), `pending` waits
     for the server's answer, and `saved` is accepted but not yet known to be
     held by a delivery. `seen` holds the delivery counters when it was sent,
-    the views' among them (deliveries of the reads that bring view rows) and
-    the task window's (deliveries of the watched task's own answer).
+    the views' among them (deliveries of the reads that bring view rows),
+    the task window's (deliveries of the watched task's own answer) and the
+    milestone reads' (deliveries of their answers).
     `seenFrom` names, for each field of `over`, the newest open or pending
     layer that painted it when this one was made, so a refusal of that
     earlier write explains this one's (store/planner.ts). */
@@ -81,12 +88,13 @@ export type Layer = {
   readonly over?: Over
   readonly seenFrom?: ReadonlyMap<string, number>
   state: 'open' | 'pending' | 'saved'
-  seen: { snapshot: number; thread: number; view: number; detail: number }
+  seen: { snapshot: number; thread: number; view: number; detail: number; milestones: number }
   view: View
 }
 
 /** Whether `view` paints anything. */
-export const paints = (view: View) => !!(view.workspace || view.thread || view.view || view.detail)
+export const paints = (view: View) =>
+  !!(view.workspace || view.thread || view.view || view.detail || view.milestones)
 
 /** Creates an empty registry. */
 export function createLayers() {
@@ -116,7 +124,7 @@ export function createLayers() {
         ...(over ? { over } : {}),
         ...(seenFrom.size ? { seenFrom } : {}),
         state: 'open',
-        seen: { snapshot: 0, thread: 0, view: 0, detail: 0 },
+        seen: { snapshot: 0, thread: 0, view: 0, detail: 0, milestones: 0 },
         view,
       }
       live.push(layer)
@@ -154,15 +162,15 @@ export function createLayers() {
     /** Whether `layer` is still in the registry. */
     has: (layer: Layer) => live.includes(layer) || saved.includes(layer),
     /** Drops the saved `part` of every saved layer, once a live delivery
-        holds them: every part for the workspace and the views, and for the
-        thread and the task window's answer only the parts of task `task`,
-        or of every task but `task` with `except`. Answers whether it
-        dropped any. */
+        holds them: every part for the workspace, the views and the
+        milestone reads, and for the thread and the task window's answer
+        only the parts of task `task`, or of every task but `task` with
+        `except`. Answers whether it dropped any. */
     dropSaved(part: Part, task?: string, except = false): boolean {
       let dropped = false
       // remove() replaces `saved`, so this walks the list as it was
       for (const layer of saved) {
-        if (part === 'workspace' || part === 'view') {
+        if (part === 'workspace' || part === 'view' || part === 'milestones') {
           if (!layer.view[part]) continue
           layer.view = { ...layer.view, [part]: undefined }
         } else {

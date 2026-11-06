@@ -4,29 +4,38 @@
    that ask for a person: work with no owner and reviews with no reviewer.
    Naming someone here stamps no one: it is not a change made on a person's
    page. Finished work is not listed: it belongs to each person's page,
-   since each person's "since" differs. */
-import { memo, type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+   since each person's "since" differs. The milestones come from the
+   server's bounded reads over the scope's top-level projects
+   (useSyncMilestoneReads); the rest still reads the workspace. */
+import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { DeferredList } from '@/components/DeferredList'
 import { Avatar, Icon, IssueKey, ProjectNameOf } from '@/components/qivo'
+import { Button } from '@/components/ui/button'
+import { HoverTooltip } from '@/components/ui/tooltip'
 import { SYNC_LIMIT } from '@/lib/boardGroups'
-import { relativeWeek } from '@/lib/dates'
+import { relativeWeek, weekToISO } from '@/lib/dates'
+import { limitSentence } from '@/lib/fieldLimits'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import {
   bannerVerdict,
-  milestonesAhead,
   nearCapacity,
   needsOwner,
   needsReviewer,
-  nextMilestone,
   openingFacts,
+  SYNC_MILESTONE_SLOTS,
   type SyncDay,
+  syncMilestones,
   syncSentence,
   waitingLabel,
 } from '@/lib/teamSync'
 import { cn } from '@/lib/utils'
-import { type IssueVM, P, type UserVM } from '@/store/planner'
+import { useViewVisibility } from '@/lib/viewVisibility'
+import type { MilestoneAsk } from '@/store/milestoneRows'
+import { type IssueVM, type MilestoneVM, P, type UserVM } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
+import { LIMITS } from '../../../convex/lib/limits'
+import { useViewsNews } from '../useViewsNews'
 import { LoadChip, type PageCtx, TitleButton } from './SyncCard'
 import { weekFigure } from './weekFigure'
 
@@ -180,6 +189,86 @@ const pendingAsks = (n: number) => `Loading ${n} more ${n === 1 ? 'task' : 'task
 const ASK_LIST =
   'overflow-hidden rounded-lg border border-border [&>*+.deferred-block>*:first-child]:border-t'
 
+/* How many openings mounted, each one's milestone read owner
+   (P.watchMilestones). */
+let syncReaders = 0
+
+/* What Team sync offers for a scope of more top-level projects than one
+   milestone read names, after the limit's own sentence: its Scope menu
+   picks a team or a project. */
+const TOO_MANY_HINT = 'Pick a team or a project with fewer top-level projects.'
+
+/** The opening's two milestone reads, which it registers with the store
+    while it and the tab show: its next milestone, the first row of the
+    upcoming section of the scope's top-level projects `metaIds` from this
+    week on (milestones.section), and the milestones of this week and next
+    (milestones.between, from this week's first day in the app's week grid
+    to the first day two weeks later), with Retry. A scope with no
+    top-level project asks nothing, and one of more than the store's cap
+    (MILESTONE_READS.projects) answers too_many without a read. Leaving
+    the opening, as for a person's page, stops them and keeps their
+    answers, which show as refreshing on return; App releases them once
+    the page is no longer kept. A new week asks anew. Renders again on the
+    store's `views` news. */
+function useSyncMilestoneReads(metaIds: Set<string>, todayWeek: number, owner: number) {
+  const { visible } = useViewVisibility()
+  const [attempt, setAttempt] = useState(0)
+  useViewsNews()
+  const projects = [...metaIds].sort()
+  const scope = projects.join()
+  const from = weekToISO(todayWeek)
+  const to = weekToISO(todayWeek + 2)
+  const empty = projects.length === 0
+  // the reads' arguments as the opening shows them now
+  const nextAsk: MilestoneAsk = { kind: 'section', projects, from, side: 'upcoming', limit: 1 }
+  const aheadAsk: MilestoneAsk = { kind: 'between', projects, from, to }
+  useEffect(() => {
+    if (empty) return
+    const ask = visible
+    const list = scope.split(',')
+    P.watchMilestones(
+      SYNC_MILESTONE_SLOTS.next,
+      ask ? { kind: 'section', projects: list, from, side: 'upcoming', limit: 1 } : null,
+      owner,
+      attempt,
+    )
+    P.watchMilestones(
+      SYNC_MILESTONE_SLOTS.ahead,
+      ask ? { kind: 'between', projects: list, from, to } : null,
+      owner,
+      attempt,
+    )
+    return () => {
+      P.watchMilestones(SYNC_MILESTONE_SLOTS.next, null, owner, attempt)
+      P.watchMilestones(SYNC_MILESTONE_SLOTS.ahead, null, owner, attempt)
+    }
+  }, [empty, visible, scope, from, to, owner, attempt])
+  // with no top-level project in scope the answer is known: none
+  const shown = empty
+    ? syncMilestones<MilestoneVM>(
+        { state: 'ok', current: true, answer: { rows: [], next: null, stopped: null } },
+        { state: 'ok', current: true, answer: { rows: [], next: null, stopped: null } },
+      )
+    : syncMilestones<MilestoneVM>(
+        // an answer for arguments the effect has not asked yet is loading
+        P.milestoneRead(SYNC_MILESTONE_SLOTS.next, nextAsk),
+        P.milestoneRead(SYNC_MILESTONE_SLOTS.ahead, aheadAsk),
+      )
+  return { ...shown, retry: () => setAttempt((n) => n + 1) }
+}
+
+/** The muted "unknown" the strip shows for a fact Qivo could not read
+    whole, with what it means on hover. */
+function Unknown({ why }: { why: string }) {
+  return (
+    <HoverTooltip content={why}>
+      <div data-sync-fact="unknown" className="w-fit text-base text-text-3">
+        unknown
+      </div>
+    </HoverTooltip>
+  )
+}
+
 export function TeamOpening({
   rows,
   humans,
@@ -194,6 +283,7 @@ export function TeamOpening({
   /** the people in the walk */
   humans: UserVM[]
   subIds: Set<string>
+  /** the scope's top-level projects, whose milestones the opening reads */
   metaIds: Set<string>
   day: SyncDay
   now: number
@@ -204,8 +294,11 @@ export function TeamOpening({
     issueById: P.issueById,
     today: day.today,
   })
-  const next = nextMilestone(P.milestones, metaIds, day.todayWeek)
-  const ahead = milestonesAhead(P.milestones, metaIds, day.todayWeek)
+  // this mounted opening, which owns the milestone reads while it asks
+  const [owner] = useState(() => ++syncReaders)
+  const milestones = useSyncMilestoneReads(metaIds, day.todayWeek, owner)
+  const next = milestones.next.kind === 'milestone' ? milestones.next.milestone : null
+  const ahead = milestones.ahead
   const busy = nearCapacity(humans, weekFigure)
   const unowned = needsOwner(P.issues, subIds, day)
   const unreviewed = needsReviewer(rows).map((ask) => ask.issue)
@@ -264,7 +357,10 @@ export function TeamOpening({
         <Fact label="Slipping" value={facts.slipping} tone="warning" />
         <Fact label="Blocked" value={facts.blocked} />
         <Fact label="Paused" value={facts.paused} />
-        <div className="min-w-0 [grid-column:span_2] max-[520px]:[grid-column:auto]">
+        <div
+          data-sync-next-milestone={milestones.next.kind}
+          className="min-w-0 [grid-column:span_2] max-[520px]:[grid-column:auto]"
+        >
           <div className="text-sm text-text-2">Next milestone</div>
           {next ? (
             <>
@@ -273,8 +369,15 @@ export function TeamOpening({
                 {P.projectLabelOf(next.project)}, {P.weekLabel(next.week)}
               </div>
             </>
-          ) : (
+          ) : milestones.next.kind === 'none' ? (
             <div className="text-base text-text-3">None scheduled</div>
+          ) : milestones.next.kind === 'loading' ? (
+            <div className="text-base text-text-3">
+              <span aria-hidden="true">…</span>
+              <span className="sr-only">Loading the next milestone</span>
+            </div>
+          ) : (
+            <Unknown why="Qivo could not read every milestone of these projects." />
           )}
         </div>
       </div>
@@ -297,8 +400,12 @@ export function TeamOpening({
           <div className="mt-6">
             <ListHeading title="Milestones" />
           </div>
-          <div data-sync-milestones className="flex flex-col gap-1.5">
-            {ahead.map((m) => {
+          <div
+            data-sync-milestones
+            aria-busy={ahead.refreshing || undefined}
+            className="flex flex-col gap-1.5"
+          >
+            {ahead.rows.map((m) => {
               const lead = m.id === next?.id
               return (
                 <div key={m.id} className="flex min-w-0 items-center gap-2 text-sm">
@@ -329,7 +436,43 @@ export function TeamOpening({
                 </div>
               )
             })}
-            {!ahead.length && <Empty>No milestones this week or next</Empty>}
+            {ahead.note === 'empty' && <Empty>No milestones this week or next</Empty>}
+            {ahead.note === 'loading' && <Empty>Loading milestones…</Empty>}
+            {ahead.note && ahead.note !== 'empty' && ahead.note !== 'loading' && (
+              <div
+                data-sync-milestones-note={ahead.note}
+                className="flex flex-wrap items-center gap-x-2 text-sm text-text-3"
+              >
+                {ahead.note === 'partial'
+                  ? 'Some milestones of this week and next may be missing.'
+                  : ahead.note === 'failed'
+                    ? "Couldn't load milestones."
+                    : ahead.note === 'too_many'
+                      ? `${limitSentence(LIMITS.milestoneProjects)} ${TOO_MANY_HINT}`
+                      : ahead.sentence}
+                {ahead.note === 'failed' && (
+                  <Button type="button" variant="ghost" size="sm" onClick={milestones.retry}>
+                    Retry
+                  </Button>
+                )}
+              </div>
+            )}
+            {/* the next milestone's read failed or was refused alone */}
+            {milestones.nextNote && (
+              <div
+                data-sync-next-milestone-note={milestones.nextNote.note}
+                className="flex flex-wrap items-center gap-x-2 text-sm text-text-3"
+              >
+                {milestones.nextNote.note === 'failed'
+                  ? "Couldn't load the next milestone."
+                  : milestones.nextNote.sentence}
+                {milestones.nextNote.note === 'failed' && (
+                  <Button type="button" variant="ghost" size="sm" onClick={milestones.retry}>
+                    Retry
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

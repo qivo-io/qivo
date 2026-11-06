@@ -49,7 +49,7 @@ import { addressMoved, rememberAddress } from './lib/addressBook'
 import { closeOrAsk } from './lib/discardQuestion'
 import { lazyFromModule, preloadInBackground } from './lib/lazyModule'
 import { autoAllNoted, noteAutoAll, seesNoProject } from './lib/noProjects'
-import { parseSyncScope } from './lib/teamSync'
+import { parseSyncScope, SYNC_MILESTONE_SLOTS } from './lib/teamSync'
 import { useMobile, useMobileBackLayer } from './lib/useMobile'
 import { OUT_OF_USE } from './lib/viewHidden'
 import './styles/mobile.css'
@@ -1044,6 +1044,13 @@ function App() {
   useEffect(() => {
     if (!overviewKept) P.releaseOverview()
   }, [overviewKept])
+  // and so does Team sync's page, its opening's milestone reads, which
+  // stop while a person's page shows and keep their answers until then
+  const syncKept = keep.pages.includes('sync')
+  useEffect(() => {
+    if (syncKept) return
+    for (const slot of Object.values(SYNC_MILESTONE_SLOTS)) P.releaseMilestones(slot)
+  }, [syncKept])
   /** The id a page's ViewKeeper keeps it under: its scope for a page that
       shows one, so a new scope mounts it anew; null once it is not kept. */
   const keptId = (page: MainPage) =>

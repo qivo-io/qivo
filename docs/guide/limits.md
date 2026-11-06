@@ -62,6 +62,7 @@ A view never shows a number it could not count whole as if it were complete. Whe
 | Projects a removed person may lead | 1,000 projects | This person leads more than 1,000 projects and cannot be removed at once. Give some of those projects another lead first, or make the person Inactive to end their access now. |
 | Inbox messages the app shows | 500 messages | The app shows your newest 500 inbox messages. Mark older ones read or remove them to see the rest. |
 | Tasks one Board shows | 1,000 tasks, subtasks included, across the project or sub-project with its filters, or My view | This selection exceeds the Board's 1,000-task limit. |
+| Projects whose milestones one view reads | 200 top-level projects | The app reads the milestones of at most 200 projects at once. Choose fewer projects. |
 | Active billable users with online billing | 1,000 users | Online billing supports up to 1,000 active billable users. Email support@qivo.io to arrange billing for a larger organization. |
 
 ## Numbers and settings

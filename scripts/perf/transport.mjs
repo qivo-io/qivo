@@ -46,8 +46,9 @@ server.onmessage = ({ data }) => {
   window.__perf.boardCards = data.boardCards
   window.__perf.boardRows = data.boardRows
   if (data.type === 'result' && data.error) {
-    // a read the server could not answer, as Convex reports a failed query
-    const failure = new Error(data.error)
+    // a read the server could not answer, as Convex reports a failed query,
+    // or a refusal, which Convex throws as a ConvexError with its data
+    const failure = data.data ? new ConvexError(data.data) : new Error(data.error)
     const receiver = receivers.get(data.to)
     if (receiver) receiver.fail?.(failure)
     else calls.get(data.to)?.reject(failure)
@@ -70,7 +71,7 @@ server.onmessage = ({ data }) => {
       if (!entry) continue
       tokens.add(token)
       if (result.error) {
-        entry.error = new Error(result.error)
+        entry.error = result.data ? new ConvexError(result.data) : new Error(result.error)
         continue
       }
       window.__perf.wireBytes += result.bytes

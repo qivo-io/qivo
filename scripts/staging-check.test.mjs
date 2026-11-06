@@ -22,12 +22,14 @@ import {
   evaluate,
   FIXTURE_STATUS,
   FORMERLY_BARE,
+  freeMilestoneWeek,
   hasTag,
   historyRows,
   isSiteOf,
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
+  MILESTONE_STEP,
   ON_DEMAND_STEP,
   OVERVIEW_EXPECTED,
   OVERVIEW_HEALTH_EXPECTED,
@@ -117,6 +119,26 @@ describe('staging check REST contract', () => {
       confirm:
         'Used by 1 active task. Deleting this label removes it from all tasks, including archived tasks. This cannot be undone.',
     })
+  })
+  it("opens its own milestone in the Milestones window by the window's own marks, in a free week", () => {
+    const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')
+    for (const mark of [
+      'data-milestone-window',
+      'data-milestone-editor={m.id}',
+      'data-milestone-row={m.id}',
+      'aria-label="Name"',
+      "armDel ? 'Confirm delete' : 'Delete'",
+    ])
+      expect(modals).toContain(mark)
+    expect(modals).toMatch(/aria-label=\{`Edit \$\{m\.name\}`\}/)
+    const overview = readFileSync(new URL('../src/views/Overview.tsx', import.meta.url), 'utf8')
+    expect(overview).toContain('data-overview-milestone={m.id}')
+    expect(MILESTONE_STEP).toBe('ui/milestones')
+    // three weeks after the run's own Monday, past the weeks M holds
+    expect(freeMilestoneWeek([], '2026-11-06', 1)).toBe('2026-11-23')
+    expect(freeMilestoneWeek(['2026-11-24', '2026-11-30'], '2026-11-06', 1)).toBe('2026-12-07')
+    // a week starting on Sunday
+    expect(freeMilestoneWeek([], '2026-11-06', 0)).toBe('2026-11-22')
   })
   it("checks the removal window on a sub-project of its own, in the window's words", () => {
     const modals = readFileSync(new URL('../src/panels/Modals.tsx', import.meta.url), 'utf8')

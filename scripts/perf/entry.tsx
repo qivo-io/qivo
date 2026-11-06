@@ -8,7 +8,7 @@ import App from '@perf/App'
 import { AppearanceProvider } from '@perf/AppearanceProvider'
 import { installFocusVisibility } from '@perf/lib/focusVisibility'
 import * as liveParts from '@perf/store/liveParts'
-import { initStore } from '@perf/store/planner'
+import * as planner from '@perf/store/planner'
 
 async function boot() {
   // as src/main.tsx does: views tell pointer from keyboard input by it
@@ -18,8 +18,14 @@ async function boot() {
   // store from before it (scripts/perf/page.mjs) has no TASKS and loads
   // every task as it boots either way.
   const tasks = Reflect.get(liveParts, 'TASKS') as { atBoot: boolean } | undefined
-  if (tasks && new URLSearchParams(location.search).get('taskload') === 'boot') tasks.atBoot = true
-  await initStore()
+  const parameters = new URLSearchParams(location.search)
+  if (tasks && parameters.get('taskload') === 'boot') tasks.atBoot = true
+  // milestones=sync-too-many: no milestone read may name a project, so Team
+  // sync's opening asks nothing and says why (scripts/perf/server.mjs)
+  const reads = Reflect.get(planner, 'MILESTONE_READS') as { projects: number } | undefined
+  if (reads && (parameters.get('milestones') ?? '').split(',').includes('sync-too-many'))
+    reads.projects = 0
+  await planner.initStore()
   createRoot(document.getElementById('root')!).render(
     <TooltipProvider>
       <AppearanceProvider accountId="perf-account">
