@@ -33,7 +33,7 @@ const groups = (page) =>
       ids: g.ids,
     })),
   )
-/* The badge's count: the unread summary's (P.inboxSummary) once it is
+/* The badge's count, the unread summary's (P.inboxSummary) once it is
    current, which the top bar's chip must show, as lib/inboxBadge.ts says. */
 const unreadBadge = async (page) => {
   await page.waitForFunction(

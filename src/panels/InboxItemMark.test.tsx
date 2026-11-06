@@ -14,8 +14,8 @@ import type { Row } from '../store/rows'
    item from the server's messages through its stand-in
    (store/inboxStandIn.setup.ts). The server here holds the task's messages
    beyond the inbox part's cut, so the workspace holds none of them, as
-   for an Inbox past 500 messages: the divider and the read come from the
-   item alone. The read waits for the item's answer, takes the task's
+   for an Inbox past 500 messages, and the divider and the read come from
+   the item alone. The read waits for the item's answer, takes the task's
    organization, uuid and the answer's `through`, goes once a `through`,
    and never for a snoozed item, a seat whose items are building, a failed
    read or no item. The Inbox pane keeps the Inbox's frozen start, and the
@@ -325,8 +325,8 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(5)) })
     expect(itemReads()).toHaveLength(2)
     expect(itemReads()[1]).toEqual(itemReads()[0])
-    // only once more: a later answer at the same through, still unread,
-    // sends nothing
+    // only once more, so a later answer at the same through, still
+    // unread, sends nothing
     await act(async () => writes[1].answer())
     beyond = beyond.map((m) => (m.id === 'late' ? { ...m, dropped: 1 } : m))
     await act(async () => publish())

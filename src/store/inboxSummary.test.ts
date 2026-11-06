@@ -35,8 +35,8 @@ const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 let doubleWatch: Double['watch'] | null = null
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-/** The fixture's organization with three tasks: unread messages about the
-    first two and a read one about the third. */
+/** The fixture's organization with three tasks, with unread messages about
+    the first two and a read one about the third. */
 function fixture(): Snapshot {
   const snap = plannerFixture()
   const org = snap.orgs[0].id

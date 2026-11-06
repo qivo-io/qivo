@@ -258,8 +258,8 @@ export function liveOver(client: Client): LiveQueries & {
           changed.add(token)
           continue
         }
-        // a read that never answers holds what it had: nothing, while the
-        // stand-in is told to wait from its first answer
+        // a read that never answers holds what it had, which is nothing
+        // when the stand-in is told to wait from its first answer
         if (value === INBOX_NO_ANSWER) continue
       } else value = answerOf(whole.value, w.name, w.args)
       const json = JSON.stringify(value)

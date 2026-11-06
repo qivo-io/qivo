@@ -2066,7 +2066,7 @@ function IssueDetail({
   // render, and a null key would freeze "nothing unread" forever. It comes
   // from the task's inbox item, which the store reads beside the thread
   // (P.inboxItem), so it is exact also for messages the workspace never
-  // loaded, and stays pending until that read answers: meanwhile no mark
+  // loaded, and stays pending until that read answers, while no mark
   // shows and no read goes out. An item that is building or failed starts
   // nowhere. …unless the surface that opened us froze it first (the inbox,
   // whose click marks the item read before this render): then that answer

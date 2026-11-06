@@ -9,7 +9,7 @@ import type { ForcedInbox } from './store/inboxStandIn.setup'
 import { plannerFixture } from './store/plannerFixture.setup'
 import type { Row } from './store/rows'
 
-/* The Inbox badge on App and the real store: the desktop top bar's Inbox
+/* The Inbox badge on App and the real store. The desktop top bar's Inbox
    tab and the phone's bottom Inbox tab show the server's unread summary
    (store/planner.ts P.inboxSummary, lib/inboxBadge.ts), which the live
    double answers from the server's messages through its stand-in

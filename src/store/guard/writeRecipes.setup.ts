@@ -1162,7 +1162,7 @@ export const recipes: Recipe[] = [
   },
   {
     // the item read of P.readItem, which the read on open (P.readOnOpen)
-    // sends too: the server marks every unread message of the item stored
+    // sends too. The server marks every unread message of the item stored
     // up to `through` read and prunes the item to its newest message, the
     // one msg-1 here
     mutation: 'messages:readItem',

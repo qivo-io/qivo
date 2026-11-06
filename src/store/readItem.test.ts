@@ -5,7 +5,7 @@ import { plannerFixture, type Snapshot } from './plannerFixture.setup'
 import type { Row } from './rows'
 
 /* The store's read of one inbox item (store/planner.ts P.readItem), a
-   plain write of messages.readItem: its paint marks read the task's loaded
+   plain write of messages.readItem. Its paint marks read the task's loaded
    messages that are unread, not snoozed and no newer than the item's
    newest, so the Inbox's row turns read at once, and prunes the task to its
    newest message, as the server does; it leaves the rest. The pause
@@ -115,7 +115,7 @@ describe("the store's read of one inbox item", () => {
         args: { org_id: snapshot.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(5)) },
       },
     ])
-    // a plain write: the next call sends again
+    // a plain write, so the next call sends again
     expect(P().readItem(target(5))).toBe(true)
     expect(sent).toHaveLength(2)
   })

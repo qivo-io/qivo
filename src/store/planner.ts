@@ -473,7 +473,7 @@ export type InboxItemAnswer = FunctionReturnType<typeof api.inbox.item>
 /** An inbox item's fields, from an answer that holds one. */
 export type InboxItemFields = NonNullable<Extract<InboxItemAnswer, { state: 'ok' }>['item']>
 
-/** The unread summary as the store holds it (P.inboxSummary): `loading`
+/** The unread summary as the store holds it (P.inboxSummary), `loading`
     until its first answer and while it runs again, `failed` after a
     failure, which drops the answer, else `ok` with the answer and whether
     it is current, the running registry's latest on the socket's newest
@@ -508,8 +508,8 @@ let itemConnection = 0
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer after its confirmation (P.readOnOpen). */
 let itemAnswers = 0
-/* The window's last read on open (P.readOnOpen): its task, organization
-   and `through`, how many item answers had arrived when the server
+/* The window's last read on open (P.readOnOpen), with its task,
+   organization and `through`, how many item answers had arrived when the server
    confirmed it (null until then, and for good after a refusal), and
    whether it was the one more read the rule allows at the same `through`.
    Forgotten when the thread changes or stops. */
@@ -1769,8 +1769,8 @@ function summaryNews(news: SideNews, connection: number) {
   if (flags || summaryView() !== before) emit('inbox')
 }
 
-/* What the badge reads of the summary: its state, whether it is current,
-   and the count with its bounds, as one string to compare. */
+/* The summary's state, whether it is current, and the count with its
+   bounds, which the badge reads, as one string to compare. */
 function summaryView(): string {
   const s = PLANNER.inboxSummary
   if (s.state !== 'ok') return s.state
@@ -3098,8 +3098,8 @@ let heldSections: { comments: boolean; inbox: boolean } | null = null
 /** Runs `step`, which settles several layers, and repaints what they asked
     for once at its end. React renders after each emit, so one repaint per
     layer would render the screen once for each. The comments' and the
-    Inbox's emits wait too: a workspace emit at the end shows them, and
-    each one it did not show goes out after it. */
+    Inbox's emits wait too, since a workspace emit at the end shows them,
+    and each one it did not show goes out after it. */
 function together(step: () => void) {
   if (heldRepaint) return step()
   heldRepaint = {
@@ -7026,7 +7026,7 @@ function rebuild(now = new Date(), full = false) {
       .sort((a, b) => b.ts - a.ts || (a.id < b.id ? -1 : 1)),
   )
   // the loaded groups that are unread and not snoozed (P.unreadMessages),
-  // which no view reads: the badge counts from the unread summary
+  // which no view reads, since the badge counts from the unread summary
   P.unreadMessages = P.messageGroups.reduce((n, g) => n + (g.read || g.snoozed ? 0 : 1), 0)
   P.readMessageCount =
     hiddenReadMessages +
@@ -9451,8 +9451,8 @@ export const PLANNER = {
   messages: [] as MessageVM[],
   messageGroups: [] as MessageGroupVM[],
   /** The loaded message groups (P.messageGroups) that are unread and not
-      snoozed. No view reads it: the Inbox badge counts every unread task
-      from the unread summary (P.inboxSummary). The store's tests read it to
+      snoozed. No view reads it, as the Inbox badge counts every unread
+      task from the unread summary (P.inboxSummary). The store's tests read it to
       check the paint of loaded messages, and the browser benchmark's checks
       read it on builds before and after that move
       (scripts/benchmark-browser.mjs). It goes with the workspace inbox
@@ -13430,7 +13430,7 @@ export const PLANNER = {
     { quiet = false } = {},
   ): boolean => sendItemRead(target, quiet),
   /** The read on open of task `task`, which a window shows once it froze
-      where its unread part starts: its inbox item read through
+      where its unread part starts. It reads the task's inbox item through
       P.readItem, with the organization, the task and the `through` of its
       item answer (P.inboxItem), once that answer is ok and current with
       unread messages and no snooze. Nothing goes out while the item loads,

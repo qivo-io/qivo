@@ -7,7 +7,7 @@
  * and a comment mention alone. `through` is the newest message's
  * _creationTime on the server, which the workspace's rows do not carry, so
  * the stand-in takes the created_at's ms and the comparison only asks for
- * a number. One difference is named: a message about a task the seat can
+ * a number. One difference is named. A message about a task the seat can
  * no longer see or an archived task, which neither counts, sets the
  * server's flag of the action that reaches it, as markAllRead and
  * removeRead do, and not the stand-in's, which sees only the workspace's
@@ -182,7 +182,7 @@ describe("the inbox reads' stand-in", () => {
       kind: 'mention',
       body: MENTION_DETAILS.comment,
     })
-    // a read change and an unread comment mention: nothing unread tells of one
+    // a read change and an unread comment mention, so nothing unread tells of one
     const change = await post(t, f, { to: f.guest, task: mixed, minute: 7 })
     if (!change) throw new Error('no message')
     await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [change.id] })

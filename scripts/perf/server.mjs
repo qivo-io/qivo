@@ -296,8 +296,8 @@
 //                        task's inbox item (inbox:summary and inbox:item)
 //                        answer whatever the messages say, for screenshots
 //                        of the badge's states a seeded backend cannot
-//                        reach (src/store/inboxStandIn.setup.ts): loading
-//                        (neither ever answers), failed (both fail),
+//                        reach (src/store/inboxStandIn.setup.ts), one of
+//                        loading (neither ever answers), failed (both fail),
 //                        incomplete (the count is a lower bound, so unread=12
 //                        shows 12+), more (more than 99) or notready (the
 //                        seat's items are not complete, so the count is a
@@ -1906,10 +1906,10 @@ async function mutate(name, args) {
     return null
   }
   if (name === 'messages:readItem') {
-    // as convex/messages.ts readItem does: the unread messages of the
-    // caller's item stored up to `through`, then the prune. The rows held
-    // here carry no _creationTime, so their created_at stands for it, as
-    // the stand-in's `through` takes it
+    // as convex/messages.ts readItem does, it marks the unread messages of
+    // the caller's item stored up to `through` read, then prunes. The rows
+    // held here carry no _creationTime, so their created_at stands for it,
+    // as the stand-in's `through` takes it
     const at = new Date().toISOString()
     const through = args.through ?? Number.POSITIVE_INFINITY
     const marked = snapshot.messages.filter(
