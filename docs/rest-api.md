@@ -1266,7 +1266,7 @@ GET    /v1/tasks/{ref}/subtasks            a page of its subtasks, by number
 GET    /v1/tasks/{ref}/links               a page of its links
 GET    /v1/tasks/{ref}/followers           a page of its followers, by name
 GET    /v1/tasks/{ref}/attachments         a page of its files, oldest first
-       &limit=50                           limit 1 to 200, 50 by default
+       ?limit=50                           limit 1 to 200, 50 by default
        &offset=0                           refused unless 0; page with cursor
        &cursor=<next_cursor>               the next page of that list
 POST   /v1/tasks                           requires write on the target
