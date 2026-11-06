@@ -883,8 +883,17 @@ describe("a team's page", () => {
     server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
     await answer('teams:addMember', 'accept')
     expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
-    // back on the page, the list reads again and holds Oli
+    // back on the page, the list reads again. Until that read answers, the
+    // ended list it shows is from before the add, both in the first render
+    // after the return and while it refreshes, so it tells nothing.
+    server.reads.hold(true)
     await setVisibility('visible')
+    expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    server.reads.hold(false)
+    await rerun()
     expect(document.querySelector('[data-team-member-kept]')).toBeNull()
     expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
   })
