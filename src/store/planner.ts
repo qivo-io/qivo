@@ -3387,21 +3387,38 @@ function milestoneMarked(slot: ViewSlot, marks: MilestoneMarks): boolean {
   return marks.rows?.some((row) => milestoneRows.covers(slot, row)) ?? false
 }
 
+/** Whether stopped read `slot`'s copies of what `marks` changes follow a
+    live read's deliveries (store/milestoneRows.ts take): its answer holds
+    a copy of at least one of the milestones, a live read's answer holds
+    each one it holds, and the write adds no milestone to it and takes no
+    project's milestones out of it, which no delivery of another read
+    brings it. */
+function followsLive(slot: ViewSlot, marks: MilestoneMarks): boolean {
+  const copies = marks.ids?.filter((id) => milestoneRows.anchorHas(slot, id)) ?? []
+  if (!copies.length || !copies.every((id) => milestoneRows.liveHolds(id))) return false
+  if (marks.projects && milestoneRows.anchorHasProject(slot, new Set(marks.projects))) return false
+  return !marks.rows?.some(
+    (row) => !milestoneRows.anchorHas(slot, row.id) && milestoneRows.covers(slot, row),
+  )
+}
+
 /** Whether the milestone reads hold saved milestone part `paint` of a
     write sent when their deliveries counted `seen`: each read whose answer
     holds what the write changes (milestoneMarked) is live, and its newest
     result is a delivery on the socket's current connection since the
     send (readHolds), as viewPartHeld decides for the views' rows. A read
     stopped with such an answer kept, as a hidden page's, holds nothing
-    until it reads again. A part no read holds anything of, as a create no
-    read covers or a read released, paints nothing, so nothing is left to
-    hold: Convex delivers what a write changed before the write resolves
-    (lib/convexOrdering.test.ts). */
+    until it reads again, except where its copies follow a live read's
+    deliveries (followsLive), so the live read decides. A part no read
+    holds anything of, as a create no read covers or a read released,
+    paints nothing, so nothing is left to hold: Convex delivers what a
+    write changed before the write resolves (lib/convexOrdering.test.ts). */
 function milestonePartHeld(paint: Paint, seen: number): boolean {
   const marks = milestonePaintMarks.get(paint)
   for (const [slot, read] of viewReads) {
     if (!read.query.milestones || !milestoneRows.holds(slot)) continue
     if (marks && !milestoneMarked(slot, marks)) continue
+    if (read.live === null && marks && followsLive(slot, marks)) continue
     if (!readHolds(read, seen)) return false
   }
   return true

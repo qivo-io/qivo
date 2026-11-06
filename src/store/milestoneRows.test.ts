@@ -83,23 +83,48 @@ describe('the anchors', () => {
 
   it('answers a row and its organization from a live read before a stopped one', () => {
     const r = registry(['kept'])
-    r.take(
-      'kept',
-      'k1',
-      { kind: 'get', id: 'a' },
-      answer([ms('a', '2026-09-15', 'Old')], null, { project: project('o1') }),
-    )
+    // the live read answers first, so the stopped one's copy is its own
     r.take(
       'live',
       'k2',
       { kind: 'get', id: 'a' },
       answer([ms('a', '2026-09-15', 'New')], null, { project: project('o2') }),
     )
+    r.take(
+      'kept',
+      'k1',
+      { kind: 'get', id: 'a' },
+      answer([ms('a', '2026-09-15', 'Old')], null, { project: project('o1') }),
+    )
     r.beginPaint()
+    expect(r.shownOf('kept')?.rows[0].name).toBe('Old')
     expect(r.row('a')?.name).toBe('New')
     expect(r.orgOf('a')).toBe('o2')
     expect(r.row('b')).toBeUndefined()
     expect(r.orgOf('b')).toBeUndefined()
+  })
+
+  it("has a stopped read's copies follow a live read's answer, in their place or out of the read", () => {
+    const r = registry(['kept'])
+    const kept = answer([ms('a', '2026-09-15', 'Alpha'), ms('b', '2026-09-22', 'Beta')])
+    const up = answer([ms('a', '2026-09-15', 'Alpha'), ms('b', '2026-09-22', 'Beta')])
+    r.take('kept', 'k', range, kept)
+    r.take('up', 'u', upcoming(), up)
+    const get = { kind: 'get', id: 'a' } as const
+    r.take('open', 'g', get, answer([ms('a', '2026-09-23', 'Alpha 2')]))
+    expect(r.liveHolds('a')).toBe(true)
+    expect(r.liveHolds('c')).toBe(false)
+    r.beginPaint()
+    // the stopped range takes the row, moved after Beta
+    expect(r.shownOf('kept')?.rows.map((row) => row.name)).toEqual(['Beta', 'Alpha 2'])
+    // a live read's answer is the server's own, which another's never changes
+    expect(r.shownOf('up')?.rows).toBe(up.rows)
+    // the answer as the server sent it stays as it was
+    expect(kept.rows[0].name).toBe('Alpha')
+    // a day past the range takes it out of the stopped read
+    r.take('open', 'g', get, answer([ms('a', '2026-10-12', 'Alpha 2')]))
+    r.beginPaint()
+    expect(ids(r.shownOf('kept')?.rows)).toEqual(['b'])
   })
 })
 

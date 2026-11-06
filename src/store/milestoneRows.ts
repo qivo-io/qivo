@@ -14,7 +14,9 @@
      order, and adds it to a read it now belongs to (covers), as a create
      does. A `get` read takes no row it did not hold.
    - A read stopped with its rows kept, as a hidden page's, never stands in
-     for a live read's: row() and orgOf() look in live reads first.
+     for a live read's: row() and orgOf() look in live reads first. Its
+     copies of the milestones a live read's answer brings follow that
+     answer (take), as store/viewRows.ts keeps a stopped view's tasks.
    - Rows are never changed in place: a paint replaces a row and its read's
      list, so an anchor stays as the server sent it and a list on screen
      keeps its object while no paint changed it.
@@ -118,6 +120,14 @@ export function comparePositions(a: MilestonePosition, b: MilestonePosition): nu
 /** Whether `ask` reads its rows newest first. */
 const descending = (ask: MilestoneAsk) => ask.kind === 'section' && ask.side === 'past'
 
+/** Whether two answers' rows of one milestone hold the same values. */
+const sameRow = (a: MilestoneRow, b: MilestoneRow) =>
+  a === b ||
+  (a.name === b.name &&
+    a.week === b.week &&
+    a.project_id === b.project_id &&
+    a.created_at === b.created_at)
+
 /** Creates an empty registry. `topOf` names the top-level project a project
     stands for in a read (a sub-project its parent), as the server folds the
     projects a read names; `live` says whether a slot's read is subscribed. */
@@ -185,9 +195,27 @@ export function createMilestoneRows(o: {
 
   return {
     /** Takes slot `slot`'s answer `take` to `ask`, whose arguments' key is
-        `key`, as its new anchor. The caller repaints. */
+        `key`, as its new anchor, and as the anchor copy of each of these
+        milestones that a stopped read holds: the copy takes the new row
+        and, in a section or a range, its place there, or leaves the read
+        when the read no longer covers it. Anchors are replaced, never
+        changed in place. The caller repaints. */
     take(slot: string, key: string, ask: MilestoneAsk, take: MilestoneTake) {
       anchors.set(slot, { key, ask, take })
+      const fresh = new Map(take.rows.map((row) => [row.id, row]))
+      for (const [other, anchor] of anchors) {
+        if (other === slot || o.live(other)) continue
+        let rows: readonly MilestoneRow[] | null = null
+        for (const held of anchor.take.rows) {
+          const row = fresh.get(held.id)
+          if (!row || sameRow(row, held)) continue
+          const rest: readonly MilestoneRow[] = (rows ?? anchor.take.rows).filter(
+            (r) => r.id !== row.id,
+          )
+          rows = coversRow(anchor, row) ? placed(anchor.ask, rest, row) : rest
+        }
+        if (rows) anchors.set(other, { ...anchor, take: { ...anchor.take, rows } })
+      }
     },
     /** Forgets slot `slot`'s rows. The caller repaints. */
     release(slot: string) {
@@ -202,6 +230,12 @@ export function createMilestoneRows(o: {
         milestone `id`. */
     anchorHas: (slot: string, id: string) =>
       anchors.get(slot)?.take.rows.some((row) => row.id === id) ?? false,
+    /** Whether a live read's answer holds milestone `id`. */
+    liveHolds(id: string): boolean {
+      for (const [slot, { take }] of anchors)
+        if (o.live(slot) && take.rows.some((row) => row.id === id)) return true
+      return false
+    },
     /** Whether slot `slot`'s answer holds a milestone of one of the
         top-level projects `projects`. */
     anchorHasProject(slot: string, projects: ReadonlySet<string>): boolean {

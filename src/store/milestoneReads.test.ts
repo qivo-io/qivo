@@ -443,6 +443,38 @@ describe('the writes', () => {
     expect(names('sync')).toEqual(['Alpha', 'Beta'])
   })
 
+  it('lets a live read hold a rename a stopped read also shows, whose copy then follows it', async () => {
+    await boot()
+    // a kept, hidden page's range holds Alpha, and the window opens it
+    await watch('sync', range(), 3)
+    await watch('sync', null, 3)
+    await watch('open', { kind: 'get', id: 'alpha' })
+    const P = store.P
+    const saved = P.updateMilestone(
+      'alpha',
+      { name: 'Alpha 2' },
+      { name: 'Alpha', week: '2026-09-15' },
+    )
+    writes[0].resolve(null)
+    await expect(saved).resolves.toBe(true)
+    server.milestones[0].name = 'Alpha 2'
+    await rerun()
+    expect(names('open')).toEqual(['Alpha 2'])
+    expect(names('sync')).toEqual(['Alpha 2', 'Beta'])
+    // someone renames it again: the window shows theirs, and sends it as
+    // what the person saw
+    server.milestones[0].name = 'Alpha 3'
+    await rerun()
+    expect(names('open')).toEqual(['Alpha 3'])
+    expect(names('sync')).toEqual(['Alpha 3', 'Beta'])
+    const read = P.milestoneRead('open')
+    expect(read.state === 'ok' && read.answer.stored.get('alpha')?.name).toBe('Alpha 3')
+    // and a move out of the two weeks takes the kept copy out of the range
+    server.milestones[0].week = '2026-10-12'
+    await rerun()
+    expect(names('sync')).toEqual(['Beta'])
+  })
+
   it("hides a project's milestones in every read when it is archived or deleted", async () => {
     await boot()
     await watch('up', upcoming(['plan', 'ship']))
