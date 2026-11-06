@@ -16,7 +16,6 @@ import type {
   BillingUsage,
   BillingUsageFigures,
   BillingUsageHead,
-  BillingUsageReport,
 } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
@@ -24,7 +23,6 @@ import { limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, periodCalls, usagePeriod } from './billingUsage'
-import { estimateDocumentBytes } from './demoMetrics'
 import {
   CHECKOUT_DAYS,
   checkoutDeadline,
@@ -272,161 +270,6 @@ export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<Bill
   }
 }
 
-/**
- * The attachment bytes an organization stores, in total and per project,
- * largest first. Counts every attachment and description image of its
- * tasks, archived ones included, whose project still exists, so a task left
- * under a removed project is not counted. Reads the organization's
- * attachment rows in one index range and counts each row in its task's
- * project, reading each task once.
- *
- * It leaves files in Deleted items out, as the period-start storage sample
- * does, while Billing's current storage (billing.currentUsage, from the
- * stored-byte totals) counts them until they are deleted for good. A task
- * item's rows leave issue_attachments with its move, in the delete's
- * transaction or in the steps just after it, and count nowhere once their
- * task has left issues. A project item's project rows leave projects
- * first, so the rows of its tasks still moving count nowhere. A restore
- * writes the rows back before it reveals the task, and they count from
- * then on where its project is live.
- *
- * It reads every attachment row of the organization in one transaction, so
- * no function serves it. The storage samples and the legacy usage report
- * (billing.usageReport) count the same bytes page by page (storagePage),
- * and the tests check those pages against it.
- */
-export async function storageUsage(ctx: QueryCtx, orgId: string) {
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const totals = new Map(
-    projects.map((p) => [p.id, { project_id: p.id, name: p.name, storage_bytes: 0 }]),
-  )
-  const tasks = new Map<string, Doc<'issues'> | null>()
-  let bytes = 0
-  const files = ctx.db
-    .query('issue_attachments')
-    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', orgId))
-  for await (const file of files) {
-    let task = tasks.get(file.issue_id)
-    if (task === undefined) {
-      task = await byId(ctx, 'issues', file.issue_id)
-      tasks.set(file.issue_id, task)
-    }
-    const project = task === null ? undefined : totals.get(task.project_id)
-    if (project === undefined) continue
-    project.storage_bytes += file.size_bytes
-    bytes += file.size_bytes
-  }
-  return {
-    bytes,
-    projects: [...totals.values()]
-      .filter((p) => p.storage_bytes > 0)
-      .sort((a, b) => b.storage_bytes - a.storage_bytes),
-  }
-}
-
-/** Sizes of one step of a period's storage sample (storagePage). A step
- * reads at most `rows` attachment rows and `bytes` of their range, one task
- * for each task it meets and one project for each project it meets. When
- * the tasks it read pass `taskBytes`, it stops and the step after it reads
- * the same page again, only as far as the rows before the one that passed.
- * Tests lower them. */
-export const STORAGE_PAGE = {
-  rows: 1000,
-  bytes: 4 * 1024 * 1024,
-  taskBytes: 4 * 1024 * 1024,
-}
-
-/** One project's counted bytes, as the legacy usage report lists it. */
-export type StorageProject = BillingUsageReport['projects'][number]
-
-/** A storage sample's page, or the smaller size to read the same page at. */
-export type StoragePage =
-  | { bytes: number; projects: StorageProject[]; next: string | null }
-  | { split: number }
-
-/* Counts bytes in the projects of `orgId` that still exist, reading each
- * project once. */
-function projectCounter(ctx: QueryCtx, orgId: string) {
-  const live = new Map<string, StorageProject | null>()
-  let bytes = 0
-  return {
-    async add(projectId: string, size: number) {
-      let project = live.get(projectId)
-      if (project === undefined) {
-        const row = await byId(ctx, 'projects', projectId)
-        project =
-          row?.org_id === orgId ? { project_id: row.id, name: row.name, storage_bytes: 0 } : null
-        live.set(projectId, project)
-      }
-      if (project === null) return
-      project.storage_bytes += size
-      bytes += size
-    },
-    counted: () => ({
-      bytes,
-      projects: [...live.values()].filter((p): p is StorageProject => p !== null),
-    }),
-  }
-}
-
-/**
- * One page of the bytes storageUsage counts for organization `orgId`, for a
- * sample taken over many transactions or the legacy usage report
- * (billing.usageReport), which tabs loaded before billing.currentUsage
- * shipped still read. It
- * counts the same rows: each row counts in its task's project, which must
- * still exist in the organization. The page also gives the bytes of each
- * project it counted.
- *
- * Pages follow the order rows were stored, so archiving a task or restoring
- * an archived one during the sample moves none of them. Rows stored after
- * `before` (a _creationTime, the period row's) are left out. Those include
- * the rows a restore from Deleted items writes back, which would otherwise
- * be counted a second time if their earlier copies were counted before the
- * task was deleted. Each page is its own snapshot, so a file removed while
- * the sample runs may count or not.
- *
- * Returns the bytes the page counts and the cursor of the next one, or
- * `split` with a smaller size when the tasks it read pass
- * STORAGE_PAGE.taskBytes. A page of one row always completes. `size`
- * defaults to STORAGE_PAGE.rows.
- */
-export async function storagePage(
-  ctx: QueryCtx,
-  orgId: string,
-  { cursor, size, before }: { cursor: string | null; size?: number; before: number },
-): Promise<StoragePage> {
-  const counter = projectCounter(ctx, orgId)
-  const page = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .paginate({
-      cursor,
-      numItems: Math.max(1, size ?? STORAGE_PAGE.rows),
-      maximumBytesRead: STORAGE_PAGE.bytes,
-    })
-  const tasks = new Map<string, Doc<'issues'> | null>()
-  let taskBytes = 0
-  for (const [i, file] of page.page.entries()) {
-    if (file._creationTime > before) continue
-    let task = tasks.get(file.issue_id)
-    if (task === undefined) {
-      task = await byId(ctx, 'issues', file.issue_id)
-      tasks.set(file.issue_id, task)
-      if (task !== null) taskBytes += estimateDocumentBytes(task)
-      // the rows before this one fit, and a page of one always completes
-      if (taskBytes > STORAGE_PAGE.taskBytes && page.page.length > 1)
-        return { split: Math.max(1, i) }
-    }
-    if (task === null) continue
-    await counter.add(task.project_id, file.size_bytes)
-  }
-  return { ...counter.counted(), next: page.isDone ? null : page.continueCursor }
-}
-
 /** The plan usage allowances follow (the subscription's, else the default
  * plan before enrollment, else none), the seats they are sized by and the API
  * calls they include. The Billing and API access pages both use it, so their
@@ -507,8 +350,8 @@ export async function periodHead(
   }
 }
 
-/** @deprecated The head of the deprecated billing.currentUsage and of the
- * legacy billing.usageReport: periodHead with the bucket's calls summed
+/** @deprecated The head of the deprecated billing.currentUsage: periodHead
+ * with the bucket's calls summed
  * from every one of its usage rows and every account with calls in
  * `users`, read with one profile each, named "Removed user" when it is
  * gone or of another organization. billing.usageFigures answers the calls

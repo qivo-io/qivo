@@ -32,11 +32,10 @@ import type {
   BillingSummary,
   BillingUsage,
   BillingUsageFigures,
-  BillingUsageReport,
   StorageProjects,
 } from '../lib/billingTypes'
 import { LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
-import { enrollOrganization, nextReminder, STORAGE_PAGE, storageUsage } from '../model/billing'
+import { enrollOrganization, nextReminder } from '../model/billing'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { deleteOrgStep } from '../model/orgDeletion'
 import { addToOrg, addToProject, orgTotalsRow, startOrgTotals } from '../model/storageTotals'
@@ -47,9 +46,6 @@ import { plantTicket } from './uploadTickets.setup'
 type PlanInput = Omit<BillingPlan, 'id' | 'archived' | 'created_at'>
 const summary = makeFunctionReference<'query', { org_id: string }, BillingSummary>(
   'billing:summary',
-)
-const usageReport = makeFunctionReference<'action', { org_id: string }, BillingUsageReport>(
-  'billing:usageReport',
 )
 const currentUsage = makeFunctionReference<'query', { org_id: string }, BillingUsage>(
   'billing:currentUsage',
@@ -183,7 +179,6 @@ beforeEach(() => {
   vi.stubEnv('POLAR_SERVER', 'sandbox')
 })
 afterEach(() => {
-  Object.assign(STORAGE_PAGE, DEFAULT_STORAGE_PAGE)
   Object.assign(REMOVAL_BUDGET, DEFAULT_REMOVAL_BUDGET)
   Object.assign(SYNC_PAGE, DEFAULT_SYNC_PAGE)
   Object.assign(REMINDER_PAGE, DEFAULT_REMINDER_PAGE)
@@ -318,7 +313,6 @@ const iso = (n: number) => new Date(Date.parse(NOW) + n * 60_000).toISOString()
  * from it is stored: a minute short, for the sweep (billingSync.ts after). */
 const minutesAfter = (ms: number) => (ms - SWEEP_INTERVAL_MS) / 60_000
 
-const DEFAULT_STORAGE_PAGE = { ...STORAGE_PAGE }
 const DEFAULT_REMOVAL_BUDGET = { ...REMOVAL_BUDGET }
 const DEFAULT_SYNC_PAGE = { ...SYNC_PAGE }
 const DEFAULT_REMINDER_PAGE = { ...REMINDER_PAGE }
@@ -405,11 +399,6 @@ describe('billing authority and plan versions', () => {
     for (const profile of [f.user, f.viewer, f.guest]) {
       const caller = as(t, profile)
       await expectRefusal(caller.query(summary, { org_id: f.org.id }), 'forbidden', /admin only/)
-      await expectRefusal(
-        caller.action(usageReport, { org_id: f.org.id }),
-        'forbidden',
-        /admin only/,
-      )
       for (const read of [currentUsage, storageProjects, details, usageFigures])
         await expectRefusal(caller.query(read, { org_id: f.org.id }), 'forbidden', /admin only/)
       await expectRefusal(
@@ -1088,81 +1077,6 @@ describe('provider state, retries and billing snapshots', () => {
     console.log('period sample reads', JSON.stringify({ one, many }))
     expect(many.documents).toBe(one.documents)
     expect(many.ranges).toBe(one.ranges)
-  })
-
-  /* An organization with more files on its tasks than one transaction may
-   * look up, on transaction limits as the backend sets them except for index
-   * ranges. Those are lowered to 200, and the storage page to 50 rows, about
-   * as the backend's 4,096 ranges are to 1,000 rows, so the reads below take
-   * several pages. Counting the files in one transaction, as storageUsage
-   * does, reads a range for each task with a file, so it passes the limit
-   * here as it would past about 4,000 such tasks on the backend. */
-  async function pastOneTransaction() {
-    STORAGE_PAGE.rows = 50
-    const { t, f } = await fixture({ transactionLimits: { databaseQueries: 200 } })
-    await t.mutation(apply, { payload: remote(f.org.id), event_id: 'first-period' })
-    // 250 tasks, 225 of them with a 40 MB file, a third of those in PCB.
-    // The rows share one stored file; only their size_bytes count.
-    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([])))
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 250; i++) {
-        const project_id = i % 3 === 0 ? f.sub2.id : f.sub.id
-        const id = uuid()
-        await ctx.db.insert('issues', {
-          id,
-          org_id: f.org.id,
-          project_id,
-          num: i + 1,
-          title: `Task ${i}`,
-          description: '',
-          status: 'todo',
-          priority: 'medium',
-          paused: false,
-          created_at: NOW,
-          updated_at: NOW,
-        })
-        if (i < 225)
-          await ctx.db.insert('issue_attachments', {
-            org_id: f.org.id,
-            id: uuid(),
-            issue_id: id,
-            storage_id,
-            name: `file-${i}.bin`,
-            size_bytes: 40_000_000,
-            inline: false,
-            created_at: NOW,
-          })
-      }
-    })
-
-    // a row whose task is gone costs one lookup and counts nowhere
-    await t.run((ctx) =>
-      ctx.db.insert('issue_attachments', {
-        org_id: f.org.id,
-        id: uuid(),
-        issue_id: uuid(),
-        storage_id,
-        name: 'old.bin',
-        size_bytes: 5,
-        inline: false,
-        created_at: NOW,
-      }),
-    )
-    await expect(t.run((ctx) => storageUsage(ctx, f.org.id))).rejects.toThrow(
-      /Too many index ranges read/,
-    )
-    return { t, f }
-  }
-
-  it('reports the storage of an organization with more files than one transaction may look up within the transaction limits', async () => {
-    const { t, f } = await pastOneTransaction()
-    // the legacy usage report, which tabs loaded before billing.currentUsage read
-    const report = await as(t, f.admin).action(usageReport, { org_id: f.org.id })
-    expect(report.storage_bytes).toBe(9_000_000_000)
-    expect(report.projects).toEqual([
-      { project_id: f.sub.id, name: 'Firmware', storage_bytes: 6_000_000_000 },
-      { project_id: f.sub2.id, name: 'Board rev', storage_bytes: 3_000_000_000 },
-    ])
   })
 
   it.each([

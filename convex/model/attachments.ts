@@ -16,8 +16,8 @@
  *
  * Each row carries its task's organization, so the storage totals read the
  * organization's rows by index. It names no project: the storage totals
- * read each row's project through its task (model/billing.ts storagePage),
- * so moving a task writes none of its rows. The maintained stored-byte
+ * count each file in its task's project (storage_task_totals), so moving a
+ * task writes none of its rows. The maintained stored-byte
  * totals (model/storageTotals.ts) count a file in the transaction that
  * attaches it and take it out in the one that deletes it. A task holds at
  * most LIMITS.attachments.max rows, files and description images together

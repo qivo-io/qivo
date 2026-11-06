@@ -415,9 +415,8 @@ const issueSubscriptionsTable = defineTable({
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
 // dropped_at, and at most DROPPED_IMAGES_MAX with one (model/descriptionImages.ts).
-// A row names no project. The billing sample reads it through its task
-// (model/billing.ts storagePage), and the stored-byte totals through its
-// task's storage_task_totals row, so a move writes no attachment row.
+// A row names no project. The stored-byte totals read it through its task's
+// storage_task_totals row, so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
   org_id: v.string(),
   id: v.string(),
@@ -441,9 +440,8 @@ const issueAttachmentsTable = defineTable({
   // the app's windows: the unmarked rows of a range of window keys
   .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   // An organization's rows in the order they were stored. Archiving a task
-  // moves its rows within by_org_task_archived_issue but not here, so the
-  // billing storage sample pages through this one (model/billing.ts
-  // storagePage) and leaves out the rows stored after the period began.
+  // moves its rows within by_org_task_archived_issue but not here, so Qivo
+  // Admin's monthly usage pages through this one (model/usage.ts filesPage).
   .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])

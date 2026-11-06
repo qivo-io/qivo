@@ -27,7 +27,6 @@ import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
 import crons from '../crons'
 import { REAP_PAGES } from '../files'
-import { storageUsage } from '../model/billing'
 import {
   ERASE_EVERY_MS,
   ERASE_PAGE,
@@ -52,6 +51,7 @@ import {
   watchRestores,
   withOrg,
 } from './helpers.setup'
+import { liveAttachmentUsage } from './liveAttachments.setup'
 import { plantTicket } from './uploadTickets.setup'
 
 /* edge-runtime provides Blob; convex/tsconfig's ESNext-only lib does not
@@ -750,11 +750,11 @@ describe('a held file is out of reach', () => {
     )
   })
 
-  it('leaves the storage totals', async () => {
+  it('takes the row out of the live attachment rows while its bytes are held', async () => {
     const t = newT()
     const f = await withOrg(t)
     const { row } = await attached(t, f)
-    const bytes = () => t.run(async (ctx) => (await storageUsage(ctx, f.org.id)).bytes)
+    const bytes = () => t.run(async (ctx) => (await liveAttachmentUsage(ctx, f.org.id)).bytes)
     expect(await bytes()).toBe(12)
     await remove(t, f, row)
     expect(await fileState(t, row.storage_id)).toBe('held')

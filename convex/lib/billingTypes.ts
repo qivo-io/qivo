@@ -155,9 +155,9 @@ export type BillingUsageFigures = BillingPeriodHead & {
   sampled_storage_bytes: number | null
 }
 
-/** @deprecated The head of the deprecated billing.currentUsage and of the
- * legacy billing.usageReport: the bucket's calls summed from its usage
- * rows, and every account with calls in `users`. billing.usageFigures
+/** @deprecated The head of the deprecated billing.currentUsage: the
+ * bucket's calls summed from its usage rows, and every account with calls
+ * in `users`. billing.usageFigures
  * answers the calls from the aggregates and billing.apiAccounts the
  * accounts 25 at a time; the release that removes those reads removes
  * this type. */
@@ -174,15 +174,6 @@ export type BillingUsageHead = BillingPeriodHead & {
 export type BillingUsage = BillingUsageHead & {
   storage_bytes: number | null
   sampled_storage_bytes: number | null
-}
-
-/* The answer of the legacy billing.usageReport, which tabs loaded before
- * billing.currentUsage shipped still read. Its storage comes from a scan
- * of the attachment rows of live tasks, files in Deleted items left out,
- * with the whole project breakdown, largest first. */
-export type BillingUsageReport = BillingUsageHead & {
-  storage_bytes: number
-  projects: { project_id: string; name: string; storage_bytes: number }[]
 }
 
 /* One project of Billing's Storage by project list

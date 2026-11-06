@@ -35,10 +35,14 @@
  * files out first, while its number can still be read.
  *
  * Every total is a row of its own, read by none of the queries the app
- * keeps open, so the writes rerun none of them. Attaches, moves and purges
- * in one organization all write its row and conflict with each other, and
- * Convex runs the one that lost again. Inserts go through uncountedWriter,
- * so they spend none of a public demo visitor's record limit (lib/demo.ts).
+ * keeps open, so the writes rerun none of them. Billing reads them once on
+ * demand, and a paid period's storage sample reads the organization's row
+ * in a mutation of its own (billingSync.ts storageStep). Attaches, moves
+ * and purges in one organization all write its row and conflict with each
+ * other, and Convex runs the one that lost again. A write that commits
+ * while the sample reads the row reruns the sample, never the write, which
+ * reads nothing the sample writes. Inserts go through uncountedWriter, so
+ * they spend none of a public demo visitor's record limit (lib/demo.ts).
  *
  * It imports neither model/issues.ts nor model/attachments.ts, which import
  * it, as model/descriptionImages.ts does too. */

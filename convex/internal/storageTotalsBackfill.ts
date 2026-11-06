@@ -3,9 +3,11 @@
  * tables and in Deleted items, into its stored-byte totals (schema.ts
  * storage_org_totals, storage_project_totals and storage_task_totals, kept
  * by model/storageTotals.ts). Billing's current storage and Storage by
- * project read the totals (billing.currentUsage and billing.storageProjects),
+ * project (billing.usageFigures and billing.storageProjects) and a paid
+ * period's storage sample (billingSync.ts storageStep) read the totals,
  * and only once an organization is counted (storageTotalsOf), so an
- * organization that is not counted yet reads as not counted, never as empty.
+ * organization that is not counted yet reads as not counted, never as
+ * empty, and its sample waits.
  * Organizations created since this release are counted from their start
  * (model/orgs.ts insertOrgRows).
  *
@@ -33,8 +35,8 @@
  * the project its own totals row names, or else in the project of its id
  * that existed when it was deleted (projectFor), never in one that took the
  * id after a purge. An attachment row whose task is in neither issues nor
- * deleted_tasks counts nowhere, as in the billing sample today. The dry run
- * lists such rows, and nothing here deletes them.
+ * deleted_tasks counts nowhere. The dry run lists such rows, and nothing
+ * here deletes them.
  *
  * Read the dry run first. It writes nothing and reports, for every
  * organization, the totals it would count, and for one counted already

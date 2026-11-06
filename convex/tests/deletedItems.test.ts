@@ -19,7 +19,6 @@ import { ORG_REMOVAL_PHASES, type OrgRemovalPhase } from '../lib/enums'
 import { LIMITS, TEXT_MAX } from '../lib/limits'
 import type { EventOwner } from '../lib/taskEvents'
 import { storageIdInUse } from '../model/attachments'
-import { storageUsage } from '../model/billing'
 import { deleteOrgDeep, REMOVAL_BUDGET } from '../model/cascade'
 import {
   EXPIRY,
@@ -58,6 +57,7 @@ import {
   withOrg,
   workspaceOf,
 } from './helpers.setup'
+import { liveAttachmentUsage } from './liveAttachments.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
   assertNoOrphanHistory,
@@ -1443,7 +1443,7 @@ describe('reservations while items are in Deleted items', () => {
 })
 
 describe('bytes in Deleted items', () => {
-  it('fences trashed bytes from the orphan sweep and bills only live projects', async () => {
+  it('fences trashed bytes from the orphan sweep and keeps live attachment rows only in live projects', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -1461,7 +1461,7 @@ describe('bytes in Deleted items', () => {
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 1 })
     await deleteProject(t, f, f.sub2.id)
     expect((await itemFor(t, f.sub2.id)).state).toBe('moving')
-    const usage = await t.run((ctx) => storageUsage(ctx, org_id))
+    const usage = await t.run((ctx) => liveAttachmentUsage(ctx, org_id))
     expect(usage).toEqual({
       bytes: 5,
       projects: [{ project_id: f.sub.id, name: 'Firmware', storage_bytes: 5 }],
