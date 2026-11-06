@@ -10,13 +10,13 @@ import { LIMITS } from '../../../convex/lib/limits'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { limitSentence, sentence } from '../../lib/fieldLimits'
 import type { InviteDeliveryRow } from '../../lib/inviteDeliveries'
+import { WHOLE } from '../../store/guard/liveDouble.setup'
 import {
   type ForcedPeopleSettings,
   isPeopleSettingsRead,
   peopleSettingsServer,
   type StandInKey,
 } from '../../store/peopleSettingsStandIn.setup'
-import { WHOLE } from '../../store/guard/liveDouble.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 
 /* Organization > Users on the real store, its people read from the server
