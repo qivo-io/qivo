@@ -147,21 +147,21 @@ const seatIn = (ws: SettingsWorkspace, orgId: string): Profile | undefined =>
   ws.profiles.find((p) => p.org_id === orgId && ws.myProfileIds.includes(p.id) && p.active)
 
 /** The seat an orgQuery resolves, refused as the server refuses it. */
-function memberOf(ws: SettingsWorkspace, orgId: string): Profile {
+export function memberOf(ws: SettingsWorkspace, orgId: string): Profile {
   const me = seatIn(ws, orgId)
   if (!me) throw forbidden('no profile in this organization')
   return me
 }
 
-/* convex/lib/access.ts inMetaTree */
-const inMetaTree = (project: Project, root: Project) =>
+/** convex/lib/access.ts inMetaTree */
+export const inMetaTree = (project: Project, root: Project) =>
   root.parent_id === undefined &&
   root.type === 'meta' &&
   (project.id === root.id || project.parent_id === root.id)
 
 /** The top-level project whose tree holds `project`, with its parent, or
     null outside a meta tree (model/projectSettings.ts treeOf). */
-function treeOf(ws: SettingsWorkspace, project: Project) {
+export function treeOf(ws: SettingsWorkspace, project: Project) {
   if (project.parent_id === undefined)
     return inMetaTree(project, project) ? { parent: null, root: project } : null
   const parent = ws.projects.find((p) => p.id === project.parent_id)
@@ -175,10 +175,12 @@ const canLead = (me: Pick<Profile, 'org_role'>) =>
 const isLead = (me: Profile, project: Project, root: Project) =>
   canLead(me) && (project.lead_id ?? root.lead_id) === me.id
 
-/** `me`'s level on `project` by convex/lib/access.ts levelsFrom, a
-    top-level project they see only through a sub-project answering Viewer
-    (navigation). */
-function levelOf(ws: SettingsWorkspace, me: Profile, project: Project): Level | null {
+/** `me`'s own level on `project` by convex/lib/access.ts levelsFrom, from
+    its grants, team shares, its lead and its parent's, without the
+    navigation a sub-project gives its parent; null outside a meta tree or
+    another organization. The Settings project lists' stand-in
+    (projectSettingsListsStandIn.setup.ts) reads it too. */
+export function levelIn(ws: SettingsWorkspace, me: Profile, project: Project): Level | null {
   const teamsOf = new Set(
     ws.teamMembers.filter((m) => m.profile_id === me.id).map((m) => m.team_id),
   )
@@ -194,26 +196,30 @@ function levelOf(ws: SettingsWorkspace, me: Profile, project: Project): Level | 
           level = higher(level, s.level)
     return level
   }
-  const effective = (p: Project): Level | null => {
-    const tree = treeOf(ws, p)
-    if (tree === null || p.org_id !== me.org_id) return null
-    let level = own(p.id)
-    if (me.org_role === 'admin' || isLead(me, p, tree.root)) level = 'lead'
-    else if (p.id !== tree.root.id)
-      level = higher(level, isLead(me, tree.root, tree.root) ? 'user' : own(tree.root.id))
-    return me.org_role === 'viewer' && level !== null ? 'viewer' : level
-  }
-  const level = effective(project)
+  const tree = treeOf(ws, project)
+  if (tree === null || project.org_id !== me.org_id) return null
+  let level = own(project.id)
+  if (me.org_role === 'admin' || isLead(me, project, tree.root)) level = 'lead'
+  else if (project.id !== tree.root.id)
+    level = higher(level, isLead(me, tree.root, tree.root) ? 'user' : own(tree.root.id))
+  return me.org_role === 'viewer' && level !== null ? 'viewer' : level
+}
+
+/** `me`'s level on `project` by convex/lib/access.ts levelsFrom, a
+    top-level project they see only through a sub-project answering Viewer
+    (navigation). */
+function levelOf(ws: SettingsWorkspace, me: Profile, project: Project): Level | null {
+  const level = levelIn(ws, me, project)
   if (level !== null || project.parent_id !== undefined) return level
   // navigation: a sub-project the caller reaches shows its parent
-  return ws.projects.some((c) => c.parent_id === project.id && effective(c) !== null)
+  return ws.projects.some((c) => c.parent_id === project.id && levelIn(ws, me, c) !== null)
     ? 'viewer'
     : null
 }
 
 /** Whether `me` manages `project` (convex/lib/access.ts
-    canManageOwnProjectAccess). */
-function manages(ws: SettingsWorkspace, me: Profile, project: Project): boolean {
+    canManageOwnProjectAccess, the writes' managesIn). */
+export function manages(ws: SettingsWorkspace, me: Profile, project: Project): boolean {
   const tree = treeOf(ws, project)
   return (
     me.active &&
@@ -703,6 +709,16 @@ export function projectSettingsServer(
   server: () => SettingsWorkspace,
   force: () => ForcedProjectSettings = () => ({}),
 ) {
+  return readsServer((name, args) => projectSettingsStandIn(server(), name, args, force()))
+}
+
+/**
+ * A server double for the jsdom tests over a stand-in that answers read
+ * `name` for `args` (`answer`, which throws as the server refuses), as
+ * projectSettingsServer and the Settings project lists'
+ * (projectSettingsListsStandIn.setup.ts projectListsServer) use it.
+ */
+export function readsServer(answerOf: (name: string, args: Record<string, unknown>) => unknown) {
   type Read = {
     name: string
     args: Record<string, unknown>
@@ -714,7 +730,7 @@ export function projectSettingsServer(
   const answer = (read: Read) => {
     let value: unknown
     try {
-      value = projectSettingsStandIn(server(), read.name, read.args, force())
+      value = answerOf(read.name, read.args)
     } catch (error) {
       read.fail?.(error)
       return
@@ -734,7 +750,7 @@ export function projectSettingsServer(
       return () => reads.delete(read)
     },
     async query(name: string, args: Record<string, unknown>): Promise<unknown> {
-      return structuredClone(projectSettingsStandIn(server(), name, args, force()))
+      return structuredClone(answerOf(name, args))
     },
     /** Answers every open read again, as Convex reruns them. */
     rerun() {

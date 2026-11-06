@@ -17,7 +17,14 @@
  * guest and a Viewer with Firmware archived alone and then Testbed
  * platform archived carrying Board rev, and the fixture's admin without a
  * grant. Every answer is also held to the rule worked out without reach
- * rows (convex/tests/projectSettingsLists.setup.ts).
+ * rows (convex/tests/projectSettingsLists.setup.ts), and to the stand-in
+ * the jsdom tests and the browser benchmark read
+ * (store/projectSettingsListsStandIn.setup.ts) over the caller's own
+ * workspace: the same rows in the same order, Archived projects by archive
+ * time where the server ties equal times by fields the workspace does not
+ * carry. Two cases hold the stand-in to the real queries at the design
+ * size, 200 live top-level projects for Settings › Projects and 300
+ * archived ones for Archived projects.
  *
  * Today the store's admin rule (planner.ts levelOnProject) gives an
  * organization admin every project and Lead on each, which is what
@@ -50,6 +57,7 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
+import { names, plantMetas, ready } from '../../convex/tests/projectNavFixtures.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import {
   expectedArchived,
@@ -58,6 +66,7 @@ import {
   expectedSubProjects,
 } from '../../convex/tests/projectSettingsLists.setup'
 import type { Snapshot } from './plannerFixture.setup'
+import { projectListsStandIn } from './projectSettingsListsStandIn.setup'
 
 vi.hoisted(() => {
   // cursors are sealed with a key derived from it (lib/archiveCursorSeal.ts)
@@ -220,8 +229,146 @@ async function compare(t: T, profile: Doc<'profiles'>, label: string, terms: rea
     ).toEqual(sorted(all.filter(named).map((r) => [r.id, r.parentArchived])))
     seen += found.length + foundOld.length
   }
+  await compareStandIn(t, profile, label, terms)
   return seen
 }
+
+/* ------------------------------------------------------------ the stand-in */
+
+/** Every row of the stand-in's list `name` for `args` over `ws`, from its
+ * start, following `next`. */
+const standInRows = <R>(ws: Snapshot, name: string, args: Record<string, unknown>) =>
+  rowsOf(
+    async (after) =>
+      projectListsStandIn(ws, name, after === undefined ? args : { ...args, after }) as Awaited<
+        SettingsListAnswer<R>
+      >,
+  )
+
+/** Archived rows' archive times in order: the server ties equal times by
+ * _creationTime and _id, which the workspace does not carry, so the rows
+ * themselves compare as sets (byId). */
+const archiveOrder = (rows: readonly { archived_at: string }[]) => rows.map((r) => r.archived_at)
+
+/** `rows` in id order. */
+const byId = <R extends { id: string }>(rows: readonly R[]) =>
+  [...rows].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+
+/**
+ * Holds the stand-in over `profile`'s own workspace to the real queries:
+ * every list from its start, each search of `terms`, the New sub-project
+ * dialog's parents, each listed project's sub-projects and each archived
+ * entry's chips, row for row.
+ */
+async function compareStandIn(
+  t: T,
+  profile: Doc<'profiles'>,
+  label: string,
+  terms: readonly string[],
+) {
+  const ws = await workspaceOf(as(t, profile))
+  if (ws === null) throw new Error(`no workspace for ${profile.name}`)
+  const me = profile
+  const org = { org_id: me.org_id }
+  for (const term of ['', ...terms]) {
+    const search = term === '' ? {} : { search: term }
+    const real = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, me, { ...search, after })),
+    )
+    expect(
+      await standInRows(ws, 'projectSettings:projects', { ...org, ...search }),
+      `${label}: the stand-in's projects ${term}`,
+    ).toEqual(real)
+    const parents = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, me, { ...search, sub_project_parents: true, after })),
+    )
+    expect(
+      await standInRows(ws, 'projectSettings:projects', {
+        ...org,
+        ...search,
+        sub_project_parents: true,
+      }),
+      `${label}: the stand-in's sub-project parents ${term}`,
+    ).toEqual(parents)
+    const old = await rowsOf((after) =>
+      t.run((ctx) => settingsArchivedOf(ctx, me, { ...search, after })),
+    )
+    const standOld = await standInRows<(typeof old)[number]>(ws, 'projectSettings:archived', {
+      ...org,
+      ...search,
+    })
+    expect(byId(standOld), `${label}: the stand-in's archived ${term}`).toEqual(byId(old))
+    expect(archiveOrder(standOld), `${label}: the stand-in's archived order ${term}`).toEqual(
+      archiveOrder(old),
+    )
+    if (term !== '') continue
+    for (const p of real) {
+      const kids = await rowsOf((after) =>
+        t.run((ctx) => settingsSubProjectsOf(ctx, me, { project_id: p.id, after })),
+      )
+      expect(
+        await standInRows(ws, 'projectSettings:subProjects', { ...org, project_id: p.id }),
+        `${label}: the stand-in's sub-projects of ${p.name}`,
+      ).toEqual(kids)
+    }
+    for (const entry of old.filter((r) => r.parent === null)) {
+      const chips = await rowsOf((after) =>
+        t.run((ctx) => settingsArchivedChildrenOf(ctx, me, { project_id: entry.id, after })),
+      )
+      expect(
+        await standInRows(ws, 'projectSettings:archivedSubProjects', {
+          ...org,
+          project_id: entry.id,
+        }),
+        `${label}: the stand-in's chips of ${entry.name}`,
+      ).toEqual(chips)
+    }
+  }
+  // a cursor of another search or filter is refused, as the server refuses it
+  const first = projectListsStandIn(ws, 'projectSettings:projects', org, { batch: 1 })
+  const next = (first as { next?: string | null }).next
+  if (next) {
+    for (const other of [{ search: 'x' }, { sub_project_parents: true }])
+      expect(() =>
+        projectListsStandIn(ws, 'projectSettings:projects', { ...org, ...other, after: next }),
+      ).toThrow(/cursors from an earlier answer/)
+  }
+}
+
+describe('the stand-in at the design size', () => {
+  it('lists an admin’s 200 live top-level projects as the real query does, eight batches', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // withOrg's two top-level projects, and 198 more
+    await plantMetas(t, f.org.id, names('Live project ', 198))
+    await ready(t, f)
+    const ws = await workspaceOf(as(t, f.admin))
+    if (ws === null) throw new Error('no workspace')
+    const real = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, f.admin, { after })),
+    )
+    expect(real).toHaveLength(200)
+    expect(await standInRows(ws, 'projectSettings:projects', { org_id: f.org.id })).toEqual(real)
+  })
+
+  it('lists an admin’s 300 archived top-level projects as the real query does, twelve batches', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    // archived a few milliseconds apart, so the order is by archive time alone
+    const at = Date.parse('2026-10-01T08:00:00.000Z')
+    const old = names('Archived ', 300)
+    for (const [i, name] of old.entries())
+      await plantMetas(t, f.org.id, [name], { archived_at: new Date(at + i * 1000).toISOString() })
+    await ready(t, f)
+    const ws = await workspaceOf(as(t, f.admin))
+    if (ws === null) throw new Error('no workspace')
+    const real = await rowsOf((after) =>
+      t.run((ctx) => settingsArchivedOf(ctx, f.admin, { after })),
+    )
+    expect(real).toHaveLength(300)
+    expect(await standInRows(ws, 'projectSettings:archived', { org_id: f.org.id })).toEqual(real)
+  })
+})
 
 /** The project with id `id` as it is stored now. */
 const projectOf = (t: T, id: string) =>
