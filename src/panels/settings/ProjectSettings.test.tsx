@@ -7,6 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import {
+  type ForcedProjectLists,
+  isProjectListRead,
+  projectListsServer,
+} from '../../store/projectSettingsListsStandIn.setup'
+import {
   type ForcedProjectSettings,
   isProjectSettingsRead,
   projectSettingsServer,
@@ -61,6 +66,9 @@ let server: {
   snap: Snapshot
   force: ForcedProjectSettings
   reads: ReturnType<typeof projectSettingsServer>
+  /** the Sub-projects section's read (projectSettings.subProjects) */
+  lists: ReturnType<typeof projectListsServer>
+  listForce: ForcedProjectLists
   publish: (snap: Snapshot) => void
 }
 // what the removal preview answers
@@ -144,6 +152,11 @@ async function load(
       () => server.snap,
       () => server.force,
     ),
+    lists: projectListsServer(
+      () => server.snap,
+      () => server.listForce,
+    ),
+    listForce: {},
     publish: () => {},
   }
   preview = async () => ({ state: 'ok', pending: true, ...noTasks })
@@ -155,6 +168,7 @@ async function load(
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return server.reads.watch(name, args, next, fail)
+    if (isProjectListRead(name)) return server.lists.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       server.publish = (value) => next(storeCopy(value))
       server.publish(server.snap)
@@ -238,7 +252,10 @@ const rest = async () => {
 }
 /** Answers every open read again from the server's workspace. */
 const rerun = async () => {
-  await act(async () => server.reads.rerun())
+  await act(async () => {
+    server.reads.rerun()
+    server.lists.rerun()
+  })
   await settle()
 }
 /** Changes what the server holds, as another session's write does, and
@@ -364,6 +381,13 @@ const choices = () =>
   [...document.querySelectorAll<HTMLElement>('[data-project-access-choice]')].map(
     (c) => c.querySelector('span.truncate')?.textContent,
   )
+/** The Sub-projects section's rows, as they read. */
+const subProjects = () =>
+  [...document.querySelectorAll<HTMLElement>('[data-project-subproject]')].map((b) =>
+    b.textContent?.trim(),
+  )
+/** The Archive or delete section's sentence. */
+const archiveLine = () => text('[data-project-removal] p')
 /** The name the Lead field's button shows. */
 const leadName = () => text('[data-project-lead-picker] span.truncate')
 const addButton = () => find<HTMLButtonElement>('[data-add-project-user]')
@@ -544,8 +568,10 @@ describe('the page before and after its answer', () => {
     const before = network.onUpdate.mock.calls.length
     await open()
     const opened = network.onUpdate.mock.calls.slice(before).map(([ref]) => getFunctionName(ref))
+    // the project's settings and lists, its sub-projects included
     expect([...new Set(opened)].sort()).toEqual([
       'projectSettings:get',
+      'projectSettings:subProjects',
       'projectSettings:teams',
       'projectSettings:users',
     ])
@@ -556,6 +582,7 @@ describe('the page before and after its answer', () => {
     ).toEqual([])
     await act(async () => root.unmount())
     expect(server.reads.open()).toEqual([])
+    expect(server.lists.open()).toEqual([])
     root = createRoot(container)
   })
 })
@@ -1220,7 +1247,8 @@ describe('a project the workspace does not hold', () => {
     expect(pageState()).toBe('ok')
     expect(nameField().value).toBe('Plan')
     expect(rows('user')).toEqual(['Mira Holm', 'Ada Lind', 'Leo Berg', 'Vic Viewer'])
-    expect(text('[data-project-subprojects-none]')).toBe("Sub-projects can't be listed here yet.")
+    // its sub-projects come from the server too
+    expect(subProjects()).toEqual(['Work'])
     await click(find('[data-project-delay-toggle] button'))
     expect(sent('projects:update')).toEqual([
       { org_id: org, id: 'plan', patch: { track_delay: true }, expected: { track_delay: false } },
@@ -1251,6 +1279,66 @@ describe('a project the workspace does not hold', () => {
     expect(P.projects.some((p) => p.id === 'plan')).toBe(false)
     await click(find('[data-remove-project]'))
     expect(reads('projects:removalSummary')).toEqual([{ org_id: org, id: 'plan' }])
+  })
+})
+
+describe("a project page's Sub-projects section", () => {
+  it('lists the server’s sub-projects and counts them in the archive sentence once the list is whole', async () => {
+    await open()
+    expect(subProjects()).toEqual(['Work'])
+    expect(archiveLine()).toBe(
+      'Archive hides it and its 1 sub-project. Delete moves them and their tasks to Deleted items.',
+    )
+    expect(server.lists.open().map((r) => [r.name, r.args.org_id, r.args.project_id])).toEqual([
+      ['projectSettings:subProjects', server.snap.orgs[0].id, 'plan'],
+    ])
+    // a sub-project added elsewhere shows, and counts
+    await elsewhere((snap) =>
+      snap.projects.push({ ...snap.projects[1], id: 'spec', num: 9, name: 'Spec' }),
+    )
+    expect(subProjects()).toEqual(['Spec', 'Work'])
+    expect(archiveLine()).toContain('its 2 sub-projects.')
+  })
+
+  it('never counts a partial list nor says none where the list stopped, failed or is held', async () => {
+    server.listForce = { stop: 1, batch: 1 }
+    await load((snap) =>
+      snap.projects.push({ ...snap.projects[1], id: 'spec', num: 9, name: 'Spec' }),
+    )
+    server.listForce = { batch: 1 }
+    await open()
+    expect(subProjects()).toEqual(['Spec'])
+    expect(text('[data-project-subprojects-end]')).toBe('Load more')
+    expect(archiveLine()).toBe(
+      'Archive hides it and its sub-projects. Delete moves them and their tasks to Deleted items.',
+    )
+    server.listForce = { notReady: true }
+    await rerun()
+    expect(text('[data-project-subprojects-end]')).toBe(
+      "Sub-projects can't be listed yet. Try again in a few minutes.",
+    )
+    server.listForce = { fail: ['subProjects'] }
+    await rerun()
+    expect(text('[data-project-subprojects-end]')).toBe("Couldn't load its sub-projects.Retry")
+    expect(document.body.textContent).not.toContain('No sub-projects yet.')
+    expect(archiveLine()).toContain('and its sub-projects.')
+  })
+
+  it('says No sub-projects yet. only at the real end of an empty list, and goes alone in the sentence', async () => {
+    await load((snap) => {
+      snap.projects = snap.projects.filter((p) => p.id !== 'work')
+    })
+    await open()
+    expect(subProjects()).toEqual([])
+    expect(text('[data-project-subprojects-end]')).toBe('No sub-projects yet.')
+    expect(archiveLine()).toBe('Archive hides it. Delete moves it and its tasks to Deleted items.')
+  })
+
+  it('shows no Sub-projects section on a sub-project’s page, which reads none', async () => {
+    await open('work')
+    expect(has('[data-project-subprojects]')).toBe(false)
+    expect(server.lists.open()).toEqual([])
+    expect(archiveLine()).toBe('Archive hides it. Delete moves it and its tasks to Deleted items.')
   })
 })
 
