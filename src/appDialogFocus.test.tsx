@@ -10,6 +10,7 @@ import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setu
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
+import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
 import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
@@ -39,6 +40,8 @@ let root: Root
 // answers the held projects.create, or refuses it
 let saved: () => void
 let refused: () => void
+// every write App sent, by name and arguments
+let sent: { name: string; args: Record<string, unknown> }[]
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -116,8 +119,12 @@ const knownScope = (snap: Snapshot, args: unknown) => {
   return scope.kind === 'mine' || snap.projects.some((p) => p.id === scope.project_id)
 }
 
-/** Boots App on Plan, with what `prepare` adds. */
-async function boot(prepare: (snap: Snapshot) => void = () => {}) {
+/** Boots App on Plan, with what `prepare` adds; `held` changes the
+    workspace App holds, so it differs from the server's. */
+async function boot(
+  prepare: (snap: Snapshot) => void = () => {},
+  held: (copy: Snapshot) => void = () => {},
+) {
   vi.resetModules()
   const snap = plannerFixture()
   const base = snap.projects[0]
@@ -137,15 +144,22 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
      a delete reads its milestone; that transition is a delivery that holds
      the delete, which the workspace delivered already. */
   let wrote = false
-  // Settings › Projects reads the server's lists, which hold Plan
+  // Settings › Projects reads the server's lists, which hold Plan, and New
+  // sub-project checks its parent on the server (projectSettings.get)
   const lists = projectListsServer(() => snap)
+  const settings = projectSettingsServer(() => snap)
   let publish: ((value: Snapshot) => void) | null = null
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (isProjectListRead(name)) return lists.watch(name, args, next, fail)
+    if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
-      publish = next
-      next(structuredClone(snap))
+      publish = (value) => {
+        const copy = structuredClone(value)
+        held(copy)
+        next(copy)
+      }
+      publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
@@ -161,8 +175,10 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
     return () => {}
   })
   network.query.mockResolvedValue(null)
+  sent = []
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
+    sent.push({ name, args })
     if (name !== 'identity:claimMySeats') wrote = true
     // a delete from the window, or from it during a Roadmap visit
     const operations = (args.operations ?? []) as { kind: string; id: string }[]
@@ -172,7 +188,7 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
         : operations.filter((o) => o.kind === 'milestone_remove').map((o) => o.id)
     if (removed.length) {
       snap.milestones = snap.milestones.filter((m) => !removed.includes(m.id))
-      publish?.(structuredClone(snap))
+      publish?.(snap)
     }
     if (name === 'projects:create')
       return new Promise((resolve, reject) => {
@@ -206,7 +222,8 @@ async function openOnPhone(view: string) {
 }
 
 /** Names the new project or sub-project Docs in the open dialog and
-    creates it with `submit`, or cancels it. */
+    creates it with `submit`, once the dialog turns it on (New
+    sub-project's parent check answered), or cancels it. */
 async function finish(create: boolean, submit = 'Create sub-project') {
   const name = await waitFor(
     () => document.querySelector<HTMLInputElement>('[data-modal-shell] input[aria-label="Name"]'),
@@ -218,7 +235,13 @@ async function finish(create: boolean, submit = 'Create sub-project') {
       name.dispatchEvent(new Event('input', { bubbles: true }))
     })
   const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
-  await press(await find(create ? submit : 'Cancel', shell))
+  const action = create
+    ? await waitFor(() => {
+        const found = named(submit, shell)
+        return found && !found.disabled ? found : null
+      }, `${submit} turned on`)
+    : await find('Cancel', shell)
+  await press(action)
   expect(document.querySelector('[data-modal-shell]')).toBeNull()
 }
 /** Answers the create, after which App moves into the new sub-project. */
@@ -300,6 +323,51 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     )
     expect(row.textContent).toBe('Docs')
     expect(document.activeElement).toBe(row)
+  })
+
+  it('stays where it is after a create under a parent the workspace does not hold, with no starter task', async () => {
+    history.replaceState(null, '', '/app/testbed/settings/projects')
+    // the server holds Ops, which the workspace leaves out, as after the
+    // admin access split for a project an admin only manages
+    await boot(
+      (snap) =>
+        snap.projects.push({ ...snap.projects[0], id: 'ops', key: 'OPS', num: 3, name: 'Ops' }),
+      (copy) => {
+        copy.projects = copy.projects.filter((p) => p.id !== 'ops')
+      },
+    )
+    const row = await waitFor(
+      () => document.querySelector('[data-settings-projects] [data-project-row="ops"]'),
+      "Ops's row",
+    )
+    // its own right offers New sub-project, held by the workspace or not
+    await press(await find('Project actions', row))
+    const menu = await waitFor(
+      () => document.querySelector('[data-slot="popover-content"]'),
+      'the menu',
+    )
+    await press(await find('New sub-project…', menu))
+    await waitFor(() => document.querySelector('[data-new-subproject-parent="ops"]'), 'the check')
+    // no starter task under a parent the workspace does not hold
+    expect(document.querySelector('#subproject-starter')).toBeNull()
+    await finish(true)
+    const create = sent.find((w) => w.name === 'projects:create')
+    expect(create?.args).toMatchObject({ type: 'project', parent_id: 'ops', name: 'Docs' })
+    expect(create?.args).not.toHaveProperty('sort_order')
+    // nothing paints under a parent the workspace does not hold
+    expect(document.querySelector('[data-subproject-row]')).toBeNull()
+    const { P } = await import('./store/planner')
+    const scopes = vi.spyOn(P, 'saveUI')
+    await save()
+    expect(document.body.textContent).toContain('Sub-project “Docs” created')
+    // App stays in Settings › Projects, never moves into the sub-project,
+    // and creates no task
+    expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
+    const id = String(sent.find((w) => w.name === 'projects:create')?.args.id)
+    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
+      false,
+    )
+    expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
   })
 
   it.each([

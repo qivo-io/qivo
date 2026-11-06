@@ -1,7 +1,8 @@
-/* A project's Settings page's read of its settings from the server
-   (projectSettings.get). Settings holds it for its check that the page is
-   still valid and the phone's Back, and hands it to the page. It lives
-   apart from ProjectSettings.tsx, which exports components only. */
+/* The read of a project's settings from the server (projectSettings.get).
+   Settings holds it for its check that a project's page is still valid and
+   the phone's Back, and hands it to the page; the New sub-project dialog
+   reads it for the parent it would create under (panels/Modals.tsx). It
+   lives apart from ProjectSettings.tsx, which exports components only. */
 import React from 'react'
 import { api } from '../../../convex/_generated/api'
 import { useLiveView } from '../../lib/liveView'
@@ -44,11 +45,13 @@ export type ProjectSettingsRead = {
  * tab or the desktop window is hidden and when the page is left, and
  * keeps the last `ok` answer for the same project while the read has no
  * current answer, a failure included (ProjectSettingsRead). Call it once
- * per page: Settings calls it and passes the read to ProjectPage, and a
- * ProjectPage rendered on its own calls it itself. A second call with
- * equal arguments joins the first one's subscription (lib/liveView.ts),
- * so its `retry` reads back the result Convex holds, a failure included,
- * and asks the server nothing while the first call still subscribes.
+ * per page or dialog for a project: Settings calls it and passes the read
+ * to ProjectPage, a ProjectPage rendered on its own calls it itself, and
+ * the New sub-project dialog calls it for its parent, which no page under
+ * it reads. A second call with equal arguments joins the first one's
+ * subscription (lib/liveView.ts), so its `retry` reads back the result
+ * Convex holds, a failure included, and asks the server nothing while the
+ * first call still subscribes.
  */
 export function useProjectSettings(projectId: string | null): ProjectSettingsRead {
   const key = projectId === null ? null : JSON.stringify({ id: projectId })

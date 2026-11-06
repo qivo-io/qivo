@@ -730,28 +730,33 @@ try {
   if ((await projectDialog.getByRole('button', { name: /project icon/i }).count()) !== 0) {
     await fail('New project still has a project icon chooser beside Name')
   }
-  const projectLead = projectDialog.getByRole('combobox', { name: 'Lead', exact: true })
+  const projectLead = projectDialog.locator('[data-project-lead-picker]')
   if (
     (await projectDialog.getByRole('combobox', { name: 'Managing team', exact: true }).count()) !==
     0
   )
     await fail('New project still offers a managing-team selector')
-  const leadCandidates = await pageA.evaluate(() =>
-    window.PLANNER.homeAssignees()
-      .map((user) => user.id)
-      .sort(),
+  // the lead starts as the creator, and the Lead popover lists the server's
+  // first batch of the people who may lead a new project
+  const creator = await pageA.evaluate(() => window.PLANNER.CURRENT_USER)
+  if ((await projectLead.getAttribute('data-project-lead-picker')) !== creator)
+    await fail('New project did not start with its creator as lead')
+  const leadBatch = await pageA.evaluate(async () => {
+    const answer = await window.PLANNER.leadChoices({ org_id: window.PLANNER.homeOrg }, '', null)
+    return answer?.state === 'ready' ? answer.rows.map((person) => person.id) : null
+  })
+  if (!leadBatch?.length) await fail('the lead choices of a new project did not load')
+  await projectLead.click()
+  const choices = pageA.locator('[data-lead-choice]')
+  await choices.first().waitFor({ state: 'visible', timeout: 10000 })
+  const offered = await choices.evaluateAll((rows) =>
+    rows.map((row) => row.getAttribute('data-lead-choice')),
   )
-  const offered = await projectLead.locator('option').evaluateAll((options) =>
-    options
-      .map((option) => option.value)
-      .filter(Boolean)
-      .sort(),
-  )
-  if (JSON.stringify(offered) !== JSON.stringify(leadCandidates))
-    await fail('New project offers a lead outside the active organization roster')
-  if (!leadCandidates.includes(await projectLead.inputValue()))
-    await fail('New project did not select an eligible lead by default')
-  log('A: New project is teamless and offers one eligible lead roster')
+  if (JSON.stringify(offered) !== JSON.stringify(leadBatch))
+    await fail("New project's Lead does not list the server's lead choices")
+  await pageA.keyboard.press('Escape')
+  await pageA.locator('[data-lead-choices]').waitFor({ state: 'detached', timeout: 5000 })
+  log("A: New project is teamless and offers the server's lead choices, starting on its creator")
   await pageA.keyboard.press('Escape')
   await projectName.waitFor({ state: 'detached', timeout: 5000 })
   if (

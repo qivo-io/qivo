@@ -349,6 +349,11 @@ try {
   await access.click()
   const accessPopup = page.locator('[data-new-project-access-popup]')
   await accessPopup.waitFor()
+  // the server's first batch, before the sweep presses its rows
+  await accessPopup
+    .locator('[data-project-access-team-option], [data-project-access-user-option]')
+    .first()
+    .waitFor()
   await activeField(access, 'Open project access field')
   await sweep(accessPopup, 'Project access popup checkboxes')
   await closeLayer('[data-new-project-access-popup]')

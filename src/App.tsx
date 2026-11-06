@@ -107,7 +107,7 @@ import {
   loadTeamSync,
   workspaceModules,
 } from './lib/workspaceChunks'
-import { P, TASKS_FAILED_TEXT } from './store/planner'
+import { type NewProjectInput, P, type ProjectShown, TASKS_FAILED_TEXT } from './store/planner'
 import { usePlannerVersion } from './store/usePlannerVersion'
 import { BOARD_SLOTS } from './views/board/useBoardView'
 import type { SyncPlace } from './views/TeamSync'
@@ -2036,8 +2036,15 @@ function App() {
   }
   // The new project shows in the sidebar at once, but the toast, the starter
   // task and the move into the project wait for the server. A refused create
-  // must not leave the user inside a project that then disappears.
-  const createProject = (p, { withStarter }) => {
+  // must not leave the user inside a project that then disappears. `shown`
+  // is the organization New sub-project's parent check named, which the
+  // create goes to (P.addProject); under a parent the workspace does not
+  // hold nothing paints, and App moves into the new sub-project, and makes
+  // its starter task, only once the workspace holds it.
+  const createProject = (
+    p: NewProjectInput,
+    { withStarter, shown }: { withStarter: boolean; shown?: ProjectShown },
+  ) => {
     // while edits are paused the dialog stays open with what was typed
     if (P.refusePausedEdit()) return
     // Projects and sub-projects are led by people and shared through explicit grants.
@@ -2052,7 +2059,11 @@ function App() {
       p,
       () => {
         answered(true)
-        if (withStarter) {
+        // whether the workspace holds the new project now: the live
+        // transport delivers what the create made visible before it
+        // answers, and a paint under a held parent stays until then
+        const held = !!id && !!P.project(id)
+        if (withStarter && held) {
           P.addIssue({
             title: p.name,
             project: id,
@@ -2062,14 +2073,15 @@ function App() {
             parent: null,
           })
         }
-        // Visibility comes from the draft by the rule the dialog's warning used,
-        // not from the rows, which hold the project only until the delivery
-        // that holds it arrives when the creator cannot see it.
-        // Sub-projects ignore it, since their creator leads the parent.
+        // A top-level project's visibility comes from the draft by the rule
+        // the dialog's warning used, not from the rows, which hold the
+        // project only until the delivery that holds it arrives when the
+        // creator cannot see it. A sub-project opens once the workspace
+        // holds it.
         const saved = afterProjectSaved({
           type: p.type,
           name: p.name,
-          visible: P.seesNewProject(p),
+          visible: p.type === 'meta' ? P.seesNewProject(p) : held,
         })
         window.showToast?.(saved.message)
         // stay put when the creator cannot see it, or moved elsewhere while it
@@ -2087,6 +2099,7 @@ function App() {
         const { parent } = p
         if (parent) focusAfterMove.current = () => projectTarget(parent)
       },
+      shown,
     )
     createdProject.current = id ?? null
     if (id) modal?.onCreated?.(id, saved)

@@ -96,7 +96,11 @@ export function creatorNote({
 
 /** What follows a saved create: the toast, and whether to open the project.
  * A top-level project its creator cannot see is not opened; the toast says
- * so instead. A sub-project always opens, since its creator leads the parent. */
+ * so instead. A sub-project opens when `visible`, which App answers with
+ * whether the workspace holds it once the create is answered: its creator
+ * manages the parent, which before the admin access split means they see
+ * it, and a sub-project under a parent the workspace does not hold stays
+ * closed with the same toast. */
 export function afterProjectSaved({
   type,
   name,
@@ -106,7 +110,7 @@ export function afterProjectSaved({
   name: string
   visible: boolean
 }): { message: string; open: boolean } {
-  if (type === 'project') return { message: `Sub-project “${name}” created`, open: true }
+  if (type === 'project') return { message: `Sub-project “${name}” created`, open: visible }
   if (!visible) {
     return { message: `Project “${name}” created. You don't have access to it.`, open: false }
   }
