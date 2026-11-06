@@ -207,10 +207,10 @@ const CREATOR_SETTINGS: Record<OrgVM['projectCreators'], { label: string; toast:
   selected: { label: 'Selected users', toast: 'Selected users can create projects' },
 }
 
-/* The creators line's states, for `data-creators-state`: checking before
-   an answer and while the answer counted under another setting than the
-   one on screen, failed, unavailable when the server could not count, or
-   ok. */
+/* The creators line's states, for `data-creators-state`, which are
+   checking before an answer and while the answer counted under another
+   setting than the one on screen, failed, unavailable when the server
+   could not count, or ok. */
 type CreatorsState = 'checking' | 'failed' | 'unavailable' | 'ok'
 
 // Who may create top-level projects besides org admins. The line under the

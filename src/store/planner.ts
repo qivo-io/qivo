@@ -13401,9 +13401,10 @@ export const PLANNER = {
 
   /* ---- agent keys (Settings → Organization → Users) ----
      An agent's key is its login (0100). Keys live outside the snapshot, so
-     they are read on demand, once, and every mutator is AWAITED: the secret
-     exists only in createAgentKey's return value, minted in the browser,
-     and the server keeps a SHA-256 and a display fingerprint, nothing more. */
+     they are read on demand, once, and every mutator is AWAITED, since the
+     secret exists only in createAgentKey's return value, minted in the
+     browser, and the server keeps a SHA-256 and a display fingerprint,
+     nothing more. */
 
   /** The keys of the agents of organization `orgId` among `agentIds`
       (tokens.agentKeys), each agent with its newest keys and `more`, or

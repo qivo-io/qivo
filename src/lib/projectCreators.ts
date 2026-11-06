@@ -1,7 +1,7 @@
 /* The pure rules behind the "Who can create new projects?" setting in
-   Organization settings: how the line under it words the server's answer
-   (orgs.projectCreators, convex/model/peopleSettings.ts projectCreatorsOf)
-   and which Users rows offer the per-user checkbox. Both follow the shared
+   Organization settings, which say how the line under it words the
+   server's answer (orgs.projectCreators, convex/model/peopleSettings.ts
+   projectCreatorsOf) and which Users rows offer the per-user checkbox. Both follow the shared
    rule in convex/lib/projectCreators.ts, the one projects.create enforces,
    which counts a Standard user agent like a standard user who is a person.
    Nothing here imports the store at runtime. */
@@ -10,21 +10,21 @@ import type { OrgVM, UserVM } from '../store/planner'
 
 type Setting = OrgVM['projectCreators']
 
-/** The creators line of one answer: the creators it names and how many
-    others it counted, up to 100, with `more` past them and `agents` among
+/** The creators line of one answer, with the creators it names and how
+    many others it counted, up to 100, `more` past them and `agents` among
     the counted others. */
 export type CreatorCount = Omit<
   Extract<ProjectCreatorsAnswer, { state: 'ok' }>,
   'state' | 'setting'
 >
 
-/** How the summary names a creator: an agent's name says it is one, such as
- * "Atlas (agent)", because the roster shows agents as standard users. */
+/** How the summary names a creator. An agent's name says it is one, such
+ * as "Atlas (agent)", because the roster shows agents as standard users. */
 export function creatorName(creator: Pick<CreatorRow, 'name' | 'agent'>): string {
   return creator.agent ? `${creator.name} (agent)` : creator.name
 }
 
-/** One part of a name list: a name, or the words that join the names. */
+/** One part of a name list, a name or the words that join the names. */
 export type NamePart = { text: string; name: boolean }
 
 /** The summary's creators on one line. With no others counted, the

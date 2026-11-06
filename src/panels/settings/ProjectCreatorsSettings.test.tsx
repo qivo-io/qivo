@@ -159,7 +159,7 @@ const summary = () => query('[data-project-creators-summary]')?.textContent
 const creatorsState = () =>
   query('[data-project-creators-summary]')?.getAttribute('data-creators-state')
 
-/* Saves `setting` on the server's side, as orgs.update would: the
+/* Saves `setting` on the server's side, as orgs.update would. The
    workspace carries it, and the server runs its reads again. */
 async function saved(setting: Setting) {
   snap.orgs[0].project_creators = setting

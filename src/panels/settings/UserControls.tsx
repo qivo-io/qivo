@@ -2,7 +2,7 @@
    Each control reads only the fields of `user` it shows, so Settings ›
    Users can draw a row from the server's answer while the store does not
    hold the person. Writes go through P.updateUser, which needs the store's
-   row, so such a row passes `waiting`: the control shows the answer's
+   row, so such a row passes `waiting`, and the control shows the answer's
    values, writes nothing and says "Loading this person…" (WAITING). */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { flushSync } from 'react-dom'

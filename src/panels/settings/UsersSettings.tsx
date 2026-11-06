@@ -1,4 +1,4 @@
-/* Settings → Organization → Users: the home organization's people, agents
+/* Settings → Organization → Users, the home organization's people, agents
    and guests, read from the server a page at a time, with their roles,
    hours and an agent's keys, and the form that adds a person or an agent.
 
@@ -72,7 +72,7 @@ type PageReady = Extract<PeoplePageAnswer, { state: 'ready' }>
 
 /* ------------------------------------------------------------- the rows */
 
-/** What a row shows of a person: the store's profile while the store
+/** What a row shows of a person, the store's profile while the store
     holds it, else the server's answer. */
 type Shown = Pick<
   UserVM,
@@ -108,7 +108,7 @@ const shownOf = (answer: SettingsPersonRow): Shown => ({
   canCreateProjects: answer.can_create_projects,
 })
 
-/** A face for a person the store does not hold: their initials on a
+/** A face for a person the store does not hold, their initials on a
     neutral color, named for readers, never the dashed "Unassigned" face
     a missing person gets elsewhere. In a div, so the row's name block
     stays its second div, as the phone layout reads it. */
@@ -127,8 +127,8 @@ function PersonFace({ name }: { name: string }) {
   )
 }
 
-/** The note a kept row carries: a person added on this visit, or a row
-    the page on screen does not hold. */
+/** The note a kept row carries, for a person added on this visit or a
+    row the page on screen does not hold. */
 type KeptNote = 'Added' | 'Not on this page'
 
 /** An agent's key line state, from the page's one-shot key reads. */
@@ -519,10 +519,10 @@ function UserRow({
   )
 }
 
-/* One guest of the list, by id: the address, the invitation's state, the
-   first projects the server listed and the hours, with a two-press Remove.
-   Like UserRow, it paints the store's profile while the store holds it and
-   waits otherwise. */
+/* One guest of the list, by id, with the address, the invitation's state,
+   the first projects the server listed and the hours, and a two-press
+   Remove. Like UserRow, it paints the store's profile while the store
+   holds it and waits otherwise. */
 function GuestRow({
   id,
   answer,
@@ -626,7 +626,7 @@ function GuestRow({
   )
 }
 
-/* A phone row of the list: a link to the person's page, with the name,
+/* A phone row of the list, a link to the person's page with the name,
    "Agent" or the address, and the role or Inactive. */
 function PhoneRow({
   id,
@@ -674,9 +674,9 @@ function PhoneRow({
 /* ------------------------------------------------------------ the page */
 
 /* What Settings › Users keeps for the browser session, so Back from a
-   person's page lands on the page it came from, read again: the settled
-   search and the page starts, for the login that left them, and never an
-   answer. */
+   person's page lands on the page it came from, read again. It keeps the
+   settled search and the page starts, for the login that left them, and
+   never an answer. */
 let usersKept: { login: string; search: string; starts: readonly (string | null)[] } | null = null
 const loginNow = () => P.myProfileIds.join(',')
 
@@ -960,8 +960,8 @@ export function OrgUsersPage({
     setFreshAgent({ name, secret: res.secret })
   }
 
-  // focus after Previous and Next: the page's first row's name field, or on
-  // the phone its first link, else the search box
+  // focus after Previous and Next goes to the page's first row's name
+  // field, or on the phone its first link, else to the search box
   const move = useMoveFocus(
     page,
     'users',

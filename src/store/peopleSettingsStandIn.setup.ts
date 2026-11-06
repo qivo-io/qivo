@@ -72,7 +72,7 @@ export type PeopleSettingsWorkspace = Pick<
 /** One agent key as the server lists it, with its agent. */
 export type StandInKey = AgentKeysRow['keys'][number]
 
-/** What the workspace does not hold: the agents' keys, and the invitation
+/** What the workspace does not hold, the agents' keys and the invitation
     rows invites.deliveries would report. */
 export type PeopleSettingsExtra = {
   keys?: readonly StandInKey[]
@@ -397,7 +397,7 @@ export function peopleSettingsStandIn(
 }
 
 /**
- * A server double for the jsdom tests: the Users page's reads over the
+ * A server double for the jsdom tests, the Users page's reads over the
  * workspace `server()` answers, with the states `force()` asks for and the
  * keys and invitation rows `extra()` holds, through
  * projectSettingsStandIn.setup.ts readsServer (`watch` for the live reads,

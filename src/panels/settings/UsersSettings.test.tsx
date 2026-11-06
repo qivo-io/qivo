@@ -253,8 +253,8 @@ async function type(input: HTMLInputElement, value: string) {
     input.dispatchEvent(new Event('input', { bubbles: true }))
   })
 }
-/* Presses `element` as a pointer does in a browser: focus moves to it
-   first, then the click. */
+/* Presses `element` as a pointer does in a browser, focus moving to it
+   first and then the click. */
 async function click(element: HTMLElement) {
   await act(async () => {
     element.focus()

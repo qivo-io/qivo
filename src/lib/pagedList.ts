@@ -1227,10 +1227,11 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
 
 /**
  * A list the server answers a page at a time, one page on screen, which
- * Next and Previous replace, as Settings › Projects and Archived projects
- * read theirs (the limits plan's "Settings project list" and "Archived
- * project list loading"). It reads on the live engine's rules (the module
- * header), with these of its own:
+ * Next and Previous replace, as Settings › Projects, Archived projects and
+ * Settings › Users read theirs (the limits plan's "Settings project list",
+ * "Archived project list loading" and "Settings user list loading"). It
+ * reads on the live engine's rules (the module header), with these of its
+ * own:
  *
  * - One page is on screen, read live and open (no `through`), so a row
  *   added before its end moves its last row to the next page, and a row

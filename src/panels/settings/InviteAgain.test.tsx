@@ -36,8 +36,8 @@ beforeAll(async () => {
   invites = await import('../../lib/inviteDeliveries')
 }, 60_000)
 
-/* A pending row as the Users page shows it: the page reads its pending
-   seats once and InviteLabel takes the seat's row from it (InviteRows). */
+/* A pending row as the Users page shows it. The page reads its pending
+   seats once, and InviteLabel takes the seat's row from it (InviteRows). */
 function Label({ user }: { user: UserVM }) {
   const rows = invites.useInviteDeliveries(user.org, [user.id])
   return (
