@@ -39,6 +39,8 @@ and subscribe them to the task.
 
 Paste or drag images into descriptions. Hover for Copy or Download, or
 double-click for full size. Inline images cannot be pasted across tasks.
+Images load as you scroll near them, a few at a time, and show "Loading
+image…" in a box of their size until then.
 **Save / Discard** appears when the draft changes. Press **Save** to save.
 The formatting row and save controls remain visible while long drafts
 scroll. Descriptions and comments can hold up to 20,000 characters,
