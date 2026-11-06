@@ -34,6 +34,8 @@ const PAGE = 50
 describe('the task window keeps a bounded thread', () => {
   let store: typeof import('./planner')
   let budget: typeof import('../lib/threadBudget')
+  // the figure the module holds, which each test lowers and gives back
+  let figure: number
   let snap: Snapshot
   let author: string
   let publish: (page: Comments) => void
@@ -169,13 +171,14 @@ describe('the task window keeps a bounded thread', () => {
     })
     store = await import('./planner')
     budget = await import('../lib/threadBudget')
+    figure = budget.THREAD_KEEP.rows
     budget.THREAD_KEEP.rows = 120
     await store.initStore()
     store.P.watchComments('task-a')
   })
 
   afterEach(() => {
-    budget.THREAD_KEEP.rows = 150
+    budget.THREAD_KEEP.rows = figure
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -640,17 +643,19 @@ describe('the task window keeps a bounded thread', () => {
       }
       expect(met.size).toBe(1000)
       expect(shown()[0]).toBe('comment-0')
-      // forward again: each page comes in right under the row above it
+      // Forward again, each page comes in right under the row above it, so
+      // the rows above the gap and the pages that come in, in the order
+      // they come, are every comment above the live window, each once
       const order = shown().filter((id) => P.threadGap?.comments?.above.has(id))
       while (P.commentsNewer === 'more') {
         const before = new Set(shown())
         await newer()
-        order.push(...shown().filter((id) => !before.has(id) && !id.startsWith('comment-9')))
+        order.push(...shown().filter((id) => !before.has(id)))
         expect(held()).toBeLessThanOrEqual(150)
       }
-      const forward = [...new Set(order)].map((id) => Number(id.slice(8)))
-      expect(forward).toEqual([...forward].sort((a, b) => a - b))
-      expect(new Set(forward).size).toBe(forward.length)
+      expect(order.map((id) => Number(id.slice(8)))).toEqual(
+        Array.from({ length: 950 }, (_, n) => n),
+      )
       expect(shown()).toContain('comment-999')
     })
 

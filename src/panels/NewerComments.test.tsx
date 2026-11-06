@@ -40,6 +40,8 @@ const at = (minute: number, second = 0) =>
 
 let P: Planner
 let budget: typeof import('../lib/threadBudget')
+// the figure the module holds, which load() lowers and afterEach gives back
+let figure: number | undefined
 let detail: Detail
 let container: HTMLDivElement
 let root: Root
@@ -133,6 +135,7 @@ async function load({ unread }: { unread?: number } = {}) {
   const store = await import('../store/planner')
   P = store.P
   budget = await import('../lib/threadBudget')
+  figure = budget.THREAD_KEEP.rows
   budget.THREAD_KEEP.rows = 120
   await store.initStore()
   detail = await import('./IssueDetail')
@@ -157,7 +160,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
-  if (budget) budget.THREAD_KEEP.rows = 150
+  if (budget && figure !== undefined) budget.THREAD_KEEP.rows = figure
+  figure = undefined
   container.remove()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
@@ -426,23 +430,30 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
       )
     }
     const place = vi.spyOn(P, 'threadPlace')
-    await walkBack(1)
+    // two pages back the store holds its 120, #150 to #219 above the gap
+    // and the live window
+    await walkBack(2)
     // the window opens at its newest end, with the composer on screen
     await see(
       (el) =>
         el.hasAttribute('data-composer') || el.getAttribute('data-comment') === comment(299).id,
     )
     expect(place.mock.calls.at(-1)?.[1]).toBeNull()
-    // the reader scrolls up to #210
+    // the reader scrolls up to #160
     await see((el) => {
       const id = el.getAttribute('data-comment')
-      return id === comment(210).id || id === comment(211).id
+      return id === comment(160).id || id === comment(161).id
     })
-    expect(place.mock.calls.at(-1)?.[1]).toBe(comment(210).id)
-    // and an arrival then lets the newer side go, not the rows they read
+    expect(place.mock.calls.at(-1)?.[1]).toBe(comment(160).id)
+    // An arrival past the budget then lets the newer side go from the gap
+    // down, #250, which slid out of the live window, and not the oldest row,
+    // #150, which it lets go for a reader at the newest end
     await deliver({ comments: range(251, 301), earlier: true })
-    await press('Show earlier comments')
-    await answer({ comments: range(150, 200), earlier: true })
-    expect(thread()).toContain('#210')
+    expect(thread()).toEqual([
+      '[Show earlier comments]',
+      ...comments(150, 220),
+      '[Show newer comments]',
+      ...comments(251, 301),
+    ])
   })
 })
