@@ -72,7 +72,8 @@ hours only, with no percentage or over-capacity warning.
 **All projects / This project** chooses which visible projects contribute
 hours. The toggle is absent over all projects and in My view. Use the three
 layout buttons to expand Team, show it with the Roadmap, or collapse it. Expanded
-Team keeps the timeline's dates, milestones and window controls.
+Team keeps the timeline's dates and window controls, and a project's
+milestones. In My view, whose milestones sit on the rows, it shows none.
 
 Click a person or weekly cell to highlight their tasks. Hover or keyboard-focus
 a cell to highlight its person and week. Clicking locks the week highlight;

@@ -104,24 +104,40 @@ the subtasks below it. To change the bar, move its subtasks.
 A task with subtasks but none scheduled shows as unplanned. While you drag a
 subtask, its parent's bar follows it.
 
-Milestones appear as violet diamonds. Drag one to move it or click it to open
-the Milestones window, which reads that milestone from the server as an
-Overview row does ([Overview milestones](./the-overview-project-health-at-a-glance.md)). The toolbar's **Milestone** button creates one.
+Milestones appear as violet diamonds. In a project or sub-project they sit in
+the header under the week numbers, and each one's dashed line runs down
+through every row. In My view each milestone sits on its own project's row
+with its name, and its dashed line runs through that project's rows only, so
+two projects' milestones of the same week sit on their two rows. Drag one to
+move it or click it to open the Milestones window, which reads that milestone
+from the server as an Overview row does ([Overview milestones](./the-overview-project-health-at-a-glance.md)). In a project, the toolbar's **Milestone** button creates one.
 A project has at most one milestone a week, so a diamond dropped on a week
 that already has one of the project's milestones goes back, and Qivo names
 the milestone there.
 Each name stays on one line and runs from its diamond to the next milestone
-in its row, or to the left near the end of the timeline. Milestones of
-different projects in the same week, or close together, take rows of their own, and the header grows
+in its row, or to the left near the end of the timeline. In the header,
+milestones of the same week, or close together, take rows of their own, and the header grows
 when one week holds more than two milestones or the names need more room, as
 far as the screen leaves room for your tasks. Where a name is still cut short,
 hover the milestone or move to it with Tab to read it in full, and press Enter
 to open it. When one week holds more milestones than the header shows, scroll
 the milestone rows to reach the others. Beside the rows, **+N more** says how
-many milestones are out of sight above or below them.
+many milestones are out of sight above or below them. A project's row in My
+view holds two rows of milestones and cuts names short where they meet.
+The Roadmap loads the milestones of the weeks it shows, and moving or
+resizing the window loads those of the new weeks; meanwhile the milestones of
+the weeks both windows share stay. A line under the toolbar says when the
+milestones are still loading, could not load (**Retry** loads them again),
+are not all shown because the window held more than Qivo reads at once (it
+says from which day, and that a shorter window shows them all, or in My view
+also opening a project), or belong to more projects than the app reads at once
+([Limits](./limits.md)). The window narrows only the milestones, not the tasks
+the Roadmap shows.
 When a scope has nothing to schedule, for example a project without
 sub-projects or My view with nothing assigned to you, the Roadmap says why.
-If the scope has milestones, the timeline stays behind that note and shows them.
+In a project or sub-project, and in My view, the timeline stays behind that
+note with its window controls, and in a project with the milestones of its
+window. All projects asks you to choose a project and shows only its note.
 
 ## Undo this Roadmap visit's changes
 
