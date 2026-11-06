@@ -117,11 +117,14 @@ export const CALLS_COUNTING = 'Being counted. Check again later.'
 
 /** The line under current storage that names the storage the paid
     period's sample measured at its start, which the period's storage
-    charge uses and which leaves files in Deleted items out, so the page
-    never implies the charge counts them. Null outside a paid period, and
-    for a trial, which never gets a sample (convex/billingSync.ts apply
-    records a period only for an active or past-due subscription).
-    `status` is the details'. */
+    charge uses. The sample reads the same stored-byte totals as current
+    storage, files in Deleted items included (convex/billingSync.ts
+    storageStep), so the two differ only by what changed since the period
+    started. The words name no files, so they stay true of a sample an
+    earlier backend took from the attachment rows of live tasks. Null
+    outside a paid period, and for a trial, which never gets a sample
+    (convex/billingSync.ts apply records a period only for an active or
+    past-due subscription). `status` is the details'. */
 export function storageSampleLine(
   usage: Pick<BillingUsageFigures, 'period_kind' | 'sampled_storage_bytes'>,
   status: BillingDetails['status'] | undefined,
@@ -129,5 +132,5 @@ export function storageSampleLine(
   if (usage.period_kind !== 'paid' || status === 'trialing') return null
   return usage.sampled_storage_bytes === null
     ? 'Not measured yet for this period.'
-    : `${billingBytes(usage.sampled_storage_bytes)} measured at the start of this period, without files in Deleted items.`
+    : `${billingBytes(usage.sampled_storage_bytes)} measured at the start of this period.`
 }

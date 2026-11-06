@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { storageSampleLine, usageHints } from './billingDisplay'
 
 describe('storageSampleLine', () => {
-  it("names a paid period's sample without files in Deleted items, or says it is not measured yet", () => {
-    expect(
-      storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: 1_200_000_000 }, 'active'),
-    ).toBe('1.20 GB measured at the start of this period, without files in Deleted items.')
+  it("names a paid period's sample without naming which files it counts, or says it is not measured yet", () => {
+    const line = storageSampleLine(
+      { period_kind: 'paid', sampled_storage_bytes: 1_200_000_000 },
+      'active',
+    )
+    expect(line).toBe('1.20 GB measured at the start of this period.')
+    // the case that must fail: the sample counts files in Deleted items now
+    expect(line).not.toContain('Deleted items')
     expect(storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: 0 }, 'past_due')).toBe(
-      '0 B measured at the start of this period, without files in Deleted items.',
+      '0 B measured at the start of this period.',
     )
     expect(storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: null }, 'active')).toBe(
       'Not measured yet for this period.',
@@ -22,7 +26,7 @@ describe('storageSampleLine', () => {
     ).toBeNull()
     // before the summary answers, a paid period still gets its line
     expect(storageSampleLine({ period_kind: 'paid', sampled_storage_bytes: 7 }, undefined)).toBe(
-      '7 B measured at the start of this period, without files in Deleted items.',
+      '7 B measured at the start of this period.',
     )
   })
 })

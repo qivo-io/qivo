@@ -125,8 +125,9 @@ describe('current storage', () => {
   it("shows a paid period's sample on its own line, and none for a month, an unconfirmed renewal or a trial", async () => {
     await render({ ...PAID, storage_bytes: 9_000_000, sampled_storage_bytes: 1_200_000_000 })
     expect(text('[data-billing-storage-sample]')).toBe(
-      '1.20 GB measured at the start of this period, without files in Deleted items.',
+      '1.20 GB measured at the start of this period.',
     )
+    expect(text('[data-billing-storage-sample]')).not.toContain('without files in Deleted items')
     await render({ ...PAID, sampled_storage_bytes: null })
     expect(text('[data-billing-storage-sample]')).toBe('Not measured yet for this period.')
     await render({ ...PAID, sampled_storage_bytes: null }, { status: 'trialing' })
