@@ -1185,9 +1185,13 @@ describe('at the design size, one figure at a time, and a read over several at t
 
   it('walks an admin’s archive at its sum, 300 archived top-level projects and 1,000 archived sub-projects of live parents, to its end', async () => {
     await load((snap) => {
-      // the fixture's four live top-level projects and 163 more, as many as
-      // 500 live sub-projects need at 3 each, with the 1,000 archived
-      // sub-projects spread under them
+      // 167 live top-level parents, the fixture's four and 163 more, with
+      // no live sub-project, beside the archive's two figures at their sum,
+      // 300 archived top-level projects and 1,000 archived sub-projects,
+      // about 6 under each parent. Only that sum is raised. The 167
+      // parents stay under the 200 live projects of the design size, no
+      // live sub-project is seeded, and 6 archived sub-projects stay under
+      // the 40 of one project
       const live = snap.projects.filter((p) => p.parent_id === undefined && !p.archived_at)
       const base = { ...live[0], lead_id: undefined }
       for (let i = live.length; i < 167; i++)
