@@ -125,6 +125,18 @@
  * one archived on its own, and restores it there, which must bring back the
  * project and the carried sub-project only, each checked over REST
  * (ui/settings-projects).
+ * It makes 26 tasks of its own in Alpha and deletes them over REST,
+ * searches its tag in Settings › Projects › Deleted items, from the
+ * deployment's page (deletedItems.page), and waits until the page answers
+ * that nothing matches without projects, then picks its project and kind
+ * Tasks, opens the folded run with Show all, selects the first page of 25
+ * and the 26th on the next, restores them as one action of two calls
+ * after the window says to keep Qivo open, and checks the 26 tasks live
+ * over REST; then it makes a sub-project of its own with two tasks,
+ * deletes it in the app, finds it among the deleted projects without a
+ * scope, and deletes it for good from its row menu once Delete now counts
+ * no earlier items (deletedItems.purgeSummary)
+ * (ui/deleted-items).
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
  * the project's Overview, which opens the Milestones window on the
@@ -6020,6 +6032,196 @@ async function settingsProjectsCheck() {
   })
 }
 
+/** The step that checks Settings › Projects › Deleted items
+ *  (deletedItemsCheck). */
+export const DELETED_ITEMS_STEP = 'ui/deleted-items'
+
+/** The marks the step waits for on the Deleted items page
+ *  (src/panels/settings/DeletedItems.tsx). */
+export const DELETED_ITEMS_MARKS = {
+  page: 'data-deleted-items',
+  scope: 'data-deleted-scope',
+  search: 'data-deleted-search',
+  row: 'data-deleted-row',
+  selectAll: 'data-select-all',
+  next: 'data-deleted-page-next',
+  count: 'data-deleted-count',
+  restoreSelected: 'data-restore-selected',
+  keepOpen: 'data-keep-open',
+  menu: 'data-row-menu',
+  deleteNow: 'data-delete-now',
+  along: 'data-purge-along',
+  showAll: 'data-show-all',
+  end: 'data-deleted-page-end',
+  state: 'data-deleted-state',
+}
+
+/** The class of the app's visible toasts (src/App.tsx ToastHost). */
+export const TOAST_HOST = 'planner-toast-host'
+
+/** What the step restores and sees, one action of two calls. */
+export const DELETED_ITEMS_EXPECTED = {
+  tasks: 26,
+  selected: '26 selected, 25 on other pages',
+  /** the end toast, which adds how many tasks finish restoring in the
+   *  background (src/lib/deletedItems.ts endText) */
+  toast:
+    /^Restored 26 tasks\.( (1 of them finishes|\d+ of them finish) restoring in the background\.)?$/,
+  keepOpen:
+    'Restoring them runs in steps. Keep Qivo open until it finishes. Closing or reloading Qivo stops it, and the steps already done stay done.',
+  /** the end line of a search that matches nothing */
+  none: (words) => `No deleted items match “${words}”.`,
+}
+
+/** Settings › Projects › Deleted items on the deployment's reads
+ *  (deletedItems.page, roles and purgeSummary) and its restore and purge.
+ *  Over REST the run makes 26 tasks titled `<tag> Deleted <n>` in Alpha
+ *  and deletes them. In the app as Nora it opens Deleted items, searches
+ *  `<tag> Deleted` and waits until the page says nothing matches it
+ *  without projects, so the search has gone out before anything is
+ *  selected, then picks the run's project M in Projects, chooses kind
+ *  Tasks, opens the run of the 26 deletes that the page folds
+ *  after its first rows (Show all), checks a first page of 25 with Next,
+ *  selects it, goes Next and selects the rest, presses Restore 26
+ *  selected, checks the window's keep-open paragraph and confirms, waits
+ *  for "Restored 26 tasks.", which may add how many finish restoring in
+ *  the background, and checks over REST that the 26 tasks are live. Then
+ *  it makes
+ *  `<tag> Deleted sub` over REST under M with two tasks and deletes it in
+ *  the app (deleteProjectInApp), opens Deleted items again without a
+ *  scope, searches the sub-project's name until it is the one row listed,
+ *  opens Delete now… from its
+ *  menu, waits until the window counts no earlier items, and deletes it
+ *  for good, after which its row is gone. The 26 tasks go in the cleanup
+ *  with M and the sweep finds them by their tag. It needs a backend from
+ *  v0.1.131 on. */
+async function deletedItemsCheck() {
+  const w = run.creds.writeToken
+  const m = DELETED_ITEMS_MARKS
+  const { M, A } = run.projects
+  await check(DELETED_ITEMS_STEP, async () => {
+    const made = []
+    for (let n = 1; n <= DELETED_ITEMS_EXPECTED.tasks; n++)
+      made.push(
+        await restOk(w, 'POST', '/tasks', { project: A.id, title: `${run.tag} Deleted ${n}` }),
+      )
+    run.created.push(...made)
+    for (const task of made) {
+      const r = await rest(w, 'DELETE', `/tasks/${task.id}`)
+      expect(r.status === 200, `DELETE ${task.key} answered HTTP ${r.status}`)
+    }
+    const open = async () => {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-deleted`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
+    }
+    await open()
+    // The search goes first. The page waits a moment before it sends what
+    // was typed, and a changed search clears the selection, so the step
+    // waits until the page answers it, matching nothing without projects.
+    const words = `${run.tag} Deleted`
+    await app.locator(`[${m.search}]`).fill(words)
+    const end = app.locator(`[${m.end}]`)
+    const none = DELETED_ITEMS_EXPECTED.none(words)
+    expect(
+      await until(async () => ((await end.textContent()) ?? '').trim() === none, 60_000),
+      `the page without projects ends "${((await end.textContent()) ?? '').trim()}", not "${none}"`,
+    )
+    // the run's project, from the shared picker's search
+    await app.locator(`[${m.scope}]`).click()
+    await app.locator('[data-project-picker-search]').fill(run.tag)
+    await app.locator(`[data-project-pick="${M.id}"]`).click({ timeout: 30_000 })
+    await app.locator('[data-project-picker-search]').press('Escape')
+    await app.getByRole('radio', { name: 'Tasks', exact: true }).click()
+    const rows = app.locator(`[${m.row}]`)
+    // one person's 26 deletes in a row are one run, which the page shows
+    // folded after its first rows until Show all
+    const showAll = app.locator(`[${m.showAll}]`)
+    const settled = app.locator(`[${m.state}="ok"]`)
+    expect(
+      await until(async () => (await settled.count()) > 0 && (await showAll.count()) > 0, 60_000),
+      `the first page shows ${await rows.count()} rows and no folded run`,
+    )
+    await showAll.first().click()
+    expect(
+      await until(async () => (await rows.count()) === 25, 60_000),
+      `the first page holds ${await rows.count()} rows, not 25`,
+    )
+    await app.locator(`[${m.selectAll}]`).click()
+    await app.locator(`[${m.next}]`).click()
+    expect(
+      await until(async () => (await rows.count()) === 1, 60_000),
+      `the next page holds ${await rows.count()} rows, not 1`,
+    )
+    await app.locator(`[${m.selectAll}]`).click()
+    eq(
+      ((await app.locator(`[${m.count}]`).textContent()) ?? '').trim(),
+      DELETED_ITEMS_EXPECTED.selected,
+      'the selection across pages',
+    )
+    await app.locator(`[${m.restoreSelected}]`).first().click()
+    eq(
+      ((await app.locator(`[${m.keepOpen}]`).textContent()) ?? '').trim(),
+      DELETED_ITEMS_EXPECTED.keepOpen,
+      "the window's keep-open paragraph",
+    )
+    await app.getByRole('button', { name: 'Restore 26 tasks', exact: true }).click()
+    // the visible toast, as a screen reader's region holds a copy of it
+    await app
+      .locator(`.${TOAST_HOST}`)
+      .getByText(DELETED_ITEMS_EXPECTED.toast)
+      .waitFor({ timeout: 120_000 })
+    let live = 0
+    expect(
+      await until(async () => {
+        live = 0
+        for (const task of made)
+          if ((await rest(w, 'GET', `/tasks/${task.id}`)).status === 200) live++
+        return live === made.length
+      }, 60_000),
+      `${live} of ${made.length} tasks are live after the restore`,
+    )
+    // a sub-project of its own, deleted in the app, then for good
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Deleted sub`,
+      parent: M.id,
+    })
+    for (const title of [`${run.tag} bench one`, `${run.tag} bench two`])
+      await restOk(w, 'POST', '/tasks', { project: sub.id, title })
+    await deleteProjectInApp(w, sub)
+    await open()
+    await app.locator(`[${m.search}]`).fill(`${run.tag} Deleted sub`)
+    // an item's id is its own, so the row is found by the sub-project's name.
+    // The page first shows its rows without the search, the newest delete
+    // among them, and an answered search leaves that row alone. Until then a
+    // menu opened on it closes when the answer comes.
+    const row = app.locator(`[${m.row}]`, { hasText: sub.name })
+    const listed = app.locator(`[${m.row}]`)
+    expect(
+      await until(async () => (await listed.count()) === 1 && (await row.count()) === 1, 60_000),
+      `the search for ${sub.name} lists ${await listed.count()} rows`,
+    )
+    // the row lists the sub-project while its tasks still move into Deleted
+    // items, and shows its menu once they all did
+    await row.first().locator(`[${m.menu}]`).click({ timeout: 60_000 })
+    await app.locator(`[${m.deleteNow}]`).click()
+    const forGood = app.getByRole('button', { name: 'Delete for good', exact: true })
+    expect(await until(async () => await forGood.isEnabled(), 60_000), 'Delete for good stays off')
+    eq(
+      ((await app.locator(`[${m.along}]`).textContent()) ?? '').trim(),
+      '',
+      'the items deleted from the sub-project earlier',
+    )
+    await forGood.click()
+    expect(
+      await until(async () => (await row.count()) === 0, 60_000),
+      `${sub.name} is still in Deleted items`,
+    )
+    return `restored ${made.length} tasks from two pages as one action of two calls, and deleted ${sub.name} for good after Delete now counted no earlier items`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -7676,6 +7878,9 @@ async function main() {
   // Settings › Projects and Archived projects on the server's lists, on a
   // project of its own
   await settingsProjectsCheck()
+  // Deleted items on the server's page, with tasks and a sub-project of its
+  // own, restored past 25 in steps and deleted for good
+  await deletedItemsCheck()
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()

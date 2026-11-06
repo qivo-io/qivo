@@ -7,11 +7,12 @@
    organization, in the order picked. The rows come from the navigation
    reads (convex/projectNav.ts), which judge each one by ordinary access;
    a pick goes only to reads that check access themselves
-   (issues.archivedPage, search.page), so a project that was picked and is
-   later archived, deleted or hidden answers there like any project the
-   person cannot see.
+   (issues.archivedPage, search.page, deletedItems.page), so a project that
+   was picked and is later archived, deleted or hidden answers there like
+   any project the person cannot see.
 
-   Both reads take a top-level project with its live sub-projects, so in
+   These reads take a top-level project with its sub-projects, the first
+   two its live ones and Deleted items its live and archived ones, so in
    many mode a picked top-level project covers its sub-projects: their rows
    show included, a pick of one of them is refused, and picking the project
    drops their earlier picks. Each pick counts one of PICK_MOST. In one
@@ -169,6 +170,20 @@ export function archivedScopeOf(pick: ProjectPick): PickArchivedScope | undefine
   if (pick.kind === 'every') return undefined
   if (pick.kind === 'org') return { org: pick.org_id, all: true }
   return { org: pick.org_id, projectIds: pick.projects.map((p) => p.id) }
+}
+
+/** Deleted items' scope (deletedItems.page `scope`). */
+export type PickDeletedScope =
+  | { org_id: string; project_ids: string[] }
+  | { org_id: string; all: true }
+
+/** The scope deletedItems.page reads for `pick`: All projects of the
+    organization, or its projects in pick order. Undefined for All projects
+    of every organization, which Deleted items does not offer. */
+export function deletedScopeOf(pick: ProjectPick): PickDeletedScope | undefined {
+  if (pick.kind === 'every') return undefined
+  if (pick.kind === 'org') return { org_id: pick.org_id, all: true }
+  return { org_id: pick.org_id, project_ids: pick.projects.map((p) => p.id) }
 }
 
 /** A project's name for a label, after its top-level project's for a

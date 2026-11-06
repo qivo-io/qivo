@@ -1,6 +1,6 @@
-/* The shared project picker, which Search's Search in and Settings ›
-   Archived tasks open, and which Deleted items and startup selection can
-   take later. It lists the person's projects from the server's navigation
+/* The shared project picker, which Search's Search in, Settings ›
+   Archived tasks and Settings › Projects › Deleted items open, and which
+   startup selection can take later. It lists the person's projects from the server's navigation
    reads (convex/projectNav.ts), never from the workspace's projects, each
    judged by ordinary access, and picks by the rules of its caller
    (lib/projectPick.ts): one project, or several of one organization, or
@@ -93,6 +93,7 @@ import {
   type ProjectPick,
   pickLabel,
   pickRow,
+  placeName,
   refusalOf,
 } from '../lib/projectPick'
 import { useMobile } from '../lib/useMobile'
@@ -869,5 +870,69 @@ export function ProjectPicker({
     >
       {(close) => <ProjectPickerPanel {...panel} onDone={() => close()} />}
     </Popover>
+  )
+}
+
+/** How many picked projects PickChips shows before Show all. */
+export const CHIPS_SHOWN = 6
+
+/** The data attributes of a page's chips: the row, each chip's remove
+    button (with the project's id) and Show all. */
+export type ChipHooks = { row: `data-${string}`; chip: `data-${string}`; more: `data-${string}` }
+
+/**
+ * The picked projects of a picker of several, as chips under its trigger,
+ * each with a button that takes it off (`onRemove`), the first CHIPS_SHOWN
+ * and Show all for the rest, as Archived tasks and Deleted items show
+ * them, each page with its own `hooks`. Nothing while no project is
+ * picked.
+ */
+export function PickChips({
+  picked,
+  onRemove,
+  hooks,
+  className,
+}: {
+  picked: readonly PickedProject[]
+  onRemove: (id: string) => void
+  hooks: ChipHooks
+  className?: string
+}) {
+  const [all, setAll] = useState(false)
+  if (picked.length === 0) return null
+  return (
+    <div {...{ [hooks.row]: '' }} className={cn('flex flex-wrap items-center gap-1.5', className)}>
+      {(all ? picked : picked.slice(0, CHIPS_SHOWN)).map((p) => (
+        <span
+          key={p.id}
+          className="flex h-control-sm max-w-full min-w-0 items-center gap-1 rounded-pill border border-border bg-surface-1 pl-2.5 text-sm text-text-1"
+        >
+          <span className="min-w-0 truncate">{placeName(p)}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            {...{ [hooks.chip]: p.id }}
+            aria-label={`Remove ${placeName(p)}`}
+            className="size-6 shrink-0 rounded-pill"
+            onClick={() => onRemove(p.id)}
+          >
+            <Icon name="close" size={12} />
+          </Button>
+        </span>
+      ))}
+      {picked.length > CHIPS_SHOWN && (
+        <Button
+          type="button"
+          variant="quiet"
+          size="sm"
+          {...{ [hooks.more]: '' }}
+          aria-expanded={all}
+          onClick={() => setAll((shown) => !shown)}
+        >
+          {all ? 'Show fewer' : `Show all ${picked.length}`}
+        </Button>
+      )}
+    </div>
   )
 }

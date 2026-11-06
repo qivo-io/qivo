@@ -862,3 +862,54 @@ describe('the project picker at the design size', { timeout: 60_000 }, () => {
     expect(notes()).toContain('most: You can choose up to 50 projects.')
   })
 })
+
+describe('the picked projects as chips', () => {
+  it('shows six chips and Show all for the rest, and takes one off with its button', async () => {
+    await load(base())
+    const lab = { id: 'lab', org_id: ORG, name: 'Luma Sensor', num: 2 }
+    const picks = Array.from({ length: 8 }, (_, n) => ({
+      id: `p${n}`,
+      org_id: ORG,
+      name: `Firmware ${n}`,
+      num: 20 + n,
+      parent: n === 0 ? lab : null,
+    }))
+    const removed: string[] = []
+    const hooks = {
+      row: 'data-test-picks',
+      chip: 'data-test-pick',
+      more: 'data-test-picks-more',
+    } as const
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <picker.PickChips picked={picks} onRemove={(id) => removed.push(id)} hooks={hooks} />
+        </TooltipProvider>,
+      ),
+    )
+    const chips = () =>
+      [...document.querySelectorAll<HTMLElement>('[data-test-pick]')].map(
+        (el) => el.dataset.testPick,
+      )
+    expect(chips()).toEqual(['p0', 'p1', 'p2', 'p3', 'p4', 'p5'])
+    // a sub-project's chip names its project first
+    expect(find('[data-test-pick="p0"]').getAttribute('aria-label')).toBe(
+      'Remove Luma Sensor › Firmware 0',
+    )
+    expect(find('[data-test-picks-more]').textContent).toBe('Show all 8')
+    await click(find('[data-test-picks-more]'))
+    expect(chips()).toHaveLength(8)
+    expect(find('[data-test-picks-more]').textContent).toBe('Show fewer')
+    await click(find('[data-test-pick="p7"]'))
+    expect(removed).toEqual(['p7'])
+    // no pick, no row
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <picker.PickChips picked={[]} onRemove={() => {}} hooks={hooks} />
+        </TooltipProvider>,
+      ),
+    )
+    expect(document.querySelector('[data-test-picks]')).toBeNull()
+  })
+})

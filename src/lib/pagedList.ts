@@ -13,16 +13,16 @@
    Settings › Users (panels/settings/UsersSettings.tsx). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
    which Previous and Next replace, as Settings › Projects, Archived
-   projects and Users read theirs, and useMoreOnScroll loads the next batch of a
-   list as its end scrolls into view. It holds only what the page shows,
-   in the page, and drops it when the page is left. It imports nothing
-   from the store.
+   projects, Users and Deleted items read theirs, and useMoreOnScroll
+   loads the next batch of a list as its end scrolls into view. It holds
+   only what the page shows, in the page, and drops it when the page is
+   left. It imports nothing from the store.
 
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access, Billing's lists and the removal window's Reassign picker read
-     everything. Load
+     access, Billing's lists, the removal window's Reassign picker and
+     Deleted items' people read everything. Load
      more reads after the last batch's `next`; one read runs at a time, so a
      second press or a Retry while one runs reads nothing. A failed batch
      keeps the rows and the place, and Retry reads it again, or starts again

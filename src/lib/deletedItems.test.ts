@@ -1,27 +1,42 @@
 import { describe, expect, it } from 'vitest'
+import { DELETED_PAGE } from '../../convex/model/deletedItemsPage'
 import {
-  ANYONE,
+  alongText,
   blockedText,
-  chosenProfile,
-  type DeletedMatch,
+  type DeletedAction,
+  type DeletedItemsOutcome,
   type DeletedRow,
   type Deleter,
-  deletedAlong,
-  deletedBy,
-  deletedByOptions,
   destinations,
+  endText,
+  faultText,
   fold,
   foldText,
-  hitItem,
+  heldAnswer,
+  heldOf,
   itemSuffix,
   type Line,
-  matchHasText,
+  lineKey,
+  linesOf,
+  notesOf,
+  PAGE_ROWS,
   type Piece,
+  pauseText,
   placeText,
+  planOf,
+  progressText,
+  type RestoreRefusal,
+  restoreToast,
+  SELECT_MOST,
+  stopText,
+  subtitleOf,
   viaText,
 } from './deletedItems'
 
-/* Rows as deletedItems.list projects them, at local times on 16 Oct 2026. */
+/* Rows as deletedItems.page projects them, at local times on 16 Oct 2026.
+   The helpers sort, filter and count nothing a page answers; each case
+   says what the page shows for one answer, with cases that must pass and
+   cases that must not. */
 const NOW = new Date(2026, 9, 16, 15, 0)
 const at = (h: number, m: number, s = 0) => new Date(2026, 9, 16, h, m, s).toISOString()
 const DANIEL: Deleter = {
@@ -120,171 +135,6 @@ describe('who deleted it', () => {
     expect(viaText({ ...HIDDEN, kind: 'agent_keys' }, 'row')).toBe(' via an agent key')
     expect(viaText(DANIEL, 'row')).toBe('')
   })
-
-  it('offers each person, then each way they deleted when there is more than one', () => {
-    const you: Deleter = {
-      you: true,
-      profile_id: 'a',
-      name: 'Aisha Khan',
-      kind: 'app',
-      who: 'a|app',
-    }
-    const gone: Deleter = { you: false, kind: 'app', who: '|app' }
-    const rows = [
-      row('1', { deleter: CURSOR }),
-      row('2', { deleter: HIDDEN }),
-      row('3', { deleter: DANIEL }),
-      row('4', { deleter: gone }),
-      row('5', { deleter: you }),
-    ]
-    expect(deletedByOptions(rows, false).map((o) => o.label)).toEqual([
-      'Deleted by anyone',
-      'You',
-      'Daniel Berg',
-      'Daniel Berg via a personal token',
-      'Daniel Berg via Cursor',
-      'Someone',
-    ])
-    // a person who deleted one way only gets no "via" choice
-    expect(deletedByOptions([row('1')], false).map((o) => o.label)).toEqual([
-      'Deleted by anyone',
-      'Daniel Berg',
-    ])
-    const [, , person, hidden] = deletedByOptions(rows, false)
-    const by = (deleter: Deleter, value: string) => deletedBy(row('x', { deleter }), value)
-    expect(by(CURSOR, person.value) && by(DANIEL, person.value)).toBe(true)
-    expect(by(HIDDEN, hidden.value)).toBe(true)
-    expect(by(CURSOR, hidden.value)).toBe(false)
-    expect(by(you, person.value)).toBe(false)
-    expect(by(you, ANYONE)).toBe(true)
-  })
-
-  it('keeps people of two organizations apart, and names the organization last', () => {
-    const gone: Deleter = { you: false, kind: 'app', who: '|app' }
-    const claude: Deleter = {
-      you: true,
-      profile_id: 'me-a',
-      name: 'Aisha Khan',
-      kind: 'oauth_connections',
-      credential_name: 'Claude',
-      who: 'me-a|oauth_connections:c1',
-    }
-    const acme = { org_id: 'acme', org_name: 'Acme' }
-    const rows = [
-      row('1', { ...acme, deleter: gone }),
-      row('2', { deleter: gone }),
-      row('3', { deleter: claude }),
-      row('4', { deleter: { ...claude, kind: 'app', who: 'me-a|app' } }),
-    ]
-    const options = deletedByOptions(rows, true)
-    expect(options.map((o) => o.label)).toEqual([
-      'Deleted by anyone',
-      'You, Northstar Labs',
-      'You via Claude, Northstar Labs',
-      'Someone, Acme',
-      'Someone, Northstar Labs',
-    ])
-    // every choice has its own value, so the select can tell them apart
-    const values = options.map((o) => o.value)
-    expect(new Set(values).size).toBe(values.length)
-    // a "Someone" choice filters its own organization only
-    const acmeSomeone = options[3].value
-    expect(deletedBy(rows[0], acmeSomeone)).toBe(true)
-    expect(deletedBy(rows[1], acmeSomeone)).toBe(false)
-    expect(chosenProfile(acmeSomeone, rows)).toBeUndefined()
-    // a "via" choice names the profile the server can narrow to
-    expect(chosenProfile(options[2].value, rows)).toBe('me-a')
-    expect(deletedBy(rows[2], options[2].value)).toBe(true)
-    expect(deletedBy(rows[3], options[2].value)).toBe(false)
-    expect(deletedBy(rows[2], 'person:')).toBe(false)
-  })
-})
-
-describe('search hits', () => {
-  const hit: DeletedMatch = {
-    item_id: 'p',
-    item_kind: 'project',
-    org_id: 'org',
-    org_name: 'Northstar Labs',
-    key: 'QN-12',
-    title: 'Book test sites in Umeå',
-    archived: false,
-    path: ['Field trial Q3', 'Site preparation'],
-    deleted_at: at(14, 9),
-    deleter: CURSOR,
-    state: 'ready',
-    can_restore: true,
-  }
-  it('keeps a hit of an older text only while its key or title holds the new one', () => {
-    expect(matchHasText(hit, 'book t')).toBe(true)
-    expect(matchHasText(hit, 'qn-12')).toBe(true)
-    expect(matchHasText(hit, 'zebra')).toBe(false)
-    // the path is not what the server searched
-    expect(matchHasText(hit, 'field trial')).toBe(false)
-  })
-
-  it('stands for a task item as its own task row, and a project item as an unnamed project', () => {
-    const blocked = { reason: 'view_only' as const, project: 'Luma Sensor' }
-    const task = hitItem({
-      ...hit,
-      item_id: 't',
-      item_kind: 'task',
-      path: ['Luma Sensor', 'Firmware'],
-      archived: true,
-      can_restore: false,
-      blocked,
-    })
-    expect(task).toMatchObject({
-      id: 't',
-      kind: 'task',
-      key: 'QN-12',
-      title: 'Book test sites in Umeå',
-      path: ['Luma Sensor', 'Firmware'],
-      archived: true,
-      deleter: CURSOR,
-      state: 'ready',
-      can_restore: false,
-      blocked,
-      can_purge: false,
-    })
-    expect(task.redacted).toBeUndefined()
-    expect(placeText(task)).toBe('Luma Sensor › Firmware')
-    expect(itemSuffix(task)).toBe('')
-    const redacted = hitItem({
-      ...hit,
-      item_kind: 'task',
-      path: [],
-      redacted: true,
-      can_restore: false,
-      blocked: { reason: 'no_access' },
-    })
-    expect(redacted).toMatchObject({ kind: 'task', redacted: true, path: [], can_restore: false })
-    // a subtask's hit stands for its whole task item, named after the root,
-    // whose place the hit does not tell
-    const subtask = hitItem({
-      ...hit,
-      item_id: 't',
-      item_kind: 'task',
-      key: 'QN-15',
-      title: 'Log the readings',
-      root_key: 'QN-12',
-      root_title: 'Calibrate the rig',
-      archived: true,
-    })
-    expect(subtask).toMatchObject({
-      id: 't',
-      kind: 'task',
-      key: 'QN-12',
-      title: 'Calibrate the rig',
-      path: [],
-      archived: false,
-    })
-    expect(destinations([subtask])).toEqual([
-      { key: 't', kind: 'task', name: 'QN-12 Calibrate the rig', count: 'task and its subtasks' },
-    ])
-    // a project item's hit names only the task, never the project
-    expect(hitItem(hit)).toMatchObject({ id: 'p', kind: 'project', key: '', title: '', path: [] })
-  })
 })
 
 describe('what a row says', () => {
@@ -341,41 +191,312 @@ describe('what a row says', () => {
   })
 })
 
-describe('what Delete now deletes along with a project', () => {
-  const project = (id: string, patch: Partial<DeletedRow> = {}) =>
-    row(id, { kind: 'project', status: undefined, path: [], ...patch })
-  const waits = (id: string, holder: string, patch: Partial<DeletedRow> = {}) =>
-    row(id, {
-      can_restore: false,
-      blocked: { reason: 'project_deleted', item_id: holder },
-      ...patch,
+describe('the lines of a page', () => {
+  const hit = { key: 'QN-12', title: 'Book test sites', archived: false, path: ['Trial', 'Sites'] }
+  it('keeps the server’s order, makes hit lines and leaves out an entry without its row', () => {
+    const p = row('p', { kind: 'project' })
+    const a = row('a')
+    const lines = linesOf({
+      entries: [
+        { item_id: 'p' },
+        { item_id: 'p', task: hit },
+        { item_id: 'gone' },
+        // the server orders it, and it stays where it is
+        { item_id: 'a' },
+      ],
+      items: [a, p],
     })
-
-  it('counts the items that wait for a project item, and those that wait for them', () => {
-    const trial = project('trial')
-    const blog = project('blog', {
-      can_restore: false,
-      blocked: { reason: 'parent_deleted', item_id: 'trial' },
-    })
-    // a row can come before the item it waits for
-    const rows = [trial, waits('2', 'blog'), waits('1', 'trial'), blog, waits('3', 'web'), row('4')]
-    expect(deletedAlong(trial, rows, false)).toEqual({ count: 3, exact: true })
-    expect(deletedAlong(blog, rows, false)).toEqual({ count: 1, exact: true })
-    // a task item takes nothing along, whatever the list holds
-    expect(deletedAlong(rows[2], rows, true)).toEqual({ count: 0, exact: true })
+    expect(lines).toEqual([
+      { kind: 'item', row: p },
+      { kind: 'hit', hit, item: p },
+      { kind: 'item', row: a },
+    ])
+    expect(lines.map(lineKey)).toEqual(['p', 'p:QN-12', 'a'])
+    expect(linesOf(null)).toEqual([])
   })
 
-  it('does not count when the list may hold more than it names', () => {
-    const trial = project('trial')
-    expect(deletedAlong(trial, [trial, waits('1', 'trial')], true)).toEqual({
-      count: 1,
-      exact: false,
+  it('folds within the lines of one page only', () => {
+    // a run of 11 split 6 and 5 over two pages folds on neither
+    expect(shape(fold(run(6), new Set()))).not.toContain('fold')
+    expect(shape(fold(run(5, CURSOR, 6), new Set()))).not.toContain('fold')
+    // a hit line ends a run
+    const lines = run(12)
+    lines.splice(6, 0, { kind: 'hit', hit, item: row('p', { kind: 'project' }) })
+    expect(shape(fold(lines, new Set()))).not.toContain('fold')
+  })
+
+  it('pins the page’s 25 to the server’s', () => {
+    expect(PAGE_ROWS).toBe(DELETED_PAGE.rows)
+    expect(SELECT_MOST.items).toBe(1000)
+  })
+})
+
+describe('what the page says from the server’s answers', () => {
+  it('words the subtitle for each role and each mix of seats', () => {
+    expect(subtitleOf([])).toBe('')
+    expect(subtitleOf([{ role: 'admin' }])).toBe(
+      'Tasks and projects deleted in your organization. Their files count toward its storage until they are deleted for good.',
+    )
+    expect(subtitleOf([{ role: 'lead' }, { role: 'lead' }])).toBe(
+      'Tasks and projects you deleted, and those deleted in projects you lead.',
+    )
+    expect(subtitleOf([{ role: 'user' }])).toBe('Tasks and projects you deleted.')
+    expect(subtitleOf([{ role: 'user' }, { role: 'lead' }])).toBe(
+      'Tasks and projects you deleted, and those deleted in projects you lead.',
+    )
+    expect(subtitleOf([{ role: 'admin' }, { role: 'lead' }])).toBe(
+      'Tasks and projects deleted in the organizations you administer, those you deleted and those deleted in projects you lead. Files of items deleted in an organization you administer count toward its storage until they are deleted for good.',
+    )
+    expect(subtitleOf([{ role: 'admin' }, { role: 'user' }])).toBe(
+      'Tasks and projects deleted in the organizations you administer, and those you deleted. Files of items deleted in an organization you administer count toward its storage until they are deleted for good.',
+    )
+  })
+
+  it('says each note only where the answer does', () => {
+    const page = { entries: [{ item_id: 'p' }] }
+    expect(notesOf(null, false)).toEqual([])
+    expect(notesOf({ ...page, scope_needed: true }, false).map((n) => n.text)).toEqual([
+      'Deleted tasks show once you choose projects.',
+    ])
+    // the scope line of an empty page without a search is the end line's
+    expect(notesOf({ entries: [], scope_needed: true }, false)).toEqual([])
+    expect(notesOf({ entries: [], scope_needed: true }, true)).toHaveLength(1)
+    expect(notesOf({ ...page, missing: 'reads' }, false).map((n) => n.key)).toEqual(['reads'])
+    expect(notesOf({ ...page, missing: 'matches', legacy: true }, true)).toEqual([
+      { key: 'matches', text: 'Some matching tasks might not be listed.' },
+      {
+        key: 'legacy',
+        text: 'Tasks deleted before this version of Qivo are found by their key or title only, and Assigned to may miss them.',
+      },
+    ])
+    expect(notesOf(page, true)).toEqual([])
+  })
+
+  it('holds a scope too wide to list and a part Qivo could not check, never as empty', () => {
+    const empty = { entries: [], next_cursor: null }
+    expect(heldAnswer({ ...empty, too_wide: true })).toBe(true)
+    expect(heldAnswer({ ...empty, missing: 'reads' })).toBe(true)
+    // a stopped page with a cursor shows Next, an empty last page its end line
+    expect(heldAnswer({ entries: [], next_cursor: 'c', missing: 'reads' })).toBe(false)
+    expect(heldAnswer(empty)).toBe(false)
+    expect(heldOf({ too_wide: true })).toEqual({
+      line: "Qivo can't list the deleted items of these projects together. Choose fewer projects.",
+      retry: false,
     })
-    const stuck = row('5', { state: 'stuck', can_restore: false })
-    expect(deletedAlong(trial, [trial, stuck], false).exact).toBe(false)
-    // a stuck row of another organization cannot wait for it, nor can the item itself
-    expect(deletedAlong(trial, [trial, { ...stuck, org_id: 'other' }], false).exact).toBe(true)
-    const stuckTrial = project('trial', { state: 'stuck', can_restore: false })
-    expect(deletedAlong(stuckTrial, [stuckTrial], false).exact).toBe(true)
+    expect(heldOf(null)).toEqual({
+      line: "Qivo couldn't check the deleted items here. Choose fewer projects.",
+      retry: true,
+    })
+  })
+
+  it('words Delete now’s count for each answer, and keeps it off while counting', () => {
+    expect(alongText(undefined)).toEqual({
+      text: ' Counting the items deleted from the project earlier…',
+      ready: false,
+    })
+    expect(alongText({ along: 0, exact: true })).toEqual({ text: '', ready: true })
+    expect(alongText({ along: 3, exact: true }).text).toBe(
+      ' It also deletes 3 items deleted from the project earlier.',
+    )
+    expect(alongText({ along: 1000, exact: false }).text).toBe(
+      ' It also deletes at least 1,000 items deleted from the project earlier.',
+    )
+    expect(alongText({ along: 0, exact: false }).text).toBe(
+      ' It also deletes any items deleted from the project earlier.',
+    )
+    for (const failed of [null, 'failed'] as const)
+      expect(alongText(failed)).toEqual({
+        text: " Qivo couldn't count the items deleted from the project earlier. Deleting it for good deletes them too.",
+        ready: true,
+      })
+  })
+})
+
+describe('a restore in steps', () => {
+  const tasks = (org: string, n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => row(`${org}${from + i}`, { org_id: org }))
+  it('plans calls of 25 per organization, projects first, and says when it takes rounds', () => {
+    const items = [
+      ...tasks('a', 24),
+      row('sub', { org_id: 'a', kind: 'project', path: ['Luma'] }),
+      row('top', { org_id: 'a', kind: 'project', path: [] }),
+      ...tasks('a', 1, 24),
+    ]
+    const plan = planOf(items, 25)
+    expect(plan.total).toBe(27)
+    expect(plan.lanes).toHaveLength(1)
+    const [lane] = plan.lanes
+    expect(lane.calls.map((c) => c.length)).toEqual([25, 2])
+    expect(lane.calls[0].slice(0, 3)).toEqual(['top', 'sub', 'a0'])
+    // a 26th item never goes in the first call
+    expect(lane.calls[1]).toEqual(['a23', 'a24'])
+    expect(plan.long).toBe(true)
+    // two organizations of one call each are one round at two lanes
+    expect(planOf([...tasks('a', 25), ...tasks('b', 25)], 25).long).toBe(false)
+    expect(planOf([...tasks('a', 1), ...tasks('b', 1), ...tasks('c', 1)], 25).long).toBe(true)
+    // each id once
+    expect(planOf([row('x'), row('x')], 25).total).toBe(1)
+  })
+
+  const action = (patch: Partial<DeletedAction> = {}): DeletedAction => ({
+    kind: 'restore',
+    state: 'running',
+    long: true,
+    noun: '180 tasks',
+    total: 180,
+    done: 75,
+    refused: 0,
+    lanes: 1,
+    lanesDone: 0,
+    pending: [],
+    stops: [],
+    ...patch,
+  })
+  it('words the progress line', () => {
+    expect(progressText(action())).toBe('Restoring 180 tasks, 75 done')
+    expect(progressText(action({ lanes: 2, lanesDone: 1 }))).toBe(
+      'Restoring 180 tasks, 75 done, 1 of 2 organizations finished',
+    )
+    expect(progressText(action({ kind: 'purge', noun: '2 items', done: 1 }))).toBe(
+      'Deleting 2 items for good, 1 done',
+    )
+  })
+
+  it('ends with what the answers confirmed, deferred items following and never restored', () => {
+    const asked = tasks('a', 180)
+    const tally = { kind: 'restore' as const, asked, stepping: 0, refused: 0 }
+    expect(endText({ ...tally, done: 180, following: [], unsent: [] })).toEqual({
+      text: 'Restored 180 tasks.',
+      tone: 'success',
+    })
+    expect(endText({ ...tally, done: 180, stepping: 3, following: [], unsent: [] }).text).toBe(
+      'Restored 180 tasks. 3 of them finish restoring in the background.',
+    )
+    expect(endText({ ...tally, done: 178, following: asked.slice(0, 2), unsent: [] })).toEqual({
+      text: 'Restored 178 of 180 tasks. 2 follow once their project is back.',
+      tone: 'success',
+    })
+    expect(endText({ ...tally, done: 170, refused: 10, following: [], unsent: [] })).toEqual({
+      text: "Restored 170 of 180 tasks. 10 couldn't be restored.",
+      tone: 'error',
+    })
+  })
+
+  it('words a stop by organization and the pause once', () => {
+    const stop = {
+      org_id: 'a',
+      org_name: 'Northstar Labs',
+      total: 180,
+      done: 100,
+      refused: 25,
+      unsent: 55,
+      reason: 'Restoring is paused while the organization is read-only.',
+      paused: false,
+    }
+    const noun = (n: number) => `${n} tasks`
+    expect(stopText('restore', stop, noun)).toBe(
+      "Restoring stopped after 100 of 180 tasks in Northstar Labs. 25 couldn't be restored and 55 were not sent. They stay in Deleted items. Restoring is paused while the organization is read-only.",
+    )
+    expect(stopText('restore', { ...stop, done: 0, refused: 0, unsent: 1 }, noun)).toBe(
+      'Restoring stopped in Northstar Labs before it restored any item. 1 was not sent. They stay in Deleted items. Restoring is paused while the organization is read-only.',
+    )
+    const lane = { org_name: 'Northstar Labs', done: 100, stepping: 0, following: 0 }
+    const paused = { ...lane, refused: 0, unsent: 55 }
+    expect(
+      pauseText(
+        'restore',
+        [paused, { ...paused, org_name: 'Partner Co', done: 25, unsent: 5 }],
+        noun,
+        'Qivo is offline.',
+      ),
+    ).toBe(
+      'Restoring stopped after 100 tasks in Northstar Labs and 25 in Partner Co. 60 were not sent. They stay in Deleted items. Qivo is offline.',
+    )
+    // a finished organization counts, its background restores and
+    // deferred items too, and refused and unsent work apart
+    expect(
+      pauseText(
+        'restore',
+        [
+          { ...lane, done: 30, stepping: 2, following: 1, refused: 0, unsent: 0 },
+          { ...lane, org_name: 'Partner Co', done: 0, refused: 25, unsent: 5 },
+        ],
+        noun,
+        'Qivo is offline.',
+      ),
+    ).toBe(
+      "Restoring stopped after 30 tasks in Northstar Labs. 2 of them finish restoring in the background. 1 follows once its project is back. 25 couldn't be restored and 5 were not sent. They stay in Deleted items. Qivo is offline.",
+    )
+    expect(
+      pauseText('purge', [{ ...lane, done: 0, refused: 0, unsent: 3 }], noun, 'Qivo is offline.'),
+    ).toBe(
+      'Deleting for good stopped before it deleted any item. 3 were not sent. They stay in Deleted items. Qivo is offline.',
+    )
+    expect(faultText('purge')).toBe(
+      'Deleting for good stopped after a fault in Qivo. What it already did stays done.',
+    )
+  })
+
+  const outcome = (patch: Partial<DeletedItemsOutcome<RestoreRefusal>> = {}) => ({
+    done: [],
+    stepping: [],
+    refused: [],
+    deferred: [],
+    failed: [],
+    unsent: [],
+    unknown: [],
+    error: null,
+    paused: false,
+    ...patch,
+  })
+  it('says a restore of one round as the page shows it, a deferred item as following', () => {
+    const trial = row('trial', { kind: 'project', title: 'Field trial Q3', path: [] })
+    const task = row('12', { key: 'QN-12' })
+    expect(
+      restoreToast([trial], outcome({ done: ['trial'], deferred: ['12'] }), undefined, [
+        trial,
+        task,
+      ]),
+    ).toEqual({ text: 'Restored “Field trial Q3”. QN-12 follows once its project is back.' })
+    expect(restoreToast([task], outcome({ done: ['12'] }))).toEqual({ text: 'Restored QN-12.' })
+    expect(restoreToast([task], outcome({ done: ['12'], stepping: ['12'] })).text).toBe(
+      'Restoring QN-12…',
+    )
+    expect(restoreToast([task], outcome({ refused: [{ id: '12', reason: 'view_only' }] }))).toEqual(
+      { text: "Couldn't restore QN-12. You can only view its project now.", tone: 'error' },
+    )
+    const three = [task, row('13'), row('14')]
+    expect(restoreToast(three, outcome({ done: ['12', '13'], failed: ['14'] }))).toEqual({
+      text: "Restored 2 of 3 tasks. 1 couldn't be restored.",
+      tone: 'error',
+    })
+    // a deferred item never counts as restored
+    expect(restoreToast(three, outcome({ done: ['12'], deferred: ['13', '14'] })).text).toBe(
+      'Restored QN-12. QN-13 and QN-14 follow once their project is back.',
+    )
+  })
+})
+
+describe('the bulk restore window', () => {
+  it('lists each project item, then the places tasks go back to, most first', () => {
+    const rows = [
+      row('1'),
+      row('2'),
+      row('3', {
+        path: ['Website', 'Docs'],
+        counts: { tasks: 1, archived_tasks: 0, subtasks: 2, sub_projects: 0 },
+      }),
+      row('p', {
+        kind: 'project',
+        title: 'Field trial Q3',
+        path: [],
+        counts: { tasks: 48, archived_tasks: 0, subtasks: 0, sub_projects: 2 },
+      }),
+    ]
+    expect(destinations(rows).map((d) => [d.name, d.count])).toEqual([
+      ['Field trial Q3', 'project with 2 sub-projects and 48 tasks'],
+      ['Luma Sensor › Firmware', '2 tasks'],
+      ['Website › Docs', '1 task and 2 subtasks'],
+    ])
   })
 })

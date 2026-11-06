@@ -1404,7 +1404,9 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'deletedItems:restore',
-    mutator: 'restoreDeletedItems',
+    // P.restoreDeletedItems sends its calls on the shared runner
+    // (runDeletedItems), each through restoreCall
+    mutator: 'restoreCall',
     what: 'a restored Deleted item',
     pause: 'P',
     act: (P) => P.restoreDeletedItems([{ id: 'item-1', org_id: ORG }]),
@@ -1412,7 +1414,7 @@ export const recipes: Recipe[] = [
   },
   {
     mutation: 'deletedItems:purge',
-    mutator: 'purgeDeletedItems',
+    mutator: 'purgeCall',
     what: 'a Deleted item deleted for good',
     pause: 'P',
     act: (P) => P.purgeDeletedItems([{ id: 'item-1', org_id: ORG }]),

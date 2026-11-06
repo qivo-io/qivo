@@ -3,8 +3,18 @@
    re-rendering every view. `inbox` carries the Inbox's own state, such as a
    bulk action's progress (P.inboxBulk), so it repaints the Inbox alone.
    `views` carries the Board's own read and the task rows it brings
-   (store/viewRows.ts), so an answer repaints the Board alone. */
-const SECTIONS = ['workspace', 'comments', 'teamSync', 'health', 'inbox', 'views'] as const
+   (store/viewRows.ts), so an answer repaints the Board alone. `deleted`
+   carries a Deleted items restore or Delete now's progress
+   (P.deletedAction), so it repaints that page alone. */
+const SECTIONS = [
+  'workspace',
+  'comments',
+  'teamSync',
+  'health',
+  'inbox',
+  'views',
+  'deleted',
+] as const
 export type PlannerSection = (typeof SECTIONS)[number]
 export type StoreVersion = Readonly<{ revision: number }>
 type Listener = () => void
@@ -26,6 +36,7 @@ export function createPlannerUpdates() {
     health: new Set(),
     inbox: new Set(),
     views: new Set(),
+    deleted: new Set(),
   }
   const legacy = new Set<Listener>()
   const initial = Object.freeze({ revision })
@@ -36,6 +47,7 @@ export function createPlannerUpdates() {
     health: initial,
     inbox: initial,
     views: initial,
+    deleted: initial,
   }
   const subscribe = (list: Set<Listener>, listener: Listener) => {
     list.add(listener)
@@ -55,6 +67,7 @@ export function createPlannerUpdates() {
     health: channel('health'),
     inbox: channel('inbox'),
     views: channel('views'),
+    deleted: channel('deleted'),
   })
   return {
     channels,

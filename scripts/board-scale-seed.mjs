@@ -4,7 +4,7 @@
  *   QIVO_FIXTURE_LOCAL=true QIVO_LOCAL_ADMIN_KEY=… \
  *     node scripts/board-scale-seed.mjs --local --deployment local-<name>-<port> \
  *       --url http://127.0.0.1:<port> [--site-url http://localhost:5199] [--tasks 10000] \
- *       [--sub-project FW] [--archived 160] [--inbox 600] \
+ *       [--sub-project FW] [--archived 160] [--deleted 70] [--inbox 600] \
  *       [--credentials 45 --api-url http://127.0.0.1:<site port>] [--relations] \
  *       [--api-accounts 90 --api-url http://127.0.0.1:<site port>] \
  *       [--labels 60] [--files 60]
@@ -38,13 +38,32 @@
  * comments last, each as its poster, so the comments land on tasks that
  * stay active.
  *
- * `--archived <n>` archives the first n seeded tasks that are not parents,
- * which spread over the seeded sub-projects as the tasks do, as Nora through
+ * `--archived <n>` archives the first n seeded tasks that are neither
+ * parents nor in Deleted items, which spread over the seeded sub-projects
+ * as the tasks do, as Nora through
  * issues:archive without a reason, so every archive writer runs. A run
  * archives only those still active. The workspace leaves archived tasks out,
  * so the seed finds them in the issues table, as the Convex CLI reads a
  * table, with their text from issue_descriptions, and never seeds them
  * again.
+ *
+ * `--deleted <n>` then moves the first n seeded tasks that are neither
+ * parents, in a family nor archived to Deleted items, for checking Deleted
+ * items past
+ * its pages of 25: as Nora through issues:deleteDeep, every third as Leo
+ * Martins, who has a login in Northstar and leads Luma Sensor, where he
+ * leads the task's top-level project (Nora deletes the rest of those), and
+ * every seventh through issues' REST delete with an agent key of Atlas,
+ * which Nora makes for the run, when --api-url names the local backend's
+ * site origin. It also makes the sub-project "Retired bench fixtures" with
+ * three tasks under the live top-level project that holds the fewest
+ * sub-projects and deletes it whole as Nora through projects:deleteDeep, so
+ * the list holds a project item and its tasks. A run deletes only what is
+ * still live, read as the run left them, so a task it archived stays
+ * archived, and makes the sub-project only while no row or used id holds
+ * its id. Every run, with or without --deleted, reads the tasks Deleted
+ * items stores (deleted_tasks), so no later run seeds them again or
+ * archives them. Northstar's own tasks stay as they are.
  *
  * `--inbox <n>` then gives Nora n inbox items, for checking the Inbox and
  * its bulk actions at scale: on each of the first n seeded tasks that are
@@ -327,6 +346,7 @@ export function parseSeedArgs(args) {
     target: null,
     tasks: 10_000,
     archived: 0,
+    deleted: 0,
     inbox: 0,
     credentials: 0,
     apiAccounts: 0,
@@ -349,6 +369,7 @@ export function parseSeedArgs(args) {
     else if (arg === '--site-url') options.siteUrl = value()
     else if (arg === '--tasks') options.tasks = Number(value())
     else if (arg === '--archived') options.archived = Number(value())
+    else if (arg === '--deleted') options.deleted = Number(value())
     else if (arg === '--inbox') options.inbox = Number(value())
     else if (arg === '--credentials') options.credentials = Number(value())
     else if (arg === '--api-url') options.apiUrl = value()
@@ -363,7 +384,7 @@ export function parseSeedArgs(args) {
     throw new DemoCliError('board-scale-seed writes to a disposable --local backend only.')
   if (!Number.isInteger(options.tasks) || options.tasks < 0 || options.tasks > MOST_TASKS)
     throw new DemoCliError(`--tasks takes a whole number from 0 to ${MOST_TASKS}.`)
-  for (const name of ['archived', 'inbox']) {
+  for (const name of ['archived', 'deleted', 'inbox']) {
     const count = options[name]
     if (!Number.isInteger(count) || count < 0 || count > options.tasks)
       throw new DemoCliError(`--${name} takes a whole number from 0 up to the --tasks count.`)
@@ -1043,20 +1064,108 @@ export function seededTasks(issues) {
 }
 
 /** The ids of the seeded tasks to archive so that the first `count` seeded
-    tasks that are not parents are archived: `seeded` holds every seeded
-    task by number (seededTasks), and `parents` the ids of tasks with
-    subtasks. A task archived already needs nothing. */
+    tasks that are neither parents nor in Deleted items are archived:
+    `seeded` holds every seeded task by number (seededTasks), the ones
+    Deleted items stores among them with `deleted`, and `parents` the ids
+    of tasks with subtasks. A task archived already needs nothing. */
 export function planArchive(count, seeded, parents) {
   const ids = []
   let taken = 0
   for (const n of [...seeded.keys()].sort((a, b) => a - b)) {
     if (taken === count) break
     const { task } = seeded.get(n)
-    if (parents.has(task.id)) continue
+    if (parents.has(task.id) || task.deleted) continue
     taken++
     if (!task.archived_at) ids.push(task.id)
   }
   return ids
+}
+
+/** The seeded tasks to move to Deleted items so that the first `count`
+    seeded tasks that are neither parents, in a family (every 25th task and
+    the three after it, planSeed) nor archived are there: `seeded` holds
+    every seeded task by number (seededTasks) as it is now, with the tasks
+    this run made and archived, each with its project, the ones Deleted
+    items stores among them with `deleted`, and `parents` the ids of tasks
+    with subtasks. A family stays whole, so a rerun's planSeed finds it as it
+    left it. Each comes with who deletes it: every seventh the agent
+    (`agent`) when the run has its key, every third Leo where `leads` says
+    he leads the task's top-level project, and Nora the rest. A task in
+    Deleted items already needs nothing. */
+export function planDelete(count, seeded, parents, { agent, leads }) {
+  const out = []
+  let taken = 0
+  for (const n of [...seeded.keys()].sort((a, b) => a - b)) {
+    if (taken === count) break
+    const { task } = seeded.get(n)
+    if (parents.has(task.id) || task.archived_at || n % 25 < 4) continue
+    taken++
+    if (task.deleted) continue
+    const by = taken % 7 === 0 && agent ? 'agent' : taken % 3 === 0 && leads(task) ? 'leo' : 'nora'
+    out.push({ id: task.id, by })
+  }
+  return out
+}
+
+/** The sub-project --deleted makes and deletes whole, and its tasks. */
+const DELETED_SUB = 'Retired bench fixtures'
+const DELETED_SUB_TASKS = [
+  'Calibrate the retired bench rig',
+  'Archive the bench rig wiring notes',
+  'Return the spare bench sensors',
+]
+
+/** The calls that make --deleted's sub-project under the live top-level
+    project of `tops` (`{ id, subs }`) that holds the fewest, with its three
+    tasks, or null when `present` holds its id already, in any table or as
+    a used id, or no top-level project has room. */
+export function planDeletedSub({ org, tops, present }) {
+  const project = uuidOf('board-scale-deleted-sub')
+  if (present.has(project)) return null
+  const room = tops.filter((top) => top.subs < SUBS_PER_PROJECT)
+  if (room.length === 0) return null
+  const parent = room.reduce((a, b) => (b.subs < a.subs ? b : a))
+  return {
+    project: {
+      id: project,
+      org_id: org,
+      type: 'project',
+      parent_id: parent.id,
+      key: 'RBF',
+      name: DELETED_SUB,
+      sort_order: 2000,
+    },
+    tasks: DELETED_SUB_TASKS.map((title, n) => ({
+      id: uuidOf(`board-scale-deleted-sub-task-${n}`),
+      org_id: org,
+      project_id: project,
+      title,
+      description: `Seeded by board-scale-seed --deleted as bench task ${n + 1}.`,
+      status: STATUSES[n % STATUSES.length],
+      priority: 'medium',
+    })),
+  }
+}
+
+/** The seeded tasks Deleted items stores in organization `org`
+    (deleted_tasks), as the Convex CLI reads a table, each as a task row
+    with the seed's mark and `deleted`, so a run neither seeds them again
+    nor deletes more. */
+async function deletedTasksOf(client, org) {
+  return (await tableRows(client, 'deleted_tasks'))
+    .filter((row) => row.org_id === org)
+    .map((row) => {
+      const head = `${row.title}\n`
+      const text = row.search_text ?? row.title
+      return {
+        id: row.task_id,
+        org_id: org,
+        title: row.title,
+        description: text.startsWith(head) ? text.slice(head.length) : '',
+        project_id: row.project_id,
+        deleted: true,
+      }
+    })
 }
 
 /** The archived tasks of organization `org`, which the workspace leaves
@@ -1142,6 +1251,10 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   const archived = await archivedTasksOf(client, actor.org_id)
   const storedLinks = options.relations ? await linkIdsOf(client, actor.org_id) : new Set()
   const stored = options.files > 0 ? await storedIdsOf(client, actor.org_id) : null
+  // what Deleted items holds, which no run seeds again, archives or
+  // deletes, whatever its flags
+  const inTrash = await deletedTasksOf(client, actor.org_id)
+  const takenIds = options.deleted > 0 ? await storedIdsOf(client, actor.org_id) : null
   client.setAdminAuth(target.key, identityOf(actor.auth_user_id))
   const snapshot = await readWorkspace((name, args) => client.query(ref(name), args))
   const org = snapshot.orgs.find((o) => o.id === actor.org_id)?.id
@@ -1194,8 +1307,8 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
       apiUrl: new URL(options.apiUrl).origin,
       log,
     })
-  // a task an earlier run archived is seeded already
-  const seeded = seededTasks([...issues, ...archived])
+  // a task an earlier run archived or deleted is seeded already
+  const seeded = seededTasks([...issues, ...archived, ...inTrash])
   const jobs = planSeed(options.tasks, seeded)
   log(`${jobs.added} seeded tasks to add in ${projects.length} sub-projects.`)
   let made = 0
@@ -1259,7 +1372,11 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
         )
       }
       if (name !== 'issues:create') continue
-      seeded.set(number, { task: { id: fields.id }, parent: fields.parent_id ?? null })
+      // --deleted reads its project, as Leo deletes where he leads
+      seeded.set(number, {
+        task: { id: fields.id, project_id: fields.project_id },
+        parent: fields.parent_id ?? null,
+      })
       if (++made % 500 === 0) log(`${made} seeded tasks added`)
     }
   }
@@ -1281,10 +1398,115 @@ export async function runBoardScaleSeed(args, { env = process.env, log = console
   if (options.labels > 0) await seedLabels(options.labels, { client, org, seeded, target, log })
   if (options.archived > 0) {
     const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
-    await seedArchive(planArchive(options.archived, seeded, parents), { client, org, target, log })
+    const ids = planArchive(options.archived, seeded, parents)
+    await seedArchive(ids, { client, org, target, log })
+    // --deleted plans from the tasks as they are now, so it leaves these
+    markArchived(seeded, ids)
+  }
+  if (options.deleted > 0) {
+    const parents = new Set([...issues, ...archived].map((task) => task.parent_id).filter(Boolean))
+    await seedDeleted(options.deleted, {
+      client,
+      key: target.key,
+      org,
+      actor,
+      people: people.page,
+      joined,
+      seeded,
+      parents,
+      taken: takenIds,
+      apiUrl: options.apiUrl,
+      target,
+      log,
+    })
   }
   if (options.inbox > 0)
     await seedInbox(options.inbox, { client, target, people: people.page, actor, org, log })
+}
+
+/** Moves the --deleted tasks to Deleted items (planDelete) and makes and
+    deletes the sub-project (planDeletedSub), each as its deleter, then
+    acts as Nora again. */
+async function seedDeleted(
+  count,
+  { client, key, org, actor, people, joined, seeded, parents, taken, apiUrl, target, log },
+) {
+  const projects = joined('projects')
+  const byId = new Map(projects.map((p) => [p.id, p]))
+  const leo = people.find((p) => p.email === 'leo@demo.qivo.io' && p.auth_user_id && p.active)
+  const agent = people.find((p) => p.org_id === org && p.kind === 'agent' && p.active)
+  /** Whether Leo leads the task's project or its top-level project. */
+  const leads = (task) => {
+    const project = byId.get(task.project_id)
+    const top = project?.parent_id ? byId.get(project.parent_id) : project
+    return !!leo && (project?.lead_id === leo.id || top?.lead_id === leo.id)
+  }
+  const call = async (name, fields, what) => {
+    try {
+      return await client.mutation(ref(name), fields)
+    } catch (error) {
+      throw new DemoCliError(`${name} refused ${what}: ${error.data?.message ?? error.message}`)
+    }
+  }
+  let secret = null
+  const plan = planDelete(count, seeded, parents, {
+    agent: !!agent && !!apiUrl && isLoopbackOrigin(new URL(apiUrl).origin),
+    leads,
+  })
+  if (plan.some((job) => job.by === 'agent')) {
+    const minted = await mintCredential('qva')
+    await call(
+      'tokens:createAgentKey',
+      {
+        org_id: org,
+        id: minted.id,
+        agent_id: agent.id,
+        name: `Board scale deletes ${new Date().toISOString().slice(0, 10)}`,
+        key_prefix: `${minted.secret.slice(0, 7)}...${minted.secret.slice(-5)}`,
+        key_hash: minted.hash,
+      },
+      'the agent key for --deleted',
+    )
+    secret = minted.secret
+  }
+  log(`${plan.length} seeded tasks to move to Deleted items.`)
+  for (const job of plan) {
+    if (job.by === 'agent') {
+      for (;;) {
+        const res = await fetch(`${new URL(apiUrl).origin}/v1/tasks/${job.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${secret}` },
+        })
+        if (res.status === 429) {
+          const wait = Number(res.headers.get('Retry-After') ?? '60')
+          await new Promise((done) => setTimeout(done, Math.max(1, wait) * 1000))
+          continue
+        }
+        if (!res.ok) throw new DemoCliError(`DELETE /v1/tasks/${job.id} answered ${res.status}.`)
+        break
+      }
+      continue
+    }
+    client.setAdminAuth(key, identityOf((job.by === 'leo' ? leo : actor).auth_user_id))
+    await call('issues:deleteDeep', { org_id: org, id: job.id }, `task ${job.id}`)
+  }
+  client.setAdminAuth(key, identityOf(actor.auth_user_id))
+  const tops = projects
+    .filter((p) => p.type === 'meta' && !p.parent_id && !p.archived_at)
+    .map((top) => ({
+      id: top.id,
+      subs: projects.filter((p) => p.parent_id === top.id && !p.archived_at).length,
+    }))
+  const present = new Set([...(taken?.projects ?? []), ...projects.map((p) => p.id)])
+  const sub = planDeletedSub({ org, tops, present })
+  if (sub !== null) {
+    await call('projects:create', sub.project, `"${sub.project.name}"`)
+    for (const fields of sub.tasks) await call('issues:create', fields, `"${fields.title}"`)
+    await call('projects:deleteDeep', { org_id: org, id: sub.project.id }, `"${sub.project.name}"`)
+  }
+  log(
+    `Done: ${plan.length} seeded tasks${sub ? ` and the sub-project "${DELETED_SUB}"` : ''} moved to Deleted items in Northstar on ${target.url}.`,
+  )
 }
 
 /** Makes the --labels labels as Nora and puts them on tasks (planLabels):
@@ -1543,6 +1765,16 @@ async function seedRelations({
 export function windowKeyNote(key) {
   const share = Math.round((Number.parseInt(key, 16) / 2 ** 32) * 100)
   return `Its window key is ${key}, ${share}% into the key space. The app loads its task windows only when a page needs every task, all of them at once, so the key names the window that brings it then.`
+}
+
+/** Marks the seeded tasks `ids` archived in `seeded` (seededTasks), as a
+    run that just archived them finds them, so a later plan of the same run
+    reads them as they are now. */
+function markArchived(seeded, ids, at = new Date().toISOString()) {
+  const archivedNow = new Set(ids)
+  for (const [n, entry] of seeded)
+    if (archivedNow.has(entry.task.id))
+      seeded.set(n, { ...entry, task: { ...entry.task, archived_at: at } })
 }
 
 /* Archives the tasks `ids` (planArchive) through `client`, which acts as

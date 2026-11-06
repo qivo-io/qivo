@@ -1,239 +1,274 @@
-/* Settings › Projects › Deleted items (design 10). The page lists the tasks
-   and projects in the trash that this login may see in each of its
-   organizations, live from deletedItems.list, and search finds deleted tasks
-   by key or title, live from deletedItems.matches, also inside deleted
-   projects and among task items a capped list leaves out. One item restores
-   without asking, and several open a window that says where they go back.
-   A task that can only come back with a whole item the line does not show,
-   its deleted project or the task item it is a subtask of, opens a window
-   that says what else comes back.
-   An organization admin can delete an item for good from its row menu. The
-   page never names the 30 days an item stays, which only the user guide
-   does. Row text, folding and the filters live in lib/deletedItems.ts, and
-   times in lib/deletedTime.ts. */
+/* Settings › Projects › Deleted items (design 10). The page reads the
+   server's Deleted items a page of 25 entries at a time, deleted projects
+   first (deletedItems.page), with Previous and Next. Without a scope it
+   lists every seat's deleted projects and says that deleted tasks show
+   once projects are chosen; Projects, the shared project picker with
+   Archived tasks' rules, picks up to 50 projects of one organization or
+   All projects in it, and only then are deleted tasks read. The kind
+   control, the search, Deleted by (a person and the way they deleted, or
+   Someone) and Assigned to go to the server as the page's filters, their
+   people read 25 at a time from deletedItems.people while a popover is
+   open. The subtitle and whether Deleted by shows come from each seat's
+   role (deletedItems.roles), whose answer drops a Deleted by choice once it
+   takes the control away, and Delete now's count from
+   deletedItems.purgeSummary. The page never sorts, filters, groups or
+   counts entries itself, and its notes say what the answer says, never an
+   empty or complete list the server did not answer.
 
-import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+   The selection is kept across the pages of one list, at most
+   SELECT_MOST.items, and cleared when a filter changes or an action
+   starts. One item restores at once; several open a window that says where
+   they go back and, when the restore runs in more than one round, that
+   Qivo must stay open. The store runs every restore and Delete now
+   (store/planner.ts runDeletedItems) on the shared runner, keeps its
+   progress, which the page shows however often it is left and opened
+   again, and sends a deferred item again once its project is back. A line
+   that can only come back with a whole item, a task found inside a deleted
+   project or a subtask of a deleted task, and an item deleted before its
+   project, opens a window that says what else comes back; when the item
+   was deleted before its project, also for a line search found inside it,
+   that project comes back first. An organization admin can delete an item
+   for good from its row menu.
+
+   Every read stops while the tab is hidden and ends when the page is left.
+   Of the store the page reads only the organizations, the login's own
+   seats and the running action. The page never names the 30 days an item
+   stays, which only the user guide does. Row text, folding and the
+   sentences live in lib/deletedItems.ts, and times in lib/deletedTime.ts. */
+
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { PageTitle } from '@/components/settingsPage'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { NativeSelect } from '@/components/ui/native-select'
 import { HoverTooltip } from '@/components/ui/tooltip'
-import { convex } from '@/lib/convex'
 import { cn } from '@/lib/utils'
 import { api } from '../../../convex/_generated/api'
 import { LIMITS } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
+import { PickChips, ProjectPicker } from '../../components/ProjectPicker'
+import { PageFold } from '../../components/pageFold'
+import { pagesState, useMoveFocus } from '../../components/pageMoves'
+import { ChoiceEnd, PickerSearch } from '../../components/pickerParts'
+import { type ChoiceWords, escapeClearsFirst, heldLine } from '../../components/pickerWords'
 import { Icon, MenuItem, Popover, Seg, StatusDot } from '../../components/qivo'
+import { ACCESS_CAPS } from '../../lib/accessCaps'
+import { KEEP_OPEN } from '../../lib/batchRunner'
 import {
-  ANYONE,
+  alongText,
   andList,
   blockedText,
-  byTime,
-  chosenProfile,
-  type DeletedList,
-  type DeletedMatch,
+  type DeletedEntry,
+  type DeletedHit,
+  type DeletedPage,
+  type DeletedPeople,
+  type DeletedPerson,
+  type DeletedRole,
   type DeletedRow,
-  deletedAlong,
-  deletedBy,
-  deletedByOptions,
+  deletedBusy,
   deleterName,
   deleterSentence,
   destinations,
   FOLD,
   fold,
   foldText,
-  hitItem,
-  type ItemRow,
+  heldAnswer,
+  heldOf,
   itemName,
   itemSuffix,
+  itemsNoun,
   type KindFilter,
   type Line,
   lineItem,
-  matchHasText,
+  lineKey,
+  linesOf,
+  notesOf,
+  PAGE_ROWS,
   type Piece,
+  type PurgeSummary,
   placeText,
+  planOf,
   plural,
+  progressText,
   type RestoreRefusal,
-  type RosterPerson,
   refusalText,
-  restoreNoun,
-  rowHasText,
+  restoreToast,
+  SELECT_MOST,
   stateText,
+  subtitleOf,
   viaText,
 } from '../../lib/deletedItems'
 import { deletedAtFull, deletedAtLabel } from '../../lib/deletedTime'
-import { overLimit } from '../../lib/fieldLimits'
 import { restoreFocus } from '../../lib/focusVisibility'
-import { type DeletedItemsOutcome, P } from '../../store/planner'
+import { useLiveView } from '../../lib/liveView'
+import {
+  listEnd,
+  pageEnd,
+  usePagedList,
+  usePagedPages,
+  useSettledSearch,
+} from '../../lib/pagedList'
+import {
+  deletedScopeOf,
+  PICK_MOST,
+  type PickRules,
+  type ProjectPick,
+  pickedProjects,
+  unpick,
+} from '../../lib/projectPick'
+import { P } from '../../store/planner'
+import { usePlannerVersion } from '../../store/usePlannerVersion'
 import { ModalShell } from '../Modals'
 import '../../styles/deleted-items.css'
 
-type Role = 'admin' | 'lead' | 'user'
+/** How the page picks projects: up to PICK_MOST of one organization, or
+    All projects of one, as Archived tasks picks them. */
+const PICK_RULES: PickRules = { many: true, most: PICK_MOST, oneOrg: true, all: 'org' }
 
-const SUBTITLES: Record<Role, string> = {
-  admin:
-    'Tasks and projects deleted in your organization. Their files count toward its storage until they are deleted for good.',
-  lead: 'Tasks and projects you deleted, and those deleted in projects you lead.',
-  user: 'Tasks and projects you deleted.',
+/** Who Deleted by asks for: anyone, one person or agent, with whether it
+    is the login's own seat and its name kept for the trigger, or the
+    deletes of people no longer in the organization. */
+type ByChoice =
+  | { kind: 'anyone' }
+  | { kind: 'person'; id: string; name: string; agent: boolean; you: boolean }
+  | { kind: 'someone' }
+
+/** The way a person deleted, which Deleted by narrows to (`via`). */
+type Way = 'any' | 'app' | 'mcp_tokens' | 'oauth_connections'
+
+/** Who Assigned to asks for, with the name kept for the trigger. */
+type Assignee = { id: string; name: string; you: boolean }
+
+const ANYONE: ByChoice = { kind: 'anyone' }
+
+const WAYS: { value: Way; label: string; trigger: string }[] = [
+  { value: 'any', label: 'Any way', trigger: '' },
+  { value: 'app', label: 'In the app', trigger: ' in the app' },
+  { value: 'mcp_tokens', label: 'Via a personal token', trigger: ' via a personal token' },
+  { value: 'oauth_connections', label: 'Via a connected app', trigger: ' via a connected app' },
+]
+
+/** What the Deleted by trigger says: "Deleted by anyone", "Deleted by
+    Daniel Berg via a personal token". */
+function byLabel(by: ByChoice, way: Way): string {
+  if (by.kind === 'anyone') return 'Deleted by anyone'
+  if (by.kind === 'someone') return 'Deleted by someone no longer here'
+  const how = WAYS.find((w) => w.value === way)?.trigger ?? ''
+  return `Deleted by ${by.you ? 'you' : by.name}${by.agent ? '' : how}`
 }
 
-/* Who the page speaks to (design 6.1). An organization admin sees every
-   delete, a lead their own and those in the projects they lead, and everyone
-   else their own. A lead of any project in any of the login's organizations
-   reads as a lead, archived projects included. Only a lead's list holds
-   deletes by other people, so a person who led only projects that are now
-   in Deleted items reads as a lead once the list arrives. */
-function viewerRole(rows: DeletedRow[]): Role {
-  if (P.isAdmin()) return 'admin'
-  const leads =
-    P.projects.some((p) => P.levelOn(p.id) === 'lead') || P.archivedProjects.some((p) => p.manage)
-  return leads || rows.some((row) => !row.deleter.you) ? 'lead' : 'user'
-}
-
-/** The people of each organization where this login's seat is an admin, from
-    the store's roster, for Deleted by. That is people and agents, switched
-    off ones too, but no seat nobody has claimed yet, which cannot have
-    deleted anything. Empty for a login that administers none. */
-function adminRoster(): RosterPerson[] {
-  const mine = new Set(P.myProfileIds)
-  const orgs = new Set(
-    P.users.filter((u) => mine.has(u.id) && u.orgRole === 'admin').map((u) => u.org),
-  )
-  if (orgs.size === 0) return []
-  const orgName = new Map(P.orgs.map((org) => [org.id, org.name]))
-  return P.users
-    .filter((u) => orgs.has(u.org) && !u.pending)
-    .map((u) => ({
-      org_id: u.org,
-      org_name: orgName.get(u.org) ?? '',
-      profile_id: u.id,
-      name: u.name,
-      you: mine.has(u.id),
-    }))
-}
-
-/** deletedItems.list, live. It is undefined while loading and null after an error.
-    `deleted_by` narrows it to one person on the server. */
-function useDeletedList(deletedBy: string | undefined, enabled: boolean) {
-  const [list, setList] = useState<DeletedList | null | undefined>(undefined)
-  const [attempt, setAttempt] = useState(0)
-  useEffect(() => {
-    setList(undefined)
-    if (!enabled) return
-    let active = true
-    const unsubscribe = convex.onUpdate(
-      api.deletedItems.list,
-      deletedBy === undefined ? {} : { deleted_by: deletedBy },
-      (answer) => {
-        if (active) setList(answer)
-      },
-      (cause) => {
-        console.error('[qivo] deleted items failed:', cause)
-        if (active) setList(null)
-      },
-    )
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [deletedBy, enabled, attempt])
-  return { list, retry: () => setAttempt((n) => n + 1) }
-}
-
-/** deletedItems.item for `id`, live: one item's row, for the project item a
-    blocked row waits for when no list the page holds has it. Undefined
-    without an id and while loading, null when the caller does not see the
-    item or the query failed. */
-function useDeletedItem(id: string | undefined) {
-  const [answer, setAnswer] = useState<{ id: string; row: DeletedRow | null } | undefined>()
-  useEffect(() => {
-    setAnswer(undefined)
-    if (id === undefined) return
-    let active = true
-    const unsubscribe = convex.onUpdate(
-      api.deletedItems.item,
-      { id },
-      (row) => {
-        if (active) setAnswer({ id, row })
-      },
-      (cause) => {
-        console.error('[qivo] deleted item failed:', cause)
-        if (active) setAnswer({ id, row: null })
-      },
-    )
-    return () => {
-      active = false
-      unsubscribe()
-    }
-  }, [id])
-  return answer !== undefined && answer.id === id ? answer.row : undefined
-}
+/** An item the selection holds: the row it was selected from, and the hit
+    line it was selected through, when no line of its own was. */
+type Picked = { row: DeletedRow; hit?: DeletedHit }
 
 /** The windows the page opens: restore several items, restore a line that
     can only come back with a whole item (WholeItemWindow), or delete one for
     good. `key` is the line that opened it, for focus. `selection` marks a
     whole item window that Restore N selected opened, which hands focus back
-    like the bulk one. `along` is what Delete now takes with the row, counted
-    as it opens. */
+    like the bulk one. */
 type Ask =
-  | { kind: 'bulk'; rows: ItemRow[] }
+  | { kind: 'bulk'; rows: DeletedRow[] }
   | { kind: 'whole'; line: Line; key: string; selection?: boolean }
-  | { kind: 'purge'; row: DeletedRow; key: string; along: ReturnType<typeof deletedAlong> }
-
-/** The key of a line in the list, which also names it for focus. */
-const lineKey = (line: Line) =>
-  line.kind === 'item' ? line.row.id : `${line.match.item_id}:${line.match.key}`
+  | { kind: 'purge'; row: DeletedRow; key: string }
 
 /** The rows on either side of a row that may leave the list. */
 type Around = { next?: string; previous?: string }
 
 const toast = (text: string, tone?: 'error') => window.showToast?.(text, tone)
 
-/** The newest search answer and the text it answers. `capped` when more
-    tasks may match than the server answers (MATCHES.max). */
-type Found = { text: string; matches: DeletedMatch[]; capped: boolean }
-/** No search. One shared object, so setting it again while the box stays
-    empty does not render the page again. */
-const NOTHING_FOUND: Found = { text: '', matches: [], capped: false }
+/** The people popovers' words (components/pickerWords.ts). */
+const PEOPLE_WORDS: ChoiceWords = {
+  held: (held) => heldLine(held, true),
+  failed: "Couldn't load people.",
+  stopped: 'Showing the people found so far.',
+  empty: 'No one else to choose.',
+  none: 'No one matches.',
+}
 
 export function DeletedItemsPage() {
-  const main = useDeletedList(undefined, true)
-  const [kind, setKind] = useState<KindFilter>('all')
-  const [search, setSearch] = useState('')
-  const [by, setBy] = useState(ANYONE)
-  const all = main.list?.items ?? []
-  const role = viewerRole(all)
-  // A capped list may not hold a person's older deletes; ask the server for
-  // that person alone then (only an admin's seat reaches further).
-  const person = main.list?.capped ? chosenProfile(by, all) : undefined
-  const narrowed = useDeletedList(person, person !== undefined)
-  const source = person === undefined ? main : narrowed
-  const rows = source.list?.items ?? []
-  const loaded = source.list !== undefined && source.list !== null
-  const byId = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows])
-  const allById = useMemo(() => new Map(all.map((row) => [row.id, row])), [all])
-  /** Item `id` as the shown list has it, else as the main one does. A list
-      narrowed to one person holds their older deletes, which the capped main
-      list may not, and the main list holds the project items others deleted. */
-  const findItem = (id: string | undefined) =>
-    id === undefined ? undefined : (byId.get(id) ?? allById.get(id))
+  usePlannerVersion('deleted')
+  // each seat's role, kept across a hide, so the subtitle and Deleted by
+  // stay while the read starts again
+  const roles = useLiveView<DeletedRole[]>(api.deletedItems.roles, '{}')
+  const knownRoles = useRef<DeletedRole[] | null>(null)
+  if (roles.value !== undefined) knownRoles.current = roles.value
+  const seats = knownRoles.current
+  // a backend without roles cannot show the page as it should
+  const rolesFailed = seats === null && roles.error !== undefined
 
-  const [found, setFound] = useState<Found>(NOTHING_FOUND)
-  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  const [pick, setPick] = useState<ProjectPick | null>(null)
+  const [kind, setKind] = useState<KindFilter>('all')
+  const [text, setText] = useState('')
+  const search = useSettledSearch(text, LIMITS.search)
+  const [by, setBy] = useState<ByChoice>(ANYONE)
+  const [way, setWay] = useState<Way>('any')
+  const [assignee, setAssignee] = useState<Assignee | null>(null)
+  const scope = pick === null ? undefined : deletedScopeOf(pick)
+  // the organization the people popovers list: the scope's, or the only
+  // seat's; a login of several seats has none without a scope
+  const listOrg = scope?.org_id ?? (P.orgs.length === 1 ? (P.orgs[0]?.id ?? null) : null)
+  const shownRoles = (seats ?? []).filter((r) => scope === undefined || r.org_id === scope.org_id)
+  const showsBy = shownRoles.some((r) => r.role !== 'user')
+
+  /* A roles answer that takes Deleted by away, as when a lead's last lead
+     role ends, also drops its choice, which no control could clear then,
+     and the page starts again without it. A read that waits, fails or
+     stops while the tab is hidden keeps the roles it knew, and the choice. */
+  useEffect(() => {
+    if (roles.value === undefined || showsBy) return
+    setBy(ANYONE)
+    setWay('any')
+  }, [roles.value, showsBy])
+
+  /* The list's ask, in a fixed key order with empty fields left out. */
+  const ask = {
+    ...(scope === undefined ? {} : { scope }),
+    ...(kind === 'all' ? {} : { kind }),
+    ...(search.settled === '' ? {} : { search: search.settled }),
+    ...(by.kind === 'person'
+      ? { deleted_by: by.id, ...(way === 'any' || by.agent ? {} : { via: way }) }
+      : {}),
+    ...(by.kind === 'someone' ? { someone: true as const } : {}),
+    ...(assignee === null ? {} : { assignee: assignee.id }),
+  }
+  const key = JSON.stringify(ask)
+  const page = usePagedPages<DeletedPage, DeletedEntry>({
+    key,
+    query: api.deletedItems.page,
+    args: (after) => ({ ...ask, ...(after === null ? {} : { cursor: after }) }),
+    // a scope too wide to list, or a part Qivo could not check, shows no
+    // rows and no end line calls it empty
+    batch: (answer) =>
+      heldAnswer(answer)
+        ? null
+        : {
+            rows: answer.entries,
+            next: answer.next_cursor,
+            stopped: answer.entries.length < PAGE_ROWS && answer.next_cursor !== null,
+          },
+  })
+  // the rows of the entries on screen, also beside a failed move
+  const lastAnswer = useRef<DeletedPage | null>(null)
+  if (page.answer !== null) lastAnswer.current = page.answer
+  const items = (page.answer ?? lastAnswer.current)?.items ?? []
+  const lines = linesOf({ entries: page.rows, items })
+  const onPage = new Map(items.map((row) => [row.id, row]))
+  const searching = search.settled !== ''
+  const end = pageEnd(page, searching)
+  const notes = notesOf(page.answer, searching)
+
+  const action = P.deletedAction
+  const running = deletedBusy(action)
+  const pending = new Set(running ? (action?.pending ?? []) : [])
+  const waiting = P.deletedWaiting
+
+  const [selected, setSelected] = useState<ReadonlyMap<string, Picked>>(() => new Map())
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   const [refusals, setRefusals] = useState<ReadonlyMap<string, RestoreRefusal>>(() => new Map())
-  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set())
-  const [ask, setAsk] = useState<Ask | null>(null)
+  const [ask2, setAsk] = useState<Ask | null>(null)
   const [saving, setSaving] = useState(false)
   // whether the open window did what it asks, for where focus goes after it
   const acted = useRef(false)
-  // Items deferred behind a project item of the same restore, each with
-  // whether a bulk restore sent it. They are sent again once a list shows them
-  // restorable (design 5), still marked bulk if they were.
-  const [waiting, setWaiting] = useState<ReadonlyMap<string, boolean>>(() => new Map())
-  // The items this page restored. A capped list need not have held them, so
-  // their search hits cannot go by the item leaving it (the lines).
-  const [restored, setRestored] = useState<ReadonlySet<string>>(() => new Set())
   const pageRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   // a focus move for after the next commit, once rows that left are gone
@@ -247,245 +282,53 @@ export function DeletedItemsPage() {
     run?.()
   })
 
-  /* Search hits, live for the text 250ms after typing stops. The server
-     answers again whenever a hit's item changes state or leaves, and when an
-     item deleted after the search holds tasks the text finds, so hits outside
-     a capped list stay current too. A new text stops following the old one
-     at once, and the old answer shows until the new one replaces it. An
-     error keeps the hits of the text, or shows none when the text has no
-     answer yet. */
-  const text = search.trim()
-  // a search over the server's cap is not sent; the field shows it invalid
-  const tooLong = overLimit(LIMITS.search, text)
+  /* A filter change starts a new list, whose selection starts empty. */
   useEffect(() => {
-    if (!text || tooLong) {
-      setFound(NOTHING_FOUND)
-      return
-    }
-    let active = true
-    let unsubscribe: (() => void) | undefined
-    const timer = window.setTimeout(() => {
-      unsubscribe = convex.onUpdate(
-        api.deletedItems.matches,
-        { text },
-        (answer) => {
-          if (active) setFound({ text, matches: answer.matches, capped: answer.capped })
-        },
-        (cause) => {
-          console.error('[qivo] deleted items search failed:', cause)
-          if (active)
-            setFound((current) =>
-              current.text === text ? current : { text, matches: [], capped: false },
-            )
-        },
-      )
-    }, 250)
-    return () => {
-      active = false
-      window.clearTimeout(timer)
-      unsubscribe?.()
-    }
-  }, [text, tooLong])
-  const lower = text.toLowerCase()
-  // Until the new text has its answer, the hits of the previous one show only
-  // when they still hold the new text.
-  const hits = useMemo(
-    () =>
-      found.text === text ? found.matches : found.matches.filter((m) => matchHasText(m, lower)),
-    [found, text, lower],
-  )
+    setSelected((current) => (current.size === 0 ? current : new Map()))
+  }, [key])
 
-  /* ---------------------------------------------------------- the lines */
-  // A search hit acts on its item as a list has it, with its name and
-  // counts. A hit whose item left a complete list goes. A capped list can
-  // stop before an older item, so there the hit stands for its item itself
-  // (hitItem), in the state of the newest search answer, until this page
-  // restores it. A hit inside a project item is a match line, which acts on
-  // the project. A task item's hit is that item's own row, which shows once
-  // however many of its tasks the search finds, and also when the text is
-  // in a subtask the row does not name. Only a hit on a subtask of a task
-  // item that no list holds is a match line, which acts on the whole item,
-  // unless a hit on its root shows the item's row.
-  const capped = source.list?.capped === true
-  const lines = useMemo(() => {
-    const out: Line[] = []
-    const shown = new Set<string>()
-    for (const row of rows)
-      if (
-        (kind === 'all' || row.kind === kind) &&
-        deletedBy(row, by) &&
-        (!lower || rowHasText(row, lower))
-      ) {
-        out.push({ kind: 'item', row })
-        shown.add(row.id)
-      }
-    if (lower && kind !== 'project') {
-      const subtasks: { kind: 'match'; match: DeletedMatch; item: ItemRow }[] = []
-      for (const match of hits) {
-        const id = match.item_id
-        const listed = byId.get(id) ?? allById.get(id)
-        const item = listed ?? (capped && !restored.has(id) ? hitItem(match) : undefined)
-        if (!item || !deletedBy(item, by)) continue
-        if (item.kind === 'project') out.push({ kind: 'match', match, item })
-        else if (!listed && match.root_key !== undefined)
-          subtasks.push({ kind: 'match', match, item })
-        else if (!shown.has(id)) {
-          out.push({ kind: 'item', row: item })
-          shown.add(id)
-        }
-      }
-      out.push(...subtasks.filter((line) => !shown.has(line.item.id)))
-    }
-    return out.sort(byTime)
-  }, [rows, byId, allById, capped, restored, kind, by, lower, hits])
-  // the items the lines show, each once however many hits it has
-  const lineIds = useMemo(() => new Set(lines.map((line) => lineItem(line).id)), [lines])
-  // the items that only a search hit names, by id
-  const hitItems = useMemo(() => {
-    const out = new Map<string, ItemRow>()
-    for (const line of lines) {
-      const item = lineItem(line)
-      if (item.hit && !out.has(item.id)) out.set(item.id, item)
-    }
-    return out
-  }, [lines])
-  /** Item `id` as a line acts on it. That is a list's row, else an item that
-      only a search hit names. */
-  const itemOf = (id: string): ItemRow | undefined => findItem(id) ?? hitItems.get(id)
-  /* The project item that the row of an open whole item window waits for,
-     asked of the server when no list holds it: a search can find a task
-     item older than a capped list whose project item the list left out
-     too, and a list narrowed to one person need not hold another's. */
-  const waitsFor =
-    ask?.kind === 'whole' && ask.line.kind === 'item' ? ask.line.row.blocked?.item_id : undefined
-  const missing = waitsFor !== undefined && findItem(waitsFor) === undefined ? waitsFor : undefined
-  const asked = useDeletedItem(missing)
-
-  /* The selection holds only what the person can still act on. A delivery or
-     a filter change drops a selected id whose row is no longer shown, or that
-     became blocked. An id the last restore refused stays, with its reason,
-     and so does one a restore still waits for, since Convex delivers the list
-     before the restore's answer. Refusals of rows that left the list go. */
+  /* The selection holds what the person can still act on. A selected row
+     the page shows in a state that cannot be restored leaves it, unless the
+     last restore refused it with a reason or an action still answers for
+     it; one of another page stays until a restore or Delete now answers
+     for it. A row the page shows again replaces the one kept. */
   useEffect(() => {
-    if (!loaded) return
     setSelected((current) => {
-      const next = new Set(
-        [...current].filter((id) => {
-          const row = itemOf(id)
-          return (
-            row !== undefined &&
-            lineIds.has(id) &&
-            (row.can_restore || refusals.has(id) || busy.has(id))
-          )
-        }),
-      )
-      return next.size === current.size ? current : next
-    })
-    setRefusals((current) => {
-      const next = new Map([...current].filter(([id]) => itemOf(id) !== undefined))
-      return next.size === current.size ? current : next
-    })
-  }, [byId, allById, hitItems, lineIds, loaded, refusals, busy])
-
-  /* Sends again the deferred items a list shows restorable. It reads the
-     main list as well as the shown one. No Deleted by choice narrows the
-     main list, so an item that another choice hides is still sent once its
-     project is back. An item leaves the waiting set when it is sent, and the
-     answer speaks for it from then on (deferred again, it waits again). A
-     waiting item that no list holds stays, since a list narrowed to one
-     person or a capped one need not hold it, unless the main list is
-     complete and no longer holds it. A task item older than a capped list
-     holds is sent once its search hit shows it restorable. It runs on each
-     delivery of either list or the search, and when an answer defers items,
-     because the list that shows a small project back can arrive before the
-     answer that defers its items. Items a bulk restore deferred go in their
-     own call, marked bulk, so one sent alone sends no Restored notice. */
-  useEffect(() => {
-    if (waiting.size === 0) return
-    const complete = main.list?.capped === false
-    const ready: ItemRow[] = []
-    const gone: string[] = []
-    for (const id of waiting.keys()) {
-      const held = [byId.get(id), allById.get(id), hitItems.get(id)]
-      const row = held.find((r) => r?.can_restore)
-      if (row) ready.push(row)
-      else if (complete && held.every((r) => r === undefined)) gone.push(id)
-    }
-    if (ready.length === 0 && gone.length === 0) return
-    const settled = new Set([...gone, ...ready.map((row) => row.id)])
-    setWaiting((current) => new Map([...current].filter(([id]) => !settled.has(id))))
-    const bulk = ready.filter((row) => waiting.get(row.id))
-    const single = ready.filter((row) => !waiting.get(row.id))
-    if (bulk.length) void restore(bulk, { bulk: true })
-    if (single.length) void restore(single)
-    // restore reads the newest state through refs and setters
-  }, [byId, allById, hitItems, main.list, waiting])
-
-  /* The Deleted by choices. An admin's seat reads a chosen person's own range
-     on the server, which reaches past a capped list, so an admin may choose
-     anyone in the roster of an organization they administer, and not only
-     the people the list shows. A lead's or standard user's seat reads the
-     same ranges with or without a choice, which only narrows them, so their
-     choices come from the list. */
-  const options = useMemo(() => {
-    const roster = adminRoster()
-    const orgs = new Set([...all.map((row) => row.org_id), ...roster.map((p) => p.org_id)])
-    return deletedByOptions(all, orgs.size > 1, roster)
-  }, [all, P.users, P.orgs, P.myProfileIds])
-  // a choice no longer offered, such as a person whose deletes all left the
-  // list or who left an admin's roster, goes back to anyone
-  useEffect(() => {
-    if (main.list && by !== ANYONE && !options.some((o) => o.value === by)) setBy(ANYONE)
-  }, [main.list, by, options])
-
-  const filtered = kind !== 'all' || !!lower || by !== ANYONE
-  // a search hit, or a narrowed answer such as one person's deletes, can come
-  // from an organization that a capped list stopped before
-  const orgRows = [...all, ...rows, ...hitItems.values()]
-  const orgs = [...new Set(orgRows.map((row) => row.org_id))]
-  const grouped = orgs.length > 1
-  const groups = grouped
-    ? orgs
-        .map((org) => ({
-          org,
-          name: orgRows.find((row) => row.org_id === org)?.org_name ?? '',
-          lines: lines.filter((line) => lineItem(line).org_id === org),
-        }))
-        .filter((group) => group.lines.length > 0)
-        .sort(
-          (a, b) =>
-            Number(b.org === P.homeOrg) - Number(a.org === P.homeOrg) ||
-            a.name.localeCompare(b.name),
-        )
-    : [{ org: '', name: '', lines }]
-  const shownIds = [...lineIds].filter((id) => itemOf(id)?.can_restore)
-  const chosen = [...selected].flatMap((id) => itemOf(id) ?? [])
-  const chosenReady = chosen.filter((row) => row.can_restore)
-  const wide = rows.some((row) => row.can_purge)
-  const now = new Date()
-
-  /* ---------------------------------------------------------- selection */
-  const choose = (ids: string[], on: boolean) =>
-    setSelected((current) => {
-      const next = new Set(current)
-      for (const id of ids) {
-        if (on) next.add(id)
-        else next.delete(id)
+      let next: Map<string, Picked> | null = null
+      for (const row of onPage.values()) {
+        const had = current.get(row.id)
+        if (!had) continue
+        next ??= new Map(current)
+        if (!row.can_restore && !refusals.has(row.id) && !pending.has(row.id)) next.delete(row.id)
+        else if (had.row !== row) next.set(row.id, { ...had, row })
       }
-      return next
+      return next ?? current
     })
-  const boxState = (ids: string[]): boolean | 'indeterminate' => {
-    const on = ids.filter((id) => selected.has(id)).length
-    return on === 0 ? false : on === ids.length ? true : 'indeterminate'
+  }, [page.answer])
+
+  /* Who deleted and who is assigned follow the scope's organization. A
+     pick in another organization, or clearing the scope, which Assigned to
+     needs, start them again; for a login of several seats Deleted by needs
+     a scope too. */
+  const choosePick = (next: ProjectPick | null) => {
+    const was = pick === null ? null : (deletedScopeOf(pick)?.org_id ?? null)
+    const now = next === null ? null : (deletedScopeOf(next)?.org_id ?? null)
+    setPick(next)
+    if (was === now) return
+    setAssignee(null)
+    if ((was !== null && now !== null) || (now === null && P.orgs.length > 1)) {
+      setBy(ANYONE)
+      setWay('any')
+    }
   }
 
   /* -------------------------------------------------------------- focus */
   const lineEls = () => [...(pageRef.current?.querySelectorAll<HTMLElement>('[data-line]') ?? [])]
-  const findLine = (key: string | undefined) =>
-    key === undefined ? null : (lineEls().find((el) => el.dataset.line === key) ?? null)
-  const around = (key: string): Around => {
+  const findLine = (k: string | undefined) =>
+    k === undefined ? null : (lineEls().find((el) => el.dataset.line === k) ?? null)
+  const around = (k: string): Around => {
     const els = lineEls()
-    const at = els.findIndex((el) => el.dataset.line === key)
+    const at = els.findIndex((el) => el.dataset.line === k)
     return at < 0 ? {} : { next: els[at + 1]?.dataset.line, previous: els[at - 1]?.dataset.line }
   }
   const controlOf = (el: HTMLElement | null, prefer = '[data-restore]') =>
@@ -494,11 +337,11 @@ export function DeletedItemsPage() {
       '[data-restore]:not(:disabled), [data-select]:not(:disabled), [data-row-menu]',
     ) ??
     null
-  /** Where focus goes after an action on row `key`: back to the row while it
+  /** Where focus goes after an action on row `k`: back to the row while it
       is there, else the next row's Restore, the previous row's, or the
       search box (the review's keyboard rules). */
-  const targetAround = (key: string, sides: Around, prefer?: string) => {
-    const here = findLine(key)
+  const targetAround = (k: string, sides: Around, prefer?: string) => {
+    const here = findLine(k)
     if (here) return controlOf(here, prefer)
     return (
       controlOf(findLine(sides.next)) ?? controlOf(findLine(sides.previous)) ?? searchRef.current
@@ -506,16 +349,15 @@ export function DeletedItemsPage() {
   }
   /* After an action that did not open a window, focus moves only when it was
      on the row, or fell to the page when the row left. */
-  const settleFocus = (key: string, sides: Around) => () => {
+  const settleFocus = (k: string, sides: Around) => () => {
     const active = document.activeElement
-    const here = findLine(key)
+    const here = findLine(k)
     const lost = !active || active === document.body || !active.isConnected
     if (!lost && !here?.contains(active)) return
-    restoreFocus(targetAround(key, sides))
+    restoreFocus(targetAround(k, sides))
   }
-
-  /** Where focus goes after a restore of the selection. That is the
-      select-all box, or the search box when nothing is left to select. */
+  /** Where focus goes after a restore of the selection: the select-all
+      box, or the search box when nothing is left to select. */
   const selectAllOrSearch = () =>
     pageRef.current?.querySelector<HTMLElement>('[data-select-all]:not(:disabled)') ??
     searchRef.current
@@ -523,173 +365,151 @@ export function DeletedItemsPage() {
       to the select-all box, and a Cancel back to the button (ModalShell's
       own return, when this answers null). */
   const afterSelectionWindow = () => (acted.current ? selectAllOrSearch() : null)
-
-  /** Opens a window, which has not acted yet. */
   const openAsk = (next: Ask) => {
     acted.current = false
     windowSides.current = {}
     setAsk(next)
   }
-  /** Closes the window after it did what it asks. */
   const closeActed = () => {
     acted.current = true
     setAsk(null)
   }
+  const move = useMoveFocus(
+    page,
+    'deleted-page',
+    () => controlOf(lineEls()[0] ?? null, '[data-select]'),
+    () => searchRef.current,
+  )
 
   /* ----------------------------------------------------------- restoring */
-  /** Restores `items` and says how it went. `announce` are the items the
-      person asked for; others in the call are what they wait for. `name`
-      names the one announced item where the page has no name for it.
-      `settle` moves focus once the page shows the answer. `bulk` marks a
-      restore of several items the person chose, which sends no Restored
-      notice however the calls split it (design 5.4). */
+  /** Restores `rows`, an action of one round, and says how it went. `announce`
+      are the items the person asked for; others in the call are what they
+      wait for. `settle` moves focus once the page shows the answer. `bulk`
+      marks a restore of several items the person chose, which sends no
+      Restored notice however the calls split it (design 5.4). */
   async function restore(
-    items: ItemRow[],
+    rows: DeletedRow[],
     {
-      announce = items,
-      name,
+      announce = rows,
       settle,
       bulk = false,
-    }: { announce?: ItemRow[]; name?: string; settle?: () => void; bulk?: boolean } = {},
+    }: { announce?: DeletedRow[]; settle?: () => void; bulk?: boolean } = {},
   ) {
-    const ids = items.map((row) => row.id)
-    setBusy((current) => new Set([...current, ...ids]))
-    setRefusals((current) => new Map([...current].filter(([id]) => !ids.includes(id))))
-    const outcome = await P.restoreDeletedItems(items, { bulk })
-    if (outcome.deferred.length > 0)
-      setWaiting(
-        (current) => new Map([...current, ...outcome.deferred.map((id) => [id, bulk] as const)]),
-      )
-    if (outcome.done.length > 0) setRestored((current) => new Set([...current, ...outcome.done]))
+    const ids = new Set(rows.map((row) => row.id))
+    setRefusals((current) => new Map([...current].filter(([id]) => !ids.has(id))))
+    // the store sends a deferred item again once its project is back
+    const outcome = await P.restoreDeletedItems(rows, { bulk })
     if (settle) focusNext.current = settle
-    setBusy((current) => new Set([...current].filter((id) => !ids.includes(id))))
     setRefusals((current) => {
       const next = new Map(current)
       for (const { id, reason } of outcome.refused) next.set(id, reason)
       return next
     })
     const back = new Set([...outcome.done, ...outcome.deferred])
-    setSelected((current) => new Set([...current].filter((id) => !back.has(id))))
-    announceRestore(announce, outcome, back, name)
+    setSelected((current) => new Map([...current].filter(([id]) => !back.has(id))))
+    const said = restoreToast(announce, outcome, undefined, rows)
+    if (said.text) toast(said.text, said.tone)
     return outcome
   }
 
-  /* The toast after a restore (the review's spec): one item by name, many by
-     count, and a partial failure as an error that counts what failed. `name`
-     stands for the one item's own name. */
-  function announceRestore(
-    items: ItemRow[],
-    outcome: DeletedItemsOutcome<RestoreRefusal>,
-    back: ReadonlySet<string>,
-    name?: string,
-  ) {
-    const done = items.filter((row) => back.has(row.id))
-    const missed = items.length - done.length
-    if (missed === 0) {
-      if (done.length !== 1) {
-        toast(`Restored ${restoreNoun(done)}`)
-        return
-      }
-      const row = done[0]
-      // an item too large for one call goes on in steps, as the server says
-      const stepping = outcome.stepping.includes(row.id)
-      if (name !== undefined) {
-        toast(stepping ? `Restoring ${name}…` : `Restored ${name}`)
-        return
-      }
-      if (row.kind === 'task') {
-        toast(
-          stepping
-            ? `Restoring ${row.key}…`
-            : `Restored ${row.key}${row.archived ? ' to Archived tasks' : ''}`,
-        )
-        return
-      }
-      toast(
-        stepping
-          ? `Restoring “${row.title}”…`
-          : `Restored “${row.title}”${row.archived ? ' to Archived projects' : ''}`,
-      )
-      return
-    }
-    if (items.length === 1) {
-      const row = items[0]
-      const reason = outcome.refused.find((r) => r.id === row.id)?.reason
-      const label = name ?? (row.kind === 'task' ? row.key : `“${row.title}”`)
-      toast(
-        reason
-          ? `Couldn't restore ${label}. ${refusalText(reason)}`
-          : (outcome.error ?? `Couldn't restore ${label}.`),
-        'error',
-      )
-      return
-    }
-    if (done.length === 0) {
-      toast(outcome.error ?? `Couldn't restore ${restoreNoun(items)}.`, 'error')
-      return
-    }
-    toast(
-      `Restored ${done.length.toLocaleString('en-US')} of ${restoreNoun(items)}. ${missed.toLocaleString('en-US')} couldn't be restored.`,
-      'error',
-    )
-  }
-
-  /** A row's Restore. One item restores at once. A search hit, inside a
-      deleted project or on a subtask of a task item no list holds, and an
-      item whose project is deleted too go through the whole item window. */
-  const restoreLine = (line: Line, key: string) => {
+  /** A row's Restore. One item restores at once. A hit line, and an item
+      whose project is deleted too, go through the whole item window. */
+  const restoreLine = (line: Line, k: string) => {
     const row = lineItem(line)
     const reason = row.blocked?.reason
-    if (line.kind === 'match' || reason === 'project_deleted' || reason === 'parent_deleted') {
-      openAsk({ kind: 'whole', line, key })
+    if (line.kind === 'hit' || reason === 'project_deleted' || reason === 'parent_deleted') {
+      openAsk({ kind: 'whole', line, key: k })
       return
     }
-    if (!row.can_restore || busy.has(row.id)) return
-    void restore([row], { settle: settleFocus(key, around(key)) })
+    if (!row.can_restore || running) return
+    void restore([row], { settle: settleFocus(k, around(k)) })
   }
 
-  /** Restore N selected. One item restores at once, and more open the bulk
-      window. An item ticked through a search hit's match line, while it has
-      no row of its own, opens the whole item window instead, so the person
-      learns that the whole project or task comes back and not only the task
-      the search found. */
+  const chosen = [...selected.values()]
+  const chosenReady = chosen.map((p) => p.row).filter((row) => row.can_restore)
+  /** Restore N selected. One item restores at once, unless it was selected
+      through a hit line alone, which opens the whole item window, so the
+      person learns that the whole project or task comes back. More open
+      the bulk window. */
   const restoreSelected = () => {
-    if (chosenReady.length === 0) return
+    if (chosenReady.length === 0 || running) return
     if (chosenReady.length > 1) {
       openAsk({ kind: 'bulk', rows: chosenReady })
       return
     }
-    const [row] = chosenReady
-    const hit = lines.find((line) => line.kind === 'match' && line.item.id === row.id)
-    if (hit && !lines.some((line) => line.kind === 'item' && line.row.id === row.id)) {
-      openAsk({ kind: 'whole', line: hit, key: lineKey(hit), selection: true })
+    const [only] = chosen.filter((p) => p.row.can_restore)
+    if (only?.hit) {
+      const line: Line = { kind: 'hit', hit: only.hit, item: only.row }
+      openAsk({ kind: 'whole', line, key: lineKey(line), selection: true })
       return
     }
     void restore(chosenReady, { settle: () => restoreFocus(selectAllOrSearch()) })
   }
 
-  /* --------------------------------------------------------------- render */
-  // The count names items, so a project with three search hits counts once.
-  // The total holds the items that only a hit names. A list narrowed to one
-  // person on the server has no total to count against.
-  const countText =
-    filtered && person === undefined
-      ? `${lineIds.size.toLocaleString('en-US')} of ${plural(rows.length + hitItems.size, 'item')}`
-      : plural(lineIds.size, 'item')
+  /* ---------------------------------------------------------- selection */
+  const full = selected.size >= SELECT_MOST.items
+  /** Selects or clears `picks`, at most SELECT_MOST.items in all. A line of
+      its own wins over a hit line of the same item. */
+  const choose = (picks: Picked[], on: boolean) =>
+    setSelected((current) => {
+      const next = new Map(current)
+      for (const p of picks) {
+        if (!on) {
+          next.delete(p.row.id)
+          continue
+        }
+        const had = next.get(p.row.id)
+        if (had) {
+          if (had.hit && !p.hit) next.set(p.row.id, p)
+          continue
+        }
+        if (next.size >= SELECT_MOST.items) break
+        next.set(p.row.id, p)
+      }
+      return next
+    })
+  const pickOf = (line: Line): Picked =>
+    line.kind === 'item' ? { row: line.row } : { row: line.item, hit: line.hit }
+  const shownPicks = lines.map(pickOf).filter((p) => p.row.can_restore && p.row.state === 'ready')
+  const shownIds = [...new Set(shownPicks.map((p) => p.row.id))]
+  const boxState = (ids: string[]): boolean | 'indeterminate' => {
+    const on = ids.filter((id) => selected.has(id)).length
+    return on === 0 ? false : on === ids.length ? true : 'indeterminate'
+  }
+  const elsewhere = chosen.filter((p) => !onPage.has(p.row.id)).length
 
+  /* --------------------------------------------------------------- render */
+  const orgs = new Set(lines.map((line) => lineItem(line).org_id))
+  const namesOrg = orgs.size > 1
+  const wide = lines.some((line) => lineItem(line).can_purge)
+  const now = new Date()
+  const itemCount = new Set(lines.map((line) => lineItem(line).id)).size
+  const countText =
+    page.phase === 'first' || page.phase === 'failed' || page.phase === 'held'
+      ? ''
+      : page.hasNext || page.hasPrevious
+        ? `${plural(itemCount, 'item')} on this page`
+        : plural(itemCount, 'item')
+  const filtered = kind !== 'all' || by.kind !== 'anyone' || assignee !== null
+  const progress = running && action?.long ? progressText(action) : ''
+
+  function selectedText() {
+    const n = selected.size.toLocaleString('en-US')
+    return elsewhere > 0
+      ? `${n} selected, ${elsewhere.toLocaleString('en-US')} on other pages`
+      : `${n} selected`
+  }
   const selectionBar = (place: 'top' | 'bottom') => (
     <>
       {place === 'bottom' && (
-        <span className="text-sm font-semibold text-text-1">
-          {selected.size.toLocaleString('en-US')} selected
-        </span>
+        <span className="text-sm font-semibold text-text-1">{selectedText()}</span>
       )}
       <Button
         type="button"
         variant="quiet"
         size="sm"
         data-clear-selection
-        onClick={() => setSelected(new Set())}
+        onClick={() => setSelected(new Map())}
       >
         Clear
       </Button>
@@ -700,7 +520,7 @@ export function DeletedItemsPage() {
         size="sm"
         className="font-semibold"
         data-restore-selected
-        disabled={chosenReady.length === 0}
+        disabled={chosenReady.length === 0 || running}
         onClick={restoreSelected}
       >
         <Icon name="rotateCcw" size={16} />
@@ -709,24 +529,24 @@ export function DeletedItemsPage() {
     </>
   )
 
-  const renderLine = (line: Line, key: string) => {
+  const renderLine = (line: Line, k: string) => {
     const item = lineItem(line)
-    const match = line.kind === 'match' ? line.match : null
-    // a search hit shows its project item as the list has it now
+    const hit = line.kind === 'hit' ? line.hit : null
     const { state, blocked, deleter } = item
     const ready = state === 'ready'
-    const name = match ? match.key : itemName(item)
+    const hidden = !hit && item.hidden === true
+    const name = hit ? hit.key : itemName(item)
     const opensWindow =
-      match !== null ||
-      blocked?.reason === 'project_deleted' ||
-      blocked?.reason === 'parent_deleted'
+      hit !== null || blocked?.reason === 'project_deleted' || blocked?.reason === 'parent_deleted'
     const canRestore = ready && !item.redacted && (item.can_restore || opensWindow)
-    const holder = findItem(blocked?.item_id)
+    const holder = blocked?.item_id === undefined ? undefined : onPage.get(blocked.item_id)
     const refused = refusals.get(item.id)
+    // what a running action is doing to the row, which its button says
+    const acting = pending.has(item.id) ? action?.kind : undefined
     // the reason given at deletion, then why the row cannot be restored now
-    const notes: { key: string; text: ReactNode }[] = []
-    if (!match && item.reason)
-      notes.push({
+    const rowNotes: { key: string; text: ReactNode }[] = []
+    if (!hit && item.reason && !hidden)
+      rowNotes.push({
         key: 'reason',
         text: (
           <>
@@ -736,21 +556,31 @@ export function DeletedItemsPage() {
       })
     const stateLine = stateText(state)
     const blockedLine = blocked && !item.redacted ? blockedText(blocked, holder?.title) : null
-    if (stateLine) notes.push({ key: 'state', text: stateLine })
-    else if (blockedLine) notes.push({ key: 'blocked', text: blockedLine })
-    else if (refused) notes.push({ key: 'refused', text: refusalText(refused) })
-    const place = match ? match.path.filter(Boolean).join(' › ') : placeText(item)
-    const archived = match ? match.archived : item.archived
+    if (stateLine) rowNotes.push({ key: 'state', text: stateLine })
+    else if (waiting.has(item.id))
+      rowNotes.push({ key: 'waiting', text: 'Qivo restores it once its project is back.' })
+    else if (blockedLine) rowNotes.push({ key: 'blocked', text: blockedLine })
+    else if (refused) rowNotes.push({ key: 'refused', text: refusalText(refused) })
+    if (hidden)
+      rowNotes.push({
+        key: 'hidden',
+        text: "You can't open this task's project, so its title isn't shown.",
+      })
+    const place = hit ? hit.path.filter(Boolean).join(' › ') : placeText(item)
+    const archived = hit ? hit.archived : item.archived
     // a row with no place line puts its deleter there on a phone
-    const placed = !!place || item.redacted === true || archived
+    const placed = !!place || item.redacted === true || archived || namesOrg
     const time = new Date(item.deleted_at)
-    const status = !match && !item.redacted && item.kind === 'task' ? item.status : undefined
+    const status =
+      !hit && !item.redacted && !hidden && item.kind === 'task' ? item.status : undefined
+    const selectable = item.can_restore || selected.has(item.id)
     return (
       <div
-        key={key}
-        data-line={key}
-        data-deleted-row={match ? undefined : item.id}
-        data-deleted-match={match ? match.key : undefined}
+        key={k}
+        data-line={k}
+        data-deleted-row={hit ? undefined : item.id}
+        data-deleted-hit={hit ? hit.key : undefined}
+        data-hidden-row={hidden ? '' : undefined}
         data-state={state}
         className={cn(
           'deleted-row rounded-md border border-border bg-surface-1 p-2',
@@ -765,16 +595,17 @@ export function DeletedItemsPage() {
               data-select
               aria-label={`Select ${name}`}
               checked={selected.has(item.id)}
-              // a refused row that stays selected can still be cleared
-              disabled={!item.can_restore && !selected.has(item.id)}
-              onCheckedChange={(on) => choose([item.id], on === true)}
+              // a refused row that stays selected can still be cleared, and
+              // at the cap only a selected row's box takes a press
+              disabled={!selectable || (full && !selected.has(item.id))}
+              onCheckedChange={(on) => choose([pickOf(line)], on === true)}
             />
           ) : (
             <span className="size-4" />
           )}
         </div>
         <span className="deleted-row-icon mt-[2px] flex text-text-2">
-          {item.kind === 'project' && !match ? (
+          {item.kind === 'project' && !hit ? (
             <Icon name="layers" size={16} color="var(--text-2)" />
           ) : status ? (
             <StatusDot status={status} size={16} />
@@ -783,29 +614,35 @@ export function DeletedItemsPage() {
           )}
         </span>
         <div className="deleted-row-title flex min-w-0 items-baseline gap-2">
-          {(match || item.kind === 'task') && (
+          {(hit || item.kind === 'task') && (
             <span className="shrink-0 font-mono text-xs text-text-2">{name}</span>
           )}
-          <span className="line-clamp-2 min-w-0 break-words text-base font-medium leading-[1.4] text-text-1">
-            {match ? match.title : item.title}
-          </span>
-          {!match && itemSuffix(item) && (
+          {hidden ? (
+            <span className="min-w-0 text-base italic text-text-2">Title not shown</span>
+          ) : (
+            <span className="line-clamp-2 min-w-0 break-words text-base font-medium leading-[1.4] text-text-1">
+              {hit ? hit.title : item.title}
+            </span>
+          )}
+          {/* a hidden row keeps its counts, which name no title */}
+          {!hit && itemSuffix(item) && (
             <span className="shrink-0 text-sm text-text-2">{itemSuffix(item)}</span>
           )}
         </div>
         <div className="deleted-row-meta mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-2">
           {placed && (
             <span data-row-place className="deleted-row-where flex flex-wrap gap-x-3">
-              {item.redacted && !match ? (
+              {namesOrg && <span data-row-org>{item.org_name}</span>}
+              {item.redacted && !hit ? (
                 <span>Deleted with a task in a project you can't open</span>
               ) : (
                 place && (
                   <span>
                     {place}
-                    {match && (
+                    {hit && (
                       <span className="text-danger">
                         , deleted with{' '}
-                        {item.kind === 'project' ? 'the project' : (match.root_key ?? 'its task')}
+                        {item.kind === 'project' ? 'the project' : (hit.root_key ?? 'its task')}
                       </span>
                     )}
                   </span>
@@ -819,9 +656,9 @@ export function DeletedItemsPage() {
             {viaText(deleter, 'row')}
           </span>
         </div>
-        {notes.length > 0 && (
+        {rowNotes.length > 0 && (
           <div data-row-notes className="deleted-row-notes">
-            {notes.map((note) => (
+            {rowNotes.map((note) => (
               <div key={note.key} data-row-note={note.key} className="mt-1 text-xs text-text-2">
                 {note.text}
               </div>
@@ -837,10 +674,13 @@ export function DeletedItemsPage() {
             {deletedAtLabel(time, now)}
           </span>
         </HoverTooltip>
+        {/* at least the width of Restore and the menu, so the times line up,
+            and wider while a row says Restoring… or Deleting…, which never runs
+            into its time */}
         <div
           className={cn(
             'deleted-row-actions flex shrink-0 items-center justify-end gap-0.5',
-            wide ? 'w-[128px]' : 'w-[96px]',
+            wide ? 'min-w-[128px]' : 'min-w-[96px]',
           )}
         >
           {canRestore && (
@@ -849,17 +689,17 @@ export function DeletedItemsPage() {
               variant="ghost"
               data-restore
               aria-label={`Restore ${name}`}
-              disabled={busy.has(item.id)}
+              disabled={running}
               className="h-control-sm shrink-0 text-sm text-text-1"
-              onClick={() => restoreLine(line, key)}
+              onClick={() => restoreLine(line, k)}
             >
               <Icon name="rotateCcw" size={16} />
               <span className="deleted-restore-label">
-                {busy.has(item.id) ? 'Restoring…' : 'Restore'}
+                {acting === 'restore' ? 'Restoring…' : acting === 'purge' ? 'Deleting…' : 'Restore'}
               </span>
             </Button>
           )}
-          {item.can_purge && (
+          {item.can_purge && !hit && (
             <Popover
               width={200}
               align="right"
@@ -881,17 +721,8 @@ export function DeletedItemsPage() {
                 <MenuItem
                   danger
                   data-delete-now
-                  onClick={() =>
-                    close(() =>
-                      openAsk({
-                        kind: 'purge',
-                        row: item,
-                        key,
-                        // the main list holds every item of an admin's organization unless capped
-                        along: deletedAlong(item, all, main.list?.capped !== false),
-                      }),
-                    )
-                  }
+                  disabled={running}
+                  onClick={() => close(() => openAsk({ kind: 'purge', row: item, key: k }))}
                 >
                   <Icon name="trash" size={14} />
                   Delete now…
@@ -922,14 +753,15 @@ export function DeletedItemsPage() {
                     ...(pageRef.current?.querySelectorAll<HTMLElement>('[data-show-all]') ?? []),
                   ].find((el) => el.dataset.showAll === piece.key),
                 )
-              setOpen((current) => new Set([...current].filter((k) => k !== piece.key)))
+              setOpen((current) => new Set([...current].filter((x) => x !== piece.key)))
             }}
           >
             Show fewer
           </Button>
         </div>
       )
-    const ids = piece.run.filter((row) => row.can_restore).map((row) => row.id)
+    const runPicks = piece.run.filter((row) => row.can_restore).map((row) => ({ row }))
+    const ids = runPicks.map((p) => p.row.id)
     return (
       <div
         key={`fold-${piece.key}`}
@@ -940,8 +772,8 @@ export function DeletedItemsPage() {
           data-select-run
           aria-label={`Select all ${plural(piece.run.length, 'task')} in this run`}
           checked={ids.length ? boxState(ids) : false}
-          disabled={!ids.length}
-          onCheckedChange={(on) => choose(ids, on === true)}
+          disabled={!ids.length || (full && boxState(ids) === false)}
+          onCheckedChange={(on) => choose(runPicks, on === true)}
         />
         <span className="text-sm text-text-2">{foldText(piece.hidden, now)}</span>
         <Button
@@ -963,114 +795,222 @@ export function DeletedItemsPage() {
     )
   }
 
-  let body: ReactNode
-  if (source.list === undefined) body = <ListNote>Loading…</ListNote>
-  else if (source.list === null)
-    body = (
-      <div role="alert" className="flex items-center gap-3 px-2 py-4">
-        <span className="text-base text-text-2">Couldn't load deleted items.</span>
-        <Button type="button" size="sm" onClick={source.retry}>
-          Try again
-        </Button>
-      </div>
-    )
-  // A capped list with no rows can still have search hits to show. A list
-  // narrowed to one person can be empty while the main one is not.
-  else if (all.length === 0 && lines.length === 0) body = <ListNote>No deleted items.</ListNote>
-  else if (lines.length === 0) body = <ListNote>No deleted items match the filter.</ListNote>
-  else
-    body = groups.map((group) => (
-      <div key={group.org} data-org-group={group.org || undefined} className="mb-2 last:mb-0">
-        {grouped && (
-          <div className="mt-4 mb-2 px-1 text-sm font-semibold text-text-1">{group.name}</div>
-        )}
-        <div className="flex flex-col gap-2">{fold(group.lines, open).map(renderPiece)}</div>
-      </div>
-    ))
+  const scopeNeeded = page.answer?.scope_needed === true
+  const words = {
+    loading: 'Loading…',
+    failed: "Couldn't load deleted items.",
+    stopped: 'Qivo checked part of Deleted items. Next continues.',
+    stoppedEmpty: 'Qivo checked part of Deleted items and found nothing there yet. Next continues.',
+    stuck: 'Qivo could not check part of Deleted items.',
+    none: `No deleted items match “${search.settled}”.`,
+    // without a scope the server reads no task entries, so the line never
+    // says there are no deleted projects when Tasks only left them out
+    empty: scopeNeeded
+      ? kind === 'task'
+        ? 'Deleted tasks show once you choose projects.'
+        : filtered
+          ? 'No deleted projects match the filters. Choose projects to see deleted tasks.'
+          : 'No deleted projects. Choose projects to see deleted tasks.'
+      : filtered
+        ? 'No deleted items match the filters.'
+        : pick?.kind === 'projects'
+          ? 'No deleted items in the projects you chose.'
+          : 'No deleted items.',
+    nomore: 'No more deleted items.',
+  }
+  const state = rolesFailed ? 'failed' : pagesState(page)
+  const subtitle = subtitleOf(shownRoles)
 
   return (
     <>
-      <PageTitle sub={SUBTITLES[role]}>Deleted items</PageTitle>
+      <PageTitle sub={subtitle || undefined}>Deleted items</PageTitle>
       <div ref={pageRef} data-deleted-items>
         <div className="deleted-filter-block sticky top-[-16px] z-10 -mx-1 mb-2 px-1 pt-1 pb-1">
-          <div className="deleted-filters flex items-center gap-2">
-            <Seg<KindFilter>
-              value={kind}
-              onChange={setKind}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'task', label: 'Tasks' },
-                { value: 'project', label: 'Projects' },
-              ]}
-            />
-            <div className="deleted-search flex h-control items-center gap-2 rounded-md border border-border bg-surface-1 px-2">
-              <Icon name="search" size={16} color="var(--text-3)" />
-              <LimitedInput
-                limit={LIMITS.search}
-                ref={searchRef}
-                data-deleted-search
-                aria-label="Filter deleted items"
-                placeholder="Filter deleted items…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  // Escape clears a live filter first; an empty field lets it
-                  // reach Settings, which closes
-                  if (e.key === 'Escape' && search) {
-                    e.stopPropagation()
-                    setSearch('')
-                  }
-                }}
-                wrapperClassName="h-full flex-1"
-                className="h-full rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
+          <div className="deleted-filters flex flex-col gap-2">
+            <div className="deleted-filters-row flex items-center gap-2">
+              <ProjectPicker
+                trigger={{ 'data-deleted-scope': '' }}
+                name="Projects"
+                none="Choose projects…"
+                pick={pick}
+                rules={PICK_RULES}
+                label="Search projects"
+                oneOrgNote="Deleted items lists one organization at a time."
+                onPick={choosePick}
+                className="deleted-scope h-control"
               />
-              {search && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-6 shrink-0"
-                  aria-label="Clear the filter"
-                  onClick={() => {
-                    setSearch('')
-                    searchRef.current?.focus()
+              <div className="deleted-search flex h-control items-center gap-2 rounded-md border border-border bg-surface-1 px-2">
+                <Icon name="search" size={16} color="var(--text-3)" />
+                <LimitedInput
+                  limit={LIMITS.search}
+                  ref={searchRef}
+                  data-deleted-search
+                  aria-label="Search deleted items"
+                  placeholder="Search deleted items…"
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Escape clears the search first; an empty field lets it
+                    // reach Settings, which closes
+                    if (e.key === 'Escape' && text) {
+                      e.stopPropagation()
+                      setText('')
+                    }
                   }}
-                >
-                  <Icon name="close" size={12} />
-                </Button>
-              )}
+                  wrapperClassName="h-full flex-1"
+                  className="h-full rounded-none border-none bg-transparent p-0 text-base text-text-1 shadow-none focus-visible:ring-0"
+                />
+                {text && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-6 shrink-0"
+                    aria-label="Clear the search"
+                    onClick={() => {
+                      setText('')
+                      searchRef.current?.focus()
+                    }}
+                  >
+                    <Icon name="close" size={12} />
+                  </Button>
+                )}
+              </div>
             </div>
-            {role !== 'user' && (
-              <NativeSelect
-                aria-label="Deleted by"
-                data-deleted-by
-                value={by}
-                onChange={(e) => setBy(e.target.value)}
-                className="deleted-by h-control cursor-pointer bg-surface-1 font-sans text-sm"
-              >
-                {options.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </NativeSelect>
-            )}
+            <div className="deleted-filters-row flex flex-wrap items-center gap-2">
+              <Seg<KindFilter>
+                value={kind}
+                onChange={setKind}
+                label="Kind"
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'task', label: 'Tasks' },
+                  // the server lists no project entry for an assignee
+                  { value: 'project', label: 'Projects', disabled: assignee !== null },
+                ]}
+              />
+              {showsBy && (
+                <PeoplePicker
+                  hook="data-deleted-by"
+                  label={byLabel(by, way)}
+                  org={listOrg}
+                  why={listOrg === null ? 'Choose projects to filter by who deleted.' : null}
+                  fixed={[
+                    { id: 'anyone', label: 'Deleted by anyone', on: by.kind === 'anyone' },
+                    ...(listOrg !== null && P.seatIn(listOrg) !== ''
+                      ? [{ id: 'you', label: 'You', on: by.kind === 'person' && by.you }]
+                      : []),
+                    {
+                      id: 'someone',
+                      label: 'Someone no longer in the organization',
+                      on: by.kind === 'someone',
+                    },
+                  ]}
+                  chosen={by.kind === 'person' && !by.you ? by.id : null}
+                  // pending seats have deleted nothing, and You is fixed
+                  keep={(person) => !person.you && !person.pending}
+                  onFixed={(id) => {
+                    setWay('any')
+                    if (id === 'anyone') setBy(ANYONE)
+                    else if (id === 'someone') setBy({ kind: 'someone' })
+                    else if (listOrg !== null)
+                      setBy({
+                        kind: 'person',
+                        id: P.seatIn(listOrg),
+                        name: 'you',
+                        agent: false,
+                        you: true,
+                      })
+                  }}
+                  onPerson={(person) => {
+                    setWay('any')
+                    setBy({
+                      kind: 'person',
+                      id: person.id,
+                      name: person.name,
+                      agent: person.kind === 'agent',
+                      you: false,
+                    })
+                  }}
+                />
+              )}
+              {showsBy && by.kind === 'person' && !by.agent && (
+                <NativeSelect
+                  aria-label="How they deleted"
+                  data-deleted-by-way
+                  value={way}
+                  onChange={(e) => setWay(e.target.value as Way)}
+                  className="deleted-way h-control cursor-pointer bg-surface-1 font-sans text-sm"
+                >
+                  {WAYS.map((w) => (
+                    <option key={w.value} value={w.value}>
+                      {w.label}
+                    </option>
+                  ))}
+                </NativeSelect>
+              )}
+              <PeoplePicker
+                hook="data-deleted-assignee"
+                label={
+                  assignee === null
+                    ? 'Assigned to anyone'
+                    : `Assigned to ${assignee.you ? 'you' : assignee.name}`
+                }
+                org={scope === undefined ? null : scope.org_id}
+                why={
+                  scope === undefined
+                    ? 'Choose projects to filter by assignee.'
+                    : kind === 'project'
+                      ? 'Projects have no assignee.'
+                      : null
+                }
+                fixed={[
+                  { id: 'anyone', label: 'Assigned to anyone', on: assignee === null },
+                  ...(scope !== undefined && P.seatIn(scope.org_id) !== ''
+                    ? [{ id: 'you', label: 'You', on: assignee?.you === true }]
+                    : []),
+                ]}
+                chosen={assignee !== null && !assignee.you ? assignee.id : null}
+                keep={(person) => !person.you}
+                onFixed={(id) => {
+                  if (id === 'anyone' || scope === undefined) setAssignee(null)
+                  else setAssignee({ id: P.seatIn(scope.org_id), name: 'you', you: true })
+                }}
+                onPerson={(person) => setAssignee({ id: person.id, name: person.name, you: false })}
+              />
+            </div>
+          </div>
+          <PickChips
+            picked={pickedProjects(pick)}
+            onRemove={(id) => choosePick(unpick(pick, id))}
+            hooks={{
+              row: 'data-deleted-picks',
+              chip: 'data-deleted-pick',
+              more: 'data-deleted-picks-more',
+            }}
+            className="mt-2"
+          />
+          <div
+            data-deleted-progress
+            role="status"
+            aria-live="polite"
+            className={cn('deleted-progress text-sm text-text-2', progress && 'mt-2')}
+          >
+            {progress}
           </div>
           <div className="mt-2 flex h-control items-center gap-2.5 border-b border-border pr-1 pl-[9px]">
             <Checkbox
               data-select-all
               aria-label="Select all shown"
               checked={shownIds.length ? boxState(shownIds) : false}
-              disabled={!shownIds.length}
-              onCheckedChange={(on) => choose(shownIds, on === true)}
+              disabled={!shownIds.length || (full && boxState(shownIds) === false)}
+              onCheckedChange={(on) => choose(shownPicks, on === true)}
             />
             <span role="status" data-deleted-count>
               {selected.size > 0 ? (
-                <span className="text-sm font-semibold text-text-1">
-                  {selected.size.toLocaleString('en-US')} selected
-                </span>
+                <span className="text-sm font-semibold text-text-1">{selectedText()}</span>
               ) : (
-                loaded && <span className="font-mono text-sm text-text-2">{countText}</span>
+                countText && <span className="font-mono text-sm text-text-2">{countText}</span>
               )}
             </span>
             {selected.size > 0 && (
@@ -1079,37 +1019,85 @@ export function DeletedItemsPage() {
               </div>
             )}
           </div>
+          {full && (
+            <p data-deleted-cap className="mt-1 px-1 text-sm text-text-2">
+              You can select up to {SELECT_MOST.items.toLocaleString('en-US')} items at a time.
+            </p>
+          )}
         </div>
-        <div className="deleted-list">{body}</div>
-        {/* the server stops at 2,000 items, or sooner when a very large
-            trash would take a list call past its read budget */}
-        {source.list?.capped && (
-          <p className="mt-3 px-1 text-sm text-text-2">
-            Not every item is shown. Search to find older ones.
+        {notes.map((note) => (
+          <p key={note.key} data-deleted-note={note.key} className="mb-2 px-1 text-sm text-text-2">
+            {note.text}
           </p>
-        )}
-        {/* the search answers at most 50 tasks (MATCHES.max) */}
-        {found.capped && found.text === text && kind !== 'project' && (
-          <p data-deleted-search-capped className="mt-3 px-1 text-sm text-text-2">
-            More deleted tasks match than the search shows. Type more of the title or key to narrow
-            it.
-          </p>
-        )}
+        ))}
+        <div
+          className="deleted-list"
+          data-deleted-state={state}
+          aria-busy={state === 'loading' || state === 'refreshing' || undefined}
+        >
+          {rolesFailed ? (
+            <div role="alert" className="flex items-center gap-3 px-2 py-4">
+              <span className="text-base text-text-2">Couldn't load deleted items.</span>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  roles.retry()
+                  page.retry()
+                }}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col gap-2">{fold(lines, open).map(renderPiece)}</div>
+              <PageFold
+                page={page}
+                end={end}
+                hook="deleted-page"
+                words={words}
+                held={heldOf}
+                tooLong={search.tooLong}
+                focus={move}
+              />
+            </>
+          )}
+        </div>
         {selected.size > 0 && (
           <div data-selection-bar className="deleted-selection-bar">
             {selectionBar('bottom')}
           </div>
         )}
       </div>
-      {ask?.kind === 'bulk' && (
+      {ask2?.kind === 'bulk' && (
         <BulkRestoreWindow
-          rows={ask.rows}
+          rows={ask2.rows}
           now={now}
           saving={saving}
           onClose={() => setAsk(null)}
           onRestore={async () => {
+            const { rows } = ask2
+            if (planOf(rows, LIMITS.restoreBatch.max).long) {
+              // the store runs it and says how it went, wherever the
+              // person is; the window closes at once. An action that
+              // starts sets P.deletedAction before its first call, so an
+              // unchanged one means the store refused it at the press (the
+              // pause, another action) and sent nothing, so the window and
+              // the selection stay and the page says why.
+              const before = P.deletedAction
+              const started = P.restoreDeletedItems(rows, { bulk: true })
+              if (P.deletedAction === before) {
+                const outcome = await started
+                if (outcome.error !== null) toast(outcome.error, 'error')
+                return
+              }
+              setSelected(new Map())
+              closeActed()
+              return
+            }
             setSaving(true)
-            const outcome = await restore(ask.rows, { bulk: true })
+            const outcome = await restore(rows, { bulk: true })
             setSaving(false)
             // a call refused whole (billing, offline) keeps it open for another try
             if (outcome.error === null || outcome.done.length > 0) closeActed()
@@ -1117,59 +1105,52 @@ export function DeletedItemsPage() {
           focusAfterClose={afterSelectionWindow}
         />
       )}
-      {ask?.kind === 'whole' && (
+      {ask2?.kind === 'whole' && (
         <WholeItemWindow
-          line={ask.line}
-          holder={(() => {
-            const item = lineItem(ask.line)
-            if (ask.line.kind !== 'match')
-              return findItem(item.blocked?.item_id) ?? asked ?? undefined
-            // the hit's own item stands in while no list holds its project item
-            return itemOf(item.id) ?? (item.hit ? item : undefined)
-          })()}
-          asking={missing !== undefined && asked === undefined}
+          line={ask2.line}
+          onPage={onPage}
           saving={saving}
           onClose={() => setAsk(null)}
           onRestore={async (holder) => {
-            const { line } = ask
-            windowSides.current = around(ask.key)
+            const { line } = ask2
+            windowSides.current = around(ask2.key)
             setSaving(true)
-            // a search hit comes back with its item; an item that waits for
-            // its project goes in the same call and is deferred
-            const outcome = await restore(line.kind === 'match' ? [holder] : [holder, line.row], {
+            // a hit comes back with its item; an item that waits for its
+            // project, a hit's or the line's own, goes in the same call
+            // after that project and is deferred
+            const item = lineItem(line)
+            const outcome = await restore(holder.id === item.id ? [holder] : [holder, item], {
               announce: [holder],
-              // an item known only from a hit has no name or size of its own
-              name:
-                line.kind !== 'match' || !holder.hit
-                  ? undefined
-                  : holder.kind === 'project'
-                    ? `${line.match.key} and its project`
-                    : `${holder.key} and its subtasks`,
             })
             setSaving(false)
             // a call refused whole (billing, offline) keeps it open for another try
             if (outcome.error === null || outcome.done.length > 0) closeActed()
           }}
           focusAfterClose={
-            ask.selection ? afterSelectionWindow : () => targetAround(ask.key, windowSides.current)
+            ask2.selection
+              ? afterSelectionWindow
+              : () => targetAround(ask2.key, windowSides.current)
           }
         />
       )}
-      {ask?.kind === 'purge' && (
+      {ask2?.kind === 'purge' && (
         <PurgeWindow
-          row={ask.row}
-          along={ask.along}
+          row={ask2.row}
           saving={saving}
           onClose={() => setAsk(null)}
           onPurge={async () => {
-            const { row } = ask
-            windowSides.current = around(ask.key)
+            const { row } = ask2
+            windowSides.current = around(ask2.key)
             setSaving(true)
             const outcome = await P.purgeDeletedItems([row])
             setSaving(false)
+            // an item deleted for good leaves the selection, which no page
+            // shows it in any more to take it out
+            const gone = new Set(outcome.done)
+            setSelected((current) => new Map([...current].filter(([id]) => !gone.has(id))))
             const name = row.kind === 'task' ? row.key : `“${row.title}”`
             const refused = outcome.refused[0]
-            if (outcome.done.includes(row.id)) toast(`Deleted ${name} for good`)
+            if (outcome.done.includes(row.id)) toast(`Deleted ${name} for good.`)
             else if (refused)
               toast(`Couldn't delete ${name} for good. ${refusalText(refused.reason)}`, 'error')
             else {
@@ -1179,20 +1160,172 @@ export function DeletedItemsPage() {
             }
             closeActed()
           }}
-          focusAfterClose={() => targetAround(ask.key, windowSides.current, '[data-row-menu]')}
+          focusAfterClose={() => targetAround(ask2.key, windowSides.current, '[data-row-menu]')}
         />
       )}
     </>
   )
 }
 
-/** The list area's one line when it has no rows. */
-function ListNote({ children }: { children: ReactNode }) {
-  return <div className="px-2 py-4 text-base italic text-text-2">{children}</div>
+/** A fixed row of a people popover. */
+type FixedChoice = { id: string; label: string; on: boolean }
+
+/**
+ * Deleted by or Assigned to: a trigger naming the choice and a popover of
+ * fixed rows and organization `org`'s people from deletedItems.people, 25
+ * a batch with a search and Load more, read once a batch and only while
+ * open. `keep` leaves rows out of the batches, the login's own seat, which
+ * a fixed You row stands for, and for Deleted by the seats nobody has
+ * claimed, which deleted nothing. With `why` the trigger takes no press and
+ * says why in its tooltip.
+ */
+function PeoplePicker({
+  hook,
+  label,
+  org,
+  why,
+  fixed,
+  chosen,
+  keep,
+  onFixed,
+  onPerson,
+}: {
+  hook: `data-${string}`
+  label: string
+  org: string | null
+  why: string | null
+  fixed: FixedChoice[]
+  chosen: string | null
+  keep: (person: DeletedPerson) => boolean
+  onFixed: (id: string) => void
+  onPerson: (person: DeletedPerson) => void
+}) {
+  const trigger = (toggle: () => void, open: boolean) => (
+    <Button
+      type="button"
+      variant="default"
+      {...{ [hook]: '' }}
+      data-on={open ? '' : undefined}
+      aria-disabled={why !== null || undefined}
+      data-disabled-why={why ?? undefined}
+      onClick={() => why === null && toggle()}
+      className={cn(
+        'deleted-person h-control min-w-0 max-w-[260px] justify-between gap-2 bg-surface-1 font-sans text-sm',
+        why !== null && 'cursor-default text-text-2',
+      )}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <Icon name="chevronDown" size={14} color="var(--text-2)" />
+    </Button>
+  )
+  if (why !== null || org === null)
+    return <HoverTooltip content={why ?? undefined}>{trigger(() => undefined, false)}</HoverTooltip>
+  return (
+    <Popover
+      width={280}
+      backLayer
+      collisionPadding={16}
+      onEscapeKeyDown={escapeClearsFirst('data-deleted-people-search')}
+      wrapStyle={{ minWidth: 0 }}
+      button={trigger}
+    >
+      {(close) => (
+        <PeopleChoices
+          org={org}
+          fixed={fixed}
+          chosen={chosen}
+          keep={keep}
+          onFixed={(id) => close(() => onFixed(id))}
+          onPerson={(person) => close(() => onPerson(person))}
+        />
+      )}
+    </Popover>
+  )
+}
+
+/* The open people popover: its fixed rows, a search and the server's
+   people with Load more. A batch whose rows `keep` leaves out says so,
+   never that nobody is there. */
+function PeopleChoices({
+  org,
+  fixed,
+  chosen,
+  keep,
+  onFixed,
+  onPerson,
+}: {
+  org: string
+  fixed: FixedChoice[]
+  chosen: string | null
+  keep: (person: DeletedPerson) => boolean
+  onFixed: (id: string) => void
+  onPerson: (person: DeletedPerson) => void
+}) {
+  const [text, setText] = useState('')
+  const { tooLong, settled } = useSettledSearch(text, LIMITS.search)
+  const list = usePagedList({
+    key: JSON.stringify([org, settled]),
+    source: { kind: 'once', read: (at) => P.deletedPeople(org, settled, at.after) },
+    batch: (answer: DeletedPeople) => (answer.state === 'ready' ? answer : null),
+    id: (person: DeletedPerson) => person.id,
+    most: ACCESS_CAPS.choices,
+  })
+  const end = listEnd(list, settled !== '')
+  const shown = list.rows.filter(keep)
+  const leftOut = shown.length === 0 && list.rows.length > 0
+  return (
+    <div data-deleted-people="" className="flex flex-col gap-1">
+      {fixed.map((row) => (
+        <MenuItem
+          key={row.id}
+          active={row.on}
+          data-deleted-people-fixed={row.id}
+          onClick={() => onFixed(row.id)}
+        >
+          {row.label}
+        </MenuItem>
+      ))}
+      <PickerSearch
+        text={text}
+        onText={setText}
+        label="Search people"
+        probe="data-deleted-people-search"
+      />
+      <div className="max-h-[280px] overflow-y-auto">
+        {shown.map((person) => (
+          <MenuItem
+            key={person.id}
+            active={chosen === person.id}
+            data-deleted-person={person.id}
+            onClick={() => onPerson(person)}
+          >
+            <span className="min-w-0 truncate">{person.name}</span>
+            {person.kind === 'agent' && <span className="ml-auto text-xs text-text-2">agent</span>}
+            {person.pending && person.kind === 'person' && (
+              <span className="ml-auto text-xs text-text-2">invited</span>
+            )}
+          </MenuItem>
+        ))}
+        {leftOut && end === 'more' && (
+          <p className="px-2 py-1 text-sm text-text-2">
+            No one else to choose in this part. Load more continues.
+          </p>
+        )}
+        {leftOut && end === 'end' ? (
+          <p data-picker-empty="" className="px-2 py-1 text-sm text-text-2">
+            {PEOPLE_WORDS.empty}
+          </p>
+        ) : (
+          <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PEOPLE_WORDS} />
+        )}
+      </div>
+    </div>
+  )
 }
 
 /** The bulk restore window: who deleted the items and when, where they go
-    back, and what does not come back with them. */
+    back, what does not come back with them, and, for a restore of more
+    than one round, that it runs in steps and Qivo must stay open. */
 function BulkRestoreWindow({
   rows,
   now,
@@ -1201,7 +1334,7 @@ function BulkRestoreWindow({
   onRestore,
   focusAfterClose,
 }: {
-  rows: ItemRow[]
+  rows: DeletedRow[]
   now: Date
   saving: boolean
   onClose: () => void
@@ -1209,7 +1342,8 @@ function BulkRestoreWindow({
   focusAfterClose: () => HTMLElement | null
 }) {
   const who = deleterSentence(rows, now)
-  const noun = restoreNoun(rows)
+  const noun = itemsNoun(rows)
+  const { long } = planOf(rows, LIMITS.restoreBatch.max)
   return (
     <ModalShell
       icon="rotateCcw"
@@ -1240,6 +1374,11 @@ function BulkRestoreWindow({
           ))}
         </div>
         <p className="text-sm">They keep their keys. Labels deleted since then are gone.</p>
+        {long && (
+          <p data-keep-open className="text-sm text-text-1">
+            Restoring them runs in steps. {KEEP_OPEN}
+          </p>
+        )}
       </div>
     </ModalShell>
   )
@@ -1255,54 +1394,122 @@ function comesBack(holder: DeletedRow): string {
   ].filter(Boolean)
   if (parts.length === 0) return `${holder.title} comes back on its own. It keeps its key.`
   const kept =
-    archived === 0 ? '' : tasks === 1 ? ', which is archived' : `, ${archived} of them archived`
+    archived === 0 ? '' : tasks === 1 ? ', which is archived' : `, ${archived} of them archived`
   return `${holder.title} comes back with ${andList(parts)}${kept}. They keep their keys.`
 }
 
-/** The window of a line that can only come back with a whole item, which
-    `holder` is. A search hit inside a deleted project, or (for admins) an
-    item deleted before its project, comes back with that project item
-    ("<key> is in a deleted project"), so Restore brings the project back
-    first. A search hit on a subtask of a task item that no list holds comes
-    back with the whole item, its root and every other subtask ("<key> is a
-    subtask of a deleted task"). When the item cannot be restored, the window
-    says why and offers Close. A project item that only a search hit names
-    (a capped list stopped before it) has no name or counts here, so the
-    window speaks of "the project". While a restore is saving, the window
-    waits for it, also when the list meanwhile shows the item restoring or
-    gone. `asking` holds while the page asks the server for a holder that
-    no list has, and Restore waits for the answer. */
+/** The window of a line that can only come back with a whole item. A hit
+    inside a deleted project comes back with that project item ("<key> is
+    in a deleted project"), and a hit on a subtask of a deleted task with
+    the whole item, its root and every other subtask ("<key> is a subtask
+    of a deleted task"). An item deleted before its project (for admins)
+    comes back only after that project item, and so does a hit whose item
+    was, so Restore brings that project back first, in the same call, and
+    the store sends the item again once the project is back. The project
+    item the line's item waits for is the page's when it holds it, and is
+    read from deletedItems.item while the window shows otherwise, Restore
+    waiting for it; a failed read says so with Try again, and an answer
+    that the person cannot see it says Qivo can't find it. When nothing can
+    be restored, the window says why and offers Close. While a restore is
+    saving, the window waits for it, also when the page meanwhile shows the
+    item restoring or gone. */
 function WholeItemWindow({
   line,
-  holder,
-  asking,
+  onPage,
   saving,
   onClose,
   onRestore,
   focusAfterClose,
 }: {
   line: Line
-  holder: ItemRow | undefined
-  asking: boolean
+  onPage: ReadonlyMap<string, DeletedRow>
   saving: boolean
   onClose: () => void
-  onRestore: (holder: ItemRow) => void
+  onRestore: (holder: DeletedRow) => void
   focusAfterClose: () => HTMLElement | null
 }) {
   const item = lineItem(line)
-  const name = line.kind === 'match' ? line.match.key : itemName(item)
+  // the deleted project the line's item waits for, an item's or a hit's alike
+  const waits =
+    item.blocked?.reason === 'project_deleted' || item.blocked?.reason === 'parent_deleted'
+  const waitsFor = waits ? item.blocked?.item_id : undefined
+  const held = waitsFor === undefined ? undefined : onPage.get(waitsFor)
+  const read = useLiveView<DeletedRow | null>(
+    api.deletedItems.item,
+    waitsFor !== undefined && held === undefined ? JSON.stringify({ id: waitsFor }) : null,
+  )
+  // the item the restore sends first, the project item the line's item
+  // waits for or else a hit's own item
+  const holder = waits ? (held ?? read.value ?? undefined) : item
+  // the read of that project item while the page holds no row of it, which
+  // still asks, failed, or answered that the person cannot see it now
+  const reading = waitsFor !== undefined && held === undefined
+  const asking = reading && read.value === undefined && read.error === undefined
+  const failed = reading && read.value === undefined && read.error !== undefined
+  const gone = reading && read.value === null
+  const name = line.kind === 'hit' ? line.hit.key : itemName(item)
   // the task item a subtask's hit belongs to, by its root
   const root =
-    line.kind === 'match' && line.item.kind === 'task'
-      ? { key: line.match.root_key ?? line.item.key, title: line.match.root_title ?? '' }
+    line.kind === 'hit' && item.kind === 'task'
+      ? { key: line.hit.root_key ?? item.key, title: line.hit.root_title ?? '' }
       : undefined
-  const project = holder?.hit ? undefined : holder?.title
+  // what the line's item is called in a sentence, a subtask's root, a hit's
+  // project item or the item itself
+  const itemCalled = root?.key ?? (line.kind === 'hit' ? item.title : name)
+  const project = waits ? (holder?.kind === 'project' ? holder.title : undefined) : undefined
   const canRestore = holder?.can_restore === true
   const reason = !holder
     ? null
     : (stateText(holder.state) ??
       (holder.blocked ? blockedText(holder.blocked) : null) ??
       (canRestore ? null : refusalText('no_access')))
+  // what Restore brings back, in order: the project waited for, the hit's
+  // item and the line itself
+  const restores = [
+    ...(waits ? [project ?? 'the project'] : []),
+    ...(line.kind === 'hit' ? [itemCalled] : []),
+    name,
+  ]
+  /** The sentence of an item deleted before its project, which names it. */
+  const before = (who: string) =>
+    holder ? (
+      <p>
+        <b className="font-semibold text-text-1">{who}</b> was deleted before its project
+        {project !== undefined && (
+          <>
+            {' '}
+            <b className="font-semibold text-text-1">{project}</b>
+          </>
+        )}
+        , which is in Deleted items too. It can only come back after the project.
+      </p>
+    ) : (
+      <p>
+        <b className="font-semibold text-text-1">{who}</b> is in a project that is in Deleted items
+        too. It can only come back after the project.
+      </p>
+    )
+  /** What the window says while it has no project item to send. */
+  const holderNote = failed ? (
+    <div role="alert" className="flex items-center gap-3 text-sm">
+      <span>Couldn't load its project.</span>
+      <Button type="button" size="sm" data-whole-retry onClick={read.retry}>
+        Try again
+      </Button>
+    </div>
+  ) : gone ? (
+    <p data-whole-gone className="text-sm">
+      Qivo can't find its project in Deleted items now.
+    </p>
+  ) : asking ? (
+    <p role="status" className="text-sm">
+      Loading its project…
+    </p>
+  ) : null
+  // what the store sends once the project waited for is back
+  const follows = root
+    ? ` ${root.key} and its subtasks follow once the project is back.`
+    : ` ${itemCalled} follows once the project is back.`
   return (
     <ModalShell
       icon="rotateCcw"
@@ -1311,12 +1518,11 @@ function WholeItemWindow({
       onClose={saving ? () => false : onClose}
       onSubmit={() => holder && onRestore(holder)}
       canSubmit={canRestore && !saving}
-      submitLabel={
-        saving ? 'Restoring…' : `Restore ${root?.key ?? project ?? 'the project'} and ${name}`
-      }
+      submitLabel={saving ? 'Restoring…' : `Restore ${andList(restores)}`}
       focusAfterClose={focusAfterClose}
       footer={
-        canRestore || saving || asking ? undefined : (
+        // Restore stays, disabled, while the project item may still come
+        canRestore || saving || asking || failed ? undefined : (
           <>
             <div className="min-w-0 flex-1" />
             <Button type="button" variant="ghost" className="text-text-1" onClick={onClose}>
@@ -1338,43 +1544,34 @@ function WholeItemWindow({
             </b>
             . It can only come back with that task.
           </p>
-          <p className="text-sm">
-            {reason ?? `${root.key} and its subtasks come back. They keep their keys.`}
-          </p>
+          {waits && before(root.key)}
+          {waits && holderNote}
+          {(!waits || holder) && (
+            <p className="text-sm">
+              {reason ??
+                (waits && holder
+                  ? `${comesBack(holder)}${follows}`
+                  : `${root.key} and its subtasks come back. They keep their keys.`)}
+            </p>
+          )}
         </div>
       ) : (
         <div
           data-project-first
           className="flex flex-col gap-3 break-words text-base leading-normal text-text-2"
         >
-          {holder ? (
+          {line.kind === 'hit' && (
             <p>
-              <b className="font-semibold text-text-1">{name}</b>
-              {line.kind === 'match'
-                ? ' was deleted together with its project'
-                : ' was deleted before its project'}
-              {project !== undefined && (
-                <>
-                  {' '}
-                  <b className="font-semibold text-text-1">{project}</b>
-                </>
-              )}
-              {line.kind === 'match'
-                ? '. It can only come back with the project.'
-                : ', which is in Deleted items too. It can only come back after the project.'}
-            </p>
-          ) : (
-            <p>
-              <b className="font-semibold text-text-1">{name}</b> is in a project that is in Deleted
-              items too. It can only come back after the project.
+              <b className="font-semibold text-text-1">{name}</b> was deleted together with its
+              project <b className="font-semibold text-text-1">{item.title}</b>. It can only come
+              back with the project.
             </p>
           )}
+          {waits && before(line.kind === 'hit' ? item.title : name)}
+          {waits && holderNote}
           {holder && (
             <p className="text-sm">
-              {reason ??
-                (project === undefined
-                  ? 'The project comes back with all its tasks. They keep their keys.'
-                  : comesBack(holder))}
+              {reason ?? `${comesBack(holder)}${waits && line.kind === 'hit' ? follows : ''}`}
             </p>
           )}
         </div>
@@ -1384,24 +1581,27 @@ function WholeItemWindow({
 }
 
 /** The Delete now window, where an organization admin deletes one item for
-    good. `along` counts the items deleted from a project earlier that go
-    with it (deletedAlong), named without a number when the list may not
-    hold them all. */
+    good. A project item's window reads how many items deleted from the
+    project earlier go with it (deletedItems.purgeSummary) while it shows,
+    and keeps Delete for good off until the count or its failure, which
+    says it could not count. A task item takes nothing along. */
 function PurgeWindow({
   row,
-  along,
   saving,
   onClose,
   onPurge,
   focusAfterClose,
 }: {
   row: DeletedRow
-  along: ReturnType<typeof deletedAlong>
   saving: boolean
   onClose: () => void
   onPurge: () => void
   focusAfterClose: () => HTMLElement | null
 }) {
+  const count = useLiveView<PurgeSummary | null>(
+    api.deletedItems.purgeSummary,
+    row.kind === 'project' ? JSON.stringify({ id: row.id }) : null,
+  )
   const { subtasks, sub_projects: subs, tasks } = row.counts
   let rest: string
   if (row.kind === 'task')
@@ -1413,11 +1613,10 @@ function PurgeWindow({
   else if (tasks) rest = ` and its ${plural(tasks, 'task')} with their comments and attachments.`
   else if (subs) rest = ` and its ${plural(subs, 'sub-project')}.`
   else rest = '.'
-  const earlier = !along.exact
-    ? ' It also deletes any items deleted from the project earlier.'
-    : along.count > 0
-      ? ` It also deletes ${plural(along.count, 'item')} deleted from the project earlier.`
-      : ''
+  const along =
+    row.kind === 'task'
+      ? { text: '', ready: true }
+      : alongText(count.error !== undefined ? 'failed' : count.value)
   return (
     <ModalShell
       icon="warning"
@@ -1426,7 +1625,7 @@ function PurgeWindow({
       danger
       onClose={saving ? () => false : onClose}
       onSubmit={onPurge}
-      canSubmit={!saving}
+      canSubmit={!saving && along.ready}
       submitLabel={saving ? 'Deleting…' : 'Delete for good'}
       focusAfterClose={focusAfterClose}
     >
@@ -1436,8 +1635,8 @@ function PurgeWindow({
           {row.kind === 'task' ? `${row.key} ${row.title}` : row.title}
         </b>
         {rest}
-        {earlier} This cannot be undone. Its files then stop counting toward your organization’s
-        storage.
+        <span data-purge-along>{along.text}</span> This cannot be undone. Its files then stop
+        counting toward your organization’s storage.
       </p>
     </ModalShell>
   )

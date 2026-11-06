@@ -3,6 +3,7 @@ import { ARCHIVED_SCOPE } from '../../convex/lib/archivedTasks'
 import {
   archivedScopeOf,
   covered,
+  deletedScopeOf,
   isFixedPick,
   PICK_MOST,
   type PickedProject,
@@ -152,6 +153,16 @@ describe('the scopes', () => {
     expect(archivedScopeOf({ kind: 'org', org_id: ORG })).toEqual({ org: ORG, all: true })
     // every organization at once is never an Archived tasks scope
     expect(archivedScopeOf({ kind: 'every' })).toBeUndefined()
+  })
+
+  it('gives deletedItems.page the projects in pick order, or All projects of one organization', () => {
+    expect(deletedScopeOf(press([ELECTRONICS, FIRMWARE]) as ProjectPick)).toEqual({
+      org_id: ORG,
+      project_ids: ['el', 'fw'],
+    })
+    expect(deletedScopeOf({ kind: 'org', org_id: OTHER })).toEqual({ org_id: OTHER, all: true })
+    // Deleted items never reads task entries across every organization
+    expect(deletedScopeOf({ kind: 'every' })).toBeUndefined()
   })
 
   it('caps a pick at the server scope’s own number of ids', () => {

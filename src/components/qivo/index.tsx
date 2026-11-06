@@ -879,7 +879,9 @@ function AnchoredPopLayer({
    icon's corner (the caller styles and positions it, relative to the 16px
    icon), `divider` stands a vertical rule after the option, splitting the
    switch into groups, and `ariaLabel` names an icon-only option without the
-   hover tooltip `title` would open. `label` names the whole control for
+   hover tooltip `title` would open. `disabled` keeps an option in place but
+   takes no press, as Deleted items' Projects while Assigned to names
+   someone. `label` names the whole control for
    assistive tech, where two segmented controls on one page share an option
    label such as "All". */
 function Seg<T extends string>({
@@ -900,6 +902,7 @@ function Seg<T extends string>({
     badge?: ReactNode
     divider?: boolean
     ariaLabel?: string
+    disabled?: boolean
   }[]
   onChange: (value: T) => void
   height?: string | number
@@ -933,6 +936,7 @@ function Seg<T extends string>({
             <ToggleGroupItem
               aria-label={o.ariaLabel ?? (o.label ? undefined : o.title)}
               value={o.value}
+              disabled={o.disabled}
               className={cn(
                 // the lit slab is the shared toggle on-state (deviation #232);
                 // on a raised well — itself --surface-3 — it is --surface-1 so

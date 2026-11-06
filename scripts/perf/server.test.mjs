@@ -1678,3 +1678,148 @@ describe('the benchmark server', () => {
     expect(change.results).toHaveLength(1)
   })
 })
+
+describe('Deleted items on the benchmark page', () => {
+  /** A server with page parameters `params`, its snapshot, and a way to ask
+      a Deleted items read or write and answer what it posted back. */
+  async function deleted(params) {
+    const at = await server(`tasks=60&latency=0&mbps=100000&${params}`)
+    await at.send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+    const snap = JSON.parse(at.posted.find((m) => m.to === 'snap').text)
+    let n = 0
+    const read = async (name, args = {}) => {
+      const id = `read-${n++}`
+      await at.send({ type: 'query', id, name, args })
+      const answer = at.posted.find((m) => m.to === id)
+      return answer.error ? { error: answer.error, data: answer.data } : JSON.parse(answer.text)
+    }
+    const write = async (name, args) => {
+      const id = `write-${n++}`
+      await at.send({ type: 'mutation', id, name, args })
+      for (let i = 0; i < 50 && !at.posted.some((m) => m.id === id); i++)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      return at.posted.find((m) => m.type === 'answer' && m.id === id)
+    }
+    return { snap, read, write, org: snap.orgs[0].id }
+  }
+
+  it('answers the page, the roles and the people from the stand-in', async () => {
+    const { read, org } = await deleted('deleted=30&role=admin')
+    const first = await read('deletedItems:page')
+    // without a scope, the deleted sub-project and the scope note
+    expect(first.entries).toHaveLength(1)
+    expect(first.scope_needed).toBe(true)
+    const all = await read('deletedItems:page', { scope: { org_id: org, all: true } })
+    expect(all.entries).toHaveLength(25)
+    expect(all.next_cursor).toEqual(expect.any(String))
+    const next = await read('deletedItems:page', {
+      scope: { org_id: org, all: true },
+      cursor: all.next_cursor,
+    })
+    expect(next.entries).toHaveLength(6)
+    expect(await read('deletedItems:roles')).toEqual([
+      { org_id: org, org_name: 'Testbed Labs', role: 'admin', can_purge: true },
+    ])
+    const people = await read('deletedItems:people', { org_id: org })
+    expect(people).toMatchObject({ state: 'ready', stopped: false })
+    expect(people.rows).toHaveLength(25)
+    // anyone but an admin sees their own deletes only
+    const mine = await deleted('deleted=30')
+    const own = await mine.read('deletedItems:page', { scope: { org_id: mine.org, all: true } })
+    expect(own.items.every((row) => row.deleter.you)).toBe(true)
+    expect(own.entries.length).toBeLessThan(25)
+    // no deleted items by default
+    const none = await deleted('')
+    expect((await none.read('deletedItems:page')).entries).toEqual([])
+  }, 60_000)
+
+  it('holds the second organization of two-orgs in the workspace, its parts and the project picker', async () => {
+    const two = await deleted('deleted=5&role=admin&deletedstate=two-orgs')
+    // the root names both seats, so the page asks for projects before Deleted by
+    const root = await two.read('workspace:root')
+    expect(root.orgs.map((o) => o.name)).toEqual(['Testbed Labs', 'Partner Co'])
+    expect(root.myProfileIds).toHaveLength(2)
+    const partner = root.orgs[1]
+    // its parts hold its projects and its seat, and the first one's neither
+    const [projectWindow] = idWindows(startWindows(partner).projects)
+    const projects = await two.read('workspace:projects', { org_id: partner.id, ...projectWindow })
+    expect(projects.projects.map((p) => p.name)).toEqual(['Partner launch', 'Partner web'])
+    const [peopleWindow] = idWindows(1)
+    const people = await two.read('workspace:people', { org_id: partner.id, ...peopleWindow })
+    expect(people.profiles.map((p) => p.id)).toEqual(['perf-partner-seat'])
+    const [firstWindow] = idWindows(startWindows(root.orgs[0]).projects)
+    const first = await two.read('workspace:projects', { org_id: two.org, ...firstWindow })
+    expect(first.projects.length).toBeGreaterThan(0)
+    expect(first.projects.some((p) => p.org_id === partner.id)).toBe(false)
+    // the project picker offers its project, so its scope can be chosen
+    const nav = await two.read('projectNav:page')
+    expect(nav.rows.filter((row) => row.org_id === partner.id).map((row) => row.name)).toEqual([
+      'Partner launch',
+    ])
+    // Deleted items reads both, and the scope of Partner Co its own
+    const both = await two.read('deletedItems:page')
+    expect(new Set(both.items.map((row) => row.org_name))).toEqual(
+      new Set(['Testbed Labs', 'Partner Co']),
+    )
+    const scoped = await two.read('deletedItems:page', { scope: { org_id: partner.id, all: true } })
+    expect(scoped.items.map((row) => row.title)).toEqual(['Partner web'])
+    // without it the workspace holds one organization
+    const one = await deleted('deleted=5&role=admin')
+    expect((await one.read('workspace:root')).orgs).toHaveLength(1)
+  }, 60_000)
+
+  it('answers the forced states the page asks for, and a restore that changes the page', async () => {
+    const wide = await deleted('deleted=30&deletedstate=too-wide')
+    expect(
+      await wide.read('deletedItems:page', { scope: { org_id: wide.org, all: true } }),
+    ).toMatchObject({ entries: [], too_wide: true })
+    const notes = await deleted('deleted=30&deletedstate=missing-matches,legacy,stopped')
+    const noted = await notes.read('deletedItems:page', { scope: { org_id: notes.org, all: true } })
+    expect(noted).toMatchObject({ missing: 'matches', legacy: true })
+    expect(noted.entries).toHaveLength(10)
+    expect(noted.next_cursor).toEqual(expect.any(String))
+    const hidden = await deleted('deleted=5&role=admin&deletedstate=hidden')
+    const shown = await hidden.read('deletedItems:page', {
+      scope: { org_id: hidden.org, all: true },
+    })
+    const task = shown.items.find((row) => row.kind === 'task')
+    expect(task).toMatchObject({ title: '', hidden: true })
+    const failing = await deleted('deleted=5&deletedstate=error')
+    expect((await failing.read('deletedItems:page')).error).toContain('failed')
+    // the second write is refused whole, with its data
+    const refusing = await deleted('deleted=30&role=admin&deletedstate=refuse-at-2')
+    const page = await refusing.read('deletedItems:page', {
+      scope: { org_id: refusing.org, all: true },
+    })
+    const ids = page.entries.map((e) => e.item_id)
+    const restored = await refusing.write('deletedItems:restore', {
+      org_id: refusing.org,
+      ids: ids.slice(0, 25),
+    })
+    expect(restored.value.restored).toHaveLength(25)
+    const after = await refusing.read('deletedItems:page', {
+      scope: { org_id: refusing.org, all: true },
+    })
+    expect(after.entries.some((e) => ids.slice(0, 25).includes(e.item_id))).toBe(false)
+    const refused = await refusing.write('deletedItems:restore', {
+      org_id: refusing.org,
+      ids: after.entries.map((e) => e.item_id),
+    })
+    expect(refused.error).toMatchObject({ code: 'rule' })
+    // Delete now's count past its bound, and failing
+    const counts = async (state) => {
+      const at = await deleted(`deleted=5&role=admin&deletedstate=${state}`)
+      const project = (await at.read('deletedItems:page')).entries[0].item_id
+      return at.read('deletedItems:purgeSummary', { id: project })
+    }
+    expect(await counts('purge-at-least')).toEqual({ along: 1000, exact: false })
+    expect((await counts('purge-failed')).error).toContain('failed')
+    const pausing = await deleted('deleted=5&role=admin&deletedstate=pause-at-2')
+    const any = (
+      await pausing.read('deletedItems:page', { scope: { org_id: pausing.org, all: true } })
+    ).entries[0].item_id
+    await pausing.write('deletedItems:purge', { org_id: pausing.org, ids: [any] })
+    const paused = await pausing.write('deletedItems:purge', { org_id: pausing.org, ids: [any] })
+    expect(paused.error).toMatchObject({ code: 'paused' })
+  }, 60_000)
+})

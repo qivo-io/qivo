@@ -6,9 +6,11 @@
  * model/deletedItemsChoices.ts what the page shows beside its entries.
  *
  * page answers the Settings page one page of 25 entries at a time, project
- * entries first, with its filters and search applied on the server; no app
- * calls it yet. list, item and matches stay for the app, which reads them
- * until it moves to page. All four read every active seat of the login
+ * entries first, with its filters and search applied on the server, as the
+ * app reads it from the release after v0.1.148. list and matches stay for
+ * apps loaded before that release, and item for the app's holder of a
+ * blocked row and its watch of a deferred item. All four read every active
+ * seat of the login
  * (authedQuery), as Archived projects does, and show each item only as the
  * seat in its own organization may see it (model/deletedItems.ts viewOf);
  * page reads one organization's seat when its scope names one. An
@@ -19,7 +21,7 @@
  * seat's role, people the people of one organization a batch at a time for
  * Deleted by and the assignee filter, and purgeSummary what Delete now
  * deletes with a project item, so the page needs no roster or loaded list
- * beside its entries. No app calls them yet either. restore and purge act
+ * beside its entries; the app reads them with page. restore and purge act
  * in one organization and load each id through myItem, the same rule: an
  * unknown id, another organization's item and one hidden from the caller
  * all answer not_found, before any state or permission reason. They answer
@@ -171,8 +173,9 @@ export const purgeSummary = authedQuery({
 })
 
 /* ------------------------------------------------------------------- list
- * The Deleted items page as the app reads it today, until it moves to
- * page: the rows every seat of the login sees, newest
+ * The Deleted items page as apps before the release after v0.1.148 read
+ * it, kept for them until a later release removes it: the rows every seat
+ * of the login sees, newest
  * first, at most 2,000 per organization, fewer once the call spent its read
  * budget (model/deletedItemsList.ts LIST); `capped` when more may exist.
  * `deleted_by` lists one person's deletes only, a profile id. */
@@ -184,15 +187,17 @@ export const list = authedQuery({
 /* ------------------------------------------------------------------- item
  * One item's row as the list would show it, or null when the caller does
  * not see it, the same answer for unknown, hidden and other organizations'
- * ids. For the project item a blocked row waits for, when no list the page
- * holds has it. */
+ * ids. For the project item a blocked row waits for, when the page on
+ * screen does not hold it, and for the store's watch of an item a restore
+ * deferred until it can be sent again. */
 export const item = authedQuery({
   args: { id: v.string() },
   handler: async (ctx, { id }) => await rowFor(ctx, ctx.myProfiles.values(), id),
 })
 
 /* ---------------------------------------------------------------- matches
- * The app's search until it moves to page. Deleted tasks the caller sees
+ * The search of apps before the release after v0.1.148, kept for them
+ * until a later release removes it. Deleted tasks the caller sees
  * whose task key or title matches `text`, the
  * roots and subtasks of task items and the tasks inside deleted projects,
  * at most 50, fewer once the call spent the same read budget, and `capped`

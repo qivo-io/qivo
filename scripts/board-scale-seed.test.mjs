@@ -9,6 +9,8 @@ import {
   parseSeedArgs,
   planApiAccounts,
   planArchive,
+  planDelete,
+  planDeletedSub,
   planFiles,
   planInbox,
   planLabels,
@@ -66,6 +68,8 @@ const fake = vi.hoisted(() => ({
   fileRows: [],
   storedRows: [],
   usedRows: [],
+  // the deleted_tasks table, the tasks Deleted items stores, for --deleted
+  deletedTasks: [],
 }))
 vi.mock('convex/browser', () => ({
   ConvexHttpClient: class {
@@ -119,6 +123,7 @@ vi.mock('convex/browser', () => ({
             issue_attachments: fake.fileRows,
             deleted_rows: fake.storedRows,
             used_ids: fake.usedRows,
+            deleted_tasks: fake.deletedTasks,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
             profile_removals: fake.removals,
@@ -1770,5 +1775,227 @@ describe('board-scale-seed --api-accounts', () => {
     expect(lines).toContain(
       '2 seeded agents were removed through Users and stay removed (Zoë relay 01, Quillon importer 02).',
     )
+  })
+})
+
+describe('board-scale-seed --deleted', () => {
+  const task = (n, more = {}) => ({
+    task: { id: `t${n}`, project_id: 'sub', ...more },
+    parent: null,
+  })
+
+  it('takes a deleted count up to the task count', () => {
+    expect(parseSeedArgs([...local, '--tasks', '120', '--deleted', '70']).deleted).toBe(70)
+    expect(parseSeedArgs(local).deleted).toBe(0)
+    expect(() => parseSeedArgs([...local, '--tasks', '10', '--deleted', '11'])).toThrow(
+      '--deleted takes a whole number from 0 up to the --tasks count.',
+    )
+    expect(() => parseSeedArgs([...local, '--deleted', '-1'])).toThrow('--deleted')
+  })
+
+  it('deletes the first tasks that are neither parents, in a family nor archived, each as its deleter', () => {
+    const seeded = new Map(Array.from({ length: 22 }, (_, n) => [n, task(n)]))
+    seeded.set(5, task(5, { archived_at: 'x' }))
+    seeded.set(8, task(8, { deleted: true }))
+    const plan = planDelete(14, seeded, new Set(['t6']), { agent: true, leads: () => true })
+    // 0 to 3 are a family, t5 is archived and t6 a parent; t8 is in Deleted
+    // items already
+    expect(plan.map((job) => job.id)).toEqual([
+      't4',
+      't7',
+      't9',
+      't10',
+      't11',
+      't12',
+      't13',
+      't14',
+      't15',
+      't16',
+      't17',
+      't18',
+      't19',
+    ])
+    const by = Object.fromEntries(plan.map((job) => [job.id, job.by]))
+    // every third Leo, every seventh the agent, Nora the rest, counting t8
+    expect(by.t11).toBe('leo')
+    expect(by.t12).toBe('agent')
+    expect(by.t4).toBe('nora')
+    expect(by.t9).toBe('nora')
+    // without the agent's key, or a project Leo leads, Nora deletes them
+    const plain = planDelete(14, seeded, new Set(['t6']), { agent: false, leads: () => false })
+    expect(new Set(plain.map((job) => job.by))).toEqual(new Set(['nora']))
+    expect(planDelete(0, seeded, new Set(), { agent: true, leads: () => true })).toEqual([])
+  })
+
+  it('makes the deleted sub-project under the top-level project with the fewest, once', () => {
+    const tops = [
+      { id: 'a', subs: 4 },
+      { id: 'b', subs: 2 },
+    ]
+    const plan = planDeletedSub({ org: 'org', tops, present: new Set() })
+    expect(plan?.project).toMatchObject({ parent_id: 'b', name: 'Retired bench fixtures' })
+    expect(plan?.tasks).toHaveLength(3)
+    expect(plan?.tasks.every((t) => t.project_id === plan.project.id)).toBe(true)
+    expect(planDeletedSub({ org: 'org', tops, present: new Set([plan?.project.id]) })).toBeNull()
+    expect(
+      planDeletedSub({ org: 'org', tops: [{ id: 'a', subs: 30 }], present: new Set() }),
+    ).toBeNull()
+  })
+
+  it('leaves the tasks it archived in the same run and deletes as Leo where he leads, and a rerun does nothing', async () => {
+    fake.projects = [
+      { id: 'top', org_id: 'org', type: 'meta', key: 'LUMA', name: 'Luma Sensor', lead_id: 'leo' },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'top', key: 'FW', name: 'Firmware' },
+    ]
+    fake.people = [
+      {
+        email: 'leo@demo.qivo.io',
+        auth_user_id: 'leo-login',
+        id: 'leo',
+        name: 'Leo Martins',
+        org_id: 'org',
+        kind: 'person',
+        active: true,
+      },
+    ]
+    fake.issues = []
+    fake.archived = []
+    fake.deletedTasks = []
+    const args = [...local, '--tasks', '12', '--archived', '6', '--deleted', '4']
+    try {
+      fake.calls = []
+      await runBoardScaleSeed(args, { env, log: () => {} })
+      const of = (name) => fake.calls.filter(([call]) => call === name).map(([, fields]) => fields)
+      const made = of('issues:create').filter((f) => f.description?.startsWith('Seeded by'))
+      const idOf = (n) =>
+        made.find((f) => f.description === `Seeded by board-scale-seed as task ${n + 1}.`).id
+      expect(of('issues:archive').map((f) => f.id)).toEqual([0, 1, 2, 3, 4, 5].map(idOf))
+      // tasks 0 to 3 are a family and 4 and 5 archived now, so 6 to 9 go,
+      // the third as Leo, who leads their top-level project
+      const deletes = fake.calls.filter(([name]) => name === 'issues:deleteDeep')
+      expect(deletes.map(([, fields, login]) => [fields.id, login])).toEqual([
+        [idOf(6), 'nora-login'],
+        [idOf(7), 'nora-login'],
+        [idOf(8), 'leo-login'],
+        [idOf(9), 'nora-login'],
+      ])
+      // the backend as the run left it
+      const [parent] = of('issues:createParent')
+      const rows = made.map((f) => ({
+        ...f,
+        org_id: 'org',
+        parent_id: f.parent_id ?? (f.id === parent.id ? parent.parent_id : null),
+      }))
+      const archivedIds = new Set(of('issues:archive').map((f) => f.id))
+      const deletedIds = new Set(deletes.map(([, f]) => f.id))
+      fake.archived = rows
+        .filter((row) => archivedIds.has(row.id))
+        .map((row) => ({ ...row, archived_at: '2026-10-29T00:00:00.000Z' }))
+      fake.deletedTasks = rows
+        .filter((row) => deletedIds.has(row.id))
+        .map((row) => ({
+          org_id: 'org',
+          task_id: row.id,
+          title: row.title,
+          search_text: `${row.title}\n${row.description}`,
+          project_id: row.project_id,
+        }))
+      fake.issues = rows.filter((row) => !archivedIds.has(row.id) && !deletedIds.has(row.id))
+      const sub = of('projects:create')[0]
+      fake.usedRows = [{ org_id: 'org', table: 'projects', row_id: sub.id }]
+      fake.calls = []
+      await runBoardScaleSeed(args, { env, log: () => {} })
+      expect(fake.calls).toEqual([])
+    } finally {
+      fake.projects = null
+      fake.people = []
+      fake.issues = []
+      fake.archived = []
+      fake.deletedTasks = []
+      fake.usedRows = []
+    }
+  })
+
+  it('deletes as Nora and Leo, makes and deletes the sub-project, and no rerun makes, deletes or archives those tasks again', async () => {
+    fake.projects = [
+      { id: 'top', org_id: 'org', type: 'meta', key: 'LUMA', name: 'Luma Sensor', lead_id: 'leo' },
+      { id: 'sub', org_id: 'org', type: 'project', parent_id: 'top', key: 'FW', name: 'Firmware' },
+    ]
+    fake.people = [
+      {
+        email: 'leo@demo.qivo.io',
+        auth_user_id: 'leo-login',
+        id: 'leo',
+        name: 'Leo Martins',
+        org_id: 'org',
+        kind: 'person',
+        active: true,
+      },
+    ]
+    // the family of task 0 is whole, under its parent p0
+    fake.issues = Array.from({ length: 10 }, (_, n) => ({
+      ...seededTask(n, 'org', 'sub', 'owner'),
+      id: `task${n}`,
+      parent_id: n < 4 ? 'p0' : null,
+    }))
+    fake.archived = []
+    fake.deletedTasks = []
+    try {
+      fake.calls = []
+      await runBoardScaleSeed([...local, '--tasks', '10', '--deleted', '4'], { env, log: () => {} })
+      const deletes = fake.calls.filter(([name]) => name === 'issues:deleteDeep')
+      expect(deletes.map(([, fields, login]) => [fields.id, login])).toEqual([
+        ['task4', 'nora-login'],
+        ['task5', 'nora-login'],
+        ['task6', 'leo-login'],
+        ['task7', 'nora-login'],
+      ])
+      // no agent key without --api-url
+      expect(fake.calls.some(([name]) => name === 'tokens:createAgentKey')).toBe(false)
+      const sub = fake.calls.find(([name]) => name === 'projects:create')
+      expect(sub?.[1]).toMatchObject({ name: 'Retired bench fixtures', parent_id: 'top' })
+      const after = fake.calls.findIndex(([name]) => name === 'projects:deleteDeep')
+      expect(fake.calls[after][1]).toEqual({ org_id: 'org', id: sub?.[1].id })
+      expect(fake.calls.slice(after + 1)).toEqual([])
+      // Deleted items now holds them, and the sub-project's id is used
+      fake.deletedTasks = deletes.map(([, fields]) => {
+        const row = fake.issues.find((t) => t.id === fields.id)
+        return {
+          org_id: 'org',
+          task_id: row.id,
+          title: row.title,
+          search_text: `${row.title}\n${row.description}`,
+          project_id: 'sub',
+        }
+      })
+      fake.issues = fake.issues.filter((t) => !deletes.some(([, f]) => f.id === t.id))
+      fake.usedRows = [{ org_id: 'org', table: 'projects', row_id: sub?.[1].id }]
+      fake.calls = []
+      await runBoardScaleSeed([...local, '--tasks', '10', '--deleted', '4'], { env, log: () => {} })
+      // nothing seeded again, nothing more deleted
+      expect(fake.calls).toEqual([])
+      // a run without --deleted reads Deleted items too, so it makes none of
+      // those tasks again
+      await runBoardScaleSeed([...local, '--tasks', '10'], { env, log: () => {} })
+      expect(fake.calls).toEqual([])
+      // and --archived passes over them to the next live tasks
+      await runBoardScaleSeed([...local, '--tasks', '10', '--archived', '6'], {
+        env,
+        log: () => {},
+      })
+      expect(fake.calls).toEqual(
+        ['task0', 'task1', 'task2', 'task3', 'task8', 'task9'].map((id) => [
+          'issues:archive',
+          { id, org_id: 'org' },
+          'nora-login',
+        ]),
+      )
+    } finally {
+      fake.projects = null
+      fake.people = []
+      fake.issues = []
+      fake.deletedTasks = []
+      fake.usedRows = []
+    }
   })
 })
