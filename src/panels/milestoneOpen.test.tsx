@@ -362,6 +362,8 @@ describe('a milestone that goes away', () => {
     )
     expect(q('[data-milestone-row="beta"]')).not.toBeNull()
     expect(q('[data-milestone-row="alpha"]')).toBeNull()
+    // the window keeps the project it was fixed on, and says so
+    expect(q('[data-modal-shell]')?.textContent).toContain('Plan')
   })
 
   it('says nothing after the person deleted it here', async () => {

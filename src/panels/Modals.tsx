@@ -2457,10 +2457,18 @@ function MilestoneModal({
   const [projectId, setProjectId] = useStateM<string | null>(() =>
     init.id ? null : (P.metaOf(init.project)?.id ?? null),
   )
-  if (init.id && projectId === null && openedM && answer?.project) setProjectId(answer.project.id)
+  // the name the answer gave the project as it fixed it, which the badge
+  // keeps once the milestone is gone and its answer names no project
+  const [fixedName, setFixedName] = useStateM<string | null>(null)
+  if (init.id && projectId === null && openedM && answer?.project) {
+    setProjectId(answer.project.id)
+    setFixedName(answer.project.name)
+  }
   // the store's own project, which the add row and the list need
   const project = projectId ? P.metaOf(projectId) : null
-  const projectName = init.id ? (answer?.project?.name ?? null) : (project?.name ?? null)
+  const projectName = init.id
+    ? (answer?.project?.name ?? fixedName ?? project?.name ?? null)
+    : (project?.name ?? null)
   // opened on a milestone, the answer says whether the person may write;
   // else their level on the project
   const canWrite = init.id
