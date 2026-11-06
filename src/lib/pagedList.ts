@@ -9,8 +9,11 @@
    (components/ProjectPicker.tsx), the expanded sub-project lists and an
    archived project's sub-projects in Settings
    (panels/settings/ProjectLists.tsx), Settings › Teams, a team's members
-   and its Add member picker (panels/settings/TeamSettings.tsx), and
-   Settings › Users (panels/settings/UsersSettings.tsx). Beside it, a page
+   and its Add member picker (panels/settings/TeamSettings.tsx), Settings ›
+   Users (panels/settings/UsersSettings.tsx) and the task label picker
+   (panels/LabelPicker.tsx). The editor's @ mention popup, plain DOM outside
+   React, reads through the `once` engine itself (onceList,
+   components/mentionSuggestion.ts). Beside it, a page
    mode (usePagedPages, at the end of this file) shows one page at a time,
    which Previous and Next replace, as Settings › Projects, Archived
    projects, Users and Deleted items read theirs, and useMoreOnScroll
@@ -417,6 +420,27 @@ function onceEngine<A, Row>(
       else if (phase === 'failed') more()
     },
   }
+}
+
+/** A list read once a batch, without React: the `once` engine under
+    usePagedList, its rules unchanged. `open` starts it for a key (null
+    reads nothing), `stop` drops every read and answer, `view` is what it
+    holds now, and `more` and `retry` are the list's. */
+export type OnceList<A, Row> = Omit<Engine<A, Row>, 'show'>
+
+/**
+ * The `once` engine for a page that is not a React component, such as the
+ * editor's mention popup (components/mentionSuggestion.ts), on the rules
+ * in the module header: one read at a time, an older key's answer and one
+ * after `stop` dropped, a failed Load more keeping its rows and place.
+ * `options` answers the list's options when read, so a page can change
+ * them between reads; `changed` runs after each change the view shows.
+ */
+export function onceList<A, Row>(
+  options: () => PagedListOptions<A, Row>,
+  changed: () => void,
+): OnceList<A, Row> {
+  return onceEngine(options, changed)
 }
 
 /** The refusal code of a query's error (convex/lib/functions.ts Refusal). */

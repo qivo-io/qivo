@@ -111,6 +111,7 @@ vi.mock('./convex', () => ({ live: transport.live }))
 
 const {
   listEnd,
+  onceList,
   PAGE_LIMITS,
   pageEnd,
   useMoreOnScroll,
@@ -398,6 +399,39 @@ describe('a list read once a batch', () => {
     // nothing rendered the late answer
     expect(now()).toBe(shown)
     expect(now().rows.some((row) => row.name === 'late')).toBe(false)
+  })
+
+  it('runs the same engine without React for a plain page, through onceList', async () => {
+    plant('a', 30)
+    const d = deferred()
+    const changed = vi.fn()
+    const list = onceList<ListBatch<Row>, Row>(
+      () => ({ key: null, source: d.source, batch: (a) => a, id: (row) => row.id, most: 200 }),
+      changed,
+    )
+    list.open('k')
+    expect(list.view().phase).toBe('first')
+    const older = d.asked[0]
+    // a new key drops the older key's answer
+    list.open('j')
+    older?.answer({ rows: [{ id: 'x', name: 'old' }], next: null, stopped: false })
+    await d.reply()
+    expect(list.view().rows.map((row) => row.name)).toHaveLength(25)
+    expect(list.view().rows.some((row) => row.name === 'old')).toBe(false)
+    // one read at a time, and a failed Load more keeps its rows and place
+    list.more()
+    list.more()
+    expect(d.asked).toHaveLength(3)
+    await d.reply(null)
+    expect(list.view()).toMatchObject({ phase: 'failed' })
+    expect(list.view().rows).toHaveLength(25)
+    list.retry()
+    expect(d.asked.at(-1)?.at.after).toBe(JSON.stringify(['a24', 'a-24']))
+    // stop drops a late answer and every row
+    list.stop()
+    await d.reply()
+    expect(list.view().rows).toEqual([])
+    expect(changed).toHaveBeenCalled()
   })
 
   it('says the cap is reached, and never ends a stopped batch', async () => {
