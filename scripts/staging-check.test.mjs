@@ -13,6 +13,7 @@ import {
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
+import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   AGENDA_QUERY,
@@ -88,6 +89,7 @@ import {
   TEAMS_EXPECTED,
   TEAMS_STEP,
   THREAD_PAGE,
+  TOAST_HOST,
   taskPages,
   UPLOAD_STEP,
   WAITS,
@@ -411,10 +413,16 @@ describe('staging check REST contract', () => {
     expect(DELETED_ITEMS_STEP).toBe('ui/deleted-items')
     // the page's end line names its marks after the page's hook
     // (src/components/pageFold.tsx)
+    const fromHook = [DELETED_ITEMS_MARKS.next, DELETED_ITEMS_MARKS.end]
     for (const mark of Object.values(DELETED_ITEMS_MARKS))
-      if (mark === DELETED_ITEMS_MARKS.next) expect(page).toContain('hook="deleted-page"')
+      if (fromHook.includes(mark)) expect(page).toContain('hook="deleted-page"')
       else expect(page).toContain(mark)
     expect(DELETED_ITEMS_MARKS.next).toBe('data-deleted-page-next')
+    expect(DELETED_ITEMS_MARKS.end).toBe('data-deleted-page-end')
+    // the step waits for the page's own sentence for a search that matches
+    // nothing
+    const [before, after] = DELETED_ITEMS_EXPECTED.none('WORDS').split('WORDS')
+    expect(page).toContain(`none: \`${before}\${search.settled}${after}\``)
     // the window's paragraph is the shared runner's keep-open sentence
     const runner = readFileSync(new URL('../src/lib/batchRunner.ts', import.meta.url), 'utf8')
     expect(DELETED_ITEMS_EXPECTED.keepOpen).toBe(
@@ -423,6 +431,20 @@ describe('staging check REST contract', () => {
     // 26 tasks are one more than a call takes, so the restore takes two
     expect(DELETED_ITEMS_EXPECTED.tasks).toBe(LIMITS.restoreBatch.max + 1)
     expect(DELETED_ITEMS_EXPECTED.selected).toBe('26 selected, 25 on other pages')
+    // the end toast the store words, also with tasks that finish in the
+    // background, and never one that counts a refusal
+    const tasks = Array.from({ length: 26 }, (_, n) => ({ id: `t${n}`, org_id: 'o', kind: 'task' }))
+    const tally = { kind: 'restore', asked: tasks, following: [], unsent: [] }
+    for (const stepping of [0, 1, 3])
+      expect(endText({ ...tally, done: 26, stepping, refused: 0 }).text).toMatch(
+        DELETED_ITEMS_EXPECTED.toast,
+      )
+    expect(endText({ ...tally, done: 25, stepping: 0, refused: 1 }).text).not.toMatch(
+      DELETED_ITEMS_EXPECTED.toast,
+    )
+    // the step reads the visible toast, never the screen reader's copy
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    expect(app).toContain(`<div className="${TOAST_HOST}">`)
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await deletedItemsCheck()')).toBeGreaterThan(
       check.indexOf('await settingsProjectsCheck()'),
@@ -438,6 +460,27 @@ describe('staging check REST contract', () => {
       step.indexOf('await deleteProjectInApp(w, sub)'),
     )
     expect(step).toContain("getByRole('radio', { name: 'Tasks', exact: true })")
+    // the 26 deletes are one folded run, opened before the first page counts
+    const opened = step.indexOf('await showAll.first().click()')
+    expect(opened).toBeGreaterThan(-1)
+    expect(opened).toBeLessThan(step.indexOf('(await rows.count()) === 25'))
+    // the search is answered before the scope and the selection, since a
+    // changed search clears the selection
+    const answered = step.indexOf('=== none')
+    expect(answered).toBeGreaterThan(step.indexOf('.fill(words)'))
+    expect(answered).toBeLessThan(step.indexOf('[data-project-picker-search]'))
+    expect(answered).toBeLessThan(step.indexOf('m.selectAll}]`).click()'))
+    expect(step).toMatch(
+      /\.locator\(`\.\$\{TOAST_HOST\}`\)\s*\.getByText\(DELETED_ITEMS_EXPECTED\.toast\)/,
+    )
+    // the sub-project's menu shows only once its tasks moved, which can
+    // take longer than a click's own wait
+    expect(step).toMatch(/locator\(`\[\$\{m\.menu\}\]`\)\.click\(\{ timeout: 60_000 \}\)/)
+    // the sub-project's menu opens only once the search is answered, which
+    // lists it alone
+    const alone = step.indexOf('(await listed.count()) === 1')
+    expect(alone).toBeGreaterThan(step.indexOf('Deleted sub`)'))
+    expect(alone).toBeLessThan(step.indexOf('m.menu}]`).click('))
   })
   it("opens task links in the window's own words, with the unknown number past every organization's", () => {
     const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
