@@ -679,6 +679,26 @@ describe('the label picker of a task the window shows from its own answer', () =
     expect(toggles().at(-1)).toEqual({ org_id: org, issue_id: 'far', label_id: far.id, on: false })
     expect(P.taskDetail('far')?.view?.labels).toEqual([])
   })
+
+  it('drops a label deleted since the picker listed it, saying it no longer exists', async () => {
+    const gone = label('Bench')
+    await load({ labels: many(2), serverOnly: [gone] })
+    await shownFar()
+    await open(() => P.taskDetail('far')?.view)
+    expect(rows().map((r) => r.name)).toEqual(['Bench', 'Label 00', 'Label 01'])
+    // the server answers a deleted label as another organization's
+    answers['labels:toggle'] = () =>
+      Promise.reject(new ConvexError({ code: 'rule', message: LABEL_NOT_IN_TASK_ORG }))
+    await click(rowOf(gone.id))
+    expect(toggles()).toEqual([{ org_id: org, issue_id: 'far', label_id: gone.id, on: true }])
+    expect(P.taskDetail('far')?.view?.labels).toEqual([])
+    expect(vi.mocked(window.showToast).mock.calls.at(-1)).toEqual([
+      'This label no longer exists. Change reverted.',
+      'error',
+    ])
+    expect(rows().map((r) => r.name)).toEqual(['Label 00', 'Label 01'])
+    expect(P.labelGone(gone.id)).toBe(true)
+  })
 })
 
 describe("the store's label toggles", () => {
