@@ -5,7 +5,8 @@
  * needs no Better Auth answer as before: a route Qivo does not serve, the
  * demo's foreign or non-JSON anonymous sign-in, a body over the cap and the
  * OAuth machine routes on the demo. Every route that needs Better Auth fails
- * with an error, never with a 2xx or a cookie. A last case lets the import
+ * with an error, never with a 2xx or a cookie, and the demo's anonymous
+ * sign-in takes no admission, because the import comes first. A last case lets the import
  * succeed with a recording stand-in for createAuth, to show what the
  * sign-in handler hands Better Auth. */
 /// <reference types="vite/client" />
@@ -66,6 +67,18 @@ const settle = (sent: Promise<Response>) =>
 /* An error's message with its causes', since vitest wraps the mock's. */
 const reasons = (error: unknown): string =>
   error instanceof Error ? `${error.message} ${reasons(error.cause)}` : ''
+
+/* Checks that `outcome` failed closed: an error whose reasons match
+ * `reason`, or a 5xx that sets no cookie. */
+function expectFailedClosed(outcome: Response | Error, reason: RegExp) {
+  if (outcome instanceof Error) {
+    expect(reasons(outcome)).toMatch(reason)
+    return
+  }
+  expect(outcome.status).toBeGreaterThanOrEqual(500)
+  expect(outcome.headers.get('Set-Cookie')).toBeNull()
+  expect(outcome.headers.get('Set-Better-Auth-Cookie')).toBeNull()
+}
 
 describe('a router whose import of auth.ts is refused', () => {
   it.each([
@@ -182,14 +195,15 @@ describe('a router whose import of auth.ts is refused', () => {
     ],
     ['GET /.well-known/oauth-authorization-server', '/.well-known/oauth-authorization-server', {}],
   ])('fails %s with an error, never a 2xx or a cookie', async (_name, path, init) => {
-    const outcome = await settle(fetchOf(newT(), path, init))
-    if (outcome instanceof Error) {
-      expect(reasons(outcome)).toMatch(/refused to import auth\.ts/)
-      return
-    }
-    expect(outcome.status).toBeGreaterThanOrEqual(500)
-    expect(outcome.headers.get('Set-Cookie')).toBeNull()
-    expect(outcome.headers.get('Set-Better-Auth-Cookie')).toBeNull()
+    expectFailedClosed(await settle(fetchOf(newT(), path, init)), /refused to import auth\.ts/)
+  })
+
+  it("fails the demo's anonymous sign-in with an error and takes no admission", async () => {
+    demo()
+    const t = newT()
+    const outcome = await settle(fetchOf(t, '/api/auth/sign-in/anonymous', json(DEMO_APP, '{}')))
+    expectFailedClosed(outcome, /refused to import auth\.ts/)
+    expect(await t.run((ctx) => ctx.db.query('demo_admission').collect())).toEqual([])
   })
 
   it('still answers an OAuth machine request on the demo 403', async () => {
