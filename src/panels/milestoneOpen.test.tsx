@@ -46,6 +46,8 @@ let snap: Snapshot
 /* the server's own copy, which the milestone read answers from */
 let server: Snapshot
 let force: ForcedMilestones
+/* delivers a snapshot to the store's workspace subscription */
+let deliverWorkspace: (snapshot: Snapshot) => void
 let subs: {
   name: string
   args: Record<string, unknown>
@@ -126,8 +128,10 @@ async function start() {
   vi.resetModules()
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
-    if (name === 'workspace:whole') next(structuredClone(snap))
-    else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    if (name === 'workspace:whole') {
+      deliverWorkspace = (snapshot) => next(structuredClone(snapshot))
+      deliverWorkspace(snap)
+    } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) {
       const sub = { name, args, next, fail, stopped: false }
@@ -192,6 +196,20 @@ const windowState = () => q('[data-milestone-window]')?.getAttribute('data-miles
 const nameBox = () =>
   q('[data-milestone-editor] input[aria-label="Name"]') as HTMLInputElement | null
 const liveGets = () => subs.filter((s) => s.name === 'milestones:get' && !s.stopped)
+
+/** Presses Delete and then Confirm delete in the open editor. */
+async function deleteInEditor() {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  const del = () =>
+    [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find((b) =>
+      b.textContent?.includes('elete'),
+    )
+  await act(async () => del()?.click())
+  vi.setSystemTime(Date.now() + 1_000)
+  await act(async () => del()?.click())
+  vi.useRealTimers()
+  await settle()
+}
 
 describe('opened from an Overview row', { timeout: 30_000 }, () => {
   it('says it is loading at once, then shows the editor from the answer beside the list', async () => {
@@ -464,16 +482,7 @@ describe('a milestone that goes away', () => {
     fixture()
     await start()
     await open('alpha')
-    vi.useFakeTimers({ toFake: ['Date'] })
-    const del = () =>
-      [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find(
-        (b) => b.textContent?.includes('elete'),
-      )
-    await act(async () => del()?.click())
-    vi.setSystemTime(Date.now() + 1_000)
-    await act(async () => del()?.click())
-    vi.useRealTimers()
-    await settle()
+    await deleteInEditor()
     expect(q('[data-milestone-editor]')).toBeNull()
     server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
     await rerun()
@@ -486,6 +495,25 @@ describe('a milestone that goes away', () => {
     await act(async () => edit?.click())
     expect(nameBox()?.value).toBe('Beta')
     expect(nameBox()?.readOnly).toBe(false)
+  })
+
+  it("takes the add row and the rest's Edit away after the person's own delete once the store lowers them to Viewer", async () => {
+    fixture()
+    await start()
+    await open('alpha')
+    await deleteInEditor()
+    server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
+    await rerun()
+    expect(q('[data-milestone-new]')).not.toBeNull()
+    // the workspace now holds me as a Viewer on Plan, with Alpha deleted
+    snap.milestones = snap.milestones.filter((m) => m.id !== 'alpha')
+    snap.profiles[0].org_role = 'viewer'
+    snap.access.push({ project_id: 'plan', profile_id: snap.profiles[0].id, level: 'viewer' })
+    await act(async () => deliverWorkspace(snap))
+    await settle()
+    expect(q('[data-milestone-row="beta"]')).not.toBeNull()
+    expect(q('[data-milestone-new]')).toBeNull()
+    expect(q('button[aria-label^="Edit"]')).toBeNull()
   })
 
   it("keeps another milestone's open editor and its draft, locked, when the opened one goes", async () => {
@@ -519,16 +547,7 @@ describe('a milestone that goes away', () => {
         : Promise.resolve(null),
     )
     await open('alpha')
-    vi.useFakeTimers({ toFake: ['Date'] })
-    const del = () =>
-      [...document.querySelectorAll<HTMLButtonElement>('[data-milestone-editor] button')].find(
-        (b) => b.textContent?.includes('elete'),
-      )
-    await act(async () => del()?.click())
-    vi.setSystemTime(Date.now() + 1_000)
-    await act(async () => del()?.click())
-    vi.useRealTimers()
-    await settle()
+    await deleteInEditor()
     // the refusal took the paint back: the milestone shows again
     expect(q('[data-milestone-row="alpha"]')).not.toBeNull()
     expect(line()).toBeNull()
