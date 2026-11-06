@@ -2068,13 +2068,13 @@ describe('reads at the design size', () => {
     })
   })
 
-  it('a caller in 1 team reading a task through a sub-project shared with 5 teams', async () => {
-    // the other 4 teams hold other people
+  it('a caller in 3 teams reading a task through a sub-project shared with 5 teams', async () => {
+    // the other 2 teams hold other people
     await throughTeams(await setup(), {
       teams: 5,
-      mine: 1,
+      mine: 3,
       sharing: 5,
-      name: 'a caller in 1 team, a sub-project shared with 5',
+      name: 'a caller in 3 teams, a sub-project shared with 5',
     })
   })
 
