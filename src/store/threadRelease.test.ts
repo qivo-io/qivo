@@ -352,6 +352,37 @@ describe('the task window keeps a bounded thread', () => {
   })
 
   describe('places and presses', () => {
+    it("keeps the rows around this window's place while its earlier page loads, and another window's through a press", async () => {
+      const { P } = store
+      openServed(300)
+      await earlier()
+      serve = null
+      // the reader scrolls down to #220 while the next page loads
+      void P.loadEarlierComments()
+      P.threadPlace(pane, 'comment-220')
+      last()?.answer.resolve({ comments: range(150, 200), earlier: true })
+      await settle()
+      // the 30 rows above the live window are on the reader's screen, so
+      // they stay, over the budget, until the next release
+      for (const id of ids(220, 250)) expect(shown()).toContain(id)
+      expect(held()).toBe(150)
+      expect(P.commentsNewer).toBe('none')
+    })
+
+    it("keeps another window's place through this window's press, and lets go only of the rows below it", async () => {
+      const { P } = store
+      budget.THREAD_KEEP.rows = 150
+      openServed(300)
+      await earlier()
+      await earlier()
+      // the pop-out reads at #160 while the pane walks back
+      P.threadPlace(popOut, 'comment-160')
+      await earlier()
+      // the page and the pop-out's #160 to #210 stay; #211 to #249 go
+      expect(shown()).toEqual([...ids(100, 211), ...ids(250, 300)])
+      expect(held()).toBe(161)
+    })
+
     it('places a report on a comment held apart for its editor at its time, so an arrival keeps the rows under it', async () => {
       const { P } = store
       openServed(300)

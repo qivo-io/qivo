@@ -670,7 +670,8 @@ const commentHolds = new Map<object, string>()
 const pinnedComments = new Map<string, Row<'comments'>>()
 /* The first comment or change on screen in each window, by the window's own
    object, null while the window shows the thread's newest end
-   (P.threadPlace). A comment or change that arrives past the budget
+   (P.threadPlace). Every release keeps the rows on screen around each of
+   them (placesKept), and a comment or change that arrives past the budget
    releases on the side farther from the topmost of them (arrivalMoves).
    Dropped when its window unmounts and when another task is watched. */
 const threadPlaces = new Map<object, string | null>()
@@ -1235,30 +1236,23 @@ function startPress(direction: 'earlier' | 'newer') {
   pressKeep = new Set(ids.filter((id) => id !== undefined))
 }
 
-/* Which side a release after an arrival, or after an editor closed, takes
-   (keepThread), and what it keeps: for each place a window reported
-   (threadPlaces), the reported row and the 50 rows after it in time order,
-   both kinds counted, which are on that window's screen. A comment held
-   apart for its editor (pinnedComments) shows at its time outside every
-   run, so a place on it keeps the 50 held rows from its time on, the ones
-   under it on screen. The pages of the last press are not kept here: a
-   reader still up there reports a place among them, and one back at the
-   newest end lets them go. With no place
-   reported, or the topmost one at or below a gap or in the live rows, the
-   oldest side goes. A reader above a gap keeps the
-   rows around them: the newer run goes from the gap down, then the end of
-   the run they read in that is farther from them. With no gap, the end
-   farther from them goes. */
-function arrivalMoves(held: ReturnType<typeof heldThread>): {
-  moves: ReleaseMove[]
+/* The rows on screen around each place a window reported (threadPlaces),
+   the reported row and the 50 rows after it in time order, both kinds
+   counted, which every release keeps (keepThread). A comment held apart for its
+   editor (pinnedComments) shows at its time outside every run, so a place
+   on it keeps the 50 held rows from its time on, the ones under it on
+   screen. Also answers the topmost place, by the held row it starts at,
+   and the kind whose run above the gap holds that row, for an arrival's
+   side (arrivalMoves). */
+function placesKept(held: ReturnType<typeof heldThread>): {
   keep: Set<string>
+  top: { kind: HeldKind | null; at: number; ts: number } | null
 } {
   const keep = new Set<string>()
   const kinds: HeldKind[] = held.history ? [held.comments, held.history] : [held.comments]
   const merged = kinds
     .flatMap((k) => [...k.older, ...k.newer, ...k.live])
     .sort((a, b) => a.ts - b.ts)
-  // the topmost reported row, and the kind whose run above the gap holds it
   let top: { kind: HeldKind | null; at: number; ts: number } | null = null
   for (const first of threadPlaces.values()) {
     if (first === null) continue
@@ -1277,33 +1271,49 @@ function arrivalMoves(held: ReturnType<typeof heldThread>): {
     const kind = kinds.find((k) => k.older.some((r) => r.id === id)) ?? null
     top = { kind, at: kind ? kind.older.findIndex((r) => r.id === id) : -1, ts }
   }
-  // no place, or the topmost at or below a gap or in the live rows
-  if (top === null || top.kind === null) return { moves: ['top'], keep }
+  return { keep, top }
+}
+
+/* Which side a release after an arrival, or after an editor closed, takes
+   (keepThread), from the topmost place a window reported (placesKept).
+   With no place reported, or the topmost one at or below a gap or in the
+   live rows, the oldest side goes. A reader above a gap keeps the rows
+   around them, so the newer run goes from the gap down, then the end of
+   the run they read in that is farther from them. With no gap, the end
+   farther from them goes. */
+function arrivalMoves(
+  held: ReturnType<typeof heldThread>,
+  top: ReturnType<typeof placesKept>['top'],
+): ReleaseMove[] {
+  if (top === null || top.kind === null) return ['top']
+  const kinds: HeldKind[] = held.history ? [held.comments, held.history] : [held.comments]
   const gaps = kinds.filter((k) => k.gap !== null)
   // a row of a kind without a gap counts as above the other kind's gap
   // when it is no later than that gap's last row above
   const gapEnd = Math.min(
     ...gaps.map((k) => k.older.reduce((max, r) => Math.max(max, r.ts), Number.NEGATIVE_INFINITY)),
   )
-  if (gaps.length && top.kind.gap === null && top.ts > gapEnd) return { moves: ['top'], keep }
+  if (gaps.length && top.kind.gap === null && top.ts > gapEnd) return ['top']
   const toTop = top.at
   const toEnd = top.kind.older.length - 1 - top.at + (gaps.length ? 0 : top.kind.live.length)
   const far: ReleaseMove = toTop > toEnd ? 'top' : 'up'
-  return { moves: gaps.length ? ['down', far] : [far], keep }
+  return gaps.length ? ['down', far] : [far]
 }
 
 /* Lets go of the watched thread's rows past THREAD_KEEP.rows
    (lib/threadBudget.ts releaseThread), on the side `why` names: after an
    earlier page (`earlier`) the newer side, after a newer page the oldest
-   side, after an arrival, an editor closing or the history starting the
-   side arrivalMoves picks. It never takes the live window or page, the
-   rows a press keeps (pressKeep) after that press's page, or the rows on
-   screen around a reported place, it never splits an instant, and it passes over a comment
-   open in an editor, which it holds apart (pinnedComments). Released
-   comments leave acceptedCommentChanges, since a read brings them back with
-   the server's text, edits included. A release from the top unloads that
-   kind's start, and the history then reads on before its oldest kept row
-   (historyNext). The caller repaints. Answers whether rows went. */
+   side, after an arrival (a delivery of the live window or page, the
+   history's first included) or an editor closing the sides arrivalMoves
+   picks. It never takes the live window or page, the rows the last press
+   keeps (pressKeep) after that press's page, or the rows on screen around
+   any window's reported place (placesKept), it never splits an instant,
+   and it passes over a comment open in an editor, which it holds apart
+   (pinnedComments). Released comments leave acceptedCommentChanges, since
+   a read brings them back with the server's text, edits included. A
+   release from the top unloads that kind's start, and the history then
+   reads on before its oldest kept row (historyNext). The caller repaints.
+   Answers whether rows went. */
 function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
   if (commentsSnap === null) return false
   const held = heldThread()
@@ -1313,19 +1323,19 @@ function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
     commentsSnap.length +
     (historySnap === null ? 0 : olderEvents.length + newerEvents.length + historySnap.length)
   if (count <= THREAD_KEEP.rows) return false
-  const side =
+  const places = placesKept(held)
+  const moves: ReleaseMove[] =
     why === 'arrival'
-      ? arrivalMoves(held)
-      : {
-          moves: why === 'earlier' ? (['down', 'up'] as ReleaseMove[]) : (['top'] as ReleaseMove[]),
-          keep: pressKeep,
-        }
+      ? arrivalMoves(held, places.top)
+      : why === 'earlier'
+        ? ['down', 'up']
+        : ['top']
   const after = releaseThread({
     comments: held.comments,
     history: held.history,
-    keep: side.keep,
+    keep: why === 'arrival' ? places.keep : new Set([...pressKeep, ...places.keep]),
     pinned: new Set(commentHolds.values()),
-    moves: side.moves,
+    moves,
     budget: THREAD_KEEP.rows,
   })
   if (!after) return false
@@ -14528,9 +14538,10 @@ export const PLANNER = {
 
   /** Reports the first comment or change on screen in the window `owner`,
       by its id, or null while the window shows the thread's newest end, as
-      the reader scrolls. A comment or change that arrives past the budget
-      lets go of rows on the side farther from the topmost window's place,
-      and keeps the rows around each place (keepThread). Called with no
+      the reader scrolls. Every release keeps the rows around each place,
+      and a comment or change that arrives past the budget lets go of rows
+      on the side farther from the topmost window's place (keepThread).
+      Called with no
       `first`, it drops the window's report, as on unmount. A window that
       never reported counts as at its newest end. */
   threadPlace: (owner: object, first?: string | null) => {
