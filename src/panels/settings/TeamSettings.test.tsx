@@ -426,6 +426,30 @@ describe('Settings › Teams', () => {
     expect(deleteOf('bench').disabled).toBe(false)
   })
 
+  it('counts a deletion on its way that a search hides, so the last team left keeps Delete off', async () => {
+    await load()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    onTestFinished(() => {
+      vi.useRealTimers()
+    })
+    await teamsPage()
+    await click(deleteOf('crew'))
+    vi.setSystemTime(Date.now() + CONFIRM_IGNORE_MS)
+    await click(deleteOf('crew'))
+    expect(requests.map((r) => r.name)).toEqual(['teams:deleteDeep'])
+    // the search's batch holds Bench alone, and the server still counts Crew
+    await type(find<HTMLInputElement>('[data-teams-search]'), 'bench')
+    await rest()
+    expect(open('teams:settingsPage').map((r) => r.args)).toEqual([
+      { org_id: org(), search: 'bench' },
+    ])
+    expect(teamRows().map((r) => r.id)).toEqual(['bench'])
+    expect(deleteOf('bench').disabled).toBe(true)
+    // a refusal brings Crew back, and Bench's Delete with it
+    await answer('teams:deleteDeep', 'refuse')
+    expect(deleteOf('bench').disabled).toBe(false)
+  })
+
   it('keeps a team created here past the loaded rows as Added until a batch holds it, and never shows a pending or refused one', async () => {
     await load()
     server.force = { batch: 1 }

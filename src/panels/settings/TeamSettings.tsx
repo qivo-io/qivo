@@ -1005,11 +1005,14 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
   const kept = [...made.keys()].filter(
     (id) => !loaded.has(id) && !removing(id) && storeTeam(id) !== null,
   )
+  // the teams whose Delete this visit pressed, so a deletion on its way
+  // counts though a search hides its team
+  const [deleted, setDeleted] = useState<ReadonlySet<string>>(() => new Set())
   // the organization's teams as the server last counted them, up to three,
   // less the deletions on their way; unknown until a batch answers, which
   // keeps Delete off
   const counted = lastReady(list)?.teams ?? null
-  const going = [...new Set([...loaded.keys(), ...made.keys()])].filter(removing).length
+  const going = [...new Set([...loaded.keys(), ...made.keys(), ...deleted])].filter(removing).length
   const last = counted === null || counted - going <= 1
 
   const [teamName, setTeamName] = useState('')
@@ -1063,7 +1066,10 @@ export function OrgTeamsPage({ setPage }: { setPage: (page: string) => void }) {
       checking={removal.checking({ kind: 'deleteTeam', teamId: id })}
       onOpen={() => setPage(`team:${id}`)}
       onDelete={(at) =>
-        confirm.press(`t:${id}`, () => removal.press({ kind: 'deleteTeam', teamId: id }, at))
+        confirm.press(`t:${id}`, () => {
+          setDeleted((s) => toggled(s, id, true))
+          removal.press({ kind: 'deleteTeam', teamId: id }, at)
+        })
       }
     />
   )
