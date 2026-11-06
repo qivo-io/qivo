@@ -32,13 +32,14 @@ import {
    workspace parts, the archived ones `fake.archived` holds, in the issues
    table two rows a page beside a task of another organization that carries
    a seed mark, the description rows `fake.texts` holds beside one of that
-   organization's, the personal
-   tokens, agent keys and usage rows `fake.tokens`, `fake.keys` and
-   `fake.usage` hold, Billing's current bucket `fake.period`, and every
-   mutation it receives, with the login it came
-   as. A comment whose id `fake.comments` holds is refused as taken, so is
-   a project or task create whose id `fake.usedRows` (the used_ids table)
-   holds, as the server refuses it, and an archive marks its task in
+   organization's, the personal tokens, agent keys and usage rows
+   `fake.tokens`, `fake.keys` and `fake.usage` hold, Billing's current
+   bucket `fake.period`, the pending profile removals `fake.removals`
+   holds, and every mutation it receives, with the login it came as. A
+   comment whose id `fake.comments` holds is refused as taken, so is a
+   profile create whose id those usage rows or removals name, and a
+   project or task create whose id `fake.usedRows` (the used_ids table)
+   holds, as the server refuses them, and an archive marks its task in
    `fake.issues` archived. */
 const fake = vi.hoisted(() => ({
   issues: [],
@@ -52,6 +53,8 @@ const fake = vi.hoisted(() => ({
   usage: [],
   // the bucket billing.usageFigures answers
   period: 'month:2026-11',
+  // the profile_removals table
+  removals: [],
   // the sub-projects the workspace holds, the one below when null
   projects: null,
   // the issue_links table, which holds links the workspace leaves out
@@ -117,6 +120,7 @@ vi.mock('convex/browser', () => ({
             used_ids: fake.usedRows,
             agent_keys: fake.keys,
             billing_usage: fake.usage,
+            profile_removals: fake.removals,
             issue_descriptions: [
               ...fake.texts,
               {
@@ -173,6 +177,15 @@ vi.mock('convex/browser', () => ({
         fake.usedRows.some((row) => row.row_id === fields.id)
       )
         throw Object.assign(new Error('taken'), { data: { message: 'this id is already taken' } })
+      // a removed profile's id stays taken while its usage or its removal
+      // names it (convex/profiles.ts create)
+      if (
+        name === 'profiles:create' &&
+        [...fake.usage, ...fake.removals].some((row) => row.profile_id === fields.id)
+      )
+        throw Object.assign(new Error('taken'), {
+          data: { message: 'a profile with this id already exists' },
+        })
       if (name === 'issues:archive') {
         const task = fake.issues.find((issue) => issue.id === fields.id)
         if (task) task.archived_at = '2026-10-29T00:00:00.000Z'
@@ -1713,5 +1726,48 @@ describe('board-scale-seed --api-accounts', () => {
       ['tokens:createAgentKey', 'Billing load key 02', id(2)],
     ])
     expect(fetched).toHaveBeenCalledTimes(1 + 3)
+  })
+
+  it('leaves a seeded agent removed through Users removed on a rerun', async () => {
+    const id = (n) => apiAccountId('org', n)
+    fake.calls = []
+    fake.issues = []
+    // agents 1 and 2 were removed: 1's usage keeps its id, and 2's removal
+    // is still running; agent 3 was never made
+    fake.people = []
+    fake.usage = [
+      {
+        org_id: 'org',
+        profile_id: id(1),
+        credential_id: 'agent_keys:1',
+        credential_name: 'Billing load key 01',
+        period_start: 'month:2026-10',
+        calls: 2,
+      },
+    ]
+    fake.removals = [{ profile_id: id(2), phase: 'access' }]
+    const lines = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, status: 200, headers: new Headers() })),
+    )
+    try {
+      await runBoardScaleSeed([...local, '--tasks', '0', '--api-accounts', '3', ...api], {
+        env,
+        log: (line) => lines.push(line),
+      })
+    } finally {
+      vi.unstubAllGlobals()
+      fake.usage = []
+      fake.removals = []
+    }
+    expect(fake.calls.map(([name, fields]) => [name, fields.name ?? fields.id])).toEqual([
+      ['profiles:create', 'Backup checker 03'],
+      ['tokens:createAgentKey', 'Billing load key 03'],
+      ['profiles:deactivate', id(3)],
+    ])
+    expect(lines).toContain(
+      '2 seeded agents were removed through Users and stay removed (Zoë relay 01, Quillon importer 02).',
+    )
   })
 })

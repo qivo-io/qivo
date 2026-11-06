@@ -93,7 +93,10 @@
  * with all its calls gets no new key, one short of them gets a new key and
  * only the calls it lacks, so a run in a later month gives each active
  * agent a new key and its calls there, and one already inactive is left
- * as it is, with no calls in a later bucket. N goes up to 100 (MOST_API_ACCOUNTS),
+ * as it is, with no calls in a later bucket. One removed through Users,
+ * for checking how Billing names a Removed user, stays removed, since its
+ * usage or its pending removal keeps its id taken, and the run logs its
+ * name. N goes up to 100 (MOST_API_ACCOUNTS),
  * and a larger N is refused before anything is seeded. It runs after
  * --credentials and before the tasks.
  *
@@ -885,21 +888,23 @@ const apiAccountKeyName = (n) => `Billing load key ${String(n).padStart(2, '0')}
 
 /** What --api-accounts still has to do for agents 1 to `count` of
     organization `org` (see the file comment), from `profiles`, the
-    organization's profiles by id, and `used`, by profile id the calls each
-    agent's own keys made in the bucket Billing shows now: for each agent
-    number, whether to make its
-    profile, the calls it lacks, made with a new key when more than 0, and
-    whether to set it inactive. Agent n makes 1 + n % 7 calls, and every
-    third is set inactive after them. An agent that is inactive already
-    gets no calls, since its key would be refused, and nothing else. */
-export function planApiAccounts({ org, count, profiles, used }) {
+    organization's profiles by id, `used`, by profile id the calls each
+    agent's own keys made in the bucket Billing shows now, and `removed`,
+    the ids of seeded agents removed through Users: for each agent number,
+    whether to make its profile, the calls it lacks, made with a new key
+    when more than 0, and whether to set it inactive. Agent n makes
+    1 + n % 7 calls, and every third is set inactive after them. An agent
+    that is inactive already gets no calls, since its key would be refused,
+    and nothing else, and a removed one gets nothing, since profiles:create
+    refuses its id. */
+export function planApiAccounts({ org, count, profiles, used, removed = new Set() }) {
   const plan = []
   for (let n = 1; n <= count; n++) {
     const id = apiAccountId(org, n)
     const profile = profiles.get(id)
     const calls = 1 + (n % 7)
     const inactive = n % 3 === 0
-    if (profile && !profile.active) continue
+    if (profile ? !profile.active : removed.has(id)) continue
     const missing = Math.max(0, calls - (used.get(id) ?? 0))
     const step = {
       n,
@@ -917,7 +922,8 @@ export function planApiAccounts({ org, count, profiles, used }) {
 
 /** Adds the --api-accounts agents still missing up to `count` in
     organization `org` (planApiAccounts), acting as `actor` with the local
-    admin key `key`, and answers how many agents it changed. */
+    admin key `key`, and answers how many agents it changed. It logs the
+    seeded agents it leaves removed. */
 export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, log }) {
   // the system tables answer the admin itself, not a person it acts as
   client.setAdminAuth(key)
@@ -927,6 +933,20 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
       .map((profile) => [profile.id, profile]),
   )
   const usage = (await tableRows(client, 'billing_usage')).filter((row) => row.org_id === org)
+  const numbers = new Map(
+    Array.from({ length: count }, (_, i) => [apiAccountId(org, i + 1), i + 1]),
+  )
+  // A seeded agent removed through Users has no profile, and its id stays
+  // taken while a pending removal or any of its usage rows names it
+  // (convex/profiles.ts create), so the run leaves it removed.
+  const named = new Set(usage.map((row) => row.profile_id))
+  for (const row of await tableRows(client, 'profile_removals')) named.add(row.profile_id)
+  const removed = new Set([...numbers.keys()].filter((id) => !profiles.has(id) && named.has(id)))
+  const left = [...removed].map((id) => seededAgentName(numbers.get(id)))
+  if (left.length)
+    log(
+      `${left.length} seeded agents were removed through Users and stay removed (${left.join(', ')}).`,
+    )
   client.setAdminAuth(key, identityOf(actor.auth_user_id))
   const call = async (name, fields) => {
     try {
@@ -937,9 +957,6 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
   }
   // the bucket Billing shows now, which the calls below are recorded in
   const { period_key: period } = await client.query(ref('billing:usageFigures'), { org_id: org })
-  const numbers = new Map(
-    Array.from({ length: count }, (_, i) => [apiAccountId(org, i + 1), i + 1]),
-  )
   // the calls each agent's own keys made in that bucket
   const used = new Map()
   for (const row of usage) {
@@ -947,7 +964,7 @@ export async function seedApiAccounts(client, { key, org, actor, count, apiUrl, 
     if (n && row.period_start === period && row.credential_name === apiAccountKeyName(n))
       used.set(row.profile_id, (used.get(row.profile_id) ?? 0) + row.calls)
   }
-  const plan = planApiAccounts({ org, count, profiles, used })
+  const plan = planApiAccounts({ org, count, profiles, used, removed })
   for (const step of plan) {
     if (step.create)
       await call('profiles:create', {
