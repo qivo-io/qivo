@@ -1031,6 +1031,27 @@ describe('invitation labels', () => {
     expect(has('[data-invites-failed]')).toBe(false)
     expect(label().textContent).toBe('invitation not sent')
   })
+
+  it("reads no invitation row for a pending person on the phone's list, whose row shows no label, and reads a pending guest's", async () => {
+    await load()
+    force = { fail: ['deliveries'] }
+    narrowScreen(true)
+    await render(() => <Screen initial="org-users" reset={vi.fn()} />)
+    expect(find('[data-settings-open-user="anna"]').textContent).toContain('anna@')
+    expect(opened('invites:deliveries')).toEqual([])
+    expect(has('[data-invites-failed]')).toBe(false)
+
+    // a guest's row shows its label on the phone too, so its failed read says so
+    await load((s) =>
+      s.profiles.push(person('gail', 'Gail Guest', { org_role: 'guest', auth_user_id: undefined })),
+    )
+    force = { fail: ['deliveries'] }
+    narrowScreen(true)
+    await render(() => <Screen key="guest" initial="org-users" reset={vi.fn()} />)
+    expect(opened('invites:deliveries').map((r) => r.args.profile_ids)).toEqual([['gail']])
+    expect(find('[data-invite-for="gail"]').textContent).toBe("couldn't check invitation")
+    expect(has('[data-invites-failed]')).toBe(true)
+  })
 })
 
 /* ------------------------------------------------ the phone and the shell */

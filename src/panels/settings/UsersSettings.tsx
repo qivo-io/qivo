@@ -896,12 +896,16 @@ export function OrgUsersPage({
     const vm = held(id)
     return vm ? vm.pending : !!known.current.get(id)?.pending
   }
+  // a phone row shows no invitation label and only a guest's row does, so
+  // the phone's list reads the pending guests alone
+  const labelled = (id: string) =>
+    !narrow || (held(id)?.orgRole ?? known.current.get(id)?.org_role) === 'guest'
   if (personPage) {
     if (pagePerson && (held(pagePerson.id)?.pending ?? pagePerson.pending))
       pendingIds.push(pagePerson.id)
   } else
     for (const id of [...onPage, ...keptIds.map((k) => k.id)])
-      if (pendingOf(id)) pendingIds.push(id)
+      if (pendingOf(id) && labelled(id)) pendingIds.push(id)
   const inviteRows = useInviteDeliveries(org, pendingIds)
 
   const ctx: RowContext = {
