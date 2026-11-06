@@ -51,7 +51,12 @@ import { withReach } from '../../convex/tests/projectReach.setup'
 import { plantBlocks, plantStamp, plantTeam } from '../../convex/tests/teamSyncAgenda.setup'
 import type { SyncScope } from '../lib/teamSync'
 import type { Snapshot } from './plannerFixture.setup'
-import { SYNC_CONTEXT, type SyncArgs, teamSyncStandIn } from './teamSyncStandIn.setup'
+import {
+  type ForcedSync,
+  SYNC_CONTEXT,
+  type SyncArgs,
+  teamSyncStandIn,
+} from './teamSyncStandIn.setup'
 
 vi.hoisted(() => {
   // the client's zone, set before any module reads the clock
@@ -129,16 +134,18 @@ const agendaOf = (t: T, P: Store, profile: Doc<'profiles'>, scope: AgendaScope) 
 
 /** What Team sync's stand-in answers `profile` for `scope` from the
  * workspace the store booted from, reading sight and edit rights from that
- * store, as the jsdom fixture does, on `args` when given. */
+ * store, as the jsdom fixture does, on `args` when given, with `force`. */
 const standInOf = (
   P: Store,
   profile: Doc<'profiles'>,
   scope: AgendaScope,
   args: SyncArgs = argsOf(P, profile, scope),
+  force?: ForcedSync,
 ) =>
   teamSyncStandIn(P.snap, args, {
     sees: (id) => P.canSee(id),
     writes: (id) => P.canWrite(id),
+    force,
   })
 
 /** The scopes the page offers, as the server and the page name them. */
@@ -493,8 +500,8 @@ describe('the rules that must hold', () => {
     const kept = P.rules.doneSince(f.user.id, done, m.subIds, m.sinceOf(user))
     expect(drifted.length).toBeGreaterThan(kept.filter((d) => d.kind === 'reviewed').length)
     // a scope the page would answer as All projects: the agenda and the
-    // stand-in answer unavailable, and a stand-in that fell back would
-    // answer All projects' meeting, which must fail
+    // stand-in answer unavailable, where a stand-in that fell back would
+    // answer All projects' meeting, an ok one here
     const unknown = uuid()
     expect(P.oracle.resolveSyncScope({ kind: 'team', id: unknown }, P.oracle.worldOf())).toEqual({
       kind: 'all',
@@ -502,7 +509,7 @@ describe('the rules that must hold', () => {
     const refused = await agendaOf(t, P, subject, { kind: 'team', team_id: unknown })
     expect(refused).toEqual({ state: 'unavailable' })
     expect(standInOf(P, subject, { kind: 'team', team_id: unknown })).toEqual(refused)
-    expect(standInOf(P, subject, { kind: 'all' })).not.toEqual(refused)
+    expect(standInOf(P, subject, { kind: 'all' }).state).toBe('ok')
     // the stand-in's context bound is the agenda's
     expect(SYNC_CONTEXT).toBe(AGENDA.context)
     // a blocker read past sight, as the stored links name one in SKNK's
@@ -588,12 +595,51 @@ describe('the rules that must hold', () => {
     // and a week left unrounded must fail
     const week = answer.people.find((p) => p.id === carol.id)?.week
     expect(week).toEqual({ state: 'ok', hours: 3.3 })
-    const unrounded = {
-      ...answer,
-      people: answer.people.map((p) =>
-        p.id === carol.id ? { ...p, week: { state: 'ok' as const, hours: 10 / 3 } } : p,
-      ),
+    expect(week).not.toEqual({ state: 'ok', hours: 10 / 3 })
+  })
+
+  it('refuses past a lowered ceiling as the agenda does, over_ceiling from rows, asks and certain Done tasks and over_budget where only those the floor reads pass it', async () => {
+    const { t, f, subject, now } = await compareShape(null, 'admin')
+    // a Done task after the subject's latest reading point, the start of
+    // their sitting, so certain; the case's other Done tasks are older and
+    // only their reading floors read them
+    await plantIssue(t, {
+      org_id: f.org.id,
+      project_id: f.sub.id,
+      title: 'Done in the sitting',
+      status: 'done',
+      assignee_id: subject.id,
+      done_at: '2026-01-01T16:00:00.000Z',
+    })
+    await withReach(t)
+    await countOrg(t, f.org.id)
+    const P = await storeOf(t, subject, now)
+    const scope = { kind: 'project', project_id: f.meta.id } as const
+    const whole = await agendaOf(t, P, subject, scope)
+    if (whole.state !== 'ok') throw new Error(whole.state)
+    const fixed = whole.rows.length + whole.asks.length
+    // the agenda's module as the server reads it after the store's reset
+    const { AGENDA: agenda } = await import('../../convex/lib/teamSyncAgenda')
+    const was = agenda.ceiling
+    const states = new Map<number, string>()
+    try {
+      for (let ceiling = fixed - 1; ceiling <= fixed + whole.done.length; ceiling++) {
+        agenda.ceiling = ceiling
+        const real = await agendaOf(t, P, subject, scope)
+        expect(
+          standInOf(P, subject, scope, argsOf(P, subject, scope), { ceiling }),
+          `ceiling ${ceiling}`,
+        ).toEqual(real)
+        states.set(ceiling, real.state)
+      }
+    } finally {
+      agenda.ceiling = was
     }
-    expect(unrounded).not.toEqual(answer)
+    // past the rows and asks; at them, the certain Done task passes it, which
+    // a stand-in that judged the floors first would answer over_budget
+    expect(states.get(fixed - 1)).toBe('over_ceiling')
+    expect(states.get(fixed)).toBe('over_ceiling')
+    expect([...states.values()]).toContain('over_budget')
+    expect(states.get(fixed + whole.done.length)).toBe('ok')
   })
 })
