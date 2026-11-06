@@ -358,16 +358,18 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const create = sent.find((w) => w.name === 'projects:create')
     expect(create?.args).toMatchObject({ type: 'project', parent_id: 'ops', name: 'Docs' })
     expect(create?.args).not.toHaveProperty('sort_order')
-    // nothing paints under a parent the workspace does not hold
-    expect(document.querySelector('[data-subproject-row]')).toBeNull()
+    // nothing paints under a parent the workspace does not hold, neither
+    // as the create goes nor once it is answered
+    const id = String(create?.args.id)
     const { P } = await import('./store/planner')
+    expect(P.project(id)).toBeUndefined()
     const scopes = vi.spyOn(P, 'saveUI')
     await save()
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
+    expect(P.project(id)).toBeUndefined()
     // App stays in Settings › Projects, never moves into the sub-project,
     // and creates no task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
-    const id = String(sent.find((w) => w.name === 'projects:create')?.args.id)
     expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
       false,
     )
