@@ -449,6 +449,26 @@ describe('Settings › Teams', () => {
     expect(document.body.textContent).not.toContain('Other crew')
   })
 
+  it('drops a created team the server no longer holds once the list passed its place', async () => {
+    await load()
+    server.force = { batch: 1 }
+    await teamsPage()
+    await type(find<HTMLInputElement>('input[placeholder="New team name"]'), 'Aaa crew')
+    await click(button('Add team'))
+    const created = requests.find((r) => r.name === 'teams:create')?.args.id as string
+    // the workspace delivers the team, but the server's list never holds it,
+    // as when someone deleted it meanwhile
+    const delivered = structuredClone(server.snap)
+    team(delivered, created, 'Aaa crew')
+    await act(async () =>
+      server.publish({ ...delivered, delivered_at: '2026-09-15T09:00:00.000Z' }),
+    )
+    await answer('teams:create', 'accept')
+    // the first batch reached Bench, past the place of Aaa crew
+    expect(document.querySelector('[data-team-kept]')).toBeNull()
+    expect(teamRows().map((r) => r.name)).toEqual(['Bench'])
+  })
+
   it("lists a leader's teams with the non-admin description, and reads nothing for a seat that leads none", async () => {
     await load((snap) => {
       snap.profiles[0].org_role = 'user'
@@ -558,6 +578,27 @@ describe("a team's page", () => {
     expect(deleteOf('crew').disabled).toBe(true)
     expect(find('[data-team-row="crew"]').hasAttribute('data-team-waiting')).toBe(true)
     expect(deleteOf('bench').disabled).toBe(false)
+  })
+
+  it("shows the store's hours and role while it holds the person, else the answer's", async () => {
+    await load(undefined, (held) => {
+      const leo = held.profiles.find((p) => p.id === 'leo')
+      if (leo) leo.plannable_hours = 32
+      // the store holds Vic as a user, as after this session promoted them
+      const vic = held.profiles.find((p) => p.id === 'vic')
+      if (vic) vic.org_role = 'user'
+      held.profiles = held.profiles.filter((p) => p.id !== 'bot')
+    })
+    await teamPage()
+    expect(find<HTMLInputElement>('[data-plannable-for="leo"]').value).toBe('32')
+    expect(
+      document.querySelector('[data-settings-team-member="vic"] [data-viewer-chip]'),
+    ).toBeNull()
+    // the agent the store does not hold shows from the answer, waiting
+    const bot = find('[data-settings-team-member="bot"]')
+    expect(bot.hasAttribute('data-team-member-waiting')).toBe(true)
+    expect(bot.textContent).toContain('Relay')
+    expect(bot.querySelector('[data-plannable-unbounded]')).not.toBeNull()
   })
 
   it("locks Leader for a Viewer and an agent, and paints the store's change at once", async () => {
