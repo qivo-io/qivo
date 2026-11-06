@@ -75,7 +75,9 @@
 //                        gathers at most and nine pages of the
 //                        directory), error (every read fails) and
 //                        favorites (the first two programs starred to
-//                        begin with); several joined by commas. A star
+//                        begin with) and empty (projectNav.page and search
+//                        list nothing, as for someone who sees no
+//                        project); several joined by commas. A star
 //                        or an unstar (projectNav:setFavorite) changes the
 //                        starred set by the server's rule and sends the
 //                        reads again
@@ -679,6 +681,7 @@ const forcedProjectNav = (() => {
     else if (state === 'small') force.batch = 5
     else if (state === 'error') force.fail = true
     else if (state === 'favorites') force.favorites = true
+    else if (state === 'empty') force.empty = true
   }
   return force
 })()
@@ -1971,8 +1974,13 @@ const projectNavForce = () => ({ ...forcedProjectNav, favorites: starredSet() })
 const read = (name, args = {}) => {
   if (name.startsWith('workspace:')) return readPart(name, args)
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
-  if (name.startsWith('projectNav:'))
-    return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+  if (name.startsWith('projectNav:')) {
+    const answer = projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+    // projectnav=empty: the lists hold nothing, after the stand-in's checks
+    return forcedProjectNav.empty && answer.state === 'ok' && name !== 'projectNav:resolve'
+      ? { ...answer, rows: [], next: null, stopped: false }
+      : answer
+  }
   // Deleted items (src/store/deletedItemsStandIn.setup.ts)
   if (isDeletedRead(name))
     return name === 'deletedItems:purgeSummary' && deletedStates.has('purge-counting')

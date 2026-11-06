@@ -1242,6 +1242,12 @@ describe('the benchmark server', () => {
       5,
     )
     expect((await nav('projectnav=error', 'projectNav:page')).answer.error).toContain('fails')
+    expect((await nav('programs=4&projectnav=empty', 'projectNav:page')).answer).toEqual({
+      state: 'ok',
+      rows: [],
+      next: null,
+      stopped: false,
+    })
     const starred = await nav('programs=4&projectnav=favorites', 'projectNav:page')
     expect(starred.answer.rows.map((row) => [row.name, row.favorite])).toEqual([
       ['Testbed program', true],
