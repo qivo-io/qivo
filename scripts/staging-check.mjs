@@ -4499,12 +4499,15 @@ export function freeMilestoneWeek(milestones, today, weekStart) {
 }
 
 /** The first week before the run's own that `milestones` (YYYY-MM-DD days)
- *  leaves free, going back from last week, in an organization whose weeks
- *  start on `weekStart`, so a milestone made there shows in the Milestones
- *  window's Past. */
+ *  leaves free, going back from the week before last, in an organization
+ *  whose weeks start on `weekStart`, so a milestone made there shows in the
+ *  Milestones window's Past. `today` is the run's UTC day, while the
+ *  browser places weeks by the runner's local day, which can still be in
+ *  the week before the UTC one, so the UTC week before could be the
+ *  browser's current week. */
 export function freePastMilestoneWeek(milestones, today, weekStart) {
   const taken = new Set(milestones.map((day) => weekOf(day, weekStart)))
-  let week = addDays(weekOf(today, weekStart), -7)
+  let week = addDays(weekOf(today, weekStart), -14)
   while (taken.has(week)) week = addDays(week, -7)
   return week
 }
@@ -4512,7 +4515,8 @@ export function freePastMilestoneWeek(milestones, today, weekStart) {
 /** The Milestones window on the deployment's answers (milestones.get and
  *  section): the run makes `<tag> Milestone` over REST on its project M in
  *  a week M leaves free after the run's own, and `<tag> Past milestone` in
- *  the first week M leaves free before it, then in the app M's Overview
+ *  the first week M leaves free from the week before last back
+ *  (freePastMilestoneWeek), then in the app M's Overview
  *  reaches its ok state, a press on the first milestone's row opens the
  *  window, which reads the milestone and shows its editor with its name in
  *  its place in Upcoming once that section's read answered, so the

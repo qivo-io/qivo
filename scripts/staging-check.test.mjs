@@ -151,10 +151,11 @@ describe('staging check REST contract', () => {
     expect(freeMilestoneWeek(['2026-11-24', '2026-11-30'], '2026-11-06', 1)).toBe('2026-12-07')
     // a week starting on Sunday
     expect(freeMilestoneWeek([], '2026-11-06', 0)).toBe('2026-11-22')
-    // a past milestone goes in the first free week before the run's own
-    expect(freePastMilestoneWeek([], '2026-11-06', 1)).toBe('2026-10-26')
-    expect(freePastMilestoneWeek(['2026-10-27', '2026-10-21'], '2026-11-06', 1)).toBe('2026-10-12')
-    expect(freePastMilestoneWeek([], '2026-11-06', 0)).toBe('2026-10-25')
+    // a past milestone goes in the first free week from the week before
+    // last back, which no runner's local day can place in its current week
+    expect(freePastMilestoneWeek([], '2026-11-06', 1)).toBe('2026-10-19')
+    expect(freePastMilestoneWeek(['2026-10-20', '2026-10-14'], '2026-11-06', 1)).toBe('2026-10-05')
+    expect(freePastMilestoneWeek([], '2026-11-06', 0)).toBe('2026-10-18')
     // must fail: the run's own week is not in the past
     expect(freePastMilestoneWeek([], '2026-11-06', 1)).not.toBe('2026-11-02')
   })
