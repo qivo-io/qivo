@@ -45,8 +45,18 @@ projects. Viewers, including **Viewer** agents, have none.
 You cannot remove or deactivate yourself, demote or deactivate the last admin,
 or delete the last team. An organization needs at least one team, so create
 another team before you delete the last one. Adding or reactivating a user requires no prepaid
-seat. The page lists **Guests** separately with their projects and roles. An
-active guest counts toward billing only without an active home membership ([Guest billing](./who-sees-what-the-access-model.md#people-outside-your-organization)).
+seat. An active guest counts toward billing only without an active home membership ([Guest billing](./who-sees-what-the-access-model.md#people-outside-your-organization)).
+
+**Organization → Users** lists 25 people at a time in name order, people and
+agents first, then guests with their projects and roles, with **Previous**
+and **Next**. The search finds anyone by the words of their name or by their
+email address, ignoring case and accents, also people on other pages. A
+person you add shows at the top until their page is open. A name, address or
+hours you are typing stays on screen when you search or change page, and so
+does an agent whose keys are open. A guest row names up to ten projects and
+says when there are more. The last admin's role and **Remove** stay locked
+while the organization has one active admin, counted across the whole
+organization, not just the page on screen.
 
 ## Agent users
 
@@ -56,6 +66,11 @@ Qivo shows it once and stores only its hash and a display fingerprint, such as
 `qva_d9e...58b76`. To rotate a key, create another from the agent's row, update
 your client, then revoke the old key. Agent and key names, like personal token
 names, allow up to 80 characters.
+
+An agent's row shows its newest active key's fingerprint, read when the page
+opens, and its keys load when you open them. If Qivo cannot check them, the
+row says so rather than claiming the agent has no key. A key panel lists the
+newest 50 keys, and **Organization → API access** lists every key.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
