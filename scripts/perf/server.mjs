@@ -394,8 +394,11 @@ const forcedMilestones = (() => {
 const forcedSync = new Set((parameters.get('sync') ?? '').split(',').filter(Boolean))
 /* How long an agenda read answers ok before sync=stale turns it, in ms. */
 const SYNC_STALE_MS = 4000
-/* When the first agenda read was asked, for sync=stale, or null. */
+/* When the first agenda read was asked, for sync=stale, or null, and
+   whether the meeting has stopped fitting. The first read's timer sets it,
+   then sends the watched agenda again in a transition. */
 let syncAskedAt = null
+let syncTurned = false
 /* The relation pickers' forced states (the `relations` parameter), as the
    stand-in's `force` takes them. */
 const forcedRelations = (() => {
@@ -1547,8 +1550,16 @@ const subscriptions = new Map()
     the forced states of the `sync` parameter. */
 function syncAgenda(args) {
   if (forcedSync.has('error')) throw new Error("Team sync's agenda fails, as sync=error asks")
+  // sync=stale: the meeting stops fitting while it is open, which the app,
+  // watching the agenda as a view read, hears in the next transition
+  if (forcedSync.has('stale') && syncAskedAt === null)
+    setTimeout(() => {
+      syncTurned = true
+      void transition()
+    }, SYNC_STALE_MS)
   syncAskedAt ??= Date.now()
-  const turned = forcedSync.has('stale') && Date.now() - syncAskedAt >= SYNC_STALE_MS
+  const turned =
+    forcedSync.has('stale') && (syncTurned || Date.now() - syncAskedAt >= SYNC_STALE_MS)
   const state = ['over_ceiling', 'over_budget', 'unavailable', 'access_unchecked'].find((s) =>
     forcedSync.has(s),
   )
@@ -1856,11 +1867,6 @@ self.onmessage = async ({ data }) => {
       setTimeout(() => {
         if (subscriptions.has(sub)) void subscription.send()
       }, latency)
-      // sync=stale: the meeting stops fitting while it is open
-      if (name === 'teamSync:agenda' && forcedSync.has('stale'))
-        setTimeout(() => {
-          if (subscriptions.has(sub)) void subscription.send()
-        }, SYNC_STALE_MS + latency)
       return
     }
     case 'watch': {
