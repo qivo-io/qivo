@@ -112,7 +112,9 @@ export function createMintQueue(mint: MintCall, options: Options) {
     void call
       .then(
         (res) => {
-          const leases = chunk.kind === 'attachment' ? res.attachments : res.avatars
+          const leases = chunk.kind === 'attachment' ? res?.attachments : res?.avatars
+          // an answer without its leases is no answer: nothing is omitted
+          if (!leases || typeof leases !== 'object') return answer(() => ({ state: 'failed' }))
           answer((w) => {
             const lease = leases[w.request.id]
             return lease ? { state: 'lease', lease } : { state: 'missing' }

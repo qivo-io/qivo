@@ -10,6 +10,8 @@ type Call = {
   kind: 'attachment' | 'avatar'
   ids: string[]
   resolve: (answer?: Partial<Awaited<ReturnType<MintCall>>>) => void
+  /** answers exactly `value`, as a stand-in that answers nothing might */
+  raw: (value: unknown) => void
   reject: (error: unknown) => void
 }
 
@@ -33,6 +35,10 @@ function harness() {
         resolve: (answer = {}) => {
           done()
           resolve({ attachments: {}, avatars: {}, ...answer })
+        },
+        raw: (value) => {
+          done()
+          resolve(value as Awaited<ReturnType<MintCall>>)
         },
         reject: (error) => {
           done()
@@ -169,6 +175,19 @@ describe('the mint queue', () => {
       { state: 'refused' },
       { state: 'failed' },
     ])
+  })
+
+  it('answers a call whose answer holds no leases failed, never missing', async () => {
+    const h = harness()
+    const asked = h.queue.request(item('avatar', 0))
+    await flush()
+    ;(h.calls[0] as Call).raw(null)
+    expect(await asked).toEqual({ state: 'failed' })
+    // its slot is free again
+    const next = h.queue.request(item('avatar', 1))
+    await flush()
+    answer(h.calls[1] as Call)
+    expect((await next).state).toBe('lease')
   })
 
   it('answers a timed-out call failed at 15 s and keeps its slot until it settles', async () => {
