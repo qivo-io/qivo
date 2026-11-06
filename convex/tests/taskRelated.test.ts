@@ -18,7 +18,8 @@
  *      room for, a write's answer.
  *   9. Access: one accessOf instance, its refusal, and reads that follow
  *      the task rather than the organization.
- *  10. Reads at the design size, one figure a case, recorded in the
+ *  10. Comment pages' names read by id.
+ *  11. Reads at the design size, one figure a case, recorded in the
  *      budgets' docstrings (lib/core.ts RELATED_READ, SUBTASK_PAGE and
  *      TASK_DETAILS). */
 
@@ -44,7 +45,7 @@ import { DEFAULT_PAGE_SIZE, LIMITS } from '../lib/limits'
 import { CURSOR_REFUSAL, listCursorText, offsetRefusal } from '../lib/listCursor'
 import { nameKey } from '../lib/nameKey'
 import { sha256hex } from '../machine/auth'
-import { getIssue as mcpGetIssue } from '../machine/mcp'
+import { getIssue as mcpGetIssue, listComments as mcpListComments } from '../machine/mcp'
 import {
   mcpTaskRelated,
   restListAttachments,
@@ -52,7 +53,7 @@ import {
   restListLinks,
   restListSubtasks,
 } from '../machine/records'
-import { getIssue as restGetIssue } from '../machine/rest'
+import { getIssue as restGetIssue, listComments as restListComments } from '../machine/rest'
 import { insertTask } from '../model/descriptions'
 import {
   expectRefusal,
@@ -1384,7 +1385,59 @@ describe('access', () => {
   })
 })
 
-/* ---------------------------------------------------- 10. the design size */
+/* ------------------------------------------------------------ 10. comments */
+
+describe('comment pages', () => {
+  it('names a page’s authors and editors from their own profiles, never the roster', async () => {
+    const fx = await setup()
+    const [task] = await plantTasks(fx, 1)
+    // an organization of 200 people
+    const people = await plantFollowers(
+      fx,
+      (await plantTasks(fx, 1))[0],
+      Array.from({ length: 195 }, (_, i) => `Person ${i}`),
+    )
+    const gone = uuid()
+    const authors = [people[0].id, people[1].id, gone]
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 10; i++)
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: authors[i % 3],
+          body: `Comment ${i}`,
+          created_at: at(i),
+          ...(i === 4 ? { edited_at: at(20), edited_by: people[2].id } : {}),
+        })
+    })
+    const measure = (fn: unknown) =>
+      fx.t.query(async (ctx) =>
+        readsOf(ctx, () =>
+          handlerOf<Record<string, unknown>, unknown>(fn)(ctx, {
+            ...reader(fx.agent),
+            ref: task.id,
+          }),
+        ),
+      )
+    const rest = await measure(restListComments)
+    const rows = rest.out as {
+      author_id: string | null
+      author_name: string | null
+      edited_by_name: string | null
+    }[]
+    expect(rows.map((c) => c.author_name)).toEqual(
+      Array.from({ length: 10 }, (_, i) => [people[0].name, people[1].name, null][i % 3]),
+    )
+    expect(rows[4].edited_by_name).toBe(people[2].name)
+    const mcp = await measure(mcpListComments)
+    expect(JSON.parse(mcp.out as string)).toHaveLength(10)
+    // the task, its comments and four people asked by id (one gone), where
+    // the roster read 200 profiles
+    for (const read of [rest, mcp]) expect(read.documents).toBeLessThan(40)
+  })
+})
+
+/* ---------------------------------------------------- 11. the design size */
 
 /* A public or internal function's handler, run inside `ctx`, so a test can
  * read the transaction's metrics after it. */
@@ -1644,5 +1697,46 @@ describe('reads at the design size', () => {
     const details = reads['REST details'].out as { subtasks: Row[]; links: Row[] }
     expect(details.subtasks).toHaveLength(3)
     expect(details.links).toHaveLength(3)
+  })
+
+  it('a comment page of 50 comments by 50 authors in an organization of 1,000 people', async () => {
+    const fx = await setup()
+    const [task] = await plantTasks(fx, 1)
+    const people = await plantFollowers(
+      fx,
+      (await plantTasks(fx, 1))[0],
+      Array.from({ length: 995 }, (_, i) => `Person ${String(i).padStart(3, '0')} Example`),
+    )
+    await fx.t.run(async (ctx) => {
+      for (let i = 0; i < 50; i++)
+        await ctx.db.insert('comments', {
+          id: uuid(),
+          issue_id: task.id,
+          author: people[i * 19].id,
+          body: `An ordinary comment of a sentence or two, number ${i}.`,
+          created_at: at(i),
+        })
+    })
+    const lines: string[] = []
+    for (const [call, fn] of [
+      ['REST', restListComments],
+      ['MCP', mcpListComments],
+    ] as const) {
+      const r = await fx.t.query((ctx) =>
+        readsOf(ctx, () =>
+          handlerOf<Record<string, unknown>, unknown>(fn)(ctx, {
+            ...reader(fx.agent),
+            ref: task.id,
+          }),
+        ),
+      )
+      lines.push(
+        `${call} ${r.ranges} ranges, ${r.documents} documents, ${(r.bytes / 1e6).toFixed(2)} MB`,
+      )
+      expect(r.documents).toBeLessThan(200)
+    }
+    console.log(
+      `[task details at the design size] a comment page of 50 by 50 authors of 1,000: ${lines.join('; ')}`,
+    )
   })
 })

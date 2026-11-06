@@ -60,6 +60,7 @@ import {
   CALLER_GONE,
   type Caller,
   childProjectsCore,
+  commentNames,
   commentOut,
   credentialVia,
   destinationOf,
@@ -1756,14 +1757,6 @@ async function catalogueFlags(ctx: QueryCtx, me: Caller, access: CredentialAcces
   }
 }
 
-async function orgNames(ctx: QueryCtx, me: Caller): Promise<Map<string, string>> {
-  const rows = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', me.org_id))
-    .collect()
-  return new Map(rows.map((p) => [p.id, p.name]))
-}
-
 /* The forbidden refusal for a project the caller can read but not write
  * (machine/shared.ts MCP_NO_WRITE). */
 const noWrite = (): ConvexError<Refusal> => forbidden(MCP_NO_WRITE)
@@ -1992,7 +1985,8 @@ export const getIssue = internalQuery({
 
 /* list_comments answers a page of the thread, the newest comments or those
  * before the comment `before` names, oldest first (lib/core.ts
- * listCommentsCore). `limit` is checked as REST checks it (shared.ts
+ * listCommentsCore), naming their authors and editors from their own
+ * profiles (commentNames). `limit` is checked as REST checks it (shared.ts
  * pageLimit). */
 export const listComments = internalQuery({
   args: {
@@ -2009,7 +2003,7 @@ export const listComments = internalQuery({
       limit: pageLimit(LIMITS.listComments, limit),
       before,
     })
-    const names = await orgNames(ctx, me)
+    const names = await commentNames(ctx, me, rows)
     const out = []
     for (const c of rows) out.push(await commentOut(ctx, c, { surface: 'mcp', names }))
     return pretty(out)

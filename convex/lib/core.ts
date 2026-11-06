@@ -877,6 +877,32 @@ export async function listCommentsCore(
   return rows.reverse()
 }
 
+/** The names of the people a page of comments names, its authors and
+ * editors, each profile read by id once, at most two a comment, never the
+ * organization's roster. A profile of another organization is left out, so
+ * its name reads null, as a removed person's does. Measured on 6 November
+ * 2026 in convex/tests/taskRelated.test.ts ("at the design size"): a REST or
+ * MCP page of 50 comments by 50 authors in an organization of 1,000 people
+ * reads 66 ranges, 111 documents and 0.03 MB, where the roster read 1,000
+ * profiles. */
+export async function commentNames(
+  ctx: QueryCtx,
+  me: Caller,
+  rows: readonly Doc<'comments'>[],
+): Promise<Map<string, string>> {
+  const ids = new Set<string>()
+  for (const c of rows) {
+    if (c.author !== undefined) ids.add(c.author)
+    if (c.edited_by !== undefined) ids.add(c.edited_by)
+  }
+  const names = new Map<string, string>()
+  for (const id of ids) {
+    const profile = await byId(ctx, 'profiles', id)
+    if (profile !== null && profile.org_id === me.org_id) names.set(id, profile.name)
+  }
+  return names
+}
+
 /* ------------------------------------------------------------- projections
  * One superset feeds both surfaces; each publishes its subset in ITS deployed
  * key order (the MCP body is 2-space pretty-printed — key order is the wire).

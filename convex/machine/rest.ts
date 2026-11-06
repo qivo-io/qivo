@@ -62,6 +62,7 @@ import {
   CALLER_GONE,
   type Caller,
   type Catalogue,
+  commentNames,
   commentOut,
   credentialVia,
   destinationOf,
@@ -236,15 +237,6 @@ async function catalogueAccess(
     readable: (id) => flags.get(id)?.read === true,
     writable: (id) => flags.get(id)?.write === true,
   }
-}
-
-/* uuid → name over one org roster scan, for the list projections. */
-async function orgNames(ctx: QueryCtx, orgId: string): Promise<Map<string, string>> {
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  return new Map(profiles.map((p) => [p.id, p.name]))
 }
 
 /* The body fields of POST /v1/tasks. `archived`, `project_id` and
@@ -940,7 +932,8 @@ export const deleteIssue = internalMutation({
 
 /* GET /v1/tasks/{ref}/comments?limit=&before= answers the newest comments
  * of the discussion thread, or those before the comment `before` names,
- * oldest first (lib/core.ts listCommentsCore). */
+ * oldest first (lib/core.ts listCommentsCore), naming their authors and
+ * editors from their own profiles (commentNames). */
 export const listComments = internalQuery({
   args: {
     callerId: v.string(),
@@ -957,7 +950,7 @@ export const listComments = internalQuery({
       limit: pageLimit(LIMITS.listComments, a.limit),
       before: a.before,
     })
-    const names = await orgNames(ctx, me.org_id)
+    const names = await commentNames(ctx, me, rows)
     return (await Promise.all(
       rows.map((c) => commentOut(ctx, c, { surface: 'rest', names })),
     )) as RestCommentJson[]
