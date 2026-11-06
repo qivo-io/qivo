@@ -941,27 +941,31 @@ describe("profiles.setPlannableHours — a leader's check walks the person's tea
     expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
   })
 
-  it('refuses a leader past a lowered bound for a person in more teams, with its own sentence, and still judges a leader in more teams', async () => {
+  it('passes a leader at a lowered bound and refuses one past it for a person in more teams, with its own sentence, and still judges a leader in more teams', async () => {
     const t = newT()
     const f = await withOrg(t)
     const set = setter(t, f.org.id)
     const most = OWN_READS.teams
     OWN_READS.teams = 2
     try {
-      // Pat is in three teams, Hardware among them, which the user leads
+      // Pat is in two teams, the bound, Hardware among them, which the
+      // user leads
       const pat = await plantSeat(t, { org_id: f.org.id, name: 'Pat Ito' })
       await t.run((ctx) =>
         ctx.db.insert('team_members', { team_id: f.team.id, profile_id: pat.id, is_leader: false }),
       )
       await plantTeam(t, f.org.id, [{ profile: pat }])
+      await set(f.user, pat.id, 30)
+      expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
+      // one team more is past it
       await plantTeam(t, f.org.id, [{ profile: pat }])
-      const past = await expectRefusal(set(f.user, pat.id, 30), 'rule')
+      const past = await expectRefusal(set(f.user, pat.id, 31), 'rule')
       expect(past.data).toEqual({
         code: 'rule',
         reason: ACCESS_UNCHECKED,
         message: PLANNABLE_HOURS_UNCHECKED,
       })
-      expect((await profileById(t, pat.id))?.plannable_hours).toBe(40)
+      expect((await profileById(t, pat.id))?.plannable_hours).toBe(30)
       // an admin is not walked, so passes
       await set(f.admin, pat.id, 32)
       expect((await profileById(t, pat.id))?.plannable_hours).toBe(32)
