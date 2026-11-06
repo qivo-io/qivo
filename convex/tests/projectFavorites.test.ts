@@ -829,7 +829,7 @@ describe('the one way to write a favorite', () => {
   const PATCH = /\.\s*(?:patch|replace)\(/
   const DELETE = /\.\s*delete\(/
 
-  it('inserts them only in model/projectFavorites.ts', () => {
+  it('inserts them only in model/projectFavorites.ts, the Northstar seed through it', () => {
     // the scan sees the file that inserts them, so its silence means something
     expect(sources['../model/projectFavorites.ts']).toMatch(INSERT)
     const others = Object.entries(sources)
@@ -859,6 +859,11 @@ describe('the one way to write a favorite', () => {
       .filter(([path, source]) => !allowed.has(path) && writesAfterRead(source, PATCH))
       .map(([path]) => path)
     expect(others).toEqual([])
+    // and the rollback repair (internal/favoritesRepair.ts), which patches
+    // the stale copies of the page of rows it read
+    expect(sources['../internal/favoritesRepair.ts']).toMatch(
+      /writer\.db\.patch\(row\._id, copiesOf\(project\)\)/,
+    )
   })
 
   it('deletes them only in the writer and the teardowns', () => {
@@ -868,6 +873,9 @@ describe('the one way to write a favorite', () => {
       '../model/orgDeletion.ts',
       '../internal/demoCleanup.ts',
       '../model/deletedItems.ts',
+      // the rollback repair, which deletes the rows of its page a
+      // rollback left (internal/favoritesRepair.ts)
+      '../internal/favoritesRepair.ts',
     ])
     // the scan sees deletes in the files it allows that delete in place
     for (const path of [

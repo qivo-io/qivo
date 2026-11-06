@@ -1,12 +1,15 @@
 /* A seat's favorite top-level projects (schema.ts project_favorites), which
- * the All projects directory and the sidebar list first, in name order.
- * A star changes that seat's navigation only. It grants nothing, writes no
- * access, reach, subscription, message or activity row, reads no task and
- * changes no other seat's favorites.
+ * the All projects directory (src/components/ProjectDirectory.tsx), the
+ * shared project picker and, later, the sidebar list first, in name order;
+ * the directory's star sets them. A star changes that seat's navigation
+ * only. It grants nothing, writes no access, reach, subscription, message
+ * or activity row, reads no task and changes no other seat's favorites.
  *
  * setFavoriteCore is the one writer (projectNav.setFavorite): it stars a
  * top-level project the seat sees through ordinary access and unstars any
- * project. A rename, an archive or a restore of a starred project brings
+ * project. The Northstar seed writes its people's stars through
+ * insertSeededFavorite, and internal/favoritesRepair.ts deletes and patches
+ * the rows a rollback past the favorites release left. A rename, an archive or a restore of a starred project brings
  * the rows' copies in line (model/projectNav.ts treeFavorites,
  * settleFavorites). The teardowns delete rows through the ranges below:
  * profile removal by seat (favoritesOfProfile), the organization teardowns
@@ -171,6 +174,34 @@ export async function favoriteShows(
   const copies = copiesOf(project)
   if (row.name_key !== copies.name_key || row.live !== copies.live) return null
   return (await sight.shows(project)) ? project : null
+}
+
+/**
+ * Inserts seat `profileId`'s favorites row on top-level project `project`
+ * of organization `orgId`, with the project's copies, for the Northstar
+ * seed (model/demoSeed.ts). It writes the row without setFavoriteCore's
+ * access check, because the dataset shares every top-level project with
+ * both teams and every person belongs to one, which the dataset's test
+ * holds; and a seed refuses an organization that holds a favorites row
+ * (internal/marketingDemo.ts holdsNoWork), so the seat holds no row on the
+ * project before.
+ */
+export async function insertSeededFavorite(
+  ctx: MutationCtx,
+  a: {
+    orgId: string
+    profileId: string
+    project: Pick<Doc<'projects'>, 'id' | 'name' | 'archived_at'>
+    now: string
+  },
+): Promise<void> {
+  await ctx.db.insert('project_favorites', {
+    org_id: a.orgId,
+    profile_id: a.profileId,
+    project_id: a.project.id,
+    ...copiesOf(a.project),
+    created_at: a.now,
+  })
 }
 
 /** The refusal of a star on a sub-project the seat sees. */
