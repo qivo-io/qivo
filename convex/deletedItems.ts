@@ -7,7 +7,7 @@
  *
  * page answers the Settings page one page of 25 entries at a time, project
  * entries first, with its filters and search applied on the server, as the
- * app reads it from the release after v0.1.141. list and matches stay for
+ * app reads it from the release after v0.1.148. list and matches stay for
  * apps loaded before that release, and item for the app's holder of a
  * blocked row and its watch of a deferred item. All four read every active
  * seat of the login
@@ -173,7 +173,7 @@ export const purgeSummary = authedQuery({
 })
 
 /* ------------------------------------------------------------------- list
- * The Deleted items page as apps before the release after v0.1.141 read
+ * The Deleted items page as apps before the release after v0.1.148 read
  * it, kept for them until a later release removes it: the rows every seat
  * of the login sees, newest
  * first, at most 2,000 per organization, fewer once the call spent its read
@@ -196,7 +196,7 @@ export const item = authedQuery({
 })
 
 /* ---------------------------------------------------------------- matches
- * The search of apps before the release after v0.1.141, kept for them
+ * The search of apps before the release after v0.1.148, kept for them
  * until a later release removes it. Deleted tasks the caller sees
  * whose task key or title matches `text`, the
  * roots and subtasks of task items and the tasks inside deleted projects,

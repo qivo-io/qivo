@@ -810,7 +810,7 @@ From the release that first ships `deletedItems.page`, every task moved to
 Deleted items stores its search text, its assignee and copies of its item's
 deletion time, deleter, project and parent on its `deleted_tasks` row, and
 the page's search and assignee filter read them. No app of that release
-calls the page; the app reads it from the release after v0.1.141, whose
+calls the page; the app reads it from the release after v0.1.148, whose
 paragraph below names v0.1.131, which holds it, as the backend that app
 needs. Code from before that release lists `deleted_tasks` without these fields, so
 it does not accept a row that holds them, and once any row does, a backend
@@ -973,7 +973,7 @@ credential kind, which matches every delete through that kind of
 credential, so an admin's `via: 'mcp_tokens'` now lists the deletes
 through personal tokens where it listed none. No app of that release calls
 any of them, so it sets no rollback floor and needs no step. The app reads
-them from the release after v0.1.141, whose paragraph below names this
+them from the release after v0.1.148, whose paragraph below names this
 release (v0.1.131) as the backend that app needs, already held by the floor
 of the release after v0.1.140. The same release has
 Deleted items judge an organization admin by what the admin's role reads,
@@ -1352,7 +1352,7 @@ PR 299. This release's flow also reads a new read-only dry run on staging
 and on production before it ships, which must report no rows that differ,
 are missing or are extra.
 
-From the release after v0.1.141, **Settings → Projects → Deleted items**
+From the release after v0.1.148, **Settings → Projects → Deleted items**
 reads `deletedItems.page`, which v0.1.122 (`3a2da2ba`) first shipped, and
 `deletedItems.roles`, `people` and `purgeSummary` with the page's `someone`
 and kind-only `via`, which v0.1.131 (`c718c4e5`) first shipped, instead of
@@ -1364,10 +1364,10 @@ opens, as `deletedItems.roles` fails there, also in a tab that was open when
 the backend went back. A page already showing keeps the roles it read, while
 its people lists say they couldn't load people and **Delete now** says it
 couldn't count the items deleted earlier, until the backend rolls forward.
-The floor of the release after v0.1.140 above, v0.1.141 (`e79e1db9`),
-already holds v0.1.131, so this release sets no new floor. From it on, as
-from that one, never return the backend to a commit before v0.1.141; roll
-forward instead.
+The floors above, the release after v0.1.140's v0.1.141 (`e79e1db9`) and
+the newer ones, already hold v0.1.131, so this release sets no new floor.
+From it on, as from them, never return the backend to a commit before the
+newest floor above; roll forward instead.
 Returning the app alone to an earlier release is safe against a later
 backend, because that app reads `deletedItems.list`, `matches` and `item`,
 which stay through this release. A later release may remove `list` and
