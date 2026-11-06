@@ -558,8 +558,8 @@ describe('creating projects and sub-projects', () => {
     // an archived top-level project, one the user cannot see and an
     // archived sub-project of TBED, which all count, each placed at its
     // number, far past how many siblings there are
-    await plantProject(fx.t, { org_id: fx.org.id, archived_at: NOW })
-    await plantProject(fx.t, { org_id: fx.org.id })
+    const archivedTop = await plantProject(fx.t, { org_id: fx.org.id, archived_at: NOW })
+    const hiddenTop = await plantProject(fx.t, { org_id: fx.org.id })
     await plantProject(fx.t, {
       org_id: fx.org.id,
       type: 'project',
@@ -615,11 +615,22 @@ describe('creating projects and sub-projects', () => {
     // the places run past the counts, so a count would land among them
     expect(first.tops).toBeGreaterThan(first.counts[0])
     expect(first.subs).toBeGreaterThan(first.counts[1])
-    for (const [surface, create, parent] of [
-      ['app', appCreate, fx.meta.id],
-      ['REST', restCreate, 'TBED'],
-      ['MCP', mcpCreate, 'TBED'],
+    /* Moves top-level project `p` past every other one with a gap, so the
+     * next top-level create lands after it only if it reads `p`. Each
+     * surface lifts one, the archived project on the app and over MCP and
+     * the hidden one over REST, so each is the largest place at its own
+     * step; the archived sub-project, planted last, is TBED's largest at
+     * the app's. */
+    const lift = async (p: Doc<'projects'>) => {
+      const past = (await stored()).tops + 10
+      await fx.t.run((ctx) => ctx.db.patch(p._id, { sort_order: past }))
+    }
+    for (const [surface, create, parent, lifted] of [
+      ['app', appCreate, fx.meta.id, archivedTop],
+      ['REST', restCreate, 'TBED', hiddenTop],
+      ['MCP', mcpCreate, 'TBED', archivedTop],
     ] as const) {
+      await lift(lifted)
       const before = await stored()
       const top = await create(`Top over ${surface}`)
       expect((await projectRow(fx.t, top))?.sort_order, `${surface}, top-level`).toBe(before.tops)
