@@ -6085,9 +6085,9 @@ export const DELETED_BUSY_TEXT =
    (watchDeferred), each with the way to stop its watch. */
 const deferredWatches = new Map<string, () => void>()
 
-/* What waits for edits to resume: a deferred item's second send that the
-   pause refused or stopped (watchDeferred). Each runs once, when neither
-   the save pause nor snapshot trouble holds any more. */
+/* What waits for edits to resume, such as a deferred item's second send
+   that the pause refused or stopped (watchDeferred). Each runs once, when
+   neither the save pause nor snapshot trouble holds any more. */
 const afterPause = new Set<() => void>()
 
 /** Runs what waits for edits to resume, once both pauses have ended. */
@@ -6421,7 +6421,7 @@ async function runDeletedItems<Reason>(
    to ready or stuck after its restore failed; `siblings`, the action's
    other deferred items, are watched for themselves, so one that waits for
    another waits without judging it. A re-send skips the busy rule, so a
-   new action may run beside the watches, and honors the pause: when the
+   new action may run beside the watches, and honors the pause. When the
    pause refuses it or stops its call, the watch goes on and judges the
    last row it took again once edits resume (resumeAfterPause), or on the
    row's next answer, whichever comes first. */
@@ -6460,7 +6460,7 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       if (ended || epoch !== storeEpoch) return
       const refused = outcome.refused.find((r) => r.id === row.id)
       if (refused) return end(refusalText(refused.reason))
-      // the pause is no refusal of the item: it waits for edits to resume
+      // the pause is no refusal of the item, which waits for edits to resume
       if (outcome.paused) {
         afterPause.add(again)
         return
@@ -6483,7 +6483,7 @@ function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet
       }),
     }
   }
-  /** What the item's row says now: send it again, wait, or end. */
+  /** Sends the item again, waits or ends, as its row says now. */
   function judge(row: DeletedRow) {
     name = targetName(row)
     if (row.state === 'stuck') return end(refusalText('stuck'))
