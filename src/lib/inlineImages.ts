@@ -117,7 +117,8 @@ type Entry = {
   /** the minted URL a queued download fetches */
   leaseUrl: string | null
   pins: number
-  /** a gateway refusal already took one fresh mint */
+  /** a gateway refusal took one fresh mint and no download has succeeded
+      since, so the next refusal marks it gone */
   refusedOnce: boolean
   /** the plain-URL fallback holds a slot until its view reports */
   fallbackSlot: boolean
@@ -146,9 +147,6 @@ async function measureImage(url: string): Promise<Size> {
   if (!image.naturalWidth || !image.naturalHeight) throw new Error('Empty image')
   return { width: image.naturalWidth, height: image.naturalHeight }
 }
-
-/** A loader of inline images. Every dependency is injected for the tests;
-    the store passes `mint` and `held`. */
 
 /** A loader of inline images. Every dependency is injected for the tests;
     the store passes `mint` and `held`. */
@@ -370,6 +368,15 @@ export function createInlineImages(
         })
       } catch {
         if (!current() || controller.signal.aborted) return
+        if (entry.pins === 0) {
+          // No view will render the fallback <img> that would free the
+          // slot, so the slot goes back now and the next view asks again.
+          entry.controller = null
+          entry.phase = 'idle'
+          publish(entry)
+          tidy(entry)
+          return
+        }
         // A forwarded or local origin may show the gateway's no-cors image
         // even when fetch cannot read it. The view's <img> loads the URL
         // and keeps the slot until it reports load or error. Its bytes
@@ -412,6 +419,7 @@ export function createInlineImages(
       entry.box = size
       entry.phase = 'ready'
       entry.renewing = false
+      entry.refusedOnce = false
       if (entry.pins === 0) {
         unpinned.set(entry.id, entry)
         cachedBytes += entry.bytes
@@ -572,6 +580,8 @@ export function createInlineImages(
         freeSlot()
       }
       if (size === null) return refused(entry)
+      // the plain-URL fallback loaded, which ends a refusal's fresh mint
+      entry.refusedOnce = false
       if (!entry.box || entry.box.width !== size.width || entry.box.height !== size.height) {
         entry.box = size
         publish(entry)
@@ -690,13 +700,17 @@ export type InlineImages = ReturnType<typeof createInlineImages>
 /** What a view of attachment `id` shows, with `element` its wrapper: the
     view pins the attachment while its wrapper is near and unpins it when
     it goes far or unmounts. `near` tells whether the view may show the
-    bytes. */
+    bytes. It turns true only once this view's pin has run, so the row gate
+    and a renewal past the lease decide what shows before any held bytes
+    paint. */
 export function useInlineImage(
   loader: InlineImages,
   id: string | null,
   element: Element | null,
 ): InlineImage & { near: boolean } {
   const [near, setNear] = useState(false)
+  // the attachment this view's pin has run for
+  const [pinned, setPinned] = useState<string | null>(null)
   useEffect(() => {
     setNear(false)
     if (!id || !element) return
@@ -705,7 +719,11 @@ export function useInlineImage(
   useEffect(() => {
     if (!near || !id) return
     loader.pin(id)
-    return () => loader.unpin(id)
+    setPinned(id)
+    return () => {
+      setPinned(null)
+      loader.unpin(id)
+    }
   }, [loader, id, near])
   const subscribe = useCallback(
     (listener: () => void) => (id ? loader.watch(id, listener) : () => {}),
@@ -716,7 +734,7 @@ export function useInlineImage(
     () => (id ? loader.snapshot(id) : WAITING),
     () => WAITING,
   )
-  return { ...shown, near }
+  return { ...shown, near: near && pinned === id }
 }
 
 /** An external image's turn to load: `load` stays false until the view

@@ -337,6 +337,40 @@ describe('the inline image loader', () => {
     expect(v.shown().state).toBe('gone')
   })
 
+  it('takes a fresh mint again for a refusal after a download succeeded since the last one', async () => {
+    const h = harness()
+    h.fetcher.mockResolvedValueOnce(image(0, 404))
+    const v = h.view('a')
+    v.near()
+    await settle()
+    expect(v.shown().state).toBe('ready')
+    // evicted out of reach, so coming near again downloads again
+    INLINE_IMAGES.cacheBytes = 0
+    v.far()
+    expect(h.loader.stats().cachedBytes).toBe(0)
+    h.fetcher.mockResolvedValueOnce(image(0, 404))
+    v.near()
+    await settle()
+    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, false, true])
+    expect(v.shown().state).toBe('ready')
+  })
+
+  it('takes a fresh mint again when a plain-URL fallback fails after one loaded since the last refusal', async () => {
+    const h = harness()
+    h.fetcher.mockRejectedValue(new TypeError('Failed to fetch'))
+    const v = h.view('a')
+    v.near()
+    await settle()
+    expect(v.shown()).toMatchObject({ state: 'ready', url: 'https://files.test/files/a' })
+    h.loader.loaded('a', null)
+    await settle()
+    h.loader.loaded('a', { width: 10, height: 10 })
+    h.loader.loaded('a', null)
+    await settle()
+    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, true])
+    expect(v.shown().state).toBe('ready')
+  })
+
   it('keeps "Loading image…" and tries again after a failed mint', async () => {
     const h = harness()
     h.mint.mockResolvedValueOnce({ state: 'failed' })
@@ -363,6 +397,29 @@ describe('the inline image loader', () => {
     await settle()
     expect(h.fetcher).toHaveBeenCalledTimes(2)
     expect(b.shown().state).toBe('ready')
+  })
+
+  it('frees the slot of a download that fetch cannot read once nothing shows it', async () => {
+    INLINE_IMAGES.downloads = 1
+    const h = harness({ hold: true })
+    const a = h.view('a')
+    a.near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    // the window closes while the download runs, and then it fails
+    a.unmount()
+    h.downloads[0]?.answer.reject(new TypeError('Failed to fetch'))
+    await settle()
+    const b = h.view('b')
+    b.near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    expect(h.loader.stats().downloading).toBe(1)
+    // the next view of the first asks again
+    const back = h.view('a')
+    back.near()
+    await settle()
+    expect(h.mint.mock.calls.filter(([id]) => id === 'a')).toHaveLength(2)
   })
 
   it('treats every image as near without IntersectionObserver', async () => {

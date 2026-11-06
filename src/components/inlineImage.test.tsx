@@ -14,6 +14,8 @@ const reach = vi.hoisted(() => ({
     receive: Parameters<ObserverFactory>[0]
     elements: Set<Element>
   }[],
+  // while set, the mint answers once it settles
+  mintHeld: null as Promise<void> | null,
 }))
 vi.mock('../store/planner', async () => {
   const { createInlineImages, INLINE_IMAGES: bounds } = await import('../lib/inlineImages')
@@ -33,10 +35,13 @@ vi.mock('../store/planner', async () => {
   const blob = new Blob([new Uint8Array(64)], { type: 'image/webp' })
   const inlineImages = createInlineImages({
     held: () => true,
-    mint: async (id) => ({
-      state: 'lease',
-      lease: { url: `https://files.test/files/${id}`, exp: Date.now() / 1000 + 600 },
-    }),
+    mint: async (id) => {
+      if (reach.mintHeld) await reach.mintHeld
+      return {
+        state: 'lease',
+        lease: { url: `https://files.test/files/${id}`, exp: Date.now() / 1000 + 600 },
+      }
+    },
     fetch: async () => ({ ok: true, status: 200, blob: async () => blob }) as unknown as Response,
     createUrl: () => 'blob:inline-1',
     revokeUrl: () => {},
@@ -77,6 +82,7 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   reach.observers.length = 0
+  reach.mintHeld = null
   vi.useRealTimers()
   vi.unstubAllGlobals()
   Object.assign(INLINE_IMAGES, structuredClone(BOUNDS))
@@ -108,6 +114,46 @@ describe('description images', () => {
     await moveAll(false)
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector<HTMLElement>('.mdimgbox')?.style.aspectRatio).toBe('640 / 480')
+  })
+
+  it('paints no held bytes past their lease before the mint that names them again answers', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    await render(<Markdown text="![board](att:9d0b7c3e-1111-4222-8333-444455556688)" />)
+    await moveAll(true)
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:inline-1')
+    await moveAll(false)
+    expect(container.querySelector('img')).toBeNull()
+    // back near once the lease is within its skew, with the mint held
+    vi.setSystemTime(Date.now() + 9 * 60_000)
+    let answer = () => {}
+    reach.mintHeld = new Promise<void>((resolve) => {
+      answer = resolve
+    })
+    // every <img> any render puts in the DOM, also one a later render removes
+    const painted: string[] = []
+    const watcher = new MutationObserver((records) => {
+      for (const record of records)
+        for (const node of record.addedNodes)
+          if (node instanceof HTMLElement)
+            for (const img of [
+              ...(node.matches('img') ? [node] : []),
+              ...node.querySelectorAll('img'),
+            ])
+              painted.push(img.getAttribute('src') ?? '')
+    })
+    watcher.observe(container, { childList: true, subtree: true })
+    await moveAll(true)
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(painted).toEqual([])
+    expect(container.textContent).toContain('Loading image…')
+    await act(async () => {
+      answer()
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    watcher.disconnect()
+    expect(container.querySelector('img')?.getAttribute('src')).toBe('blob:inline-1')
   })
 
   it('gives an external image its source only near, with no referrer and no lazy loading', async () => {
