@@ -251,7 +251,11 @@ must echo the origin and expose `Set-Better-Auth-Cookie`. The step sends no
 credential and creates no session, OAuth client or token, so it runs before
 the check proves the API origin, and its failure names the origin it called,
 which may still lack the region label the app shows. A failure is reported as
-`FAIL auth/routes` and the run goes on to the sign-in. It signs in as the
+`FAIL auth/routes` and the run goes on to the sign-in. If the app's MCP
+address then names another host of the deployment, the failed step runs
+again on that host, and that result replaces the first. A pass there drops
+the earlier failure with a `NOTE auth/routes` line, and a failure counts
+once. The run signs in as the
 Northstar fixture admin with a password, creates two personal tokens, a
 Standard and a Viewer agent with their keys, and two OAuth connections on the
 consent screen, one with **Allow changes** and one without. With each it

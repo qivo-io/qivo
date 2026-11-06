@@ -21,6 +21,7 @@ import {
   addDays,
   addsQuery,
   authCorsProblems,
+  authRoutesStep,
   BILLING_ACCOUNTS_MARKS,
   BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
@@ -70,6 +71,7 @@ import {
   redact,
   request,
   resolveConfig,
+  results,
   SETTINGS_PROJECTS_MARKS,
   SETTINGS_PROJECTS_STEP,
   SETTINGS_USERS_EXPECTED,
@@ -815,6 +817,102 @@ describe('staging check auth routes', () => {
   ])('refuses %s', (_name, answers, problem) => {
     const [sentPreflight, sentSession] = answers()
     expect(authCorsProblems(sentPreflight, sentSession, APP)).toContain(problem)
+  })
+
+  describe('the step after setup/target', () => {
+    beforeEach(() => {
+      results.fail.length = 0
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+    })
+    afterEach(() => {
+      results.fail.length = 0
+      vi.restoreAllMocks()
+    })
+    /** A loopback deployment whose auth routes answer as `handle` does. It
+     *  closes each connection after its answer, so fetch keeps no idle
+     *  connection whose keep-alive timer a later test's fake timers count. */
+    const deployment = async (handle) => {
+      const server = createServer((req, res) => {
+        res.setHeader('Connection', 'close')
+        req.resume()
+        req.on('end', () => handle(req, res))
+      })
+      await new Promise((done) => server.listen(0, '127.0.0.1', done))
+      return { server, origin: `http://127.0.0.1:${server.address().port}` }
+    }
+    /** The answers of a deployment whose auth routes and CORS work, as the
+     *  router gives them (convex/tests/authHttp.test.ts). `credentials`
+     *  false leaves Access-Control-Allow-Credentials out of the preflight. */
+    const working =
+      ({ credentials = true } = {}) =>
+      (req, res) => {
+        if (req.method === 'OPTIONS' && req.url === '/api/auth/sign-in/email') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': APP,
+            ...(credentials && { 'Access-Control-Allow-Credentials': 'true' }),
+            'Access-Control-Allow-Headers': 'Content-Type, Better-Auth-Cookie, Authorization',
+            'Access-Control-Allow-Methods': 'GET, POST',
+          })
+          res.end()
+        } else if (req.url === '/api/auth/get-session') {
+          res.writeHead(200, {
+            'Access-Control-Allow-Origin': APP,
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Expose-Headers': 'Set-Better-Auth-Cookie',
+            'Content-Type': 'application/json',
+          })
+          res.end('null')
+        } else if (req.url === '/api/auth/oauth2/token') {
+          res.writeHead(400, {
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type': 'application/json',
+          })
+          res.end('{"error":"invalid_request"}')
+        } else if (req.url === '/.well-known/oauth-authorization-server') {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end('{"token_endpoint_auth_methods_supported":["none"]}')
+        } else res.writeHead(404).end()
+      }
+    // the bare name.convex.site host, which answers 404 on every route
+    const bare = () => deployment((_req, res) => res.writeHead(404).end())
+    const logged = () => console.log.mock.calls.map(([line]) => line)
+
+    it('passes at the host setup/target found and drops the failure at the first one', async () => {
+      const first = await bare()
+      const named = await deployment(working())
+      try {
+        const earlier = await authRoutesStep(first.origin, { appOrigin: APP, local: true })
+        expect(earlier).toEqual({ origin: first.origin, passed: false })
+        expect(results.fail).toEqual(['auth/routes'])
+        const again = await authRoutesStep(named.origin, { appOrigin: APP, local: true, earlier })
+        expect(again).toEqual({ origin: named.origin, passed: true })
+        expect(results.fail).toEqual([])
+        expect(logged()).toContain(
+          `NOTE auth/routes  its failure at ${first.origin} no longer counts, because setup/target found the API at ${named.origin}, where the step passed`,
+        )
+      } finally {
+        first.server.close()
+        named.server.close()
+      }
+    })
+
+    it('counts one failure when the step fails at both hosts', async () => {
+      const first = await bare()
+      const named = await deployment(working({ credentials: false }))
+      try {
+        const earlier = await authRoutesStep(first.origin, { appOrigin: APP, local: true })
+        const again = await authRoutesStep(named.origin, { appOrigin: APP, local: true, earlier })
+        expect(again).toEqual({ origin: named.origin, passed: false })
+        expect(results.fail).toEqual(['auth/routes'])
+        expect(logged()).toContain(
+          `FAIL auth/routes  at ${named.origin}: the sign-in preflight does not allow credentials`,
+        )
+        expect(logged().some((line) => line.includes('no longer counts'))).toBe(false)
+      } finally {
+        first.server.close()
+        named.server.close()
+      }
+    })
   })
 })
 
