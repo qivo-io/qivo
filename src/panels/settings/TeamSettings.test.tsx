@@ -816,6 +816,7 @@ describe("a team's page", () => {
     expect(document.querySelector('[data-team-member-kept]')).toBeNull()
     expect(memberIds()).toEqual(['leo', 'off'])
   })
+
   it('keeps a member added to a team whose whole list shows as Added until the server answers, then lets the list tell', async () => {
     await load()
     await teamPage()
