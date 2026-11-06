@@ -1405,7 +1405,9 @@ export const recipes: Recipe[] = [
     pause: 'P',
     act: (P) => P.addProject({ type: 'meta', key: 'NEW', name: 'New project', access: {} }),
     answers: { 'projects:create': () => ({ num: 4, key: 'NEW' }) },
-    // an admin creator leads it and gets no grant of their own
+    // an admin creator leads it and gets no grant of their own; it goes one
+    // past Plan, the organization's one top-level project, as the server
+    // places a create without a sort_order (nextSiblingPlace)
     truth: (snap, args) => {
       snap.orgs[0].next_project_num = 4
       snap.projects.push({
@@ -1418,6 +1420,38 @@ export const recipes: Recipe[] = [
         lead_id: ME,
         description: '',
         sort_order: 1,
+        track_delay: true,
+        created_at: SERVER,
+      })
+    },
+  },
+  {
+    mutation: 'projects:create',
+    mutator: 'addProject',
+    what: 'a new sub-project in the organization its dialog showed',
+    pause: 'P',
+    act: (P) =>
+      P.addProject(
+        { type: 'project', key: 'DOCS', name: 'Docs', parent: 'plan', lead: ME },
+        undefined,
+        undefined,
+        { orgId: ORG },
+      ),
+    answers: { 'projects:create': () => ({ num: 4, key: 'DOCS' }) },
+    // one past Work 2, the last of Plan's sub-projects
+    truth: (snap, args) => {
+      snap.orgs[0].next_project_num = 4
+      snap.projects.push({
+        id: str(args.id),
+        org_id: ORG,
+        type: 'project',
+        parent_id: 'plan',
+        key: 'DOCS',
+        num: 4,
+        name: 'Docs',
+        lead_id: ME,
+        description: '',
+        sort_order: 2,
         track_delay: true,
         created_at: SERVER,
       })
