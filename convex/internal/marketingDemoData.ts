@@ -12,7 +12,7 @@ declare class TextEncoder {
   encode(input: string): Uint8Array
 }
 
-export const MARKETING_DEMO_VERSION = 8
+export const MARKETING_DEMO_VERSION = 9
 
 export type DemoPerson = {
   key: string
@@ -2094,6 +2094,23 @@ export const MARKETING_DEMO = {
   links,
   history,
   milestones: [
+    // what Northstar finished before the anchor, three on each top-level
+    // project and outside the recorded Roadmap's weeks -3 to 6, so the
+    // Milestones window's Past and its search show rows on every copy
+    {
+      key: 'requirements-signed',
+      project: 'sensor',
+      name: 'Sensor requirements signed off',
+      week: -12,
+    },
+    { key: 'rev-a-tested', project: 'sensor', name: 'Revision A boards tested', week: -8 },
+    { key: 'enclosure-frozen', project: 'sensor', name: 'Enclosure design frozen', week: -5 },
+    { key: 'schema-agreed', project: 'cloud', name: 'Telemetry schema agreed', week: -11 },
+    { key: 'onboarding-api-live', project: 'cloud', name: 'Device onboarding API live', week: -7 },
+    { key: 'alert-rules-drafted', project: 'cloud', name: 'Alert rules drafted', week: -4 },
+    { key: 'pilot-sites-chosen', project: 'launch', name: 'Pilot sites chosen', week: -10 },
+    { key: 'office-survey-done', project: 'launch', name: 'Office survey complete', week: -6 },
+    { key: 'installers-booked', project: 'launch', name: 'Installer training booked', week: -4 },
     { key: 'pcb-released', project: 'sensor', name: 'Revision B ready', week: 1 },
     { key: 'prototype-validated', project: 'sensor', name: 'Prototype validated', week: 3 },
     { key: 'batch-ready', project: 'sensor', name: 'Pilot batch ready', week: 4 },

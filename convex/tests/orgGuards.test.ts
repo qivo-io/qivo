@@ -301,10 +301,10 @@ describe('teams.deleteDeep names its cascade — the Northstar Labs dataset', ()
     expect(await count('teams')).toBe(2)
     expect(await count('projects')).toBe(15)
     expect(await count('issues')).toBe(90)
-    expect(await count('milestones')).toBe(7)
+    expect(await count('milestones')).toBe(16)
     expect(sensorTree.size).toBe(6)
     expect(sensorIssues).toBe(40)
-    expect(sensorMilestones).toBe(3)
+    expect(sensorMilestones).toBe(6)
     const before = {
       links: await count('issue_links'),
       issueLabels: await count('issue_labels'),
@@ -325,7 +325,7 @@ describe('teams.deleteDeep names its cascade — the Northstar Labs dataset', ()
     expect(await count('teams')).toBe(1)
     expect(await count('projects')).toBe(15)
     expect(await count('issues')).toBe(90)
-    expect(await count('milestones')).toBe(7)
+    expect(await count('milestones')).toBe(16)
     const survivors = await t.run(async (ctx) =>
       ctx.db
         .query('projects')
