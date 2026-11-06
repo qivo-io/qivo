@@ -955,6 +955,32 @@ describe("the phone's user page and Settings' check", () => {
     expect(keyLine('atlas')).toBe('qva_001...abcd1')
   })
 
+  it("reads an agent's keys and a pending person's invitation from the answer while the store does not hold them", async () => {
+    await load()
+    // the server holds them, the store not yet
+    snap.profiles.push(
+      person('zed', 'Zed Unheld', { kind: 'agent', auth_user_id: undefined, email: undefined }),
+      person('abby', 'Abby Unheld', { auth_user_id: undefined }),
+    )
+    extra.keys.push(keyOf('zed', 1))
+    extra.deliveries.push({
+      profile_id: 'abby',
+      email: 'abby@example.test',
+      state: 'held',
+      since: new Date().toISOString(),
+      free_at: null,
+    })
+    narrowScreen(true)
+    await render(() => <Screen key="zed" initial="user:zed" reset={vi.fn()} />)
+    expect(store.P.user('zed')).toBeUndefined()
+    expect(keyReads()).toEqual([['zed']])
+    expect(keyLine('zed')).toBe('qva_001...abcd1')
+    await render(() => <Screen key="abby" initial="user:abby" reset={vi.fn()} />)
+    expect(store.P.user('abby')).toBeUndefined()
+    expect(opened('invites:deliveries').map((r) => r.args.profile_ids)).toEqual([['abby']])
+    expect(find('[data-invite-for="abby"]').textContent).toBe('invitation not sent')
+  })
+
   it('sends an unknown person and a guest back to Users, a non-admin to their account, and moves nothing while loading or failed', async () => {
     await load((s) => s.profiles.push(person('gail', 'Gail Guest', { org_role: 'guest' })))
     narrowScreen(true)

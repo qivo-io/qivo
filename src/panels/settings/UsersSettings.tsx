@@ -821,10 +821,13 @@ export function OrgUsersPage({
     const vm = held(id)
     return vm ? vm.isAgent : known.current.get(id)?.kind === 'agent'
   }
-  // the phone's list shows no key line, so only its person page reads keys
+  // the phone's list shows no key line, so only its person page reads
+  // keys, for the person the store holds or, while it does not, as the
+  // page's answer has them
+  const pagePerson = personPage ? (person?.answer?.person ?? null) : null
   if (personPage) {
-    const id = person?.answer?.person.id
-    if (id && isAgentRow(id)) shownAgents.add(id)
+    if (pagePerson && (held(pagePerson.id)?.isAgent ?? pagePerson.kind === 'agent'))
+      shownAgents.add(pagePerson.id)
   } else if (!narrow) {
     for (const row of pageRows)
       if (row.kind === 'agent' && !removed.has(row.id)) shownAgents.add(row.id)
@@ -875,8 +878,8 @@ export function OrgUsersPage({
     return vm ? vm.pending : !!known.current.get(id)?.pending
   }
   if (personPage) {
-    const id = person?.answer?.person.id
-    if (id && pendingOf(id)) pendingIds.push(id)
+    if (pagePerson && (held(pagePerson.id)?.pending ?? pagePerson.pending))
+      pendingIds.push(pagePerson.id)
   } else
     for (const id of [...onPage, ...keptIds.map((k) => k.id)])
       if (pendingOf(id)) pendingIds.push(id)
