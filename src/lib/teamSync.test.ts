@@ -17,11 +17,9 @@ import {
   doneSince,
   loadFigure,
   mentionBody,
-  milestonesAhead,
   nearCapacity,
   needsOwner,
   needsReviewer,
-  nextMilestone,
   openingFacts,
   parseSyncScope,
   personGroups,
@@ -33,11 +31,13 @@ import {
   type SinceMark,
   type SyncDay,
   type SyncIssue,
+  type SyncMilestoneRead,
   type SyncProject,
   scopeMetaIds,
   scopeProjectIds,
   stampLabel,
   syncDay,
+  syncMilestones,
   syncRoster,
   syncRows,
   syncScopeKey,
@@ -659,20 +659,65 @@ describe('needsOwner and needsReviewer', () => {
 })
 
 describe('milestones', () => {
-  const ms = [
-    { id: 'a', name: 'Pilot', week: 12, project: 'M1' },
-    { id: 'b', name: 'Proto', week: 11, project: 'M1' },
-    { id: 'c', name: 'Launch', week: 13, project: 'M1' },
-    { id: 'd', name: 'Past', week: 10, project: 'M1' },
-    { id: 'e', name: 'Elsewhere', week: 11, project: 'M9' },
-  ]
-  it('keeps this week and next, in scope, by week', () => {
-    expect(milestonesAhead(ms, new Set(['M1']), 11).map((m) => m.id)).toEqual(['b', 'a'])
+  type M = { id: string }
+  const POS = { week: '2026-09-21', key: 'b', id: 'b' }
+  const ok = (rows: M[], next: unknown = null, stopped: string | null = null, current = true) =>
+    ({ state: 'ok', current, answer: { rows, next, stopped } }) as const
+  const loading: SyncMilestoneRead<M> = { state: 'loading' }
+  const ids = (rows: readonly M[]) => rows.map((m) => m.id)
+
+  it("shows the section's first row and the range's rows, in the server's order", () => {
+    const shown = syncMilestones<M>(ok([{ id: 'a' }], POS), ok([{ id: 'a' }, { id: 'c' }]))
+    expect(shown.next).toEqual({ kind: 'milestone', milestone: { id: 'a' } })
+    expect(ids(shown.ahead.rows)).toEqual(['a', 'c'])
+    expect(shown.ahead.note).toBeNull()
   })
-  it('finds the next one however far, or none', () => {
-    expect(nextMilestone(ms, new Set(['M1']), 11)?.id).toBe('b')
-    expect(nextMilestone(ms, new Set(['M1']), 13)?.id).toBe('c')
-    expect(nextMilestone(ms, new Set(['M1']), 14)).toBeNull()
+
+  it('says none only for whole empty answers', () => {
+    const shown = syncMilestones<M>(ok([]), ok([]))
+    expect(shown.next).toEqual({ kind: 'none' })
+    expect(shown.ahead.note).toBe('empty')
+  })
+
+  it('must fail: says unknown, never none, for an answer that stopped or names more', () => {
+    expect(syncMilestones<M>(ok([], POS, '2026-09-21'), ok([])).next).toEqual({ kind: 'unknown' })
+    expect(syncMilestones<M>(ok([], POS), ok([])).next).toEqual({ kind: 'unknown' })
+    // a range that stopped lists its rows and says some may be missing
+    const stopped = syncMilestones<M>(ok([]), ok([{ id: 'a' }], POS, '2026-09-21')).ahead
+    expect(ids(stopped.rows)).toEqual(['a'])
+    expect(stopped.note).toBe('partial')
+    expect(syncMilestones<M>(ok([]), ok([], POS, '2026-09-21')).ahead.note).toBe('partial')
+  })
+
+  it('waits, and says unknown for a failure, a refusal or too many projects', () => {
+    expect(syncMilestones<M>(loading, loading)).toEqual({
+      next: { kind: 'loading' },
+      ahead: { rows: [], note: 'loading', refreshing: false },
+    })
+    for (const read of [
+      { state: 'failed', kept: null },
+      { state: 'refused', sentence: 'Choose fewer projects.', kept: null },
+      { state: 'too_many' },
+    ] as SyncMilestoneRead<M>[])
+      expect(syncMilestones<M>(read, read).next).toEqual({ kind: 'unknown' })
+    expect(syncMilestones<M>(loading, { state: 'too_many' }).ahead.note).toBe('too_many')
+    expect(
+      syncMilestones<M>(loading, {
+        state: 'refused',
+        sentence: 'Choose fewer projects.',
+        kept: null,
+      }).ahead,
+    ).toEqual({ rows: [], note: 'refused', sentence: 'Choose fewer projects.', refreshing: false })
+  })
+
+  it('keeps a shown answer under a failure, and marks a kept one refreshing', () => {
+    const kept = { rows: [{ id: 'a' }], next: null, stopped: null }
+    const failed = syncMilestones<M>({ state: 'failed', kept }, { state: 'failed', kept })
+    expect(failed.next).toEqual({ kind: 'milestone', milestone: { id: 'a' } })
+    expect(failed.ahead).toEqual({ rows: [{ id: 'a' }], note: 'failed', refreshing: false })
+    expect(syncMilestones<M>(ok([]), ok([{ id: 'a' }], null, null, false)).ahead.refreshing).toBe(
+      true,
+    )
   })
 })
 

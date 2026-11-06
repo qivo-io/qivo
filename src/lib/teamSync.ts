@@ -20,7 +20,7 @@ import {
   SYNC_SITTING_MS,
   type SyncStamp,
 } from '../../convex/lib/teamSync'
-import type { IssueVM, MilestoneVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
+import type { IssueVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
 import { fmtDate, isoFromDate, TODAY_WEEK, WEEKDAYS, weekStartOf } from './dates'
 import type { DelayInfo } from './delay'
 import { isIssueDone, isIssueGroup } from './issueGroups'
@@ -62,7 +62,6 @@ export type SyncProject = Pick<
   'id' | 'type' | 'org' | 'parent' | 'children' | 'teamAccess'
 >
 export type SyncTeam = Pick<TeamVM, 'id' | 'org'>
-export type SyncMilestone = Pick<MilestoneVM, 'id' | 'name' | 'week' | 'project'>
 /** What a blocker lookup needs: its display key and whether it is finished
     (a group is finished when all its known leaves are, as `P.isDone`). */
 export type BlockerIssue = Pick<
@@ -588,28 +587,99 @@ export function needsReviewer<I extends SyncIssue>(
     )
 }
 
-/** The milestones of the metas in scope due this week or next, by week. */
-export function milestonesAhead<M extends SyncMilestone>(
-  milestones: readonly M[],
-  metaIds: Set<string>,
-  todayWeek: number,
-): M[] {
-  return milestones
-    .filter((m) => metaIds.has(m.project) && m.week >= todayWeek && m.week <= todayWeek + 1)
-    .sort((a, b) => a.week - b.week)
+/* ---- milestones ---------------------------------------------------------------------- */
+
+/** The store's slots of the opening's two milestone reads
+    (store/planner.ts P.watchMilestones): its next milestone, a one-row
+    upcoming section, and the milestones of this week and next, a range.
+    App releases them once the Team sync page is no longer kept. */
+export const SYNC_MILESTONE_SLOTS = {
+  next: 'milestones:sync-next',
+  ahead: 'milestones:sync-ahead',
+} as const
+
+/** One milestone read as the opening takes it, the store's MilestoneRead
+    narrowed to what the opening shows: its rows in the server's order,
+    and whether the server answered whole (`next` and `stopped` null). */
+export type SyncMilestoneRead<M> =
+  | { state: 'loading' | 'too_many' }
+  | { state: 'refused'; sentence: string; kept: SyncMilestoneAnswer<M> | null }
+  | { state: 'failed'; kept: SyncMilestoneAnswer<M> | null }
+  | { state: 'ok'; current: boolean; answer: SyncMilestoneAnswer<M> }
+export type SyncMilestoneAnswer<M> = {
+  rows: readonly M[]
+  next: unknown
+  stopped: string | null
 }
 
-/** The strip's "Next milestone": the first in scope from this week on,
-    however far (ties keep the store's creation order, as the Overview). */
-export function nextMilestone<M extends SyncMilestone>(
-  milestones: readonly M[],
-  metaIds: Set<string>,
-  todayWeek: number,
-): M | null {
-  const ahead = milestones
-    .filter((m) => metaIds.has(m.project) && m.week >= todayWeek)
-    .sort((a, b) => a.week - b.week)
-  return ahead[0] || null
+/** What the strip's "Next milestone" shows: the section's first row, "None
+    scheduled" only for a whole answer with no row, a wait, or "unknown"
+    for an answer that stopped or names more without a row, a failure, a
+    refusal, or more projects than one read names. */
+export type SyncNextMilestone<M> =
+  | { kind: 'milestone'; milestone: M }
+  | { kind: 'none' }
+  | { kind: 'loading' }
+  | { kind: 'unknown' }
+
+/** What the opening's Milestones list shows: the rows of this week and
+    next in the server's order and what goes with them. `empty` says "No
+    milestones this week or next", for a whole answer with no row only;
+    `partial` says some may be missing, for an answer that stopped; and
+    `loading`, `failed` (with Retry), `refused` (the server's sentence) and
+    `too_many` say why the list is not there, a failure or refusal under
+    the rows it kept. `refreshing` marks a kept answer shown until it is
+    current again. */
+export type SyncMilestoneList<M> = {
+  rows: readonly M[]
+  note: 'empty' | 'partial' | 'loading' | 'failed' | 'refused' | 'too_many' | null
+  sentence?: string
+  refreshing: boolean
+}
+
+/** Whether `answer` holds every milestone it was asked for. */
+const whole = (answer: SyncMilestoneAnswer<unknown>) =>
+  answer.next === null && answer.stopped === null
+
+/** What the opening shows of its two milestone reads: `next`, the one-row
+    upcoming section, and `ahead`, the range of this week and next. A
+    failure or refusal after an answer keeps that answer. Neither says
+    there are none unless the server answered whole, and nothing here
+    sorts or cuts the server's rows. */
+export function syncMilestones<M>(
+  next: SyncMilestoneRead<M>,
+  ahead: SyncMilestoneRead<M>,
+): { next: SyncNextMilestone<M>; ahead: SyncMilestoneList<M> } {
+  const answerOf = (read: SyncMilestoneRead<M>) =>
+    read.state === 'ok'
+      ? read.answer
+      : read.state === 'failed' || read.state === 'refused'
+        ? read.kept
+        : null
+  const nextAnswer = answerOf(next)
+  const first = nextAnswer?.rows[0]
+  const nextShown: SyncNextMilestone<M> =
+    first !== undefined
+      ? { kind: 'milestone', milestone: first }
+      : nextAnswer && whole(nextAnswer)
+        ? { kind: 'none' }
+        : next.state === 'loading'
+          ? { kind: 'loading' }
+          : { kind: 'unknown' }
+  const kept = answerOf(ahead)
+  const rows = kept?.rows ?? []
+  const refreshing = ahead.state === 'ok' && !ahead.current
+  if (ahead.state === 'failed')
+    return { next: nextShown, ahead: { rows, note: 'failed', refreshing } }
+  if (ahead.state === 'refused')
+    return {
+      next: nextShown,
+      ahead: { rows, note: 'refused', sentence: ahead.sentence, refreshing },
+    }
+  if (ahead.state === 'loading' || ahead.state === 'too_many')
+    return { next: nextShown, ahead: { rows: [], note: ahead.state, refreshing } }
+  const note = !kept || !whole(kept) ? 'partial' : rows.length ? null : 'empty'
+  return { next: nextShown, ahead: { rows, note, refreshing } }
 }
 
 /* ---- load --------------------------------------------------------------------------- */

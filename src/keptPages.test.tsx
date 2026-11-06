@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from './components/ui/tooltip'
 import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
+import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
 import { taskRow } from './views/boardFixture.setup'
@@ -146,6 +147,7 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+    else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
     else if (name === 'teamSync:lastComments')
       next({ rows: [{ issue_id: 't1', at: '2026-09-10T08:00:00.000Z' }], complete: true })
     else if (name === 'taskWindow:task' && answersTasks) {
