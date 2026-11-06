@@ -1215,9 +1215,8 @@ the app alone to an earlier release is safe while the backend keeps
 unchanged for tabs loaded before it, and the release that removes them
 adds them to the Instant Rollback list above. The operator console's
 organization page reads `adminBilling.orgBilling`, which answers without
-the account names from this release, and no console reads them. The
-release after v0.1.140, the backend's floor before this one, is older, so
-this release becomes the newest floor. There is no schema change, no
+the account names from this release, and no console reads them. This
+release becomes the backend's newest floor. There is no schema change, no
 backfill and no release step.
 
 ## Node.js version
