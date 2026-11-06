@@ -862,6 +862,34 @@ describe('a list shown a page at a time', () => {
     expect(shown()[0]).toBe('a25')
   })
 
+  it('reads a failed page again before the move that failed beside it, on one Retry', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    await act(async () => page().next())
+    // the page on screen and its Next fail in one transition, which leaves
+    // Next no start until the page answers again
+    server.fail = () => new Error('offline')
+    await publish()
+    expect(page().failedMove).toBe('next')
+    expect(page().phase).toBe('failed')
+    expect(shown()[0]).toBe('a00')
+    const watches = transport.watches.size
+    server.fail = null
+    await act(async () => page().retry())
+    // the page reads again first, on a watch of its own
+    expect(transport.watches.size).toBe(watches + 1)
+    expect(open()).toEqual([{ list: 'k' }])
+    await publish()
+    // then Next, from the page's new answer
+    expect(page().moving).toBe('next')
+    expect(open()).toEqual([{ list: 'k' }, { list: 'k', after: cursor('a24') }])
+    await publish()
+    expect(page().failedMove).toBe(null)
+    expect(page().phase).toBe('ready')
+    expect(shown()[0]).toBe('a25')
+  })
+
   it('goes back to the first page once for a refused start, then fails, and Retry starts again', async () => {
     plant('a', 60)
     await show({ listKey: 'k' })

@@ -897,7 +897,9 @@ export type PagedPages<A, Row> = {
       reads */
   previous: () => void
   /** Reads again what failed: the move that failed, the page on screen, or
-      the list from its first page when it failed as a whole */
+      the list from its first page when it failed as a whole. A failed
+      move that cannot start from the page on screen, as Next beside a
+      page that failed too, reads that page first and starts once it can. */
   retry: () => void
 }
 
@@ -929,6 +931,9 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
   let shown: Shown | null = null
   let move: { to: 'next' | 'previous'; read: Read } | null = null
   let failedMove: 'next' | 'previous' | null = null
+  // the failed move Retry starts again once the page on screen, read
+  // again first, shows rows; a move that starts clears it
+  let resume: 'next' | 'previous' | null = null
   // the key a position refusal sent back to the first page, and whether a
   // second one failed the list
   let restarted: string | null = null
@@ -985,6 +990,7 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
     shown = null
     move = null
     failedMove = null
+    resume = null
   }
 
   /** Opens the list on the page starts `at`, the last one on screen. */
@@ -1078,23 +1084,37 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
       if (refusedPosition(page)) return refused()
       const next = shownOf(page)
       if (next !== undefined) shown = next
+      // the page Retry read again has answered. The failed move starts
+      // where it can from that answer, stays failed beside another
+      // failure, and is over where it cannot, as Next from an answer with
+      // no rows or from a page now at its end
+      if (resume !== null && page.held !== null && current(page)) {
+        const to = resume
+        resume = null
+        if (startOf(to) !== undefined) return go(to)
+        if (shown?.kind !== 'error') failedMove = null
+      }
     }
     changed()
+  }
+
+  /** Where the move `to` starts from the page on screen, or undefined
+      while it cannot move that way. */
+  function startOf(to: 'next' | 'previous'): string | null | undefined {
+    if (to === 'previous')
+      return starts.length < 2 ? undefined : (starts[starts.length - 2] ?? null)
+    if (shown?.kind !== 'ok' || shown.batch.next === null || shown.batch.next === page?.after)
+      return undefined
+    return shown.batch.next
   }
 
   /** Starts the move `to`, which replaces the page once it answered. */
   function go(to: 'next' | 'previous') {
     if (key === null || failed || move !== null || page === null) return
-    let at: string | null
-    if (to === 'next') {
-      if (shown?.kind !== 'ok' || shown.batch.next === null || shown.batch.next === page.after)
-        return
-      at = shown.batch.next
-    } else {
-      if (starts.length < 2) return
-      at = starts[starts.length - 2] ?? null
-    }
+    const at = startOf(to)
+    if (at === undefined) return
     failedMove = null
+    resume = null
     move = { to, read: readAt(at) }
     changed()
   }
@@ -1132,10 +1152,22 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
         changed()
         return
       }
-      if (failedMove !== null && move === null) return go(failedMove)
+      // a failed move leaves no move running, and a move clears it
+      if (failedMove !== null && startOf(failedMove) !== undefined) return go(failedMove)
       if (shown?.kind === 'error' || shown?.kind === 'held' || isStuck()) {
+        // the page on screen reads again, and a failed move that cannot
+        // start from it, such as Next beside a failed page, follows once
+        // it shows rows (settle)
+        resume = failedMove
         page.held = null
         watch(page)
+        changed()
+        return
+      }
+      // a failed move with nowhere to go now, as from a page that became
+      // the last, is over
+      if (failedMove !== null) {
+        failedMove = null
         changed()
       }
     },
@@ -1184,9 +1216,10 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
  * - The page on screen keeps its rows until the new page answered on the
  *   connection the socket holds now, and the new one then replaces it in
  *   one step, so the list never flashes empty. A move that fails keeps the
- *   page, with `failedMove`, and Retry tries it again. An answer with no
- *   rows, such as not ready or a refusal, shows as `held` in place of the
- *   page, whichever page it answers.
+ *   page, with `failedMove`, and Retry tries it again. Where the page on
+ *   screen failed too, Retry reads it first and then the move. An answer
+ *   with no rows, such as not ready or a refusal, shows as `held` in place
+ *   of the page, whichever page it answers.
  * - A page that stopped before it was full offers Next and is never the
  *   end; one that stopped without moving past its start is `stuck`, with
  *   Retry.
