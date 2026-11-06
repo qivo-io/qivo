@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { SYNC_LIMIT } from '../lib/boardGroups'
 import { menuTrigger } from '../lib/focusWhenGone'
+import { inboxBadge } from '../lib/inboxBadge'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
 import { noProjectsHint } from '../lib/noProjects'
@@ -11,6 +12,7 @@ import { useLatest } from '../lib/useLatest'
 import { useMobile, useMobileBackLayer } from '../lib/useMobile'
 import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
+import { usePlannerVersion } from '../store/usePlannerVersion'
 import { BoardFrame, BoardNote, IncompleteNote } from '../views/board/BoardNote'
 import { type BoardView, useBoardView } from '../views/board/useBoardView'
 import { DeferredList } from './DeferredList'
@@ -180,7 +182,9 @@ export function MobileHeader({
 
 /* The phone's bottom tabs. Team sync is the fourth, for a login with a
    home organization (the page is always about it); a page that owns the
-   screen lights its own tab, and Projects lights for every scope view. */
+   screen lights its own tab, and Projects lights for every scope view. The
+   Inbox tab's badge comes from the server's unread summary, as the desktop
+   top bar's does (lib/inboxBadge.ts), and the other tabs show none. */
 export function MobileNavigation({
   scope,
   inboxOpen,
@@ -194,6 +198,9 @@ export function MobileNavigation({
   syncOpen: boolean
   actions: Actions
 }) {
+  // the unread summary answers on the Inbox's channel
+  usePlannerVersion('inbox')
+  const inbox = inboxBadge(P.inboxSummary)
   const mine = !inboxOpen && !projectsOpen && !syncOpen && P.isMineScope(scope)
   const projects = !inboxOpen && !syncOpen && !mine
   return (
@@ -204,7 +211,7 @@ export function MobileNavigation({
           icon: 'mail',
           active: inboxOpen,
           action: actions.openInbox,
-          count: P.unreadMessages,
+          badge: inbox,
           hook: 'data-inbox-nav',
         },
         {
@@ -212,7 +219,7 @@ export function MobileNavigation({
           icon: 'user',
           active: mine,
           action: actions.openMine,
-          count: 0,
+          badge: null,
           hook: 'data-mine-nav',
         },
         {
@@ -220,7 +227,7 @@ export function MobileNavigation({
           icon: 'layers',
           active: projects,
           action: actions.openProjects,
-          count: 0,
+          badge: null,
           hook: 'data-projects-nav',
         },
         ...(P.homeOrg
@@ -230,7 +237,7 @@ export function MobileNavigation({
                 icon: 'people',
                 active: syncOpen,
                 action: actions.openSync,
-                count: 0,
+                badge: null,
                 hook: 'data-sync-nav',
               },
             ]
@@ -247,9 +254,15 @@ export function MobileNavigation({
         >
           <span className="relative inline-flex">
             <Icon name={item.icon} size={20} />
-            {item.count > 0 && (
-              <span className="mobile-unread-badge" role="img" aria-label={`${item.count} unread`}>
-                {item.count > 99 ? '99+' : item.count}
+            {item.badge && item.badge.chip !== null && (
+              <span
+                className="mobile-unread-badge"
+                role="img"
+                aria-label={item.badge.phoneName ?? undefined}
+                data-inbox-badge-state={item.badge.state ?? undefined}
+                data-refreshing={item.badge.refreshing ? '' : undefined}
+              >
+                {item.badge.chip}
               </span>
             )}
           </span>
