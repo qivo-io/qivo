@@ -7535,7 +7535,8 @@ const mintQueue = createMintQueue(
   (org, ids) => convex.query(api.files.mintUrls, { org_id: org, ...ids }),
   { refused: (error) => error instanceof ConvexError },
 )
-const avatarSources = createAvatarSources()
+// a picture that waited for room and started by itself repaints as any does
+const avatarSources = createAvatarSources({ changed: () => showPortraits() })
 const inlineImages = createInlineImages({
   held: (id) => attachmentHeld(id),
   mint: (id, fresh) => attachmentLease(id, fresh),

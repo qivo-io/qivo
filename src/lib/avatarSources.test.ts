@@ -29,7 +29,7 @@ function persistentFixture(blob: Blob | null = new Blob(['cached face'], { type:
   return { cache, blobs }
 }
 
-function fixture(overrides: { shrink?: (blob: Blob) => Promise<Blob> } = {}) {
+function fixture(overrides: { shrink?: (blob: Blob) => Promise<Blob>; changed?: () => void } = {}) {
   let now = 0
   let serial = 0
   const fetcher = vi
@@ -430,7 +430,8 @@ describe('profile picture bounds', () => {
 
   it('starts no download past a lowered kept budget, and a roster change frees room in the order asked', async () => {
     AVATAR_SOURCES.keptBytes = 500 * KIB
-    const f = fixture()
+    const changed = vi.fn()
+    const f = fixture({ changed })
     f.fetcher.mockImplementation(async () => new Response(face(200 * KIB)))
     const [a, b, c, d] = keys(4) as [string, string, string, string]
     f.cache.sync([a, b, c, d])
@@ -444,11 +445,35 @@ describe('profile picture bounds', () => {
       [null, false],
       [null, false],
     ])
+    // the roster drops a: c starts by itself with the lease it waited
+    // with, d still waits, and nothing mints either again
     f.cache.sync([b, c, d])
-    expect(f.cache.needsRefresh(c)).toBe(true)
+    expect(f.fetcher).toHaveBeenCalledTimes(3)
+    expect(f.cache.needsRefresh(c)).toBe(false)
     expect(f.cache.needsRefresh(d)).toBe(false)
-    expect(await f.cache.prepare(c, LEASE)).toBe(true)
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledOnce())
+    expect(f.cache.url(c)).not.toBeNull()
     expect(f.cache.keptBytes()).toBe(400 * KIB)
+    // a waiting lease that ran out is minted again instead
+    f.time(600_000)
+    f.cache.sync([c, d])
+    expect(f.cache.needsRefresh(d)).toBe(true)
+  })
+
+  it('counts the pictures waiting for a download slot against the budget, so a thousand at once stay inside it', async () => {
+    AVATAR_SOURCES.keptBytes = 2 * 1024 * 1024
+    const f = fixture()
+    f.fetcher.mockImplementation(async () => new Response(face(200 * KIB)))
+    const all = keys(40)
+    f.cache.sync(all)
+    // every prepare asked in one go, as a chunk's answers arrive
+    const results = await Promise.all(all.map((key) => f.cache.prepare(key, LEASE)))
+    // 2 MiB holds eight reservations of 256 KiB; once they are 200 KiB
+    // each, room for one more, which starts by itself, and no more
+    expect(results.filter(Boolean)).toHaveLength(8)
+    await vi.waitFor(() => expect(f.cache.keptBytes()).toBe(9 * 200 * KIB))
+    expect(f.fetcher).toHaveBeenCalledTimes(9)
+    expect(f.cache.keptBytes()).toBeLessThanOrEqual(AVATAR_SOURCES.keptBytes)
   })
 
   it('counts restored pictures in the kept bytes', async () => {

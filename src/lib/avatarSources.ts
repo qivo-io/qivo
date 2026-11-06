@@ -39,8 +39,9 @@ type Entry = {
   expiresAt: number
   retryAt: number
   restored?: boolean
-  /** waiting for room in the kept bytes; `due` once room freed */
-  waiting?: { due: boolean }
+  /** waiting for room in the kept bytes with its lease, `due` once room
+      freed and its lease ran out, so the store mints it again */
+  waiting?: { due: boolean; lease: Lease }
   /** too large even re-encoded, so initials until the version changes */
   tooLarge?: boolean
   pending?: { controller: AbortController; source?: string }
@@ -56,6 +57,8 @@ type Dependencies = {
   decode: (url: string) => Promise<unknown>
   /** re-encodes a picture that passes the bounds, as an upload does */
   shrink: (blob: Blob) => Promise<Blob>
+  /** a picture the source started by itself, when room freed, now shows */
+  changed: () => void
 }
 
 /** Portrait bytes, keyed by profile AND storage version. A renewed lease
@@ -83,6 +86,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       return { width: image.naturalWidth, height: image.naturalHeight }
     },
     shrink: (blob) => avatarImage(new File([blob], 'picture', { type: blob.type })),
+    changed: () => {},
     ...overrides,
   }
   const entries = new Map<string, Entry>()
@@ -99,19 +103,35 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   // prepares waiting for a download slot, in order
   const slotQueue: { grant: () => void; signal: AbortSignal }[] = []
 
-  const roomFor = (bytes: number) =>
-    kept + downloading * AVATAR_SOURCES.pictureBytes + bytes <= AVATAR_SOURCES.keptBytes
-  /* Marks waiting keys due, in order, while room remains for them. */
+  /* The bytes the kept pictures and every download on its way or waiting
+     for a slot may hold, each download counted at pictureBytes. */
+  const held = () => kept + (downloading + slotQueue.length) * AVATAR_SOURCES.pictureBytes
+  const roomFor = (bytes: number) => held() + bytes <= AVATAR_SOURCES.keptBytes
+  /* Starts the waiting keys, in order, while room remains for them: with
+     the lease each waits with while it lasts, else marked due so the
+     store mints it again. A picture started here tells the store through
+     `changed` once it shows. */
+  let admitting = false
   const admit = () => {
-    let free = AVATAR_SOURCES.keptBytes - kept - downloading * AVATAR_SOURCES.pictureBytes
-    for (const [key, entry] of waitingKeys) {
-      if (free < AVATAR_SOURCES.pictureBytes) return
-      if (entries.get(key) !== entry || !entry.waiting) {
-        waitingKeys.delete(key)
-        continue
+    if (admitting || paused) return
+    admitting = true
+    try {
+      for (const [key, entry] of waitingKeys) {
+        if (held() + AVATAR_SOURCES.pictureBytes > AVATAR_SOURCES.keptBytes) return
+        if (entries.get(key) !== entry || !entry.waiting) {
+          waitingKeys.delete(key)
+          continue
+        }
+        if (entry.waiting.due) continue
+        const { lease } = entry.waiting
+        if (lease.exp * 1000 - deps.now() > REFRESH_SKEW) {
+          void prepare(key, lease, entry).then((shown) => {
+            if (shown) deps.changed()
+          })
+        } else entry.waiting.due = true
       }
-      if (!entry.waiting.due) entry.waiting.due = true
-      free -= AVATAR_SOURCES.pictureBytes
+    } finally {
+      admitting = false
     }
   }
   const setSource = (entry: Entry, source: string | null, owned: boolean, bytes: number) => {
@@ -155,6 +175,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       const leave = () => {
         const at = slotQueue.indexOf(waiter)
         if (at >= 0) slotQueue.splice(at, 1)
+        admit()
         reject(new Error('Profile picture no longer wanted'))
       }
       signal.addEventListener('abort', leave, { once: true })
@@ -197,6 +218,127 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
   }
   const fits = (blob: Blob, size: unknown) =>
     blob.size <= AVATAR_SOURCES.pictureBytes && largest(size) <= AVATAR_SOURCES.pictureEdge
+
+  /* Downloads and keeps the picture of `key` with `lease`, unless it is
+     held already, too large, or past the kept bytes, where it waits with
+     its lease until admit() starts it. */
+  const prepare = async (
+    key: string,
+    lease: Lease,
+    ticket = entries.get(key),
+  ): Promise<boolean> => {
+    if (!current(key, ticket)) return false
+    ticket.expiresAt = lease.exp * 1000
+    ticket.retryAt = 0
+    // The storage version is immutable. Keep the decoded source when only
+    // its access token changes, including across a route's React remount.
+    if (ticket.source && ticket.sourceOwned) {
+      ticket.restored = false
+      ticket.refreshFailed = false
+      return false
+    }
+    if (ticket.pending || ticket.tooLarge) return false
+    // start no download while the kept bytes and one more picture would
+    // pass the budget; the key waits, in order, as initials
+    if (!ticket.source && !roomFor(AVATAR_SOURCES.pictureBytes)) {
+      ticket.waiting = { due: false, lease }
+      if (!waitingKeys.has(key)) waitingKeys.set(key, ticket)
+      return false
+    }
+    ticket.waiting = undefined
+    waitingKeys.delete(key)
+    const pending = { controller: new AbortController(), source: undefined as string | undefined }
+    ticket.pending = pending
+    let slot = false
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      const queued = takeSlot(pending.controller.signal)
+      if (queued) await queued
+      slot = true
+      if (!current(key, ticket) || ticket.pending !== pending) return false
+      // a lease that ran out while it waited for a slot is minted again,
+      // not taken to the gateway for a refusal
+      if (queued && lease.exp * 1000 <= deps.now()) {
+        ticket.refreshFailed = true
+        return false
+      }
+      // the load's time starts with its download, not in the queue
+      const timedOut = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          pending.controller.abort()
+          reject(new Error('Profile picture load timed out'))
+        }, LOAD_TIMEOUT)
+      })
+      const publish = (source: string, owned: boolean, bytes: number) => {
+        if (!current(key, ticket) || ticket.pending !== pending) return false
+        setSource(ticket, source, owned, bytes)
+        ticket.restored = false
+        ticket.refreshFailed = false
+        if (owned) pending.source = undefined
+        return true
+      }
+      let blob: Blob
+      try {
+        const response = await Promise.race([
+          deps.fetch(lease.url, {
+            credentials: 'omit',
+            referrerPolicy: 'no-referrer',
+            signal: pending.controller.signal,
+          }),
+          timedOut,
+        ])
+        if (!current(key, ticket) || ticket.pending !== pending) return false
+        if (!response.ok) {
+          const refused = [401, 403, 404].includes(response.status)
+          // a refused picture leaves the persistent cache too, or the
+          // next boot would show it again before any mint
+          if (refused) persistent?.remove(key)
+          return failure(key, refused, ticket)
+        }
+        blob = await Promise.race([response.blob(), timedOut])
+      } catch (error) {
+        if (!current(key, ticket) || ticket.pending !== pending) return false
+        if (pending.controller.signal.aborted) throw error
+        // A forwarded/local origin may display the gateway's no-cors image
+        // even when fetch cannot read it. Preserve that existing capability.
+        // Explicit HTTP refusals return above and never take this fallback.
+        // Its bytes cannot be read, so they count as one whole picture.
+        await Promise.race([deps.decode(lease.url), timedOut])
+        return publish(lease.url, false, AVATAR_SOURCES.pictureBytes)
+      }
+      if (!current(key, ticket) || ticket.pending !== pending) return false
+      pending.source = deps.createUrl(blob)
+      let size = await Promise.race([deps.decode(pending.source), timedOut])
+      if (!fits(blob, size)) {
+        // a legacy picture: re-encoded as an upload is, kept only if it fits
+        const shrunk = await Promise.race([deps.shrink(blob), timedOut])
+        if (!current(key, ticket) || ticket.pending !== pending) return false
+        deps.revokeUrl(pending.source)
+        pending.source = undefined
+        if (shrunk !== blob) {
+          pending.source = deps.createUrl(shrunk)
+          size = await Promise.race([deps.decode(pending.source), timedOut])
+        }
+        if (shrunk === blob || !fits(shrunk, size)) {
+          if (!current(key, ticket) || ticket.pending !== pending) return false
+          ticket.tooLarge = true
+          return false
+        }
+        blob = shrunk
+      }
+      const ready = publish(pending.source, true, blob.size)
+      if (ready) persistent?.put(key, blob)
+      return ready
+    } catch {
+      if (!current(key, ticket) || ticket.pending !== pending) return false
+      return failure(key, false, ticket)
+    } finally {
+      clearTimeout(timeout)
+      if (pending.source) deps.revokeUrl(pending.source)
+      if (ticket.pending === pending) ticket.pending = undefined
+      if (slot) freeSlot()
+    }
+  }
 
   return {
     /** Removing/replacing a roster entry fences every pending response. */
@@ -321,6 +463,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         entry.retryAt = 0
       }
       pump()
+      admit()
     },
     /** The bytes the kept pictures hold, for the tests and the measurement. */
     keptBytes: () => kept,
@@ -328,119 +471,7 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
         measurement. */
     downloading: () => downloading,
     mostDownloading: () => mostDownloading,
-    async prepare(key: string, lease: Lease, ticket = entries.get(key)): Promise<boolean> {
-      if (!current(key, ticket)) return false
-      ticket.expiresAt = lease.exp * 1000
-      ticket.retryAt = 0
-      // The storage version is immutable. Keep the decoded source when only
-      // its access token changes, including across a route's React remount.
-      if (ticket.source && ticket.sourceOwned) {
-        ticket.restored = false
-        ticket.refreshFailed = false
-        return false
-      }
-      if (ticket.pending || ticket.tooLarge) return false
-      // start no download while the kept bytes and one more picture would
-      // pass the budget; the key waits, in order, as initials
-      if (!ticket.source && !roomFor(AVATAR_SOURCES.pictureBytes)) {
-        ticket.waiting = { due: false }
-        if (!waitingKeys.has(key)) waitingKeys.set(key, ticket)
-        return false
-      }
-      ticket.waiting = undefined
-      waitingKeys.delete(key)
-      const pending = { controller: new AbortController(), source: undefined as string | undefined }
-      ticket.pending = pending
-      let slot = false
-      let timeout: ReturnType<typeof setTimeout> | undefined
-      try {
-        const queued = takeSlot(pending.controller.signal)
-        if (queued) await queued
-        slot = true
-        if (!current(key, ticket) || ticket.pending !== pending) return false
-        // a lease that ran out while it waited for a slot is minted again,
-        // not taken to the gateway for a refusal
-        if (queued && lease.exp * 1000 <= deps.now()) {
-          ticket.refreshFailed = true
-          return false
-        }
-        // the load's time starts with its download, not in the queue
-        const timedOut = new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            pending.controller.abort()
-            reject(new Error('Profile picture load timed out'))
-          }, LOAD_TIMEOUT)
-        })
-        const publish = (source: string, owned: boolean, bytes: number) => {
-          if (!current(key, ticket) || ticket.pending !== pending) return false
-          setSource(ticket, source, owned, bytes)
-          ticket.restored = false
-          ticket.refreshFailed = false
-          if (owned) pending.source = undefined
-          return true
-        }
-        let blob: Blob
-        try {
-          const response = await Promise.race([
-            deps.fetch(lease.url, {
-              credentials: 'omit',
-              referrerPolicy: 'no-referrer',
-              signal: pending.controller.signal,
-            }),
-            timedOut,
-          ])
-          if (!current(key, ticket) || ticket.pending !== pending) return false
-          if (!response.ok) {
-            const refused = [401, 403, 404].includes(response.status)
-            // a refused picture leaves the persistent cache too, or the
-            // next boot would show it again before any mint
-            if (refused) persistent?.remove(key)
-            return failure(key, refused, ticket)
-          }
-          blob = await Promise.race([response.blob(), timedOut])
-        } catch (error) {
-          if (!current(key, ticket) || ticket.pending !== pending) return false
-          if (pending.controller.signal.aborted) throw error
-          // A forwarded/local origin may display the gateway's no-cors image
-          // even when fetch cannot read it. Preserve that existing capability.
-          // Explicit HTTP refusals return above and never take this fallback.
-          // Its bytes cannot be read, so they count as one whole picture.
-          await Promise.race([deps.decode(lease.url), timedOut])
-          return publish(lease.url, false, AVATAR_SOURCES.pictureBytes)
-        }
-        if (!current(key, ticket) || ticket.pending !== pending) return false
-        pending.source = deps.createUrl(blob)
-        let size = await Promise.race([deps.decode(pending.source), timedOut])
-        if (!fits(blob, size)) {
-          // a legacy picture: re-encoded as an upload is, kept only if it fits
-          const shrunk = await Promise.race([deps.shrink(blob), timedOut])
-          if (!current(key, ticket) || ticket.pending !== pending) return false
-          deps.revokeUrl(pending.source)
-          pending.source = undefined
-          if (shrunk !== blob) {
-            pending.source = deps.createUrl(shrunk)
-            size = await Promise.race([deps.decode(pending.source), timedOut])
-          }
-          if (shrunk === blob || !fits(shrunk, size)) {
-            if (!current(key, ticket) || ticket.pending !== pending) return false
-            ticket.tooLarge = true
-            return false
-          }
-          blob = shrunk
-        }
-        const ready = publish(pending.source, true, blob.size)
-        if (ready) persistent?.put(key, blob)
-        return ready
-      } catch {
-        if (!current(key, ticket) || ticket.pending !== pending) return false
-        return failure(key, false, ticket)
-      } finally {
-        clearTimeout(timeout)
-        if (pending.source) deps.revokeUrl(pending.source)
-        if (ticket.pending === pending) ticket.pending = undefined
-        if (slot) freeSlot()
-      }
-    },
+    prepare,
     clear() {
       for (const entry of entries.values()) release(entry)
       entries.clear()
