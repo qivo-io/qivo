@@ -717,7 +717,8 @@ The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119
 (v0.1.120). No app of that release calls them, so it sets no floor of its
 own. The app reads them from the release after v0.1.139, whose paragraph
-below makes v0.1.125, which holds them, the backend's floor. The Board's filter read moved into
+below names v0.1.125, which holds them, as the backend that app needs,
+already held by the upload floor v0.1.136. The Board's filter read moved into
 `convex/lib/viewFilters.ts` with `tasks.board`'s answers unchanged. There
 is no schema change, no backfill and no release step.
 
@@ -785,7 +786,8 @@ cache asks for it again in a call of its own. `planning.assigneeLoad`, the
 REST and MCP workload pages and delays and the Overview ask nothing about
 paused tasks' projects or subtasks, and read and answer as before. The app
 reads the fields from the release after v0.1.139, whose paragraph below
-makes this release (v0.1.125) the backend's floor. There is no schema
+names this release (v0.1.125) as the backend that app needs, already held
+by the upload floor v0.1.136. There is no schema
 change and no backfill.
 
 From the release after v0.1.125, a member's task history in the task
@@ -1075,8 +1077,11 @@ An app from this release, against a backend before v0.1.120, says on every
 Roadmap that it could not be loaded, and against a backend before v0.1.125
 shows every Team utilization cell and the planning panel's workload as
 unknown, also in a tab that was open when the backend went back, until the
-backend rolls forward. From this release on, never return the backend to a
-commit before v0.1.125 (`fdb4d232`); roll forward instead. Returning the
+backend rolls forward. So this app needs a backend from v0.1.125
+(`fdb4d232`) on. The upload floor above, v0.1.136 (`31f3e45f`), already
+holds that, so this release sets no new floor. From it on, as from that
+one, never return the backend to a commit before v0.1.136; roll forward
+instead. Returning the
 app alone to an earlier release is safe against a later backend, because
 that app derives the Roadmap from the workspace's tasks, and
 `planning.assigneeLoad`, which this release no longer calls, stays for it.
