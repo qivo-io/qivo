@@ -1951,12 +1951,18 @@ describe('reads at the design size', () => {
     expect(details.subtasks as Row[]).toHaveLength(50)
   })
 
-  it('a caller in 5 teams reading a task through a sub-project shared with 5 teams', async () => {
-    const fx = await setup()
+  /* `teams` new teams with `me` in the first `mine` of them and another
+   * person in each of the rest, the first `sharing` of them sharing a new
+   * sub-project of TBED, and a task there with a few subtasks, links,
+   * followers and files, everyday values, measured under `name`. */
+  async function throughTeams(
+    fx: Fx,
+    o: { teams: number; mine: number; sharing: number; name: string },
+  ) {
     const me = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Teamed', accepted_at: NOW })
     const [sub] = await plantSubProjects(fx, 1, { under: fx.meta })
     await fx.t.run(async (ctx) => {
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < o.teams; i++) {
         const team = uuid()
         await ctx.db.insert('teams', {
           id: team,
@@ -1965,29 +1971,59 @@ describe('reads at the design size', () => {
           track_delay_default: false,
           created_at: NOW,
         })
-        await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
-        await ctx.db.insert('project_team_access', {
-          project_id: sub.id,
-          team_id: team,
-          level: 'user',
-        })
+        let member = me.id
+        if (i >= o.mine) {
+          member = uuid()
+          await ctx.db.insert('profiles', {
+            id: member,
+            org_id: fx.org.id,
+            name: `Member ${i}`,
+            initials: 'ME',
+            color: '#7a7ad0',
+            org_role: 'user',
+            active: true,
+            kind: 'person',
+            plannable_hours: 40,
+            created_at: NOW,
+          })
+        }
+        await ctx.db.insert('team_members', { team_id: team, profile_id: member, is_leader: false })
+        if (i < o.sharing)
+          await ctx.db.insert('project_team_access', {
+            project_id: sub.id,
+            team_id: team,
+            level: 'user',
+          })
       }
     })
-    // everyday values: a few subtasks, links, followers and files
     const [task] = await plantTasks(fx, 1, { project_id: sub.id })
     await plantTasks(fx, 3, { parent_id: task.id, project_id: sub.id })
     await plantLinks(fx, task, await plantTasks(fx, 3, { project_id: sub.id }))
     await plantFollowers(fx, task, ['Ada', 'Bo', 'Cy'])
     await plantAttachments(fx, task, [at(0), at(1), at(2)])
-    const { reads } = await measureTask(
-      fx,
-      me,
-      task.id,
-      'a caller in 5 teams, a sub-project shared with 5',
-    )
+    const { reads } = await measureTask(fx, me, task.id, o.name)
     const details = reads['REST details'].out as { subtasks: Row[]; links: Row[] }
     expect(details.subtasks).toHaveLength(3)
     expect(details.links).toHaveLength(3)
+  }
+
+  it('a caller in 5 teams reading a task through a sub-project one of them shares', async () => {
+    await throughTeams(await setup(), {
+      teams: 5,
+      mine: 5,
+      sharing: 1,
+      name: 'a caller in 5 teams, a sub-project shared with 1 of them',
+    })
+  })
+
+  it('a caller in 1 team reading a task through a sub-project shared with 5 teams', async () => {
+    // the other 4 teams hold other people
+    await throughTeams(await setup(), {
+      teams: 5,
+      mine: 1,
+      sharing: 5,
+      name: 'a caller in 1 team, a sub-project shared with 5',
+    })
   })
 
   it('a comment page of 50 comments by 50 authors in an organization of 1,000 people', async () => {
