@@ -1019,7 +1019,7 @@ archived project's **Show sub-projects** read `projectSettings.projects`,
 #364, `e0a2d0b7`) first shipped, instead of the workspace, one
 organization at a time and 25 a page, and a restore from Archived projects
 sends the organization the page showed. That makes v0.1.129 the backend's
-floor for this app: against a backend before it, these pages say they
+floor for this app. Against a backend before it, these pages say they
 could not load the lists and offer Try again, never an empty list, also in
 a tab that was open when the backend went back, until the backend rolls
 forward. The upload tickets' floor above, the release after v0.1.135,
