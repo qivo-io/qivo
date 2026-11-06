@@ -435,8 +435,9 @@ describe('the benchmark server', () => {
       expect(viewer.deps.auto_move.editable_projects).toEqual([])
   }, 60_000)
 
-  it('takes the Roadmap past its ceiling with a remote task at 1,000 tasks, and back when it goes', async () => {
-    const { posted, send } = await server('latency=0&mbps=100000&tasks=1000')
+  it('shows a remote task on the Roadmap, and the same rows again once it goes', async () => {
+    // at everyday tasks, as the forced state's case above reaches the ceiling
+    const { posted, send } = await server('latency=0&mbps=100000&tasks=100')
     await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
     const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
     const program = snap.projects.find((p) => p.type === 'meta')
@@ -458,16 +459,21 @@ describe('the benchmark server', () => {
     }
     const at = await roadmap()
     expect(at.state).toBe('ok')
-    expect(at.rows).toHaveLength(1000)
+    expect(at.rows.length).toBeGreaterThan(0)
+    const before = at.rows.map((row) => row.id)
     await send({ type: 'scenario', id: 'create', name: 'deliverCreate', args: [] })
-    expect((await roadmap()).state).toBe('over_ceiling')
+    const grown = await roadmap()
+    expect(grown.state).toBe('ok')
+    expect(grown.rows).toHaveLength(before.length + 1)
+    const made = grown.rows.map((row) => row.id).filter((id) => !before.includes(id))
+    expect(made).toHaveLength(1)
     await send({ type: 'scenario', id: 'delete', name: 'deliverDelete', args: [] })
     const back = await roadmap()
     expect(back.state).toBe('ok')
-    expect(back.rows.map((row) => row.id)).toEqual(at.rows.map((row) => row.id))
+    expect(back.rows.map((row) => row.id)).toEqual(before)
     // nothing more of its own to delete
     await send({ type: 'scenario', id: 'again', name: 'deliverDelete', args: [] })
-    expect((await roadmap()).rows).toHaveLength(1000)
+    expect((await roadmap()).rows.map((row) => row.id)).toEqual(before)
   }, 60_000)
 
   it("answers the task window's comment page and, apart, its history page", async () => {
