@@ -3335,7 +3335,7 @@ function MilestoneSectionPart({
       data-milestone-section-state={open ? view.state : undefined}
       aria-busy={(open && (view.state === 'refreshing' || view.more === 'loading')) || undefined}
       aria-label={side === 'upcoming' ? 'Upcoming milestones' : 'Past milestones'}
-      className="flex flex-col outline-none"
+      className="flex flex-col"
     >
       {header}
       <div id={bodyId} className="flex flex-col gap-2">
