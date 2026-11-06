@@ -479,6 +479,13 @@ describe('kept rows', () => {
     expect(keptRows()).toEqual([])
     await click(find('[data-users-next]'))
     expect(find<HTMLInputElement>('input[data-user-name="p00"]').value).toBe('Paula Draft')
+    // a kept row stays while its field holds focus, also as its text passes
+    // through the saved name
+    const kept = find<HTMLInputElement>('input[data-user-name="p00"]')
+    await act(async () => kept.focus())
+    await type(kept, 'Person 00')
+    expect(keptRows().map(([id]) => id)).toContain('p00')
+    await type(kept, 'Paula Draft')
     // Escape puts the saved name back, and the row is no longer kept
     await act(async () =>
       find('input[data-user-name="p00"]').dispatchEvent(

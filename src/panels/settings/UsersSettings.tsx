@@ -762,6 +762,10 @@ export function OrgUsersPage({
   const [drafts, setDrafts] = useStateS<ReadonlyMap<string, ReadonlySet<string>>>(() => new Map())
   // the profiles removed here, hidden while the store no longer holds them
   const [removed, setRemoved] = useStateS<ReadonlySet<string>>(() => new Set())
+  // the row that holds focus, which stays while a person edits it, so a
+  // kept row does not leave under the cursor as its text passes through
+  // the saved value or empty
+  const [focused, setFocused] = useStateS<string | null>(null)
   // the answer row each person last showed with, for the rows kept
   const known = useRefS(new Map<string, SettingsPersonRow>())
   const pageRows = page.rows
@@ -795,6 +799,7 @@ export function OrgUsersPage({
   if (!personPage) {
     for (const id of added) if (held(id)) keep(id, 'Added')
     for (const id of drafts.keys()) keep(id, 'Not on this page')
+    if (focused !== null && known.current.has(focused)) keep(focused, 'Not on this page')
     if (openKeys !== null) keep(openKeys, 'Not on this page')
   }
   // forget the answers of rows neither the page nor a kept row shows
@@ -1131,6 +1136,15 @@ export function OrgUsersPage({
           />
           <div
             data-org-users=""
+            onFocus={(e) => {
+              const row = e.target.closest<HTMLElement>('[data-user-row]')
+              setFocused(row?.dataset.userRow ?? null)
+            }}
+            onBlur={(e) => {
+              const next = e.relatedTarget instanceof Element ? e.relatedTarget : null
+              const row = next?.closest<HTMLElement>('[data-user-row]')
+              setFocused(row?.dataset.userRow ?? null)
+            }}
             data-users-state={state}
             aria-busy={state === 'loading' || state === 'refreshing' || undefined}
             className="[display:flex] [flex-direction:column] [gap:6px]"
