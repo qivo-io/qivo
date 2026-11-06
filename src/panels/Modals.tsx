@@ -2845,19 +2845,22 @@ function MilestoneModal({
   // or was refused, which the opened milestone waits for
   const [upcomingIn, setUpcomingIn] = useStateM(false)
   if (!upcomingIn && project && upcoming.view.state !== 'loading') setUpcomingIn(true)
-  // a past milestone the person added here, or moved into a past week with
-  // its editor, after which Past shows even where the last first answer of
-  // Upcoming said the project held none
-  const [pastMade, setPastMade] = useStateM(false)
-  /** Marks a past milestone made here at once, as the paint shows it, and
-      answers what runs once the server answered, which takes the mark back
-      after a refusal unless an earlier write set it. */
+  // The person's writes here that make a past milestone, an add or a save
+  // that moves one into a past week. The window counts those still waiting
+  // for the server and notes whether the server saved one. While one waits,
+  // or once one saved, Past shows even where the last first answer of
+  // Upcoming said the project held none.
+  const [pastWrites, setPastWrites] = useStateM({ waiting: 0, saved: false })
+  const pastMade = pastWrites.saved || pastWrites.waiting > 0
+  /** Counts a write that makes a past milestone as waiting, since its paint
+      shows the milestone at once, and answers what runs, once, with the
+      server's answer. That settles this write alone, so a refusal takes back
+      only its own part of the mark and leaves another write's waiting or
+      saved one. */
   const makePast = () => {
-    const had = pastMade
-    setPastMade(true)
-    return (saved: boolean) => {
-      if (!saved && !had) setPastMade(false)
-    }
+    setPastWrites((w) => ({ ...w, waiting: w.waiting + 1 }))
+    return (saved: boolean) =>
+      setPastWrites((w) => ({ waiting: w.waiting - 1, saved: w.saved || saved }))
   }
   // each section's search box, which stays once it showed
   const [searchable, setSearchable] = useStateM({ upcoming: false, past: false })

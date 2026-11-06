@@ -712,6 +712,81 @@ describe("the person's writes", { timeout: 30_000 }, () => {
     expect(q('[data-milestone-past-toggle]')).not.toBeNull()
   })
 
+  it.each([
+    ['saves', true],
+    ['refuses', false],
+  ] as const)(
+    "keeps Past's disclosure for a waiting past add when an overlapping move into the past is refused, and the server %s the add",
+    async (_, addSaved) => {
+      fixture({ up: 3 })
+      await start({ batch: 2, rows: 4 })
+      // each write waits until the case answers it
+      const writes = new Map<
+        string,
+        { resolve: (v: unknown) => void; reject: (e: unknown) => void }
+      >()
+      network.mutation.mockImplementation(
+        (ref) =>
+          new Promise((resolve, reject) => writes.set(getFunctionName(ref), { resolve, reject })),
+      )
+      await act(async () =>
+        root.render(
+          <TooltipProvider>
+            <Live
+              page={() => (
+                <modals.MilestoneModal
+                  init={{ project: 'plan', week: store.P.TODAY_WEEK - 3 }}
+                  onClose={vi.fn()}
+                />
+              )}
+            />
+          </TooltipProvider>,
+        ),
+      )
+      await settle()
+      expect(q('[data-milestone-past-toggle]')).toBeNull()
+      await press(q('[data-milestone-row="u2"] button[aria-label^="Edit"]'))
+      // a new search's read, which would say whether Past holds any, is held
+      force.upcoming = 'loading'
+      await typeInto(
+        q('[data-milestone-section="upcoming"] [data-milestone-search]') as HTMLInputElement,
+        'step',
+      )
+      await searchSettles()
+      expect(stateOf('upcoming')).toBe('loading')
+      // a move into the past, then a past add before the move is answered
+      await pickInEditor(mondayIn(-2))
+      await press(button('Save'))
+      await typeInto(q('[data-milestone-new]') as HTMLInputElement, 'Kickoff')
+      await press(button('Add'))
+      expect([...writes.keys()]).toEqual(['projects:updateMilestone', 'projects:addMilestone'])
+      expect(q('[data-milestone-past-toggle]')).not.toBeNull()
+      // the move is refused over someone else's change while the add waits
+      await act(async () =>
+        writes.get('projects:updateMilestone')?.reject(
+          new ConvexError({
+            code: 'conflict',
+            reason: FIELD_CHANGED,
+            message: 'the week of the milestone changed since you read it',
+            changes: [{ record: 'milestone', id: 'u2', field: 'week', by: 'someone', at: AT }],
+          }),
+        ),
+      )
+      await settle()
+      expect(q('[data-milestone-editor="u2"]')).not.toBeNull()
+      expect(q('[data-milestone-past-toggle]')).not.toBeNull()
+      // a saved add keeps the disclosure, and a refused one takes it back
+      const add = writes.get('projects:addMilestone')
+      await act(async () =>
+        addSaved
+          ? add?.resolve(null)
+          : add?.reject(new ConvexError({ code: 'forbidden', message: 'You cannot add here.' })),
+      )
+      await settle()
+      expect(q('[data-milestone-past-toggle]') !== null).toBe(addSaved)
+    },
+  )
+
   it('paints a rename and a move at once', async () => {
     fixture({ up: 3 })
     let resolve: (v: unknown) => void = () => {}
