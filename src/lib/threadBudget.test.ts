@@ -220,6 +220,97 @@ describe('the thread budget', () => {
     expect(after?.history?.gap).toEqual(['e59'])
   })
 
+  it('keeps a row inside a run that shares its instant with a live row of the other kind below the gap, so later presses still let rows go', () => {
+    // Under All, a task archived with a reason. The archive's change and its
+    // reason comment share minute 160. More than 50 comments followed, so
+    // the reason comment c160 sits inside the run above the live window
+    // c170 to c219, while the archive's change is on the live page
+    const live = [
+      row('e', 0, 160),
+      ...Array.from({ length: 19 }, (_, i) => row('e', i + 1, 300 + i)),
+    ]
+    const history = kind([], live)
+    // Show earlier comments loaded c120 to c169, then c70 to c119
+    const first = release(kind(rows('c', 70, 170), rows('c', 170, 220)), ['down', 'up'], 150, {
+      history,
+      keep: ['c120', ...ids(rows('c', 70, 120)), 'e0'],
+    })
+    // the gap opens above c160, which stays below it with the rows after it,
+    // and the walk up from it lets 20 rows go, which brings the store to its
+    // budget
+    expect(first?.comments).toMatchObject({
+      older: rows('c', 70, 140),
+      gap: ids(rows('c', 140, 160)),
+      newer: rows('c', 160, 170),
+    })
+    // the next press, c20 to c69, lets the next 50 rows go above the gap
+    const before = first?.comments
+    if (!before) throw new Error('the first press let nothing go')
+    const second = release(
+      kind([...rows('c', 20, 70), ...before.older], rows('c', 170, 220), before.gap, before.newer),
+      ['down', 'up'],
+      150,
+      { history, keep: ['c70', ...ids(rows('c', 20, 70))] },
+    )
+    expect(second?.comments).toMatchObject({
+      older: rows('c', 20, 90),
+      gap: ids(rows('c', 90, 160)),
+      newer: rows('c', 160, 170),
+    })
+    // and the mirror, with the reason comment live and the archive's change inside
+    // the history's run, walked back with Show earlier activity
+    const comments = kind(
+      [],
+      [row('c', 0, 160), ...Array.from({ length: 29 }, (_, i) => row('c', i + 1, 400 + i))],
+    )
+    const firstChanges = release(comments, ['down', 'up'], 150, {
+      history: kind(rows('e', 70, 170), rows('e', 170, 220)),
+      keep: ['e120', ...ids(rows('e', 70, 120)), 'c0'],
+    })
+    expect(firstChanges?.history).toMatchObject({
+      older: rows('e', 70, 130),
+      gap: ids(rows('e', 130, 160)),
+      newer: rows('e', 160, 170),
+    })
+    const after = firstChanges?.history
+    if (!after) throw new Error('the first press let no change go')
+    const secondChanges = release(comments, ['down', 'up'], 150, {
+      history: kind(
+        [...rows('e', 20, 70), ...after.older],
+        rows('e', 170, 220),
+        after.gap,
+        after.newer,
+      ),
+      keep: ['e70', ...ids(rows('e', 20, 70))],
+    })
+    expect(secondChanges?.history).toMatchObject({
+      older: rows('e', 20, 80),
+      gap: ids(rows('e', 80, 160)),
+      newer: rows('e', 160, 170),
+    })
+  })
+
+  it('stops a move before an instant it cannot take whole, so the next move still runs', () => {
+    // The comments hold an older run of 0-59, a gap of 60-69, a newer run of
+    // 70-79 and live rows from 80. The change at minute 70 is on a reader's screen and must stay, so
+    // `down` cannot take c70 without splitting that instant
+    const comments = kind(
+      rows('c', 0, 60),
+      rows('c', 80, 130),
+      ids(rows('c', 60, 70)),
+      rows('c', 70, 80),
+    )
+    const history = kind([row('e', 1, 5), row('e', 2, 70), row('e', 3, 75)], [row('e', 4, 200)])
+    const after = release(comments, ['down', 'up'], 104, { history, keep: ['c0', 'e2'] })
+    // `down` stops before c70, and `up` lets the 20 newest rows above go
+    expect(after?.comments).toMatchObject({
+      older: rows('c', 0, 40),
+      gap: ids(rows('c', 40, 70)),
+      newer: rows('c', 70, 80),
+    })
+    expect(after?.history?.gap).toBeNull()
+  })
+
   it('moves the cut until every row kept above is older than every row kept below, in a thread whose times run against its order', () => {
     // a seeded thread: in thread order c0 to c9, but c5's time is minute 90
     const seeded = [...rows('c', 0, 5), row('c', 5, 90), ...rows('c', 6, 10)]

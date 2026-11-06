@@ -14,19 +14,32 @@
 
    A release walks rows out one at a time on the side its trigger names
    (ReleaseMove), both kinds together in time order, so the two gaps run
-   between the same kept instants as far as the rows allow. It stops at a
-   row it must keep, and at the rows at the end of a run that share an
-   instant with a live row, since the live rows stay. One write can log
-   several changes at one instant, and the live page can start among them.
-   It keeps the first state on its walk that holds at most the budget and
-   splits no instant: no kept row shares a time with a row this release
-   took, and every row kept above a gap is older than every row kept below
-   one, both kinds counted. Where no such state comes before
-   a row it must keep, it keeps the last state on the walk that splits no
-   instant, which holds more than the budget, and the next release tries
-   again. A row the person edits (`pinned`) is passed over, not kept: it
-   leaves its run, and the store holds it apart until a page holds it
-   again. */
+   between the same kept instants as far as the rows allow. It keeps the
+   first state on its walk that holds at most the budget and splits no
+   instant, where no kept row shares a time with a row this release took
+   and every row kept above a gap is older than every row kept below one,
+   both kinds counted.
+
+   Every held row at an instant a live row of either kind holds stays with
+   the live rows, wherever it sits in its run, since the live rows never
+   go. One write can log several changes at one instant, and the live page
+   can start among them; an archive with a reason logs its change and posts
+   its comment at one instant, so one of the two can sit inside a run while
+   the other is live. A kind without a gap opens it above its first such
+   row, so the rows from there down stay below the gap. A move stops
+   before a row at such an instant, at an instant of a row it must keep,
+   and, walking `up`, at the instant of a kind's oldest kept row, which
+   `up` never takes. So it never takes part of an instant it cannot
+   finish, and the moves after it still run, where stepping back from a
+   split instant would undo them too. Where the walk
+   still ends in a state that splits an instant or breaks the order, it
+   steps back to the last state on the walk that does neither, which holds
+   more than the budget, and the next release tries again. A row already
+   above a gap that comes to share an instant with a live row, as when
+   Show earlier walks back to it after the gap opened, holds `up` there
+   until its live row leaves the live window or page. A row the person
+   edits (`pinned`) is passed over, not kept. It leaves its run, and the
+   store holds it apart until a page holds it again. */
 
 import { LIMITS } from '../../convex/lib/limits'
 
@@ -88,9 +101,10 @@ export type HeldKind<R extends HeldRow = HeldRow> = {
 /** Which side a release walks. `down` takes the newer run from the gap
     down, toward the live rows. `up` takes the older run from its newest
     row up. A kind without a gap opens one for either at the other kind's
-    gap, or just above its own live rows when neither kind has one, and
-    below it keeps the rows at the end of its run that share an instant
-    with a live row. `top` takes the older run from its oldest row down;
+    gap, or just above its own live rows when neither kind has one, and in
+    either case no lower than its first row at an instant a live row
+    holds, which stays below the gap with every row after it. `top` takes
+    the older run from its oldest row down;
     once it empties, the gap joins the start and the walk goes on into the
     newer run. */
 export type ReleaseMove = 'down' | 'up' | 'top'
@@ -224,26 +238,31 @@ export function releaseThread<C extends HeldRow, E extends HeldRow>(
     (max, k) => (k.gap === null ? max : k.older.reduce((m, r) => Math.max(m, r.ts), max)),
     Number.NEGATIVE_INFINITY,
   )
-  // The rows at the end of each kind's runs that share an instant with a
-  // live row of either kind, as the changes of one write that the live
-  // page starts among do. The live rows stay, so these stay with them. No
-  // move takes them, and a kind without a gap opens it above them.
+  // The instants of the live rows of either kind. The live rows stay, so
+  // every held row at one of them stays with them, wherever it sits, and a
+  // kind without a gap opens it above its first such row.
   const liveAt = new Set(kinds.flatMap((k) => k.live.map((r) => r.ts)))
-  const atLive = new Set<string>()
   const walks: Walk<HeldRow>[] = kinds.map((k) => {
     const seq = [...k.older, ...k.newer]
-    let end = seq.length
-    while (end > 0 && liveAt.has(seq[end - 1].ts)) atLive.add(seq[--end].id)
     let cut = k.older.length
     if (k.gap === null) {
       if (gapEnd > Number.NEGATIVE_INFINITY) {
         const later = seq.findIndex((r) => r.ts > gapEnd)
         cut = later === -1 ? seq.length : later
       }
-      cut = Math.min(cut, end)
+      const stay = seq.findIndex((r) => liveAt.has(r.ts))
+      if (stay !== -1) cut = Math.min(cut, stay)
     }
     return { seq, live: k.live, cut, gap: k.gap, t: 0, a: cut, b: cut, join: false }
   })
+  // The instants no move takes a row at, those of the live rows and of the
+  // rows this release must keep, and walking `up` also the instant of each
+  // kind's oldest kept row, which `up` never takes.
+  const stays = new Set(liveAt)
+  for (const w of walks) for (const r of w.seq) if (ask.keep.has(r.id)) stays.add(r.ts)
+  const stops = (move: ReleaseMove, ts: number) =>
+    stays.has(ts) ||
+    (move === 'up' && walks.some((w) => !w.join && w.t < w.seq.length && w.seq[w.t].ts === ts))
   const held = () =>
     walks.reduce(
       (n, w) =>
@@ -274,8 +293,9 @@ export function releaseThread<C extends HeldRow, E extends HeldRow>(
         }
       }
       if (pick === -1) break
-      const row = walks[pick].seq[at]
-      if (ask.keep.has(row.id) || atLive.has(row.id)) break
+      // a row the move cannot take with the rest of its instant ends the
+      // move here, so the next move still runs
+      if (stops(move, walks[pick].seq[at].ts)) break
       take(walks[pick], move, at)
       passed.push(places())
       done = held() <= ask.budget && fine()
@@ -283,7 +303,8 @@ export function releaseThread<C extends HeldRow, E extends HeldRow>(
     if (done) break
   }
   if (!done) {
-    // the last place on the walk that splits no instant, or none
+    // the last place on the walk that splits no instant and keeps the
+    // order, or none
     let back = passed.length - 1
     for (; back >= 0; back--) {
       for (const [k, place] of passed[back].entries()) Object.assign(walks[k], place)
