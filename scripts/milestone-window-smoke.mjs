@@ -1,8 +1,12 @@
 /* Milestones window regression against the Northstar development demo.
  * Usage: node scripts/milestone-window-smoke.mjs [baseURL]
  * Requires a running dev server. Creates one temporary milestone through the
- * window, edits and deletes it there; finally sweeps anything it left behind,
- * never seeds or resets. */
+ * window, edits and deletes it there, and one past milestone through the
+ * backend that Past shows once expanded; finally removes the milestones the
+ * run made, by their ids, never seeds or resets. It reads milestones from
+ * the server (milestones.between, as the window reads milestones.section),
+ * never from the workspace's copy, so a copy seeded before Northstar had
+ * past milestones runs too. */
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -30,22 +34,51 @@ async function selectView(name) {
   )
 }
 
-/* The backend's rows for this run, read through the dev app's authenticated
-   client once its outstanding writes have landed. */
+/* The ids of the milestones this run made, which cleanup() removes. */
+const made = new Set()
+
+/* Every milestone of `project` the backend holds on a day in [from, to),
+   read on `on` through the dev app's authenticated client with the window's
+   own bounded read of a range of days (milestones.between). */
+function serverRows(on, project, from, to) {
+  return on.evaluate(
+    async ({ project, from, to }) => {
+      const { convex } = await import('/src/lib/convex.ts')
+      const rows = []
+      let after
+      for (let round = 0; round < 20; round++) {
+        const batch = await convex.query('milestones:between', {
+          projects: [project],
+          from,
+          to,
+          ...(after ? { after } : {}),
+        })
+        rows.push(...batch.rows)
+        if (!batch.next) return rows
+        after = batch.next
+      }
+      throw new Error('The range did not end within 20 batches')
+    },
+    { project, from, to },
+  )
+}
+
+/* The project and weeks a run reads and writes in, 13 weeks back to 13
+   ahead, once it chose them. */
+let span = null
+
+/* The backend's rows for this run, read once the app's outstanding writes
+   have landed. */
 async function persisted() {
   await page.waitForFunction(async () => {
     const { convex } = await import('/src/lib/convex.ts')
     return convex.connectionState().inflightMutations === 0
   })
-  return page.evaluate(async (prefix) => {
-    const { convex } = await import('/src/lib/convex.ts')
-    const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-      (name, args) => convex.query(name, args),
-    )
-    return snapshot.milestones
-      .filter((row) => row.name.startsWith(prefix))
-      .map(({ name, week, project_id }) => ({ name, week, project_id }))
-  }, prefix)
+  const rows = (await serverRows(page, span.project, span.from, span.to)).filter((row) =>
+    row.name.startsWith(prefix),
+  )
+  for (const row of rows) made.add(row.id)
+  return rows.map(({ name, week, project_id }) => ({ name, week, project_id }))
 }
 
 /* The store dispatches a write a tick after it paints the row, so the backend
@@ -84,26 +117,23 @@ async function pickWeek(week) {
   return iso
 }
 
+/* Removes the milestones this run made: the ids it recorded, and any row
+   named with its prefix that the server answers in the run's weeks of its
+   project, as an add the run painted before a failure. */
 async function cleanup() {
+  if (!span) return
   const context = await browser.newContext()
   try {
     const cleanupPage = await context.newPage()
     await signInDemo(cleanupPage, demo)
+    for (const row of await serverRows(cleanupPage, span.project, span.from, span.to))
+      if (row.name.startsWith(prefix)) made.add(row.id)
     await cleanupPage.evaluate(
-      async ({ prefix, orgSlug }) => {
+      async ({ ids, org }) => {
         const { convex } = await import('/src/lib/convex.ts')
-        const snapshot = await (await import('/convex/lib/workspaceJoin.ts')).readWorkspace(
-          (name, args) => convex.query(name, args),
-        )
-        const org = snapshot.orgs.find((row) => row.slug === orgSlug)
-        if (!org) throw new Error('Cleanup organization is unavailable')
-        for (const row of snapshot.milestones.filter((row) => row.name.startsWith(prefix))) {
-          const project = snapshot.projects.find((project) => project.id === row.project_id)
-          if (project?.org_id === org.id)
-            await convex.mutation('projects:removeMilestone', { org_id: org.id, id: row.id })
-        }
+        for (const id of ids) await convex.mutation('projects:removeMilestone', { org_id: org, id })
       },
-      { prefix, orgSlug: demo.orgSlug },
+      { ids: [...made], org: span.org },
     )
     await cleanupPage.evaluate(() => window.PLANNER?.signOut()).catch(() => {})
   } finally {
@@ -115,36 +145,52 @@ try {
   await signInDemo(page, demo)
   /* A top-level project holds one milestone a week, so the run uses a
      Northstar project, Luma Sensor when it can, whose milestones leave this
-     week and the week two ahead free for the milestone it adds and moves. */
-  const fixture = await page.evaluate(() => {
+     week and the week two ahead free for the milestone it adds and moves,
+     and a week before this one free for the past milestone it makes. */
+  const grid = await page.evaluate(() => {
     const P = window.PLANNER
     // P.projects holds only active projects; the demo organization's own
     const metas = P.projects
       .filter((p) => p.type === 'meta' && p.org === P.org.id)
       .sort((a, b) => Number(b.name === 'Luma Sensor') - Number(a.name === 'Luma Sensor'))
-    const free = (p) =>
-      P.milestonesIn(p.id).every((m) => m.week !== P.TODAY_WEEK && m.week !== P.TODAY_WEEK + 2)
-    const project = metas.find(free)
-    if (!project) throw new Error('No Northstar project has this week and the week two ahead free')
+      .map((p) => ({ id: p.id, name: p.name }))
     P.saveUINow({ roadmapWin: P.DEFAULT_WIN })
     const iso = (week) => P.isoFromDate(P.weekToDate(week))
-    return {
-      project: project.id,
-      name: project.name,
-      today: P.TODAY_WEEK,
-      thisWeek: iso(P.TODAY_WEEK),
-    }
+    const weeks = Array.from({ length: 27 }, (_, i) => iso(P.TODAY_WEEK - 13 + i))
+    return { metas, org: P.org.id, today: P.TODAY_WEEK, weeks }
   })
+  // the first day of the week `offset` weeks from this one
+  const at = (offset) => grid.weeks[13 + offset]
+  let fixture = null
+  for (const meta of grid.metas) {
+    const rows = await serverRows(page, meta.id, grid.weeks[0], grid.weeks[26])
+    const taken = new Set(rows.map((row) => row.week))
+    const pastWeek = [-1, -2, -3, -4, -5, -6].map(at).find((week) => !taken.has(week))
+    if (!taken.has(at(0)) && !taken.has(at(2)) && pastWeek) {
+      fixture = {
+        project: meta.id,
+        name: meta.name,
+        today: grid.today,
+        thisWeek: at(0),
+        pastWeek,
+      }
+      break
+    }
+  }
+  if (!fixture) throw new Error('No Northstar project has the weeks this run needs free')
+  span = { project: fixture.project, org: grid.org, from: grid.weeks[0], to: grid.weeks[26] }
   await page.locator('aside').getByText(fixture.name, { exact: true }).click()
   await selectView('Overview')
-  const existing = await page.evaluate(
-    (id) => window.PLANNER.milestonesIn(id).length,
-    fixture.project,
-  )
+  const upcomingRows = () =>
+    modal().locator('[data-milestone-section="upcoming"] [data-milestone-row]')
 
   // ---- the + opens the window on the new row; Enter adds and keeps it open
   await page.getByRole('button', { name: 'New milestone', exact: true }).click()
   await modal().waitFor()
+  await modal()
+    .locator('[data-milestone-section="upcoming"][data-milestone-section-state="ok"]')
+    .waitFor()
+  const existing = await upcomingRows().count()
   assert.equal(await modal().getByRole('heading', { name: 'Milestones' }).count(), 1)
   assert.ok(await modal().getByText(fixture.name, { exact: true }).isVisible(), 'No project chip')
   const newBox = modal().getByRole('textbox', { name: 'New milestone', exact: true })
@@ -158,11 +204,7 @@ try {
   while ((await newBox.inputValue()) !== '' && Date.now() < cleared) await page.waitForTimeout(200)
   assert.equal(await newBox.inputValue(), '', 'New box was not cleared after Add')
   assert.equal(await modal().count(), 1, 'Window closed after Add')
-  assert.equal(
-    await modal().locator('[data-milestone-row]').count(),
-    existing + 1,
-    'List did not grow by one',
-  )
+  assert.equal(await upcomingRows().count(), existing + 1, 'Upcoming did not grow by one')
   await expectPersisted([
     { name: `${prefix} A`, week: fixture.thisWeek, project_id: fixture.project },
   ])
@@ -214,11 +256,12 @@ try {
   await editor().getByRole('button', { name: 'Cancel', exact: true }).click()
   await modal().getByRole('button', { name: 'Done', exact: true }).click()
   await modal().waitFor({ state: 'detached' })
+  // the milestone the run made, whose id the backend's rows give
+  const [flagId] = (await serverRows(page, span.project, span.from, span.to))
+    .filter((row) => row.name === `${prefix} B`)
+    .map((row) => row.id)
+  assert.ok(flagId, 'The backend does not hold the renamed milestone')
   await selectView('Roadmap')
-  const flagId = await page.evaluate(
-    (name) => window.PLANNER.milestones.find((m) => m.name === name)?.id,
-    `${prefix} B`,
-  )
   await page.locator(`[data-msflag="${flagId}"]`).click()
   await editor().waitFor()
   assert.equal(
@@ -234,12 +277,44 @@ try {
   await editor().getByRole('button', { name: 'Confirm delete', exact: true }).click()
   await editor().waitFor({ state: 'detached' })
   assert.equal(await editButton(`${prefix} B`).count(), 0, 'Deleted milestone still listed')
-  assert.equal(await modal().locator('[data-milestone-row]').count(), existing)
+  assert.equal(await upcomingRows().count(), existing)
   await expectPersisted([], 'Deleted milestone still persisted')
+  log('Delete arms, confirms and removes the milestone; Upcoming is back to its start')
+
+  // ---- Past: collapsed, reading nothing, then the run's past milestone in
+  // its place among the project's past milestones, newest first
+  const pastName = `${prefix} past`
+  const pastId = randomUUID()
+  made.add(pastId)
+  await page.evaluate(
+    async ({ org, id, project, name, week }) => {
+      const { convex } = await import('/src/lib/convex.ts')
+      await convex.mutation('projects:addMilestone', {
+        org_id: org,
+        id,
+        project_id: project,
+        name,
+        week,
+      })
+    },
+    { org: span.org, id: pastId, project: fixture.project, name: pastName, week: fixture.pastWeek },
+  )
+  const toggle = modal().locator('[data-milestone-past-toggle]')
+  await toggle.waitFor()
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false', 'Past was not collapsed')
+  assert.equal(await modal().getByText(pastName, { exact: true }).count(), 0, 'Past showed early')
+  await toggle.click()
+  const pastSection = modal().locator('[data-milestone-section="past"]')
+  await pastSection.locator(`[data-milestone-row="${pastId}"]`).waitFor()
+  const days = await pastSection
+    .locator('[data-milestone-row] time')
+    .evaluateAll((times) => times.map((time) => time.getAttribute('datetime')))
+  assert.ok(days.length >= 1, 'Past shows no milestone')
+  assert.deepEqual(days, [...days].sort().reverse(), 'Past is not newest first')
+  log(`Past expands to ${days.length} past milestones, newest first, the run's own among them`)
   await modal().getByRole('button', { name: 'Done', exact: true }).click()
   await modal().waitFor({ state: 'detached' })
   assert.deepEqual(errors, [], 'Browser reported uncaught errors')
-  log('Delete arms, confirms and removes the milestone; the list is back to its start')
   passed = true
 } catch (error) {
   console.error('[milestone-window] FAIL:', error?.message || 'Browser drive failed')
