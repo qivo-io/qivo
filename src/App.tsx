@@ -2019,13 +2019,13 @@ function App() {
     setModal(null)
     window.showToast?.(`Created ${P.issueById[key]?.key || key}`)
     const curProj = P.project(scope)
-    /* All projects already shows it — jumping out of the widest scope to a
-       single sub-project would be a demotion, not a "so you can see it" —
-       except on the Board, whose All projects asks to choose a project. My
-       view shows it only if it landed on me; a task created from a side-board's
-       + is unassigned, so that one still jumps to its sub-project. */
+    /* All projects shows the task on no view, as the Board, the Overview
+       and the Roadmap each ask to choose a project there, so a create from
+       it moves to the task's sub-project, as from a project that does not
+       hold it. My view shows it only if it landed on me; a task created
+       from a side-board's + is unassigned, so that one still jumps to its
+       sub-project. */
     const inScope =
-      (P.isAllScope(scope) && view !== 'kanban') ||
       (P.isMineScope(scope) && P.isMine(P.issueById[key])) ||
       (curProj &&
         (curProj.id === issue.project || (curProj.children || []).includes(issue.project)))

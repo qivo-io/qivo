@@ -9,6 +9,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { isProjectSettingsRead, projectSettingsServer } from './store/projectSettingsStandIn.setup'
+import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The entries App's pages and phone layers leave, on App and the real
    store. A layer that closes with the move it started, as Create and a
@@ -175,6 +176,8 @@ async function boot(address: string, phone: boolean, second = false) {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
+    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
+      next(answerRoadmap(server, name, args))
     else if (name === 'taskWindow:task') {
       // the server's answer, a moment later, as from Convex: an archived
       // task with its text, or the task the workspace holds, by its uuid or
@@ -356,6 +359,45 @@ describe('a phone layer that closes with the move it started', { timeout: 30_000
     )
     expect(document.querySelector('[data-board-choice]')).toBeNull()
   })
+
+  it.each([
+    ['Roadmap', 'roadmap'],
+    ['Overview', 'overview'],
+  ])(
+    "opens a task created from the %s's All projects chooser on its sub-project's page",
+    async (_, view) => {
+      await boot(`/app/~/${view}/all`, true)
+      const state = () =>
+        document
+          .querySelector(`[data-workspace-view="${view}"] [data-${view}-root]`)
+          ?.getAttribute(`data-${view}-state`)
+      await waitFor(() => state() === 'choose', 'the project chooser')
+      await settle()
+      await press('New task')
+      await waitFor(() => document.querySelector('[data-modal-shell]'), 'the dialog')
+      await settle()
+      const where = document.querySelector<HTMLSelectElement>('[data-modal-shell] select')
+      const next = where && [...where.options].find((o) => !o.disabled && o.value)
+      if (where && next) {
+        where.value = next.value
+        await act(async () => where.dispatchEvent(new Event('change', { bubbles: true })))
+      }
+      await type(
+        await waitFor(
+          () => document.querySelector<HTMLInputElement>('input[aria-label="Title"]'),
+          'the Title field',
+        ),
+        'Run the soak test',
+      )
+      await press('Create')
+      await waitFor(() => !document.querySelector('[data-modal-shell]'), 'the dialog to close')
+      await settle()
+      // the sub-project's page in place of the chooser, under the task's
+      // address, not All projects' (roadmap/all or overview/all)
+      expect(location.pathname).toBe(`/app/testbed/${view}/tasks/qn-2`)
+      await waitFor(() => state() === 'ok', "the sub-project's page")
+    },
+  )
 
   it("gives a search result's task the search's entry, and Back returns to the page the search began on", async () => {
     await boot('/app/testbed/board/p/1', true)
