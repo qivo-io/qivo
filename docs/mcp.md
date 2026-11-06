@@ -2016,9 +2016,10 @@ follow, also when you are past the first page of `followers`, which come by
 name, ignoring case and accents and comparing the names by their UTF-8
 bytes. `attachments` lists the task's files, oldest first, described under
 [Attachments](#attachments). When one call cannot read every first page,
-such as the answer of an update that archived a large group, a list it had
-no room for holds no rows and a cursor at its start, so a list is never
-shown as complete when it is not.
+a list it had no room for holds no rows and a cursor at its start, and an
+archived group's subtasks, which always read their first subtask, hold the
+subtasks the room allowed and a cursor, so a list is never shown as
+complete when it is not.
 
 `list_task_related` reads the rest, one page of one list at a time,
 without reading the task's text or its other lists. `list` is `subtasks`,
@@ -2048,7 +2049,10 @@ cursor`, `offset does not apply to followers; pass next_cursor as cursor`
 or `offset does not apply to attachments; pass next_cursor as cursor`),
 then the task (`task "QN-482" not found (or not visible to you)`), then
 `cursor` (`cursor must be the next_cursor of an earlier page`, also for an
-empty one). A list with more rows than one call reads and sorts, twice its
+empty one). A `limit` that is not a whole number is refused by the schema
+first, with `Input validation error: Invalid arguments for tool
+list_task_related: limit: …`. A list with more rows than one call reads
+and sorts, twice its
 per-task limit, which only data stored before that limit, or followers that
 a new assignee or reviewer added past theirs, can reach, is refused with
 `this task has more subtasks than Qivo can list in one request. Contact

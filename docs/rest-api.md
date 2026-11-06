@@ -1825,8 +1825,10 @@ when they are past the first page of `followers`. See
 links, minted only for the files on that page, in the shape
 [Attachments](#attachments) describes. When one request cannot read every
 first page, such as the answer of a `PATCH` that archived a large group, a
-list it had no room for holds no rows and a cursor at its start, which its
-route reads in full, so a list is never shown as complete when it is not.
+list it had no room for holds no rows and a cursor at its start, and an
+archived group's subtasks, which always read their first subtask, hold the
+subtasks the room allowed and a cursor, so a list is never shown as
+complete when it is not.
 
 A task's four lists page on their own routes, one page of one list at a
 time, without reading the task's text or its other lists:
@@ -1864,8 +1866,8 @@ A task holds at most 100 files, so `GET
 client that resolves the description's `att:<id>` images reads them all
 with that one request.
 
-A list call checks the caller and the task first, so a task the caller
-cannot read answers `404` like an unknown one. These requests are a `400`,
+A list call checks the caller first, and a task the caller cannot read
+answers `404` like an unknown one. These requests are a `400`,
 checked in this order after any unknown query parameter, the task coming
 between the `offset` and the `cursor`:
 
