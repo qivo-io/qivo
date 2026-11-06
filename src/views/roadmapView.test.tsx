@@ -1048,6 +1048,50 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(consumedPlans).toHaveBeenCalledWith(2)
   })
 
+  it('says a Done task without dates has nothing to plan, starting no session and keeping the open one', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues.push(taskRow(snap, 'one-3', 'done', 3))
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const one = board.snapshot.projects[0].id
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await flush()
+    expect(planCard('QN-1')).not.toBeNull()
+    // Plan on roadmap from a window that showed one-3 Done without dates,
+    // which the Roadmap's read never holds
+    await renderRoadmap(board, {
+      focusPlan: {
+        id: 'QN-3',
+        n: 2,
+        key: 'QN-3',
+        uuid: 'one-3',
+        project: one,
+        start: null,
+        end: null,
+        status: 'done',
+      },
+    })
+    await board.answer()
+    await settle()
+    await flush()
+    expect(window.showToast).toHaveBeenCalledWith(
+      "QN-3 can't be planned. A Done task without dates has nothing to plan on the Roadmap.",
+      'error',
+    )
+    expect(window.showToast).toHaveBeenCalledTimes(1)
+    expect(planCard('QN-3')).toBeNull()
+    expect(consumedPlans).toHaveBeenCalledWith(2)
+    // the open session stays, and the read names its task again
+    expect(planCard('QN-1')).not.toBeNull()
+    expect(roadmapAsks(board).at(-1)?.planned_task).toEqual({ id: 'one-1', project_id: one })
+  })
+
   it('pans to a Done task outside the window, then shows it', async () => {
     const board = await loadBoard(
       network,

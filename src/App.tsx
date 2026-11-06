@@ -935,7 +935,7 @@ function App() {
   // from the issue window. { id, n } — n is a nonce so re-planning the same
   // issue re-triggers the spotlight even when the id is unchanged.
   const [focusPlan, setFocusPlan] = useState<
-    ({ id: string; n: number; key?: string } & Partial<TaskPlace>) | null
+    ({ id: string; n: number; key?: string; status?: string } & Partial<TaskPlace>) | null
   >(null)
   const focusN = useRef(0)
   // Show a task in the view: its bar on the Roadmap (Team sync's jump, a
@@ -1673,10 +1673,11 @@ function App() {
   // instead. That opens no session and writes nothing, and a group's dormant
   // status never stops it as Backlog. A task the window shows from its own
   // answer plans the same way (P.taskShown). The request carries the task's
-  // uuid, sub-project and weeks (TaskPlace): the Roadmap pans to them, asks
-  // the server to keep the task past the filter row, waits for an answer
-  // that holds it, then spotlights it, or says it is not on the roadmap any
-  // more or why it cannot plan it there.
+  // uuid, sub-project and weeks (TaskPlace) and its status. The Roadmap pans
+  // to those weeks, asks the server to keep the task past the filter row,
+  // waits for an answer that holds it, then spotlights it, or says it is
+  // not on the roadmap any more or why it cannot plan it there, as for a
+  // Done task without dates, whose window's button is off.
   const planOnRoadmap = (id) => {
     const it = P.taskShown(id)
     if (!it) return
@@ -1714,7 +1715,7 @@ function App() {
           roadmapReveal.current = focusN.current
         } else {
           focusN.current += 1
-          setFocusPlan({ id, n: focusN.current, key: it.key, ...place })
+          setFocusPlan({ id, n: focusN.current, key: it.key, status: it.status, ...place })
         }
       },
     )

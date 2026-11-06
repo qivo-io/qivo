@@ -20,7 +20,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
-import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
+import { DONE_WITHOUT_DATES, doneWithoutDates, isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
@@ -86,7 +86,8 @@ const PANEL_GAP = 8
     roadmap (focusPlan) or Team sync's jump (revealTask): its handle, a
     nonce, the key a sentence names it by, and what its source knows of it,
     its uuid, sub-project and weeks, so the Roadmap pans to it and asks the
-    server to keep it before it looks it up. */
+    server to keep it before it looks it up, and for a plan request its
+    status, so a Done task without dates hears why it cannot be planned. */
 export type RoadmapRequest = {
   id: string
   n: number
@@ -95,6 +96,7 @@ export type RoadmapRequest = {
   project?: string
   start?: number | null
   end?: number | null
+  status?: string
 }
 
 /** A request the Roadmap takes and waits to resolve against an answer:
@@ -1093,8 +1095,10 @@ function Roadmap({
      task, it acts at once; where the Roadmap shows a note instead, it says
      why the task cannot be planned or shown here; and where a current
      answer for the arguments on screen does not hold it, that it is not on
-     the roadmap any more. A plan request that sends its task judges only
-     an answer for arguments that carry it. Meanwhile it waits. */
+     the roadmap any more, or for a task its source showed Done without
+     dates, which the Roadmap never shows, that it has nothing to plan. A
+     plan request that sends its task judges only an answer for arguments
+     that carry it. Meanwhile it waits. */
   useEffectR(() => {
     for (const req of [pending.plan, pending.reveal]) {
       // A request taken since this render replaced this one, and the next
@@ -1115,7 +1119,12 @@ function Roadmap({
       if (req.kind === 'plan') dropPlanAsk(req)
       if (req.kind === 'plan') onFocusConsumed?.(req.n)
       else onRevealConsumed?.(req.n)
-      if (why)
+      if (req.kind === 'plan' && doneWithoutDates(req))
+        window.showToast?.(
+          `${req.key ?? 'This task'} can't be planned. ${DONE_WITHOUT_DATES}`,
+          'error',
+        )
+      else if (why)
         window.showToast?.(
           `${req.key ?? 'This task'} can't be ${req.kind === 'plan' ? 'planned' : 'shown'} here. ${why}`,
           'error',
