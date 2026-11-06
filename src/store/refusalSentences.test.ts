@@ -205,12 +205,21 @@ describe('refusal sentences in restore and upload toasts', () => {
     answers['files:uploadUrl'] = () => Promise.resolve('https://upload.example.test/u')
     answers['files:avatarUploadUrl'] = () => Promise.resolve('https://upload.example.test/a')
     const picture = new File(['png bytes'], 'me.png', { type: 'image/png' })
-    // the connection drops, and the hosting front end answers instead
+    // the connection drops, the hosting front end answers instead, and the
+    // connection drops after the answer's headers arrived
     for (const post of [
       async () => {
         throw new TypeError('Failed to fetch')
       },
       async () => new Response('Bad gateway', { status: 502 }),
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new TypeError('terminated')
+          },
+        }) as unknown as Response,
     ]) {
       showToast.mockClear()
       vi.stubGlobal('fetch', vi.fn(post))

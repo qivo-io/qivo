@@ -5015,7 +5015,15 @@ async function postUpload(url: string, file: Blob): Promise<Posted> {
     console.error('[qivo] upload did not finish:', e)
     return { unanswered: true }
   }
-  if (res.ok) return { storageId: ((await res.json()) as { storageId: string }).storageId }
+  if (res.ok) {
+    try {
+      return { storageId: ((await res.json()) as { storageId: string }).storageId }
+    } catch (e) {
+      // the connection dropped after the answer's headers arrived
+      console.error('[qivo] upload answer did not finish:', e)
+      return { unanswered: true }
+    }
+  }
   console.error('[qivo] upload failed:', res.status)
   const why = await receiverRefusal(res)
   return why === null ? { unanswered: true } : { refused: why }
