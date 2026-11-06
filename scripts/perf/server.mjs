@@ -165,6 +165,25 @@
 //                        still answer them, as for a project an admin
 //                        manages without taking part in it); several
 //                        joined by commas. Open it with role=admin
+//   projectlists         states Settings' project lists answer whatever the
+//                        workspace says (projectSettings:projects,
+//                        subProjects, archived and archivedSubProjects,
+//                        src/store/projectSettingsListsStandIn.setup.ts):
+//                        not-ready (every list not ready), stopped (each
+//                        open batch stops after ten projects looked at),
+//                        error (every list fails), unchecked (every list
+//                        the access_unchecked refusal) and small (batches
+//                        of five); several joined by commas. With
+//                        role=admin the lists hold the hidden projects the
+//                        workspace leaves out, so opening one shows a
+//                        project page the workspace does not hold
+//   archivedprojects (0) archives that many of the last programs, keeping
+//                        the first live: every other one after its first
+//                        sub-project was archived on its own a day before,
+//                        the rest of its sub-projects carried with it, for
+//                        Archived projects. programs=120&subprojects=3&
+//                        archivedprojects=60 lists 60 live and 60 archived
+//                        projects, inside the design size
 //   grants (0)           User grants on the first program for that many
 //                        more people, with more people in the
 //                        organization when it needs them, so the Users
@@ -197,9 +216,12 @@
 // project's Settings page reads (projectSettings:get, users, teams, candidates,
 // leadCandidates and inviteTarget), through the stand-in the jsdom tests use
 // (src/store/projectSettingsStandIn.setup.ts), over the whole workspace, with
-// the access rules but no read budget, and the project writes they lead to
-// (projects:update, setAccess, removeAccess and inviteGuest) change the
-// workspace. So are the removal window's reads (accessRemovals:preview and
+// the access rules but no read budget. So are Settings' project lists
+// (projectSettings:projects, subProjects, archived and archivedSubProjects),
+// through src/store/projectSettingsListsStandIn.setup.ts, over the whole
+// workspace and, for an admin, the hidden projects. The project writes
+// they lead to (projects:update, setAccess, removeAccess and inviteGuest)
+// change the workspace. So are the removal window's reads (accessRemovals:preview and
 // reassignChoices), through src/store/removalStandIn.setup.ts, which takes the
 // removed people's open tasks in the projects the change reaches as the lost
 // holdings and every person who can hold work as the choices, and answers a
@@ -217,6 +239,11 @@ import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
 import { NAV_UNCHECKED, projectNavStandIn } from '../../src/store/projectNavStandIn.setup'
+import {
+  isProjectListRead,
+  LISTS_UNCHECKED,
+  projectListsStandIn,
+} from '../../src/store/projectSettingsListsStandIn.setup'
 import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
@@ -342,6 +369,20 @@ const forcedSettings = (() => {
   if (fail.length) force.fail = fail
   return force
 })()
+/* Settings' project lists' forced states (the `projectlists` parameter),
+   as the stand-in's `force` takes them. */
+const forcedLists = (() => {
+  const force = {}
+  for (const state of (parameters.get('projectlists') ?? '').split(',').filter(Boolean)) {
+    if (state === 'not-ready') force.notReady = true
+    else if (state === 'stopped') force.stop = 10
+    else if (state === 'error')
+      force.fail = ['projects', 'subProjects', 'archived', 'archivedSubProjects']
+    else if (state === 'unchecked') force.unchecked = LISTS_UNCHECKED
+    else if (state === 'small') force.batch = 5
+  }
+  return force
+})()
 /* The removal window's forced states (the `removal` parameter). */
 const forcedRemoval = new Set((parameters.get('removal') ?? '').split(',').filter(Boolean))
 const fixtureTime = new Date()
@@ -461,7 +502,22 @@ const visible = programs[0]
 if (parameters.has('projectsettings') || grantCount) visible.meta.lead_id = profiles[1].id
 const hiddenNum = Math.max(20, 1 + programCount * (subprojectCount + 1))
 const hidden = program(programCount, 'Hidden program', hiddenCount, hiddenNum)
-const projects = programs.flatMap((p) => p.children)
+/* `archivedprojects`: the last programs archived an hour apart, newest
+   first, every other one after its first sub-project was archived on its
+   own a day before; the first program stays live. Their tasks are not in
+   the workspace, as an archive takes them out of it. */
+const archivedCount = Math.min(Math.max(0, option('archivedprojects', 0)), programCount - 1)
+const archivedPrograms = programs.slice(programCount - archivedCount)
+archivedPrograms.forEach((p, i) => {
+  const at = new Date(fixtureTime.getTime() - (i + 1) * 3_600_000).toISOString()
+  const alone = new Date(fixtureTime.getTime() - (i + 1) * 3_600_000 - 86_400_000).toISOString()
+  p.meta.archived_at = at
+  p.children.forEach((child, c) => {
+    child.archived_at = i % 2 === 0 && c === 0 ? alone : at
+  })
+})
+const liveProgramCount = programCount - archivedCount
+const projects = programs.slice(0, liveProgramCount).flatMap((p) => p.children)
 // a grant on each program reaches its sub-projects; the hidden one has none
 const access = [
   ...programs.map((p) => ({ project_id: p.meta.id, profile_id: me.id, level: 'user' })),
@@ -727,8 +783,9 @@ const snapshot = {
       next_issue_num: count + hiddenTasks.length + 1,
       next_project_num: hiddenNum + hiddenCount + 1,
       // every task is active, and every program and its projects are live
+      // but those archivedprojects archives
       active_tasks: count + hiddenTasks.length,
-      live_projects: programCount * (subprojectCount + 1) + 1 + hiddenCount,
+      live_projects: liveProgramCount * (subprojectCount + 1) + 1 + hiddenCount,
       date_format: 'iso',
       week_start: 1,
       week_one_rule: 'first4day',
@@ -1164,6 +1221,9 @@ const read = (name, args = {}) => {
   // the project picker's reads (src/store/projectNavStandIn.setup.ts)
   if (name.startsWith('projectNav:'))
     return projectNavStandIn(snapshot, name, args, { force: projectNavForce() })
+  // Settings' project lists (src/store/projectSettingsListsStandIn.setup.ts)
+  if (isProjectListRead(name))
+    return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
   if (name.startsWith('projectSettings:')) return readSettings(name, args)
   // the relation pickers' read, before the task window's other reads
   if (name === 'taskWindow:relationCandidates')
@@ -1281,7 +1341,15 @@ function readSettings(name, args) {
     settingsUnheld.add(args.id)
     setTimeout(() => void emitWorkspace(), 0)
   }
-  return projectSettingsStandIn(snapshot, name, { org_id: org, ...args }, forcedSettings)
+  return projectSettingsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedSettings)
+}
+/** The projects the server holds: the workspace's, and for an admin the
+    hidden program too, which an admin manages though the workspace leaves
+    it out, so Settings' project lists list it and its page answers. */
+function serverWorld() {
+  return admin
+    ? { ...snapshot, projects: [...snapshot.projects, hidden.meta, ...hidden.children] }
+    : snapshot
 }
 /** Delivers query `name`'s new result to its listeners, and resolves once
     it reached them. */

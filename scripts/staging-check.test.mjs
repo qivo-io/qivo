@@ -52,6 +52,8 @@ import {
   redact,
   request,
   resolveConfig,
+  SETTINGS_PROJECTS_MARKS,
+  SETTINGS_PROJECTS_STEP,
   searchOf,
   send,
   syncsWith,
@@ -150,6 +152,22 @@ describe('staging check REST contract', () => {
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await projectSettingsCheck()')).toBeGreaterThan(
       check.indexOf('await removalWindowCheck()'),
+    )
+  })
+  it("checks Settings › Projects and Archived projects on the pages' own marks, after a project's Settings page", () => {
+    const pages = readFileSync(
+      new URL('../src/panels/settings/ProjectLists.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(SETTINGS_PROJECTS_STEP).toBe('ui/settings-projects')
+    for (const mark of Object.values(SETTINGS_PROJECTS_MARKS)) expect(pages).toContain(mark)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await settingsProjectsCheck()')).toBeGreaterThan(
+      check.indexOf('await projectSettingsCheck()'),
+    )
+    // its project goes in the cleanup with its sub-projects
+    expect(check).toContain(
+      'if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)',
     )
   })
   it("opens task links in the window's own words, with the unknown number past every organization's", () => {

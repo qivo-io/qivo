@@ -88,7 +88,14 @@
  * counted (billing.currentUsage) and whose Storage by project, searched for
  * its run tag and the word storage, must list that sub-project alone with
  * the file's size (billing.storageProjects), then deletes the file
- * (ui/billing-storage).
+ * (ui/billing-storage). It makes a project of its own with two
+ * sub-projects, finds it by its run tag in Settings › Projects from the
+ * deployment's list (projectSettings.projects) and opens its sub-projects
+ * (subProjects), archives one sub-project alone and then the project over
+ * REST, finds the project in Archived projects (archived), shows its
+ * sub-projects (archivedSubProjects), one carried and one archived on its
+ * own, and restores it there, which must bring back the project and the
+ * carried sub-project only, each checked over REST (ui/settings-projects).
  * Every task, comment,
  * grant and file lives in projects the run creates and names with its run
  * tag. It revokes every credential in the app, checks that the next call is
@@ -4802,6 +4809,103 @@ async function billingStorageCheck() {
   })
 }
 
+/** The step that checks Settings › Projects and Archived projects
+ *  (settingsProjectsCheck). */
+export const SETTINGS_PROJECTS_STEP = 'ui/settings-projects'
+
+/** The marks the step waits for on Settings' project pages
+ *  (src/panels/settings/ProjectLists.tsx). */
+export const SETTINGS_PROJECTS_MARKS = {
+  search: 'data-settings-projects-search',
+  row: 'data-project-row',
+  subList: 'data-subproject-list',
+  subRow: 'data-subproject-row',
+  archivedSearch: 'data-archived-projects-search',
+  entry: 'data-archived-project',
+  under: 'data-archived-under',
+  toggle: 'data-archived-subs-toggle',
+  chip: 'data-archived-sub',
+  withParent: 'data-with-parent',
+  restore: 'data-restore-project',
+}
+
+/** Settings › Projects and Archived projects on the deployment's lists
+ *  (projectSettings.projects, subProjects, archived and
+ *  archivedSubProjects): the run makes `<tag> Lists` over REST with two
+ *  sub-projects, `<tag> Lists A` and `<tag> Lists B`. In the app as Nora it
+ *  searches Settings › Projects for the run's tag, waits for the project's
+ *  row, opens it and waits for both sub-projects' rows. Over REST it
+ *  archives B alone and then the project, which carries A. In Archived
+ *  projects it searches the tag, waits for the project's entry with A and B
+ *  beneath it as search hits, shows its sub-projects and checks A solid
+ *  (archived with it) and B dashed (archived on its own), and presses
+ *  Restore. Over REST the project and A must then be live and B archived,
+ *  and in the app B an entry of its own under a live project. The project
+ *  goes in the cleanup with its sub-projects, and the sweep finds it by its
+ *  tag. It needs a backend that answers the four lists. */
+async function settingsProjectsCheck() {
+  const w = run.creds.writeToken
+  const m = SETTINGS_PROJECTS_MARKS
+  await check(SETTINGS_PROJECTS_STEP, async () => {
+    const lists = await restOk(w, 'POST', '/projects', { name: `${run.tag} Lists` })
+    run.projects.L = lists
+    const a = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Lists A`,
+      parent: lists.id,
+    })
+    const b = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Lists B`,
+      parent: lists.id,
+    })
+    // Settings › Projects: the project by its tag, and its sub-projects
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator(`[${m.search}]`).fill(run.tag)
+    const row = app.locator(`[${m.row}="${lists.id}"]`)
+    await row.waitFor({ timeout: 60_000 })
+    await row.locator('button').first().click()
+    for (const sub of [a, b])
+      await app
+        .locator(`[${m.subList}="${lists.id}"] [${m.subRow}="${sub.id}"]`)
+        .waitFor({ timeout: 30_000 })
+    // B alone, then the project, which carries A
+    await restOk(w, 'PATCH', `/projects/${b.id}`, { archived: true })
+    await restOk(w, 'PATCH', `/projects/${lists.id}`, { archived: true })
+    // Archived projects: the entry, its search hits and its sub-projects
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/projects-archived`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app.locator(`[${m.archivedSearch}]`).fill(run.tag)
+    const entry = app.locator(`[${m.entry}="${lists.id}"]:not([${m.under}])`)
+    await entry.waitFor({ timeout: 60_000 })
+    for (const sub of [a, b])
+      await app.locator(`[${m.entry}="${sub.id}"][${m.under}]`).waitFor({ timeout: 30_000 })
+    await entry.locator(`[${m.toggle}="${lists.id}"]`).click()
+    const chip = (sub) => entry.locator(`[${m.chip}="${sub.id}"]`)
+    await chip(a).waitFor({ timeout: 30_000 })
+    await chip(b).waitFor({ timeout: 30_000 })
+    eq(
+      [await chip(a).getAttribute(m.withParent), await chip(b).getAttribute(m.withParent)],
+      ['', null],
+      'A archived with the project and B on its own',
+    )
+    await entry.locator(`[${m.restore}="${lists.id}"]`).click()
+    const archivedOf = async (p) => (await restOk(w, 'GET', `/projects/${p.id}`)).archived
+    let last = null
+    expect(
+      await until(async () => {
+        last = [await archivedOf(lists), await archivedOf(a), await archivedOf(b)]
+        return last[0] === false && last[1] === false && last[2] === true
+      }, 30_000),
+      `the project, A and B are archived ${JSON.stringify(last)} after the restore`,
+    )
+    // B stays archived, now an entry of its own under a live project
+    await app.locator(`[${m.entry}="${b.id}"]:not([${m.under}])`).waitFor({ timeout: 30_000 })
+    return `found ${lists.name} and its sub-projects in Settings › Projects, archived B and then the project, and restored it from Archived projects, which brought back A and left B archived on its own`
+  })
+}
+
 /** The Settings page Archived tasks opens with its search as the first
  *  control, focused, and the server search finds `target`, a task the run
  *  archived in its project (#143). Its key is the search, because a key
@@ -6442,12 +6546,16 @@ async function main() {
   await billingStorageCheck()
   // a file attached through the task window, on an upload ticket
   await attachmentUploadCheck()
+  // Settings › Projects and Archived projects on the server's lists, on a
+  // project of its own
+  await settingsProjectsCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {
     await deleteProjectInApp(c.writeToken, run.projects.M)
     if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
     if (run.projects.R) await deleteProjectInApp(c.writeToken, run.projects.R)
+    if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)
     for (const t of run.created)
       eq(
         (await rest(c.writeToken, 'GET', `/tasks/${t.id}`)).status,
