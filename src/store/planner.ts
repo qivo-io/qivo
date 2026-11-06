@@ -136,14 +136,17 @@ import {
 import { attachmentTooLarge, DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { DemoSessionEnded } from '../lib/demoSession'
 import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
+import { frameBatch } from '../lib/frameBatch'
 import { AVATAR_TYPES, avatarImage, compressImage } from '../lib/images'
 import { nameInitials } from '../lib/initials'
+import { createInlineImages } from '../lib/inlineImages'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
 import { watchLive } from '../lib/liveView'
 import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
+import { createMintQueue, type MintOutcome } from '../lib/mintQueue'
 import { pauseSentence } from '../lib/noticeText'
 import { desktopNotify } from '../lib/notify'
 import { reloadPage } from '../lib/pageHistory'
@@ -2867,7 +2870,8 @@ function sectionAttachment(attId: string): { row: Row<'issue_attachments'>; org:
    mints only a file of a task in that organization whose project the
    person can see, the gateway checks the same again, so the text can name
    no file the person could not open anyway. The lookup ends with the
-   detail. t3/limits-image-bounds rewrites the mints later. */
+   detail. Its mints go through the mint queue, and the description's
+   images load through the inline image loader (attachmentLease). */
 function detailAttachment(attId: string): { org: string } | null {
   const detail = PLANNER.detail
   const text = detail?.view?.description
@@ -2982,6 +2986,7 @@ function purgeIssueRows(subtree: Set<string>) {
   for (const id of rows.attachments.keysWhere((a) => subtree.has(a.issue_id))) {
     rows.attachments.delete(id)
     minted.delete(`att:${id}`)
+    inlineImages.drop(id)
   }
   for (const id of rows.links.keysWhere(
     (link) => subtree.has(link.source_id) || subtree.has(link.target_id),
@@ -7496,30 +7501,68 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
 /* --- minted file URLs (phase 7) ---------------------------------------------
    Attachment and avatar bytes serve through the token-checked HTTP gateway
    (/files/<uuid>, /avatars/<uuid> on the Convex site origin); the URLs come
-   from files.mintUrls, batched, and live ~10 minutes.
+   from files.mintUrls and live ~10 minutes.
    Attachments keep their signed URL; portraits prepare one decoded blob URL
    per `avatar:<profileId>:<storageId>`. Renewing an unchanged portrait checks
    access without dropping its source or downloading its bytes again.
+
+   Every mint goes through one queue (lib/mintQueue.ts): at most 100 ids a
+   call, two calls at once, attachments and pictures never in one call and
+   attachment calls first. The inline images of descriptions and comments
+   load through one loader (lib/inlineImages.ts) near view, four at a
+   time, behind P.attachmentUrl's row gate. Pictures download six at a
+   time within a byte budget (lib/avatarSources.ts AVATAR_SOURCES) and
+   repaint the store once a frame, and while the page is hidden nothing
+   renews or downloads and no held picture is released.
 
    mintUrls is a QUERY but must be consumed ONE-SHOT (convex.query), never
    subscribed: exp comes from Date.now(), which is not a reactive dependency —
    a subscription would pin a stale exp forever. THIS cache owns refresh
    timing: rebuild() re-primes anything expiring within the skew, a sweep
-   covers idle tabs (avatars only — an expired inline <img> recovers through
-   its own onError → attachmentUrl retry), and expiry is re-checked here with
-   the same skew the server's TTL was designed against. */
+   covers idle tabs (avatars only; an inline image renews when it shows
+   again), and expiry is re-checked here with the same skew the server's
+   TTL was designed against. */
 const MINT_SKEW = 120_000 // treat as stale this long before expiry
 const MINT_SWEEP = 30_000 // access renewal, retry and stale-byte cleanup (avatars)
-const AVATAR_MINT_TIMEOUT = 15_000
+/** The attachment leases minted keeps, oldest first out. */
+const MINTED_MAX = 1_000
 const minted = new Map<string, { url: string; exp: number }>() // exp: unix SECONDS
-const minting = new Map<string, Promise<boolean>>() // key -> its batch, for dedup
+/* Keys primeMint asked the queue for and has not handled the answer of.
+   The queue forgets a key when its call answers, a task before primeMint
+   takes the answer, so a rebuild in between would ask again. */
+const mintingKeys = new Set<string>()
+const mintQueue = createMintQueue(
+  (org, ids) => convex.query(api.files.mintUrls, { org_id: org, ...ids }),
+  { refused: (error) => error instanceof ConvexError },
+)
 const avatarSources = createAvatarSources()
+const inlineImages = createInlineImages({
+  held: (id) => attachmentHeld(id),
+  mint: (id, fresh) => attachmentLease(id, fresh),
+})
 let mintSweep: ReturnType<typeof setInterval> | null = null
+let fileVisibility: (() => void) | null = null
+/* Whether the page is hidden, which holds the pictures and the inline
+   images (watchFileVisibility). */
+let filesHidden = false
+/* One repaint a frame for the pictures that became ready or failed. */
+const portraitFrame = frameBatch(() => {
+  if (stillLoading !== null) return
+  rebuild()
+  emit()
+})
 
+/* Clears every file URL and byte the store holds: the mint queue, the
+   minted attachment leases, the inline images and the pictures, for
+   sign-out, a demo's end and reinitialization. */
 function clearAvatarSources() {
+  mintQueue.clear()
+  mintingKeys.clear()
+  minted.clear()
+  inlineImages.clear()
   avatarSources.clear()
   avatarSources.setPersistent(null)
-  for (const key of minting.keys()) if (key.startsWith('avatar:')) minting.delete(key)
+  portraitFrame.cancel()
   if (mintSweep) clearInterval(mintSweep)
   mintSweep = null
 }
@@ -7531,195 +7574,217 @@ function mintedUrl(key: string): string | null {
   return hit && hit.exp * 1000 - Date.now() > MINT_SKEW ? browserBackendUrl(hit.url) : null
 }
 
-type MintItem = { kind: 'attachment' | 'avatar'; id: string }
-
-/** Mint URLs for every item that has no fresh one. Resolves true when a
-    displayed source changed — the caller's cue to REBUILD (the
-    URLs are baked into the snapshot, so a bare emit is not enough). Never
-    rejects: an item that cannot be minted leaves its consumer on the
-    "unavailable" state, exactly like the old signing path. Items another
-    call is already minting are awaited, not re-requested. */
-async function primeMint(items: MintItem[]): Promise<boolean> {
-  const epoch = storeEpoch
-  // group by the org the mint is asked through: an attachment's is its
-  // issue's (mintUrls silently skips foreign-org ids); avatars are answered
-  // across every org I hold a seat in, so one call through the home seat
-  // (or any seat, for a guest-only login) covers the whole blended roster
-  const byOrg = new Map<
-    string,
-    { attachment_ids: string[]; profile_ids: string[]; keys: Map<string, string> }
-  >()
-  const slot = (org: string) => {
-    let s = byOrg.get(org)
-    if (!s) {
-      s = { attachment_ids: [], profile_ids: [], keys: new Map() }
-      byOrg.set(org, s)
-    }
-    return s
+/* Keeps attachment lease `lease` of `key`, dropping the expired ones and
+   then the oldest past MINTED_MAX. */
+function rememberMinted(key: string, lease: { url: string; exp: number }) {
+  minted.delete(key)
+  minted.set(key, lease)
+  if (minted.size <= MINTED_MAX) return
+  const now = Date.now() / 1000
+  for (const [k, m] of minted) if (m.exp <= now) minted.delete(k)
+  for (const k of minted.keys()) {
+    if (minted.size <= MINTED_MAX) break
+    minted.delete(k)
   }
-  const wanted: string[] = [] // cache keys this call is about
-  const claimed: string[] = [] // …the subset this call will fetch itself
-  const waits: Promise<boolean>[] = [] // other calls' in-flight batches
-  const avatarTickets = new Map<string, ReturnType<typeof avatarSources.ticket>>()
-  for (const it of items) {
-    let key: string
-    let org: string
-    if (it.kind === 'attachment') {
-      const rec = rows.attachments.get(it.id)
-      // a file only the watched task's attachments answer holds mints
-      // through the organization the sections watch, and an image the
-      // description of a task shown from its answer names through its own
-      const from = rec
-        ? rows.issues.get(rec.issue_id)?.org_id
-        : (sectionAttachment(it.id)?.org ?? detailAttachment(it.id)?.org)
-      if (!from) continue
-      key = `att:${it.id}`
-      org = from
-    } else {
-      const prof = rows.profiles.get(it.id)
-      if (!prof?.avatar_storage_id) continue
-      key = `avatar:${it.id}:${prof.avatar_storage_id}`
-      org = HOME_ORG || myProfiles.keys().next().value || ''
-      if (!org) continue
-    }
-    if (it.kind === 'avatar' ? !avatarSources.needsRefresh(key) : mintedUrl(key)) continue
-    wanted.push(key)
-    const inflight = minting.get(key)
-    if (inflight) {
-      waits.push(inflight)
-      continue
-    }
-    const s = slot(org)
-    if (it.kind === 'attachment') {
-      s.attachment_ids.push(it.id)
-      s.keys.set(`a:${it.id}`, key)
-    } else {
-      s.profile_ids.push(it.id)
-      s.keys.set(`p:${it.id}`, key)
-      avatarTickets.set(key, avatarSources.ticket(key))
-    }
-    claimed.push(key)
-  }
-  if (!wanted.length) return false
-  if (claimed.length) {
-    const batch = (async () => {
-      let changed = false
-      await Promise.all(
-        [...byOrg.entries()].map(async ([org, s]) => {
-          try {
-            // ONE-SHOT on purpose — see the header above
-            const querying = convex.query(api.files.mintUrls, {
-              org_id: org,
-              ...(s.attachment_ids.length ? { attachment_ids: s.attachment_ids } : {}),
-              ...(s.profile_ids.length ? { profile_ids: s.profile_ids } : {}),
-            })
-            let deadline: ReturnType<typeof setTimeout> | undefined
-            const res = await (s.profile_ids.length
-              ? Promise.race([
-                  querying,
-                  new Promise<never>((_, reject) => {
-                    deadline = setTimeout(
-                      () => reject(new Error('Profile URL refresh timed out')),
-                      AVATAR_MINT_TIMEOUT,
-                    )
-                  }),
-                ]).finally(() => clearTimeout(deadline))
-              : querying)
-            if (epoch !== storeEpoch) return
-            // invisible/missing ids are silently OMITTED from the result (the
-            // consumers render their "unavailable" state; no existence oracle)
-            Object.entries(res.attachments).forEach(([id, m]) => {
-              const key = s.keys.get(`a:${id}`)
-              if (key) {
-                minted.set(key, m)
-                changed = true
-              }
-            })
-            await Promise.all(
-              s.profile_ids.map(async (id) => {
-                const key = s.keys.get(`p:${id}`)
-                const ticket = avatarTickets.get(key)
-                const lease = res.avatars[id]
-                // A snapshot replacement can overtake either the mint or its
-                // byte fetch. Never attach a newer storage version to an old key.
-                if (!lease || new URL(lease.url).searchParams.get('v') !== key.split(':').at(-1)) {
-                  if (avatarSources.failure(key, true, ticket)) showPortraits()
-                  return
-                }
-                if (
-                  await avatarSources.prepare(
-                    key,
-                    { ...lease, url: browserBackendUrl(lease.url) },
-                    ticket,
-                  )
-                ) {
-                  // One slow portrait must not hold the roster's ready faces.
-                  if (epoch === storeEpoch) showPortraits()
-                }
-              }),
-            )
-          } catch (e) {
-            const refused = e instanceof ConvexError
-            for (const id of s.profile_ids) {
-              const key = s.keys.get(`p:${id}`)
-              if (avatarSources.failure(key, refused, avatarTickets.get(key))) changed = true
-            }
-            console.warn('[qivo] url mint failed:', e)
-          }
-        }),
-      )
-      return changed
-    })()
-    claimed.forEach((k) => {
-      minting.set(k, batch)
-    })
-    waits.push(batch)
-    void batch.finally(() => {
-      claimed.forEach((k) => {
-        if (minting.get(k) === batch) minting.delete(k)
-      })
-    })
-  }
-  return (await Promise.all(waits)).some(Boolean)
 }
 
-/** Shows the portraits that became ready or failed. While the task windows
-    an ask subscribed are on their way, they wait for the next paint, which
-    rebuilds from them: each one would repaint the whole workspace while
-    the parts still to come need the page (store/liveParts.ts). */
+/* The organization to mint attachment `attId` through: its task's, or for
+   a file the workspace does not hold, the one the watched task's
+   attachments answer or the window's detail names it through, else
+   undefined. */
+function attachmentOrg(attId: string): string | undefined {
+  const rec = rows.attachments.get(attId)
+  return rec
+    ? rows.issues.get(rec.issue_id)?.org_id
+    : (sectionAttachment(attId)?.org ?? detailAttachment(attId)?.org)
+}
+
+/* P.attachmentUrl's row gate: whether the store holds attachment `attId`,
+   or the watched task's attachments answer or the window's detail names
+   it. Every show of an inline image passes it first. */
+function attachmentHeld(attId: string): boolean {
+  return rows.attachments.has(attId) || !!sectionAttachment(attId) || !!detailAttachment(attId)
+}
+
+/* The inline image loader's lease for attachment `attId`, behind the row
+   gate: a fresh minted one, or one through the queue (`fresh` skips the
+   minted one, after a gateway refusal). Its URL is the browser's. */
+async function attachmentLease(attId: string, fresh: boolean): Promise<MintOutcome> {
+  watchFileVisibility()
+  const org = attachmentHeld(attId) ? attachmentOrg(attId) : undefined
+  if (!org) return { state: 'missing' }
+  const key = `att:${attId}`
+  const hit = fresh ? null : minted.get(key)
+  if (hit && hit.exp * 1000 - Date.now() > MINT_SKEW)
+    return { state: 'lease', lease: { url: browserBackendUrl(hit.url), exp: hit.exp } }
+  if (fresh) minted.delete(key)
+  const epoch = storeEpoch
+  const outcome = await mintQueue.request({ kind: 'attachment', id: attId, org, key })
+  if (epoch !== storeEpoch) return { state: 'failed' }
+  if (outcome.state !== 'lease') return outcome
+  rememberMinted(key, outcome.lease)
+  return { state: 'lease', lease: { ...outcome.lease, url: browserBackendUrl(outcome.lease.url) } }
+}
+
+/* The row gate as one check for many ids, for the inline images' sweep
+   after a rebuild: the attachments answer's rows and the detail's images
+   read once. */
+function attachmentGate(): (attId: string) => boolean {
+  let listed: Set<string> | null = null
+  let named: Set<string> | null = null
+  return (attId) => {
+    if (rows.attachments.has(attId)) return true
+    if (listed === null) {
+      const answer = sectionAnswers.attachments
+      const watched = sectionsWatched.attachments
+      listed = new Set(
+        watched &&
+          sectionAnswers.issue === watched.task &&
+          answer !== null &&
+          answer !== CREATING &&
+          answer.state === 'ok'
+          ? answer.rows.map((r) => r.id)
+          : [],
+      )
+    }
+    if (listed.has(attId)) return true
+    if (named === null) {
+      const text = PLANNER.detail?.view?.description
+      named = text ? imageRefs(text) : new Set()
+    }
+    return named.has(attId.toLowerCase())
+  }
+}
+
+type MintItem = { kind: 'attachment' | 'avatar'; id: string }
+
+/** Mint URLs for every item that has no fresh one, through the mint queue.
+    Resolves true when a displayed source changed — the caller's cue to
+    REBUILD (the URLs are baked into the snapshot, so a bare emit is not
+    enough). Never rejects: an item that cannot be minted leaves its
+    consumer on the "unavailable" state, exactly like the old signing path.
+    Items already waiting or on their way share their answer. */
+async function primeMint(items: MintItem[]): Promise<boolean> {
+  const epoch = storeEpoch
+  const work: Promise<boolean>[] = []
+  for (const it of items) {
+    if (it.kind === 'attachment') {
+      // an attachment's organization is its task's (mintUrls omits
+      // foreign-org ids)
+      const org = attachmentOrg(it.id)
+      const key = `att:${it.id}`
+      if (!org || mintedUrl(key)) continue
+      mintingKeys.add(key)
+      work.push(
+        mintQueue.request({ kind: 'attachment', id: it.id, org, key }).then((outcome) => {
+          mintingKeys.delete(key)
+          if (epoch !== storeEpoch || outcome.state !== 'lease') return false
+          rememberMinted(key, outcome.lease)
+          return true
+        }),
+      )
+      continue
+    }
+    // avatars are answered across every org I hold a seat in, so they go
+    // through the home seat (or any seat, for a guest-only login)
+    const prof = rows.profiles.get(it.id)
+    if (!prof?.avatar_storage_id) continue
+    const key = `avatar:${it.id}:${prof.avatar_storage_id}`
+    const org = HOME_ORG || myProfiles.keys().next().value || ''
+    if (!org || mintingKeys.has(key) || !avatarSources.needsRefresh(key)) continue
+    const ticket = avatarSources.ticket(key)
+    mintingKeys.add(key)
+    work.push(
+      mintQueue.request({ kind: 'avatar', id: it.id, org, key }).then(async (outcome) => {
+        // prepare marks the key pending before its first await, so no
+        // rebuild can ask for it again in between
+        mintingKeys.delete(key)
+        if (epoch !== storeEpoch) return false
+        if (outcome.state === 'refused' || outcome.state === 'failed') {
+          if (outcome.state === 'failed') console.warn('[qivo] url mint failed:', key)
+          return avatarSources.failure(key, outcome.state === 'refused', ticket)
+        }
+        const lease = outcome.state === 'lease' ? outcome.lease : null
+        // invisible/missing ids are silently OMITTED from the answer (the
+        // portrait shows initials; no existence oracle). A snapshot
+        // replacement can overtake either the mint or its byte fetch:
+        // never attach a newer storage version to an old key.
+        if (!lease || new URL(lease.url).searchParams.get('v') !== key.split(':').at(-1)) {
+          if (avatarSources.failure(key, true, ticket)) showPortraits()
+          return false
+        }
+        // One slow portrait must not hold the roster's ready faces.
+        if (
+          (await avatarSources.prepare(
+            key,
+            { ...lease, url: browserBackendUrl(lease.url) },
+            ticket,
+          )) &&
+          epoch === storeEpoch
+        )
+          showPortraits()
+        return false
+      }),
+    )
+  }
+  if (!work.length) return false
+  return (await Promise.all(work)).some(Boolean)
+}
+
+/** Shows the portraits that became ready or failed, once a frame however
+    many there are. While the task windows an ask subscribed are on their
+    way, they wait for the next paint, which rebuilds from them: each one
+    would repaint the whole workspace while the parts still to come need
+    the page (store/liveParts.ts). */
 function showPortraits() {
-  if (stillLoading !== null) return
-  rebuild()
-  emit()
+  portraitFrame.schedule()
+}
+
+/* The pictures the store holds that need a mint now. */
+function picturesDue(): MintItem[] {
+  const need: MintItem[] = []
+  rows.profiles.forEach((u) => {
+    if (u.avatar_storage_id && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatar_storage_id}`))
+      need.push({ kind: 'avatar', id: u.id })
+  })
+  return need
+}
+
+/* One sweep: releases pictures past their grace and mints the due ones. */
+function sweepPictures() {
+  if (filesHidden) return
+  if (avatarSources.expire()) showPortraits()
+  const need = picturesDue()
+  if (need.length)
+    void primeMint(need).then((grew) => {
+      if (grew) showPortraits()
+    })
+}
+
+/** Holds the pictures and the inline images while the page is hidden
+    (lib/viewVisibility.ts, by visibility and not focus): the sweep and the
+    rebuild's prime skip, no picture is released, and no inline image
+    starts a mint or a download. On return the due pictures mint once,
+    renewing the held ones without downloading them again, and the near
+    images ask again. Started with the first picture or inline image, it
+    lasts as long as the page. */
+function watchFileVisibility() {
+  if (fileVisibility) return
+  fileVisibility = watchVisibility(({ visible }) => {
+    const resumed = filesHidden && visible
+    filesHidden = !visible
+    avatarSources.pause(!visible)
+    inlineImages.pause(!visible)
+    if (resumed) sweepPictures()
+  })
 }
 
 /** Re-mint before anything goes stale. A rebuild already primes, but a tab
     nobody touches would otherwise watch its faces disappear at the TTL. */
 function startMintSweep() {
+  watchFileVisibility()
   if (mintSweep || typeof setInterval !== 'function') return
-  mintSweep = setInterval(() => {
-    const expired = avatarSources.expire()
-    const need: MintItem[] = []
-    rows.profiles.forEach((u) => {
-      if (
-        u.avatar_storage_id &&
-        avatarSources.needsRefresh(`avatar:${u.id}:${u.avatar_storage_id}`)
-      ) {
-        need.push({ kind: 'avatar', id: u.id })
-      }
-    })
-    if (expired) {
-      rebuild()
-      emit()
-    }
-    if (need.length)
-      void primeMint(need).then((grew) => {
-        if (grew) {
-          rebuild()
-          emit()
-        }
-      })
-  }, MINT_SWEEP)
+  mintSweep = setInterval(sweepPictures, MINT_SWEEP)
 }
 
 /* Agent-key rows live outside the snapshot but their mutations are
@@ -8261,18 +8326,21 @@ function rebuild(now = new Date(), full = false) {
   // avatars pre-mint: attachment URLs are minted on demand (attachmentUrl),
   // because only the open issue's inline images ever render eagerly — avatars
   // render by the dozen per board.
-  const needAvatars = P.users
-    .filter((u) => u.avatarPath && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatarPath}`))
-    .map((u) => ({ kind: 'avatar' as const, id: u.id }))
+  // While the page is hidden the pictures hold and nothing primes.
   if (P.users.some((u) => u.avatarPath)) startMintSweep()
+  const needAvatars = filesHidden
+    ? []
+    : P.users
+        .filter((u) => u.avatarPath && avatarSources.needsRefresh(`avatar:${u.id}:${u.avatarPath}`))
+        .map((u) => ({ kind: 'avatar' as const, id: u.id }))
   if (needAvatars.length) {
     void primeMint(needAvatars).then((grew) => {
-      if (grew) {
-        rebuild()
-        emit()
-      }
+      if (grew) showPortraits()
     })
   }
+  // the inline images out of reach whose files the rows no longer hold
+  // drop their bytes, and near ones a clear left waiting ask again
+  inlineImages.retain(attachmentGate())
 }
 
 /* What the last rebuild's contextVersion was taken from. */
@@ -10470,6 +10538,9 @@ export type IssueFilters = {
 /* --- the public store --------------------------------------------------------- */
 export const PLANNER = {
   roadmapContext,
+  /** The loader of description and comment images (lib/inlineImages.ts),
+      one a store. */
+  inlineImages,
   setInboxOpener,
   get roadmapUndo() {
     return {
@@ -14050,6 +14121,7 @@ export const PLANNER = {
         workspace: () => {
           rows.attachments.delete(attId)
           minted.delete(`att:${attId}`)
+          inlineImages.drop(attId)
         },
       },
       { about: { task: issueRow.id } },
@@ -14057,19 +14129,19 @@ export const PLANNER = {
   },
 
   /** Resolve an attachment to a fetchable gateway URL — minted fresh through
-      files.mintUrls when the cache has nothing younger than the skew.
-      download=true appends &download=1 (Content-Disposition: attachment with
-      the original file name); the token covers the uuid, not the query flags,
-      so a download can reuse a cached token. Resolves null on refusal or a
-      missing row — deliberately silent: this sits on render paths (markdown,
-      descEditor, imgActions) whose consumers draw "Image unavailable". A
-      file the workspace does not hold resolves while the watched task's
-      attachments answer holds it (sectionAttachment), or while the task the
-      window shows from its answer names it in its description
-      (detailAttachment), and null once those stop. */
+      the mint queue (files.mintUrls) when the cache has nothing younger than
+      the skew. download=true appends &download=1 (Content-Disposition:
+      attachment with the original file name); the token covers the uuid,
+      not the query flags, so a download can reuse a cached token. Resolves
+      null on refusal, a failed mint or a missing row, deliberately silent:
+      its callers (imgActions, the Attachments section's Open and Download)
+      do nothing then. A file the workspace does not hold resolves while the
+      watched task's attachments answer holds it (sectionAttachment), or
+      while the task the window shows from its answer names it in its
+      description (detailAttachment), and null once those stop: the row gate
+      the inline image loader asks before every show (attachmentHeld). */
   attachmentUrl: async (attId: string, download = false): Promise<string | null> => {
-    if (!rows.attachments.has(attId) && !sectionAttachment(attId) && !detailAttachment(attId))
-      return null
+    if (!attachmentHeld(attId)) return null
     const key = `att:${attId}`
     let url = mintedUrl(key)
     if (!url) {
@@ -17643,8 +17715,6 @@ export function disposeDemoStore() {
   familyShaped = null
   preferences.dispose(myProfileSet)
   clearAvatarSources()
-  minted.clear()
-  minting.clear()
   // Settings hold only appearance mode here, never image bytes or credentials.
   try {
     localStorage.removeItem('qivo-appearance-mode')

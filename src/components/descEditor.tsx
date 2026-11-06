@@ -74,7 +74,8 @@ import { beginUpdateBlock, useUpdateBlocker } from '../lib/updateSafety'
 import { P, textRefusal } from '../store/planner'
 import type { PMNode } from './descDoc'
 import { astToDoc, docToAst } from './descDoc'
-import { copyImage, downloadImage, openImageFull, toast } from './imgActions'
+import { toast } from './imgActions'
+import { InlineImageBody } from './inlineImage'
 import { Markdown } from './markdown'
 import { mentionSuggestion } from './mentionSuggestion'
 import { Icon } from './qivo'
@@ -225,31 +226,8 @@ function ImageView({ node, selected }: NodeViewProps) {
   const src = String(node.attrs.src || '')
   const alt = String(node.attrs.alt || '')
   const attId = src.startsWith('att:') ? src.slice(4) : null
-  const uploading = src.startsWith('uploading:')
-  const external = !attId && !uploading ? sanitizeHref(src) : null
-  const [url, setUrl] = useState<string | null>(external)
-  const [gone, setGone] = useState(!attId && !uploading && !external)
-  const retried = useRef(false)
-
-  useEffect(() => {
-    let alive = true
-    if (attId) {
-      setGone(false)
-      setUrl(null)
-      retried.current = false
-      void P.attachmentUrl(attId).then((u) => {
-        if (!alive) return
-        if (u) setUrl(u)
-        else setGone(true)
-      })
-    }
-    return () => {
-      alive = false
-    }
-  }, [attId])
-
   const cls = `mdimgwrap${selected ? ' ProseMirror-selectednode' : ''}`
-  if (uploading) {
+  if (src.startsWith('uploading:')) {
     return (
       <NodeViewWrapper as="span" className={cls} contentEditable={false}>
         <span className="mdimgph">
@@ -259,27 +237,7 @@ function ImageView({ node, selected }: NodeViewProps) {
       </NodeViewWrapper>
     )
   }
-  if (gone) {
-    return (
-      <NodeViewWrapper as="span" className={cls} contentEditable={false}>
-        <HoverTooltip content={alt}>
-          <span className="mdimgph">
-            <Icon name="blocked" size={16} />
-            Image unavailable
-          </span>
-        </HoverTooltip>
-      </NodeViewWrapper>
-    )
-  }
-  if (!url) {
-    return (
-      <NodeViewWrapper as="span" className={cls} contentEditable={false}>
-        <span className="mdimgph">Loading image…</span>
-      </NodeViewWrapper>
-    )
-  }
-  const freshUrl = async () => (attId ? await P.attachmentUrl(attId) : url)
-  const swallow = (e: React.MouseEvent) => e.preventDefault() // keep focus in the editor
+  const external = attId ? null : sanitizeHref(src)
   return (
     <NodeViewWrapper
       as="span"
@@ -287,43 +245,14 @@ function ImageView({ node, selected }: NodeViewProps) {
       contentEditable={false}
       data-att={attId || undefined}
     >
-      <HoverTooltip content={alt}>
-        <img
-          className="mdimg"
-          src={url}
-          alt={alt}
-          onDoubleClick={() => void openImageFull(freshUrl)}
-          onError={() => {
-            // minted URLs live ~10 minutes; a late load gets one fresh URL retry
-            if (attId && !retried.current) {
-              retried.current = true
-              void P.attachmentUrl(attId).then((u) => (u ? setUrl(u) : setGone(true)))
-            } else setGone(true)
-          }}
-        />
-      </HoverTooltip>
-      <span className="mdimgbtns" onMouseDown={swallow}>
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Copy image"
-          aria-label="Copy image"
-          onClick={() => void copyImage(freshUrl)}
-          variant="unstyled"
-        >
-          <Icon name="copy" size={16} />
-        </Button>
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Download image"
-          aria-label="Download image"
-          onClick={() => void downloadImage(attId, url)}
-          variant="unstyled"
-        >
-          <Icon name="download" size={16} />
-        </Button>
-      </span>
+      <InlineImageBody
+        key={attId ?? external ?? ''}
+        alt={alt}
+        attId={attId}
+        external={external}
+        editor
+        iconSize={16}
+      />
     </NodeViewWrapper>
   )
 }

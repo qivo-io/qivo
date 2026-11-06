@@ -184,8 +184,11 @@ describe('uploaded profile pictures through the planner store', () => {
     vi.setSystemTime(new Date(NOW.getTime() + 480_000))
     deliverChange()
     expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
+    // the mint queue sends what one task asked for after it
+    await vi.advanceTimersByTimeAsync(0)
     expect(mint).toHaveBeenCalledTimes(2)
     deliverChange()
+    await vi.advanceTimersByTimeAsync(0)
     expect(mint).toHaveBeenCalledTimes(2)
     renewal.resolve(response())
     await vi.advanceTimersByTimeAsync(0)
@@ -230,6 +233,82 @@ describe('uploaded profile pictures through the planner store', () => {
     stalled.resolve({ avatars: {}, attachments: {} })
     await vi.advanceTimersByTimeAsync(0)
     expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
+  })
+
+  it('mints 1,000 pictures in calls of 100 and repaints the store at most once a frame', async () => {
+    const base = snap.profiles[0] as Snapshot['profiles'][number]
+    snap.profiles = Array.from({ length: 1000 }, (_, i) => ({
+      ...base,
+      id: i === 0 ? base.id : crypto.randomUUID(),
+      auth_user_id: i === 0 ? 'portrait-account' : `account-${i}`,
+      name: `Person ${i}`,
+      created_at: new Date(NOW.getTime() + i).toISOString(),
+      avatar_storage_id: `storage-${i}` as Id<'_storage'>,
+    }))
+    const asked: number[] = []
+    network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
+      if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
+      asked.push(args.profile_ids?.length ?? 0)
+      return mint()
+    })
+    let emits = 0
+    const stop = store.P.subscribe(() => {
+      emits++
+    })
+    await store.initStore()
+    const start = Date.now()
+    const before = emits
+    await vi.waitFor(
+      () => expect(store.P.users.every((user) => user.avatarUrl?.startsWith('blob:'))).toBe(true),
+      { timeout: 30_000 },
+    )
+    const frames = Math.ceil((Date.now() - start) / 16) + 1
+    stop()
+    expect(asked).toEqual(Array(10).fill(100))
+    expect(fetcher).toHaveBeenCalledTimes(1000)
+    // a thousand ready pictures, one repaint a frame at most, far fewer
+    // than one a picture
+    expect(emits - before).toBeLessThanOrEqual(frames)
+    expect(emits - before).toBeLessThan(500)
+  })
+
+  it('renews, downloads and releases no picture while the page is hidden, and renews without downloading on return', async () => {
+    const page = { visibilityState: 'visible', listeners: new Set<() => void>() }
+    vi.stubGlobal('document', {
+      get visibilityState() {
+        return page.visibilityState
+      },
+      addEventListener: (_: string, listener: () => void) => page.listeners.add(listener),
+      removeEventListener: (_: string, listener: () => void) => page.listeners.delete(listener),
+    })
+    const turn = (state: 'visible' | 'hidden') => {
+      page.visibilityState = state
+      for (const listener of page.listeners) listener()
+    }
+    await store.initStore()
+    await ready()
+    const sources = store.P.users.map((user) => user.avatarUrl)
+    turn('hidden')
+    // an hour hidden, with the sweep's ticks and a delivery that rebuilds
+    vi.setSystemTime(new Date(NOW.getTime() + 3_600_000))
+    await vi.advanceTimersByTimeAsync(120_000)
+    deliverChange()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mint).toHaveBeenCalledOnce()
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
+    turn('visible')
+    await vi.waitFor(() => expect(mint).toHaveBeenCalledTimes(2))
+    await vi.advanceTimersByTimeAsync(20)
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(store.P.users.map((user) => user.avatarUrl)).toEqual(sources)
+    // a refusal at a later renewal still releases them
+    mint.mockRejectedValueOnce(
+      new ConvexError({ code: 'forbidden', message: 'No longer a member' }),
+    )
+    vi.setSystemTime(new Date(Date.now() + 480_000))
+    deliverChange()
+    await vi.waitFor(() => expect(store.P.users.every((user) => !user.avatarUrl)).toBe(true))
   })
 
   it('fences an old mint when a storage version changes before the response arrives', async () => {

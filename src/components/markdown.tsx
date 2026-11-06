@@ -1,53 +1,18 @@
 /* Markdown renderer for issue descriptions — walks the AST from lib/md and
    builds React elements (raw HTML is never interpreted; hrefs are whitelisted
-   by sanitizeHref). Images resolve "att:<id>" sources into short-lived minted
-   URLs on the access-checked file gateway and reveal copy/download buttons
-   in their top-right corner on hover. */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { HoverTooltip } from '@/components/ui/tooltip'
+   by sanitizeHref). Images load near view through the store's inline image
+   loader, "att:<id>" sources as bytes from the access-checked file gateway
+   (components/inlineImage.tsx), and reveal copy/download buttons in their
+   top-right corner on hover. */
+import React, { useMemo } from 'react'
 import type { MdBlock, MdInline } from '../lib/md'
 import { parseMd, sanitizeHref } from '../lib/md'
-import { P } from '../store/planner'
-import { copyImage, downloadImage, openImageFull } from './imgActions'
+import { InlineImageBody } from './inlineImage'
 import { Icon } from './qivo'
 
 function MdImage({ alt, src }: { alt: string; src: string }) {
   const attId = src.startsWith('att:') ? src.slice(4) : null
-  const uploading = src.startsWith('uploading:')
-  const external = !attId && !uploading ? sanitizeHref(src) : null
-  const [url, setUrl] = useState<string | null>(external)
-  const [gone, setGone] = useState(!attId && !uploading && !external)
-  const retried = useRef(false)
-
-  useEffect(() => {
-    let alive = true
-    if (attId) {
-      // reset: React reuses this instance when an edit swaps the src in place
-      setGone(false)
-      setUrl(null)
-      retried.current = false
-      void P.attachmentUrl(attId).then((u) => {
-        if (!alive) return
-        if (u) setUrl(u)
-        else setGone(true)
-      })
-    } else {
-      /* The same swap landing on a plain URL. `external` is recomputed every
-         render, but `url`/`gone` were only ever seeded at mount, so without
-         this branch the img keeps painting the src the instance FIRST had —
-         an edit from one external image to another, or from att: to external,
-         showed the old picture under the new alt text. */
-      setUrl(external)
-      setGone(!uploading && !external)
-      retried.current = false
-    }
-    return () => {
-      alive = false
-    }
-  }, [attId, external, uploading])
-
-  if (uploading) {
+  if (src.startsWith('uploading:')) {
     return (
       <span className="mdimgph">
         <Icon name="paperclip" size={13} />
@@ -55,61 +20,17 @@ function MdImage({ alt, src }: { alt: string; src: string }) {
       </span>
     )
   }
-  if (gone) {
-    return (
-      <HoverTooltip content={alt}>
-        <span className="mdimgph">
-          <Icon name="blocked" size={13} />
-          Image unavailable
-        </span>
-      </HoverTooltip>
-    )
-  }
-  if (!url) {
-    return <span className="mdimgph">Loading image…</span>
-  }
-
-  const freshUrl = async () => (attId ? await P.attachmentUrl(attId) : url)
-
+  const external = attId ? null : sanitizeHref(src)
+  // keyed by the source, so an edit that swaps it starts afresh
   return (
     <span className="mdimgwrap" {...(attId ? { 'data-att': attId } : {})}>
-      <HoverTooltip content={alt}>
-        <img
-          className="mdimg"
-          src={url}
-          alt={alt}
-          onClick={() => void openImageFull(freshUrl)}
-          onError={() => {
-            // minted URLs live ~10 minutes; a late load gets one fresh URL retry
-            if (attId && !retried.current) {
-              retried.current = true
-              void P.attachmentUrl(attId).then((u) => (u ? setUrl(u) : setGone(true)))
-            } else setGone(true)
-          }}
-        />
-      </HoverTooltip>
-      <span className="mdimgbtns">
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Copy image"
-          aria-label="Copy image"
-          onClick={() => void copyImage(freshUrl)}
-          variant="unstyled"
-        >
-          <Icon name="copy" size={13} />
-        </Button>
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Download image"
-          aria-label="Download image"
-          onClick={() => void downloadImage(attId, url)}
-          variant="unstyled"
-        >
-          <Icon name="download" size={13} />
-        </Button>
-      </span>
+      <InlineImageBody
+        key={attId ?? external ?? ''}
+        alt={alt}
+        attId={attId}
+        external={external}
+        iconSize={13}
+      />
     </span>
   )
 }
