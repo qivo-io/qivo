@@ -11,8 +11,8 @@
    and its write controls wait ("Loading this person…"). The last-admin
    lock follows the server's count of active admins, never the rows on
    screen. An agent's key line and its key panel read tokens.agentKeys
-   once, for the agents on screen, and again after a key write or the
-   page's refresh, never as a subscription. A row whose name, address or
+   once, for the agents on screen, and again after a key write and when
+   the tab shows again, never as a subscription. A row whose name, address or
    hours are being typed or wait for the server's answer to their save, an
    agent whose key panel is open and a person added on this visit stay on
    screen through a search or a page move.
@@ -835,16 +835,15 @@ export function OrgUsersPage({
   }
   const agentIds = [...shownAgents].filter((id) => !minting.has(id)).sort()
   const agentsKey = agentIds.join(',')
-  const lastKeyRead = useRefS<string | null>(null)
+  // one read each time the agents shown change, after a key write and when
+  // the tab or window shows again, the list's and the phone's user page
+  // alike, since a key may have been revoked meanwhile. Nothing is kept
+  // between reads, so the same agents shown again after a page without
+  // agents, or after the tab hid, read afresh.
   useEffectS(() => {
     if (DEMO_MODE || !visible || agentIds.length === 0) return
-    const at = `${agentsKey}#${keyEpoch}`
-    if (lastKeyRead.current === at) return
-    lastKeyRead.current = at
     let live = true
-    let done = false
     void P.agentKeys(P.homeOrg, agentIds).then((answer) => {
-      done = true
       if (!live) return
       setKeyLines((was) => {
         const next = new Map(was)
@@ -858,17 +857,8 @@ export function OrgUsersPage({
     })
     return () => {
       live = false
-      // a read cut short, as by the tab hiding, reads again
-      if (!done && lastKeyRead.current === at) lastKeyRead.current = null
     }
   }, [agentsKey, keyEpoch, visible])
-  // the page's refresh after the tab showed again reads the key lines again,
-  // since a key may have been revoked meanwhile
-  const wasRefreshing = useRefS(false)
-  useEffectS(() => {
-    if (wasRefreshing.current && !page.refreshing) setKeyEpoch((n) => n + 1)
-    wasRefreshing.current = page.refreshing
-  }, [page.refreshing])
   const onKeysChanged = React.useCallback(() => setKeyEpoch((n) => n + 1), [])
 
   /* ---- invitation labels, for the pending rows on screen ---- */

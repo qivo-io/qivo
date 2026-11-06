@@ -295,6 +295,26 @@ async function openKeys() {
 
 const sentNames = () => network.mutation.mock.calls.map(([ref]) => getFunctionName(ref))
 
+/* Settings on page `initial`, as the app's shell holds it, telling `reset`
+   where Settings' check sends it. */
+function Screen({ initial, reset = vi.fn() }: { initial: string; reset?: (page: string) => void }) {
+  const [page, setPage] = useState(initial)
+  return (
+    <pages.settings.SettingsScreen
+      page={page}
+      setPage={setPage}
+      resetPage={(next) => {
+        reset(next)
+        setPage(next)
+      }}
+      onExit={vi.fn()}
+      onNewProject={vi.fn()}
+      onNewSubProject={vi.fn()}
+      onOpenArchivedTasks={vi.fn()}
+    />
+  )
+}
+
 /* --------------------------------------------------------------- the list */
 
 describe('the list', () => {
@@ -464,7 +484,7 @@ describe('the list', () => {
     await act(async () => server.rerun())
     await settle()
     expect(find('[data-org-users]').dataset.usersState).toBe('ok')
-    // the refresh reads the key lines again, once
+    // the return reads the key lines again, once
     expect(keyReads().length).toBe(reads + 1)
   })
 
@@ -735,6 +755,37 @@ describe('key lines and the key panel', () => {
     expect(reads).not.toContain('tokens:listAgentKeys')
   })
 
+  it('reads the same agents again after a page without agents, and on the phone after the tab hid', async () => {
+    await load((s) => s.profiles.push(...people(30)))
+    extra.keys.push(keyOf('atlas', 1))
+    await show()
+    expect(keyLine('atlas')).toBe('qva_001...abcd1')
+    // the second page holds no agent
+    await click(find('[data-users-next]'))
+    expect(has('[data-agent-keyline]')).toBe(false)
+    // meanwhile another admin revokes Atlas's key
+    extra.keys[0].revokedAt = '2026-10-09T08:00:00.000Z'
+    await click(find('[data-users-previous]'))
+    expect(keyReads()).toEqual([['atlas'], ['atlas']])
+    expect(keyLine('atlas')).toBe('no key, cannot sign in')
+
+    await load()
+    network.query.mockClear()
+    extra.keys.push(keyOf('atlas', 1))
+    narrowScreen(true)
+    await render(() => <Screen initial="user:atlas" />)
+    expect(keyLine('atlas')).toBe('qva_001...abcd1')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    // another admin creates a key while the tab is hidden
+    extra.keys.push(keyOf('atlas', 2))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    await settle()
+    expect(keyReads()).toEqual([['atlas'], ['atlas']])
+    expect(keyLine('atlas')).toBe('qva_002...abcd2, +1 more')
+  })
+
   it('says it is checking, that it could not check, and no key only from a complete answer', async () => {
     await load()
     let answer: (value: unknown) => void = () => {}
@@ -885,24 +936,6 @@ describe('invitation labels', () => {
 /* ------------------------------------------------ the phone and the shell */
 
 describe("the phone's user page and Settings' check", () => {
-  function Screen({ initial, reset }: { initial: string; reset: (page: string) => void }) {
-    const [page, setPage] = useState(initial)
-    return (
-      <pages.settings.SettingsScreen
-        page={page}
-        setPage={setPage}
-        resetPage={(next) => {
-          reset(next)
-          setPage(next)
-        }}
-        onExit={vi.fn()}
-        onNewProject={vi.fn()}
-        onNewSubProject={vi.fn()}
-        onOpenArchivedTasks={vi.fn()}
-      />
-    )
-  }
-
   it('opens a person on no loaded page from people.get, and goes back to the page it came from', async () => {
     await load((s) => s.profiles.push(...people(30)))
     narrowScreen(true)

@@ -68,9 +68,10 @@ your client, then revoke the old key. Agent and key names, like personal token
 names, allow up to 80 characters.
 
 An agent's row shows its newest active key's fingerprint, read when the page
-opens, and its keys load when you open them. If Qivo cannot check them, the
-row says so rather than claiming the agent has no key. A key panel lists the
-newest 50 keys, and **Organization → API access** lists every key.
+opens and again when you return to the tab, and its keys load when you open
+them. If Qivo cannot check them, the row says so rather than claiming the
+agent has no key. A key panel lists the newest 50 keys, and **Organization →
+API access** lists every key.
 
 Agents use the same project roles as people. They cannot be organization
 admins or lead a team. Set the organization role to **Viewer** for read-only
