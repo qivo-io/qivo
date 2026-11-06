@@ -24,7 +24,7 @@ const sources = import.meta.glob(['../**/*.ts', '!../tests/**', '!../**/_generat
   import: 'default',
 }) as Record<string, string>
 
-/** How a walk reads imports: `dynamic` false leaves out `import()`, for a
+/** How a walk reads imports. `dynamic` false leaves out `import()`, for a
  * module whose handlers may load more than the module does when it loads. */
 type Walk = { dynamic?: boolean }
 

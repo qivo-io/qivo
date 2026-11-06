@@ -135,8 +135,8 @@ export const authComponent = createClient<DataModel, typeof authSchema>(componen
  *
  * Every authentication letter is sent while its request waits, and `mail`
  * holds how it went for lib/authMail.ts to report. One options object serves
- * one request: every HTTP request (http.ts) and every action builds a fresh
- * instance. `recovery` is the operator's recovery-link capture
+ * one request, because every HTTP request (http.ts) and every action builds
+ * a fresh instance. `recovery` is the operator's recovery-link capture
  * (createCaptureAuth). */
 export const createAuthOptions = (
   ctx: GenericCtx<DataModel>,

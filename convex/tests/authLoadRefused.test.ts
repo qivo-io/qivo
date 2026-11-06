@@ -56,7 +56,7 @@ function demo() {
   vi.stubEnv('DEMO_ADMISSION_OPEN', 'true')
 }
 
-/* What `sent` came to: the error it rejected with, or the response. */
+/* The error `sent` rejected with, or the response it answered. */
 const settle = (sent: Promise<Response>) =>
   sent.then(
     (response) => response,

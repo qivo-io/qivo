@@ -1,8 +1,8 @@
 /* The one HTTP router. Convex loads it, with every module it imports, for
  * each HTTP action, so none of those modules may load Better Auth, auth.ts
- * or the adapter copy in vendor/convex-better-auth/: REST, MCP, the file and
- * image links, uploads, billing webhooks, demo reporting and every CORS
- * preflight would pay for it. A handler that needs Better Auth imports
+ * or the adapter copy in vendor/convex-better-auth/, because REST, MCP, the
+ * file and image links, uploads, billing webhooks, demo reporting and every
+ * CORS preflight would pay for it. A handler that needs Better Auth imports
  * ./auth inside the handler, after the refusals that need none, as the
  * sign-in, OAuth machine and metadata handlers below do.
  * convex/tests/authTriggers.test.ts walks this module's static imports, and
