@@ -306,8 +306,17 @@ describe('the benchmark server', () => {
     const viewer = await agenda('tasks=200&sync=viewer')
     expect(viewer.answer.hidden).toBe('own_only')
     expect((await agenda('tasks=200&sync=error')).answer.error).toContain('sync=error')
-    // a meeting past the ceiling, and one that stops fitting while it is open
-    expect((await agenda('tasks=3000&programs=1')).answer.state).toBe('over_ceiling')
+    // the agenda's own ceiling rules at a lowered ceiling, never seeded past
+    // the design size. The meeting fits a ceiling of all its tasks, and its
+    // rows and asks alone pass one below theirs
+    const fixed = ok.answer.rows.length + ok.answer.asks.length
+    const all = fixed + ok.answer.done.length
+    expect((await agenda(`tasks=200&sync=ceiling:${all}`)).answer.state).toBe('ok')
+    expect((await agenda(`tasks=200&sync=ceiling:${fixed - 1}`)).answer).toEqual({
+      state: 'over_ceiling',
+      ceiling: fixed - 1,
+    })
+    // a meeting that stops fitting while it is open
     vi.useFakeTimers({ toFake: ['Date'] })
     try {
       const stale = await agenda('tasks=200&sync=stale')

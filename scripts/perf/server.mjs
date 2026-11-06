@@ -208,9 +208,13 @@
 //                        weeks-unknown (every person's week), viewer (as an
 //                        organization Viewer's agenda reads it: no load,
 //                        those verdicts unknown), stale (an ok answer that
-//                        turns over_ceiling four seconds later) and error
-//                        (every read fails); several joined by commas.
-//                        Open a Viewer's page with role=viewer too
+//                        turns over_ceiling four seconds later), error
+//                        (every read fails) and ceiling:<n> (the agenda's
+//                        own ceiling rules at a ceiling of n tasks, so a
+//                        small workspace reaches over_ceiling or
+//                        over_budget without seeding past 1,000); several
+//                        joined by commas. Open a Viewer's page with
+//                        role=viewer too
 //   syncscope=program    the first program saved as the signed-in
 //                        person's Team sync scope (prefs:get), under the
 //                        key this app reads and the one apps before the
@@ -393,6 +397,14 @@ const forcedMilestones = (() => {
 })()
 /* Team sync's forced states (the `sync` parameter). */
 const forcedSync = new Set((parameters.get('sync') ?? '').split(',').filter(Boolean))
+/* Team sync's lowered ceiling (sync=ceiling:<n>), or undefined. */
+const syncCeiling = (() => {
+  const value = [...forcedSync].find((s) => s.startsWith('ceiling:'))?.slice(8)
+  if (value === undefined) return undefined
+  const n = Number(value)
+  if (!Number.isInteger(n) || n < 0) throw new Error(`sync=ceiling:${value} is not a task count`)
+  return n
+})()
 /* How long an agenda read answers ok before sync=stale turns it, in ms. */
 const SYNC_STALE_MS = 4000
 /* When the first agenda read was asked, for sync=stale, or null, and
@@ -1568,6 +1580,7 @@ function syncAgenda(args) {
     ...(turned ? { state: 'over_ceiling' } : state ? { state } : {}),
     ...(forcedSync.has('delays-unknown') ? { delays: 'unknown' } : {}),
     ...(forcedSync.has('weeks-unknown') ? { weeks: 'loads' } : {}),
+    ...(syncCeiling === undefined ? {} : { ceiling: syncCeiling }),
   }
   // as an organization Viewer's agenda reads it, whatever the role
   const workspace = forcedSync.has('viewer')
