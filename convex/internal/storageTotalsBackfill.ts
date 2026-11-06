@@ -3,11 +3,12 @@
  * tables and in Deleted items, into its stored-byte totals (schema.ts
  * storage_org_totals, storage_project_totals and storage_task_totals, kept
  * by model/storageTotals.ts). Billing's current storage and Storage by
- * project (billing.usageFigures and billing.storageProjects) and a paid
- * period's storage sample (billingSync.ts storageStep) read the totals,
- * and only once an organization is counted (storageTotalsOf), so an
- * organization that is not counted yet reads as not counted, never as
- * empty, and its sample waits.
+ * project (billing.usageFigures and billing.storageProjects), a paid
+ * period's storage sample (billingSync.ts storageStep) and the daily
+ * storage samples (storageSamples.ts) read the totals, and only once an
+ * organization is counted (storageTotalsOf), so an organization that is not
+ * counted yet reads as not counted, never as empty, its period's sample
+ * waits and the daily run skips it.
  * Organizations created since this release are counted from their start
  * (model/orgs.ts insertOrgRows).
  *

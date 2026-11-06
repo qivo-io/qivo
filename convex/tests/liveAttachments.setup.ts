@@ -1,9 +1,9 @@
 /* The count of an organization's live attachment rows, for the suites that
  * check where a delete, a restore or a hold leaves them
  * (deletedItems.test.ts, deletedItemsRestore.test.ts, fileHolds.test.ts).
- * No billing figure comes from it: Billing and a paid period's storage
- * sample read the stored-byte totals, which count files in Deleted items
- * too (model/storageTotals.ts).
+ * No billing figure comes from it: Billing, a paid period's storage sample
+ * and the daily storage samples read the stored-byte totals, which count
+ * files in Deleted items too (model/storageTotals.ts).
  *
  * Two dots in the basename keep the Convex CLI from deploying this module,
  * the same rule as helpers.setup.ts. */

@@ -724,6 +724,10 @@ snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fiel
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadHistory query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:costReport query internal {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:expire mutation internal {"type":"object","value":{"day":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:step mutation internal {"type":"object","value":{"day":{"fieldType":{"type":"string"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:tick mutation internal {"type":"object","value":{}}
 taskWindow:attachments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:links query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:relationCandidates query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"parent"},{"type":"literal","value":"subtask"},{"type":"literal","value":"link"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}

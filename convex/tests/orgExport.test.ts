@@ -145,6 +145,10 @@ const EXCLUDED_TABLES = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // Daily readings of the stored-byte totals for billing and their runs'
+  // cost (storageSamples.ts), which the exported attachments give again.
+  'storage_daily_samples',
+  'storage_sample_runs',
   // Qivo Admin's usage figures are the operator's, not the organization's work.
   'usage_months',
   'usage_counts',

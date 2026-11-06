@@ -213,6 +213,13 @@ crons.daily('usage-month', { hourUTC: 5, minuteUTC: 15 }, internal.usage.closeMo
 // it found a full page (usage.ts).
 crons.monthly('expire-usage', { day: 1, hourUTC: 5, minuteUTC: 0 }, internal.usage.expire, {})
 
+// Records each counted organization's stored bytes once a UTC day, billing
+// nothing. The day's first call, at 00:20, away from the nightly jobs,
+// starts its run; each step schedules the next and the last starts the
+// expiry of samples older than 400 days. A later call resumes a run whose
+// step stopped, and otherwise reads one row (storageSamples.ts).
+crons.hourly('storage-daily-samples', { minuteUTC: 20 }, internal.storageSamples.tick, {})
+
 /* Convex reads this module, with the deployment's environment variables, when
  * functions are pushed, and only then. The preview builds set
  * QIVO_ENVIRONMENT=preview before their first push (scripts/vercel-build.mjs,

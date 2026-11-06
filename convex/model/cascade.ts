@@ -756,6 +756,12 @@ export async function deleteOrgDeep(ctx: MutationCtx, org: Doc<'organizations'>)
     .withIndex('by_org_bytes', (q) => q.eq('org_id', org.id))
     .collect())
     await ctx.db.delete(row._id)
+  // its daily storage samples (storageSamples.ts), which nothing else names
+  for (const row of await ctx.db
+    .query('storage_daily_samples')
+    .withIndex('by_org_day', (q) => q.eq('org_id', org.id))
+    .collect())
+    await ctx.db.delete(row._id)
 
   // the Northstar importer's ownership receipt names the org (one-row table)
   for (const r of await ctx.db.query('marketing_demo').collect()) {
