@@ -582,6 +582,40 @@ describe('Deleted items that change while the export runs', () => {
     })
   })
 
+  it('calls a ready item partial when a later batch reads a row of it stored again while the export ran', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    await comment(t, task)
+    await deleteTask(t, f, task.id)
+    await settle(t)
+    const item = await itemFor(t, task.id)
+    later()
+    const { export_id } = await as(t, f.admin).mutation(api.orgExport.request, { org_id: f.org.id })
+    // between two reads that each find the item ready, a failed restore
+    // and the move back store its comment again, as a new row
+    await exportUntil(t, export_id, sectionOf('deleted/comments'))
+    later()
+    await t.run(async (ctx) => {
+      const stored = await ctx.db
+        .query('deleted_rows')
+        .withIndex('by_item_table_owner', (q) => q.eq('item_id', item.id).eq('table', 'comments'))
+        .unique()
+      if (stored === null) throw new Error('no stored comment')
+      const { _id, _creationTime, ...again } = stored
+      await ctx.db.delete(_id)
+      await ctx.db.insert('deleted_rows', again)
+    })
+    await settle(t)
+    expect(await itemById(t, item.id)).toMatchObject({ state: 'ready' })
+    const archive = await archiveOf(t, export_id)
+    expect(itemRow(archive, item.id)).toMatchObject({
+      export_rows: 'partial',
+      export_reason: 'changed_during_export',
+      deleted_during_export: false,
+    })
+  })
+
   it('leaves rows of an item restored before the items section under an item deleted/items does not list', async () => {
     const t = newT()
     const f = await withOrg(t)

@@ -80,9 +80,11 @@ export const PAGE_BYTES = 1024 * 1024
  * and two a text) stay far under Convex's 4,096 ranges and 32,000
  * documents. A page whose texts do not fit answers no rows and
  * `retry: 'narrow'`, and the job reads the same cursor again six tasks a
- * page (ISSUES_PAGE_SIZE). Measured on 300 open tasks of ordinary text in
- * one sub-project (convex/tests/orgExportJob.test.ts, the design size
- * block): see that block's log. A mutable object, so tests can lower it. */
+ * page (ISSUES_PAGE_SIZE). A wide page among 300 open tasks of ordinary
+ * text in one sub-project, a sub-project's open figure, read 105 ranges,
+ * 200 documents and 0.097 MiB (convex/tests/orgExportJob.test.ts, the
+ * design size block, 6 November 2026). A mutable object, so tests can
+ * lower it. */
 export const TEXT_ROOM = { ranges: 1024, documents: 4096, bytes: 7 * MIB }
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
   'team_members',
@@ -800,7 +802,10 @@ async function storedEndOwned(
  * document a row of up to 1 MiB, and a link's stored end's deleted_tasks
  * row; and the items in flight, at most EXPORT_LIMITS.unsettled + 1 rows
  * of a few kilobytes. About 2 + 11 + 3 MiB for a page of ten links in the
- * worst case, under the 16 MiB a query may read. */
+ * worst case, under the 16 MiB a query may read. Each deleted/tasks page of
+ * a project item holding a project's 800 open tasks read at most 4 ranges,
+ * 101 documents and 0.073 MiB (convex/tests/orgExportDeleted.test.ts, 6
+ * November 2026). */
 async function storedBatch(
   ctx: QueryCtx,
   orgId: string,

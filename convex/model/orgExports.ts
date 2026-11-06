@@ -96,7 +96,12 @@ export const EXPORT_LIMITS = {
  * - retrySeconds: the Retry-After of a download refused past either count.
  * - slice: the most bytes the route hands its reader at a time, so the
  *   record of a download served whole waits until the reader took the
- *   archive's last slice (http.ts archiveStream). */
+ *   archive's last slice (http.ts archiveStream).
+ * A download's checks read about one range a part (orgExport.ts
+ * readDelivery, 4,007 ranges at EXPORT_LIMITS.parts data parts), a handful
+ * of reads before each part (canDeliver) and two small writes, the lease
+ * and the record; a claim reads the caller's seats, the job and one
+ * request row whatever the organization's size. */
 export const DELIVERY = {
   tokenSeconds: 120,
   streams: 2,
