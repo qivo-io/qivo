@@ -671,6 +671,7 @@ people:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"
 people:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 people:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:mentions query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1057,7 +1058,8 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   },
   // Settings > Labels (settingsPage, organization admins only) and the task
   // label picker (picker, every seat) read the labels a batch at a time in
-  // name order; byIds looks up the labels a task shows that no batch holds.
+  // name order; byIds looks up the labels a task carries that the app's
+  // catalogue does not hold (src/panels/taskLabels.ts).
   labels: {
     create: 'orgMutation',
     update: 'orgMutation',
@@ -1188,8 +1190,14 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // A task's people pickers: who could become its assignee or reviewer,
   // whom Team sync's Mention window may notify about it, and a check of a
   // few people by id. Each runs the write's own gate and rule, and is read
-  // once a batch, never subscribed.
-  pickers: { canOwn: 'orgQuery', syncRecipients: 'orgQuery', taskOwners: 'orgQuery' },
+  // once a batch, never subscribed. The editor's mention suggestions take
+  // the organization alone, for any seat there, as the people part does.
+  pickers: {
+    canOwn: 'orgQuery',
+    mentions: 'orgQuery',
+    syncRecipients: 'orgQuery',
+    taskOwners: 'orgQuery',
+  },
   // Removing a person's or team's access stays open to org admins during a
   // billing pause; giving or changing access does not. A restore schedules
   // regroup:restoredStep (internal), which clears the own hours of parents
@@ -1325,7 +1333,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 249
+const PUBLIC_COUNT = 250
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

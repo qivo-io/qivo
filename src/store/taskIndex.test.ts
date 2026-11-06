@@ -125,6 +125,37 @@ describe('the task index', () => {
     expect(index.issues()).toEqual(fresh.issues())
   })
 
+  it('lists every label of a task, by name those it holds, then by id those it does not', () => {
+    const snap = plannerFixture()
+    const home = snap.orgs[0].id
+    snap.issues = [task(snap, 'a', 1)]
+    const named = (id: string, name: string) => ({
+      id,
+      org_id: home,
+      name,
+      name_lower: name.toLowerCase(),
+      color: '#557733',
+      created_at: AT,
+    })
+    snap.labels = [named('label-z', 'Zed'), named('label-a', 'Alpha')]
+    snap.issueLabels = ['label-z', 'label-far-2', 'label-a', 'label-far-1'].map((label_id) => ({
+      issue_id: 'a',
+      label_id,
+    }))
+    const { sources, deliver } = workspace(snap)
+    const index = createTaskIndex()
+    index.full(sources())
+    // a label not loaded is still the task's, never one taken off
+    expect(index.issues()[0].labels).toEqual(['label-a', 'label-z', 'label-far-1', 'label-far-2'])
+    // once the workspace holds it, it takes its place by name
+    snap.labels.push(named('label-far-2', 'Beta'))
+    index.update(sources(), deliver(snap))
+    expect(index.issues()[0].labels).toEqual(['label-a', 'label-far-2', 'label-z', 'label-far-1'])
+    const fresh = createTaskIndex()
+    fresh.full(sources())
+    expect(index.issues()).toEqual(fresh.issues())
+  })
+
   it('holds what a full build gives after every kind of change, handle moves included', () => {
     let seed = 11
     const random = (n: number) => {

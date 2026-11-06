@@ -2007,6 +2007,14 @@ export const recipes: Recipe[] = [
     act: (P) => P.toggleIssueLabel('QN-3', 'label-a'),
     truth: (snap) => snap.issueLabels.push({ issue_id: 'task-c', label_id: 'label-a' }),
   },
+  {
+    mutation: 'labels:toggle',
+    mutator: 'toggleIssueLabel',
+    what: 'a label the workspace does not hold put on a task, as the picker or the window named it',
+    pause: 'P',
+    act: (P) => P.toggleIssueLabel('QN-3', 'label-far'),
+    truth: (snap) => snap.issueLabels.push({ issue_id: 'task-c', label_id: 'label-far' }),
+  },
 ]
 
 /* The portrait a recipe's upload stores. */

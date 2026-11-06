@@ -6,8 +6,3 @@ export { matchesAllWords, taskSearchText }
 export function commandSearchFilter(value: string, query: string, keywords: string[] = []): number {
   return Number(matchesAllWords([value, ...keywords].join('\n'), query))
 }
-
-/** The line under a short list cut to its first matches, for the `more`
- * matches it leaves out (the mention and task pickers). */
-export const moreMatches = (more: number): string =>
-  `+${more.toLocaleString('en-US')} more, keep typing`

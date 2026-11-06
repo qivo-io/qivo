@@ -1002,6 +1002,44 @@ describe('real limits', () => {
     expect(searched).toMatchObject({ can_create: null, rows: [], stopped: true })
   })
 
+  it('answers the picker whole for staff in five teams, each sharing 200 projects as Viewer', async () => {
+    // the sum of one person's own access rows the design size names: 5
+    // teams, each shared on the 50 live and 150 archived projects one team
+    // is shared with, as Viewer, which proves nothing, so the check reads
+    // all 1,000 shares under its default budget
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    await plantLabels(t, f.org.id, names('Label ', 60))
+    const me = await staffSeat(t, f, 'Viewer through five teams')
+    const subs = await plantSubProjects(t, f, 200, 50)
+    await t.run(async (ctx) => {
+      for (let n = 0; n < 5; n++) {
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: f.org.id,
+          name: `Viewers ${n}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', { team_id: team, profile_id: me.id, is_leader: false })
+        for (const project_id of subs)
+          await ctx.db.insert('project_team_access', { project_id, team_id: team, level: 'viewer' })
+      }
+    })
+    const check = await measured(t, (ctx) => canWriteOrgLabels(ctx, me))
+    console.log('canWriteOrgLabels over 5 teams of 200 viewer shares', check.read)
+    expect(check.out).toBe(false)
+    const first = await measured(t, (ctx) => pickerLabels(ctx, me, {}))
+    const none = await measured(t, (ctx) => pickerLabels(ctx, me, { search: 'nomatch' }))
+    console.log('labels.picker first batch over 5 teams of 200 viewer shares', first.read)
+    console.log('labels.picker search that matches nothing after it', none.read)
+    expect(first.out).toMatchObject({ can_create: false, stopped: false })
+    expect(first.out.rows).toHaveLength(LIST_BATCH)
+    expect(none.out).toMatchObject({ can_create: false, rows: [], stopped: false, next: null })
+    expect((await picker(t, me, f.org.id, { search: 'nomatch' })).can_create).toBe(false)
+  })
+
   it('finds User through Design after an All staff team shared on 200 sub-projects, live and archived', async () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)

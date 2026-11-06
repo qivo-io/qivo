@@ -5,7 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
-import { answerLabelPages } from '../../store/labelPagesStandIn.setup'
+import { answerLabelPages, labelPickerStandIn } from '../../store/labelPagesStandIn.setup'
 import { answerMilestones, isMilestoneRead } from '../../store/milestoneStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import {
@@ -21,9 +21,10 @@ import { isTeamSettingsRead, teamSettingsServer } from '../../store/teamSettings
    project. Settings › Labels reads its rows from the label pages'
    stand-in (store/labelPagesStandIn.setup.ts), a project's page its
    settings from the project settings stand-in
-   (store/projectSettingsStandIn.setup.ts), and the Milestones window the
+   (store/projectSettingsStandIn.setup.ts), the Milestones window the
    milestone it opens on from the milestone stand-in
-   (store/milestoneStandIn.setup.ts). */
+   (store/milestoneStandIn.setup.ts), and the task label picker its batches
+   from the label picker's stand-in. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -56,7 +57,7 @@ let pages: {
   general: typeof import('./OrganizationSettings')
   project: typeof import('./ProjectSettings')
   modals: typeof import('../Modals')
-  detail: typeof import('../IssueDetail')
+  picker: typeof import('../LabelPicker')
   version: typeof import('../../store/usePlannerVersion')
   store: typeof import('../../store/planner')
 }
@@ -128,7 +129,9 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
       created_at: NOW,
     })
   requests = []
-  network.query.mockResolvedValue(null)
+  network.query.mockImplementation(async (ref, args) =>
+    getFunctionName(ref) === 'labels:picker' ? labelPickerStandIn(snap, args) : null,
+  )
   const settings = projectSettingsServer(() => snap)
   // Settings › Teams and a team's page read the teams the server holds,
   // which a created team joins once the test answers its create
@@ -158,7 +161,7 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     general: await import('./OrganizationSettings'),
     project: await import('./ProjectSettings'),
     modals: await import('../Modals'),
-    detail: await import('../IssueDetail'),
+    picker: await import('../LabelPicker'),
     version: await import('../../store/usePlannerVersion'),
     store,
   }
@@ -344,18 +347,23 @@ describe('create forms', () => {
 })
 
 describe('the label picker in the task window', () => {
+  /* Lets the typed search rest and its answer arrive. */
+  const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 300)))
+
   it('creates a label at once and puts a refused name back', async () => {
     const { P } = await import('../../store/planner')
     const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
     if (!task) throw new Error('no task')
     await render(() => (
-      <pages.detail.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
+      <pages.picker.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
     ))
     const field = input('input[placeholder="Add labels…"]')
     await type(field, 'Firmware')
+    // Enter acts once the answer for the typed name says it is free
     await act(async () =>
       field?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })),
     )
+    await settle()
     expect(requests.map((r) => r.name)).toEqual(['labels:create', 'labels:toggle'])
     expect(field?.value).toBe('')
     await answer('labels:create', 'refuse')
@@ -367,11 +375,14 @@ describe('the label picker in the task window', () => {
     const task = P.issues.find((t) => t.title === 'Calibrate the sensor')
     if (!task) throw new Error('no task')
     await render(() => (
-      <pages.detail.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
+      <pages.picker.LabelPickerPopup it={task} anchor={{ x: 0, y: 0 }} onDone={vi.fn()} />
     ))
     const field = input('input[placeholder="Add labels…"]')
     await type(field, 'Firmware calibration notes for the sensor')
     expect(field?.value).toHaveLength(41)
+    // the refusal stands where the answer for the typed name would offer
+    // Create new label
+    await settle()
     expect(document.querySelector('[data-picker-refusal]')?.textContent).toBe(
       'A label name must be at most 40 characters. Shorten it.',
     )

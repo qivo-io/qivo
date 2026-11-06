@@ -187,6 +187,14 @@ export const TEAM_SYNC_TASKS = 1000
  * not a limit on what the list holds. */
 export const LIST_BATCH = 25
 
+/** The people one batch of the editor's @ mention popup holds before Load
+ * more (pickers.ts mentions), the popup's eight rows. A batch size, not a
+ * limit on the people of an organization or on the mentions a text holds
+ * (LIMITS.mentions). Among 1,000 people a first batch without a search
+ * reads about 10 profiles, and a search that matches nobody every one of
+ * them (model/pickers.ts mentionsOf). */
+export const MENTION_BATCH = 8
+
 /** The most ids one call that looks rows up by id may name, such as
  * labels.byIds for the labels a task shows and pickers.canOwn for the
  * people a task's pickers check. A bound on the app's own calls, not a
@@ -204,6 +212,21 @@ export const DEFAULT_MESSAGE_RETENTION_DAYS = 7
  * letters and digits joined by single hyphens, none leading or trailing. '~'
  * cannot be spelled, which /app/~/ routing depends on. */
 export const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/
+
+/** The refusal of a label create whose rights check could not finish in one
+ * request (lib/access.ts canWriteOrgLabels answered null). The task label
+ * picker shows it in place of Create new label when labels.picker answers
+ * can_create null (src/panels/LabelPicker.tsx). */
+export const LABEL_RIGHTS_UNCHECKED =
+  'you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label'
+
+/** The refusal of a label toggle whose label is not one of the task's
+ * organization. Another organization's label and an id no label holds, such
+ * as a label deleted since the person's label picker read its batch, answer
+ * alike, so a foreign id reveals nothing (tests/orgFence.test.ts). The app
+ * toggles only labels of the task's organization, so it reads this refusal
+ * as a label deleted since it was listed (src/store/planner.ts P.labelGone). */
+export const LABEL_NOT_IN_TASK_ORG = 'label and task must belong to the same organization'
 
 /** The refusal of a send again while the seat's newest invitation email is
  * still being sent. */

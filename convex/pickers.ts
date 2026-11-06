@@ -1,5 +1,5 @@
-/* The people pickers of a task, read from the server. The readers and
- * their rules are in model/pickers.ts.
+/* The people pickers of a task and the editor's mention suggestions, read
+ * from the server. The readers and their rules are in model/pickers.ts.
  *
  * - taskOwners: the people who could become a task's assignee or reviewer,
  *   25 at a time in name order, with a search over every one of them. The
@@ -28,12 +28,25 @@
  * organization, task, field and search it came from. Rows are person rows
  * (model/projectSettings.ts PersonRow), with no email, picture, team,
  * level, task, title or project. None reads a task's title, description,
- * comments or files, and none writes. */
+ * comments or files, and none writes.
+ *
+ * - mentions: the people the editor's @ mention popup offers, 8 at a time
+ *   in name order, with the popup's match over names, initials and email
+ *   (src/components/mentionSuggestion.ts reads it once a batch while the
+ *   popup is open). It is the exception to the rules above. It takes the
+ *   organization and no task, runs no gate or rule, and offers every
+ *   profile of the organization to any active seat there, guests and
+ *   viewers included, as the popup always has; the mention fan-out still
+ *   decides who is notified. Its rows hold the email, initials and color,
+ *   since the popup shows and matches them, and the workspace's people
+ *   part sends them to every seat today (model/pickers.ts mentionsOf). */
 
 import { v } from 'convex/values'
 import { orgQuery } from './lib/functions'
 import {
   canOwnOf,
+  type MentionBatch,
+  mentionsOf,
   type OwnerChecks,
   type PeopleBatch,
   syncRecipientsOf,
@@ -89,4 +102,17 @@ export const canOwn = orgQuery({
     ids: v.array(v.string()),
   },
   handler: (ctx, a): Promise<OwnerChecks> => canOwnOf(ctx, ctx.me, a),
+})
+
+/** One batch, in name order, of the people of the organization the
+ * editor's @ mention popup offers: every profile, people, agents,
+ * switched-off people, unclaimed seats and the caller alike, whose name,
+ * initials and email hold every word of the search in any order, ignoring
+ * case but not accents (model/pickers.ts mentionsOf). Any active seat of
+ * the organization may read it. Answers `not_ready`, or `ready` with rows
+ * of id, name, initials, color and email, `next` and `stopped`
+ * (lib/namedPages.ts ListBatch). */
+export const mentions = orgQuery({
+  args: vListArgs,
+  handler: (ctx, a): Promise<MentionBatch> => mentionsOf(ctx, ctx.me, a),
 })

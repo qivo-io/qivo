@@ -252,17 +252,24 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
     return count || undefined
   }
 
-  /** Every task's label ids, by label name, then id. */
+  /** Every task's label ids: those the workspace holds by label name, then
+      id, and after them, by id, those it does not, which the task window
+      names from labels.byIds (panels/taskLabels.ts useTaskLabels). A
+      task's labels are whole, so a label not loaded is never taken for
+      one taken off, and the cap counts what the server counts. */
   function labelIndex(): Map<string, string[]> {
     const { issueLabels, labels } = sources()
     const out = new Map<string, string[]>()
     for (const row of issueLabels) {
-      if (!labels.has(row.label_id)) continue
       const list = out.get(row.issue_id)
       if (list) list.push(row.label_id)
       else out.set(row.issue_id, [row.label_id])
     }
-    const name = (id: string) => labels.peek(id)?.name.toLowerCase() ?? ''
+    // a label the workspace does not hold sorts after every named one
+    const name = (id: string) => {
+      const label = labels.peek(id)
+      return label ? `0${label.name.toLowerCase()}` : '1'
+    }
     for (const list of out.values())
       if (list.length > 1) list.sort((a, b) => byThenId(name(a), a, name(b), b))
     return out

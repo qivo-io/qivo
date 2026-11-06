@@ -1020,6 +1020,27 @@ textarea {
   font-size: var(--fs-sm);
   font-style: italic;
 }
+/* an older text's rows while the typed text's answer is on its way: kept
+   in place so the list does not flicker, dimmed and not pressable */
+.mentionpop-row[data-mention-stale] {
+  opacity: 0.5;
+  cursor: default;
+}
+/* Load more and Try again, rows of the list that keep the editor's focus */
+.mentionpop-action {
+  min-height: 32px;
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+.mentionpop-action[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+.mentionpop[data-mention-state="failed"] .mentionpop-empty {
+  color: var(--danger);
+  font-style: normal;
+}
 
 /* inline images: hovering reveals copy/download in the top-right corner */
 .mdimgwrap {

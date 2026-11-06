@@ -53,6 +53,8 @@ let root: Root
 let snap: Snapshot
 let subs: Live[]
 let opened: Mock<(id: string) => void>
+/* Delivers the workspace again, as after a write the server stored. */
+let publish: () => void
 
 const task = (id: string, num: number, extra: Partial<Task> = {}): Task => ({
   id,
@@ -204,7 +206,8 @@ async function load(next = fixture(), beforeBoot?: () => Promise<void>) {
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') {
-      next(structuredClone(snap))
+      publish = () => next(structuredClone(snap))
+      publish()
       return () => {}
     }
     const live: Live = { name, args, deliver: next, fail, closed: false }
@@ -1220,4 +1223,146 @@ describe('a new task while every task loads', { timeout: 20_000 }, () => {
       expect(stateOf('subtasks')).toBe('complete')
       expect(P.familyOf(P.issueById[P.handleOf(uuid) ?? ''])).not.toBeNull()
     })
+})
+
+describe("the task window's labels", { timeout: 20_000 }, () => {
+  /* The family task with Hardware, which the workspace holds, and three
+     labels it does not hold: two the server still has and one deleted. */
+  function labelled() {
+    const next = fixture()
+    const org = next.orgs[0].id
+    next.labels.push({
+      id: 'label-hw',
+      org_id: org,
+      name: 'Hardware',
+      name_lower: 'hardware',
+      color: '#335577',
+      created_at: AT,
+    })
+    for (const label_id of ['label-hw', 'label-far-b', 'label-far-a', 'label-gone'])
+      next.issueLabels.push({ issue_id: 'fam', label_id })
+    return next
+  }
+  const chips = () =>
+    [...document.querySelectorAll<HTMLElement>('.task-label')].map((chip) => ({
+      text: chip.querySelector('.task-label-name')?.textContent,
+      waiting: chip.hasAttribute('data-label-waiting'),
+      failed: chip.hasAttribute('data-label-failed'),
+      remove: chip.querySelector('button')?.getAttribute('aria-label'),
+      disabled: chip.querySelector('button')?.disabled,
+    }))
+  const removeOf = (name: string) =>
+    document.querySelector<HTMLButtonElement>(`button[aria-label="Remove label “${name}”"]`)
+  const far = (id: string, name: string) => ({ id, name, color: '#4C9AFF' })
+
+  it('shows a label the workspace does not hold as loading, then by name, and its × takes it off', async () => {
+    await load(labelled())
+    await openTask()
+    const waiting = {
+      text: 'Loading label…',
+      waiting: true,
+      failed: false,
+      remove: 'Available once this label has loaded',
+      disabled: true,
+    }
+    expect(chips()).toEqual([
+      {
+        text: 'Hardware',
+        waiting: false,
+        failed: false,
+        remove: 'Remove label “Hardware”',
+        disabled: false,
+      },
+      waiting,
+      waiting,
+      waiting,
+    ])
+    // one read of the ids the workspace does not hold, sorted
+    expect(one('labels:byIds').args).toEqual({
+      org_id: snap.orgs[0].id,
+      ids: ['label-far-a', 'label-far-b', 'label-gone'],
+    })
+    await answer('labels:byIds', {
+      rows: [far('label-far-a', 'Far A'), far('label-far-b', 'Far B')],
+    })
+    // the deleted one, which the answer leaves out, goes
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far A', 'Far B'])
+    // the server stores the toggle, and its delivery holds it before the
+    // write's answer, as Convex sends them
+    network.mutation.mockImplementation(async (ref, args) => {
+      if (getFunctionName(ref) === 'labels:toggle') {
+        snap.issueLabels = snap.issueLabels.filter((il) => il.label_id !== args.label_id)
+        publish()
+      }
+      return null
+    })
+    await act(async () => removeOf('Far A')?.click())
+    expect(sentArgs('labels:toggle')).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'fam', label_id: 'label-far-a', on: false },
+    ])
+    // fewer ids are a new read; Far B keeps the name it was given, and
+    // only the new answer says the deleted one is gone
+    expect(one('labels:byIds').args).toEqual({
+      org_id: snap.orgs[0].id,
+      ids: ['label-far-b', 'label-gone'],
+    })
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far B', 'Loading label…'])
+    await answer('labels:byIds', { rows: [far('label-far-b', 'Far B')] })
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far B'])
+  })
+
+  it('keeps the chips after a failed read, each removable, with one Try again', async () => {
+    await load(labelled())
+    await openTask()
+    await fail('labels:byIds')
+    const failed = chips().slice(1)
+    expect(failed).toHaveLength(3)
+    for (const chip of failed)
+      expect(chip).toEqual({
+        text: "Couldn't load this label",
+        waiting: false,
+        failed: true,
+        remove: 'Remove this label',
+        disabled: false,
+      })
+    const retry = document.querySelectorAll<HTMLButtonElement>('[data-labels-retry]')
+    expect(retry).toHaveLength(1)
+    await act(async () => retry[0].click())
+    await answer('labels:byIds', { rows: [far('label-far-a', 'Far A')] })
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far A'])
+    expect(document.querySelector('[data-labels-retry]')).toBeNull()
+  })
+
+  it('offers Try again when a read fails after the labels were named, keeping their names', async () => {
+    const next = labelled()
+    next.issueLabels = next.issueLabels.filter((il) => il.label_id !== 'label-gone')
+    await load(next)
+    await openTask()
+    await answer('labels:byIds', {
+      rows: [far('label-far-a', 'Far A'), far('label-far-b', 'Far B')],
+    })
+    expect(document.querySelector('[data-labels-retry]')).toBeNull()
+    network.mutation.mockImplementation(async (ref, args) => {
+      if (getFunctionName(ref) === 'labels:toggle') {
+        snap.issueLabels = snap.issueLabels.filter((il) => il.label_id !== args.label_id)
+        publish()
+      }
+      return null
+    })
+    // taking Far A off reads Far B again, and that read fails
+    await act(async () => removeOf('Far A')?.click())
+    expect(one('labels:byIds').args.ids).toEqual(['label-far-b'])
+    await fail('labels:byIds')
+    // Far B keeps the name it was given, which may be out of date now
+    expect(chips().map((c) => [c.text, c.failed])).toEqual([
+      ['Hardware', false],
+      ['Far B', false],
+    ])
+    const retry = document.querySelectorAll<HTMLButtonElement>('[data-labels-retry]')
+    expect(retry).toHaveLength(1)
+    await act(async () => retry[0].click())
+    await answer('labels:byIds', { rows: [far('label-far-b', 'Far B renamed')] })
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far B renamed'])
+    expect(document.querySelector('[data-labels-retry]')).toBeNull()
+  })
 })

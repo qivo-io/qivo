@@ -36,6 +36,18 @@ export function allWordsMatcher(query: string, stars = false): (hay: string) => 
   }
 }
 
+/**
+ * `query` as allWordsMatcher reads it without stars: lowercased, each run
+ * of whitespace one space, trimmed. Two queries with one form match the
+ * same texts, so a list keyed or sealed by it never mixes two that differ.
+ * It keeps accents, unlike lib/nameKey.ts nameKey, so "Café" and "cafe"
+ * stay apart. When one form starts with another, every text the longer
+ * matches the shorter matches too.
+ */
+export function searchWords(query: string): string {
+  return query.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
 /** Whether `hay` matches `query` under allWordsMatcher, for one-off checks. */
 export function matchesAllWords(hay: string, query: string): boolean {
   return allWordsMatcher(query)(hay)

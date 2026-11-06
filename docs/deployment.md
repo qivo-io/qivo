@@ -316,7 +316,19 @@ again once **Search all your projects** ended, a task it makes in its second
 project only after **Search all your projects**, and the subtask it made
 as a current subtask in **Add subtask**, and writes nothing through the
 pickers (`ui/relation-pickers`). Against a backend from before the relation
-pickers' release that step fails. It then makes a
+pickers' release that step fails. In the same window it makes a label with
+its run tag over REST, finds it through **Add label**'s search on the
+deployment's batches (`labels.picker`), puts it on the task and takes it
+off with the chip's ×, creates `<tag> Made in picker` from the picker with
+Enter once **Create new label** shows, and in the comment composer picks
+the Standard agent from the @ mention popup (`pickers.mentions`) with
+Enter, then clears the draft so nothing posts and nobody is notified
+(`ui/label-mention-pickers`). Each label change is checked over REST, and
+the step deletes both labels in the app before it returns, also after a
+failure, so the later `ui/settings-labels` search for the run tag finds
+only its own label. Against a backend from before the mention suggestions'
+release the mention part fails. It then
+makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
@@ -1616,6 +1628,24 @@ first sample, for one recounted since its previous sample, or for a sample
 a late run takes after the organization's sample of a later day, so each
 raise counts once. A dry run of the storage totals backfill in the same
 window gives the cost of a reconciliation.
+
+From the release after v0.1.151, `pickers.mentions` answers the editor's @
+mention popup 8 people of the editor's organization at a time in name
+order, with the popup's match over names, initials and email, for any seat
+of that organization. The task label picker reads `labels.picker` and the
+window's labels the workspace does not hold `labels.byIds`, which v0.1.97
+(PR #304, `81acac46`) first shipped. The app of that release reads
+`pickers.mentions`, so that release is the backend's floor for its app.
+An app from it, against a backend before it, says **Couldn't load
+people.** in every mention popup, also in a tab that was open when the
+backend went back, until the backend rolls forward; its label picker works
+against any backend from v0.1.97. From that release on, never return the
+backend to a commit before it; roll forward instead. Returning the app
+alone to an earlier release is safe against a later backend, because that
+app filters the workspace's roster and catalogue and the backend keeps
+every function it calls. The reads answer `not_ready` for an organization
+whose names are not ready, and the release changes no table, field or
+index and has no backfill and no release step.
 
 ## Node.js version
 

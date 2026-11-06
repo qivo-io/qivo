@@ -266,6 +266,6 @@ People with task-editing access can apply labels. Organization admins manage
 the list in Settings. Organization users with User or Lead access to a
 top-level project can also create labels from a task's label picker. If you
 belong to so many projects and teams that Qivo cannot check this in one
-request, it refuses to create the label and says so, and an organization
-admin can create it for you. Guests can apply existing labels but cannot
-manage the list.
+request, the label picker says so in place of **Create new label**, Qivo
+refuses to create the label, and an organization admin can create it for
+you. Guests can apply existing labels but cannot manage the list.

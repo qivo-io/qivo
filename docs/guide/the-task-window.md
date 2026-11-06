@@ -24,10 +24,18 @@ keys include Ctrl/Cmd+B/I/U/E, Ctrl/Cmd+Shift+X and Ctrl/Cmd+K for links.
 Shift+Enter or Ctrl/Cmd+Enter starts a new line within a paragraph. Click a
 link to open, edit or remove it.
 
-Type **@** to mention someone. Search by partial name, initials or email
-fragments, in any order, and choose with arrow keys and Enter or a click.
-Mentions in descriptions and comments notify other people in Inbox and
-subscribe them to the task.
+Type **@** to mention someone in the task's organization. Qivo searches
+everyone there on the server by partial name, initials or email fragments,
+in any order, and shows 8 people at a time in name order, with **Load
+more** at the end for the next 8. Choose with arrow keys and Enter or a
+click. If people cannot load, **Try again** at the end of the list reads
+them again, and the arrow keys and Enter reach it too. While a search is
+on its way the list says **Searching…**, and an
+Enter you press then picks the first person it finds. In a large
+organization the list can say **Showing the people found so far.**, and
+**Load more** goes on from there. After 64 people it asks you to keep
+typing. Mentions in descriptions and comments notify other people in Inbox
+and subscribe them to the task.
 
 Paste or drag images into descriptions. Hover for Copy or Download, or
 double-click for full size. Inline images cannot be pasted across tasks.
@@ -156,6 +164,22 @@ Enter picks the only task shown, or creates a task when none matches, once
 the whole list and the task's current relations have loaded, and in
 **Linked tasks** also at the end of the task's own project. A typed task ID
 picks its task at once.
+
+The label picker searches the organization's labels on the server and
+shows 25 at a time, with **Load more** for the next 25, finding a label
+when every word you type occurs in its name, ignoring case and accents.
+The task's own labels show first, checked, so you can take them off, also
+ones not yet loaded. **Create new label** appears once Qivo has checked
+that no label of that name exists, in any case. A label whose name you
+type exactly shows first, and Enter picks it. Otherwise Enter picks the
+only label shown, or creates one when none matches, once the whole list
+has loaded. After 200 labels the picker asks you to search to find more. A
+label on a task that has not loaded yet shows **Loading label…** in the
+Labels section until it does, and one that could not load shows **Couldn't
+load this label** with **Try again**, and can still be taken off. If the
+names cannot load again later, the section keeps the names it showed and
+offers **Try again**. A label deleted since the picker listed it says
+**This label no longer exists.** when you pick it, and leaves the list.
 
 A task has at most 20 labels, 100 links and 100 attachments, with images in
 its description counted as attachments while the description shows them.

@@ -11,7 +11,9 @@
  * Settings > Labels (settingsPage) and the task label picker (picker) read
  * the labels a batch at a time in name order, with search over the whole
  * list on the server (model/labels.ts labelBatch), and byIds looks up the
- * labels a task shows that no batch holds.
+ * labels a task carries that the app's catalogue does not hold, for the
+ * task window's chips and the picker's first rows
+ * (src/panels/taskLabels.ts).
  *
  * Narration is asymmetric on purpose (T8): create and delete write an
  * activity row, update writes NONE. toggle narrates against the ISSUE
@@ -25,7 +27,7 @@ import type { MutationCtx } from './_generated/server'
 import { hasProjectLevel } from './lib/access'
 import { byId } from './lib/db'
 import { badRequest, forbidden, notFound, orgMutation, orgQuery, rule } from './lib/functions'
-import { BY_IDS_MAX } from './lib/limits'
+import { BY_IDS_MAX, LABEL_NOT_IN_TASK_ORG } from './lib/limits'
 import {
   assertLabelManager,
   createLabelCore,
@@ -89,10 +91,13 @@ export const picker = orgQuery({
 
 /* ------------------------------------------------------------------- byIds */
 
-/** The labels of the organization among `ids`, each once, for labels a task
- * shows that no batch holds. An id of another organization, an unknown id
- * and a deleted label are left out, a definite answer, since each was looked
- * up. More than BY_IDS_MAX ids are refused. */
+/** The labels of the organization among `ids`, each once. The task window
+ * reads it live, while it shows a task, for the labels the task carries
+ * that the app's catalogue does not hold, which its chips and the label
+ * picker's first rows name (src/panels/taskLabels.ts useTaskLabels). An id
+ * of another organization, an unknown id and a deleted label are left out,
+ * a definite answer, since each was looked up. More than BY_IDS_MAX ids are
+ * refused. */
 export const byIds = orgQuery({
   args: { ids: v.array(v.string()) },
   handler: async (ctx, { ids }): Promise<{ rows: LabelRow[] }> => {
@@ -176,9 +181,12 @@ export const remove = orgMutation({
  * so a resent toggle cannot undo itself. `on` is required: every app since
  * v0.1.26 sends it, and the old flip without it is gone. Predicate is
  * has_project_level(project, 'user') (0010:65-69, member→user); the org
- * guard is issue_labels_check_org's sentence VERBATIM (0078:117) — in the
- * SQL a missing label read the same sentence as a foreign one, kept here.
- * The write is model/labels.ts setTaskLabel, which REST and MCP run too. */
+ * guard is issue_labels_check_org's sentence VERBATIM (0078:117,
+ * LABEL_NOT_IN_TASK_ORG). In the SQL a missing label read the same sentence
+ * as a foreign one, and it still does, as a foreign id answers as an unknown
+ * one (tests/orgFence.test.ts). The app, which toggles only labels of the
+ * task's organization, reads it as a label deleted since it was listed. The
+ * write is model/labels.ts setTaskLabel, which REST and MCP run too. */
 export const toggle = orgMutation({
   args: { issue_id: v.string(), label_id: v.string(), on: v.boolean() },
   handler: async (ctx, { issue_id, label_id, on }) => {
@@ -189,9 +197,7 @@ export const toggle = orgMutation({
       throw forbidden('no write access to this project')
     }
     const label = await byId(ctx, 'labels', label_id)
-    if (label === null || label.org_id !== issue.org_id) {
-      throw rule('label and task must belong to the same organization')
-    }
+    if (label === null || label.org_id !== issue.org_id) throw rule(LABEL_NOT_IN_TASK_ORG)
     await setTaskLabel(ctx, { me: ctx.me, issue, label, on, now })
     return null
   },
