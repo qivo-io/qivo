@@ -99,7 +99,9 @@ export const threadHistory = orgQuery({
  * history for (showsHistory) answers an empty page. Like threadHistory it
  * refuses with access_unchecked where Qivo could not finish checking the
  * caller's access to a project the page's rows name (taskHistoryPage),
- * which the window shows as a failed load. */
+ * which the window shows as a failed load. The window also reads it for Show
+ * newer activity, before a change it let go past its budget
+ * (src/lib/threadBudget.ts), to read those changes back. */
 export const historyBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
@@ -119,7 +121,9 @@ export const historyBefore = orgQuery({
  * COMMENT_PAGE_MAX comments the thread holds before the comment `before`, in
  * threadComments' shape. The app reads it once rather than subscribing. A
  * `before` that is not a comment on this task, deleted ones included,
- * refuses with BEFORE_NOT_A_COMMENT as a bad_request. */
+ * refuses with BEFORE_NOT_A_COMMENT as a bad_request. The window also reads
+ * it for Show newer comments, before a comment it let go past its budget
+ * (src/lib/threadBudget.ts), to read those comments back. */
 export const commentsBefore = orgQuery({
   args: { issue_id: v.string(), before: v.string() },
   handler: async (ctx, { issue_id, before }) => {
