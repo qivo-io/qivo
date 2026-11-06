@@ -66,6 +66,11 @@ let server: {
 /* The one-shot reads of the team pages the page sent, by name and
    arguments. */
 let queries: { name: string; args: Record<string, unknown> }[]
+/* Every function the app read or watched over the client, by name, which
+   a test empties once the store has loaded. The store's workspace parts
+   come from the one workspace:whole watch the double holds
+   (store/guard/liveDouble.setup.ts), so a name here is a read of its own. */
+let opened: string[]
 
 const org = () => server.snap.orgs[0].id
 const me = () => server.snap.profiles[0].id
@@ -122,6 +127,7 @@ async function load(shape?: (snap: Snapshot) => void, leave?: (snap: Snapshot) =
   shape?.(snap)
   requests = []
   queries = []
+  opened = []
   const reads = teamSettingsServer(
     () => server.snap,
     () => server.force,
@@ -131,6 +137,7 @@ async function load(shape?: (snap: Snapshot) => void, leave?: (snap: Snapshot) =
   leave?.(held)
   network.query.mockImplementation(async (ref, args) => {
     const name = getFunctionName(ref)
+    opened.push(name)
     if (name.startsWith('teams:')) queries.push({ name, args })
     if (isTeamSettingsRead(name)) return await reads.query(name, args)
     if (name === 'accessRemovals:preview') return removalAnswer()
@@ -138,6 +145,7 @@ async function load(shape?: (snap: Snapshot) => void, leave?: (snap: Snapshot) =
   })
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
+    opened.push(name)
     if (isTeamSettingsRead(name)) return reads.watch(name, args, next, fail)
     if (name === 'workspace:whole') {
       server.publish = (value) => next(structuredClone(value))
@@ -298,6 +306,7 @@ const deleteOf = (id: string) =>
 describe('Settings › Teams', () => {
   it("lists the server's teams with its counts, in its key order, and reads nothing else", async () => {
     await load((snap) => team(snap, 'emile', 'Émile crew'))
+    opened = []
     server.force = { counts: { bench: null } }
     await teamsPage()
     expect(teamRows()).toEqual([
@@ -308,6 +317,7 @@ describe('Settings › Teams', () => {
       { id: 'emile', name: 'Émile crew', count: '0 members' },
     ])
     expect(server.reads.open()).toEqual([{ name: 'teams:settingsPage', args: { org_id: org() } }])
+    expect([...new Set(opened)]).toEqual(['teams:settingsPage'])
     expect(find('[data-org-teams]').dataset.teamsState).toBe('ok')
     expect(teamsEnd()).toBe('')
     // a count of one member
@@ -508,6 +518,7 @@ describe('Settings › Teams', () => {
 describe("a team's page", () => {
   it('waits for the server, then shows its name, count and members, and reads no task', async () => {
     await load()
+    opened = []
     server.reads.hold(true)
     await teamPage()
     expect(document.body.textContent).toContain('Loading the team…')
@@ -524,6 +535,8 @@ describe("a team's page", () => {
         .sort(),
     ).toEqual(['teams:get', 'teams:members'])
     expect(queries.map((q) => q.name)).toEqual([])
+    // the page read nothing else, no task among it
+    expect([...new Set(opened)].sort()).toEqual(['teams:get', 'teams:members'])
   })
 
   it('says it could not load the team with Try again, and that a gone team is no longer available', async () => {
