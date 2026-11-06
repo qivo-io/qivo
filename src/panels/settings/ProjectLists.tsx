@@ -1318,11 +1318,12 @@ function ArchivedChips({
                 data-archived-sub={k.id}
                 data-with-parent={k.with_parent ? '' : undefined}
                 tabIndex={-1}
-                style={{
-                  color: k.with_parent ? 'var(--text-1)' : 'var(--text-2)',
-                  borderStyle: k.with_parent ? 'solid' : 'dashed',
-                }}
-                className="inline-flex h-6 items-center [font-size:var(--fs-xs)] [padding:0_8px] [border-radius:var(--r-sm)] [border:1px_solid_var(--border)] [background:var(--surface-1)] outline-none"
+                className={cn(
+                  'inline-flex h-6 items-center [font-size:var(--fs-xs)] [padding:0_8px] [border-radius:var(--r-sm)] [border-width:1px] [border-color:var(--border)] [background:var(--surface-1)] outline-none',
+                  k.with_parent
+                    ? '[border-style:solid] [color:var(--text-1)]'
+                    : '[border-style:dashed] [color:var(--text-2)]',
+                )}
               >
                 <TaggedName name={k.name} tag={tags.get(k.id)} />
               </span>
