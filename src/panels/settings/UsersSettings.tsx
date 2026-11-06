@@ -990,9 +990,15 @@ export function OrgUsersPage({
               Loading this person…
             </p>
           )}
-          {answer === null && person.state === 'failed' && (
-            <p role="alert" className="flex items-center gap-2 text-sm text-danger">
-              Couldn't load this person.
+          {/* also beside a row kept from an earlier answer, whose
+              controls wait until a read is current again */}
+          {person.state === 'failed' && (
+            <p
+              role="alert"
+              className="flex items-center gap-2 text-sm text-danger"
+              data-person-failed
+            >
+              {answer === null ? "Couldn't load this person." : "Couldn't refresh this person."}
               <Button
                 type="button"
                 variant="ghost"

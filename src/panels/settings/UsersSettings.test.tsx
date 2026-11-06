@@ -921,6 +921,27 @@ describe("the phone's user page and Settings' check", () => {
     expect(reset).not.toHaveBeenCalled()
   })
 
+  it('says a failed read beside the person it kept, with Try again, and keeps the writes off until one answers', async () => {
+    await load()
+    narrowScreen(true)
+    const reset = vi.fn()
+    await render(() => <Screen initial="user:anna" reset={reset} />)
+    const role = () => find<HTMLSelectElement>('[data-user-role="anna"]')
+    expect(role().disabled).toBe(false)
+    force = { fail: ['get'] }
+    await act(async () => server.rerun())
+    await settle()
+    expect(find('[data-settings-user-detail] [role="alert"]').textContent).toBe(
+      "Couldn't refresh this person.Try again",
+    )
+    expect(role().disabled).toBe(true)
+    expect(reset).not.toHaveBeenCalled()
+    force = {}
+    await click(find('[data-person-retry]'))
+    expect(has('[data-person-failed]')).toBe(false)
+    expect(role().disabled).toBe(false)
+  })
+
   it("reads no keys for the phone's list, which shows no key line, and an agent's on its page", async () => {
     await load()
     extra.keys.push(keyOf('atlas', 1))
