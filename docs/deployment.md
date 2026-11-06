@@ -1471,7 +1471,7 @@ after another, and sends a deferred item again once its project is back,
 each with the arguments earlier apps sent. The release changes no server
 function, so it has no server change and no release step.
 
-From the release after v0.1.146, the backend's HTTP router no longer loads
+From the release after v0.1.148, the backend's HTTP router no longer loads
 Better Auth when a request starts. It registers the `/api/auth/` routes with
 the same paths, methods, CORS headers and trusted origins, and imports
 `convex/auth.ts` only in the sign-in, OAuth token, registration and
@@ -1483,14 +1483,13 @@ the CORS answers of the file and image links among them, rather than every
 HTTP action. Every app and demo build now calls the sign-in route, and
 outside the demo the OAuth token and metadata routes, after Convex pushes
 the functions, and fails the build if one does not answer as expected. No
-route's answer changes, so the release sets no rollback floor and needs no
-step, and returning the backend to a commit before it, within the floors
-above, only brings the load back. The Settings › Users release above stays
-the backend's newest floor. A failed check on staging or production comes
-after the push, so that backend may run the new functions while its domain
-keeps the earlier app; [The auth routes check](#the-auth-routes-check) says
-what a failure means and what to do. There is no schema change and no
-backfill.
+route's answer changes, so the release sets no floor of its own and needs no
+step. Returning the backend to a commit before it, but never before the
+newest floor above, only brings the load back. A failed check on staging or
+production comes after the push, so that backend may run the new functions
+while its domain keeps the earlier app.
+[The auth routes check](#the-auth-routes-check) says what a failure means
+and what to do. There is no schema change and no backfill.
 
 ## Node.js version
 
