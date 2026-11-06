@@ -328,6 +328,47 @@ describe('the benchmark server', () => {
     }
   }, 60_000)
 
+  it("posts a replaced server's late timer to its own port, never into a later server's messages", async () => {
+    // sync=stale arms a real timer that outlives its case; the server posts
+    // through the port it was loaded with, so the timer's transition lands in
+    // the finished case's messages and never in the next server's
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      /** Sends `message` and lets the server's own short timers run. */
+      const sent = async (send, message) => {
+        const done = send(message)
+        await vi.advanceTimersByTimeAsync(100)
+        await done
+      }
+      const first = await server('tasks=200&latency=0&mbps=100000&sync=stale')
+      await sent(first.send, { type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(first.posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      const start = Date.parse('2026-11-02T00:00:00.000Z')
+      await sent(first.send, {
+        type: 'query',
+        id: 'agenda',
+        name: 'teamSync:agenda',
+        args: {
+          org_id: snap.orgs[0].id,
+          scope: { kind: 'project', project_id: program.id },
+          day: '2026-11-04',
+          week: '2026-11-02',
+          week_starts: Array.from({ length: 53 }, (_, i) => start - (52 - i) * 7 * 86_400_000),
+          week_end: start + 7 * 86_400_000,
+        },
+      })
+      expect(JSON.parse(first.posted.find((m) => m.to === 'agenda').text).state).toBe('ok')
+      const second = await server('tasks=40&latency=0&mbps=100000')
+      const before = second.posted.length
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(second.posted.length).toBe(before)
+      expect(first.posted.some((m) => m.type === 'transition')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

@@ -294,7 +294,12 @@ import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
    INBOX_BATCH, which this worker cannot import with the server code. */
 const INBOX_BATCH = 160
-const parameters = new URLSearchParams(self.name)
+/* The worker port this instance was loaded with. Messages go through it,
+   not through the global `self` read at call time, so a timer of an
+   instance the tests have replaced (vi.resetModules) posts to its own,
+   finished test, never into a later one's messages. */
+const port = self
+const parameters = new URLSearchParams(port.name)
 const option = (name, fallback) => {
   const value = parameters.get(name)
   return value === null ? fallback : Number(value)
@@ -1040,7 +1045,7 @@ function deliver(to, result) {
 }
 /** Posts `message` to the page with the counters it mirrors. */
 const post = (message) =>
-  self.postMessage({
+  port.postMessage({
     ...message,
     writes,
     held: held.length,
@@ -1874,7 +1879,7 @@ async function write(data, turn) {
   }
 }
 
-self.onmessage = async ({ data }) => {
+port.onmessage = async ({ data }) => {
   switch (data.type) {
     case 'subscribe': {
       const { id: sub, name, args } = data
