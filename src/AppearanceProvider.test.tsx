@@ -241,6 +241,22 @@ describe('the Canvas background and its preview', () => {
     expect(fetched('original').length).toBe(1)
   })
 
+  it('goes on reading the preview while the canvas loads beside it', async () => {
+    await render(true)
+    await act(async () => store.deliver?.(preferences('daily')))
+    await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
+    await settle()
+    const preview = fetched('preview')[0] as Download
+    fetched('original')[0]?.answer()
+    await settle()
+    expect(background()).toMatch(/^blob:/)
+    expect(preview.signal?.aborted).toBe(false)
+    expect(fetched('preview')).toHaveLength(1)
+    preview.answer()
+    await settle()
+    expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
+  })
+
   it('shows the cached preview again on a second visit with no download', async () => {
     await render(true)
     await act(async () => store.deliver?.(preferences('daily')))

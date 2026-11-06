@@ -345,7 +345,9 @@ export function createBackgroundImageCache(
       if (disposed || !same(selected ?? null, selection)) throw new BackgroundChanged()
       if (signal?.aborted) throw new DOMException('Background request left', 'AbortError')
       const identity = `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`
-      if (!pending.has(identity)) fetchFor(url, quality, identity, new AbortController())
+      // a request every caller left is stopping; a new caller starts afresh
+      if (!pending.has(identity) || pending.get(identity)?.transfer.signal.aborted)
+        fetchFor(url, quality, identity, new AbortController())
       const entry = pending.get(identity) as NonNullable<ReturnType<typeof pending.get>>
       if (!signal) {
         // a caller without a signal never leaves, so the transfer runs on

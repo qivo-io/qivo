@@ -412,6 +412,32 @@ describe('a caller leaving a shared background request', () => {
     expect(f.fetchImage.mock.calls[1]?.[1]?.signal?.aborted).toBe(true)
   })
 
+  it('starts afresh for a caller who comes once every caller of a request left', async () => {
+    const f = fixture()
+    const answers = [deferred<Response>(), deferred<Response>()]
+    let n = 0
+    f.fetchImage.mockImplementation(
+      async () => await (answers[n++] as ReturnType<typeof deferred<Response>>).promise,
+    )
+    const cache = createBackgroundImageCache(scope, f.options)
+    cache.select(selection)
+    const left = new AbortController()
+    const first = cache.resolve('https://private.test/preview', selection, 'preview', left.signal)
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledOnce())
+    left.abort()
+    await expect(first).rejects.toThrow('Background request left')
+    // at once, before the stopped request has settled
+    const next = cache.resolve(
+      'https://private.test/preview',
+      selection,
+      'preview',
+      new AbortController().signal,
+    )
+    await vi.waitFor(() => expect(f.fetchImage).toHaveBeenCalledTimes(2))
+    answers[1]?.resolve(new Response(picture()))
+    expect(await next).toMatch(/^blob:/)
+  })
+
   it('rejects an already aborted caller at once, leaving the selection and its cache as they were', async () => {
     const f = fixture()
     const cache = createBackgroundImageCache(scope, f.options)

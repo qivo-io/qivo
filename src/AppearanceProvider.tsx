@@ -386,6 +386,31 @@ export function AppearanceProvider({
     : (dailyImage?.preview_url ?? null)
   const leaseEnd = customLease?.expires_at ?? null
   const canvasUrl = visible && visible.key === previewKey ? visible.url : null
+  // What the preview is now, or the derivative to read into the cache. Only
+  // the values a case uses go into it, so a canvas that loads on or a
+  // background status that changes never restarts a read of a derivative.
+  const plan: { read: string | null; status: BackgroundPreview['status']; url: string | null } =
+    selection === undefined
+      ? { read: null, status: 'loading', url: null }
+      : !previewKey
+        ? { read: null, status: 'unavailable', url: null }
+        : customPreview && privateFailed
+          ? { read: null, status: 'unavailable', url: null }
+          : customPreview && !customLease
+            ? // the lease of this version is on its way
+              { read: null, status: 'loading', url: null }
+            : derivative
+              ? { read: derivative, status: 'loading', url: null }
+              : // A weekly image without a derivative shows the image the
+                // canvas shows; Settings never fetches an original for one.
+                !customPreview && canvasUrl
+                ? { read: null, status: 'ready', url: canvasUrl }
+                : {
+                    read: null,
+                    status:
+                      !customPreview && backgroundStatus === 'loading' ? 'loading' : 'unavailable',
+                    url: null,
+                  }
   useEffect(() => {
     if (!previewWanted) {
       setPreview(NO_PREVIEW)
@@ -393,25 +418,12 @@ export function AppearanceProvider({
     }
     const show = (status: BackgroundPreview['status'], url: string | null) =>
       setPreview({ status, url, key: previewKey, previewVersion })
-    if (selection === undefined) return show('loading', null)
-    if (!previewKey) return show('unavailable', null)
-    if (customPreview) {
-      if (privateFailed) return show('unavailable', null)
-      // the lease of this version is on its way, or its renewal is due
-      if (!customLease || (leaseEnd !== null && leaseEnd <= Date.now()))
-        return show('loading', null)
-    }
-    if (!derivative) {
-      // A weekly image without a derivative shows the image the canvas
-      // shows; Settings never fetches an original for a preview.
-      if (!customPreview && canvasUrl) return show('ready', canvasUrl)
-      return show(
-        !customPreview && backgroundStatus === 'loading' ? 'loading' : 'unavailable',
-        null,
-      )
-    }
+    const derivativeUrl = plan.read
+    if (!derivativeUrl || !previewKey) return show(plan.status, plan.url)
+    // a custom lease whose renewal is due reads nothing with its URL
+    if (leaseEnd !== null && leaseEnd <= Date.now()) return show('loading', null)
     // the demo keeps no cache: the derivative itself
-    if (!cache) return show('ready', derivative)
+    if (!cache) return show('ready', derivativeUrl)
     const selected = { key: previewKey, previewVersion }
     const controller = new AbortController()
     let active = true
@@ -422,13 +434,13 @@ export function AppearanceProvider({
       if (restored?.key === previewKey && restored.previewVersion === previewVersion)
         return show('ready', restored.url)
       try {
-        const url = await cache.resolve(derivative, selected, 'preview', controller.signal)
+        const url = await cache.resolve(derivativeUrl, selected, 'preview', controller.signal)
         if (active) show('ready', url)
       } catch (error) {
         if (!active || controller.signal.aborted || error instanceof BackgroundChanged) return
         // Storage or fetch restrictions must not hide a preview the page
         // can load as a plain image: the derivative, never the original.
-        show('ready', derivative)
+        show('ready', derivativeUrl)
       }
     })()
     return () => {
@@ -439,16 +451,12 @@ export function AppearanceProvider({
   }, [
     previewWanted,
     previewAttempt,
-    selection,
     previewKey,
     previewVersion,
-    customPreview,
-    privateFailed,
-    customLease,
+    plan.read,
+    plan.status,
+    plan.url,
     leaseEnd,
-    derivative,
-    canvasUrl,
-    backgroundStatus,
     cache,
   ])
   useLayoutEffect(() => {
