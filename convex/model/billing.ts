@@ -1,6 +1,6 @@
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
-import { getBillableUsers, rosterCounts } from '../lib/billableUsers'
+import { getBillableUsers, type RosterCounts, rosterCounts } from '../lib/billableUsers'
 import {
   addCalendarMonths,
   billingEnabled,
@@ -151,11 +151,6 @@ export async function grantComplimentaryMonths(
   await syncOrgRemoval(ctx, orgId)
   return { until, plan_id: sub.plan_id }
 }
-
-/** The counters of Billing's Users section: who counts toward the bill,
- * the active profiles, the inactive ones and the active guests billed in
- * their home organization. */
-type RosterCounts = { billable: number; active: number; inactive: number; ownBilling: number }
 
 /* Billing's details of organization `orgId` around the counters `roster`:
  * the organization row, the subscription, any removal and the plan, read

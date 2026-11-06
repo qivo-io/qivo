@@ -117,6 +117,16 @@ export async function getBillableUsers(ctx: QueryCtx, orgId: string): Promise<Bi
   return { total: users.length, members, guests, users }
 }
 
+/** The counters of Billing's Users section: who counts toward the bill,
+ * the active profiles, the inactive ones and the active guests billed in
+ * their home organization. */
+export type RosterCounts = {
+  billable: number
+  active: number
+  inactive: number
+  ownBilling: number
+}
+
 /** The counters Billing's Users section shows, from one walk of the
  * organization's profiles, each classified by billingStanding: the people
  * and agents who count toward the bill (`billable`, getBillableUsers'
@@ -125,10 +135,7 @@ export async function getBillableUsers(ctx: QueryCtx, orgId: string): Promise<Bi
  * (`ownBilling`). It answers numbers only. At the design size it reads up
  * to 1,000 profiles, and each active guest's home check reads the
  * profiles of its email. */
-export async function rosterCounts(
-  ctx: QueryCtx,
-  orgId: string,
-): Promise<{ billable: number; active: number; inactive: number; ownBilling: number }> {
+export async function rosterCounts(ctx: QueryCtx, orgId: string): Promise<RosterCounts> {
   const counts = { billable: 0, active: 0, inactive: 0, ownBilling: 0 }
   const profiles = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', orgId))
   for await (const profile of profiles) {
