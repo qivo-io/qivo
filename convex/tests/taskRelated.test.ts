@@ -1388,6 +1388,40 @@ describe('access', () => {
     expect((await restList(fx, me, 'followers', task.id)).rows).toEqual([])
   })
 
+  it('stops an archived walk before a question about a project its room no longer holds', async () => {
+    // a request of 100 index ranges, of which the walk keeps 16 back
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    // an archived group stored before the rule of one level: one subtask
+    // in FW, and under it 30 more in 30 sub-projects of TBED, which only
+    // the walk meets, each a question of a few ranges
+    const [group] = await plantTasks(fx, 1, { archived_at: NOW })
+    const [kid] = await plantTasks(fx, 1, { parent_id: group.id, archived_at: NOW })
+    const subs = await plantSubProjects(fx, 30, { under: fx.meta })
+    for (const sub of subs)
+      await plantTasks(fx, 1, { parent_id: kid.id, archived_at: NOW, project_id: sub.id })
+    for (const details of [
+      await restDetails(fx, fx.agent, group.id),
+      await mcpDetails(fx, fx.agent, group.id),
+    ]) {
+      // the walk stopped short of the request's limits, so the group's
+      // facts say they are unknown and its first page still lists the kid
+      expect(details.progress).toEqual({ done: 0, total: 0, percent: 0, partial: true })
+      expect(ids(details.subtasks as Row[])).toEqual([kid.id])
+    }
+    // with room for every question the walk reads the group whole
+    Object.assign(TASK_READ_RESERVE, structuredClone(DEFAULTS.reserve))
+    const roomy = await setup()
+    const [whole] = await plantTasks(roomy, 1, { archived_at: NOW })
+    const [under] = await plantTasks(roomy, 1, { parent_id: whole.id, archived_at: NOW })
+    for (const sub of await plantSubProjects(roomy, 30, { under: roomy.meta }))
+      await plantTasks(roomy, 1, { parent_id: under.id, archived_at: NOW, project_id: sub.id })
+    expect((await restDetails(roomy, roomy.agent, whole.id)).progress).toMatchObject({
+      total: 30,
+      partial: false,
+    })
+  })
+
   it('reads the projects an archived group’s subtree and links name, never the organization’s', async () => {
     const fx = await setup()
     const [group] = await plantTasks(fx, 1, { archived_at: NOW })
