@@ -17,13 +17,15 @@ import { Icon } from './qivo'
 const DRAWN_HEIGHT = 340
 
 /* The placeholder's box, the size the image will be drawn at: its
-   recorded size within the column and DRAWN_HEIGHT, or before any size is
-   known a 4:3 box at the column's width, so the text around it barely
-   moves when it loads. */
+   recorded size within DRAWN_HEIGHT, or before any size is known a 4:3 box
+   DRAWN_HEIGHT tall, so the text around it barely moves when it loads.
+   .mdimgbox's max-width keeps it within the column. The width is in
+   pixels, since a percentage of the shrink-to-fit wrapper around it would
+   shrink it to its text. */
 function boxStyle(box: { width: number; height: number } | null): CSSProperties {
   const { width, height } = box ?? { width: 4, height: 3 }
   const drawn = box ? Math.min(width, (DRAWN_HEIGHT * width) / height) : (DRAWN_HEIGHT * 4) / 3
-  return { width: `min(100%, ${Math.round(drawn)}px)`, aspectRatio: `${width} / ${height}` }
+  return { width: `${Math.round(drawn)}px`, aspectRatio: `${width} / ${height}` }
 }
 
 type Props = {
