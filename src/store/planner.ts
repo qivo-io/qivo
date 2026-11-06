@@ -9220,9 +9220,10 @@ export const PLANNER = {
      so the caller is resolved to the profile they hold in the team's org
      (actorIn); with an explicit uid, that person must live there too. It
      reads the store's own memberships, which the Settings navigation's
-     Teams item and its org-teams check use until the roster stages give
-     them a server answer; a team's page decides from teams.get's
-     can_manage instead (panels/Settings.tsx). */
+     Teams item, its org-teams check and Settings › Teams' check whether a
+     seat leads any team (panels/settings/TeamSettings.tsx OrgTeamsPage)
+     use until the roster stages give them a server answer; a team's page
+     decides from teams.get's can_manage instead (panels/Settings.tsx). */
   isTeamLeader: (teamId: string, uid?: string) => {
     const t = PLANNER.teams.find((x) => x.id === teamId)
     const u = actorIn(t ? t.org : '', uid)
