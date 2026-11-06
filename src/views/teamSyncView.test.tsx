@@ -432,7 +432,7 @@ describe('the notes', () => {
   )
 
   it(
-    'shows Waiting on review and Later without their counts, and no one done on the rail, while a task has no model',
+    'shows Waiting on review and Later without their counts, and no one done on the rail, while a task has no model, busy through Try again',
     async () => {
       const BEN = 'ben'
       const { board, P } = await open(
@@ -481,6 +481,24 @@ describe('the notes', () => {
         // Aisha's only row is the one missing, which she has not reviewed
         expect(document.querySelector(`[data-sync-jump="${AISHA}"]`)).not.toBeNull()
         expect(done()).toHaveLength(0)
+        expect(page()?.hasAttribute('aria-busy')).toBe(false)
+        // Try again, whose answer the server holds back, keeps the meeting
+        // and its cards, busy until the answer arrives
+        board.server.sync.hold = true
+        await click(
+          [...document.querySelectorAll('[data-sync-incomplete] button')].find(
+            (b) => b.textContent === 'Try again',
+          ),
+        )
+        await settle()
+        expect(state()).toBe('incomplete')
+        expect(page()?.getAttribute('aria-busy')).toBe('true')
+        expect(card(P.syncTask('t1')?.id ?? '')).not.toBeNull()
+        board.server.sync.hold = false
+        await board.answer()
+        await settle()
+        expect(state()).toBe('incomplete')
+        expect(page()?.hasAttribute('aria-busy')).toBe(false)
         gone.mockRestore()
         await board.answer()
         await settle()

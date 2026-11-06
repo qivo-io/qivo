@@ -361,7 +361,8 @@ export function useSyncMeeting(scopeKey: string, now: number): SyncMeeting {
         : { state: 'unknown' },
   })
   if (stale) return meetingOf('stale', !current)
-  if (missing > 0) return meetingOf(stalled ? 'incomplete' : 'loading', !stalled)
+  // a kept incomplete meeting is busy while Try again's answer is on its way
+  if (missing > 0) return meetingOf(stalled ? 'incomplete' : 'loading', !stalled || !current)
   return meetingOf(current ? 'ok' : 'refreshing', !current)
 }
 
