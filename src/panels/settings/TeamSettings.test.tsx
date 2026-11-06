@@ -848,6 +848,31 @@ describe("a team's page", () => {
     expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
   })
 
+  it('keeps a member added again while their first add waits, since the second sends nothing', async () => {
+    await load()
+    await teamPage()
+    const add = async () => {
+      await click(find('[data-team-member-picker]'))
+      await click(document.querySelector('[data-team-member-choice="off"]'))
+      await click(find('[data-team-member-add]'))
+    }
+    await add()
+    // the picker asks the server, which has not added Oli yet, so it offers
+    // her again, and the store, which holds her membership, sends nothing
+    await add()
+    expect(requests.map((r) => [r.name, r.args.profile_id])).toEqual([['teams:addMember', 'off']])
+    expect(memberIds()).toEqual(['off', 'leo', 'bot', 'vic'])
+    expect(find('[data-settings-team-member="off"] [data-team-member-kept]').textContent).toBe(
+      'Added',
+    )
+    // the server reruns the list with the membership, then answers the add
+    server.snap.teamMembers.push({ team_id: 'crew', profile_id: 'off', is_leader: false })
+    await rerun()
+    await answer('teams:addMember', 'accept')
+    expect(document.querySelector('[data-team-member-kept]')).toBeNull()
+    expect(memberIds()).toEqual(['leo', 'off', 'bot', 'vic'])
+  })
+
   it('keeps an added member while the page is hidden, since the answers it holds are from before the add', async () => {
     await load()
     await teamPage()

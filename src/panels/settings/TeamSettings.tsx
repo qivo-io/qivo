@@ -541,15 +541,12 @@ function TeamFields({
   const addMember = (person: { id: string; name: string }) => {
     setAdded((m) => new Map(m).set(person.id, { name: person.name, saved: false }))
     void P.addTeamMember(teamId, person.id).then((saved) => {
-      // a refusal takes the store's membership back, which drops the row,
-      // and an add the store did not send keeps none
+      // a refusal, or an add the store did not send, leaves no membership
+      // in the store, which drops the row. A second add of someone whose
+      // first add waits answers false at once and keeps the row.
       setAdded((m) => {
         const entry = m.get(person.id)
-        if (!entry) return m
-        const next = new Map(m)
-        if (saved) next.set(person.id, { ...entry, saved })
-        else next.delete(person.id)
-        return next
+        return entry && saved ? new Map(m).set(person.id, { ...entry, saved: true }) : m
       })
     })
   }
