@@ -5,7 +5,8 @@
    time (projectSettings.projects and archived,
    convex/model/projectSettingsLists.ts), 25 a page through the shared
    list's page mode (lib/pagedList.ts usePagedPages), which Previous and
-   Next replace, with a search on the server, for a login with seats in
+   Next replace (components/pageFold.tsx and pageMoves.ts, which Deleted items shares),
+   with a search on the server, for a login with seats in
    several organizations after an Organization select, the home
    organization first. An opened project's live sub-projects
    (projectSettings.subProjects) load 25 at a time as the list's end

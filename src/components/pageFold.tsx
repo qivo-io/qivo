@@ -1,11 +1,12 @@
 /* The line that ends a list shown a page at a time (lib/pagedList.ts
    usePagedPages and pageEnd), with Previous and Next, and the focus that
    follows them. Settings › Projects and Archived projects
-   (panels/settings/ProjectLists.tsx) and Settings › Users
-   (panels/settings/UsersSettings.tsx) share them, each with its own data
-   attributes and words; a later page shown a page at a time takes them
-   from here, with the focus and state of pageMoves.ts. Nothing here reads
-   the store. */
+   (panels/settings/ProjectLists.tsx), Settings › Users
+   (panels/settings/UsersSettings.tsx) and Settings › Projects › Deleted
+   items (panels/settings/DeletedItems.tsx) share them, each with its own
+   data attributes and words; a later page shown a page at a time takes
+   them from here, with the focus and state of pageMoves.ts. Nothing here
+   reads the store. */
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'

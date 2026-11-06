@@ -39,7 +39,7 @@ import { Button } from '@/components/ui/button'
 import { HoverTooltip } from '@/components/ui/tooltip'
 import { LIMITS } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
-import { ProjectPicker } from '../../components/ProjectPicker'
+import { PickChips, ProjectPicker } from '../../components/ProjectPicker'
 import { Icon, StatusDot } from '../../components/qivo'
 import { archivedAtLabel, deletedAtFull, monthLabel } from '../../lib/deletedTime'
 import { limitSentence, overLimit } from '../../lib/fieldLimits'
@@ -49,7 +49,6 @@ import {
   PICK_MOST,
   type PickRules,
   type ProjectPick,
-  placeName,
   unpick,
 } from '../../lib/projectPick'
 import { useMobile } from '../../lib/useMobile'
@@ -121,9 +120,6 @@ const tasks = (n: number) => `${count(n)} archived task${n === 1 ? '' : 's'}`
     All projects of one (lib/projectPick.ts). */
 const PICK_RULES: PickRules = { many: true, most: PICK_MOST, oneOrg: true, all: 'org' }
 
-/** How many chosen projects show as chips before "Show all". */
-const CHIPS_SHOWN = 6
-
 /** The Archived tasks page, opened on `initialProject` once the server
     resolves it as a project the person can open, else on no choice, which
     says so until they choose. A row's open button calls `onOpenTask` with
@@ -180,7 +176,6 @@ export function ArchivedTasksPage({
   }, [])
   const scope: ArchivedScope | null = (pick && archivedScopeOf(pick)) ?? null
   const scopeKey = JSON.stringify(scope)
-  const [allChips, setAllChips] = useState(false)
   const [search, setSearch] = useState('')
   // the search the list answers, which is the trimmed text once typing
   // rests, and empty at once when the box is cleared
@@ -740,44 +735,16 @@ export function ArchivedTasksPage({
             className="h-control w-full max-w-none"
           />
         </div>
-        {picked.length > 0 && (
-          <div
-            data-archive-picks
-            className="archived-picks mt-2 flex flex-wrap items-center gap-1.5"
-          >
-            {(allChips ? picked : picked.slice(0, CHIPS_SHOWN)).map((p) => (
-              <span
-                key={p.id}
-                className="flex h-control-sm max-w-full min-w-0 items-center gap-1 rounded-pill border border-border bg-surface-1 pl-2.5 text-sm text-text-1"
-              >
-                <span className="min-w-0 truncate">{placeName(p)}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  data-archive-pick={p.id}
-                  aria-label={`Remove ${placeName(p)}`}
-                  className="size-6 shrink-0 rounded-pill"
-                  onClick={() => setPick((now) => unpick(now, p.id))}
-                >
-                  <Icon name="close" size={12} />
-                </Button>
-              </span>
-            ))}
-            {picked.length > CHIPS_SHOWN && (
-              <Button
-                type="button"
-                variant="quiet"
-                size="sm"
-                data-archive-picks-more
-                aria-expanded={allChips}
-                onClick={() => setAllChips((shown) => !shown)}
-              >
-                {allChips ? 'Show fewer' : `Show all ${picked.length}`}
-              </Button>
-            )}
-          </div>
-        )}
+        <PickChips
+          picked={picked}
+          onRemove={(id) => setPick((now) => unpick(now, id))}
+          hooks={{
+            row: 'data-archive-picks',
+            chip: 'data-archive-pick',
+            more: 'data-archive-picks-more',
+          }}
+          className="archived-picks mt-2"
+        />
         {countText && (
           <div
             role="status"
