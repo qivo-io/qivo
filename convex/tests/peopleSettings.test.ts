@@ -183,7 +183,10 @@ const ids = (rows: readonly { id: string }[]) => rows.map((r) => r.id)
 
 /* What `run` read in its own transaction, by Convex's counts. */
 type Read = { ranges: number; documents: number; bytes: number }
-async function measured<R>(t: T, run: (ctx: QueryCtx) => Promise<R>): Promise<{ out: R; read: Read }> {
+async function measured<R>(
+  t: T,
+  run: (ctx: QueryCtx) => Promise<R>,
+): Promise<{ out: R; read: Read }> {
   return await t.run(async (ctx) => {
     const before = await ctx.meta.getTransactionMetrics()
     let out: R
@@ -276,9 +279,9 @@ describe('settingsPage', () => {
     // agents are never admins, and have no login to read with
     expect(await readBeforeRefusal(fx.t, (ctx) => settingsPeopleOf(ctx, fx.agent, {}))).toBe(0)
     expect(await readBeforeRefusal(fx.t, (ctx) => settingsPeopleOf(ctx, fx.user, {}))).toBe(0)
-    expect(await readBeforeRefusal(fx.t, (ctx) => settingsPersonOf(ctx, fx.viewer, fx.admin.id))).toBe(
-      0,
-    )
+    expect(
+      await readBeforeRefusal(fx.t, (ctx) => settingsPersonOf(ctx, fx.viewer, fx.admin.id)),
+    ).toBe(0)
     expect(await readBeforeRefusal(fx.t, (ctx) => projectCreatorsOf(ctx, fx.user))).toBe(0)
     expect(await readBeforeRefusal(fx.t, (ctx) => agentKeysOf(ctx, fx.user, [fx.agent.id]))).toBe(0)
     // an admin of another organization reads only their own
@@ -436,7 +439,11 @@ describe('settingsPage', () => {
 
   it("names a guest's live projects of the organization, a lead before a grant and once, with more past a lowered cap", async () => {
     const fx = await setup()
-    const led = await plantProject(fx.t, { org_id: fx.org.id, name: 'Guest led', lead_id: fx.guest.id })
+    const led = await plantProject(fx.t, {
+      org_id: fx.org.id,
+      name: 'Guest led',
+      lead_id: fx.guest.id,
+    })
     const archived = await plantProject(fx.t, {
       org_id: fx.org.id,
       name: 'Old share',
@@ -446,7 +453,11 @@ describe('settingsPage', () => {
     const foreign = await plantProject(fx.t, { org_id: fx.otherOrg.id, name: 'Elsewhere share' })
     await fx.t.run(async (ctx) => {
       for (const p of [led, archived, foreign])
-        await ctx.db.insert('project_access', { project_id: p.id, profile_id: fx.guest.id, level: 'viewer' })
+        await ctx.db.insert('project_access', {
+          project_id: p.id,
+          profile_id: fx.guest.id,
+          level: 'viewer',
+        })
     })
     const guestRow = async () =>
       ready(await read.page(fx.t, fx.admin)).rows.find((r) => r.id === fx.guest.id)?.guest
@@ -463,17 +474,26 @@ describe('settingsPage', () => {
       more: true,
     })
     // a guest whose first grant is on an archived project, with more after it
-    const [second] = await plantPeople(fx.t, fx.org.id, [{ name: 'Second Guest', org_role: 'guest' }])
+    const [second] = await plantPeople(fx.t, fx.org.id, [
+      { name: 'Second Guest', org_role: 'guest' },
+    ])
     await fx.t.run(async (ctx) => {
       for (const p of [archived, fx.meta])
-        await ctx.db.insert('project_access', { project_id: p.id, profile_id: second.id, level: 'user' })
+        await ctx.db.insert('project_access', {
+          project_id: p.id,
+          profile_id: second.id,
+          level: 'user',
+        })
     })
     const rows = ready(await read.page(fx.t, fx.admin)).rows
     expect(rows.find((r) => r.id === second.id)?.guest).toEqual({ projects: [], more: true })
     GUEST_PROJECTS.shown = 10
     expect(
       ready(await read.page(fx.t, fx.admin)).rows.find((r) => r.id === second.id)?.guest,
-    ).toEqual({ projects: [{ id: fx.meta.id, name: 'Testbed platform', level: 'user' }], more: false })
+    ).toEqual({
+      projects: [{ id: fx.meta.id, name: 'Testbed platform', level: 'user' }],
+      more: false,
+    })
   })
 })
 
@@ -483,7 +503,9 @@ describe('get', () => {
   it('answers a person on no loaded page, and unavailable alike for every profile the organization lacks', async () => {
     const fx = await setup()
     await plantMany(fx.t, fx.org.id, 40)
-    const last = byKey(await profilesOf(fx.t, fx.org.id)).filter((p) => p.org_role !== 'guest').at(-1)
+    const last = byKey(await profilesOf(fx.t, fx.org.id))
+      .filter((p) => p.org_role !== 'guest')
+      .at(-1)
     if (!last) throw new Error('no people')
     expect(ids(ready(await read.page(fx.t, fx.admin)).rows)).not.toContain(last.id)
     const got = await read.get(fx.t, fx.admin, last.id)
@@ -507,8 +529,20 @@ describe('byIds', () => {
     const [off] = await plantPeople(fx.t, fx.org.id, [
       { name: 'Off Person', active: false, color: 'teal', initials: 'OP' },
     ])
-    const pending = await plantSeat(fx.t, { org_id: fx.org.id, name: 'Pat Pending', email: 'pat@example.com' })
-    const asked = [fx.admin.id, off.id, pending.id, fx.agent.id, fx.otherAdmin.id, uuid(), fx.admin.id]
+    const pending = await plantSeat(fx.t, {
+      org_id: fx.org.id,
+      name: 'Pat Pending',
+      email: 'pat@example.com',
+    })
+    const asked = [
+      fx.admin.id,
+      off.id,
+      pending.id,
+      fx.agent.id,
+      fx.otherAdmin.id,
+      uuid(),
+      fx.admin.id,
+    ]
     for (const who of [fx.guest, fx.viewer, fx.user]) {
       const { rows } = await read.byIds(fx.t, who, asked)
       expect(ids(rows).sort()).toEqual([fx.admin.id, off.id, pending.id, fx.agent.id].sort())
@@ -530,14 +564,30 @@ describe('byIds', () => {
     expect(row(fx.admin.id)).toMatchObject({ color: '#7a7ad0', initials: 'AD' })
     // 101 ids are refused on the raw length, also 101 copies of one id
     await expectRefusal(
-      read.byIds(fx.t, fx.admin, Array.from({ length: 101 }, () => uuid())),
+      read.byIds(
+        fx.t,
+        fx.admin,
+        Array.from({ length: 101 }, () => uuid()),
+      ),
       'bad_request',
     )
     await expectRefusal(
-      read.byIds(fx.t, fx.admin, Array.from({ length: 101 }, () => fx.admin.id)),
+      read.byIds(
+        fx.t,
+        fx.admin,
+        Array.from({ length: 101 }, () => fx.admin.id),
+      ),
       'bad_request',
     )
-    expect((await read.byIds(fx.t, fx.admin, Array.from({ length: 100 }, () => fx.admin.id))).rows).toHaveLength(1)
+    expect(
+      (
+        await read.byIds(
+          fx.t,
+          fx.admin,
+          Array.from({ length: 100 }, () => fx.admin.id),
+        )
+      ).rows,
+    ).toHaveLength(1)
   })
 })
 
@@ -573,7 +623,9 @@ const plantKeys = (
 describe('agentKeys', () => {
   it("answers an admin each agent's keys newest first, revoked ones included, and no hash", async () => {
     const fx = await setup()
-    const [scout] = await plantPeople(fx.t, fx.org.id, [{ name: 'Scout', kind: 'agent', auth_user_id: undefined }])
+    const [scout] = await plantPeople(fx.t, fx.org.id, [
+      { name: 'Scout', kind: 'agent', auth_user_id: undefined },
+    ])
     const [foreign] = await plantPeople(fx.t, fx.otherOrg.id, [
       { name: 'Far Bot', kind: 'agent', auth_user_id: undefined },
     ])
@@ -616,10 +668,22 @@ describe('agentKeys', () => {
       await expectRefusal(read.keys(fx.t, who, [fx.agent.id]), 'forbidden', /^admin only$/)
     await expectRefusal(read.keys(fx.t, fx.admin, []), 'bad_request')
     await expectRefusal(
-      read.keys(fx.t, fx.admin, Array.from({ length: LIST_BATCH + 1 }, () => fx.agent.id)),
+      read.keys(
+        fx.t,
+        fx.admin,
+        Array.from({ length: LIST_BATCH + 1 }, () => fx.agent.id),
+      ),
       'bad_request',
     )
-    expect((await read.keys(fx.t, fx.admin, Array.from({ length: LIST_BATCH }, () => fx.agent.id))).agents).toHaveLength(1)
+    expect(
+      (
+        await read.keys(
+          fx.t,
+          fx.admin,
+          Array.from({ length: LIST_BATCH }, () => fx.agent.id),
+        )
+      ).agents,
+    ).toHaveLength(1)
     vi.stubEnv('APP_MODE', 'demo')
     await expectRefusal(
       fx.t.run((ctx) => agentKeysOf(ctx, fx.admin, [fx.agent.id])),
@@ -631,8 +695,11 @@ describe('agentKeys', () => {
 /* -------------------------------------------------- 5. projectCreators */
 
 /* Sets the organization's project_creators. */
-const setCreators = (t: T, org: Doc<'organizations'>, project_creators: 'admins' | 'users' | 'selected') =>
-  t.run((ctx) => ctx.db.patch(org._id, { project_creators }))
+const setCreators = (
+  t: T,
+  org: Doc<'organizations'>,
+  project_creators: 'admins' | 'users' | 'selected',
+) => t.run((ctx) => ctx.db.patch(org._id, { project_creators }))
 
 describe('projectCreators', () => {
   it('names three or fewer in full, admins first and then standard users, each in name order', async () => {
@@ -694,7 +761,11 @@ describe('projectCreators', () => {
     NAMED_READ.documents = 4
     expect(await read.creators(fx.t, fx.admin)).toEqual({ state: 'unavailable' })
     for (const who of [fx.user, fx.viewer, fx.guest])
-      await expectRefusal(read.creators(fx.t, who), 'forbidden', new RegExp(`^${CREATORS_ADMINS_ONLY}$`))
+      await expectRefusal(
+        read.creators(fx.t, who),
+        'forbidden',
+        new RegExp(`^${CREATORS_ADMINS_ONLY}$`),
+      )
   })
 })
 
@@ -703,7 +774,9 @@ describe('projectCreators', () => {
 describe('the last-admin rule over the admins alone', () => {
   it('refuses demoting, deactivating and removing the last active admin, with the same sentences', async () => {
     const fx = await setup()
-    const [second] = await plantPeople(fx.t, fx.org.id, [{ name: 'Second Admin', org_role: 'admin' }])
+    const [second] = await plantPeople(fx.t, fx.org.id, [
+      { name: 'Second Admin', org_role: 'admin' },
+    ])
     // with two active admins, one may go
     await as(fx.t, fx.admin).mutation(api.profiles.deactivate, { org_id: fx.org.id, id: second.id })
     await expectRefusal(
@@ -833,7 +906,8 @@ describe('at the design size', () => {
     expect(users.read.documents).toBeLessThan(120)
     await setCreators(fx.t, fx.org, 'selected')
     await fx.t.run(async (ctx) => {
-      for (const p of [people[300], people[700]]) await ctx.db.patch(p._id, { can_create_projects: true })
+      for (const p of [people[300], people[700]])
+        await ctx.db.patch(p._id, { can_create_projects: true })
     })
     const selected = await creators()
     logged('projectCreators, Selected users with two selected, 1,000 people', selected.read, 3)
@@ -900,11 +974,19 @@ describe('at the design size', () => {
           created_at: NOW,
           window_key: newWindowKey(),
         })
-        await ctx.db.insert('project_access', { project_id: id, profile_id: fx.guest.id, level: 'viewer' })
+        await ctx.db.insert('project_access', {
+          project_id: id,
+          profile_id: fx.guest.id,
+          level: 'viewer',
+        })
       }
     })
     const page = await measured(fx.t, (ctx) => settingsPeopleOf(ctx, fx.admin, {}))
-    logged('settingsPage, a guest with 200 readable sub-projects', page.read, ready(page.out).rows.length)
+    logged(
+      'settingsPage, a guest with 200 readable sub-projects',
+      page.read,
+      ready(page.out).rows.length,
+    )
     const guest = ready(page.out).rows.find((r) => r.id === fx.guest.id)?.guest
     expect(guest?.projects).toHaveLength(GUEST_PROJECTS.shown)
     expect(guest?.more).toBe(true)
@@ -913,7 +995,9 @@ describe('at the design size', () => {
   it('checks the last admin over the two admins alone among 1,000 people, for update, deactivate and remove', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     await plantRoster(fx)
-    const [second] = await plantPeople(fx.t, fx.org.id, [{ name: 'Second Admin', org_role: 'admin' }])
+    const [second] = await plantPeople(fx.t, fx.org.id, [
+      { name: 'Second Admin', org_role: 'admin' },
+    ])
     const check = await measured(fx.t, (ctx) => assertNotLastAdmin(ctx, second, 'demote'))
     logged('assertNotLastAdmin, one of two admins among 1,000', check.read, 0)
     expect(check.read.ranges).toBe(1)

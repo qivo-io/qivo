@@ -611,9 +611,9 @@ describe('whoever caused an app invitation sees whether it went out', () => {
       'bad_request',
     )
     // without ids, every pending seat, as apps from before the argument read
-    expect(
-      seats(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id })),
-    ).toEqual([added.id, other.id, guest].sort())
+    expect(seats(await as(t, f.admin).query(api.invites.deliveries, { org_id: f.org.id }))).toEqual(
+      [added.id, other.id, guest].sort(),
+    )
   })
 
   it('tells a send in flight, a held-back one and an uncertain one apart, for the current address only', async () => {
