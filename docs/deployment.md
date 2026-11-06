@@ -1230,7 +1230,7 @@ the account names from this release, and no console reads them. This
 release becomes the backend's newest floor. There is no schema change, no
 backfill and no release step.
 
-From the release after v0.1.141, REST `GET /v1/tasks/{ref}`, the answers of
+From the release after v0.1.145, REST `GET /v1/tasks/{ref}`, the answers of
 `POST /v1/tasks` and `PATCH /v1/tasks/{ref}`, and MCP `get_task` answer at
 most 50 of each of `subtasks`, `links`, `followers` and `attachments`, each
 with its cursor, `subtasks_next_cursor`, `links_next_cursor`,
