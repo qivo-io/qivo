@@ -208,8 +208,8 @@ export function teamSettingsStandIn(
           return p !== undefined && p.org_role !== 'guest'
         }).length
   const matches = allWordsMatcher(nameKey(search))
-  // a list's arguments, checked where the server checks them
-  // (model/projectSettings.ts orderedListAsk): the search, then the cursors
+  // a list's search and then its cursors, checked where the server checks
+  // them (model/projectSettings.ts orderedListAsk)
   const open = (list: string, scope: readonly string[]) => {
     if (overText(LIMITS.search, search))
       throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })

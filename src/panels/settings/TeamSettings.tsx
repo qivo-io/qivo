@@ -79,8 +79,8 @@ type MemberChoice = Extract<TeamChoices, { state: 'ready' }>['rows'][number]
 
 const START: BatchAt = { after: null, through: null }
 
-/** A member a team's page added this visit: the name it chose them by, and
-    whether the server added them yet. */
+/** A member a team's page added this visit, with the name it chose them
+    by and whether the server added them yet. */
 type Added = { name: string; saved: boolean }
 
 /** The arguments of one batch, in a fixed key order with empty fields left
@@ -452,9 +452,10 @@ function TeamFields({
   const onUnsaved = useCallback((id: string, unsaved: boolean) => {
     setDrafts((s) => (unsaved === s.has(id) ? s : toggled(s, id, unsaved)))
   }, [])
-  // whether the list's answers are its current ones: the page shows, and
-  // showed at the last render too, as the list hears that it shows only
-  // after a render, and the list is not refreshing (as ProjectLists asks)
+  // whether the list's answers are current, as Settings › Projects asks
+  // (ProjectLists.tsx). The page shows, and showed at the last render too,
+  // since the list hears that it shows only after a render, and the list
+  // is not refreshing.
   const { visible } = useViewVisibility()
   const showed = useRef(visible)
   useEffect(() => {
