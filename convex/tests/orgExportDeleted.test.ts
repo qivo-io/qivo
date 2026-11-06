@@ -1229,6 +1229,9 @@ describe("the Deleted items section reads only the organization's own rows", () 
     expect(archive.readme).toMatch(/Being in this archive restores nothing/)
     expect(archive.readme).toMatch(/Records Qivo already deleted for good are not here/)
     expect(archive.readme).toMatch(/manifest.json counts such tasks\s+under\s+skipped/)
+    expect(archive.readme).toMatch(
+      /counts the items the archive holds completely and\s+partially \(deleted_items\.items\)/,
+    )
   })
 })
 
