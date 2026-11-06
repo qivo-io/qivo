@@ -2595,13 +2595,13 @@ function UnusedReason({
    reads nothing until the person expands it; it shows once Upcoming's first
    answer came, unless the answer Upcoming shows says the project holds no
    past milestone and the person made none here. An Upcoming that moved on
-   can no longer tell, so Past shows then. Each section reads 25 at first and 25 more for each Load
-   more, keeps at most 100 and then moves on with Show from the start, shows
-   its search box, which searches every milestone of its side on the
-   server, once it held more than one batch, and says when it loads,
-   refreshes, fails (Retry), is refused (the server's sentence) or could
-   check only part of the list, never calling such a section empty or
-   whole. Every section is a live read of the store, so the person's own
+   can no longer tell, so Past shows then. Each section reads 25 at first
+   and 25 more for each Load more, keeps at most 100 and then moves on with
+   Show from the start, shows its search box, which searches every
+   milestone of its side on the server, once it held more than one batch,
+   and says when it loads, refreshes, fails (Retry), is refused (the
+   server's sentence) or could check only part of the list, never calling
+   such a section empty or whole. Every section is a live read of the store, so the person's own
    writes paint over it at once and other people's arrive while it shows;
    every read stops while the tab or desktop window hides and reads again on
    return, and a new week starts both sections again. A row's Edit button
@@ -2625,11 +2625,10 @@ function UnusedReason({
    where that answer holds it, else above the sections, a past one
    included, without reading Past. Once the milestones showed, the loading
    line never returns, also where the store holds the project only later.
-   A milestone the server does not answer,
-   for every reason alike, or refuses, says so with Done only; a failure
-   offers Retry; and once it showed, an answer of null that the person's
-   own delete did not cause closes its editor and says it is no longer
-   here. The add row and the other milestones' Edit follow the answer's
+   A milestone the server does not answer, for every reason alike, or
+   refuses, says so with Done only; a failure offers Retry; and once it
+   showed, an answer of null that the person's own delete did not cause
+   closes its editor and says it is no longer here. The add row and the other milestones' Edit follow the answer's
    right while it names the milestone, and after the person's own delete
    the right it gave last, while the store's level allows it too; an
    answer of null for another reason gives none. An editor open when its
