@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../../components/ui/tooltip'
 import { answerLabelPages } from '../../store/labelPagesStandIn.setup'
+import { answerMilestones, isMilestoneRead } from '../../store/milestoneStandIn.setup'
 import { plannerFixture, type Snapshot } from '../../store/plannerFixture.setup'
 import {
   isProjectSettingsRead,
@@ -17,9 +18,11 @@ import {
    keeps it after a refusal; a success toast shows only for a saved change.
    I am the admin of Testbed Labs, with one team and the Luma Sensor
    project. Settings › Labels reads its rows from the label pages'
-   stand-in (store/labelPagesStandIn.setup.ts), and a project's page its
+   stand-in (store/labelPagesStandIn.setup.ts), a project's page its
    settings from the project settings stand-in
-   (store/projectSettingsStandIn.setup.ts). */
+   (store/projectSettingsStandIn.setup.ts), and the Milestones window the
+   milestone it opens on from the milestone stand-in
+   (store/milestoneStandIn.setup.ts). */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => ({
@@ -114,6 +117,7 @@ async function load(betaName = 'Beta', { crewName = 'Crew', labelName = '' } = {
     const name = getFunctionName(ref)
     if (isProjectSettingsRead(name)) return settings.watch(name, args, next, fail)
     if (name === 'labels:settingsPage') answerLabelPages(snap, args, next, fail)
+    else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
     else next(structuredClone(snap))
     return () => {}
   })
@@ -208,11 +212,18 @@ async function answer(name: string, outcome: 'accept' | 'refuse') {
 
 const toasts = () => toast.mock.calls.map(([message]) => message)
 
+/** Renders the Milestones window opened on `id` and waits for the
+    server's answer, which opens its editor. */
+async function openMilestone(id: string, onClose: () => void = vi.fn()) {
+  await render(() => <pages.modals.MilestoneModal init={{ id }} onClose={onClose} />)
+  for (let i = 0; i < 6 && !input('[data-milestone-editor]'); i++)
+    await act(async () => await new Promise((resolve) => setTimeout(resolve, 0)))
+}
+
 describe('a milestone saved with spaces around its name', () => {
   it('opens its editor with nothing unsaved', async () => {
     await load(' Beta ')
-    const onClose = vi.fn()
-    await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={onClose} />)
+    await openMilestone('beta')
     expect(input('[data-milestone-editor] input[aria-label="Name"]')?.value).toBe('Beta')
     const { hasUnsaved } = await import('../../lib/leaveGuard')
     expect(hasUnsaved()).toBe(false)
@@ -325,7 +336,7 @@ describe('the label picker in the task window', () => {
 
 describe('the milestone editor', () => {
   it('leaves another editor open when an earlier save is answered', async () => {
-    await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={vi.fn()} />)
+    await openMilestone('beta')
     await type(input('[data-milestone-editor] input[aria-label="Name"]'), 'Beta 2')
     await act(async () => button('Save')?.click())
     expect(input('[data-milestone-editor] input[aria-label="Name"]')?.readOnly).toBe(true)
@@ -504,8 +515,7 @@ describe('rename toasts', () => {
   })
 
   it('keeps a milestone editor open until the server saved the rename', async () => {
-    const onClose = vi.fn()
-    await render(() => <pages.modals.MilestoneModal init={{ id: 'beta' }} onClose={onClose} />)
+    await openMilestone('beta')
     const field = input('[data-milestone-editor] input[aria-label="Name"]')
     await type(field, 'Beta 2')
     await act(async () => button('Save')?.click())

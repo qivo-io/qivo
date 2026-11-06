@@ -9969,7 +9969,14 @@ export const PLANNER = {
     together(() => {
       const read = viewReads.get(slot)
       if (ask === null) {
-        if (read) watchView(slot, read.query, null, attempt, owner)
+        if (!read) return
+        const was = read.live !== null
+        watchView(slot, read.query, null, attempt, owner)
+        // the view shows its kept answer as refreshing from now on
+        if (was && read.live === null) {
+          viewReadsChanged = true
+          owe('view')
+        }
         return
       }
       if (ask.kind !== 'get' && new Set(ask.projects).size > MILESTONE_READS.projects) {
