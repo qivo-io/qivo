@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { itemUnreadStart, mergeSpine, spineWindow, unreadMark } from './spine'
+import {
+  type GapSide,
+  itemUnreadStart,
+  mergeSpine,
+  spineGap,
+  spineWindow,
+  splitSpine,
+  unreadMark,
+} from './spine'
 
 const c = (id: string, ts: number) => ({ id, ts, body: id })
 const e = (id: string, ts: number) => ({ id, ts, verb: 'moved' })
@@ -19,9 +27,23 @@ describe('mergeSpine', () => {
     expect(s[1].e).toBeDefined()
   })
 
-  it('breaks a timestamp tie by id, ascending — so a refetch cannot swap two rows', () => {
+  it('breaks a tie of comments by id, ascending — so a refetch cannot swap two rows', () => {
     expect(mergeSpine([c('c9', 500), c('c1', 500)], []).map((x) => x.id)).toEqual(['c1', 'c9'])
+  })
+
+  it('puts the changes of one instant before its comments, in the order they were written', () => {
+    // whatever the ids: a change's id sorting after the comment's changes nothing
     expect(mergeSpine([c('c5', 500)], [e('a1', 500)]).map((x) => x.id)).toEqual(['a1', 'c5'])
+    expect(mergeSpine([c('c5', 500)], [e('z1', 500)]).map((x) => x.id)).toEqual(['z1', 'c5'])
+    // three changes of one write keep the store's insertion order, not their ids'
+    const write = [e('e3', 500), e('e1', 500), e('e2', 500)]
+    expect(mergeSpine([c('c1', 400), c('c2', 500)], write).map((x) => x.id)).toEqual([
+      'c1',
+      'e3',
+      'e1',
+      'e2',
+      'c2',
+    ])
   })
 
   it('handles empty inputs', () => {
@@ -143,5 +165,94 @@ describe('itemUnreadStart', () => {
     const rows = [{ ts: Date.parse(AT) - 1 }, { ts: Date.parse(AT) }, { ts: Date.parse(AT) + 1 }]
     expect(unreadMark(rows, ts)).toEqual({ place: 'mark', index: 1 })
     expect(unreadMark(rows.slice(0, 1), ts)).toEqual({ place: 'tail', index: -1 })
+  })
+})
+
+describe('spineGap and splitSpine', () => {
+  const side = (end: number, below: number, above: string[]): GapSide => ({
+    end,
+    below,
+    above: new Set(above),
+  })
+  const ids = (items: readonly { id: string }[]) => items.map((x) => x.id)
+
+  it('places the newer row between the rows kept above and below a comment gap', () => {
+    const comments = side(300, 700, ['c1', 'c3'])
+    const gap = spineGap(comments, null)
+    expect(gap).toEqual({ end: 300, below: 700, load: { comments: true, events: false } })
+    const spine = mergeSpine([c('c1', 100), c('c3', 300), c('c7', 700), c('c8', 800)], [])
+    const parts = splitSpine(spine, gap, { comments, events: null })
+    expect(ids(parts.above)).toEqual(['c1', 'c3'])
+    expect(ids(parts.below)).toEqual(['c7', 'c8'])
+    // no gap: every row above, nothing below
+    expect(spineGap(null, null)).toBeNull()
+    expect(ids(splitSpine(spine, null, { comments: null, events: null }).above)).toHaveLength(4)
+  })
+
+  it('hides the rows strictly between the two kinds’ gaps and keeps those at both instants', () => {
+    // comments kept to 300 and from 700; changes kept to 400 and from 600
+    const comments = side(300, 700, ['c1', 'c3'])
+    const events = side(400, 600, ['e1', 'e3', 'e4'])
+    const gap = spineGap(comments, events)
+    // the earliest end and the latest below, and only the comments load
+    expect(gap).toEqual({ end: 300, below: 700, load: { comments: true, events: false } })
+    const spine = mergeSpine(
+      [c('c1', 100), c('c3', 300), c('c7', 700), c('c8', 800)],
+      [e('e1', 100), e('e3', 300), e('e4', 400), e('e6', 600), e('e7', 700)],
+    )
+    const parts = splitSpine(spine, gap, { comments, events })
+    // e4 and e6 sit beside the comments' gap: held, but hidden
+    expect(ids(parts.above)).toEqual(['e1', 'c1', 'e3', 'c3'])
+    expect(ids(parts.below)).toEqual(['e7', 'c7', 'c8'])
+    // a gap in one kind hides the other kind's rows inside it
+    const lone = spineGap(comments, null)
+    const only = splitSpine(spine, lone, { comments, events: null })
+    expect(ids(only.above)).toEqual(['e1', 'c1', 'e3', 'c3'])
+    expect(ids(only.below)).toEqual(['e7', 'c7', 'c8'])
+    // and both kinds at the gap's start load when their ends meet
+    expect(spineGap(side(300, 700, []), side(300, 600, []))?.load).toEqual({
+      comments: true,
+      events: true,
+    })
+  })
+
+  it('keeps the comment in this window’s editor whatever the gap hides', () => {
+    const comments = side(300, 700, ['c1', 'c3'])
+    const spine = mergeSpine([c('c1', 100), c('c3', 300), c('c5', 500), c('c7', 700)], [])
+    const gap = spineGap(comments, null)
+    expect(ids(splitSpine(spine, gap, { comments, events: null }).above)).toEqual(['c1', 'c3'])
+    expect(ids(splitSpine(spine, gap, { comments, events: null }, 'c5').above)).toEqual([
+      'c1',
+      'c3',
+      'c5',
+    ])
+  })
+
+  it('splits by run when a seeded thread’s times run past the rows below', () => {
+    // c4 is above the gap by thread order, but its time is after c7's
+    const comments = side(900, 700, ['c1', 'c4'])
+    const spine = mergeSpine([c('c1', 100), c('c4', 900), c('c7', 700), c('c8', 800)], [])
+    const parts = splitSpine(spine, spineGap(comments, null), { comments, events: null })
+    expect(ids(parts.above)).toEqual(['c1', 'c4'])
+    expect(ids(parts.below)).toEqual(['c7', 'c8'])
+  })
+
+  it('places the New line under the newer row, above the first row after the gap', () => {
+    const comments = side(300, 700, ['c1', 'c3'])
+    const spine = mergeSpine([c('c1', 100), c('c3', 300), c('c7', 700), c('c8', 800)], [])
+    const parts = splitSpine(spine, spineGap(comments, null), { comments, events: null })
+    const shown = [...parts.above, ...parts.below]
+    // the unread part starts among released rows, at 500
+    expect(unreadMark(shown, 500)).toEqual({ place: 'mark', index: parts.above.length })
+  })
+
+  it('shows no newer row for a gap wholly above where All starts', () => {
+    // the history's start is not loaded and its oldest change is at 800
+    const from = spineWindow(
+      { rows: [{ ts: 100 }, { ts: 300 }, { ts: 700 }], whole: false },
+      { rows: [{ ts: 800 }], whole: false },
+    )
+    const gap = spineGap(side(300, 700, []), null)
+    expect(gap !== null && gap.below <= from.start).toBe(true)
   })
 })

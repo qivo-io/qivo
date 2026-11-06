@@ -370,7 +370,8 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await press('Show earlier activity')
     await answer({ comments: range(1, 20), earlier: false })
     const rows = thread()
-    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) + 1)
+    // at one instant the change comes before the comment (lib/spine.ts mergeSpine)
+    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 10')) - 1)
   })
 
   it('with All, hides comments older than the oldest loaded change and pages the history', async () => {
@@ -384,7 +385,9 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     await showAll()
     await deliverHistory({ events: newest, earlier: true })
     expect(thread()[0]).toBe('[Show earlier activity]')
-    expect(thread()[1]).toContain('Check 30')
+    // change #30 and comment #30 share an instant, and the change comes first
+    expect(thread()[1]).toBe('event')
+    expect(thread()[2]).toContain('Check 30')
     await press('Show earlier activity')
     expect(histories.map((h) => h.before)).toEqual(['event-30'])
     expect(thread()[0]).toBe('[Loading earlier activity…]')
@@ -395,7 +398,7 @@ describe('earlier comments in the task window', { timeout: 20_000 }, () => {
     expect(control()).toBeNull()
     expect(rows.filter((r) => r === 'event')).toHaveLength(12)
     expect(rows[0]).toContain('Check 1')
-    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 5')) + 1)
+    expect(rows.indexOf('event')).toBe(rows.findIndex((r) => r.includes('Check 5')) - 1)
     expect(pages).toEqual([])
   })
 

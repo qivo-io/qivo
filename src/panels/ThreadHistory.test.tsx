@@ -235,7 +235,8 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     // the comments are not shown as the whole record while the history loads
     expect(thread()).toEqual(['Loading activity…'])
     await history([change(2)])
-    expect(thread()).toEqual(['Check 1', 'Check 2', 'event', 'Check 3'])
+    // at one instant the change comes before the comment (lib/spine.ts mergeSpine)
+    expect(thread()).toEqual(['Check 1', 'event', 'Check 2', 'Check 3'])
     await pick('Comments')
     expect(open('snapshot:threadHistory')).toEqual([])
     expect(thread()).toEqual(['Check 1', 'Check 2', 'Check 3'])
@@ -272,13 +273,14 @@ describe('the task window under Comments and All', { timeout: 20_000 }, () => {
     expect(thread()).toEqual(['Loading activity…'])
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
     await history([change(2)])
-    expect(thread()).toEqual(['Check 1', 'Check 2', 'event', 'Check 3'])
+    // at one instant the change comes before the comment (lib/spine.ts mergeSpine)
+    expect(thread()).toEqual(['Check 1', 'event', 'Check 2', 'Check 3'])
     // a failure after the history arrived keeps it, and says the newest failed
     await act(async () => one('snapshot:threadHistory').fail(new Error('Server Error')))
     expect(thread()).toEqual([
       'Check 1',
-      'Check 2',
       'event',
+      'Check 2',
       'Check 3',
       "Couldn't load the latest activity.Retry",
     ])
@@ -465,7 +467,7 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     await pick('All', dialog)
     expect(open('snapshot:threadHistory')).toHaveLength(1)
     await history([change(2)])
-    expect(shown(dialog)).toEqual(['Check 1', 'Check 2', 'event', 'Check 3'])
+    expect(shown(dialog)).toEqual(['Check 1', 'event', 'Check 2', 'Check 3'])
     // the pane, under Comments, shows the comments alone
     expect(shown(pane())).toEqual(['Check 1', 'Check 2', 'Check 3'])
     // the pane on All too shares the one subscription
