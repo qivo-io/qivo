@@ -55,9 +55,9 @@
  *   NOTIFY.keep_ms. Within that minute before a summary its records refuse
  *   what it announced, so a notice stored late with an earlier time that
  *   the summary never saw is still granted. Past the scope's rate window
- *   it grants no more and answers `limited`. `through` moves
- *   the scope's checkpoint, and in 'recent' names the caller's session as
- *   the one that moved it. It reads the account row, in 'recent' the
+ *   it grants no more and answers `limited`. `through` moves the scope's
+ *   checkpoint, and in 'recent' names the caller's session as the one that
+ *   moved it. It reads the account row, in 'recent' the
  *   session rows up to the target, and one or two record ranges an event,
  *   and writes a record a grant and the account row ('recent') or the
  *   caller's row ('all'). It reads no message or item. The keys and times
@@ -155,9 +155,9 @@ type Checkpoint = Partial<
   >
 >
 
-/* Writes `patch` to the scope's row: the caller's session row in 'all', the
- * account row in 'recent', which it adds when the login has none. On the
- * account row a move of covered_at also names the caller's session in
+/* Writes `patch` to the scope's row, the caller's session row in 'all' or
+ * the account row in 'recent', which it adds when the login has none. On
+ * the account row a move of covered_at also names the caller's session in
  * covered_by, which claimAlerts compares with the next target's. */
 async function saveHolder(
   ctx: MutationCtx & { authUserId: string; sessionId: string },

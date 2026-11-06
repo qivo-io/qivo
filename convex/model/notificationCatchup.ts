@@ -65,10 +65,10 @@ async function newestUnread(ctx: QueryCtx, item: Doc<'inbox_items'>): Promise<Ev
   return { key: newest.id, at: newest.created_at }
 }
 
-/* The keys of item `item`'s unread events after `from`: its unread
- * messages after it, newest first, at most ITEM_UNREAD_CAP of them, the
- * most an item keeps unread (model/messages.ts), in one index read, and its
- * wake when that is after `from`. */
+/* The keys of item `item`'s unread events after `from`. These are its
+ * unread messages after it, newest first and at most ITEM_UNREAD_CAP of
+ * them, the most an item keeps unread (model/messages.ts), read in one
+ * index range, and its wake when that is after `from`. */
 async function unreadKeysAfter(
   ctx: QueryCtx,
   item: Doc<'inbox_items'>,
@@ -119,7 +119,7 @@ export type Missed = { state: 'found' | 'none' | 'stopped'; keys: string[] }
  *
  * The first eligible item decides `found`. The read then goes on only
  * through items newer than `recent`, in every seat, so `keys` holds every
- * unread event of that last stretch of each eligible item: its unread
+ * unread event of that last stretch of each eligible item, its unread
  * messages and its wake there, not only the newest. Marking only the
  * newest read then leaves no older one unrecorded, which a later catch-up
  * reading back over the stretch would count again. A key may already hold

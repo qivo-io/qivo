@@ -834,8 +834,8 @@ describe('mode changes', () => {
     clock(2.5 + NOTIFY.keep_ms / MINUTE + 1)
     await t.mutation(internal.notifications.expire, {})
     expect(await records(t)).toEqual([])
-    // back to 'all': the account's checkpoint, past the session's own, is
-    // its floor, so the 'recent' period is not summarized again
+    // back to 'all', where the account's checkpoint, past the session's
+    // own, is its floor, so the 'recent' period is not summarized again
     await setDelivery(s, 'all')
     expect(await accountOf(t, s.authUserId)).toMatchObject({ all_from: e.at })
     expect((await rowOf(t, s))?.covered_at).toBe(START)
@@ -1063,7 +1063,8 @@ describe('claimSummary', () => {
     clock(2)
     stop()
     expect(await resume(s)).toEqual({ state: 'unchecked' })
-    // new activity in both seats: the first still stops, the second finds
+    // new activity in both seats, where the first still stops and the
+    // second finds it
     Object.assign(OWN_READS, structuredClone(DEFAULT_OWN_READS))
     await news(me, 3)
     await news(second, 3)
