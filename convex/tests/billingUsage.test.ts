@@ -91,9 +91,12 @@ const orgBuckets = async (t: T) => {
 }
 /* [period_start, calls] for every bucket, sorted. */
 const buckets = async (t: T) => (await orgBuckets(t)).map(([, period, calls]) => [period, calls])
-/* Billing's usage (billing.currentUsage) at the mocked clock. */
+/* Billing's usage figures (billing.usageFigures) at the mocked clock. */
 const report = (t: T, f: Pick<OrgFixture, 'admin' | 'org'>) =>
-  as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
+  as(t, f.admin).query(api.billing.usageFigures, { org_id: f.org.id })
+/* Billing's first batch of API calls by account for bucket `period`. */
+const accountsIn = (t: T, f: Pick<OrgFixture, 'admin' | 'org'>, period: string) =>
+  as(t, f.admin).query(api.billing.apiAccounts, { org_id: f.org.id, period })
 const at = (iso: string) => vi.mocked(Date.now).mockReturnValue(Date.parse(iso))
 const patchSub = (
   t: T,
@@ -213,10 +216,25 @@ describe('pooled API usage', () => {
       api_overage_cents: 200,
       waived: false,
     })
-    // each account's total over its credentials, and no credential list
+    // each account's total over its credentials, most calls first, and no
+    // credential list
+    expect(await accountsIn(t, f, shown.period_key)).toEqual({
+      state: 'ready',
+      rows: [
+        { profile_id: f.agent.id, name: f.agent.name, removed: false, calls: 4 },
+        { profile_id: f.user.id, name: f.user.name, removed: false, calls: 3 },
+      ],
+      next: null,
+      stopped: false,
+    })
+    // the deprecated billing.currentUsage still sums the rows and answers
+    // every account, for tabs loaded before the paged list; the release
+    // that removes it removes this pin
+    const deprecated = await as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
+    expect(deprecated.calls).toBe(7)
     const byProfile = (a: { profile_id: string }, b: { profile_id: string }) =>
       a.profile_id.localeCompare(b.profile_id)
-    expect([...shown.users].sort(byProfile)).toEqual(
+    expect([...deprecated.users].sort(byProfile)).toEqual(
       [
         { profile_id: f.agent.id, name: f.agent.name, calls: 4 },
         { profile_id: f.user.id, name: f.user.name, calls: 3 },
@@ -368,7 +386,9 @@ describe('usage buckets without a live paid period', () => {
       period_end: '2026-10-31T00:00:00.000Z',
       calls: 2,
     })
-    expect(october.users.map((user) => user.profile_id).sort()).toEqual(
+    const accounts = await accountsIn(t, f, october.period_key)
+    if (accounts.state !== 'ready') throw new Error('the accounts are being counted')
+    expect(accounts.rows.map((row) => row.profile_id).sort()).toEqual(
       [f.agent.id, f.user.id].sort(),
     )
     expect(await events(t)).toHaveLength(0)

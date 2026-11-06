@@ -538,6 +538,11 @@ describe('demo lifetime and capabilities', () => {
       () => a.as.query(api.apiAccess.people, { org_id: a.demo.orgId! }),
       () => a.as.query(api.billing.currentUsage, { org_id: a.demo.orgId! }),
       () => a.as.query(api.billing.storageProjects, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.summary, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.details, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.usageFigures, { org_id: a.demo.orgId! }),
+      () => a.as.query(api.billing.apiAccounts, { org_id: a.demo.orgId!, period: 'month:2026-01' }),
+      () => a.as.query(api.billing.accountList, { org_id: a.demo.orgId!, kind: 'billable' }),
     ])
       await expectRefusal(read(), 'forbidden', /regular workspace/)
     await expectRefusal(

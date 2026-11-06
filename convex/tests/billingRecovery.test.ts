@@ -2,7 +2,7 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import { BILLING_READ_ONLY, subscriptionFor } from '../lib/billingAccess'
-import { billingSummary, enrollOrganization } from '../model/billing'
+import { billingDetailsOf, enrollOrganization } from '../model/billing'
 import { deleteOrgDeep, removeProfile } from '../model/cascade'
 import { as, expectRefusal, newT, plantIssue, uuid, withOrg } from './helpers.setup'
 
@@ -281,7 +281,7 @@ describe('billing recovery', () => {
       checkout_lock_until: EXPIRED,
     }
     await t.run((ctx) => ctx.db.patch(sub._id, abandoned))
-    expect(await t.run((ctx) => billingSummary(ctx, f.org.id))).toMatchObject({
+    expect(await t.run((ctx) => billingDetailsOf(ctx, f.org.id))).toMatchObject({
       can_assign_plan: true,
       can_grant_complimentary: true,
     })
@@ -317,7 +317,7 @@ describe('billing recovery', () => {
           ...state,
         }),
       )
-      expect(await t.run((ctx) => billingSummary(ctx, f.org.id))).toMatchObject({
+      expect(await t.run((ctx) => billingDetailsOf(ctx, f.org.id))).toMatchObject({
         can_assign_plan: false,
         can_grant_complimentary: false,
       })
@@ -352,7 +352,7 @@ describe('billing recovery', () => {
       /before checkout/,
     )
     await t.mutation(clearEndedCheckout, { org_id: f.org.id, checkout_id: checkoutId })
-    expect(await t.run((ctx) => billingSummary(ctx, f.org.id))).toMatchObject({
+    expect(await t.run((ctx) => billingDetailsOf(ctx, f.org.id))).toMatchObject({
       can_assign_plan: true,
       can_grant_complimentary: true,
     })
