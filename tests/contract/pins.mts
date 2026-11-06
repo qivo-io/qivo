@@ -6,5 +6,5 @@
  * If a tool's wire bytes ever change deliberately, regenerate BOTH pins there
  * first — this file only mirrors them. */
 
-export const SHA_TOOLS_LEGACY = 'e045f1e5211302f543c3e351048512ea7cd39da5e63a74c664ecc2e7f1b97e00'
-export const SHA_TOOLS_MODERN = '6d3673152eb89944636c3e2acbe352db09c025e18557016d3a48d00a4e02d3c2'
+export const SHA_TOOLS_LEGACY = '3c13be6ddfd22a3224bb3875a74c680e97bbbb626c3d6b312e3e9b7bfaa7165a'
+export const SHA_TOOLS_MODERN = '42eb02aa3d15db0d57d1321576c938a2f2e0033fa27b7dd57b5ee1766c8bea93'
