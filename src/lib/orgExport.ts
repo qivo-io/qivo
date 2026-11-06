@@ -47,7 +47,7 @@ type PendingFile = {
   size_bytes?: number
 }
 
-// Format 2's own list. The server job's format 3 (convex/lib/orgExport.ts
+// Format 2's own list. The server job's archive (convex/lib/orgExport.ts
 // JOB_EXCLUSIONS) leaves uploaded files out and says so instead.
 const EXCLUSIONS = [
   ...COMMON_EXCLUSIONS,
