@@ -180,8 +180,9 @@ When the sub-project is restored, the task becomes a group again and loses
 its own estimate, as when it gains a subtask.
 
 If you can access only a sub-project, the archived list shows its archived
-project too, with that sub-project under it. Restoring a sub-project also
-restores its archived project, so it needs Lead access to that project.
+project too, whose **Show sub-projects** lists that sub-project, and a search
+for the sub-project finds it inside that project. Restoring a sub-project
+also restores its archived project, so it needs Lead access to that project.
 Otherwise, ask the project's lead to restore the project.
 
 ## Deleting a project
