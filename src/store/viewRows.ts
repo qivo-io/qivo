@@ -1,7 +1,7 @@
 /* The task rows the open views' answers bring (store/planner.ts view
-   reads: the Board's tasks.board answer, P.watchBoard, and each batch of the
-   Overview's two lists, P.watchOverview), and the view models shaped from
-   them.
+   reads: the Board's tasks.board answer, P.watchBoard, each batch of the
+   Overview's two lists, P.watchOverview, and Team sync's teamSync.agenda
+   answer, P.watchSync), and the view models shaped from them.
 
    - A view's read is its row source: the whole answer of one live query,
      which names each task with its row and a group with its facts

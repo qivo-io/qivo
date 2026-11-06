@@ -325,14 +325,6 @@ describe('the readers of every task', () => {
       reason: 'the Resources strip mounts inside the Roadmap, behind its ask',
       reads: ['ResourceStrip: P.issues'],
     },
-    'src/views/TeamSync.tsx': {
-      reason: 'Team sync waits for every task and asks (App’s TasksLoadingView, team_sync)',
-      reads: ['PersonColumns: P.issues', 'walkOf: P.issues'],
-    },
-    'src/views/teamSync/TeamOpening.tsx': {
-      reason: 'Team sync’s opening mounts inside Team sync, behind its ask',
-      reads: ['TeamOpening: P.issues'],
-    },
   }
   const FUNCTION_TYPES = new Set([
     'FunctionDeclaration',

@@ -87,7 +87,7 @@ export const OVERVIEW_BATCH = 10
     answers a position to split at (OVERVIEW.split). */
 export const OVERVIEW_SPLIT = 20
 /** How many local weeks the clock sends: this one and the 52 before
-    (convex/lib/overview.ts WEEK_STARTS). */
+    (convex/lib/viewLoads.ts WEEK_STARTS). */
 export const OVERVIEW_WEEKS = 53
 /** The rows one list keeps on screen at most. Past it, Load more drops the
     list's first batches. */
@@ -110,7 +110,7 @@ export type HealthTable = { sort: HealthSort; dir: 'asc' | 'desc'; search: strin
 export type HealthAsk = HealthTable & { limit: number }
 
 /** The client's day and weeks the queries are judged by
-    (convex/lib/overview.ts clockOf). */
+    (convex/lib/viewLoads.ts clockOf). */
 export type OverviewClock = {
   day: string
   week: string

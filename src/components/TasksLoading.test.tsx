@@ -117,11 +117,11 @@ describe('a page that needs every task', () => {
     await act(async () =>
       root.render(
         <TooltipProvider>
-          <TasksLoadingView what="Team sync" reason="team_sync" />
+          <TasksLoadingView what="The roadmap" reason="roadmap" />
         </TooltipProvider>,
       ),
     )
-    expect(store.askTasks).toHaveBeenCalledWith('team_sync')
+    expect(store.askTasks).toHaveBeenCalledWith('roadmap')
     const alert = container.querySelector('[role="alert"]')
     expect(alert?.textContent).toContain('Changes you make show as you made them')
     expect(container.textContent).toContain('Every task did not arrive in time.')
@@ -136,7 +136,7 @@ describe('a page that needs every task', () => {
     await act(async () =>
       root.render(
         <TooltipProvider>
-          <TasksLoadingView what="Team sync" reason="team_sync" />
+          <TasksLoadingView what="The roadmap" reason="roadmap" />
         </TooltipProvider>,
       ),
     )

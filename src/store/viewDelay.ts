@@ -6,7 +6,8 @@
    (store/ownerLoadCache.ts), by the rules the task index judges the
    workspace's tasks with (store/taskIndex.ts judge). Both go through one
    judge (judgeDelay), so a window over a Board card shows the card's
-   verdict.
+   verdict. An organization Viewer's Team sync judges the rows its agenda
+   left unknown with it too (store/planner.ts P.syncViewerVerdicts).
 
    The owner's load is the cache's spans, with the span of every task this
    person's rows hold, in the workspace or in a view, taken from those rows

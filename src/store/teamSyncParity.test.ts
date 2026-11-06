@@ -496,7 +496,7 @@ describe('the rules that must hold', () => {
     // stand-in answer unavailable, and a stand-in that fell back would
     // answer All projects' meeting, which must fail
     const unknown = uuid()
-    expect(P.rules.resolveSyncScope({ kind: 'team', id: unknown }, P.oracle.worldOf())).toEqual({
+    expect(P.oracle.resolveSyncScope({ kind: 'team', id: unknown }, P.oracle.worldOf())).toEqual({
       kind: 'all',
     })
     const refused = await agendaOf(t, P, subject, { kind: 'team', team_id: unknown })

@@ -513,6 +513,31 @@ export const recipes: Recipe[] = [
     },
     act: (P) => P.updateIssue('QN-90', { assignee: PAT }),
   },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateViewTask',
+    what: "a Remaining on a task only a view's answer brings, as Team sync's card writes it",
+    pause: 'P',
+    view: {
+      slot: 'board:desktop',
+      answer: (args) =>
+        viewAnswer(
+          args ? { remaining_hours: 6, remaining_set_at: SERVER, updated_at: SERVER } : {},
+        ),
+    },
+    act: (P) => P.updateIssue('QN-90', { remaining: 6 }),
+  },
+  {
+    mutation: 'issues:update',
+    mutator: 'updateViewTask',
+    what: "a Pause on a task only a view's answer brings, as Team sync's card writes it",
+    pause: 'P',
+    view: {
+      slot: 'board:desktop',
+      answer: (args) => viewAnswer(args ? { paused: true, updated_at: SERVER } : {}),
+    },
+    act: (P) => P.updateIssue('QN-90', { paused: true }),
+  },
   /* --- a task the window shows from its own answer ------------------- */
   {
     mutation: 'issues:update',

@@ -12,6 +12,7 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import type { BoardCellGroup } from '@/lib/boardGroups'
 import { clampedTitleTip } from '@/lib/clampedTitle'
 import { type StaticControls, StaticControlsContext, useLiveControls } from '@/lib/liveControls'
+import type { SyncVerdict } from '@/lib/teamSync'
 import { type IssueVM, P, type ProjectPlace } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { parentPlaceOf } from './board/cardEstimate'
@@ -28,13 +29,26 @@ type CardActions = {
 /** Delay is still a per-task exception, including inside a sibling group.
  * A neutral band names the state and ends in a block of the roadmap's
  * yellow or red carrying a clock (tokens.css, deviation #312), the band's
- * ::after (styles/glyphs.css), so a card's banner is one element. The Team
- * sync page draws the same banner on its rows. A task only the Board's
- * answer brings whose owner's load could not be read gets the same band,
- * muted, saying Delay unknown (P.delayUnknown), so it never reads as on
- * track; while that load is on its way it shows nothing. */
-function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
-  if (P.delayUnknown(it))
+ * ::after (styles/glyphs.css), so a card's banner is one element. A task
+ * only the Board's answer brings whose owner's load could not be read gets
+ * the same band, muted, saying Delay unknown (P.delayUnknown), so it never
+ * reads as on track; while that load is on its way it shows nothing. The
+ * Team sync page draws the same banner on its rows from the verdict its
+ * agenda gives (`verdict`): given, it alone decides, and null draws
+ * nothing whatever the store would say; left out, the banner reads the
+ * store, as on the Board. */
+function DelayBanner({ it, id, verdict }: { it: IssueVM; id?: string; verdict?: SyncVerdict }) {
+  const shown: SyncVerdict =
+    verdict !== undefined
+      ? verdict
+      : P.delayUnknown(it)
+        ? 'unknown'
+        : !P.delayColor(it)
+          ? null
+          : P.delayOf(it)?.status === 'behind'
+            ? 'behind'
+            : 'late'
+  if (shown === 'unknown')
     return (
       <span
         id={id}
@@ -44,8 +58,8 @@ function DelayBanner({ it, id }: { it: IssueVM; id?: string }) {
         Delay unknown
       </span>
     )
-  if (!P.delayColor(it)) return null
-  const behind = P.delayOf(it)?.status === 'behind'
+  if (shown === null) return null
+  const behind = shown === 'behind'
   return (
     <span
       id={id}

@@ -107,6 +107,7 @@ export function AssigneeAvatar({
   onPick,
   variant = 'portrait',
   backLayer = false,
+  offTitle,
 }: {
   issue: IssueVM
   compact?: boolean
@@ -114,10 +115,13 @@ export function AssigneeAvatar({
   onPick?: (profileId: string | null) => void
   variant?: 'portrait' | 'chevron' | 'label'
   backLayer?: boolean
+  /** why the control is off although the person may edit the task, such
+      as Team sync's stale meeting: given, the picker does not open */
+  offTitle?: string
 }) {
   const shown = field ?? issue.ownerField
   const who = issue[shown]
-  const canWrite = P.canWrite(issue.project)
+  const canWrite = P.canWrite(issue.project) && !offTitle
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !canWrite) return portrait
 
@@ -160,7 +164,7 @@ export function AssigneeAvatar({
             variant={variant === 'label' ? 'default' : 'unstyled'}
             size={variant === 'label' ? 'sm' : undefined}
             data-field-trigger={variant === 'portrait' ? undefined : ''}
-            {...ownerTrigger(issue, shown, canWrite, toggle)}
+            {...ownerTrigger(issue, shown, canWrite, toggle, offTitle)}
             className={faceClass}
           >
             {face}

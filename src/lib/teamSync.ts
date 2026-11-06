@@ -1,9 +1,15 @@
 /* Team sync: the pure rules behind the meeting page (deviation #316, and the
    guide's docs/guide/planning-against-real-capacity.md#team-sync).
-   Everything here is a function of plain inputs (tasks, people, projects, the
-   tasks' stamps, the latest comment per task, a reading point and today), so
-   the page reads the store once per render and the rules test on small
-   fixtures. Nothing here writes, and nothing imports the store at runtime.
+   Everything here is a function of plain inputs (tasks, people, the tasks'
+   stamps, the latest comment per task, a reading point and today), so the
+   page reads the store once per render and the rules test on small
+   fixtures. The page runs them over the tasks the server's agenda names
+   (convex/teamSync.ts agenda, views/teamSync/useSyncMeeting.ts), which
+   decides the scope, the walk's people, the blockers, the verdicts and the
+   week hours; the rules only sort, group and narrow. The page's former
+   scope and blocker rules, which derived all that from the workspace's
+   tasks, are the parity oracle's now (store/teamSyncOracle.setup.ts).
+   Nothing here writes, and nothing imports the store at runtime.
 
    Vocabulary:
    · a ROW is an open (To Do, In Progress, In Review) leaf task in scope;
@@ -11,6 +17,7 @@
      with one, else the assignee (convex/lib/review.ts);
    · `since` is the page owner's reading point in ms (convex/lib/teamSync.ts
      `syncSince`): "Done since", "untouched" and "changed" all read from it. */
+import { type LoadTask, loadRowFor } from '../../convex/lib/loadRows'
 import { STATUS_NAMES } from '../../convex/lib/taskRefs'
 import {
   askHorizon,
@@ -20,13 +27,23 @@ import {
   SYNC_SITTING_MS,
   type SyncStamp,
 } from '../../convex/lib/teamSync'
-import type { IssueVM, ProjectVM, TeamVM, UserVM } from '../store/planner'
-import { fmtDate, isoFromDate, TODAY_WEEK, WEEKDAYS, weekStartOf } from './dates'
+import type { AgendaScope } from '../../convex/lib/teamSyncAgenda'
+import type { Figure } from '../../convex/lib/viewLoads'
+import type { IssueVM, UserVM } from '../store/planner'
+import {
+  fmtDate,
+  isoFromDate,
+  isoToWeek,
+  TODAY_WEEK,
+  tsToWeek,
+  WEEKDAYS,
+  weekStartOf,
+} from './dates'
 import type { DelayInfo } from './delay'
-import { isIssueDone, isIssueGroup } from './issueGroups'
+import { isIssueGroup } from './issueGroups'
 import type { MdInline } from './md'
 import { astToMd } from './mdSerialize'
-import { hasPlannableWeek, type LoadTone, loadTone } from './workload'
+import { committedByWeek, hasPlannableWeek, type LoadTone, loadTone } from './workload'
 
 /* ---- input shapes: the slices of the store's view models the rules read -- */
 
@@ -56,21 +73,30 @@ export type SyncIssue = Pick<
   | 'createdAt'
 >
 export type SyncStatus = IssueVM['status']
-export type SyncUser = Pick<UserVM, 'id' | 'name' | 'isAgent' | 'teams'>
-export type SyncProject = Pick<
-  ProjectVM,
-  'id' | 'type' | 'org' | 'parent' | 'children' | 'teamAccess'
->
-export type SyncTeam = Pick<TeamVM, 'id' | 'org'>
-/** What a blocker lookup needs: its display key and whether it is finished
-    (a group is finished when all its known leaves are, as `P.isDone`). */
-export type BlockerIssue = Pick<
-  IssueVM,
-  'id' | 'key' | 'status' | 'children' | 'isGroup' | 'hasHiddenSubtasks'
->
+export type SyncUser = Pick<UserVM, 'id' | 'name' | 'isAgent'>
+
+/** One person the meeting walks, as the agenda names them
+    (convex/lib/teamSyncAgenda.ts AgendaPerson): their name, kind and
+    activity, plannable hours as stored, their sync stamp, which their
+    reading point reads, and their hours this week, or why they are not
+    given. The page draws faces from the roster by id (components/qivo
+    Avatar). */
+export type SyncPerson = {
+  id: string
+  name: string
+  isAgent: boolean
+  active: boolean
+  plannableHours: number | null
+  stamp: SyncStamp | null
+  week: Figure<{ hours: number }>
+}
 
 /** The board banner's verdict: Slipping (`behind`), Delayed (`late`), or nothing. */
 export type Verdict = 'behind' | 'late' | null
+
+/** A row's verdict as the agenda gives it: the banner's, or `unknown` where
+    it needs its owner's load and the load was not read, never on track. */
+export type SyncVerdict = Verdict | 'unknown'
 
 const OPEN = new Set<SyncStatus>(['todo', 'progress', 'review'])
 const DAY = 86400000
@@ -147,72 +173,90 @@ export type SyncScope =
   | { kind: 'team'; id: string }
   | { kind: 'project'; id: string }
 
-/** The saved form (`UIPrefs.syncScope`, the route's scope): `'all'`,
-    `'team:<uuid>'` or `'project:<uuid>'`. Anything else reads as all. */
-export function parseSyncScope(pref: string | null | undefined): SyncScope {
+/** What a place's scope key names: a scope to ask the server for, none
+    (nothing saved and none in the address), or a project an address names
+    that the app cannot resolve (`segment`, as typed). Neither of the last
+    two is ever read as another scope: the page asks to choose. */
+export type SyncPlaceScope = SyncScope | { kind: 'none' } | { kind: 'unresolved'; segment: string }
+
+/** The saved and routed form of a scope (`UIPrefs.teamSyncScope`, the
+    route's scope): `'all'`, `'team:<uuid>'`, `'project:<uuid>'` or
+    `'unresolved:<segment>'`. All projects is `'all'` alone; an empty key
+    and anything else read as none, never as All projects. */
+export function parseSyncScope(pref: string | null | undefined): SyncPlaceScope {
+  if (pref === 'all') return { kind: 'all' }
+  const unresolved = /^unresolved:(.*)$/s.exec(pref || '')
+  if (unresolved) return { kind: 'unresolved', segment: unresolved[1] }
   const m = /^(team|project):(.+)$/.exec(pref || '')
-  if (!m) return { kind: 'all' }
+  if (!m) return { kind: 'none' }
   return m[1] === 'team' ? { kind: 'team', id: m[2] } : { kind: 'project', id: m[2] }
 }
 
-export function syncScopeKey(scope: SyncScope): string {
-  return scope.kind === 'all' ? 'all' : `${scope.kind}:${scope.id}`
+/** The key of `scope` (parseSyncScope's form), `''` for none. */
+export function syncScopeKey(scope: SyncPlaceScope): string {
+  if (scope.kind === 'none') return ''
+  if (scope.kind === 'all') return 'all'
+  if (scope.kind === 'unresolved') return `unresolved:${scope.segment}`
+  return `${scope.kind}:${scope.id}`
 }
 
-/** What scope resolution reads: the home organization (the sync is always
-    about it), the projects and teams the viewer has, and the visibility test
-    (`P.canSee`). */
-export type ScopeWorld = {
-  homeOrg: string
-  projects: readonly SyncProject[]
-  teams: readonly SyncTeam[]
-  canSee: (projectId: string) => boolean
+/* ---- the agenda's request ---------------------------------------------------- */
+
+/** What Team sync asks the server for (convex/teamSync.ts agenda): the home
+    organization, the scope and the client's clock, in this key order. */
+export type SyncAgendaArgs = {
+  org_id: string
+  scope: AgendaScope
+  day: string
+  week: string
+  week_starts: number[]
+  week_end: number
 }
 
-/** The scope as it can be honoured: a team or project that no longer exists,
-    belongs to another organization or is out of sight falls back to all. */
-export function resolveSyncScope(scope: SyncScope, w: ScopeWorld): SyncScope {
-  if (scope.kind === 'team') {
-    return w.teams.some((t) => t.id === scope.id && t.org === w.homeOrg) ? scope : { kind: 'all' }
+/** The agenda's scope for `scope`, as the server takes it. */
+export function agendaScopeOf(scope: SyncScope): AgendaScope {
+  if (scope.kind === 'team') return { kind: 'team', team_id: scope.id }
+  if (scope.kind === 'project') return { kind: 'project', project_id: scope.id }
+  return { kind: 'all' }
+}
+
+/** The key of the agenda's arguments `args`, JSON in a fixed key order, so
+    equal arguments share one subscription. */
+export const syncAgendaKey = (args: SyncAgendaArgs): string =>
+  JSON.stringify({
+    org_id: args.org_id,
+    scope: args.scope,
+    day: args.day,
+    week: args.week,
+    week_starts: args.week_starts,
+    week_end: args.week_end,
+  })
+
+/* The arguments a key of syncAgendaKey names, or null. */
+function argsOfKey(key: string): SyncAgendaArgs | null {
+  try {
+    const args = JSON.parse(key) as Partial<SyncAgendaArgs> | null
+    return args && typeof args.org_id === 'string' && args.scope && typeof args.day === 'string'
+      ? (args as SyncAgendaArgs)
+      : null
+  } catch {
+    return null
   }
-  if (scope.kind === 'project') {
-    const p = w.projects.find((x) => x.id === scope.id)
-    return p && p.org === w.homeOrg && w.canSee(p.id) ? scope : { kind: 'all' }
-  }
-  return scope
 }
 
-/* The top-level projects a scope reaches (metas, or sub-projects shared on
-   their own), each with the sub-projects it contributes. */
-function scopeRoots(scope: SyncScope, w: ScopeWorld): SyncProject[] {
-  const s = resolveSyncScope(scope, w)
-  const home = w.projects.filter((p) => p.org === w.homeOrg && w.canSee(p.id))
-  if (s.kind === 'project') return home.filter((p) => p.id === s.id)
-  if (s.kind === 'team') return home.filter((p) => p.teamAccess[s.id] !== undefined)
-  return home.filter((p) => p.type === 'meta')
+/** The meeting key `key` asks for, its organization and scope as one
+    string, so two keys of the same meeting on other days or week grids
+    compare equal; null for a key that is not one. */
+export function syncMeetingOf(key: string): string | null {
+  const args = argsOfKey(key)
+  return args ? JSON.stringify([args.org_id, args.scope]) : null
 }
 
-/** The sub-project ids in scope (tasks live only in sub-projects): all = every
-    visible sub-project of the home organization; team = the sub-projects of
-    every project shared with the team (a meta's share reaches its children);
-    project = that project's sub-projects, or the sub-project itself. */
-export function scopeProjectIds(scope: SyncScope, w: ScopeWorld): Set<string> {
-  const out = new Set<string>()
-  for (const p of scopeRoots(scope, w)) {
-    if (p.type !== 'meta') out.add(p.id)
-    else for (const id of p.children || []) if (w.canSee(id)) out.add(id)
-  }
-  return out
-}
-
-/** The meta project ids in scope, whose milestones the team opening lists. */
-export function scopeMetaIds(scope: SyncScope, w: ScopeWorld): Set<string> {
-  const out = new Set<string>()
-  for (const p of scopeRoots(scope, w)) {
-    if (p.type === 'meta') out.add(p.id)
-    else if (p.parent) out.add(p.parent)
-  }
-  return out
+/** The client's day, YYYY-MM-DD, and the first day of its week that key
+    `key` asks with, or null. */
+export function syncClockOf(key: string): { day: string; week: string } | null {
+  const args = argsOfKey(key)
+  return args ? { day: args.day, week: args.week } : null
 }
 
 /* ---- rows, roster, a person's page ------------------------------------------ */
@@ -223,18 +267,12 @@ export function syncRows<I extends SyncIssue>(issues: readonly I[], subIds: Set<
   return issues.filter((it) => OPEN.has(it.status) && !isIssueGroup(it) && subIds.has(it.project))
 }
 
-/** Everyone who owns a row, in walk order: humans by name, then the agents
-    (one collapsed final step). Team scope keeps only that team's members.
-    Deactivated owners stay: the work is still theirs. */
-export function syncRoster<U extends SyncUser>(
-  rows: readonly SyncIssue[],
-  users: readonly U[],
-  scope: SyncScope,
-): { humans: U[]; agents: U[] } {
-  const owners = new Set(rows.map((it) => it.owner).filter(Boolean))
-  const walk = users
-    .filter((u) => owners.has(u.id) && (scope.kind !== 'team' || u.teams.includes(scope.id)))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+/** The walk's people in walk order: humans by name, then the agents (one
+    collapsed final step). The agenda decides who they are, the owners of
+    its rows, in a team only its members; deactivated owners stay, as the
+    work is still theirs. */
+export function syncWalk<U extends SyncUser>(people: readonly U[]): { humans: U[]; agents: U[] } {
+  const walk = [...people].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
   return { humans: walk.filter((u) => !u.isAgent), agents: walk.filter((u) => u.isAgent) }
 }
 
@@ -341,24 +379,11 @@ export function doneSince<I extends SyncIssue>(
 /* ---- per-row marks -------------------------------------------------------------- */
 
 /** The board banner's rule, from `P.delayOf` and `P.tracksDelay`: a verdict
-    only for a project that tracks delay, and never for on track. */
+    only for a project that tracks delay, and never for on track. The
+    agenda's verdicts follow it (convex/lib/teamSyncAgenda.ts AgendaRow
+    delay), and the parity oracle reads it. */
 export function bannerVerdict(delay: Pick<DelayInfo, 'status'> | null, tracks: boolean): Verdict {
   return tracks && delay && delay.status !== 'ok' ? delay.status : null
-}
-
-/** The display keys of the open tasks blocking this one ("is blocked by"
-    links whose task is not Done). `issueById` is `P.issueById`; a blocker the
-    viewer cannot see is not in it and says nothing. */
-export function blockersOf(
-  it: Pick<SyncIssue, 'links'>,
-  issueById: Readonly<Record<string, BlockerIssue>>,
-): string[] {
-  const out: string[] = []
-  for (const l of it.links) {
-    const b = l.type === 'blocked_by' ? issueById[l.id] : undefined
-    if (b && !isIssueDone(b, issueById)) out.push(b.key)
-  }
-  return out
 }
 
 /** The one "since the last sync" mark a row can carry. */
@@ -375,10 +400,10 @@ export type SinceMark =
   | { kind: 'changed'; what: string; at: number }
 
 export type RowMarks = {
-  verdict: Verdict
+  verdict: SyncVerdict
   paused: boolean
   /** keys of open blockers */
-  blockedBy: string[]
+  blockedBy: readonly string[]
   noEstimate: boolean
   /** In Review with no reviewer: on the assignee's page */
   noReviewer: boolean
@@ -387,8 +412,9 @@ export type RowMarks = {
   since: SinceMark | null
 }
 
-/** Everything a row says about itself on `person`'s page. `lastCommentAt` is
-    the task's latest comment (`P.lastComments` by uuid), null when it has
+/** Everything a row says about itself on `person`'s page. `blockedBy` is
+    the keys of its open blockers the agenda names. `lastCommentAt` is the
+    task's latest comment (`P.lastComments` by uuid), null when it has
     none. Left out, the comment is not known yet, so the row carries no since
     mark rather than call a discussed task untouched. */
 export function rowMarks(
@@ -396,8 +422,8 @@ export function rowMarks(
   o: {
     person: string
     since: number
-    verdict: Verdict
-    issueById: Readonly<Record<string, BlockerIssue>>
+    verdict: SyncVerdict
+    blockedBy: readonly string[]
     lastCommentAt?: number | null
   },
 ): RowMarks {
@@ -405,7 +431,7 @@ export function rowMarks(
   return {
     verdict: o.verdict,
     paused: !!it.paused,
-    blockedBy: blockersOf(it, o.issueById),
+    blockedBy: o.blockedBy,
     noEstimate: it.remaining == null,
     noReviewer: it.status === 'review' && !it.reviewer,
     reviewFor: reviewing && it.assignee && it.assignee !== o.person ? it.assignee : null,
@@ -446,56 +472,73 @@ function sinceMark(
 export type OpeningFacts = {
   /** due before today */
   overdue: number
-  /** Delayed and not yet past due: projected to miss the due date */
-  projected: number
-  /** the board's Delayed, past due or not */
-  delayed: number
-  /** the board's Slipping */
-  slipping: number
-  /** with an open blocker the viewer can see */
+  /** Delayed and not yet past due: projected to miss the due date; null
+      where some row's verdict is unknown, so the count is not known */
+  projected: number | null
+  /** the board's Delayed, past due or not; null as `projected` */
+  delayed: number | null
+  /** the board's Slipping; null as `projected` */
+  slipping: number | null
+  /** with an open blocker the agenda names */
   blocked: number
   paused: number
 }
 
 /** The opening's counts over the walk's rows (leaf, open, in scope; Done and
-    groups never count). Overdue is not gated by delay tracking, as on the
-    Overview; the verdicts are (`bannerVerdict`). */
+    groups never count). Overdue, Blocked and Paused count stored facts and
+    are always whole. The verdicts' counts are null as soon as one row's
+    verdict is unknown, never a count that leaves some out. Overdue is not
+    gated by delay tracking, as on the Overview; the verdicts are
+    (`bannerVerdict`). */
 export function openingFacts<I extends SyncIssue>(
   rows: readonly I[],
   o: {
-    verdictOf: (it: I) => Verdict
-    issueById: Readonly<Record<string, BlockerIssue>>
+    verdictOf: (it: I) => SyncVerdict
+    blockedOf: (it: I) => readonly string[]
     today: string
   },
 ): OpeningFacts {
-  const f: OpeningFacts = {
-    overdue: 0,
-    projected: 0,
-    delayed: 0,
-    slipping: 0,
-    blocked: 0,
-    paused: 0,
-  }
+  let overdue = 0
+  let projected = 0
+  let delayed = 0
+  let slipping = 0
+  let blocked = 0
+  let paused = 0
+  let unknown = false
   for (const it of rows) {
     if (it.status === 'done' || isIssueGroup(it)) continue
-    const overdue = !!it.due && it.due < o.today
+    const late = !!it.due && it.due < o.today
     const verdict = o.verdictOf(it)
-    if (overdue) f.overdue++
-    if (verdict === 'late') f.delayed++
-    if (verdict === 'late' && !overdue) f.projected++
-    if (verdict === 'behind') f.slipping++
-    if (blockersOf(it, o.issueById).length) f.blocked++
-    if (it.paused) f.paused++
+    if (late) overdue++
+    if (verdict === 'unknown') unknown = true
+    if (verdict === 'late') delayed++
+    if (verdict === 'late' && !late) projected++
+    if (verdict === 'behind') slipping++
+    if (o.blockedOf(it).length) blocked++
+    if (it.paused) paused++
   }
-  return f
+  return {
+    overdue,
+    projected: unknown ? null : projected,
+    delayed: unknown ? null : delayed,
+    slipping: unknown ? null : slipping,
+    blocked,
+    paused,
+  }
 }
 
 /** One piece of the opening sentence: text, or a count the page paints. */
 export type SentencePart = string | { n: number; tone: 'danger' | 'warning' }
 
+/** The sentence that ends the summary where some projected delay is not
+    known (OpeningFacts projected null). */
+export const PROJECTED_UNKNOWN = 'Qivo could not work out every projected delay.'
+
 /** The one-sentence summary: overdue first, then projected misses, then
     blocked, stating only numbers the opening also shows; a calm line when
-    all three are zero, so the sentence is never missing. */
+    all three are zero, so the sentence is never missing. Where the
+    projected misses are not known it leaves their clause out, never says
+    that none is projected, and ends with PROJECTED_UNKNOWN. */
 export function syncSentence(
   f: Pick<OpeningFacts, 'overdue' | 'projected' | 'blocked'>,
 ): SentencePart[] {
@@ -508,7 +551,7 @@ export function syncSentence(
       ` ${tasks(f.overdue)} ${is(f.overdue)} overdue`,
     ])
   }
-  if (f.projected > 0) {
+  if (f.projected !== null && f.projected > 0) {
     const n = f.projected
     const who = clauses.length ? `more ${is(n)}` : `${tasks(n)} ${is(n)}`
     const its = n === 1 ? 'its' : 'their'
@@ -519,13 +562,15 @@ export function syncSentence(
     const who = clauses.length ? is(n) : `${tasks(n)} ${is(n)}`
     clauses.push([{ n, tone: 'warning' }, ` ${who} blocked`])
   }
+  if (!clauses.length && f.projected === null)
+    return [`No task is overdue or blocked. ${PROJECTED_UNKNOWN}`]
   if (!clauses.length) return ['No task is overdue, projected to miss its due date, or blocked.']
   const out: SentencePart[] = []
   clauses.forEach((c, i) => {
     if (i > 0) out.push(clauses.length > 2 ? (i === clauses.length - 1 ? ', and ' : ', ') : ' and ')
     out.push(...c)
   })
-  out.push('.')
+  out.push(f.projected === null ? `. ${PROJECTED_UNKNOWN}` : '.')
   // adjacent text runs merge, so the parts alternate text and count
   return out.reduce<SentencePart[]>((acc, p) => {
     const last = acc.at(-1)
@@ -710,17 +755,70 @@ export function loadFigure(hours: number, capacity: number): LoadFigure {
   return { hours, capacity, pct, tone: loadTone(pct) }
 }
 
-/** "Near or over capacity": the people whose week is near (90%) or over,
-    highest first. `figureOf` reads the org-wide load (`P.weekLoadOf` over
-    `plannableHoursOf`). */
-export function nearCapacity<U extends SyncUser>(
+/** A person's week as the page shows it: a figure, `waiting` while an
+    organization Viewer's read of it is on its way, or `unknown` where it
+    could not be read. Never a figure for a load nobody read. */
+export type SyncLoad =
+  | { state: 'ok'; figure: LoadFigure }
+  | { state: 'waiting' }
+  | { state: 'unknown' }
+
+/** "Near or over capacity": the people whose week is known and near (90%)
+    or over, highest first, and how many people's week is unknown or still
+    loading, so the list never reads as whole while some are left out.
+    `loadOf` is the page's week figure (views/teamSync/useSyncMeeting.ts). */
+export function nearCapacity<U extends Pick<SyncUser, 'name'>>(
   users: readonly U[],
-  figureOf: (u: U) => LoadFigure,
-): { user: U; figure: LoadFigure }[] {
-  return users
-    .map((user) => ({ user, figure: figureOf(user) }))
-    .filter((x) => x.figure.tone === 'near' || x.figure.tone === 'over')
-    .sort((a, b) => b.figure.pct - a.figure.pct || a.user.name.localeCompare(b.user.name))
+  loadOf: (u: U) => SyncLoad,
+): { busy: { user: U; figure: LoadFigure }[]; unknown: number } {
+  const busy: { user: U; figure: LoadFigure }[] = []
+  let unknown = 0
+  for (const user of users) {
+    const load = loadOf(user)
+    if (load.state !== 'ok') unknown++
+    else if (load.figure.tone === 'near' || load.figure.tone === 'over')
+      busy.push({ user, figure: load.figure })
+  }
+  busy.sort(
+    (a, b) => (b.figure.pct ?? 0) - (a.figure.pct ?? 0) || a.user.name.localeCompare(b.user.name),
+  )
+  return { busy, unknown }
+}
+
+/** What weekHoursOf reads of a task besides its row, as
+    convex/lib/loadRows.ts loadRowFor takes it: whether it has subtasks,
+    whether its project is live, and whether a person is of its
+    organization. */
+export type WeekFacts = {
+  isGroup: boolean
+  projectLive: boolean
+  ownerInOrg: (id: string) => boolean
+}
+
+/** The hours task row `row` adds to week `week` (the app's week index) and
+    whose they are: its load row through the server's fence
+    (convex/lib/loadRows.ts loadRowFor, so a Done, paused, unscheduled or
+    unestimated task and a group add none) spread over its window the
+    server's way (lib/workload.ts committedByWeek), unrounded; null where it
+    adds none. Team sync re-counts a pending edit with it, the saved row's
+    hours out and the row on screen's in (store/planner.ts
+    P.syncLoadChanges). */
+export function weekHoursOf(
+  row: LoadTask,
+  facts: WeekFacts,
+  week: number,
+): { owner: string; hours: number } | null {
+  const filed = loadRowFor(row, { ...facts, visible: true, staff: true, meId: '' })
+  if (!filed) return null
+  const span = {
+    issueUuid: filed.issue_id,
+    start: isoToWeek(filed.start_week),
+    end: isoToWeek(filed.end_week),
+    remaining: Number(filed.remaining),
+    remainingSet: filed.remaining_set_at != null ? tsToWeek(filed.remaining_set_at) : null,
+  }
+  const hours = committedByWeek([span], null, { from: week, to: week }).get(week) ?? 0
+  return hours > 0 ? { owner: filed.owner_id, hours } : null
 }
 
 /* ---- mention ------------------------------------------------------------------------ */
@@ -742,27 +840,7 @@ export function mentionBody(user: Pick<UserVM, 'id' | 'name'>, text: string): st
 }
 
 /** A card on the Team sync page: its task, and the person whose section
-    shows it (the page owner, or an agent on the agents step). */
+    shows it (the page owner, or an agent on the agents step). A scope
+    switch asks about every card that holds unsent text, as the new scope's
+    walk is not known until its answer arrives. */
 export type SyncCardPlace = { task: string; owner: string }
-
-/** The cards a scope switch takes off the page at `step`, of `cards` (each
-    card's scope with its place): every card when the new walk `next` has no
-    such step, else the cards whose task it no longer holds or whose person
-    it no longer walks, such as an agent outside a team. */
-export function cardsClosedBy<S>(
-  cards: ReadonlyMap<S, SyncCardPlace>,
-  step: string,
-  next: {
-    steps: readonly string[]
-    rows: readonly { uuid: string }[]
-    humans: readonly { id: string }[]
-    agents: readonly { id: string }[]
-  },
-): S[] {
-  if (!next.steps.includes(step)) return [...cards.keys()]
-  const tasks = new Set(next.rows.map((it) => it.uuid))
-  const walkers = new Set([...next.humans, ...next.agents].map((u) => u.id))
-  return [...cards]
-    .filter(([, card]) => !tasks.has(card.task) || !walkers.has(card.owner))
-    .map(([scope]) => scope)
-}

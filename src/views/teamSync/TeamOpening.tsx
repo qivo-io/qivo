@@ -1,12 +1,15 @@
 /* The team opening, the walk's first step: the state of the team before
-   anyone speaks. The Overview's facts over the walk's rows, the people near
-   or over capacity, the milestones this week and next, and the two lists
-   that ask for a person: work with no owner and reviews with no reviewer.
-   Naming someone here stamps no one: it is not a change made on a person's
-   page. Finished work is not listed: it belongs to each person's page,
-   since each person's "since" differs. The milestones come from the
-   server's bounded reads over the scope's top-level projects
-   (useSyncMilestoneReads); the rest still reads the workspace. */
+   anyone speaks. The Overview's facts over the walk's rows, with the
+   agenda's verdicts and blockers, the people near or over capacity from
+   the agenda's weeks, the milestones this week and next, and the two lists
+   that ask for a person: work with no owner and reviews with no reviewer,
+   over the tasks the agenda names (views/teamSync/useSyncMeeting.ts). A
+   figure whose inputs are not all known says unknown, never 0. Naming
+   someone here stamps no one: it is not a change made on a person's page.
+   Finished work is not listed: it belongs to each person's page, since
+   each person's "since" differs. The milestones come from the server's
+   bounded reads over the scope's top-level projects the agenda names
+   (useSyncMilestoneReads); the rest comes from the agenda. */
 import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { DeferredList } from '@/components/DeferredList'
@@ -18,13 +21,15 @@ import { relativeWeek, weekToISO } from '@/lib/dates'
 import { limitSentence } from '@/lib/fieldLimits'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import {
-  bannerVerdict,
   nearCapacity,
   needsOwner,
   needsReviewer,
   openingFacts,
   SYNC_MILESTONE_SLOTS,
   type SyncDay,
+  type SyncLoad,
+  type SyncPerson,
+  type SyncVerdict,
   syncMilestones,
   syncSentence,
   waitingLabel,
@@ -32,34 +37,41 @@ import {
 import { cn } from '@/lib/utils'
 import { useViewVisibility } from '@/lib/viewVisibility'
 import type { MilestoneAsk } from '@/store/milestoneRows'
-import { type IssueVM, type MilestoneVM, P, type UserVM } from '@/store/planner'
+import { type IssueVM, type MilestoneVM, P } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { LIMITS } from '../../../convex/lib/limits'
 import { useViewsNews } from '../useViewsNews'
 import { LoadChip, type PageCtx, TitleButton } from './SyncCard'
-import { weekFigure } from './weekFigure'
 
+/* One figure of the facts strip; null is a figure Qivo could not work out,
+   which reads a muted "unknown", never a number. */
 function Fact({
   label,
   value,
   tone,
 }: {
   label: string
-  value: number
+  value: number | null
   tone?: 'danger' | 'warning'
 }) {
   return (
     <div className="min-w-0">
       <div className="text-sm text-text-2">{label}</div>
-      <div
-        className={cn(
-          '!font-mono text-2xl leading-tight text-text-1',
-          value > 0 && tone === 'danger' && 'text-danger',
-          value > 0 && tone === 'warning' && 'text-warning',
-        )}
-      >
-        {value}
-      </div>
+      {value === null ? (
+        <div data-sync-fact="unknown" className="text-2xl leading-tight text-text-3">
+          unknown
+        </div>
+      ) : (
+        <div
+          className={cn(
+            '!font-mono text-2xl leading-tight text-text-1',
+            value > 0 && tone === 'danger' && 'text-danger',
+            value > 0 && tone === 'warning' && 'text-warning',
+          )}
+        >
+          {value}
+        </div>
+      )}
     </div>
   )
 }
@@ -110,9 +122,9 @@ function AskRow({
   )
 }
 
-/* The two lists can hold a large share of the organization's tasks, and the
-   opening renders again on each store change. A row renders the same while
-   its task keeps its object (P.issues), with the same context
+/* The two lists can hold many of the meeting's tasks, and the opening
+   renders again on each store change. A row renders the same while its
+   task keeps its object (the meeting's model of it), with the same context
    (P.contextVersion) and label, so it skips. TeamSync keeps onOpenTask. */
 
 /** A "Needs an owner" row. */
@@ -271,27 +283,40 @@ function Unknown({ why }: { why: string }) {
 
 export function TeamOpening({
   rows,
+  tasks,
   humans,
   subIds,
   metaIds,
   day,
   now,
   onOpenTask,
+  verdictOf,
+  blockedOf,
+  loadOf,
 }: {
   /** the walk's rows: open leaf tasks in scope */
   rows: IssueVM[]
+  /** every task the agenda names: rows, asks and Done tasks */
+  tasks: IssueVM[]
   /** the people in the walk */
-  humans: UserVM[]
+  humans: SyncPerson[]
   subIds: Set<string>
-  /** the scope's top-level projects, whose milestones the opening reads */
+  /** the scope's top-level projects, as the agenda names them
+      (answer.top_projects), whose milestones the opening reads */
   metaIds: Set<string>
   day: SyncDay
   now: number
   onOpenTask: (handle: string) => void
+  /** a row's verdict, by uuid, as the agenda gives it */
+  verdictOf: (uuid: string) => SyncVerdict
+  /** a row's open blockers, by uuid, as the agenda names them */
+  blockedOf: (uuid: string) => readonly string[]
+  /** a person's week as the agenda gives it */
+  loadOf: (person: SyncPerson) => SyncLoad
 }) {
   const facts = openingFacts(rows, {
-    verdictOf: (it) => bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
-    issueById: P.issueById,
+    verdictOf: (it) => verdictOf(it.uuid),
+    blockedOf: (it) => blockedOf(it.uuid),
     today: day.today,
   })
   // this mounted opening, which owns the milestone reads while it asks
@@ -299,8 +324,9 @@ export function TeamOpening({
   const milestones = useSyncMilestoneReads(metaIds, day.todayWeek, owner)
   const next = milestones.next.kind === 'milestone' ? milestones.next.milestone : null
   const ahead = milestones.ahead
-  const busy = nearCapacity(humans, weekFigure)
-  const unowned = needsOwner(P.issues, subIds, day)
+  const capacity = nearCapacity(humans, loadOf)
+  const busy = capacity.busy
+  const unowned = needsOwner(tasks, subIds, day)
   const unreviewed = needsReviewer(rows).map((ask) => ask.issue)
   /* Lists of more than SYNC_LIMIT asks mount the rows of the first screen
      at once and the rest in slices, in the page's scrolling pane. */
@@ -385,16 +411,28 @@ export function TeamOpening({
       {/* two columns once each list has room for a row and its control */}
       <div className="grid grid-cols-1 gap-x-8 gap-y-6 @min-[720px]:grid-cols-2">
         <div className="min-w-0">
-          <ListHeading title="Near or over capacity" count={busy.length} />
+          {/* a count only when every week is known, so the list never
+              reads as whole while some are left out */}
+          <ListHeading
+            title="Near or over capacity"
+            count={capacity.unknown === 0 ? busy.length : undefined}
+          />
           <div data-sync-capacity className="flex flex-col gap-1.5">
-            {busy.map(({ user }) => (
+            {busy.map(({ user, figure }) => (
               <div key={user.id} className="flex min-w-0 items-center gap-2">
                 <Avatar id={user.id} size={20} />
                 <span className="min-w-0 flex-1 truncate text-sm text-text-1">{user.name}</span>
-                <LoadChip user={user} />
+                <LoadChip load={{ state: 'ok', figure }} />
               </div>
             ))}
-            {!busy.length && <Empty>Everyone is under 90% this week</Empty>}
+            {capacity.unknown > 0 && (
+              <div data-sync-capacity-unknown className="text-sm text-text-3">
+                Load unknown for {capacity.unknown} {capacity.unknown === 1 ? 'person' : 'people'}
+              </div>
+            )}
+            {!busy.length && capacity.unknown === 0 && (
+              <Empty>Everyone is under 90% this week</Empty>
+            )}
           </div>
 
           <div className="mt-6">

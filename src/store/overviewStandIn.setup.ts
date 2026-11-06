@@ -103,7 +103,7 @@ const WEEK_MS = 7 * DAY_MS
 /* The days since 1970-01-01 of YYYY-MM-DD `iso`. */
 const dayNumber = (iso: string) => Date.parse(`${iso}T00:00:00.000Z`) / DAY_MS
 
-/** The client's clock as convex/lib/overview.ts clockOf places days and
+/** The client's clock as convex/lib/viewLoads.ts clockOf places days and
     instants in its weeks, week 0 being the client's current week. */
 function clockOf(a: { day: string; week: string; week_starts: number[]; week_end: number }) {
   const first = dayNumber(a.week)
@@ -286,7 +286,7 @@ export function overviewStandIn(
       ? plannableHoursOf({ plannableHours: p.plannable_hours, kind: p.kind })
       : DEFAULT_PLANNABLE_HOURS
   }
-  /* The owner whose load `t`'s verdict needs, or null (convex/lib/overview.ts
+  /* The owner whose load `t`'s verdict needs, or null (convex/lib/viewLoads.ts
      verdicts needs). */
   const needs = (t: Task): string | null => {
     if (isGroup(t) || t.status === 'done') return null

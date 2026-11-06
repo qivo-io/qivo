@@ -90,18 +90,22 @@ export function WalkRail({
     empty = unset, a stored 0 is a value, unparseable or unchanged text writes
     nothing, so a bare tab-through is not an edit. `onCommit` runs once the
     server accepts the write, so a refused value (whose refusal the store
-    shows) leaves the row unreviewed. */
+    shows) leaves the row unreviewed. `readOnly`, Team sync's stale
+    meeting, keeps what was typed in the box and writes nothing, also on a
+    blur, so the hours stay typed until the box writes again. */
 export function RemainingInput({
   it,
   title,
   onCommit,
   disabled,
+  readOnly = false,
   className,
 }: {
   it: IssueVM
   title: string
   onCommit?: (it: IssueVM) => void
   disabled?: boolean
+  readOnly?: boolean
   className?: string
 }) {
   // takes the ELEMENT, not its value: the parse verdict (validity.badInput)
@@ -114,6 +118,7 @@ export function RemainingInput({
     'remaining hours',
   )
   const commit = (el: HTMLInputElement) => {
+    if (readOnly) return
     const p = remainingPatchFromInput(el, it.remaining)
     if (!p.write) return
     void P.updateIssue(it.id, { remaining: p.value }).then((saved) => {
@@ -132,6 +137,7 @@ export function RemainingInput({
       defaultValue={remainingValue(it.remaining)}
       title={title}
       disabled={disabled}
+      readOnly={readOnly}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur()
       }}

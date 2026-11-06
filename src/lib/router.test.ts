@@ -1134,8 +1134,12 @@ describe('Team sync addresses', () => {
     expect(parsePath(`/app/globex/sync/team/${TEAM}/people/${PERSON}/tasks/qn-5`)).toEqual({
       sync: {},
     })
-    // an unknown project leaves the scope to the saved one, the step still reads
-    expect(parsePath('/app/home/sync/p/99/agents')).toEqual({ sync: { step: 'agents' } })
+    // an unknown project is a scope the page cannot honour, as typed, never
+    // the saved one or All projects; the step still reads
+    expect(parsePath('/app/home/sync/p/99/agents')).toEqual({
+      sync: { scope: 'unresolved:99', step: 'agents' },
+    })
+    expect(parsePath('/app/home/sync/p/99/agents')?.sync?.scope).not.toBeUndefined()
     // a people segment without a person is no step
     expect(parsePath('/app/home/sync/all/people')).toEqual({ sync: { scope: 'all' } })
   })
@@ -1162,6 +1166,17 @@ describe('Team sync addresses', () => {
     // no number to name: the uuid, which parses back the same
     expect(buildPath({ sync: { scope: 'project:p-home-1a', step: 'team' } })).toBe(
       '/app/home/sync/p/p-home-1a',
+    )
+  })
+
+  it('writes the bare page for no scope and keeps an unresolved project as it was typed', () => {
+    // the rule before the agenda wrote /sync/all for any scope that was
+    // neither a project nor a team, which must fail now
+    expect(buildPath({ sync: { scope: '', step: 'team' } })).toBe('/app/home/sync')
+    expect(buildPath({ sync: { scope: '', step: 'team' } })).not.toBe('/app/home/sync/all')
+    expect(buildPath({ sync: { scope: '', step: PERSON } })).toBe(`/app/home/sync/people/${PERSON}`)
+    expect(buildPath({ sync: { scope: 'unresolved:99', step: 'agents' } })).toBe(
+      '/app/home/sync/p/99/agents',
     )
   })
 
@@ -1226,6 +1241,7 @@ describe('Team sync addresses', () => {
       { sync: { scope: 'project:p-acme-1', step: 'team' } },
       { sync: { scope: `team:${TEAM}`, step: PERSON }, openIssue: 'QN-9' },
       { sync: { scope: 'all', step: 'team' }, openIssue: 'uuid-acme-5' },
+      { sync: { scope: 'unresolved:99', step: 'team' } },
     ] as UiState[]) {
       const r = parsePath(buildPath(s))!
       expect(r.sync?.scope).toBe(s.sync!.scope)
@@ -1290,15 +1306,25 @@ describe('Team sync addresses', () => {
       scope: `team:${TEAM}`,
       step: 'team',
     })
-    // a named step wins everywhere; nothing saved means all projects
+    // a named step wins everywhere; nothing saved means no scope, where the
+    // page asks to choose, never All projects
     expect(place('/app/home/sync/p/7/agents', phone)).toEqual({
       scope: 'project:p-home-7',
       step: 'agents',
     })
     expect(place('/app/home/sync', { me: PERSON, mobile: false })).toEqual({
-      scope: 'all',
+      scope: '',
       step: 'team',
     })
+    expect(place('/app/home/sync', { me: PERSON, mobile: false }).scope).not.toBe('all')
+    // the phone keeps its own page behind the picker, so a pick lands there
+    expect(place('/app/home/sync', { me: PERSON, mobile: true })).toEqual({
+      scope: '',
+      step: PERSON,
+    })
+    // an address's project the app cannot resolve stays so, also with a
+    // saved scope
+    expect(place('/app/home/sync/p/99', phone)).toEqual({ scope: 'unresolved:99', step: 'team' })
   })
 })
 

@@ -208,7 +208,7 @@ const HEALTH_SORTS: HealthSort[] = [
  * owner's load a query for them, in owner id order. An owner is needed by
  * a task without subtasks, not Done, with a planned end or a due date and
  * remaining hours, whose owner by the Reviewer rule is a profile with a
- * finite capacity (convex/lib/overview.ts verdicts needs). */
+ * finite capacity (convex/lib/viewLoads.ts verdicts needs). */
 function needSecondOwner(P: Store, rows: ReturnType<Store['figures']['healthRows']>): Set<string> {
   const raw = new Map(P.snapshot.issues.map((t) => [t.id, t]))
   const people = new Map(P.snapshot.profiles.map((p) => [p.id, p]))
