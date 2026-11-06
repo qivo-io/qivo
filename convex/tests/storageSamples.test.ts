@@ -844,9 +844,15 @@ describe('reads at the batch size', () => {
     const retry = await measured(t, stepFn, { day: TODAY, run })
     expect(await runRow(t)).toMatchObject({ counts: { present: SAMPLE_PAGE.orgs } })
     const sample = (await allSamples(t))[0]
+    const row = await runRow(t)
     console.log(
       'daily sample step reads',
-      JSON.stringify({ fresh, retry, sample_bytes: getDocumentSize(sample) }),
+      JSON.stringify({
+        fresh,
+        retry,
+        sample_bytes: getDocumentSize(sample),
+        run_bytes: row && getDocumentSize(row),
+      }),
     )
     // Each organization: its row, in the step's one page of organizations,
     // and four indexed reads, its removal, its totals row, its sample of
