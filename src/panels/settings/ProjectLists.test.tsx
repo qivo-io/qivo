@@ -528,9 +528,11 @@ describe('Settings › Projects', () => {
     expect(projectsEnd().textContent).toBe('No projects match.')
   })
 
-  it('offers New sub-project… by each row’s right, never by the store’s level', async () => {
+  it('offers New sub-project… only where the row’s right and the dialog’s parent rule both allow it', async () => {
     // I hold a User grant on Ops, which Leo leads; the store's copy makes me
-    // its lead, and takes Design #7, which I lead, from me
+    // its lead, and takes Design #7, which I lead, from me. The New
+    // sub-project dialog takes its parents from the store until
+    // t3/limits-project-dialogs, so Design #7 would open it with Create off
     await load(
       (snap) => {
         signInAs('mira')(snap)
@@ -550,8 +552,12 @@ describe('Settings › Projects', () => {
       'Project settings',
       'Archived tasks',
     ])
-    expect(await projectMenu('design7')).toContain('New sub-project…')
+    expect(await projectMenu('design7')).toEqual(['Project settings', 'Archived tasks'])
     expect(await projectMenu('ops')).toEqual(['Project settings', 'Archived tasks'])
+    // nor Add sub-project at the end of its empty list
+    await click(find('[data-project-row="design7"] > button'))
+    expect(text('[data-subprojects-end]')).toBe('No sub-projects.')
+    expect(button('Add sub-project')).toBeUndefined()
     // Leo sees Plan by a User grant, which gives no right to a sub-project
     await load(signInAs('leo'))
     await projects()
@@ -710,7 +716,7 @@ describe('Settings › Projects', () => {
     expect(document.activeElement).toBe(find('[data-subproject-row="specs"] button'))
   })
 
-  it('reads nothing of the store’s catalogue and no task', async () => {
+  it('reads nothing of the store’s catalogue and no task, and its levels only for New sub-project', async () => {
     const shown = vi.spyOn(P, 'visibleProjects')
     const sees = vi.spyOn(P, 'canSee')
     const level = vi.spyOn(P, 'levelOn')
@@ -735,7 +741,12 @@ describe('Settings › Projects', () => {
     await click(find('[data-archived-subs-toggle="old"]'))
     expect(shown).not.toHaveBeenCalled()
     expect(sees).not.toHaveBeenCalled()
-    expect(level).not.toHaveBeenCalled()
+    // only New sub-project's parent rule asks the store's level, for the
+    // rows the server lets me add a sub-project under, here every live
+    // top-level project, as I am an organization admin
+    expect(new Set(level.mock.calls.map(([id]) => id))).toEqual(
+      new Set(['design7', 'design8', 'ops', 'plan']),
+    )
     expect(archivedReads).toBe(0)
     expect(new Set(watched)).toEqual(
       new Set([

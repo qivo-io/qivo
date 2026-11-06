@@ -14,13 +14,18 @@
    asked for, one entry at a time, each live while it shows. Every row,
    chip and row right comes from those answers: an organization admin's
    rows are every project of the organization, anyone else's what their
-   seat sees, and New sub-project…, Restore and Delete come from each row's
-   own rights. The pages read no task, and of the store only the
+   seat sees, and Restore and Delete come from each row's own rights.
+   New sub-project… and Add sub-project are the one exception. They need
+   the row's own right and also the store's Lead level on a project the
+   workspace holds, because the New sub-project dialog they open still
+   takes its parents from the workspace and keeps Create off for any other
+   (offersSubProject). The pages read no task, and of the store only the
    organizations to choose from, the home organization and whether the
    login may create a project there (P.canCreateProject, for New project),
-   the login's seats for the page memory, and a sub-project created here
-   until the server's list holds it. Each read stops while the tab is
-   hidden and when the page is left, and keeps no answer past it. */
+   the login's seats for the page memory, that Lead level, and a
+   sub-project created here until the server's list holds it. Each read
+   stops while the tab is hidden and when the page is left, and keeps no
+   answer past it. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -376,6 +381,20 @@ function useMoveFocus(
   }
 }
 
+/**
+ * Whether New sub-project… and Add sub-project show for `row`. The row's
+ * own `can_create_sub_project` must allow it, and so must the New
+ * sub-project dialog's parent rule (Modals.tsx NewSubProjectModal), a
+ * top-level project the workspace holds on which the store's level gives
+ * the caller Lead. That dialog still takes its parents and the create's
+ * organization from the workspace, so for any other project it would open
+ * with Create off. t3/limits-project-dialogs moves the dialog onto the
+ * server's parents and the list's organization, which removes the store's
+ * half.
+ */
+const offersSubProject = (row: Pick<SettingsProjectRow, 'id' | 'can_create_sub_project'>) =>
+  row.can_create_sub_project && P.project(row.id)?.type === 'meta' && P.levelOn(row.id) === 'lead'
+
 /* What Settings › Projects keeps for the browser session, so Back from a
    project's page lands on the page it came from, read again: the
    organization, the settled search, the page starts and the open project,
@@ -403,8 +422,9 @@ const projectsArgs = (org: string, search: string, after: string | null) => ({
  * admin and what the seat sees for anyone else, in name order with a
  * search over its projects and sub-projects. A project row opens its live
  * sub-projects below it, one project at a time; a search lists matching
- * sub-projects too, each in its project. A row's New sub-project… comes
- * from its own `can_create_sub_project`.
+ * sub-projects too, each in its project. A row's New sub-project… needs
+ * its own `can_create_sub_project` and the dialog's parent rule
+ * (offersSubProject).
  */
 export function OrgProjectsPage({
   setPage,
@@ -494,7 +514,7 @@ export function OrgProjectsPage({
           <Popover width={196} align="right" button={menuButton('Project actions')}>
             {(close) => (
               <>
-                {row.can_create_sub_project && (
+                {offersSubProject(row) && (
                   <MenuItem
                     onClick={(e) => {
                       const trigger = menuTrigger(e.currentTarget)
@@ -913,7 +933,7 @@ function SettingsSubProjects({
           end={end}
           place="settings"
           shown={list.rows.length + keptRows.length > 0}
-          onAdd={parent.can_create_sub_project ? onAdd : null}
+          onAdd={offersSubProject(parent) ? onAdd : null}
           onMore={more}
           hooks={{ end: 'data-subprojects-end', more: 'data-subproject-more' }}
           emptyLine="No sub-projects."
