@@ -39,6 +39,8 @@
     "src/store/boardStandIn.setup.ts",
     "src/store/entityLookup.ts",
     "src/store/labelPagesStandIn.setup.ts",
+    "src/store/milestoneRows.ts",
+    "src/store/milestoneStandIn.setup.ts",
     "src/store/overviewLists.ts",
     "src/store/overviewStandIn.setup.ts",
     "src/store/preferences.ts",

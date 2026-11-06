@@ -139,6 +139,13 @@ async function boot(recipe: Recipe) {
     if (P().taskDetail(WINDOW_TASK)?.state !== 'ok')
       throw new Error('the window shows no task-w from its own answer')
   }
+  if (recipe.milestones) {
+    d.publish(recipe.milestones.query, recipe.milestones.answer(), false)
+    P().watchMilestones(recipe.milestones.slot, recipe.milestones.ask)
+    await settle()
+    if (P().milestoneRead(recipe.milestones.slot).state !== 'ok')
+      throw new Error('the milestone read did not answer')
+  }
 }
 
 /* Delivers the window's answers after the write, for a write on a task the
@@ -150,9 +157,11 @@ function publishDetail(recipe: Recipe, args: Record<string, unknown>) {
 }
 
 /* Delivers the Board's answer after the write, for a write on a task only
-   the Board's answer brings. */
+   the Board's answer brings, and the milestone read's, for a write on a
+   milestone a read holds. */
 function publishView(recipe: Recipe, args: Record<string, unknown>) {
   if (recipe.view) server().publish('tasks:board', recipe.view.answer(args))
+  if (recipe.milestones) server().publish(recipe.milestones.query, recipe.milestones.answer(args))
 }
 
 /* Runs the act and answers its writes with `answer` until no new write
@@ -245,7 +254,8 @@ afterEach(() => {
 
 /** Whether `recipe`'s write paints when it is sent, not only once accepted. */
 const paintsAtSend = (recipe: Recipe) =>
-  !!(recipe.truth || recipe.thread || recipe.view || recipe.detail) && !recipe.paintsOnAccept
+  !!(recipe.truth || recipe.thread || recipe.view || recipe.detail || recipe.milestones) &&
+  !recipe.paintsOnAccept
 
 describe.each(recipes.map((recipe) => [`${recipe.mutation} (${recipe.what})`, recipe] as const))(
   '%s',

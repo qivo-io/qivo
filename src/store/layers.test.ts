@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createLayers, type View } from './layers'
 
 const paint = () => {}
-const seen = { snapshot: 0, thread: 0, view: 0, detail: 0 }
+const seen = { snapshot: 0, thread: 0, view: 0, detail: 0, milestones: 0 }
 
 describe('the layer registry', () => {
   it('orders saved layers by acceptance, then the rest by creation', () => {

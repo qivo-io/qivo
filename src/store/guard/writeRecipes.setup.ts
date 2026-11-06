@@ -5,6 +5,7 @@ import type { BoardAnswer } from '../../../convex/lib/board'
 import type { RelationCandidate } from '../../../convex/lib/relationPicker'
 import type { ViewRow } from '../../../convex/lib/viewReads'
 import type { Workspace } from '../../../convex/lib/workspaceJoin'
+import type { MilestoneAsk } from '../milestoneRows'
 import type { Row } from '../rows'
 
 /* One recipe per write the store sends (layerGuard.test.ts checks that each
@@ -83,6 +84,17 @@ export type Recipe = {
   detail?: {
     answer: (args?: Record<string, unknown>) => TaskAnswer
     files?: (args?: Record<string, unknown>) => AttachmentsAnswer
+  }
+  /** For a write on a milestone a milestone read holds
+      (store/milestoneRows.ts), such as ms-a when the projects part sends
+      no milestone: the read the runner opens (P.watchMilestones), its
+      query as Convex names it, and its answer before the write and, given
+      its arguments, as the server answers after it. */
+  milestones?: {
+    slot: string
+    ask: MilestoneAsk
+    query: string
+    answer: (args?: Record<string, unknown>) => unknown
   }
 }
 
@@ -285,6 +297,27 @@ export function thread(): Thread {
 const issue = (snap: Snapshot, id: string) => snap.issues.find((r) => r.id === id)!
 const profile = (snap: Snapshot, id: string) => snap.profiles.find((r) => r.id === id)!
 const str = (value: unknown) => String(value)
+
+/** Milestone ms-a as the server stores it (fixture). */
+const MS_A: Row<'milestones'> = {
+  id: 'ms-a',
+  project_id: 'plan',
+  name: 'Launch',
+  week: '2026-11-02',
+  created_at: '2026-10-01T08:00:00.000Z',
+}
+
+/** A milestone read of Plan's milestones from 26 October to 16 November,
+    as Team sync's opening reads a range, whose rows are `rows`, before the
+    write and, given its arguments, after it. */
+const milestoneRange = (
+  rows: (args?: Record<string, unknown>) => Row<'milestones'>[],
+): NonNullable<Recipe['milestones']> => ({
+  slot: 'milestones:sync-ahead',
+  ask: { kind: 'between', projects: ['plan'], from: '2026-10-26', to: '2026-11-16' },
+  query: 'milestones:between',
+  answer: (args) => ({ rows: rows(args), next: null, stopped: null }),
+})
 
 /* The dates a Roadmap recipe plans a task on, as the server stores them,
    and as the store's patch takes them. */
@@ -1566,6 +1599,83 @@ export const recipes: Recipe[] = [
     truth: (snap) => {
       snap.milestones = []
     },
+  },
+  // the same writes from a milestone read, as the projects part will send
+  // no milestone (t3/limits-milestone-part)
+  {
+    mutation: 'projects:addMilestone',
+    mutator: 'addMilestone',
+    what: 'a new milestone in a read that covers it',
+    pause: 'P',
+    seed: (snap) => {
+      snap.milestones = []
+    },
+    milestones: milestoneRange((args) =>
+      args
+        ? [
+            MS_A,
+            {
+              id: str(args.id),
+              project_id: 'plan',
+              name: 'Beta',
+              week: '2026-11-09',
+              created_at: SERVER,
+            },
+          ]
+        : [MS_A],
+    ),
+    act: (P) => P.addMilestone({ project: 'work', name: 'Beta', week: P.isoToWeek('2026-11-09') }),
+    // the projects part still sends every milestone at this stage
+    truth: (snap, args) =>
+      snap.milestones.push({
+        id: str(args.id),
+        project_id: 'plan',
+        name: 'Beta',
+        week: '2026-11-09',
+        created_at: SERVER,
+      }),
+  },
+  {
+    mutation: 'projects:updateMilestone',
+    mutator: 'updateMilestone',
+    what: 'a renamed milestone only a read holds',
+    pause: 'P',
+    seed: (snap) => {
+      snap.milestones = []
+    },
+    milestones: milestoneRange((args) => [args ? { ...MS_A, name: 'Release' } : MS_A]),
+    act: (P) => P.updateMilestone('ms-a', { name: 'Release' }),
+  },
+  {
+    mutation: 'projects:updateMilestone',
+    mutator: 'updateMilestone',
+    what: 'a moved milestone only an opened read holds',
+    pause: 'P',
+    seed: (snap) => {
+      snap.milestones = []
+    },
+    milestones: {
+      slot: 'milestone:open',
+      ask: { kind: 'get', id: 'ms-a' },
+      query: 'milestones:get',
+      answer: (args) => ({
+        row: args ? { ...MS_A, week: '2026-11-09' } : MS_A,
+        project: { id: 'plan', name: 'Plan', key: 'QN', org_id: ORG },
+        can_write: true,
+      }),
+    },
+    act: (P) => P.updateMilestone('ms-a', { week: P.isoToWeek('2026-11-09') }),
+  },
+  {
+    mutation: 'projects:removeMilestone',
+    mutator: 'removeMilestone',
+    what: 'a removed milestone only a read holds',
+    pause: 'P',
+    seed: (snap) => {
+      snap.milestones = []
+    },
+    milestones: milestoneRange((args) => (args ? [] : [MS_A])),
+    act: (P) => P.removeMilestone('ms-a'),
   },
   {
     mutation: 'roadmap:change',

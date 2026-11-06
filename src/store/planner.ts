@@ -39,6 +39,7 @@ import {
   LIMITS,
   type Limit,
   MIB,
+  MILESTONE_READ_PROJECTS,
   outsideWhole,
   overText,
   SLUG_SHAPE,
@@ -150,6 +151,15 @@ import {
   type SideNews,
   TASKS,
 } from './liveParts'
+import {
+  createMilestoneRows,
+  type MilestoneAsk,
+  type MilestonePosition,
+  type MilestoneProject,
+  type MilestoneRow,
+  type MilestonesShown,
+  type MilestoneTake,
+} from './milestoneRows'
 import {
   baseOfKey,
   createOverviewReads,
@@ -2668,19 +2678,21 @@ const layers = createLayers()
    is already in the newest delivery. */
 let snapshotCurrent = false
 /* Live good deliveries counted since the store started, of the snapshot, of
-   the watched thread, of the views' reads (viewReads) and of the watched
-   task's own answer (taskDelivered). A layer remembers them when it is
-   sent. */
+   the watched thread, of the views' reads (viewReads), of the watched
+   task's own answer (taskDelivered) and of the milestone reads'
+   answers (P.watchMilestones). A layer remembers them when it is sent. */
 let snapshotDeliveries = 0
 let threadDeliveries = 0
 let viewDeliveries = 0
 let detailDeliveries = 0
+let milestoneDeliveries = 0
 /** The delivery counters now, which a layer keeps when it is sent. */
 const deliveryCounters = () => ({
   snapshot: snapshotDeliveries,
   thread: threadDeliveries,
   view: viewDeliveries,
   detail: detailDeliveries,
+  milestones: milestoneDeliveries,
 })
 /* Whether the newest thread result was a live good delivery of the watched
    task, as snapshotCurrent is for the snapshot. */
@@ -2833,8 +2845,10 @@ function together(step: () => void) {
     live layer over them, in order (layers.ordered), without showing them.
     The workspace rows start again from the server's, with the staged
     delivery applied (store/rowMap.ts beginRepaint), the views' rows from
-    their reads' answers (store/viewRows.ts), and with `detail` the watched
-    task's own answer from its anchor (paintDetail). */
+    their reads' answers (store/viewRows.ts), the milestone reads' rows,
+    which repaint with the views', from their answers
+    (store/milestoneRows.ts), and with `detail` the watched task's own
+    answer from its anchor (paintDetail). */
 function paintRows(workspace: boolean, thread: boolean, view = false, detail = false) {
   if (detail) paintDetail()
   const painting = workspace && hasSnapshot
@@ -2844,7 +2858,10 @@ function paintRows(workspace: boolean, thread: boolean, view = false, detail = f
     countInbox()
   }
   if (thread) buildThreadRows()
-  if (view) viewRows.beginPaint()
+  if (view) {
+    viewRows.beginPaint()
+    milestoneRows.beginPaint()
+  }
   workspaceRows.paint(() => {
     for (const layer of layers.ordered()) {
       // one paint that throws cannot keep every later delivery off the screen
@@ -2852,6 +2869,7 @@ function paintRows(workspace: boolean, thread: boolean, view = false, detail = f
       const part = layer.view.thread
       if (thread && part && part.task === watchedComments) guarded(part.paint)
       if (view && layer.view.view) guarded(layer.view.view)
+      if (view && layer.view.milestones) guarded(layer.view.milestones)
     }
   })
 }
@@ -2924,10 +2942,15 @@ const KEEP_ROWS = Symbol('keep the rows')
     value that brings none (the read's rows go) or KEEP_ROWS for one whose
     rows stay as they were, as a fixed Overview batch that split keeps its
     last rows until its halves answer. A read without `rows`, such as the
-    Overview's summary, holds no rows, and its deliveries hold no write. */
+    Overview's summary, holds no rows, and its deliveries hold no write.
+    A milestone read's `milestones` answers the ask its arguments `key`
+    make and the milestones a value brings (store/milestoneRows.ts), which
+    hold the milestone writes the read's deliveries hold
+    (milestonePartHeld). */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
+  milestones?: (value: unknown, key: string) => { ask: MilestoneAsk; take: MilestoneTake }
 }
 
 /** The Board's read: an ok answer brings its rows and its parents. */
@@ -3110,6 +3133,15 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       read.behind = false
       dropHeldViewParts()
     }
+    // a milestone read's answer is its anchor; a failure keeps the last
+    // one, which the view shows under its note (P.milestoneRead)
+    const milestones = read.query.milestones
+    if (milestones && next.value !== undefined) {
+      const { ask, take: answer } = milestones(next.value, key)
+      milestoneRows.take(slot, key, ask, answer)
+      read.delivered = ++milestoneDeliveries
+      dropHeldMilestoneParts()
+    }
     viewReadsChanged = true
     if (overview.owns(slot)) settleOverview()
     owe('view')
@@ -3148,8 +3180,10 @@ function syncViewRead(slot: ViewSlot) {
 
 /** Forgets view `slot`'s rows, its owners' loads and what its read held,
     and repaints the views when it held any, such as a failure Try again
-    leaves, so the view shows its wait at once. */
-function releaseViewRows(slot: ViewSlot) {
+    leaves, so the view shows its wait at once. A milestone read's Retry
+    keeps its last answer (`keepMilestones`), as the view keeps the person's
+    draft over it (P.milestoneRead). */
+function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
   const read = viewReads.get(slot)
   const held = !!read?.held
   if (read) {
@@ -3163,7 +3197,9 @@ function releaseViewRows(slot: ViewSlot) {
     // a write whose tasks only these rows held has none left to hold
     dropHeldViewParts()
   }
-  if (!rows && !held) return
+  const milestones = !keepMilestones && milestoneRows.holds(slot)
+  if (milestones) releaseMilestoneRows(slot)
+  if (!rows && !held && !milestones) return
   viewReadsChanged = true
   owe('view')
 }
@@ -3222,7 +3258,7 @@ function watchView(
     read.live = null
     read.current = false
     read.query = query
-    releaseViewRows(slot)
+    releaseViewRows(slot, retry && !other && !!query.milestones)
   }
   if (read.want === key && !retry && !other) return
   const wasLive = read.live !== null
@@ -3285,6 +3321,278 @@ function overviewStep(step: () => void) {
     owe('view')
   })
 }
+
+/* ---- The milestone reads ----
+   A view registers each milestone read it shows here from an effect, by
+   slot, with the arguments on screen, or none while its page or the tab is
+   hidden (P.watchMilestones): the Milestones window opened on a milestone
+   its `get` ('milestone:open'), and Team sync's opening its next milestone
+   and the milestones of this week and next ('milestones:sync-next',
+   'milestones:sync-ahead'). Each is a view read (watchView), with its
+   owner, attempt, key, connection and the answer it keeps while it stops,
+   and its answer's milestones are the read's anchor in milestoneRows. Every
+   live layer's `milestones` part paints every copy of a milestone it
+   changes there, and a delivery of each read that holds a copy holds the
+   write (milestonePartHeld), so a person's rename shows in every read at
+   once and stays until the reads show it. The answers repaint with the
+   views and never join the workspace's context (P.contextVersion). */
+
+/** The most projects one milestone read names, the store's copy of
+    convex/lib/limits.ts MILESTONE_READ_PROJECTS, which tests lower. A read
+    of more top-level projects asks nothing (P.watchMilestones). */
+export const MILESTONE_READS = { projects: MILESTONE_READ_PROJECTS }
+
+/** The reasons of the milestone reads' refusals that the view shows in the
+    server's words: a read whose projects need more reads than one request
+    allows (convex/model/milestones.ts MILESTONE_READ_TOO_LARGE), and an
+    access check a bound of the person's own reads stopped
+    (convex/lib/access.ts ACCESS_UNCHECKED). */
+const MILESTONE_REFUSALS = new Set(['milestone_read_too_large', 'access_unchecked'])
+
+/* The slots whose last ask named more top-level projects than
+   MILESTONE_READS.projects, which read nothing. */
+const milestonesTooMany = new Set<ViewSlot>()
+
+/** What a milestone paint changes, for whether a read's delivery holds it
+    (milestonePartHeld): the milestones it edits or hides, the top-level
+    projects whose milestones it hides, and the rows it puts in place, a
+    create's or an edit's row as the write leaves it. */
+type MilestoneMarks = {
+  ids?: readonly string[]
+  projects?: readonly string[]
+  rows?: readonly MilestoneRow[]
+}
+const milestonePaintMarks = new WeakMap<Paint, MilestoneMarks>()
+
+/** A layer's `milestones` part, `paint`, which changes what `marks` names
+    (milestonePartHeld). */
+function milestonePaint(marks: MilestoneMarks, paint: Paint): Paint {
+  milestonePaintMarks.set(paint, marks)
+  return paint
+}
+
+/* The milestone reads' rows: a sub-project stands for its top-level
+   project, as the server folds the projects a read names. */
+const milestoneRows = createMilestoneRows({
+  topOf: (id) => rows.projects.get(id)?.parent_id ?? id,
+  live: viewLive,
+})
+
+/** Whether read `slot`'s answer holds what `marks` changes: a copy of one
+    of its milestones or a milestone of one of its projects, or a row the
+    read would answer (store/milestoneRows.ts covers). */
+function milestoneMarked(slot: ViewSlot, marks: MilestoneMarks): boolean {
+  if (marks.ids?.some((id) => milestoneRows.anchorHas(slot, id))) return true
+  if (marks.projects && milestoneRows.anchorHasProject(slot, new Set(marks.projects))) return true
+  return marks.rows?.some((row) => milestoneRows.covers(slot, row)) ?? false
+}
+
+/** Whether the milestone reads hold saved milestone part `paint` of a
+    write sent when their deliveries counted `seen`: each read whose answer
+    holds what the write changes (milestoneMarked) is live, and its newest
+    result is a delivery on the socket's current connection since the
+    send (readHolds), as viewPartHeld decides for the views' rows. A read
+    stopped with such an answer kept, as a hidden page's, holds nothing
+    until it reads again. A part no read holds anything of, as a create no
+    read covers or a read released, paints nothing, so nothing is left to
+    hold: Convex delivers what a write changed before the write resolves
+    (lib/convexOrdering.test.ts). */
+function milestonePartHeld(paint: Paint, seen: number): boolean {
+  const marks = milestonePaintMarks.get(paint)
+  for (const [slot, read] of viewReads) {
+    if (!read.query.milestones || !milestoneRows.holds(slot)) continue
+    if (marks && !milestoneMarked(slot, marks)) continue
+    if (!readHolds(read, seen)) return false
+  }
+  return true
+}
+
+/** Drops every saved milestone part the milestone reads hold now
+    (milestonePartHeld). */
+const dropHeldMilestoneParts = () =>
+  layers.dropSavedIf(
+    'milestones',
+    (layer) =>
+      !!layer.view.milestones && milestonePartHeld(layer.view.milestones, layer.seen.milestones),
+  )
+
+/** Forgets milestone read `slot`'s answer, and the saved paints only it
+    held. The caller repaints the views. */
+function releaseMilestoneRows(slot: ViewSlot) {
+  milestoneRows.release(slot)
+  shapedMilestones.delete(slot)
+  dropHeldMilestoneParts()
+}
+
+/** The arguments of `ask` as its query takes them, as JSON in a fixed key
+    order, with its projects once each and sorted and its empty fields left
+    out, so equal asks share one subscription. */
+function milestoneKey(ask: MilestoneAsk): string {
+  const after = (at: MilestonePosition | undefined) =>
+    at === undefined ? {} : { after: { week: at.week, key: at.key, id: at.id } }
+  if (ask.kind === 'get') return JSON.stringify({ id: ask.id })
+  const projects = [...new Set(ask.projects)].sort()
+  if (ask.kind === 'between')
+    return JSON.stringify({ projects, from: ask.from, to: ask.to, ...after(ask.after) })
+  const search = ask.search?.trim() ? { search: ask.search } : {}
+  return JSON.stringify({
+    projects,
+    from: ask.from,
+    side: ask.side,
+    ...search,
+    ...after(ask.after),
+    limit: ask.limit,
+  })
+}
+
+/* The milestone queries' answers, as convex/milestones.ts gives them. */
+type MilestoneBatchAnswer = {
+  rows: MilestoneRow[]
+  next: MilestonePosition | null
+  stopped: string | null
+  past?: boolean
+}
+type MilestoneGetAnswer = {
+  row: MilestoneRow
+  project: MilestoneProject
+  can_write: boolean
+} | null
+
+/** The milestone reads by kind: each answer brings its milestones as the
+    read's anchor, and holds no task rows. */
+const MILESTONE_QUERIES: Record<MilestoneAsk['kind'], ViewQuery> = {
+  get: {
+    ref: api.milestones.get,
+    milestones: (value, key) => {
+      const got = value as MilestoneGetAnswer
+      const { id } = JSON.parse(key) as { id: string }
+      return {
+        ask: { kind: 'get', id },
+        take: got
+          ? {
+              rows: [got.row],
+              next: null,
+              stopped: null,
+              project: got.project,
+              canWrite: got.can_write,
+            }
+          : { rows: [], next: null, stopped: null, project: null, canWrite: false },
+      }
+    },
+  },
+  section: {
+    ref: api.milestones.section,
+    milestones: (value, key) => {
+      const batch = value as MilestoneBatchAnswer
+      const args = JSON.parse(key) as Omit<Extract<MilestoneAsk, { kind: 'section' }>, 'kind'>
+      return {
+        ask: { kind: 'section', ...args },
+        take: {
+          rows: batch.rows,
+          next: batch.next,
+          stopped: batch.stopped,
+          ...(batch.past === undefined ? {} : { past: batch.past }),
+        },
+      }
+    },
+  },
+  between: {
+    ref: api.milestones.between,
+    milestones: (value, key) => {
+      const batch = value as MilestoneBatchAnswer
+      const args = JSON.parse(key) as Omit<Extract<MilestoneAsk, { kind: 'between' }>, 'kind'>
+      return {
+        ask: { kind: 'between', ...args },
+        take: { rows: batch.rows, next: batch.next, stopped: batch.stopped },
+      }
+    },
+  },
+}
+
+/** What a milestone read shows, painted: its milestones as view models in
+    the server's order, each one's stored name and day (an editor sends
+    what it showed as the write's expected values), `next`, `stopped` and
+    `past` as the answer gave them, a `past` a person's create of a past
+    milestone made true, and for a `get` the project that stores its
+    milestone and whether the person may change it. A `get` whose
+    milestone a person's own delete took away, or the server answered null
+    for, shows no milestone. */
+export type MilestoneAnswer = {
+  rows: readonly MilestoneVM[]
+  stored: ReadonlyMap<string, { name: string; week: string }>
+  next: MilestonePosition | null
+  stopped: string | null
+  past?: boolean
+  project?: MilestoneProject | null
+  canWrite?: boolean
+}
+
+/** What milestone read `slot` holds (P.milestoneRead):
+    - `loading`, nothing for the arguments asked;
+    - `too_many`, more top-level projects than one read names
+      (MILESTONE_READS.projects), so nothing was asked;
+    - `refused`, a refusal the view shows in the server's words
+      (MILESTONE_REFUSALS), with the answer kept from before, if any;
+    - `failed`, any other error, which the view's Retry asks again, with
+      the answer kept from before, if any;
+    - `ok`, the answer, `current` when it is the live subscription's on
+      the socket's current connection, else kept and refreshing. */
+export type MilestoneRead =
+  | { state: 'loading' }
+  | { state: 'too_many' }
+  | { state: 'refused'; reason: string; sentence: string; kept: MilestoneAnswer | null }
+  | { state: 'failed'; kept: MilestoneAnswer | null }
+  | { state: 'ok'; current: boolean; answer: MilestoneAnswer }
+
+/* Each slot's answer as last shaped, so a read that shows the same rows
+   keeps its objects (keepItems). */
+const shapedMilestones = new Map<
+  ViewSlot,
+  { from: MilestonesShown; take: MilestoneTake; grid: number; answer: MilestoneAnswer }
+>()
+
+/** Milestone read `slot`'s answer as it shows, painted, or null. */
+function milestoneAnswer(slot: ViewSlot): MilestoneAnswer | null {
+  const shown = milestoneRows.shownOf(slot)
+  const take = milestoneRows.anchorOf(slot)
+  if (!shown || !take) return null
+  const was = shapedMilestones.get(slot)
+  if (
+    was &&
+    was.from.rows === shown.rows &&
+    was.from.past === shown.past &&
+    was.grid === PLANNER.gridEpoch &&
+    milestoneRows.anchorOf(slot) === was.take
+  )
+    return was.answer
+  const answer: MilestoneAnswer = {
+    rows: keepItems(was?.answer.rows ?? [], shown.rows.map(shapeMilestone)),
+    stored: new Map(shown.rows.map((row) => [row.id, { name: row.name, week: row.week }])),
+    next: take.next,
+    stopped: take.stopped,
+    ...(shown.past === undefined ? {} : { past: shown.past }),
+    ...(take.project === undefined ? {} : { project: take.project, canWrite: !!take.canWrite }),
+  }
+  shapedMilestones.set(slot, { from: shown, take, grid: PLANNER.gridEpoch, answer })
+  return answer
+}
+
+/** Milestone `id` as the screen shows it: the workspace's row, else the row
+    a milestone read shows, a live read's first. The writes take their row
+    from here when an editor names none of its own. */
+const milestoneOnScreen = (id: string): MilestoneRow | undefined =>
+  rows.milestones.get(id) ?? milestoneRows.row(id)
+
+/** The organization of milestone `row`: the one a `get` answer named for
+    it, else its project's in the workspace, else none (''). */
+const milestoneOrg = (row: MilestoneRow): string =>
+  milestoneRows.orgOf(row.id) ?? orgOfProject(row.project_id)
+
+/** The `milestones` part of an archive or delete of project `id`, which
+    takes the milestones of a top-level project out of every milestone read.
+    Milestones sit on top-level projects, so a sub-project's takes none. */
+const hideProjectMilestones = (id: string): Paint =>
+  milestonePaint({ projects: [id] }, () => milestoneRows.hideProjects(new Set([id])))
 
 /** What judging a task only a view holds reads from the store
     (store/viewDelay.ts). */
@@ -3550,6 +3858,7 @@ function showPaint(view: View) {
     view.workspace?.()
     thread?.paint()
     view.view?.()
+    view.milestones?.()
   })
   // over the painted answer as it shows, or with every layer again when its
   // anchor changed or it is the anchor itself, which no paint may change
@@ -3567,7 +3876,7 @@ function showPaint(view: View) {
       if (detail) rebuildSections()
       emit('comments')
     }
-    if (view.view) {
+    if (view.view || view.milestones) {
       reshapeViews()
       emit('views')
     }
@@ -3762,7 +4071,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
         repaint({
           workspace: !!had.workspace,
           thread: !!had.thread,
-          view: !!had.view,
+          view: !!had.view || !!had.milestones,
           sections: !!had.detail,
         })
     }
@@ -3893,7 +4202,13 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
   // own (detailPartHeld)
   const detail =
     view.detail && !detailPartHeld(view.detail.task, layer.seen.detail) ? view.detail : undefined
-  layers.save(layer, { workspace, thread, view: viewPart, detail })
+  // every milestone read whose answer holds what the write changed holds
+  // it, as the views' reads do (milestonePartHeld)
+  const milestones =
+    view.milestones && !milestonePartHeld(view.milestones, layer.seen.milestones)
+      ? view.milestones
+      : undefined
+  layers.save(layer, { workspace, thread, view: viewPart, detail, milestones })
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
   if (sent.view && !viewPart) {
@@ -3902,11 +4217,16 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
     if (unsentText.has(sent.view)) viewReadsChanged = true
   }
   if (sent.detail && !detail && sent.detail.task === watchedComments) owed.sections = true
+  // the milestone reads repaint with the views
+  if (sent.milestones && !milestones) {
+    owed.view = true
+    viewReadsChanged = true
+  }
   // a view keep gave paints now, unless a delivery holds it already
   const now = {
     workspace: !!next && !!workspace,
     thread: !!next && !!thread && thread.task === watchedComments,
-    view: !!next && !!viewPart,
+    view: !!next && (!!viewPart || !!milestones),
     sections: !!next && !!detail && detail.task === watchedComments,
   }
   if (now.workspace || now.thread || now.view || now.sections) repaint(now)
@@ -3934,11 +4254,13 @@ function settleRefused(layer: Layer) {
   layers.remove(layer)
   // the views show again without its unsure mark, though no row changed
   if (had.view && unsentText.has(had.view)) viewReadsChanged = true
+  // a milestone read shows its answer again, which the views' repaint shows
+  if (had.milestones) viewReadsChanged = true
   if (paints(had)) {
     repaint({
       workspace: !!had.workspace || owed.workspace,
       thread: (!!had.thread && had.thread.task === watchedComments) || owed.thread,
-      view: !!had.view || owed.view,
+      view: !!had.view || !!had.milestones || owed.view,
       sections: (!!had.detail && had.detail.task === watchedComments) || owed.sections,
     })
   } else if (
@@ -3976,6 +4298,7 @@ function checkLayers() {
   checkingLayers = true
   const saved = workspaceRows.save()
   const savedViews = viewRows.save()
+  const savedMilestones = milestoneRows.save()
   const thread = { comments: rows.comments, threadEvents: rows.threadEvents }
   const detail = detailRows
   const counters = { hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut }
@@ -3992,6 +4315,7 @@ function checkLayers() {
           const part = layer.view.thread
           if (part && part.task === watchedComments) part.paint()
           layer.view.view?.()
+          layer.view.milestones?.()
           const own = layer.view.detail
           if (own && own.task === watchedComments && detailRows.task) own.paint()
         }
@@ -4008,6 +4332,7 @@ function checkLayers() {
   } finally {
     workspaceRows.restore(saved)
     viewRows.restore(savedViews)
+    milestoneRows.restore(savedMilestones)
     detailRows = detail
     Object.assign(rows, thread)
     ;({ hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut } = counters)
@@ -4059,6 +4384,9 @@ function canonicalRows(noStamps = false): Record<string, string> {
   for (const [section, value] of Object.entries(rows)) out[section] = JSON.stringify(norm(value))
   out.counters = JSON.stringify([hiddenReadMessages, unexaminedUnread, unexaminedRead, messagesCut])
   for (const [slot, value] of viewRows.views()) out[`view:${slot}`] = JSON.stringify(norm(value))
+  // each milestone read's rows in their order, which a paint keeps
+  for (const [slot, value] of milestoneRows.views())
+    out[`milestones:${slot}`] = JSON.stringify([value.rows.map((row) => norm(row)), value.past])
   // the watched task's own answer, painted, as the window reads it
   const detail = paintedAnswer()
   if (detail) out.detail = JSON.stringify(norm(detail))
@@ -4319,19 +4647,37 @@ function recordRoadmapChange(
   const batch = roadmapBatch
   if (!batch) return submitRoadmapChanges([operation], view, keepDraft)
   batch.operations.push(operation)
-  const before = batch.layer.view.workspace
-  const paint = view.workspace
-  if (paint)
-    batch.layer.view = {
-      workspace: before
-        ? () => {
-            before()
-            paint()
-          }
-        : paint,
-    }
+  const had = batch.layer.view
+  batch.layer.view = {
+    ...(had.workspace || view.workspace
+      ? { workspace: foldPaints(had.workspace, view.workspace) }
+      : {}),
+    ...(had.milestones || view.milestones
+      ? { milestones: foldPaints(had.milestones, view.milestones) }
+      : {}),
+  }
   showPaint(view)
   return new Promise((resolve) => batch.saved.push(resolve))
+}
+
+/** One paint that runs `before` and then `after`, for a Roadmap batch's
+    layer, which holds the paints of all its operations. A milestone part
+    carries what both change (milestonePartHeld). */
+function foldPaints(before: Paint | undefined, after: Paint | undefined): Paint {
+  if (!before || !after) return (before ?? after) as Paint
+  const paint = () => {
+    before()
+    after()
+  }
+  const a = milestonePaintMarks.get(before)
+  const b = milestonePaintMarks.get(after)
+  if (a || b)
+    milestonePaintMarks.set(paint, {
+      ids: [...(a?.ids ?? []), ...(b?.ids ?? [])],
+      projects: [...(a?.projects ?? []), ...(b?.projects ?? [])],
+      rows: [...(a?.rows ?? []), ...(b?.rows ?? [])],
+    })
+  return paint
 }
 
 // Reads (including marking a task's messages read) keep history. Task content
@@ -4722,7 +5068,7 @@ const fieldLookup = {
         return comment ? `this comment on ${task(comment.issue_id)}` : 'this comment'
       }
       case 'milestone': {
-        const name = seenName ?? rows.milestones.get(change.id)?.name
+        const name = seenName ?? milestoneOnScreen(change.id)?.name
         return name ? `milestone “${name}”` : 'a milestone'
       }
       case 'project':
@@ -9607,6 +9953,90 @@ export const PLANNER = {
     overviewStep(() => (list === 'health' ? overview.retryHealth() : overview.retry(list, batch))),
   /** Forgets the Overview's reads and rows: its page left. */
   releaseOverview: () => overviewStep(() => overview.release()),
+  /** Registers milestone read `slot` (the milestone reads' header above):
+      `ask`, one milestone by id, a section batch or a range of days of
+      the milestones of top-level projects (convex/milestones.ts get,
+      section and between), or none with null, as the view's effect runs.
+      The view passes null while its page or the tab is hidden: the read
+      stops and keeps its answer, which shows again, as refreshing, when it
+      asks for the same arguments. Other arguments drop what it held, and a
+      new `attempt` (Retry) asks afresh and keeps the answer it held until
+      the new one arrives, so an editor over it keeps its draft. `owner`
+      names the mounted view, as P.watchBoard's does. An ask of more
+      top-level projects than MILESTONE_READS.projects reads nothing and
+      answers `too_many` (LIMITS.milestoneProjects). */
+  watchMilestones: (slot: ViewSlot, ask: MilestoneAsk | null, owner = 0, attempt = 0) => {
+    together(() => {
+      const read = viewReads.get(slot)
+      if (ask === null) {
+        if (read) watchView(slot, read.query, null, attempt, owner)
+        return
+      }
+      if (ask.kind !== 'get' && new Set(ask.projects).size > MILESTONE_READS.projects) {
+        if (read && read.owner !== owner && read.want !== null) return
+        if (milestonesTooMany.has(slot)) return
+        milestonesTooMany.add(slot)
+        if (read) releaseView(slot)
+        else if (milestoneRows.holds(slot)) releaseMilestoneRows(slot)
+        viewReadsChanged = true
+        owe('view')
+        return
+      }
+      if (milestonesTooMany.delete(slot)) {
+        viewReadsChanged = true
+        owe('view')
+      }
+      const key = milestoneKey(ask)
+      // an answer kept through a Retry is for the arguments it was asked with
+      const kept = milestoneRows.keyOf(slot)
+      if (kept !== null && kept !== key) {
+        releaseMilestoneRows(slot)
+        viewReadsChanged = true
+        owe('view')
+      }
+      watchView(slot, MILESTONE_QUERIES[ask.kind], key, attempt, owner, false)
+    })
+  },
+  /** What milestone read `slot` holds now (MilestoneRead), painted with the
+      person's own milestone writes. A failure or refusal after an answer
+      keeps that answer beside it. */
+  milestoneRead: (slot: ViewSlot): MilestoneRead => {
+    if (milestonesTooMany.has(slot)) return { state: 'too_many' }
+    const held = viewRead(slot)
+    const kept = milestoneAnswer(slot)
+    if (held.error !== undefined) {
+      const d = errData(held.error)
+      if (d.reason !== undefined && MILESTONE_REFUSALS.has(d.reason))
+        return {
+          state: 'refused',
+          reason: d.reason,
+          sentence: asSentence(d.message ?? ''),
+          kept,
+        }
+      return { state: 'failed', kept }
+    }
+    if (!kept) return { state: 'loading' }
+    return {
+      state: 'ok',
+      current: held.current && held.key === milestoneRows.keyOf(slot),
+      answer: kept,
+    }
+  },
+  /** Forgets milestone read `slot` and its answer: its view left. Another
+      mounted view's read is left alone when `owner` names this one. */
+  releaseMilestones: (slot: ViewSlot, owner?: number) => {
+    const read = viewReads.get(slot)
+    if (owner !== undefined && read && read.owner !== owner) return
+    together(() => {
+      if (milestonesTooMany.delete(slot)) viewReadsChanged = true
+      if (read) releaseView(slot)
+      else if (milestoneRows.holds(slot)) {
+        releaseMilestoneRows(slot)
+        viewReadsChanged = true
+        owe('view')
+      }
+    })
+  },
   /** Task `uuid` as the rows on screen show it to view `slot`, for a task
       the person's own pending writes changed (P.ownPaintedTasks): the
       workspace's where it holds the task, none where the workspace held it
@@ -12587,6 +13017,9 @@ export const PLANNER = {
           rows.links.delete(key)
         workspaceRows.keepList('issueLabels', (il) => rows.issues.has(il.issue_id))
       },
+      // milestones sit on top-level projects, so a sub-project's archive
+      // takes none from the milestone reads
+      milestones: hideProjectMilestones(id),
     }
     void send(api.projects.archive, { org_id: row.org_id, id }, view)
   },
@@ -12686,7 +13119,14 @@ export const PLANNER = {
       { org_id: org, id, ...(text ? { reason: text } : {}) },
       'none',
       // the delivery may already hold the result; nothing paints then
-      row ? { keep: () => ({ workspace: () => dropProjectRows(id) }) } : {},
+      row
+        ? {
+            keep: () => ({
+              workspace: () => dropProjectRows(id),
+              milestones: hideProjectMilestones(id),
+            }),
+          }
+        : {},
     ).then(
       () => true,
       (error) => {
@@ -13388,9 +13828,12 @@ export const PLANNER = {
   },
 
   /** Milestone `id` as stored, its day unrounded, for an editor that sends
-      what the person saw (updateMilestone). Null when it is gone. */
+      what the person saw (updateMilestone): the workspace's row, else the
+      row a milestone read shows (milestoneOnScreen). An editor fed by a
+      read's answer takes `seen` from that answer instead
+      (MilestoneAnswer.stored). Null when it is gone. */
   milestoneRow: (id: string): { name: string; week: string } | null => {
-    const row = rows.milestones.get(id)
+    const row = milestoneOnScreen(id)
     return row ? { name: row.name, week: row.week } : null
   },
 
@@ -13420,6 +13863,10 @@ export const PLANNER = {
         if (!rows.milestones.has(uuid) && rows.projects.has(meta.id))
           rows.milestones.set(uuid, { ...milestone })
       },
+      // every milestone read that would answer it, in its place
+      milestones: milestonePaint({ ids: [uuid], rows: [milestone] }, () =>
+        milestoneRows.insert(milestone),
+      ),
     }
     return (
       recordRoadmapChange(
@@ -13436,18 +13883,24 @@ export const PLANNER = {
 
   /** Paints the change at once and resolves whether the server saved it.
       Resolves false without sending when it refused the change first
-      (toasted) or the milestone is missing here, and false after a refusal,
-      which is toasted and taken back. `seen` is the milestone as an editor
-      showed it when opened, and `keepDraft` runs when the server refuses
-      because someone changed it first (SendOptions). */
+      (toasted), or when the milestone or its organization is not known here:
+      the row comes from the workspace, else from a milestone read
+      (milestoneOnScreen), and the organization from a `get` answer, else
+      the project's (milestoneOrg). Resolves false after a refusal, which is
+      toasted and taken back. `seen` is the milestone as an editor showed it
+      when opened, which goes out as the expected values, and `keepDraft`
+      runs when the server refuses because someone changed it first
+      (SendOptions). The paint changes the workspace's row and every copy a
+      milestone read holds. */
   updateMilestone: (
     id: string,
     patch: { name?: string; week?: number },
     seen?: { name: string; week: string },
     keepDraft?: () => boolean,
   ): Promise<boolean> => {
-    const row = rows.milestones.get(id)
-    if (!row) return Promise.resolve(false)
+    const row = milestoneOnScreen(id)
+    const org = row ? milestoneOrg(row) : ''
+    if (!row || !org) return Promise.resolve(false)
     const db: FunctionArgs<typeof api.projects.updateMilestone>['patch'] = {}
     // only what differs from what the person saw goes out: a rename alone
     // leaves the date as stored, and neither undoes a change made meanwhile.
@@ -13460,36 +13913,39 @@ export const PLANNER = {
     if (refusePausedEdit()) return Promise.resolve(false)
     if ('name' in patch && refuseOver(LIMITS.milestoneName, patch.name ?? ''))
       return Promise.resolve(false)
+    const fields = { ...db }
     const view: View = {
       workspace: () => {
         const live = rows.milestones.get(id)
-        if (live) Object.assign(live, db)
+        if (live) Object.assign(live, fields)
       },
+      // every copy, each read keeping its rows where the server would
+      milestones: milestonePaint({ ids: [id], rows: [{ ...row, ...fields }] }, () =>
+        milestoneRows.update(id, fields, rows.milestones.get(id)),
+      ),
     }
     // moved/renamed verb logic is server-side now (it diffs against its row)
     const over = overOf('milestones', row, Object.keys(db), seen)
     return (
       recordRoadmapChange({ kind: 'milestone_update', id, patch: db }, view, over, keepDraft) ??
-      send(
-        api.projects.updateMilestone,
-        { org_id: orgOfProject(row.project_id), id, patch: db },
-        view,
-        { over, keepDraft },
-      )
+      send(api.projects.updateMilestone, { org_id: org, id, patch: db }, view, { over, keepDraft })
     )
   },
 
-  /** Removes the milestone from the screen at once and resolves whether the
-      server deleted it, as updateMilestone does. `seen` is the milestone as
-      an editor showed it, the values the delete is checked against. */
+  /** Removes the milestone from the screen at once, from the workspace and
+      every milestone read, and resolves whether the server deleted it, as
+      updateMilestone does, with its row and organization found as there.
+      `seen` is the milestone as an editor showed it, the values the delete
+      is checked against. */
   removeMilestone: (id: string, seen?: { name: string; week: string }): Promise<boolean> => {
-    const row = rows.milestones.get(id)
-    if (!row || refusePausedEdit()) return Promise.resolve(false)
-    const org = orgOfProject(row.project_id)
+    const row = milestoneOnScreen(id)
+    const org = row ? milestoneOrg(row) : ''
+    if (!row || !org || refusePausedEdit()) return Promise.resolve(false)
     const view: View = {
       workspace: () => {
         rows.milestones.delete(id)
       },
+      milestones: milestonePaint({ ids: [id] }, () => milestoneRows.hide(id)),
     }
     // what an editor showed, which may be older than the row on screen
     const over = overOf('milestones', row, ['name', 'week'], seen)
@@ -14312,6 +14768,9 @@ export function disposeDemoStore() {
   for (const read of viewReads.values()) read.stop?.()
   viewReads.clear()
   viewRows.clear()
+  milestoneRows.clear()
+  shapedMilestones.clear()
+  milestonesTooMany.clear()
   overview.clear()
   viewDelays = new Map()
   boardLookup = null
@@ -14326,6 +14785,7 @@ export function disposeDemoStore() {
   threadDeliveries = 0
   viewDeliveries = 0
   detailDeliveries = 0
+  milestoneDeliveries = 0
   threadCurrent = false
   detailFresh = false
   detailConnection = 0
