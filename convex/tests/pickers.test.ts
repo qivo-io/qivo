@@ -1176,10 +1176,10 @@ describe("the pickers inside Convex's limits", () => {
     // the lead and Rae reach Atlas through its last archived sub-project
     for (const p of [f.user, rae]) await grant(t, atlas.all[69], p, 'viewer')
     // Atlas's sub-projects hold no task. The everyday 30 open tasks a
-    // sub-project would put 900 under Atlas, past the 800 a project holds
-    // with its sub-projects, and the pickers read no task here but the
-    // subtask, its parent and its own subtasks. Firmware holds 30 with the
-    // subtask.
+    // sub-project would put 900 under Atlas, past the design size of 800
+    // open tasks a project with all its sub-projects, and the pickers read
+    // no task here but the subtask, its parent and its own subtasks.
+    // Firmware holds 30 with the subtask.
     await openTasks(t, f, f.sub, 29)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const subtask = await plantIssue(t, {
@@ -1210,8 +1210,9 @@ describe("the pickers inside Convex's limits", () => {
     // Lou reaches Atlas only through its last archived sub-project
     await grant(t, atlas.all[69], lou)
     // Atlas's sub-projects hold no task. The everyday 30 open tasks a
-    // sub-project would put 900 under Atlas, past the 800 a project holds
-    // with its sub-projects, and the pickers read no task here but this one.
+    // sub-project would put 900 under Atlas, past the design size of 800
+    // open tasks a project with all its sub-projects, and the pickers read
+    // no task here but this one.
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const first = await whole(
       'recipients, a task on a top-level project of 30 and 40 archived sub-projects',
