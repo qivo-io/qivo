@@ -196,7 +196,7 @@ describe('a restore of more than one round', () => {
     for (let i = 0; i < 4; i++) await answerNext()
     expect((await done).done).toHaveLength(60)
     const release = await taken
-    release()
+    release?.()
   })
 
   it('runs two organizations at once and the third once one finishes', async () => {

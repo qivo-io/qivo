@@ -275,6 +275,55 @@ describe('runLanes', () => {
     expect(await first.run).toEqual({ finished: ['p', 'q', 'r', 's'], stops: [] })
   })
 
+  it('settles a paused run without a shared place, while another action holds both', async () => {
+    const pool = lanePool(2)
+    // a restore over three organizations takes both places
+    const restore = harness({ A: 1, B: 1, C: 1 }, {}, pool)
+    // then Mark all as read over two seats, which waits for both
+    const inbox = harness({ p: 2, q: 1 }, {}, pool)
+    let ended = false
+    void restore.run.then(() => {
+      ended = true
+    })
+    const settle = async () => {
+      for (let i = 0; i < 4; i++) await tick()
+    }
+    await settle()
+    expect(restore.events).toEqual(['send A 1', 'send B 1'])
+    expect(inbox.events).toEqual([])
+    // B's place goes to p, and C waits behind q
+    restore.at('B', 1).answer()
+    await settle()
+    expect(inbox.events).toEqual(['send p 1'])
+    // A meets the pause: its place goes to q, and C leaves the queue unsent
+    restore.at('A', 1).refuse(PAUSE)
+    await settle()
+    expect(inbox.events).toEqual(['send p 1', 'send q 1'])
+    expect(ended).toBe(true)
+    expect(await restore.run).toEqual({
+      finished: ['B'],
+      stops: [
+        { lane: 'A', reason: 'Qivo is offline.', paused: true },
+        { lane: 'C', reason: 'Qivo is offline.', paused: true },
+      ],
+    })
+    expect(restore.events.filter((e) => e.startsWith('send'))).toEqual(['send A 1', 'send B 1'])
+    expect(restore.events.filter((e) => e.endsWith('last'))).toEqual(['end C last'])
+    // the other action keeps both places, and C never took one
+    expect(inbox.flying()).toBe(2)
+    inbox.at('q', 1).answer()
+    await settle()
+    inbox.at('p', 1).answer()
+    await settle()
+    inbox.at('p', 2).answer()
+    expect(await inbox.run).toEqual({ finished: ['q', 'p'], stops: [] })
+    // both places are free again
+    const one = pool.take()
+    const two = pool.take()
+    expect(typeof one).toBe('function')
+    expect(typeof two).toBe('function')
+  })
+
   it('gives a run without a pool lanes of its own, also while the shared lanes are full', async () => {
     // a long action holds both shared places
     const first = harness({ a: 1, b: 1 }, {}, LANE_POOL)

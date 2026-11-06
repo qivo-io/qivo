@@ -16,7 +16,9 @@
    - A refusal stops its lane and leaves its later batches unsent, while
      the other lanes go on. The pause (offline, a slow save, a lost seat
      or sign-in) stops every lane before its next batch, the queued ones
-     before they send anything.
+     before they send anything. A queued lane that waits for a shared
+     place leaves the queue then, so a paused action settles without
+     waiting for another action's lanes to free one.
    - Once `live` turns false, as when the store's epoch changes, the run
      ends quietly. A fault, a throw from onStop or onLaneEnd, ends the run
      at once and rejects; no lane sends another batch after it.
@@ -80,8 +82,12 @@ export function roundsOf(calls: readonly number[], atOnce = LANES_AT_ONCE): numb
 /** Where lanes take their turn. At most `size` lanes run at once, and a
     lane that waits starts once one ends, the first to wait first. `take`
     answers the way to give the place back, at once while one is free, so
-    the first batch goes out in the same turn, else once one frees. */
-export type LanePool = { take: () => (() => void) | Promise<() => void> }
+    the first batch goes out in the same turn, else once one frees. A wait
+    that `cancel` aborts leaves the queue and answers null, holding no
+    place. */
+export type LanePool = {
+  take: (cancel?: AbortSignal) => (() => void) | Promise<(() => void) | null>
+}
 
 /** A pool of `size` places (LanePool). */
 export function lanePool(size = LANES_AT_ONCE): LanePool {
@@ -101,12 +107,25 @@ export function lanePool(size = LANES_AT_ONCE): LanePool {
     }
   }
   return {
-    take() {
+    take(cancel) {
+      if (cancel?.aborted) return Promise.resolve(null)
       if (busy < size) {
         busy += 1
         return ticket()
       }
-      return new Promise((resolve) => waiting.push(() => resolve(ticket())))
+      return new Promise((resolve) => {
+        const wake = () => {
+          cancel?.removeEventListener('abort', leave)
+          resolve(ticket())
+        }
+        const leave = () => {
+          const at = waiting.indexOf(wake)
+          if (at >= 0) waiting.splice(at, 1)
+          resolve(null)
+        }
+        waiting.push(wake)
+        cancel?.addEventListener('abort', leave, { once: true })
+      })
     },
   }
 }
@@ -147,7 +166,8 @@ export type LaneRun<Lane, Answer> = {
 /**
  * Runs each lane's batches one after another, at most the pool's places
  * of lanes at once. A refusal stops its lane; the pause stops every lane
- * before its next batch, the queued ones before they send. Answers the
+ * before its next batch, the queued ones before they send and without a
+ * place, so a paused run never waits for one. Answers the
  * lanes that finished and the stops, or null once `live` turns false,
  * after which no callback runs. A throw from send, onAnswer or more is
  * that lane's refusal; one from pauseOf, reasonOf, onStop or onLaneEnd is
@@ -164,6 +184,9 @@ export async function runLanes<Lane, Answer>(
   // the pause's sentence once a batch met it, which stops every lane
   // before its next batch
   let paused: string | null = null
+  // aborted at the pause, so a lane that waits for a shared place leaves
+  // the queue and stops without one
+  const pausing = new AbortController()
   let faulted = false
   let running = queue.length
   const alive = () => !faulted && o.live()
@@ -201,7 +224,10 @@ export async function runLanes<Lane, Answer>(
           if (!alive()) return
           const { error } = step
           const pause = guard(() => o.pauseOf(error))
-          if (pause !== null) paused ??= pause
+          if (pause !== null && paused === null) {
+            paused = pause
+            pausing.abort()
+          }
           return stop(lane, pause ?? guard(() => o.reasonOf(error)), pause !== null)
         }
         if (step.ended) {
@@ -217,16 +243,18 @@ export async function runLanes<Lane, Answer>(
 
   // A worker takes its lane before it waits for a place, so no worker
   // waits in a shared pool with nothing left to run, which would keep
-  // the run from ending until another action's lane ends.
+  // the run from ending until another action's lane ends. After the
+  // pause a lane takes no place, also one that waited for a place when
+  // the pause came, and stops without sending.
   const worker = async () => {
     for (let lane = queue.shift(); lane !== undefined && alive(); lane = queue.shift()) {
-      const taken = pool.take()
-      const release = typeof taken === 'function' ? taken : await taken
+      const taken = paused === null ? pool.take(pausing.signal) : null
+      const release = taken === null || typeof taken === 'function' ? taken : await taken
       try {
         if (!alive()) return
         await runLane(lane)
       } finally {
-        release()
+        release?.()
       }
     }
   }
