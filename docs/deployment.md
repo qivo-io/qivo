@@ -246,15 +246,15 @@ task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
 1 file** by searching **Storage by project** for its run tag and the word
 storage, and deletes the file over REST, also after a failure
-(`ui/billing-storage`). Back in the run's task window it attaches a small
+(`ui/billing-storage`). That shows the deployment's stored-byte totals are
+counted and that the page reads them (`billing.currentUsage` and
+`billing.storageProjects`). Against a backend from before those queries
+that step fails. Back in the run's task window it attaches a small
 file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.135. That shows the deployment's stored-byte totals are
-counted and that the page reads them (`billing.currentUsage` and
-`billing.storageProjects`). Against a backend from before those queries
-that step fails. After that it checks
+backend from before the release after v0.1.135. After that it checks
 the
 search on **Settings → Projects → Archived tasks** and main Search, where an
 active task the run made must show with **Include archived tasks** off and a
