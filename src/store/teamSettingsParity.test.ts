@@ -262,6 +262,12 @@ describe('the team settings stand-in', () => {
     if (!theirs) throw new Error('no workspace')
     const refused = await same(t, viewer, theirs, 'teams:settingsPage', base)
     expect(refused.server[0].state).toBe('refused')
+    // the refusal comes before the search is checked, as on the server
+    const long = await same(t, viewer, theirs, 'teams:settingsPage', {
+      ...base,
+      search: 'x'.repeat(201),
+    })
+    expect(long.server[0].state).toBe('refused')
     await same(t, viewer, theirs, 'teams:addable', { ...base, team_id: teams[0].id })
     await same(t, viewer, theirs, 'teams:get', { ...base, id: teams[0].id })
     await same(t, viewer, theirs, 'teams:members', { ...base, team_id: teams[0].id }, true)

@@ -177,7 +177,8 @@ function batchOf<Item, Row>(
  * the caller the workspace belongs to. Throws as the server refuses: no
  * active seat in the organization, a search past LIMITS.search, a cursor
  * this list did not give for the same scope and search, and a read `force`
- * fails.
+ * fails. A list checks its search and cursors where the server does, so
+ * settingsPage answers a seat it refuses `refused` whatever the search.
  */
 export function teamSettingsStandIn(
   ws: TeamSettingsWorkspace,
@@ -190,8 +191,6 @@ export function teamSettingsStandIn(
   const short = name.replace(/^teams:/, '')
   if (force.fail?.includes(short)) throw new Error(`${name} fails, as the stand-in was asked`)
   const search = String(args.search ?? '').trim()
-  if (overText(LIMITS.search, search))
-    throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
   const admin = me.org_role === 'admin'
   const teamsHere = ws.teams.filter((t) => t.org_id === org)
   const people = new Map(ws.profiles.filter((p) => p.org_id === org).map((p) => [p.id, p]))
@@ -209,7 +208,11 @@ export function teamSettingsStandIn(
           return p !== undefined && p.org_role !== 'guest'
         }).length
   const matches = allWordsMatcher(nameKey(search))
+  // a list's arguments, checked where the server checks them
+  // (model/projectSettings.ts orderedListAsk): the search, then the cursors
   const open = (list: string, scope: readonly string[]) => {
+    if (overText(LIMITS.search, search))
+      throw new ConvexError({ code: 'rule', message: LIMITS.search.refusal })
     const sealed = [...scope, nameKey(search)]
     const at = (text: unknown): Position | null => {
       if (text === undefined) return null
