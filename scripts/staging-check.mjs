@@ -15,7 +15,9 @@
  * paging, cursor paging of the active and archived task lists, of the
  * workload's people (machine/workload-pages) and of the user, label, team
  * and member lists with their name search, with a label of its own that it
- * deletes in the app again (machine/people-lists), task progress, last
+ * deletes in the app again (machine/people-lists), a task's details with the
+ * first page of its subtasks, links, followers and files and those lists'
+ * own pages over REST and MCP (machine/task-details), task progress, last
  * comment times, delay and project completion, which it waits to read whole
  * again after an archive or a restore regroups its counts, and the live
  * group rule. It fills one task with a
@@ -251,6 +253,21 @@ export const PEOPLE_REFUSALS = {
  *  workload step asks for people, and one member a page, so the run's two
  *  members take a cursor. */
 export const PEOPLE_PAGE = { rest: 5, mcp: 2, members: 1 }
+
+/** A task's related lists, as MCP list_task_related names them and REST
+ *  GET /v1/tasks/{ref}/<list> routes them, in the order the details answer
+ *  them, which the script's tests pin. */
+export const TASK_LISTS = ['subtasks', 'links', 'followers', 'attachments']
+
+/** The sentences a page of a task's subtasks refuses its `offset`, `limit`
+ *  and `cursor` with on REST and MCP (convex/lib/listCursor.ts and the
+ *  limits registry's listSubtasks), which the script's tests pin. The
+ *  other lists name their own rows in the first two. */
+export const TASK_LIST_REFUSALS = {
+  offset: 'offset does not apply to subtasks; pass next_cursor as cursor',
+  limit: LIMITS.listSubtasks.refusal,
+  cursor: LIST_REFUSALS.cursor,
+}
 
 /** The MCP tools that took no arguments before November 2026 and still
  *  answer a call that sends none of their own arguments, such as a
@@ -583,6 +600,7 @@ const READ_TOOLS = new Set([
   'list_project_users',
   'list_projects',
   'list_task_activity',
+  'list_task_related',
   'list_tasks',
   'list_team_members',
   'list_teams',
@@ -956,6 +974,31 @@ const mcpRows = (cred, name, field, args = {}) =>
     field,
     peoplePagesMax(args.limit ?? 50),
   )
+
+/** Every file of `task` over REST, a page at a time
+ *  (GET /v1/tasks/{ref}/attachments), each page read with readOk. */
+const taskFiles = (cred, task) => restRows(cred, `/tasks/${task.key}/attachments`, 'attachments')
+
+/** Every file of `task` over MCP: get_task's first page, which for the
+ *  run's few files is the whole list, then list_task_related's pages past
+ *  its cursor, if any. */
+async function mcpTaskFiles(cred, task) {
+  const read = await toolOk(cred, 'get_task', { ref: task.key })
+  if (read.attachments_next_cursor === null) return read.attachments
+  expect(
+    typeof read.attachments_next_cursor === 'string',
+    'get_task answered no attachments_next_cursor',
+  )
+  return [
+    ...read.attachments,
+    ...(await mcpRows(cred, 'list_task_related', 'attachments', {
+      ref: task.key,
+      list: 'attachments',
+      limit: 200,
+      cursor: read.attachments_next_cursor,
+    })),
+  ]
+}
 
 /** Fails unless `page` is one page of a list, `{next_cursor, <field>}`. */
 function expectPage(page, field, what) {
@@ -2002,9 +2045,10 @@ async function checkReads(cred) {
       eq((await restOk(cred, 'GET', `/tasks/${run.t0.key}`)).title, run.t0.title, 'task title')
       expect(Array.isArray(await restOk(cred, 'GET', `/tasks/${run.t0.key}/comments`)), 'comments')
       expect(Array.isArray(await restOk(cred, 'GET', `/tasks/${run.t0.key}/activity`)), 'activity')
-      expect(
-        Array.isArray(await restOk(cred, 'GET', `/tasks/${run.t0.key}/attachments`)),
+      expectPage(
+        await restOk(cred, 'GET', `/tasks/${run.t0.key}/attachments`),
         'attachments',
+        'GET /v1/tasks/{ref}/attachments',
       )
       const users = await restRows(cred, '/users', 'users', { search: run.tag })
       expect(
@@ -2234,6 +2278,166 @@ async function peopleListChecks() {
     const second = await toolOk(w, 'list_users', { limit: 1, cursor: first.next_cursor })
     eq(second.users[0]?.id, ids(users)[1], 'list_users after a cursor of GET /v1/users')
     return `${users.length} users in REST pages of ${PEOPLE_PAGE.rest} and MCP pages of ${PEOPLE_PAGE.mcp}, the run's agents by its tag, its team's 2 members one a page and its label without the accent on both surfaces; offset, limit=0 and other lists' cursors refused`
+  })
+}
+
+/** machine/task-details: a group of the run's own, named with its tag in
+ *  Alpha, with three subtasks, links to the run's two fixture tasks, the
+ *  write token's person and the Standard agent following it and two text
+ *  files. REST GET /v1/tasks/{ref} and MCP get_task must answer each list
+ *  whole on its first page, every cursor null, `following` true, the
+ *  cursor before its array in MCP's text and a download link on each file.
+ *  Each list then pages at limit 1 over REST GET /v1/tasks/{ref}/<list> and
+ *  MCP list_task_related to its end, within its rows and two pages more,
+ *  every page moving on, in the details' order, and a REST cursor continues
+ *  on MCP. Then the refusals: an offset, a limit of 0, a subtasks cursor
+ *  sent to the links route, a cursor of another task and an unknown query
+ *  parameter, each with its sentence. A backend before the paged details
+ *  answers no cursors and 404 for the new routes, so the step fails there.
+ *  The rows are left to the run's sweep. */
+async function taskDetailChecks() {
+  const w = run.creds.writeToken
+  const s = run.creds.stdKey
+  await check('machine/task-details', async () => {
+    const A = run.projects.A
+    const group = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} details group`,
+    })
+    run.created.push(group)
+    const kids = []
+    for (let i = 0; i < 3; i++) {
+      const kid = await restOk(w, 'POST', '/tasks', {
+        project: A.id,
+        title: `${run.tag} details subtask ${i}`,
+        parent: group.key,
+      })
+      run.created.push(kid)
+      kids.push(kid)
+    }
+    for (const other of [run.t0, run.tz])
+      await restOk(w, 'POST', `/tasks/${group.key}/links`, { task: other.key, kind: 'relates' })
+    for (const cred of [w, s]) await restOk(cred, 'PUT', `/tasks/${group.key}/following`)
+    const files = []
+    for (let i = 0; i < 2; i++)
+      files.push(
+        await toolOk(w, 'attach_text_file', {
+          ref: group.key,
+          name: `${run.tag} details note ${i}.txt`,
+          text: `Note ${i} of the task details step.`,
+        }),
+      )
+    const ids = (rows) => rows.map((r) => r.id)
+    const want = {
+      subtasks: ids(kids),
+      links: ids([run.t0, run.tz].toSorted((a, b) => a.num - b.num)),
+      followers: [w.userId, run.agents.std.id].toSorted(),
+      attachments: ids(files),
+    }
+    const details = {
+      REST: await restOk(w, 'GET', `/tasks/${group.key}`),
+      MCP: await toolOk(w, 'get_task', { ref: group.key }),
+    }
+    for (const [surface, d] of Object.entries(details)) {
+      for (const list of TASK_LISTS) {
+        eq(d[`${list}_next_cursor`], null, `${surface} ${list}_next_cursor`)
+        const got = ids(d[list] ?? [])
+        same(list === 'followers' ? got.toSorted() : got, want[list], `${surface} ${list}`)
+      }
+      eq(d.following, true, `${surface} following`)
+      eq(d.has_more_subtasks, false, `${surface} has_more_subtasks`)
+      expect(
+        d.attachments.every((a) => typeof a.url === 'string'),
+        `${surface} attachments without a download link`,
+      )
+    }
+    const keys = Object.keys(details.MCP)
+    for (const list of TASK_LISTS)
+      eq(keys.indexOf(`${list}_next_cursor`) + 1, keys.indexOf(list), `${list}_next_cursor's place`)
+    let pages = 0
+    for (const list of TASK_LISTS) {
+      const order = ids(details.REST[list])
+      const most = order.length + 2
+      const restPaged = await movingPages(
+        (cursor) => readOk(w, withQuery(`/tasks/${group.key}/${list}`, { limit: 1, cursor })),
+        `GET /v1/tasks/{ref}/${list}`,
+        list,
+        most,
+      )
+      same(ids(restPaged), order, `the ${list} of GET /v1/tasks/{ref}/${list}`)
+      const mcpPaged = await movingPages(
+        (cursor) =>
+          toolOk(w, 'list_task_related', {
+            ref: group.key,
+            list,
+            limit: 1,
+            ...(cursor === null ? {} : { cursor }),
+          }),
+        `list_task_related ${list}`,
+        list,
+        most,
+      )
+      same(ids(mcpPaged), order, `the ${list} of list_task_related`)
+      const first = await restOk(w, 'GET', `/tasks/${group.key}/${list}?limit=1`)
+      expect(typeof first.next_cursor === 'string', `a ${list} page of one ended the list`)
+      const next = await toolOk(w, 'list_task_related', {
+        ref: group.key,
+        list,
+        limit: 1,
+        cursor: first.next_cursor,
+      })
+      eq(next[list][0]?.id, order[1], `list_task_related ${list} after a REST cursor`)
+      pages += order.length
+    }
+    // the refusals
+    const path = `/tasks/${group.key}`
+    await restRefusal(
+      w,
+      'GET',
+      `${path}/subtasks?offset=1`,
+      undefined,
+      400,
+      TASK_LIST_REFUSALS.offset,
+    )
+    await restRefusal(
+      w,
+      'GET',
+      `${path}/subtasks?limit=0`,
+      undefined,
+      400,
+      TASK_LIST_REFUSALS.limit,
+    )
+    eq(
+      await toolRefusal(w, 'list_task_related', { ref: group.key, list: 'subtasks', offset: 1 }),
+      TASK_LIST_REFUSALS.offset,
+      'list_task_related offset 1',
+    )
+    const cursor = (await restOk(w, 'GET', `${path}/subtasks?limit=1`)).next_cursor
+    await restRefusal(
+      w,
+      'GET',
+      withQuery(`${path}/links`, { cursor }),
+      undefined,
+      400,
+      TASK_LIST_REFUSALS.cursor,
+    )
+    await restRefusal(
+      w,
+      'GET',
+      withQuery(`/tasks/${run.t0.key}/subtasks`, { cursor }),
+      undefined,
+      400,
+      TASK_LIST_REFUSALS.cursor,
+    )
+    await restRefusal(
+      w,
+      'GET',
+      `${path}/followers?page=2`,
+      undefined,
+      400,
+      'unknown query parameter "page"; this request takes limit, cursor, offset',
+    )
+    return `a group with ${want.subtasks.length} subtasks, ${want.links.length} links, ${want.followers.length} followers and ${want.attachments.length} files, whole with null cursors on both surfaces, ${pages} pages of one over each, a REST cursor on MCP; offset, limit=0, another list's and another task's cursors and an unknown parameter refused`
   })
 }
 
@@ -2605,7 +2809,7 @@ async function restUpload(cred, task, name, confirmed) {
   eq(att.name, name, 'name')
   eq(att.uploaded_by_id, cred.userId, 'uploaded by')
   await sameBytes(att, bytes, type)
-  const listed = await restOk(cred, 'GET', `/tasks/${task.key}/attachments`)
+  const listed = await taskFiles(cred, task)
   expect(
     listed.some((a) => a.id === att.id),
     'the attachment list lacks the file',
@@ -2634,7 +2838,7 @@ async function mcpUpload(cred, task, name, confirmed) {
   eq(att.name, name, 'name')
   eq(att.uploaded_by_id, cred.userId, 'uploaded by')
   await sameBytes(att, bytes, type)
-  const listed = (await toolOk(cred, 'get_task', { ref: task.key })).attachments
+  const listed = await mcpTaskFiles(cred, task)
   expect(
     listed.some((a) => a.id === att.id),
     'get_task lacks the file',
@@ -2742,7 +2946,7 @@ async function uploadChecks() {
     })
   }
   await check('write-token/mcp/attach_text_file-too-long', async () => {
-    const before = (await toolOk(w, 'get_task', { ref: task.key })).attachments.length
+    const before = (await mcpTaskFiles(w, task)).length
     eq(
       await toolRefusal(w, 'attach_text_file', {
         ref: task.key,
@@ -2752,7 +2956,7 @@ async function uploadChecks() {
       LIMITS.textFile.refusal,
       'refusal',
     )
-    eq((await toolOk(w, 'get_task', { ref: task.key })).attachments.length, before, 'files')
+    eq((await mcpTaskFiles(w, task)).length, before, 'files')
   })
   // a ticket belongs to the user: started over MCP, confirmed over REST
   await check('write-token/mcp-then-rest/upload', async () => {
@@ -2803,9 +3007,7 @@ async function uploadChecks() {
       UPLOAD_MISSING,
       "the Standard agent sending Nora's confirm again",
     )
-    const rows = (await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).filter(
-      (a) => a.id === att.id,
-    )
+    const rows = (await taskFiles(w, task)).filter((a) => a.id === att.id)
     eq(rows.length, 1, 'rows of the file')
     await sameBytes(att, bytes, type)
     return 'the same attachment over REST and MCP, one row, and for another user a REST 404 and the MCP refusal'
@@ -2893,7 +3095,7 @@ async function uploadChecks() {
       )
     })
   await check('uploads/refusals-attached-nothing', async () => {
-    const files = (await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).map((a) => a.id)
+    const files = (await taskFiles(w, task)).map((a) => a.id)
     same(files.toSorted(), made.map((m) => m.att.id).toSorted(), 'the task files')
   })
   // The refused confirms left the ticket usable. Confirming it attaches the
@@ -2933,14 +3135,14 @@ async function uploadChecks() {
       }
       const said = r.error ?? `HTTP ${r.status} ${short(r.isError ? r.text : r.json?.error)}`
       try {
-        const left = await readOk(w, `/tasks/${task.key}/attachments`)
+        const left = await taskFiles(w, task)
         if (left.some((a) => a.id === att.id)) failed.push(`${att.name}: ${said}`)
       } catch (error) {
         failed.push(`${att.name}: ${said}, and the file list could not be read: ${describe(error)}`)
       }
     }
     expect(failed.length === 0, `not deleted: ${failed.join('; ')}`)
-    eq((await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).length, 0, 'files left')
+    eq((await taskFiles(w, task)).length, 0, 'files left')
     if (made[0]) eq((await download(made[0].att.url)).status, 404, 'a deleted file downloads')
     return `${made.length} files deleted`
   })
@@ -4301,9 +4503,7 @@ async function attachmentUploadCheck() {
     await app
       .locator(`[role="dialog"] [data-attachment-open="${name}"]`)
       .waitFor({ timeout: 60_000 })
-    const att = (await restOk(w, 'GET', `/tasks/${task.key}/attachments`)).find(
-      (a) => a.name === name,
-    )
+    const att = (await taskFiles(w, task)).find((a) => a.name === name)
     expect(att, 'the task lacks the file')
     try {
       await sameBytes(att, bytes, type)
@@ -6424,6 +6624,7 @@ async function liveTaskChecks(f) {
       [f.q.id],
       'the single read still lists the subtask in the archived project',
     )
+    eq(p.subtasks_next_cursor, null, 'the subtask list ends on its first page')
     eq(p.group_remaining_hours, null, 'a task without a live subtask has no group hours')
     const g = await read(f.g)
     same(g.progress, progress(1, 2), 'the group leaves out its subtask in the archived project')
@@ -7118,6 +7319,7 @@ async function main() {
   await listOrderChecks()
   await workloadPageChecks()
   await peopleListChecks()
+  await taskDetailChecks()
   await subtaskRuleChecks()
   // task and project facts, the live group rule and the billing pause
   await factChecks()
