@@ -420,7 +420,7 @@ describe('a milestone that goes away', () => {
     expect(q('[data-modal-shell]')?.textContent).toContain('Plan')
   })
 
-  it('says nothing after the person deleted it here', async () => {
+  it('says nothing after the person deleted it here, and keeps the add row and the Edit of the rest', async () => {
     fixture()
     await start()
     await open('alpha')
@@ -432,13 +432,42 @@ describe('a milestone that goes away', () => {
     await act(async () => del()?.click())
     vi.setSystemTime(Date.now() + 1_000)
     await act(async () => del()?.click())
+    vi.useRealTimers()
     await settle()
     expect(q('[data-milestone-editor]')).toBeNull()
     server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
     await rerun()
     expect(line()).toBeNull()
     expect(q('[data-milestone-row="beta"]')).not.toBeNull()
-    vi.useRealTimers()
+    // the person still leads the project: they add and change the rest
+    expect(q('[data-milestone-new]')).not.toBeNull()
+    const edit = q('[data-milestone-row="beta"] button[aria-label^="Edit"]')
+    expect(edit).not.toBeNull()
+    await act(async () => edit?.click())
+    expect(nameBox()?.value).toBe('Beta')
+    expect(nameBox()?.readOnly).toBe(false)
+  })
+
+  it("keeps another milestone's open editor and its draft, locked, when the opened one goes", async () => {
+    fixture()
+    await start()
+    await open('alpha')
+    await act(async () => q('[data-milestone-row="beta"] button[aria-label^="Edit"]')?.click())
+    const box = nameBox()
+    if (!box) throw new Error('no editor on Beta')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(box, 'Beta 2')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    // someone deletes Alpha: the answer names no project any more
+    server.milestones = server.milestones.filter((m) => m.id !== 'alpha')
+    await rerun()
+    expect(line()?.getAttribute('data-milestone-open')).toBe('gone')
+    expect(q('[data-milestone-editor="beta"]')).not.toBeNull()
+    expect(nameBox()?.value).toBe('Beta 2')
+    expect(nameBox()?.readOnly).toBe(true)
+    expect(q('[data-milestone-locked-note]')).not.toBeNull()
+    expect(q('[data-milestone-new]')).toBeNull()
   })
 
   it('says so again once a delete the server refused brought it back and it then went', async () => {

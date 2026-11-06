@@ -2359,10 +2359,15 @@ function UnusedReason({
    does not answer, for every reason alike, or refuses, says so with Done
    only; a failure offers Retry; and once it showed, an answer of null
    that the person's own delete did not cause closes its editor and says
-   it is no longer here. A failure after an answer keeps that answer, and
-   the editor its draft, under a note with Retry. While the tab hides or
-   after a reconnect the window shows its last answer and its root is
-   marked refreshing (aria-busy) until the answer is current again. */
+   it is no longer here. The add row and the other milestones' Edit follow
+   the answer's right while it names the milestone, and after the person's
+   own delete the right it gave last, while the store's level allows it
+   too; an answer of null for another reason gives none. An editor open
+   when its right goes stays, locked, with its draft. A failure after an
+   answer keeps that answer, and the editor its draft, under a note with
+   Retry. While the tab hides or after a reconnect the window shows its
+   last answer and its root is marked refreshing (aria-busy) until the
+   answer is current again. */
 
 /* The store's slot of the window's read of the milestone it opened on. */
 const MILESTONE_OPEN = 'milestone:open'
@@ -2469,11 +2474,13 @@ function MilestoneModal({
   const projectName = init.id
     ? (answer?.project?.name ?? fixedName ?? project?.name ?? null)
     : (project?.name ?? null)
-  // opened on a milestone, the answer says whether the person may write;
-  // else their level on the project
-  const canWrite = init.id
-    ? !!answer?.canWrite
-    : !!project && ['lead', 'user'].includes(P.levelOn(project.id) || '')
+  // the person's level on the project in the store: User access or more
+  const levelWrites = !!project && ['lead', 'user'].includes(P.levelOn(project.id) || '')
+  // the right the last answer that named the project gave, which the add
+  // row and the other milestones keep after the person's own delete
+  const [namedRight, setNamedRight] = useStateM(false)
+  if (init.id && answer?.project && !!answer.canWrite !== namedRight)
+    setNamedRight(!!answer.canWrite)
   // the editor opens on init.id once the answer says the person may write;
   // a read-only flag or row opens the window with that milestone as its row
   const [editId, setEditId] = useStateM<string | null>(init.id ?? null)
@@ -2490,6 +2497,19 @@ function MilestoneModal({
   if (deletedHere && openedM) setDeletedHere(false)
   const gone = !!init.id && answered && !openedM && !deletedHere && read?.state === 'ok' && !!answer
   if (gone && editId === init.id) setEditId(null)
+  // whether the person may change the opened milestone: what the answer
+  // says, and nothing once it names no milestone
+  const openedCanWrite = !!answer?.canWrite
+  // whether they may add milestones and change the others: opened on a
+  // milestone, what the answer says while it names the project, and after
+  // their own delete of the milestone what the last such answer said while
+  // the store still gives them User access; no right once the milestone
+  // went for another reason. Else their level on the project.
+  const canWrite = !init.id
+    ? levelWrites
+    : answer?.project
+      ? !!answer.canWrite
+      : deletedHere && namedRight && levelWrites
   const [initialDate] = useStateM(() => (init.week == null ? null : weekToISO(init.week)))
   const [name, setName] = useStateM('')
   const [date, setDate] = useStateM(() => initialDate ?? weekToISO(P.TODAY_WEEK))
@@ -2537,9 +2557,11 @@ function MilestoneModal({
   }
   /* A milestone of the window: the opened one from the answer, with its
      stored name and day as the answer holds them when asked, any other
-     from the list, the workspace's. */
+     from the list, the workspace's. An open editor stays, locked with its
+     draft, once the person may no longer change its milestone. */
   const item = (m: MilestoneVM, own: boolean) => {
-    const editing = m.id === editId && (own ? answered : canWrite)
+    const right = own ? openedCanWrite : canWrite
+    const editing = m.id === editId && (!own || answered)
     return editing ? (
       <MilestoneEditor
         key={m.id}
@@ -2547,7 +2569,7 @@ function MilestoneModal({
         storedOf={
           own ? () => shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(m.id) : undefined
         }
-        locked={!canWrite}
+        locked={!right}
         onClose={() => setEditId(null)}
         onDelete={own ? () => setDeletedHere(true) : undefined}
       />
@@ -2557,7 +2579,7 @@ function MilestoneModal({
         m={m}
         next={next?.id === m.id}
         opened={own}
-        onEdit={canWrite ? () => setEditId(m.id) : undefined}
+        onEdit={right ? () => setEditId(m.id) : undefined}
       />
     )
   }
