@@ -1043,7 +1043,7 @@ above already hold. v0.1.103 (`fbcf0214`) made the reads refuse with
 check; against an earlier backend such a check fails as an error, which
 the app shows as a failure with Retry, so it fails closed either way.
 
-From the release after v0.1.136, the app's Team sync reads its meeting, its
+From the release after v0.1.138, the app's Team sync reads its meeting, its
 people and their week's hours from `teamSync.agenda`, which v0.1.128
 (`941d9d15`) first shipped, so it opens without loading every task, and
 asks to choose a team or project instead of falling back to All projects.
