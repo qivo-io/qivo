@@ -314,8 +314,9 @@ export function newerAnchor(gap: readonly string[], below: string | undefined): 
     do not start the thread, so the read goes on before their first row (or
     the history's `next`); or, for the history (`strict`), `restart` when
     they hold rows the store never had without reaching the run, which only
-    a change in what the person may see makes, so the history starts over
-    from what was read rather than stitching across a gap it cannot prove. */
+    a change in what the person may see makes, so the store starts the
+    history over from the run below the gap rather than stitching across a
+    gap it cannot prove. */
 export type NewerJoin<R> =
   | { kind: 'join'; older: R[]; gap: string[] | null; added: R[] }
   | { kind: 'short' }
