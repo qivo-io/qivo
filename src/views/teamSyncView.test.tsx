@@ -1152,9 +1152,22 @@ describe('the design size, one figure at a time', () => {
   it('opens a project of 800 open and 200 Done tasks over 3 sub-projects, its opening and a person page', async () => {
     const { spread } = await import('./boardFixture.setup')
     const done = new Date(Date.now() - 3_600_000).toISOString()
-    const { P } = await open(
+    const { P, snapshot } = await open(
       (snap) => {
-        spread(334, (n) => (n > 800 ? 'done' : 'todo'))(snap)
+        // the project's two figures at their sum, each sub-project within
+        // its own 300 open and 150 Done
+        spread(0)(snap)
+        const subs = [snap.projects[0].id, 'two', 'three']
+        const openN = [267, 267, 266]
+        const doneN = [67, 67, 66]
+        let num = 0
+        subs.forEach((project, i) => {
+          for (let n = 0; n < openN[i] + doneN[i]; n++) {
+            num++
+            const status = n < openN[i] ? 'todo' : 'done'
+            snap.issues.push({ ...taskRow(snap, `t${num}`, status, num), project_id: project })
+          }
+        })
         for (const it of snap.issues) {
           if (it.status === 'done') it.done_at = done
           // unowned and urgent, so Needs an owner mounts in slices
@@ -1166,6 +1179,18 @@ describe('the design size, one figure at a time', () => {
       },
       () => ({ scope: 'project:plan', step: 'team' }),
     )
+    /** How many of the seeded tasks `where` holds, by sub-project. */
+    const counts = (where: (it: Snapshot['issues'][number]) => boolean) =>
+      ['two', 'three', snapshot.projects[0].id].map(
+        (id) => snapshot.issues.filter((it) => it.project_id === id && where(it)).length,
+      )
+    const sum = (list: number[]) => list.reduce((a, b) => a + b, 0)
+    const openBySub = counts((it) => it.status !== 'done')
+    const doneBySub = counts((it) => it.status === 'done')
+    expect(sum(openBySub)).toBe(800)
+    expect(sum(doneBySub)).toBe(200)
+    expect(Math.max(...openBySub)).toBeLessThanOrEqual(300)
+    expect(Math.max(...doneBySub)).toBeLessThanOrEqual(150)
     expect(state()).toBe('ok')
     const answer = P.syncRead().value
     if (answer?.state !== 'ok') throw new Error('no meeting')
