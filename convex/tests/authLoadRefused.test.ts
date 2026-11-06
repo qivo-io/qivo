@@ -71,8 +71,8 @@ const settle = (sent: Promise<Response>) =>
 const reasons = (error: unknown): string =>
   error instanceof Error ? `${error.message} ${reasons(error.cause)}` : ''
 
-/* Checks that `outcome` failed closed: an error whose reasons match
- * `reason`, or a 5xx that sets no cookie. */
+/* Checks that `outcome` failed closed, as an error whose reasons match
+ * `reason` or as a 5xx that sets no cookie. */
 function expectFailedClosed(outcome: Response | Error, reason: RegExp) {
   if (outcome instanceof Error) {
     expect(reasons(outcome)).toMatch(reason)
