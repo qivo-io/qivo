@@ -26,7 +26,12 @@ import { type AuthMailState, authMailPlugin, RESEND, recordAuthMail } from './li
 import { servedAuthRoutes, serveOnly } from './lib/authRoutes'
 import { stopValidationEarly } from './lib/authValidation'
 import { DEMO_TTL_MS, demoRefusal, isDemoDeployment, requireDemoDeployment } from './lib/demo'
-import { deploymentEnvironment } from './lib/deployment'
+import {
+  appOrigins,
+  deploymentEnvironment,
+  requireSiteUrl,
+  SCHEMA_ONLY_ORIGIN,
+} from './lib/deployment'
 import {
   type MicrosoftSignIn,
   recordMicrosoftTenant,
@@ -36,69 +41,6 @@ import { oauthAdapter } from './lib/oauthAdapter'
 import { oauthHooks, qivoOAuthProvider, registerOAuthCode } from './lib/oauthProvider'
 import type { PersonMailMetric } from './lib/usage'
 import { type AuthLetterIntent, sendAuthLetter } from './mail'
-
-/* SITE_URL = the APP origin (http://localhost:5199 in dev, https://qivo.io in
- * prod) — NOT the convex.site URL. baseURL is the auto-provided CONVEX_SITE_URL.
- *
- * Read at call time and checked, the way fileTokens.ts reads CONVEX_SITE_URL.
- * It used to be asserted non-null at module scope, which on a deployment
- * missing the var handed `undefined` (typed `string`) to trustedOrigins and to
- * crossDomain's redirect target — every OAuth and reset round trip then fails
- * originCheck with nothing naming the var that is missing. Staying out of
- * module scope also keeps that failure on the auth surface that needs the
- * origin, rather than on every module that imports this one. */
-const requireSiteUrl = () => {
-  const url = process.env.SITE_URL
-  if (!url) throw new Error('SITE_URL is not set, so the app origin is unknown')
-  return url
-}
-
-/* The Better Auth component (convex/betterAuth/) bundles this module and
- * evaluates it during push ANALYSIS — inside the component sandbox, which by
- * design sees NONE of the deployment's environment variables. Its two
- * consumers (adapter.ts's createApi, auth.ts's generate-only instance) only
- * ever read table SHAPES off the options, so they build with this inert
- * placeholder origin instead of refusing the whole push; every instance that
- * actually serves auth (createAuth / createCaptureAuth below) still refuses
- * an unset SITE_URL by name. `.invalid` is RFC 2606-reserved: were the
- * placeholder ever to leak into a real redirect it could not resolve. */
-const SCHEMA_ONLY_ORIGIN = 'http://schema-only.invalid'
-
-/* SITE_URL remains the canonical app origin for redirects. A developer may
- * expose the same Vite process through another exact
- * origin (for example a Tailnet IP), so ADDITIONAL_APP_ORIGINS extends only
- * the trust/CORS set. It is deliberately a comma-separated list of complete
- * origins, never a wildcard or host suffix. */
-const exactOrigin = (value: string, envName: string): string => {
-  const trimmed = value.trim().replace(/\/$/, '')
-  let url: URL
-  try {
-    url = new URL(trimmed)
-  } catch {
-    throw new Error(`${envName} contains an invalid origin`)
-  }
-  if (!/^https?:\/\//.test(trimmed) || url.origin !== trimmed) {
-    throw new Error(`${envName} entries must be exact http(s) origins`)
-  }
-  return url.origin
-}
-
-export const appOrigins = (opts?: { schemaOnly?: boolean }): string[] => {
-  if (opts?.schemaOnly) return [SCHEMA_ONLY_ORIGIN]
-  const primary = exactOrigin(requireSiteUrl(), 'SITE_URL')
-  const additional = (process.env.ADDITIONAL_APP_ORIGINS || '')
-    .split(',')
-    .filter((value) => value.trim() !== '')
-    .map((value) => exactOrigin(value, 'ADDITIONAL_APP_ORIGINS'))
-  const origins = [...new Set([primary, ...additional])]
-  if (
-    deploymentEnvironment() !== 'development' &&
-    origins.some((origin) => !origin.startsWith('https://'))
-  ) {
-    throw new Error('Hosted authentication requires HTTPS for every app origin')
-  }
-  return origins
-}
 
 /* The endpoint a mail callback runs in, or null outside one (a direct call). */
 const currentEndpoint = () => getCurrentAuthContext().catch(() => null)
