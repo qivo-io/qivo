@@ -543,6 +543,15 @@ describe("a team's page", () => {
       find<HTMLButtonElement>('[data-settings-team-member="leo"] [data-team-member-remove]')
         .disabled,
     ).toBe(true)
+    // the hours still save, as the line says, since the server checks each save
+    expect(find('[data-team-settings-failed]').textContent).toContain('Hours still save.')
+    const hours = find<HTMLInputElement>('[data-plannable-for="leo"]')
+    await act(async () => hours.focus())
+    await type(hours, '30')
+    await act(async () => hours.blur())
+    await settle()
+    expect(requests.map((r) => r.name)).toEqual(['profiles:setPlannableHours'])
+    await answer('profiles:setPlannableHours', 'accept')
     server.force = { unavailable: true }
     await rerun()
     expect(find('[data-team-settings-state]').dataset.teamSettingsState).toBe('unavailable')

@@ -561,7 +561,8 @@ function TeamFields({
       >
         {read.afterFailure && read.state !== 'unavailable' && (
           <div role="alert" data-team-settings-failed="" className={`${noteClass} mb-1`}>
-            Couldn't refresh this team. Changes wait until it loads again.{' '}
+            Couldn't refresh this team. Its name, members and leaders wait until it loads again.
+            Hours still save.{' '}
             <Button
               type="button"
               variant="ghost"
