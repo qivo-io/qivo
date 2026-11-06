@@ -731,15 +731,19 @@ describe('the filters', () => {
     expect(has('[data-org-group]')).toBe(false)
   })
 
-  it('shows a row whose task the admin cannot read without its title', async () => {
+  it('shows a row whose task the admin cannot read without its title, and with its counts', async () => {
     await load(world({ tasks: 1 }))
     force.hidden = true
+    const task = fx.items.find((i) => i.row.kind === 'task')
+    if (!task) throw new Error('no task item')
+    task.row = { ...task.row, counts: { ...task.row.counts, subtasks: 1 } }
     await open(undefined, undefined, true)
     await choose(`all:${ORG}`)
     const row = find(`[data-deleted-row="${taskItem(10)}"]`)
     expect(row.hasAttribute('data-hidden-row')).toBe(true)
     expect(row.textContent).toContain('QN-10')
     expect(row.textContent).toContain('Title not shown')
+    expect(row.textContent).toContain('and 1 subtask')
     expect(row.textContent).not.toContain('Route board 10')
     expect(row.textContent).toContain(
       "You can't open this task's project, so its title isn't shown.",

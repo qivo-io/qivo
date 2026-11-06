@@ -610,7 +610,8 @@ export function DeletedItemsPage() {
               {hit ? hit.title : item.title}
             </span>
           )}
-          {!hit && !hidden && itemSuffix(item) && (
+          {/* a hidden row keeps its counts, which name no title */}
+          {!hit && itemSuffix(item) && (
             <span className="shrink-0 text-sm text-text-2">{itemSuffix(item)}</span>
           )}
         </div>
