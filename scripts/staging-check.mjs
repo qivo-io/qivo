@@ -6427,8 +6427,6 @@ async function main() {
   await boardCheck()
   // the task window's relation pickers, while it is active
   await relationPickersCheck()
-  // a file attached through the task window, on an upload ticket
-  await attachmentUploadCheck()
   // the Overview of a sub-project of its own, while the project is active
   await overviewCheck()
   // the Board and a task address without task windows, then the Roadmap
@@ -6442,6 +6440,8 @@ async function main() {
   await projectSettingsCheck()
   // Billing's current storage and Storage by project, with a file of its own
   await billingStorageCheck()
+  // a file attached through the task window, on an upload ticket
+  await attachmentUploadCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

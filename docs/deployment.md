@@ -206,12 +206,7 @@ again once **Search all your projects** ended, a task it makes in its second
 project only after **Search all your projects**, and the subtask it made
 as a current subtask in **Add subtask**, and writes nothing through the
 pickers (`ui/relation-pickers`). Against a backend from before the relation
-pickers' release that step fails. In the same window it attaches a small
-file, which must go on an upload ticket: its `POST` must go to
-`/attachment-uploads/` on the API origin and answer 200, the window must list
-the file and its download must match the bytes, and the step deletes it again
-(`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.135. It then makes a
+pickers' release that step fails. It then makes a
 sub-project of its own under that project, with one To Do task due 70 days
 ago and one paused To Do task without a due date, opens the sub-project's
 Overview, waits for the deployment's answers (`overview.summary`,
@@ -251,7 +246,12 @@ task there, opens **Billing**, checks that current storage shows a figure
 rather than **Being counted**, finds the sub-project alone with **2.0 KB ·
 1 file** by searching **Storage by project** for its run tag and the word
 storage, and deletes the file over REST, also after a failure
-(`ui/billing-storage`). That shows the deployment's stored-byte totals are
+(`ui/billing-storage`). Back in the run's task window it attaches a small
+file, which must go on an upload ticket: its `POST` must go to
+`/attachment-uploads/` on the API origin and answer 200, the window must list
+the file and its download must match the bytes, and the step deletes it again
+(`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
+backend from before the release after v0.1.135. That shows the deployment's stored-byte totals are
 counted and that the page reads them (`billing.currentUsage` and
 `billing.storageProjects`). Against a backend from before those queries
 that step fails. After that it checks
