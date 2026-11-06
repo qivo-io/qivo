@@ -99,7 +99,14 @@ afterEach(() => {
   Object.assign(TASK_READ_RESERVE, back.reserve)
   Object.assign(OWN_READS, back.own)
   minted.count = 0
+  vi.useRealTimers()
 })
+
+/* Stops the clock until the test ends, so reads that follow one another
+ * mint the same download links. A link's expiry is the second it was
+ * minted plus its lifetime (model/attachments.ts linkExpiry), so two reads
+ * either side of a second's end mint different links and expiries. */
+const stopClock = () => vi.useFakeTimers({ toFake: ['Date'] })
 
 /* --------------------------------------------------------------- fixture */
 
@@ -581,6 +588,8 @@ describe('the arguments', () => {
   it('reads an empty REST cursor as absent, and refuses an empty MCP cursor', async () => {
     const fx = await setup()
     const { task } = await related(fx, 2)
+    // the two attachment pages are compared whole, links included
+    stopClock()
     for (const list of LISTS) {
       const first = await restList(fx, fx.agent, list, task.id, { limit: '1' })
       expect(first.next_cursor, list).toEqual(expect.any(String))
@@ -803,6 +812,8 @@ describe('the cursors', () => {
   it('continues a details cursor on its list, a REST cursor on MCP, and lets limit change', async () => {
     const fx = await setup()
     const { task, order } = await related(fx, 55)
+    // the attachment rows of each read are compared whole, links included
+    stopClock()
     const rest = await restDetails(fx, fx.agent, task.id)
     const mcp = await mcpDetails(fx, fx.agent, task.id)
     for (const list of LISTS) {
@@ -914,6 +925,8 @@ describe('order and paging', () => {
     await plantLinks(fx, task, [blocker], true)
     const [person] = await plantFollowers(fx, task, ['Ada Lovelace'])
     const [file] = await plantAttachments(fx, task, [at(0)])
+    // the details' attachment rows are compared whole with the list's
+    stopClock()
     const page = async (list: TaskRelatedList) => (await restList(fx, fx.agent, list, task.id)).rows
     expect(await page('subtasks')).toEqual([
       { id: kid.id, key: `QN-${kid.num}`, title: 'Kid', status: 'done' },
