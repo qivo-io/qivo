@@ -144,12 +144,14 @@ out. `@convex-dev/better-auth` is no longer installed.
   transaction that deletes each session row and stores one
   `oauth_ended_sessions` row with the time the session ended, so the delete
   and the record succeed or fail together, and the work stays one write
-  however many tokens the session holds. Before that, also on the demo, it
-  deletes the session's notification row (`notification_sessions`, through
-  `convex/model/notificationSessionEnd.ts`), in the same transaction. `oauthAccess.lookupAccess`
+  however many tokens the session holds. `oauthAccess.lookupAccess`
   refuses every access token of the session created before that time, and a
   scheduled cleanup deletes the record once those tokens have expired
   (`OAUTH_ACCESS_TOKEN_TTL_SECONDS` in `convex/lib/oauth.ts`, plus a minute).
+  Before it stores that record, the trigger deletes the session's
+  notification row (`notification_sessions`, through
+  `convex/model/notificationSessionEnd.ts`) in the same transaction, also on
+  the demo, where it stores no record.
   The trigger runs once for each session in one transaction, so its module
   loads none of Better Auth (`convex/tests/authTriggers.test.ts`): with it, a
   ban of 200 sessions failed on Convex's time limit on a local backend.
