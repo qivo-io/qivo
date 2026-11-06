@@ -69,6 +69,7 @@ import { SCROLL_ANCHORING } from '../lib/scrollAnchoring'
 import {
   itemUnreadStart,
   mergeSpine,
+  newerRow,
   spineGap,
   spineWindow,
   splitSpine,
@@ -2583,7 +2584,8 @@ function IssueDetail({
   // strictly between the two kinds' gaps stay hidden, so none shows beside a
   // gap in the other kind, and the comment in this window's editor shows
   // whatever the gap hides (spineGap, splitSpine). A gap wholly above where
-  // All's spine starts shows no row, since nothing above it shows.
+  // All's spine starts shows no row, since nothing above it shows
+  // (newerRow).
   const gapSides = {
     comments: P.threadGap?.comments ?? null,
     events: all ? (P.threadGap?.history ?? null) : null,
@@ -2591,17 +2593,11 @@ function IssueDetail({
   const gap = spineGap(gapSides.comments, gapSides.events)
   const parts = splitSpine(spine, gap, gapSides, editingComment)
   const shown = [...parts.above, ...parts.below]
-  const newerSides = all ? [P.commentsNewer, P.historyNewer] : [P.commentsNewer]
-  const newer: CommentsEarlier =
-    gap === null || (all && gap.below <= from.start)
-      ? 'none'
-      : newerSides.includes('loading')
-        ? 'loading'
-        : newerSides.includes('failed')
-          ? 'failed'
-          : newerSides.includes('more')
-            ? 'more'
-            : 'none'
+  const newer = newerRow(
+    gap,
+    all ? from.start : Number.NEGATIVE_INFINITY,
+    all ? [P.commentsNewer, P.historyNewer] : [P.commentsNewer],
+  )
   // What the first row says: Comments pages its comments, All both.
   const sides = all ? [P.commentsEarlier, P.historyEarlier] : [P.commentsEarlier]
   const earlier: CommentsEarlier = sides.includes('loading')

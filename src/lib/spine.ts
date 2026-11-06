@@ -1,7 +1,7 @@
 /* Inbox and task conversations share oldest-first ordering and unread marks.
    Keep them consistent while both surfaces share the same comment cache. */
 
-import type { ActivityVM, CommentVM } from '../store/planner'
+import type { ActivityVM, CommentsEarlier, CommentVM } from '../store/planner'
 
 /* Generic over the row shapes (defaulting to the store's view models) so the
    ordering rules stay testable with minimal fixtures — the merge itself only
@@ -92,6 +92,24 @@ export function spineGap(
   const end = Math.min(...sides.map((side) => side.end))
   const below = Math.max(...sides.map((side) => side.below))
   return { end, below, load: { comments: comments?.end === end, events: events?.end === end } }
+}
+
+/** What the spine's newer row says (store/planner.ts CommentsEarlier), from
+    the gap spineGap places and `newer`, the shown kinds' P.commentsNewer
+    and P.historyNewer: 'loading' while one of their newer pages loads,
+    'failed' after one failed, 'more' while one has released rows, else
+    'none'. A gap wholly above `start`, where the spine starts (spineWindow
+    under All, -Infinity under Comments), shows no row, since nothing above
+    it shows. */
+export function newerRow(
+  gap: { below: number } | null,
+  start: number,
+  newer: readonly CommentsEarlier[],
+): CommentsEarlier {
+  if (gap === null || gap.below <= start) return 'none'
+  for (const state of ['loading', 'failed', 'more'] as const)
+    if (newer.includes(state)) return state
+  return 'none'
 }
 
 /** The spine's items, oldest first, in the part above the newer row and the

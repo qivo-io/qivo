@@ -3,6 +3,7 @@ import {
   type GapSide,
   itemUnreadStart,
   mergeSpine,
+  newerRow,
   spineGap,
   spineWindow,
   splitSpine,
@@ -253,6 +254,25 @@ describe('spineGap and splitSpine', () => {
       { rows: [{ ts: 800 }], whole: false },
     )
     const gap = spineGap(side(300, 700, []), null)
-    expect(gap !== null && gap.below <= from.start).toBe(true)
+    expect(newerRow(gap, from.start, ['more', 'none'])).toBe('none')
+    // a gap whose first row below is where All starts is above it too
+    expect(newerRow(gap, 700, ['more', 'none'])).toBe('none')
+    // with the history's oldest change at 600, the rows below the gap show
+    const later = spineWindow(
+      { rows: [{ ts: 100 }, { ts: 300 }, { ts: 700 }], whole: false },
+      { rows: [{ ts: 600 }], whole: false },
+    )
+    expect(newerRow(gap, later.start, ['more', 'none'])).toBe('more')
+    // under Comments nothing is above where the spine starts
+    expect(newerRow(gap, Number.NEGATIVE_INFINITY, ['more'])).toBe('more')
+  })
+
+  it('says what the newer row shows, loading before failed before more', () => {
+    const gap = spineGap(side(300, 700, []), null)
+    expect(newerRow(null, Number.NEGATIVE_INFINITY, ['more'])).toBe('none')
+    expect(newerRow(gap, Number.NEGATIVE_INFINITY, ['none', 'none'])).toBe('none')
+    expect(newerRow(gap, Number.NEGATIVE_INFINITY, ['failed', 'loading'])).toBe('loading')
+    expect(newerRow(gap, Number.NEGATIVE_INFINITY, ['more', 'failed'])).toBe('failed')
+    expect(newerRow(gap, Number.NEGATIVE_INFINITY, ['none', 'more'])).toBe('more')
   })
 })
