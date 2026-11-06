@@ -266,19 +266,22 @@ describe("the Users page's stand-in", () => {
           created_at: NOW,
         })
         const agent = (await ctx.db.get(_id)) as Doc<'profiles'>
-        for (const [n, revoked] of [
-          [1, true],
-          [2, false],
-          [3, false],
+        // keys 2 and 3 share a created_at, as rows ported from 0100 may, and
+        // go in with ascending ids, so only the id breaking the tie orders them
+        const [low, high] = [uuid(), uuid()].sort()
+        for (const [n, id, day, revoked] of [
+          [1, uuid(), '01', true],
+          [2, low, '02', false],
+          [3, high, '02', false],
         ] as const)
           await ctx.db.insert('agent_keys', {
-            id: uuid(),
+            id,
             profile_id: agent.id,
             org_id: org.id,
             name: `Key ${n}`,
             key_prefix: `qva_00${n}...abcd${n}`,
             key_hash: uuid().replace(/-/g, '').padEnd(64, '0'),
-            created_at: `2026-10-0${n}T08:00:00.000Z`,
+            created_at: `2026-10-${day}T08:00:00.000Z`,
             ...(revoked ? { revoked_at: NOW } : {}),
           })
         out.push(agent)

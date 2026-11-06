@@ -25,8 +25,9 @@
      profiles among the ids, for any active seat, at most BY_IDS_MAX ids;
    - agentKeys: refused for anyone but an admin, for no ids and past
      LIST_BATCH; each agent of the organization among the ids with its
-     keys newest first by created_at, at most AGENT_KEYS.most and `more`;
-     the keys come from `extra.keys`, since the workspace holds none;
+     keys newest first by created_at, the id breaking ties, at most
+     AGENT_KEYS.most and `more`; the keys come from `extra.keys`, since
+     the workspace holds none;
    - projectCreators: refused for anyone but an admin; the admins and then
      the standard users in name key order who may create projects under
      the organization's setting, active ones only, two named and up to 100
@@ -333,9 +334,21 @@ export function peopleSettingsStandIn(
     for (const id of new Set(ids)) {
       const agent = people.find((p) => p.id === id && p.kind === 'agent')
       if (!agent) continue
+      // descending as agent_keys by_profile_created reads them; key ids are
+      // ASCII, so `<` matches Convex's byte order
       const keys = (extra.keys ?? [])
         .filter((k) => k.agentId === id)
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+        .sort((a, b) =>
+          a.createdAt !== b.createdAt
+            ? a.createdAt < b.createdAt
+              ? 1
+              : -1
+            : a.id < b.id
+              ? 1
+              : a.id > b.id
+                ? -1
+                : 0,
+        )
       agents.push({ agent_id: id, keys: keys.slice(0, most), more: keys.length > most })
     }
     return { agents }
