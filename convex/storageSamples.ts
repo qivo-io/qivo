@@ -74,7 +74,8 @@ const expireRef = makeFunctionReference<'mutation', { day: string }, null>('stor
  * check. Does nothing once the day's run finished, while its steps go on,
  * and on the demo deployment. Such a call reads one row and writes none.
  * It never goes back to an earlier day's run, which keeps the samples it
- * wrote. The hourly cron calls it. */
+ * wrote and, unfinished, its cursor until the row expires. The hourly cron
+ * calls it. */
 export const tick = internalMutation({
   args: {},
   handler: async (ctx): Promise<null> => {

@@ -2045,8 +2045,8 @@ export default defineSchema({
    * its progress, which a resumed run goes on from, and what it cost, for
    * the reading that decides whether daily storage billing is worth its
    * Convex cost (storageSamples.costReport). It names an organization only
-   * in `cursor`, and only while its run is under way. Deleted after
-   * SAMPLE_RETENTION_DAYS. */
+   * in `cursor`, while its run is under way and, for a run that never
+   * finished, until the row expires. Deleted after SAMPLE_RETENTION_DAYS. */
   storage_sample_runs: defineTable({
     day: v.string(), // YYYY-MM-DD, UTC
     // The run under way or done: its id, which its steps carry and a

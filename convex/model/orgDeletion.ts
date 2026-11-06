@@ -700,7 +700,9 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
  * row goes with its other bookkeeping in the last phase. A day's run writes
  * no sample once the deletion has begun, which the profiles phase marks
  * before this one, so none lands after the drain. The run rows name no
- * organization once their run finished and go by expiry only. */
+ * organization once their run finished; a run that never finished keeps
+ * the last organization id its steps reached in `cursor` until the row
+ * expires. They go by expiry only. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () =>
