@@ -4886,8 +4886,11 @@ async function settingsProjectsCheck() {
     await chip(a).waitFor({ timeout: 30_000 })
     await chip(b).waitFor({ timeout: 30_000 })
     eq(
-      [await chip(a).getAttribute(m.withParent), await chip(b).getAttribute(m.withParent)],
-      ['', null],
+      canonical([
+        await chip(a).getAttribute(m.withParent),
+        await chip(b).getAttribute(m.withParent),
+      ]),
+      canonical(['', null]),
       'A archived with the project and B on its own',
     )
     await entry.locator(`[${m.restore}="${lists.id}"]`).click()
