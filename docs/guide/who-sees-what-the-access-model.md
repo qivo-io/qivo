@@ -161,7 +161,12 @@ let someone join your organization without an invitation.
 **New project** asks for a name, lead, optional description and optional team
 or individual shares. Organization admins can always use it. For everyone
 else, [Who can create projects](./organization-and-team-settings.md#who-can-create-projects)
-decides. The lead starts as you.
+decides. The lead starts as you. **Lead** lists the people who may lead the
+project 25 at a time, with a search over the organization's people and
+**Load more**. **Project access** lists the organization's teams and then its
+people 25 at a time, with a search and **Load more**, and offers organization
+admins like anyone else. The teams and people you check stay checked, listed
+first under **Selected**, while you search again.
 
 If you are not an organization admin and pick someone else as lead, Qivo adds
 you to **Project access** as **User**. The field then names you, such as
@@ -188,9 +193,15 @@ Mount” created. You don't have access to it.**
 
 **New sub-project** asks for a name, parent project and lead; add optional
 shares in its settings. It requires Lead access to the parent project, and
-**Who can create new projects?** does not affect it. When someone else leads
-and you are not an organization admin, the footer names them with the same
-note. As the parent's lead, you keep **User** access to the sub-project.
+**Who can create new projects?** does not affect it. **Project** lists the
+projects you may add a sub-project to in the organization you opened it
+from, 25 at a time with a search: every project of the organization for an
+organization admin, and the projects you lead for anyone else. If the project
+you opened it from can't take a sub-project, the dialog says why and asks you
+to choose another. **Lead** lists that organization's people who may lead
+it, 25 at a time, and starts as you. When someone else leads and you are not
+an organization admin, the footer names them with the same note. As the
+parent's lead, you keep **User** access to the sub-project.
 
 ## People outside your organization
 
