@@ -521,6 +521,23 @@ describe("a project's milestones", { timeout: 30_000 }, () => {
     expect(liveRanges().map((s) => s.args.projects)).toEqual([['plan']])
     expect(flag('m-luma')).toBeNull()
   })
+
+  it('marks the header band busy while its flags are on their way, and says so at once', async () => {
+    holds = () => true
+    await app(world(), '/app/testbed/roadmap/p/1')
+    await roadmap('loading')
+    const band = () => document.querySelector('[data-workspace-view] [data-msband]')
+    expect(band()?.getAttribute('aria-busy')).toBe('true')
+    // a wait with no flag to show says so at once, not after a stall
+    expect(line()?.textContent).toBe('Loading milestones…')
+    holds = () => false
+    await act(async () => {
+      for (const sub of liveRanges()) answer(sub)
+    })
+    await roadmap('ok')
+    expect(band()?.getAttribute('aria-busy')).toBeNull()
+    expect(line()).toBeNull()
+  })
 })
 
 describe('a window move', { timeout: 30_000 }, () => {
