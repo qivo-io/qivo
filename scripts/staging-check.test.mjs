@@ -334,13 +334,17 @@ describe('staging check REST contract', () => {
     expect(check.indexOf('await projectDirectoryCheck()')).toBeGreaterThan(
       check.indexOf('await settingsProjectsCheck()'),
     )
+    // on the run's own project, while it is active, adding no project the
+    // later tag searches would list
     expect(check.indexOf('await projectDirectoryCheck()')).toBeLessThan(
-      check.indexOf('await deletedItemsCheck()'),
+      check.indexOf('await archiveChecks()'),
     )
-    // its project goes in the cleanup with its sub-projects
-    expect(check).toContain(
-      'if (run.projects.Y) await deleteProjectInApp(c.writeToken, run.projects.Y)',
+    const step = check.slice(
+      check.indexOf('async function projectDirectoryCheck()'),
+      check.indexOf('/** The step that checks Settings › Projects › Deleted items'),
     )
+    expect(step).toContain('const { M, A, Z } = run.projects')
+    expect(step).not.toContain("'POST', '/projects'")
   })
   it("checks Settings › Users and the creators line in the pages' own words", () => {
     const users = readFileSync(

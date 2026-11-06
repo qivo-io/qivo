@@ -145,12 +145,11 @@
  * one archived on its own, and restores it there, which must bring back the
  * project and the carried sub-project only, each checked over REST
  * (ui/settings-projects).
- * It makes a project of its own with two sub-projects, opens All projects
- * from the sidebar, finds them by its run tag from the deployment's search
- * (projectNav.search), stars the project, which the server's answer puts
- * first under Favorites (projectNav.setFavorite), lists its sub-projects
- * (projectNav.children), opens one of them, and unstars the project again
- * (ui/project-directory).
+ * It opens All projects from the sidebar, finds its project by name from
+ * the deployment's search (projectNav.search), stars it, which the
+ * server's answer puts first under Favorites (projectNav.setFavorite),
+ * lists Alpha and Zulu under it (projectNav.children), opens Zulu, and
+ * unstars the project again (ui/project-directory).
  * It makes 26 tasks of its own in Alpha and deletes them over REST,
  * searches its tag in Settings › Projects › Deleted items, from the
  * deployment's page (deletedItems.page), and waits until the page answers
@@ -6513,106 +6512,95 @@ export const NOT_LOADED_YET = 'has not loaded yet'
 
 /** The All projects directory on the deployment's navigation reads
  *  (projectNav.page, search and children) and its star
- *  (projectNav.setFavorite): over REST as Nora the run makes `<tag>
- *  Directory Zulu`, which she leads, with the sub-projects `<tag> Directory
- *  Alpha` and `<tag> Directory Bravo`. In the app it opens All projects
- *  from the sidebar, searches the run's tag and waits for the three rows,
- *  Zulu last by name. It stars Zulu and waits for the server's answer to
- *  put it first under Favorites, expands it and waits for Alpha and Bravo
- *  from projectNav.children, opens Bravo from that list, pressing again
- *  while the directory says the workspace has not loaded it yet, and waits
- *  for Bravo's address. Back in All projects it searches the tag again,
- *  unstars Zulu and waits for it to come last again; a failure unstars it
- *  through the store, so no later step meets the run's project as a
- *  favorite. It reads none of Nora's own favorites, which a deployment
- *  seeded before dataset version 10 does not hold. The project goes in the
- *  cleanup with its sub-projects, and the sweep finds it by its tag. It
- *  needs a backend from v0.1.126 on. */
+ *  (projectNav.setFavorite), on the run's own project M, which Nora leads,
+ *  and its sub-projects Alpha and Zulu, so the step adds no project the
+ *  later steps' tag searches would list. In the app it opens All projects
+ *  from the sidebar, searches M's name and waits for M's row. It stars M
+ *  and waits for the server's answer to put it first under Favorites,
+ *  expands it and waits for Alpha and Zulu from projectNav.children,
+ *  pressing Load more while one is still to come, opens Zulu from that
+ *  list, pressing again while the directory says the workspace has not
+ *  loaded it yet, and waits for Zulu's address. Back in All projects it
+ *  searches M's name again, unstars M and waits for the Favorites heading
+ *  to go; a failure unstars it through the store, so no later step meets
+ *  the run's project as a favorite. It reads none of Nora's own favorites,
+ *  which a deployment seeded before dataset version 10 does not hold, and
+ *  must run before the run archives M. It needs a backend from v0.1.126
+ *  on. */
 async function projectDirectoryCheck() {
-  const w = run.creds.writeToken
   const m = PROJECT_DIRECTORY_MARKS
   await check(PROJECT_DIRECTORY_STEP, async () => {
-    const zulu = await restOk(w, 'POST', '/projects', { name: `${run.tag} Directory Zulu` })
-    run.projects.Y = zulu
-    const alpha = await restOk(w, 'POST', '/projects', {
-      name: `${run.tag} Directory Alpha`,
-      parent: zulu.id,
-    })
-    const bravo = await restOk(w, 'POST', '/projects', {
-      name: `${run.tag} Directory Bravo`,
-      parent: zulu.id,
-    })
+    const { M, A, Z } = run.projects
     const row = (p) => app.locator(`[${m.page}] [${m.row}="${p.id}"]`)
     const order = () =>
       app
         .locator(`[${m.page}] [${m.row}]`)
         .evaluateAll((els, mark) => els.map((el) => el.getAttribute(mark)), m.row)
-    const searchTag = async () => {
-      await app.locator(`[${m.search}]`).fill(run.tag)
-      for (const p of [zulu, alpha, bravo]) await row(p).waitFor({ timeout: 60_000 })
+    const favorites = () => app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()
+    const searchM = async () => {
+      await app.locator(`[${m.search}]`).fill(M.name)
+      await row(M).waitFor({ timeout: 60_000 })
     }
-    const starOf = () => row(zulu).locator(`[${m.star}]`)
+    const starOf = () => row(M).locator(`[${m.star}]`)
     let starred = false
     try {
-      await app.locator('[data-all-nav]').click()
+      // the sidebar shows over the workspace, not over Settings
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board`, { waitUntil: 'domcontentloaded' })
+      await app.locator('[data-all-nav]').click({ timeout: 60_000 })
       await app.locator(`[${m.page}]`).waitFor({ timeout: 60_000 })
-      await searchTag()
-      eq(
-        canonical(await order()),
-        canonical([alpha.id, bravo.id, zulu.id]),
-        'the search lists Alpha and Bravo with Zulu, by name',
-      )
-      // the star, and the server's answer that puts Zulu first
+      await searchM()
+      eq(await starOf().getAttribute('aria-pressed'), 'false', "M's star before the step")
+      // the star, and the server's answer that puts M first
       await starOf().click()
       starred = true
       expect(
-        await until(
-          async () =>
-            (await app.locator(`[${m.page}] [${m.favorites}="favorites"]`).count()) === 1 &&
-            (await order())[0] === zulu.id,
-          30_000,
-        ),
-        'Zulu does not come first as a favorite',
+        await until(async () => (await favorites()) === 1 && (await order())[0] === M.id, 30_000),
+        'M does not come first as a favorite',
       )
-      eq(await starOf().getAttribute('aria-pressed'), 'true', "Zulu's star")
-      // its sub-projects from projectNav.children, and Bravo opened there
-      await row(zulu).locator(`[${m.expand}]`).click()
-      const children = app.locator(`[${m.children}="${zulu.id}"]`)
-      for (const p of [alpha, bravo])
-        await children.locator(`[${m.child}="${p.id}"]`).waitFor({ timeout: 30_000 })
+      eq(await starOf().getAttribute('aria-pressed'), 'true', "M's star")
+      // its sub-projects from projectNav.children, and Zulu opened there
+      await row(M).locator(`[${m.expand}]`).click()
+      const children = app.locator(`[${m.children}="${M.id}"]`)
+      const child = (p) => children.locator(`[${m.child}="${p.id}"]`)
+      expect(
+        await until(async () => {
+          if ((await child(A).count()) && (await child(Z).count())) return true
+          const more = children.locator('[data-directory-more]')
+          if (await more.count()) await more.click()
+          return false
+        }, 60_000),
+        "M's sub-projects do not list Alpha and Zulu",
+      )
       const opened = await until(async () => {
         if (!new URL(app.url()).pathname.endsWith('/projects')) return true
         const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
-        // a project made over REST a moment ago may not be in the
-        // workspace yet; the directory says so and moves nothing
-        if (note.includes(NOT_LOADED_YET) || note === '')
-          await children.locator(`[${m.child}="${bravo.id}"]`).click()
+        // a project the workspace has not delivered yet: the directory says
+        // so and moves nothing
+        if (note.includes(NOT_LOADED_YET) || note === '') await child(Z).click()
         return !new URL(app.url()).pathname.endsWith('/projects')
       }, 60_000)
-      expect(opened, "Bravo's page did not open from the directory")
-      // back in All projects, Zulu unstarred comes last again
+      expect(opened, "Zulu's page did not open from the directory")
+      // back in All projects, M unstarred leaves the Favorites
       await app.locator('[data-all-nav]').click()
       await app.locator(`[${m.page}]`).waitFor({ timeout: 30_000 })
-      await searchTag()
+      await searchM()
       await starOf().click()
       expect(
-        await until(async () => {
-          const ids = await order()
-          return (
-            ids[ids.length - 1] === zulu.id &&
-            (await app.locator(`[${m.page}] [${m.favorites}]`).count()) === 0
-          )
-        }, 30_000),
-        'Zulu does not come last again once unstarred',
+        await until(
+          async () =>
+            (await favorites()) === 0 && (await starOf().getAttribute('aria-pressed')) === 'false',
+          30_000,
+        ),
+        'M stays a favorite once unstarred',
       )
       starred = false
-      return `found ${zulu.name} with Alpha and Bravo by the run tag, starred it to the top, listed its sub-projects, opened Bravo from them and unstarred it again`
+      return `found ${M.name} by its name, starred it to the top, listed Alpha and Zulu under it, opened Zulu from there and unstarred it again`
     } finally {
       if (starred)
         await evaluate(
           app,
           (id) => window.PLANNER.setFavorite({ id, org_id: window.PLANNER.homeOrg }, false),
-          zulu.id,
+          M.id,
         ).catch(() => {})
     }
   })
@@ -8467,7 +8455,7 @@ async function main() {
   // project of its own
   await settingsProjectsCheck()
   // the All projects directory on the server's navigation reads, its star
-  // and its sub-project list, on a project of its own
+  // and its sub-project list, on its project while it is active
   await projectDirectoryCheck()
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
@@ -8488,7 +8476,6 @@ async function main() {
     if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
     if (run.projects.R) await deleteProjectInApp(c.writeToken, run.projects.R)
     if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)
-    if (run.projects.Y) await deleteProjectInApp(c.writeToken, run.projects.Y)
     if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)
     for (const t of run.created)
       eq(
