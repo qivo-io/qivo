@@ -490,12 +490,20 @@ export async function readsUnder(ctx: QueryCtx, ceiling: ReadCeiling): Promise<b
  * document at Convex's size limit, so as long as the walk reads nothing
  * between its calls, no range starts once the ceiling's ranges are used
  * and the documents and bytes stay under the ceiling's. The range that uses
- * the last of the ceiling's ranges may be read to its end. */
+ * the last of the ceiling's ranges may be read to its end. A walk that
+ * reads between its calls, such as a question about a project's access
+ * (lib/core.ts groupCounter over lib/access.ts accessOf), calls look before
+ * it. */
 export type CeilingGuard = {
   /** Whether the walk may start one more index range. */
   range(): Promise<boolean>
   /** Whether the walk may go on after the document it just read. */
   document(): Promise<boolean>
+  /** Looks at the metrics now, before a read the guard does not count, and
+   * answers whether the request's reads are still under the ceiling, so
+   * such a read passes it by its own reads at most. It drops what the look
+   * left, so the next range or document looks again, after that read. */
+  look(): Promise<boolean>
 }
 
 /** A CeilingGuard for `ceiling`. Each look at the metrics costs about as
@@ -526,6 +534,12 @@ export function ceilingGuard(ctx: QueryCtx, ceiling: ReadCeiling): CeilingGuard 
       if (documents <= 0) return await look()
       documents--
       return true
+    },
+    look: async () => {
+      const under = await look()
+      ranges = 0
+      documents = 0
+      return under
     },
   }
 }

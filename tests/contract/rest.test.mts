@@ -48,7 +48,7 @@ const E401_PERSON_UNKNOWN = '{"error":"unknown personal access token"}'
  * as a SET: the value crosses the Convex function boundary before the
  * httpAction stringifies it, and Convex canonically sorts object keys there —
  * the live wire is alphabetical, so key ORDER is not contract, key PRESENCE
- * is (explicit null, never omitted). A list row leaves out the last seven. */
+ * is (explicit null, never omitted). A list row leaves out the last twelve. */
 const ISSUE_KEYS = [
   'archived',
   'archived_at',
@@ -86,11 +86,15 @@ const ISSUE_KEYS = [
   'url',
   'group_remaining_hours',
   'labels',
+  'subtasks_next_cursor',
   'subtasks',
   'has_more_subtasks',
+  'links_next_cursor',
   'links',
   'following',
+  'followers_next_cursor',
   'followers',
+  'attachments_next_cursor',
   'attachments',
 ].sort()
 

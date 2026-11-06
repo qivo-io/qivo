@@ -194,7 +194,18 @@ search without the label's accent on both surfaces, deletes it again in the
 app, and checks that `offset=1`, `limit=0`, a cursor of another search and a
 users cursor sent to the teams list are refused with their sentences.
 Against a backend from before the paged people lists that step fails, and so
-do the run's other reads of those lists. In the
+do the run's other reads of those lists. Its `machine/task-details` step
+makes a group of its own with three subtasks, links to the run's two
+fixture tasks, two followers and two text files, checks that `GET
+/v1/tasks/{ref}` and `get_task` answer each list whole with every cursor
+`null`, pages each list at limit 1 over `GET /v1/tasks/{ref}/subtasks`,
+`/links`, `/followers` and `/attachments` and `list_task_related` to its
+end, carries a REST cursor into MCP, and checks that `offset=1`, `limit=0`,
+a subtasks cursor sent to the links route, a cursor of another task and an
+unknown query parameter are refused with their sentences. The run reads
+every task's files a page at a time. Against a backend from before the
+paged task details that step fails, and so do the run's reads of a task's
+files. In the
 browser it then opens the Board of the project it made, waits for the
 deployment's answer for it (`tasks.board`)
 and checks that the cards of its two fixture tasks show, which it makes in
@@ -1218,6 +1229,40 @@ organization page reads `adminBilling.orgBilling`, which answers without
 the account names from this release, and no console reads them. This
 release becomes the backend's newest floor. There is no schema change, no
 backfill and no release step.
+
+From the release after v0.1.145, REST `GET /v1/tasks/{ref}`, the answers of
+`POST /v1/tasks` and `PATCH /v1/tasks/{ref}`, and MCP `get_task` answer at
+most 50 of each of `subtasks`, `links`, `followers` and `attachments`, each
+with its cursor, `subtasks_next_cursor`, `links_next_cursor`,
+`followers_next_cursor` and `attachments_next_cursor`, and REST `GET
+/v1/tasks/{ref}/subtasks`, `/links`, `/followers` and `/attachments` and
+the new MCP tool `list_task_related` page them. `has_more_subtasks` now
+says that the subtask list goes on, and an archived group's subtasks page
+to the end. Comment pages read only the profiles their comments name. A
+task's details ask the caller's access project by project, for the
+projects the task, its subtree and its links name, rather than for the
+organization's every project. Returning the backend to a commit before it
+makes task details answer every row again, without the cursors and with
+`has_more_subtasks` as before, makes `GET /v1/tasks/{ref}/attachments`
+answer an array and refuse `limit`, `cursor` and `offset` as unknown query
+parameters, makes the three new routes answer `404` and makes
+`list_task_related` an unknown tool, so a caller that pages these lists
+stops working until the backend rolls forward. Code written for the older
+answers keeps reading the arrays, and after the release reads only their
+first 50 rows without any error, as with the workload; such code must
+follow the cursors. Such a return drops the index `issues.by_parent_num`,
+which the deploy forward builds again with no change to data. A caller far
+past the sizes Qivo is built for, whose check of which projects they can
+see stops at the fixed limits of one request, now gets that refusal (`Qivo
+could not finish checking which projects you can see in one request`) on
+task details, and on the answers of REST task creates and updates, whose
+change is then not made, where the earlier reader answered. A task's
+details naming a project on which one person holds two grant rows, which
+only bad data holds, now fail with an internal error for that person,
+where the earlier reader took the higher level for an archived task or
+past 16 projects, as a member's task history already does. This sets no
+floor for the app, which calls none of them, needs no step and has no
+backfill.
 
 ## Node.js version
 

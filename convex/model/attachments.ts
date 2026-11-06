@@ -723,22 +723,33 @@ export async function attachmentJson(
   }
 }
 
+/** The attachments of task `issueId` that count toward
+ * LIMITS.attachments.max, inline images included, at most `most` + 1 of
+ * them, so a caller can tell a task with more than `most`, in no set order.
+ * An image a description save dropped (model/descriptionImages.ts) is no
+ * longer the task's, so it is left out. REST and MCP sort them, oldest
+ * first, and page them (lib/core.ts relatedPage). */
+export const countedAttachments = (
+  ctx: QueryCtx,
+  issueId: string,
+  most: number,
+): Promise<Doc<'issue_attachments'>[]> =>
+  ctx.db
+    .query('issue_attachments')
+    .withIndex('by_issue_dropped', (q) => q.eq('issue_id', issueId).eq('dropped_at', undefined))
+    .take(most + 1)
+
 /**
- * The attachments of `issue`, oldest first and inline images included, as
- * attachmentJson reads them for `reader`, all links sharing one expiry. An
- * image a description save dropped (model/descriptionImages.ts) is no
- * longer the task's, so it is left out.
+ * `rows`, attachments of a task `reader` can read, as attachmentJson reads
+ * them for `reader`, in their order, all links sharing one expiry and each
+ * uploader's name read once. Only these rows get a download link, so a page
+ * of a task's attachments mints links for that page alone.
  */
-export async function taskAttachments(
+export async function attachmentsJson(
   ctx: QueryCtx,
   reader: Doc<'profiles'>,
-  issue: Doc<'issues'>,
+  rows: readonly AttachmentRow[],
 ): Promise<AttachmentJson[]> {
-  const rows = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_issue_dropped', (q) => q.eq('issue_id', issue.id).eq('dropped_at', undefined))
-    .collect()
-  rows.sort((x, y) => x.created_at.localeCompare(y.created_at) || x.id.localeCompare(y.id))
   const exp = linkExpiry()
   const names = new Map<string, string | null>()
   const out: AttachmentJson[] = []

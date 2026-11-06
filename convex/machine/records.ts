@@ -1,5 +1,7 @@
-/* Attachments, task activity and workload over REST and MCP. A caller reads
- * a task's files and history, and each person's planned hours per week.
+/* A task's related lists, attachments, task activity and workload over
+ * REST and MCP. A caller reads a page of a task's subtasks, links,
+ * followers or files, its history, and each person's planned hours per
+ * week.
  *
  * RECORD_TOOLS and RECORD_ROUTES are registry entries (machine/registry.ts)
  * that machine/mcp.ts TOOLS and machine/rest.ts ROUTES spread in, so
@@ -9,9 +11,12 @@
  * parser and MCP text it shares with them come from machine/shared.ts.
  *
  * Each action is one shared function that holds the app's rule.
- * model/attachments.ts lists attachments with download links, removes them
- * and runs the REST upload's start and confirm, and the app's files.ts runs
- * the same attach and remove. lib/activityVisibility.ts taskHistoryPage is the
+ * lib/core.ts relatedPage pages a task's four related lists, the same lists
+ * whose first pages REST GET /v1/tasks/{ref} and MCP get_task answer, each
+ * attachment page with download links minted for its rows alone
+ * (model/attachments.ts attachmentsJson). model/attachments.ts removes
+ * attachments and runs the REST upload's start and confirm, and the app's
+ * files.ts runs the same attach and remove. lib/activityVisibility.ts taskHistoryPage is the
  * app's activity rule, and planning.ts workloadPage pages the people with
  * each one's load as planning.ownerLoads reads it for the app, without its
  * paused list, its anonymization included. The internal functions below are thin per-surface
@@ -57,7 +62,22 @@ import {
   historyAnchor,
   taskHistoryPage,
 } from '../lib/activityVisibility'
-import { asMachineCaller, type Caller, findIssue, findProject, issueKey, UUID } from '../lib/core'
+import {
+  asMachineCaller,
+  type Caller,
+  type FollowerJson,
+  findIssue,
+  findProject,
+  issueKey,
+  RELATED_LIMITS,
+  RELATED_NOUNS,
+  relatedPage,
+  TASK_RELATED_LISTS,
+  type TaskLinkJson,
+  type TaskRefJson,
+  type TaskRelatedList,
+  UUID,
+} from '../lib/core'
 import { byId } from '../lib/db'
 import { vCredentialAccess } from '../lib/enums'
 import { badRequest, forbidden, notFound, type Refusal, rule } from '../lib/functions'
@@ -75,7 +95,6 @@ import {
   confirmAttachmentUpload,
   removeAttachmentCore,
   startAttachmentUpload,
-  taskAttachments,
   UPLOAD_SIZE_SHAPE,
   UPLOAD_STORAGE_ID,
   uploadSize,
@@ -87,6 +106,7 @@ import type { TOOLS } from './mcp'
 import { conflictRetrying } from './registry'
 import type { ROUTES, route as restRoute } from './rest'
 import {
+  cursorPaging,
   MCP_NO_WRITE,
   MCP_PROVENANCE,
   needJson,
@@ -161,16 +181,109 @@ function uploadFields(b: Record<string, unknown>): {
   return { name, content_type, size: uploadSize(b.size) }
 }
 
-/* GET /v1/tasks/{ref}/attachments, the task's attachments with fresh
- * download links (model/attachments.ts taskAttachments). The single-task
- * read carries the same list. */
+/* ------------------------------------------------------ related lists */
+
+/* The arguments of a REST page of a task's related list. Query values
+ * arrive as raw strings. */
+const vRelatedQuery = {
+  callerId: v.string(),
+  access: vCredentialAccess,
+  ref: v.string(),
+  limit: v.optional(v.string()),
+  offset: v.optional(v.string()),
+  cursor: v.optional(v.string()),
+}
+
+/* One page of `list` of the task `a.ref` names over REST, refused in the
+ * order both surfaces document: the page size and any offset but 0
+ * (cursorPaging), the task, then the cursor (lib/core.ts relatedPage). An
+ * empty cursor counts as absent. */
+async function restRelated<L extends TaskRelatedList>(
+  ctx: QueryCtx,
+  a: ObjectType<typeof vRelatedQuery>,
+  list: L,
+) {
+  const me = await asMachineCaller(ctx, a.callerId, a.access)
+  const paging = cursorPaging(RELATED_LIMITS[list], RELATED_NOUNS[list], {
+    ...a,
+    cursor: a.cursor || undefined,
+  })
+  const issue = await findIssue(ctx, me, a.ref)
+  if (issue === null) throw notFound('task not found')
+  return await relatedPage(ctx, me, issue, list, paging)
+}
+
+/* GET /v1/tasks/{ref}/subtasks?limit=&cursor=, a page of the task's
+ * subtasks the caller can read, by number: an active task's active ones,
+ * an archived task's all (lib/core.ts relatedPage). */
+export const restListSubtasks = internalQuery({
+  args: vRelatedQuery,
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; subtasks: TaskRefJson[] }> => {
+    const page = await restRelated(ctx, a, 'subtasks')
+    return { next_cursor: page.next_cursor, subtasks: page.rows }
+  },
+})
+
+/* GET /v1/tasks/{ref}/links?limit=&cursor=, a page of the task's links whose
+ * other task the caller can read, by that task's number. */
+export const restListLinks = internalQuery({
+  args: vRelatedQuery,
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; links: TaskLinkJson[] }> => {
+    const page = await restRelated(ctx, a, 'links')
+    return { next_cursor: page.next_cursor, links: page.rows }
+  },
+})
+
+/* GET /v1/tasks/{ref}/followers?limit=&cursor=, a page of who follows the
+ * task, by name. */
+export const restListFollowers = internalQuery({
+  args: vRelatedQuery,
+  handler: async (ctx, a): Promise<{ next_cursor: string | null; followers: FollowerJson[] }> => {
+    const page = await restRelated(ctx, a, 'followers')
+    return { next_cursor: page.next_cursor, followers: page.rows }
+  },
+})
+
+/* GET /v1/tasks/{ref}/attachments?limit=&cursor=, a page of the task's
+ * attachments, oldest first, with download links minted for this page's
+ * rows alone. */
 export const restListAttachments = internalQuery({
-  args: { callerId: v.string(), access: vCredentialAccess, ref: v.string() },
-  handler: async (ctx, a): Promise<AttachmentJson[]> => {
+  args: vRelatedQuery,
+  handler: async (
+    ctx,
+    a,
+  ): Promise<{ next_cursor: string | null; attachments: AttachmentJson[] }> => {
+    const page = await restRelated(ctx, a, 'attachments')
+    return { next_cursor: page.next_cursor, attachments: page.rows }
+  },
+})
+
+/* list_task_related pages one related list of a task, REST's rule
+ * (restRelated), with MCP's not-found sentence. The answer's cursor comes
+ * first, so a truncated tool result still shows it, and the rows go under
+ * the list's own name. */
+export const mcpTaskRelated = internalQuery({
+  args: {
+    callerId: v.string(),
+    access: vCredentialAccess,
+    ref: v.string(),
+    list: v.union(
+      v.literal('subtasks'),
+      v.literal('links'),
+      v.literal('followers'),
+      v.literal('attachments'),
+    ),
+    limit: v.optional(v.number()),
+    offset: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, a): Promise<string> => {
     const me = await asMachineCaller(ctx, a.callerId, a.access)
+    const paging = cursorPaging(RELATED_LIMITS[a.list], RELATED_NOUNS[a.list], a)
     const issue = await findIssue(ctx, me, a.ref)
-    if (issue === null) throw notFound('task not found')
-    return await taskAttachments(ctx, me, issue)
+    if (issue === null) throw notFound(`task "${a.ref}" not found (or not visible to you)`)
+    const page = await relatedPage(ctx, me, issue, a.list, paging)
+    return pretty({ next_cursor: page.next_cursor, [a.list]: page.rows })
   },
 })
 
@@ -708,6 +821,57 @@ export const mcpWorkload = internalQuery({
 
 /* -------------------------------------------------------------- entries */
 
+/** MCP list_task_related, which machine/mcp.ts TOOLS lists right after
+ * get_task, whose first pages it continues. */
+export const TASK_RELATED_TOOL: McpTool = {
+  access: 'read',
+  def: {
+    name: 'list_task_related',
+    title: 'List task related',
+    description: `One page of one of a task's four lists, which \`list\` names as "subtasks", "links", "followers" or "attachments". get_task answers the first ${DEFAULT_PAGE_SIZE} of each with a cursor, such as \`links_next_cursor\`; pass it as \`cursor\` with the same \`ref\` and \`list\`, then this tool's \`next_cursor\`, until it is null. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. The answer is \`{next_cursor, <list>}\`, its rows as get_task shows them: subtasks you can read by number (an active task's active ones, an archived task's all), links whose other task you can read by that task's number, followers by name, and attachments oldest first, with 10-minute download links for this page's files only. A page holds at most \`limit\` rows (${DEFAULT_PAGE_SIZE} by default, at most ${LIMITS.listSubtasks.max}); an archived task's subtasks can come in a shorter page, even an empty one, while \`next_cursor\` is set, so only a null \`next_cursor\` ends the list. \`offset\` is refused unless 0.`,
+    inputSchema: {
+      type: 'object',
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      properties: {
+        ref: {
+          type: 'string',
+        },
+        list: {
+          type: 'string',
+          enum: [...TASK_RELATED_LISTS],
+        },
+        limit: {
+          type: 'integer',
+          minimum: LIMITS.listSubtasks.min,
+          maximum: LIMITS.listSubtasks.max,
+        },
+        offset: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 0,
+        },
+        cursor: {
+          type: 'string',
+          minLength: 1,
+        },
+      },
+      required: ['ref', 'list'],
+    },
+  },
+  run: (r, { callerId, access, args }) =>
+    r.runQuery(internal.machine.records.mcpTaskRelated, {
+      callerId,
+      access,
+      ...(args as {
+        ref: string
+        list: TaskRelatedList
+        limit?: number
+        offset?: number
+        cursor?: string
+      }),
+    }),
+}
+
 export const RECORD_TOOLS: McpTool[] = [
   {
     access: 'write',
@@ -715,7 +879,7 @@ export const RECORD_TOOLS: McpTool[] = [
       name: 'delete_attachment',
       title: 'Delete attachment',
       description:
-        "Delete a file attached to a task, by `ref` and the `attachment` id from get_task's `attachments`. Needs Edit access to the task's project. A description image (`inline: true`) goes when the description stops showing it.",
+        "Delete a file attached to a task, by `ref` and the `attachment` id from the `attachments` of get_task or list_task_related. Needs Edit access to the task's project. A description image (`inline: true`) goes when the description stops showing it.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -939,11 +1103,63 @@ export const RECORD_ROUTES: RestRoute[] = [
     path: 'tasks/:ref/attachments',
     access: 'read',
     status: 200,
-    run: (r, { callerId, access, param }) =>
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
       r.runQuery(internal.machine.records.restListAttachments, {
         callerId,
         access,
         ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'tasks/:ref/subtasks',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.records.restListSubtasks, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'tasks/:ref/links',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.records.restListLinks, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
+      }),
+  }),
+  route({
+    method: 'GET',
+    path: 'tasks/:ref/followers',
+    access: 'read',
+    status: 200,
+    query: ['limit', 'cursor', 'offset'],
+    run: (r, { callerId, access, param, query }) =>
+      r.runQuery(internal.machine.records.restListFollowers, {
+        callerId,
+        access,
+        ref: param('ref'),
+        limit: query('limit'),
+        cursor: query('cursor'),
+        offset: query('offset'),
       }),
   }),
   route({

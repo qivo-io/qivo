@@ -10,7 +10,13 @@ import '../model/comments'
 import { describe, expect, it } from 'vitest'
 import { ACTIVE_RESERVE } from '../lib/activeTaskPage'
 import { ARCHIVE_RESERVE } from '../lib/archivedTasks'
-import { COMPLETION_RESERVE, TASK_READ_RESERVE } from '../lib/core'
+import {
+  COMPLETION_RESERVE,
+  RELATED_READ,
+  SUBTASK_PAGE,
+  TASK_DETAILS,
+  TASK_READ_RESERVE,
+} from '../lib/core'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
 import { TEXT_READ } from '../model/descriptions'
 
@@ -20,6 +26,9 @@ describe('the read budgets', () => {
       ACTIVE_RESERVE,
       ARCHIVE_RESERVE,
       COMPLETION_RESERVE,
+      RELATED_READ,
+      SUBTASK_PAGE,
+      TASK_DETAILS,
       TASK_READ_RESERVE,
       TEXT_READ,
     ])

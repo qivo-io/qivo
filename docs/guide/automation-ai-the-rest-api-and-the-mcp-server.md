@@ -2,13 +2,16 @@ Connect an assistant through MCP or use REST for scripts. Both act as a Qivo
 user with that user's project permissions ([User roles](./administration-guard-rails-and-the-demo.md#four-ways-to-be-a-user)). External connections require
 a regular account; the private demo is browser-only.
 
-MCP offers `list_tasks`, `get_task`, `create_task`, `update_task`,
-`delete_task`, `set_task_link`, `list_labels`, `set_label`,
+MCP offers `list_tasks`, `get_task`, `list_task_related`, `create_task`,
+`update_task`, `delete_task`, `set_task_link`, `list_labels`, `set_label`,
 `start_attachment_upload`, `confirm_attachment_upload`, `attach_text_file`,
 `delete_attachment`, `list_task_activity` and `get_workload`. REST uses
-`/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/links`,
+`/v1/tasks`, `/v1/tasks/{ref}`, `/v1/tasks/{ref}/subtasks`,
+`/v1/tasks/{ref}/links`, `/v1/tasks/{ref}/followers`,
 `/v1/tasks/{ref}/attachments`, `/v1/tasks/{ref}/activity`, `/v1/labels` and
-`/v1/workload`. Both work with the same tasks and permanent `QN-<number>`
+`/v1/workload`. A task read answers the first 50 of the task's subtasks,
+links, followers and files, and those routes and `list_task_related` page
+the rest. Both work with the same tasks and permanent `QN-<number>`
 IDs, and both can create subtasks, move tasks between sub-projects, link
 tasks, add or remove labels, upload, list and delete attachments, read a
 task's history and read planned hours per person by the same rules as the

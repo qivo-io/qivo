@@ -855,6 +855,7 @@ describe('OAuth provider and MCP integration', () => {
       list_project_users: { project: f.sub.id },
       get_project: { project: f.sub.id },
       get_task: { ref: task.id },
+      list_task_related: { ref: task.id, list: 'subtasks' },
       list_comments: { ref: task.id },
       list_task_activity: { ref: task.id },
       list_team_members: { team_id: f.team.id },

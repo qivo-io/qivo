@@ -1541,10 +1541,13 @@ describe('a single-task read of an archived group', () => {
     expect(rest).toMatchObject({
       is_group: true,
       progress: { done: 0, total: 0, percent: 0, partial: true },
+      has_more_subtasks: true,
     })
-    expect(rest.subtasks.map((t) => t.id)).toEqual(kids)
-    expect(rest.followers.map((p) => p.id)).toEqual(followers)
-    expect((mcp.followers as unknown[]).length).toBe(60)
+    // first pages, read before the walk, each with its cursor
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids.slice(0, 50))
+    expect(rest.followers.map((p) => p.id)).toEqual(followers.slice(0, 50))
+    expect(rest.followers_next_cursor).toEqual(expect.any(String))
+    expect((mcp.followers as unknown[]).length).toBe(50)
   })
 
   it('archives a group whose answer does not fit after the cascade, and says it has more subtasks', async () => {
@@ -1575,17 +1578,18 @@ describe('a single-task read of an archived group', () => {
     expect(answer.subtasks.length).toBeGreaterThan(0)
     const stored = await fx.t.run((ctx) => byId(ctx, 'issues', kids[99]))
     expect(stored?.archived_at).toBeDefined()
-    // a read of the same group, which the cascade does not burden, is whole
+    // a read of the same group, which the cascade does not burden, is
+    // whole, and lists its first 50 subtasks with a cursor for the rest
     const { rest } = await reads(fx, group.id)
     expect(rest).toMatchObject({
       progress: { total: 100, partial: false },
-      has_more_subtasks: false,
+      has_more_subtasks: true,
     })
-    expect(rest.subtasks).toHaveLength(100)
+    expect(rest.subtasks.map((t) => t.id)).toEqual(kids.slice(0, 50))
   })
 
-  it('reads a group whose subtasks span 30 sub-projects without checking each one alone', async () => {
-    const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
+  it('reads a group whose subtasks span 30 sub-projects, asking about each one once', async () => {
+    const fx = await setup(newT({ transactionLimits: { databaseQueries: 400 } }))
     Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
     const group = await plantIssue(fx.t, {
       org_id: fx.org.id,
@@ -1641,6 +1645,56 @@ describe('a single-task read of an archived group', () => {
     })
     expect(new Set(rest.subtasks.map((t) => t.id))).toEqual(new Set(kids))
     expect((mcp.subtasks as unknown[]).length).toBe(30)
+    // where the request holds fewer ranges than the questions about 28
+    // more sub-projects, which with FW and PCB are the 30 one project
+    // holds, the read stops before it would pass them and the group's
+    // facts say they are unknown
+    const tight = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
+    Object.assign(TASK_READ_RESERVE, { ranges: 16, documents: 64, bytes: 1 << 20 })
+    const narrow = await plantIssue(tight.t, {
+      org_id: tight.org.id,
+      project_id: tight.sub.id,
+      archived_at: day(9),
+      title: 'Group',
+    })
+    await tight.t.run(async (ctx) => {
+      for (let i = 0; i < 28; i++) {
+        const project_id = uuid()
+        await ctx.db.insert('projects', {
+          id: project_id,
+          org_id: tight.org.id,
+          type: 'project',
+          parent_id: tight.meta.id,
+          key: `T${i}`,
+          name: `Tight ${i}`,
+          description: '',
+          sort_order: 500 + i,
+          num: 500 + i,
+          track_delay: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('issues', {
+          id: uuid(),
+          org_id: tight.org.id,
+          project_id,
+          num: bulkNum++,
+          title: `Tight ${i}`,
+          description: '',
+          status: 'done',
+          priority: 'medium',
+          paused: false,
+          parent_id: narrow.id,
+          archived_at: day(9),
+          created_at: NOW,
+          updated_at: NOW,
+        })
+      }
+    })
+    const { rest: short } = await reads(tight, narrow.id)
+    expect(short).toMatchObject({
+      is_group: true,
+      progress: { done: 0, total: 0, percent: 0, partial: true },
+    })
   })
 
   it('lists the first subtasks of a group whose own subtasks do not fit, and says there are more', async () => {
@@ -1709,9 +1763,19 @@ describe('a single-task read of an archived group', () => {
       archived_at: day(9),
       parent_id: single.id,
     })
+    // a group of one lists it; the page had no room to look further, so its
+    // cursor is set and the next page answers the end
     const { rest: one } = await reads(fx, single.id)
-    expect(one).toMatchObject({ is_group: true, has_more_subtasks: false })
+    expect(one).toMatchObject({ is_group: true, has_more_subtasks: true })
     expect(one.subtasks.map((t) => t.id)).toEqual(only)
+    expect(
+      await fx.t.query(internal.machine.records.restListSubtasks, {
+        callerId: fx.agent.id,
+        access: 'read',
+        ref: single.id,
+        cursor: one.subtasks_next_cursor ?? undefined,
+      }),
+    ).toEqual({ next_cursor: null, subtasks: [] })
   })
 
   it('reads and archives a group whose long subtasks pass what a request may read', async () => {

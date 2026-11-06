@@ -342,6 +342,19 @@ The people and teams come in name order, ignoring case and accents, and the
 labels by name in any case, compared by UTF-8 bytes, which differs from the
 earlier order for some names.
 
+Later in November 2026 `get_task` began to answer at most 50 of each of its
+`subtasks`, `links`, `followers` and `attachments`, each with its cursor
+before it, `subtasks_next_cursor`, `links_next_cursor`,
+`followers_next_cursor` and `attachments_next_cursor`, `null` when the list
+ends there, and the new `list_task_related` pages each of those lists (see
+[Task results](#task-results)). An archived group's subtasks now page to the
+end, and followers come in name order compared by UTF-8 bytes, which differs
+from the earlier order for some names. A client holding the older catalogue
+gets the new answer too. The arrays kept their names, so code that read one
+of them as the whole list now reads its first 50 rows without any error.
+Such code must follow the cursors until they are `null`, and its model
+learns the new tool only after the client refreshes its tool list.
+
 ## Access model: the credential is a user
 
 MCP authenticates as **one user**, with three connection options. **OAuth is
@@ -684,6 +697,10 @@ the range.
 | Labels per list page | 1 to 200 labels | limit must be a whole number of labels from 1 to 200. |
 | Teams per list page | 1 to 200 teams | limit must be a whole number of teams from 1 to 200. |
 | Team members per list page | 1 to 200 members | limit must be a whole number of members from 1 to 200. |
+| Subtasks per list page | 1 to 200 subtasks | limit must be a whole number of subtasks from 1 to 200. |
+| Linked tasks per list page | 1 to 200 linked tasks | limit must be a whole number of linked tasks from 1 to 200. |
+| Followers per list page | 1 to 200 followers | limit must be a whole number of followers from 1 to 200. |
+| Attachments per list page | 1 to 200 attachments | limit must be a whole number of attachments from 1 to 200. |
 | Tasks per inbox change | 100 tasks | tasks must name at most 100 tasks per call. Send the rest in another call. |
 | Webhook subscription lifetime | 60,000 to 604,800,000 milliseconds | ttlMs must be a whole number of milliseconds from 60,000 (1 minute) to 604,800,000 (7 days), or null for no expiry. |
 | Webhook subscriptions per organization | 100 subscriptions | an organization can have at most 100 unexpired webhook subscriptions, and one agent key, token or OAuth connection at most 20. Delete an unused subscription first. |
@@ -1262,7 +1279,8 @@ anything stored), or a uuid.
 The website, MCP and REST share the same noun: **task** for one work item
 and **tasks** for collections. MCP uses `list_tasks` for the collection and
 `get_task`, `create_task`, `update_task`, and `delete_task` for individual
-operations, `set_task_link` for links between tasks, `list_labels` and
+operations, `list_task_related` for more of a task's subtasks, links,
+followers and files, `set_task_link` for links between tasks, `list_labels` and
 `set_label` for the organization's labels, `start_attachment_upload`,
 `confirm_attachment_upload`, `attach_text_file` and `delete_attachment` for
 a task's files, `list_task_activity` for its history, `get_workload` for
@@ -1343,16 +1361,17 @@ as `a task title must be at most 255 characters. Shorten it.`
 | `set_team_member` | Add (`member: true`) or remove (`member: false`) one `user_id` in a team, and with `member: true` make or unmake them a leader (`leader`). People only, as an organization admin or a leader of the team. A removal settles the user's open tasks by `on_held_tasks` |
 | `list_users` | One page of the Qivo users in the organization, for general roster discovery, as `{next_cursor, users}` in name order, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)). The row is `id`, `name`, `org_role`, `kind`, `active` and `plannable_hours`, with no email address and no profile picture. Presence here does **not** prove access to a destination project; use `list_project_users` before writing `reporter_id`, `assignee_id` or `reviewer_id`. `plannable_hours` is the **whole** hours a week that user has for **planned project work** (the work week minus meetings and other overhead). It is what the planner divides by, so plan someone at most that many hours in a week, shared across every project they work on (0092). It is **`null` for an agent** (0103), whose capacity is unbounded, never zero. A user missing from the pages you have read is not gone until `next_cursor` is `null` |
 | `list_project_users` | Users with access to `project` (number/key/uuid), and therefore valid non-null `reporter_id` values. On a parent project these are the people with access to the parent itself (organization admins, its lead and its individual or team grants); someone who reaches the parent only through one of its sub-projects is listed under that sub-project. It returns the `list_users` shape plus `assignable`: only active users with effective project Edit (`user`) or Lead access have `assignable: true` and are valid new `assignee_id` or `reviewer_id` selections. Inactive users and users with only View access remain valid reporters when they can see the project, because reporter is attribution rather than work or permission |
-| `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, `subtasks` (with `has_more_subtasks` when an archived task has more than one call lists), `links`, `following`, `followers`, `attachments` with download links and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `get_task` | One task with full description and reporter, assignee and reviewer, `progress` for a group, `delay` and `last_comment_at`, plus its `labels`, whether you follow it (`following`), the first 50 of each of its `subtasks`, `links`, `followers` and `attachments` (with download links), each with its cursor before it (`subtasks_next_cursor` and so on, `null` when the list ends there, and `has_more_subtasks` when the subtasks go on), and, for a group, `group_remaining_hours` (see [Task results](#task-results)); `ref` is `QN-482`, `482`, or a uuid. It resolves archived tasks too (`archived_at` is non-null on them) |
+| `list_task_related` | One page of one of a task's lists, `list` being `subtasks`, `links`, `followers` or `attachments`, as `{next_cursor, <list>}` with the rows of `get_task`'s same list, in its order, `limit` of them (50 by default, at most 200). Pass `get_task`'s `<list>_next_cursor`, or the page's `next_cursor`, as `cursor` with the same `ref` and `list` until it is `null`. An archived group's subtask page can hold fewer rows than `limit`, or none, while `next_cursor` is set. `offset` is refused unless `0`. Download links are minted for the page's files alone. See [Task results](#task-results) |
 | `list_comments` | The task's newest comments, oldest first, with author and edit attribution. `limit` (50 by default, at most 50) caps how many, and `before`, a comment's `id`, reads the comments posted before it. See [Comments, inbox and following](#comments-inbox-and-following) |
 | `add_comment` | Comment on a task **as yourself** (the credential's user is the pinned author); markdown body of at most 20,000 characters; returns the comment `id`, task reference as `task`, and `created_at`; leaves no activity row, because the comment is its own feed entry. A task holds at most 1,000 comments, and you post at most 10 on one task in any 60 seconds (see [Comments, inbox and following](#comments-inbox-and-following)) |
 | `create_task` | New task in a sub-project you can write to; `project` names it directly, or names a meta with `sub_project` naming one of ITS subs. Another project's sub-project is a hard error; move a task later with `update_task`. `parent` (a task ref) makes it a subtask; you need Edit access on the parent's project, because the parent becomes a group, and the parent must be in the same top-level project, in any of its sub-projects. `start_week` and `end_week` plan it (week starts, both or neither), and `paused` holds it. Optional `reporter_id` is a user returned by `list_project_users`; omission defaults it to the credential's user. `null` is refused, and the reporter cannot be changed after creation. Optional `reviewer_id` follows the `assignee_id` rule. Created straight into `review`, the task gets its project's review time as `remaining_hours` unless the call sends hours. `title` holds at most 255 characters and `description` 20,000 (see [Limits](#limits)). Returns `id` and `key` |
 | `update_task` | Patch title/description/status/priority/assignee/reviewer/due date/plan weeks/remaining hours/paused (`paused: true` holds work; only a To Do, In Progress or In Review task without subtasks can be paused, and a move to Done or Backlog resumes it), plus `archived: true/false` to archive/restore (archiving carries the subtasks along; restoring surfaces the parent chain, and a subtask whose parent already has 100 active subtasks comes back without it) and `archive_reason`, posted as your comment when the call archives the task, which the comment limits can refuse, archiving nothing. It also moves the task (`project`, `sub_project`; to another top-level project its subtasks move along, and a subtask must leave its parent in the same call), sets or clears its parent (`parent`, `null` detaches) and adds or removes labels (`add_labels`, `remove_labels`, label ids or names). See [Moving, parents and labels](#moving-parents-and-labels). Both need User access on every project they change, so a subtask or parent the credential cannot edit refuses the toggle with `archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it` or `restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it`. A subtask or parent in a project being moved to Deleted items refuses the toggle for everyone, admins included, with `a subtask of this task is being moved to Deleted items; try again when that finishes` or `a parent of this task is being moved to Deleted items; try again when that finishes`. The reporter is immutable: any `reporter_id` argument, including `null` or the current reporter, is refused before any other field is changed. `title` holds at most 255 characters, `description` 20,000 and `archive_reason` 500 (see [Limits](#limits)). The result's `updated` lists the fields you sent (`parent_id` for `parent`, `project_id` for a move, `labels` for label changes, and `archived_at` for a toggle), never a value the server set on its own, such as the review time. `expected` holds what you last read of the fields the call changes, keyed as `get_task` reads them, with `parent_id` and `has_hidden_parent` for `parent` and `project_id` for a move. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
 | `delete_task` | Move a task to Deleted items with its comments, attachments, links, labels and follows; its subtasks become top-level tasks, the active ones at once and the archived ones a moment later, and their followers hear of it moments later; its inbox messages are deleted. A person can restore it in the app for 30 days, and no tool restores. Answers `{deleted: true, key}` |
-| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the links |
+| `set_task_link` | Add (`linked: true`) or remove (`linked: false`) the link between `ref` and `other`, with `kind` `blocks`, `blocked_by` or `relates` as seen from `ref`. Two tasks share at most one link. It needs read access to both tasks and Edit access on either, the app's rule. Adding the link that exists, or removing one that does not, changes nothing; `changed` in the result says whether the call did. A different link between the same tasks is refused with `these tasks are already linked`. A task is an end of at most 100 links, and a new link to a full task is refused naming it, such as `QN-9 already has 100 links, the most a task can have. Remove one of its links first.`. `get_task` lists the first links, and `list_task_related` the rest |
 | `list_labels` | One page of the organization's labels as `{next_cursor, labels}`, each `id`, `name` and `color`, by name in any case, with `search`, `limit` (50 by default, at most 200) and `cursor` (see [Lists of users, labels and teams](#lists-of-users-labels-and-teams)) |
 | `set_label` | Without `label`, create a label from `name` (at most 40 characters) and `color` (`#` and six hex digits); this needs an organization admin, or a user (person or agent) with the User role and Edit access to a top-level project. When the caller's own project access, teams and led projects are too many to read in one request, the create is refused with `you belong to too many projects and teams for Qivo to check in one request whether you may create labels; an organization admin can create this label` and creates nothing. With `label` (an id or name), rename or recolor that label; only organization admins may, as on the app's Labels settings page, and `expected` holds the `name` and `color` you last read of the fields it changes. Returns the label with `created`. See [Refusing a change when a field changed since you read it](#refusing-a-change-when-a-field-changed-since-you-read-it) |
-| `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from `get_task`'s `attachments`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
+| `delete_attachment` | Delete a file attached to the task `ref`; `attachment` is an id from the `attachments` of `get_task` or `list_task_related`. It needs Edit access to the task's project, as in the app, and leaves description images (`inline: true`) to the app. See [Attachments](#attachments) |
 | `start_attachment_upload` | Start attaching a file to the task `ref`, given its `name` (1 to 255 characters), its exact `size` in bytes and an optional `content_type`. Answers `ticket`, an `upload_url` that stores one file and `expires_at`, an hour on. Send exactly `size` bytes to `upload_url`, then call `confirm_attachment_upload`. It needs Edit access to the task's project. See [Attachments](#attachments) |
 | `confirm_attachment_upload` | Attach the file sent to `upload_url`, given the task `ref`, the `ticket` and the `storageId` the upload answered as `storage_id`. Only the user that started the upload can confirm it, for the same task, and the file attaches once. A confirm sent again with the same `ticket` and `storage_id` answers the same attachment, and any other ticket is refused. Answers the attachment as `get_task` lists it |
 | `attach_text_file` | Attach text you write yourself, such as notes, a CSV table or a log, to the task `ref` as a file called `name`, with an optional `content_type` (`text/plain; charset=utf-8` by default). Qivo stores `text` as UTF-8, at most 256 KiB and within the organization's per-file limit. It needs Edit access to the task's project and answers the attachment as `get_task` lists it |
@@ -1967,26 +1986,89 @@ Each row's `description` and `last_comment_at` are one read each, besides
 the task. A `list_tasks` page whose rows do not all fit in one request ends
 early and answers a `next_cursor`, active and archived alike.
 
-`get_task` adds eight fields, which name only tasks you can read:
+`get_task` adds twelve fields, which name only tasks you can read:
 
 ```json
 {
   "group_remaining_hours": 6.5,
   "labels": [{ "id": "…uuid…", "name": "Hardware", "color": "#4C9AFF" }],
+  "subtasks_next_cursor": null,
   "subtasks": [{ "id": "…uuid…", "key": "QN-4", "title": "…", "status": "todo" }],
   "has_more_subtasks": false,
+  "links_next_cursor": null,
   "links": [{ "kind": "blocks", "id": "…uuid…", "key": "QN-9", "title": "…", "status": "backlog" }],
   "following": false,
+  "followers_next_cursor": "…cursor…",
   "followers": [{ "id": "…uuid…", "name": "Priya Patel" }],
+  "attachments_next_cursor": null,
   "attachments": [{ "id": "…uuid…", "name": "wiring.pdf", "size_bytes": 48213, "…": "…" }]
 }
 ```
 
-`following` says whether you follow the task, and `followers` lists everyone
-who does, by name, as the app's follower list shows them. `attachments`
-lists the task's files, described under [Attachments](#attachments).
+`subtasks`, `links`, `followers` and `attachments` each hold the first page
+of one of the task's lists, at most 50 rows, and the cursor before each is
+the cursor of the rest of that list, `null` only when the list ends on that
+page. Most tasks hold fewer than 50 of each, so every cursor is `null` and
+the arrays are whole. `has_more_subtasks` is `true` exactly when
+`subtasks_next_cursor` is set. `labels` holds every label of the task, at
+most 20. `following` says whether you follow the task, from your own
+follow, also when you are past the first page of `followers`, which come by
+name, ignoring case and accents and comparing the names by their UTF-8
+bytes. `attachments` lists the task's files, oldest first, described under
+[Attachments](#attachments). When one call cannot read every first page,
+a list it had no room for holds no rows and a cursor at its start, and an
+archived group's subtasks, which always read their first subtask, hold the
+subtasks the room allowed and a cursor, so a list is never shown as
+complete when it is not.
 
-`subtasks` are the direct subtasks you can read, by number. An active task
+`list_task_related` reads the rest, one page of one list at a time,
+without reading the task's text or its other lists. `list` is `subtasks`,
+`links`, `followers` or `attachments`, and the answer is `{next_cursor,
+<list>}`, cursor first, with rows in the shape and order of `get_task`'s
+same list and ties broken by id. A page holds at most `limit` rows, 50 by
+default and 1 to 200. Pass the task's `<list>_next_cursor`, or the page's
+`next_cursor`, as `cursor` with the same `ref` and `list`, and stop when
+`next_cursor` is `null`. `limit` may change from one page to the next. An
+archived group's subtask page can hold fewer than `limit` rows, or none,
+while `next_cursor` is set, so a short or empty page is never the end of a
+list. A cursor works only for the organization, caller, task and list it
+came from, and for subtasks only while the task stays active, or archived,
+as it was. It works on REST and MCP alike, so a cursor from `get_task`
+continues on REST `GET /v1/tasks/{ref}/subtasks` too. Pages are not a
+snapshot. A subtask, link, follower or file added, removed or renamed while
+you page can be missed or shown twice; call `get_task` again to start
+afresh. A task holds at most 100 files, so `list_task_related` with
+`list: "attachments"` and `limit: 200` answers every file in one page, and
+the description's `att:<id>` images with it.
+
+`list_task_related` checks `limit` (`limit must be a whole number of
+subtasks from 1 to 200.`, or of linked tasks, followers or attachments),
+then `offset` (`offset does not apply to subtasks; pass next_cursor as
+cursor`, `offset does not apply to linked tasks; pass next_cursor as
+cursor`, `offset does not apply to followers; pass next_cursor as cursor`
+or `offset does not apply to attachments; pass next_cursor as cursor`),
+then the task (`task "QN-482" not found (or not visible to you)`), then
+`cursor` (`cursor must be the next_cursor of an earlier page`, also for an
+empty one). A `limit` that is not a whole number is refused by the schema
+first, with `Input validation error: Invalid arguments for tool
+list_task_related: limit: …`. A list with more rows than one call reads
+and sorts, twice its
+per-task limit, which only data stored before that limit, or followers that
+a new assignee or reviewer added past theirs, can reach, is refused with
+`this task has more subtasks than Qivo can list in one request. Contact
+support@qivo.io so we can help.`, `this task has more linked tasks than
+Qivo can list in one request. Contact support@qivo.io so we can help.`,
+`this task has more followers than Qivo can list in one request. Contact
+support@qivo.io so we can help.` or `this task has more attachments than
+Qivo can list in one request. Contact support@qivo.io so we can help.`, and
+`get_task` then holds no rows of that list and a cursor at its start. A
+check of which projects you can see that a fixed limit of one call stopped
+refuses `get_task`, `list_task_related` and the answer of a REST create or
+update whole with `Qivo could not finish checking which projects you can
+see in one request. Contact support@qivo.io so we can help.` Only a person
+far past the sizes Qivo is built for meets it.
+
+`subtasks` are the first page of the direct subtasks you can read, by number. An active task
 lists its active ones, also those in an archived project, which do not make
 it a group while its own project is active, and an archived task lists all
 of them. `links` are the
@@ -2001,15 +2083,13 @@ stops at a subtask you cannot read.
 An archived group can have more tasks under it than one request can read,
 such as thousands of subtasks. So can an active group stored before the rule
 of one level of subtasks, whose subtasks have subtasks of their own.
-`get_task` then still lists its direct `subtasks`, but `start_week` and
-`end_week` are `null`, `progress` is `0` of `0` with `partial: true` and
-`group_remaining_hours` is `null`. An active task has at most 100 active
-subtasks, so it always lists all of them. When even an archived group's
-direct subtasks do not all fit, `subtasks` lists those of the first ones that
-do which you can read, and `has_more_subtasks` is `true`. Find the rest with
-`list_tasks` and `archived: true` for the group's top-level project, which
-covers its sub-projects, where each one's `parent_id` names the group.
-`has_more_subtasks` is `false` on every other task.
+`get_task` then still lists the first page of its direct `subtasks`, but
+`start_week` and `end_week` are `null`, `progress` is `0` of `0` with
+`partial: true` and `group_remaining_hours` is `null`. The dates, `progress`
+and `group_remaining_hours` always come from the group's whole subtree,
+never from the first page of `subtasks`. An archived group's subtasks page
+in number order through `list_task_related` to the end, however many there
+are.
 
 `list_tasks` answers active tasks as an object, cursor first:
 
@@ -2227,8 +2307,10 @@ changes nothing writes none.
 
 ### Attachments
 
-`get_task` lists every file of the task, oldest first, including the images
-inside its description:
+`get_task` lists the first 50 files of the task, oldest first, including the
+images inside its description, and `list_task_related` with `list:
+"attachments"` pages the rest, up to 200 a page, so one call answers every
+file a task holds:
 
 ```json
 {
@@ -2243,7 +2325,8 @@ inside its description:
 
 `inline` is `true` for a description image, which the description names as
 `![alt](att:<id>)`. `url` downloads the file for 10 minutes
-(`url_expires_at`); call `get_task` again for a fresh link. Each download
+(`url_expires_at`), and is minted only for the files of the page that
+answers it; call `get_task` or `list_task_related` again for a fresh link. Each download
 checks again that your user is active and can see the task's project, but
 not the credential, so a link fetched before a token was revoked works until
 it expires. Images open in the browser and other types download.

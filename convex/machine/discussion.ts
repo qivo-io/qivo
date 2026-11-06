@@ -889,7 +889,7 @@ export const DISCUSSION_TOOLS: McpTool[] = [
     def: {
       name: 'set_following',
       title: 'Follow task',
-      description: `Follow a task (\`following: true\`) to receive its updates in your inbox, or stop following it. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. A task has at most ${LIMITS.followers.max} followers, so following one that has ${LIMITS.followers.max} is refused. get_task shows \`following\` and \`followers\`.`,
+      description: `Follow a task (\`following: true\`) to receive its updates in your inbox, or stop following it. \`ref\` is a task ID like QN-482 (bare 482 works too) or a uuid. A task has at most ${LIMITS.followers.max} followers, so following one that has ${LIMITS.followers.max} is refused. get_task shows \`following\` and the first followers, and list_task_related the rest.`,
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',

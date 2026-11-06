@@ -71,6 +71,8 @@ import {
   TAG_PREFIX,
   TASK_LINK_STEP,
   TASK_LINK_UNKNOWN,
+  TASK_LIST_REFUSALS,
+  TASK_LISTS,
   TASK_PAGES_MAX,
   TASK_WINDOWS_QUERY,
   TEAM_SYNC_STEP,
@@ -504,6 +506,19 @@ describe('staging check REST contract', () => {
     expect(PEOPLE_PAGE.mcp).toBeLessThan(PEOPLE_PAGE.rest)
     // the run's team holds two members for the step, so one a page pages
     expect(PEOPLE_PAGE.members).toBe(LIMITS.listTeamMembers.min)
+  })
+  it("expects the server's sentences and lists for a task's related lists", () => {
+    expect(TASK_LIST_REFUSALS).toEqual({
+      offset: offsetRefusal('subtasks'),
+      limit: LIMITS.listSubtasks.refusal,
+      cursor: CURSOR_REFUSAL,
+    })
+    // the lists MCP list_task_related takes, in the details' order
+    const records = readFileSync(new URL('../convex/machine/records.ts', import.meta.url), 'utf8')
+    expect(records).toContain(`enum: [...TASK_RELATED_LISTS]`)
+    const core = readFileSync(new URL('../convex/lib/core.ts', import.meta.url), 'utf8')
+    const lists = core.match(/export const TASK_RELATED_LISTS = \[([^\]]*)\] as const/)
+    expect(lists?.[1].split(',').map((name) => name.trim().replaceAll("'", ''))).toEqual(TASK_LISTS)
   })
   it('names the tools that answer a placeholder sent alone as the server does', () => {
     const mcp = readFileSync(new URL('../convex/machine/mcp.ts', import.meta.url), 'utf8')

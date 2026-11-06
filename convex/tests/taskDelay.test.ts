@@ -19,7 +19,7 @@
 /// <reference types="vite/client" />
 
 import fc from 'fast-check'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { isoToWeek, setWeekConfig, TODAY_ISO, tsToWeek, weekToISO } from '../../src/lib/dates'
 import { computeDelayMap, type DelayIssue } from '../../src/lib/delay'
 import {
@@ -36,7 +36,8 @@ import {
 } from '../../src/lib/workload'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
-import { accessOf, isOrgStaff } from '../lib/access'
+import { accessOf, isOrgStaff, OWN_READS } from '../lib/access'
+import { TASK_READ_RESERVE } from '../lib/core'
 import { byId } from '../lib/db'
 import { type DelayJson, UNAVAILABLE_DELAY, utcToday } from '../lib/machineDelay'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
@@ -746,7 +747,14 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       status: 'ok',
       projected_end_week: W(0),
     })
-    // 100 linked tasks, which the read takes before the verdict
+    // 100 linked tasks, which the read takes before the verdict as the first
+    // page of its links, in the room the reserve after it leaves, here all
+    // of this request's
+    const reserve = structuredClone(TASK_READ_RESERVE)
+    onTestFinished(() => {
+      Object.assign(TASK_READ_RESERVE, reserve)
+    })
+    TASK_READ_RESERVE.documents = 0
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 100; i++) {
         const other = uuid()
@@ -774,6 +782,123 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       }
     })
     expect((await single(fx, estimated.id)).delay).toEqual(UNAVAILABLE_DELAY)
+  })
+
+  it('gives the owner’s load OWNER_LOADS.call past its start, not the caller’s own rows the read counted before it', async () => {
+    const fx = await setup()
+    // everyday values: the agent in 3 teams, each sharing 20 sub-projects,
+    // 3 sub-projects to a top-level project, the first share on FW
+    await fx.t.run(async (ctx) => {
+      let top: string | undefined
+      for (let k = 0; k < 3; k++) {
+        const team = uuid()
+        await ctx.db.insert('teams', {
+          id: team,
+          org_id: fx.org.id,
+          name: `Team ${k}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+        await ctx.db.insert('team_members', {
+          team_id: team,
+          profile_id: fx.agent.id,
+          is_leader: false,
+        })
+        for (let i = 0; i < 20; i++) {
+          const n = 20 * k + i
+          let project_id = fx.sub.id
+          if (n > 0) {
+            if (n % 3 === 1) {
+              top = uuid()
+              await ctx.db.insert('projects', {
+                id: top,
+                org_id: fx.org.id,
+                type: 'meta',
+                key: `FM${n}`,
+                name: `Family ${n}`,
+                description: '',
+                sort_order: 100 + n,
+                num: 100 + n,
+                track_delay: false,
+                created_at: NOW,
+              })
+            }
+            project_id = uuid()
+            await ctx.db.insert('projects', {
+              id: project_id,
+              org_id: fx.org.id,
+              type: 'project',
+              parent_id: top,
+              key: `FS${n}`,
+              name: `Family sub ${n}`,
+              description: '',
+              sort_order: 200 + n,
+              num: 200 + n,
+              track_delay: false,
+              created_at: NOW,
+            })
+          }
+          await ctx.db.insert('project_team_access', { project_id, team_id: team, level: 'user' })
+        }
+      }
+    })
+    const estimated = await task(fx, {
+      assignee_id: fx.user.id,
+      start_week: W(0),
+      end_week: W(0),
+      remaining_hours: 10,
+      remaining_set_at: NOW,
+    })
+    // the user's other open task in FW, linked, so the details' links page
+    // asks about FW before the verdict
+    const other = await task(fx, {
+      assignee_id: fx.user.id,
+      start_week: W(0),
+      end_week: W(2),
+      remaining_hours: 1,
+      remaining_set_at: NOW,
+    })
+    await fx.t.run((ctx) =>
+      ctx.db.insert('issue_links', {
+        id: uuid(),
+        org_id: fx.org.id,
+        source_id: estimated.id,
+        target_id: other.id,
+        type: 'blocks',
+        pair_key: [estimated.id, other.id].sort().join(':'),
+        created_at: NOW,
+      }),
+    )
+    const bounds = structuredClone(OWNER_LOADS)
+    const own = structuredClone(OWN_READS)
+    onTestFinished(() => {
+      Object.assign(OWNER_LOADS, bounds)
+      Object.assign(OWN_READS, own)
+    })
+    // the share on FW past a lowered bound, so that question reads the
+    // agent's own grants, memberships and the teams' 60 shares at once,
+    // before the verdict starts
+    OWN_READS.projectShares = 0
+    const delay = async () =>
+      (
+        await fx.t.query(internal.machine.rest.getIssue, {
+          callerId: fx.agent.id,
+          access: 'read',
+          today: TODAY,
+          ref: estimated.id,
+        })
+      ).delay
+    const judged = await delay()
+    expect(judged).not.toBeNull()
+    expect(judged).not.toEqual(UNAVAILABLE_DELAY)
+    // room past the profile, the two tasks and the price of one question
+    // (134 documents)
+    OWNER_LOADS.call = { ...bounds.call, documents: 200 }
+    expect(await delay()).toEqual(judged)
+    // room for the profile and the tasks, not for the question, however
+    // many of the agent's own rows the links page read before
+    OWNER_LOADS.call = { ...bounds.call, documents: 100 }
+    expect(await delay()).toEqual(UNAVAILABLE_DELAY)
   })
 
   it('reads none for a task with neither a planned end nor a due date', async () => {
