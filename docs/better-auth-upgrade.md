@@ -370,11 +370,12 @@ Qivo does not use (SSO, SCIM, Stripe, passkey, API keys).
   `convex/tests/authLoadRefused.test.ts` shows that a refused import fails
   those handlers with an error, never a cookie, and takes no demo
   admission, while every refusal before the import still answers, and that
-  a misconfigured app origin fails the `/api/auth/` routes with an error and
-  no CORS echo. Every app and demo build calls the sign-in
-  route, and outside the demo the token and metadata routes, after Convex
-  pushes the functions, and fails when one does not answer as expected
-  (`scripts/auth-probe.mjs`; see [deployment](deployment.md)).
+  a misconfigured app origin fails the routes `registerAuthRoutes` serves
+  under `/api/auth/` with an error and no CORS echo. Every app and demo
+  build calls the sign-in route, and outside the demo the token and metadata
+  routes, after Convex pushes the functions, and fails when one does not
+  answer as expected (`scripts/auth-probe.mjs`; see
+  [deployment](deployment.md)).
 - A validation error stays short (`convex/tests/authValidation.test.ts`).
   `convex/lib/authValidation.ts` relies on Better Call listing each problem
   as `[body.path] message` and joining them with `; `, on the router checking
