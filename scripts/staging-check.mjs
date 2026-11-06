@@ -5077,7 +5077,7 @@ export const IMAGE_SPACER =
  *  six small PNG attachments and a description that shows them one a
  *  paragraph with IMAGE_SPACER between (a description save shows the task's
  *  own files, model/descriptionImages.ts settleDescriptionImages). In the
- *  app at 390 by 844 it opens the task: the first image shows (naturalWidth
+ *  app at 390 by 844 it opens the task and its Details: the first image shows (naturalWidth
  *  above 0) from bytes (a blob: src, which only a fetch the gateway answers
  *  with the app's origin gives), the last has asked the gateway for nothing
  *  yet, and once the window scrolls to the end all six show from blob:
@@ -5138,7 +5138,12 @@ async function descriptionImagesCheck() {
       await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
         waitUntil: 'domcontentloaded',
       })
-      const image = (id) => app.locator(`[role="dialog"] [data-att="${id}"] img`)
+      // a phone's task window opens on Activity; its description is under
+      // Details
+      await app.locator('[role="dialog"] [data-task-title]').first().waitFor({ timeout: 60_000 })
+      const details = app.locator('[role="dialog"]').getByText('Details', { exact: true })
+      if (await details.count()) await details.first().click()
+      const image = (id) => app.locator(`[role="dialog"] [data-att="${id}"]:visible img`)
       const shows = (id) =>
         image(id).evaluate((img) => img.naturalWidth > 0 && img.src.startsWith('blob:'))
       await image(ids[0]).waitFor({ timeout: 60_000 })
@@ -5148,7 +5153,7 @@ async function descriptionImagesCheck() {
       )
       const last = ids[ids.length - 1]
       expect(!asked.has(last), 'the last image was asked for before it came near view')
-      await app.locator(`[role="dialog"] [data-att="${last}"]`).scrollIntoViewIfNeeded()
+      await app.locator(`[role="dialog"] [data-att="${last}"]:visible`).scrollIntoViewIfNeeded()
       for (const id of ids) {
         await image(id).waitFor({ timeout: 60_000 })
         expect(await until(() => shows(id)), `image ${ids.indexOf(id) + 1} does not show`)

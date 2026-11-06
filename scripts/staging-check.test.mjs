@@ -723,6 +723,11 @@ describe('staging check REST contract', () => {
       check.indexOf('export const TEAM_SYNC_STEP'),
     )
     expect(step).toContain('setViewportSize({ width: 390, height: 844 })')
+    // a phone's window shows the description under Details
+    expect(step).toContain("getByText('Details', { exact: true })")
+    expect(read('../src/panels/IssueDetail.tsx')).toContain(
+      "{ value: 'details', label: 'Details' }",
+    )
     expect(step).toContain("img.naturalWidth > 0 && img.src.startsWith('blob:')")
     expect(step).toContain('the last image was asked for before it came near view')
     expect(step).toContain('most <= 4')
