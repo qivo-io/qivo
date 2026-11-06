@@ -4,8 +4,9 @@
  *
  *   1. Creating projects and sub-projects: the creation setting per kind of
  *      caller, Lead on the parent, a hidden parent read as missing, the
- *      creator's own grant, who may name another lead, and where a REST or
- *      MCP create places a new project and what counting its siblings reads.
+ *      creator's own grant, who may name another lead, and where a create
+ *      without a sort order places a new project and what reading its
+ *      siblings costs.
  *   2. Changing a project: settings with Lead access, archive and restore as
  *      a field, and the lead handover that keeps the old lead as User.
  *   3. Access one user or team at a time, and what a removal does with the
@@ -32,7 +33,7 @@ import {
   parseHeldTasks,
   removeProjectGrantCore,
 } from '../model/projectAccess'
-import { createProjectCore } from '../model/projects'
+import { createProjectCore, SORT_ORDER_SHAPE } from '../model/projects'
 import {
   activityFor,
   as,
@@ -253,8 +254,8 @@ describe('creating projects and sub-projects', () => {
       milestones: [],
       grants: { users: [], teams: [] },
     })
-    // after both existing top-level projects
-    expect(row).toMatchObject({ sort_order: 2, track_delay: true })
+    // one past Skunkworks at 4, the later of both existing top-level projects
+    expect(row).toMatchObject({ sort_order: 5, track_delay: true })
     expect(await lastEvent(fx.t, fx.org.id)).toMatchObject({
       verb: 'created',
       target_id: out.id,
@@ -552,29 +553,47 @@ describe('creating projects and sub-projects', () => {
     expect(await grants(fx.t, declined.id)).toEqual({})
   })
 
-  it('places a REST or MCP project after every sibling, archived ones included, and keeps the place the app sends', async () => {
+  it('places a project created without a sort order after every sibling, archived, hidden and gapped ones included, over the app, REST and MCP, and keeps a place the app sends', async () => {
     const fx = await setup()
-    // an archived top-level project and an archived sub-project of TBED,
-    // which both count
-    await plantProject(fx.t, { org_id: fx.org.id, archived_at: NOW })
+    // an archived top-level project, one the user cannot see and an
+    // archived sub-project of TBED, which all count, each placed at its
+    // number, far past how many siblings there are
+    const archivedTop = await plantProject(fx.t, { org_id: fx.org.id, archived_at: NOW })
+    const hiddenTop = await plantProject(fx.t, { org_id: fx.org.id })
     await plantProject(fx.t, {
       org_id: fx.org.id,
       type: 'project',
       parent_id: fx.meta.id,
       archived_at: NOW,
     })
-    /* the organization's stored top-level metas and TBED's sub-projects */
+    // a sub-project of TBED deleted below the others leaves a gap, as
+    // Deleted items leaves its siblings' places
+    await fx.t.run((ctx) => ctx.db.delete(fx.sub._id))
+    /* One past the largest place among the organization's stored top-level
+     * metas and among TBED's sub-projects, and how many each are. */
     const stored = () =>
       fx.t.run(async (ctx) => {
         const rows = await ctx.db
           .query('projects')
           .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
           .collect()
-        return {
-          tops: rows.filter((p) => p.type === 'meta' && p.parent_id === undefined).length,
-          subs: rows.filter((p) => p.type === 'project' && p.parent_id === fx.meta.id).length,
-        }
+        const tops = rows.filter((p) => p.type === 'meta' && p.parent_id === undefined)
+        const subs = rows.filter((p) => p.type === 'project' && p.parent_id === fx.meta.id)
+        const pastLast = (ps: Doc<'projects'>[]) => Math.max(0, ...ps.map((p) => p.sort_order + 1))
+        return { tops: pastLast(tops), subs: pastLast(subs), counts: [tops.length, subs.length] }
       })
+    let keys = 0
+    const appCreate = async (name: string, parent?: string) =>
+      (
+        await as(fx.t, fx.user).mutation(api.projects.create, {
+          org_id: fx.org.id,
+          id: uuid(),
+          type: parent === undefined ? 'meta' : 'project',
+          ...(parent === undefined ? {} : { parent_id: parent }),
+          key: `APP${keys++}`,
+          name,
+        })
+      ).id
     const restCreate = async (name: string, parent?: string) =>
       (
         (await fx.t.mutation(internal.machine.projects.restCreateProject, {
@@ -592,18 +611,35 @@ describe('creating projects and sub-projects', () => {
           }),
         )
       ).id as string
-    for (const [surface, create] of [
-      ['REST', restCreate],
-      ['MCP', mcpCreate],
+    const first = await stored()
+    // the places run past the counts, so a count would land among them
+    expect(first.tops).toBeGreaterThan(first.counts[0])
+    expect(first.subs).toBeGreaterThan(first.counts[1])
+    /* Moves top-level project `p` past every other one with a gap, so the
+     * next top-level create lands after it only if it reads `p`. Each
+     * surface lifts one, the archived project on the app and over MCP and
+     * the hidden one over REST, so each is the largest place at its own
+     * step; the archived sub-project, planted last, is TBED's largest at
+     * the app's. */
+    const lift = async (p: Doc<'projects'>) => {
+      const past = (await stored()).tops + 10
+      await fx.t.run((ctx) => ctx.db.patch(p._id, { sort_order: past }))
+    }
+    for (const [surface, create, parent, lifted] of [
+      ['app', appCreate, fx.meta.id, archivedTop],
+      ['REST', restCreate, 'TBED', hiddenTop],
+      ['MCP', mcpCreate, 'TBED', archivedTop],
     ] as const) {
+      await lift(lifted)
       const before = await stored()
       const top = await create(`Top over ${surface}`)
       expect((await projectRow(fx.t, top))?.sort_order, `${surface}, top-level`).toBe(before.tops)
-      const sub = await create(`Sub over ${surface}`, 'TBED')
+      const sub = await create(`Sub over ${surface}`, parent)
       expect((await projectRow(fx.t, sub))?.sort_order, `${surface}, sub-project`).toBe(before.subs)
     }
-    expect(await stored()).toEqual({ tops: 5, subs: 5 })
-    // the app sends its own place, whatever the siblings
+    expect((await stored()).counts).toEqual([first.counts[0] + 3, first.counts[1] + 3])
+    // an app from before the server placed its creates sends its own place,
+    // which is stored as sent, whatever the siblings
     const app = await as(fx.t, fx.user).mutation(api.projects.create, {
       org_id: fx.org.id,
       id: uuid(),
@@ -615,20 +651,72 @@ describe('creating projects and sub-projects', () => {
     expect((await projectRow(fx.t, app.id))?.sort_order).toBe(1)
   })
 
+  it('refuses a sort order that is not a finite number and stores nothing, and places past a stored one by the finite places alone', async () => {
+    const fx = await setup()
+    for (const sort_order of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const id = uuid()
+      await refused(
+        as(fx.t, fx.user).mutation(api.projects.create, {
+          org_id: fx.org.id,
+          id,
+          type: 'meta',
+          key: 'BAD',
+          name: 'Bad place',
+          sort_order,
+        }),
+        'bad_request',
+        SORT_ORDER_SHAPE,
+      )
+      expect(await projectRow(fx.t, id), String(sort_order)).toBeNull()
+    }
+    // a top-level project and a sub-project of TBED stored with NaN, as an
+    // older backend stored a create's place as sent; the next creates land
+    // one past the finite places alone
+    await plantProject(fx.t, { org_id: fx.org.id, sort_order: Number.NaN })
+    await plantProject(fx.t, {
+      org_id: fx.org.id,
+      type: 'project',
+      parent_id: fx.meta.id,
+      sort_order: Number.NaN,
+    })
+    const pastLast = async (pick: (p: Doc<'projects'>) => boolean) =>
+      fx.t.run(async (ctx) => {
+        const rows = await ctx.db
+          .query('projects')
+          .withIndex('by_org', (q) => q.eq('org_id', fx.org.id))
+          .collect()
+        const places = rows.filter(pick).map((p) => p.sort_order)
+        return Math.max(0, ...places.filter(Number.isFinite).map((place) => place + 1))
+      })
+    const tops = await pastLast((p) => p.type === 'meta' && p.parent_id === undefined)
+    const subs = await pastLast((p) => p.type === 'project' && p.parent_id === fx.meta.id)
+    const top = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.user),
+      body: JSON.stringify({ name: 'Past the gap' }),
+    })) as Json
+    expect((await projectRow(fx.t, top.id as string))?.sort_order).toBe(tops)
+    const sub = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
+      ...rest(fx.user),
+      body: JSON.stringify({ name: 'Sub past the gap', parent: 'TBED' }),
+    })) as Json
+    expect((await projectRow(fx.t, sub.id as string))?.sort_order).toBe(subs)
+  })
+
   it('places a top-level project by the top-level metas only, not a meta stored with a parent', async () => {
     const fx = await setup()
-    // createProjectCore refuses a meta with a parent; only bad data has one
-    await fx.t.run((ctx) => ctx.db.patch(fx.sub._id, { type: 'meta' }))
+    // createProjectCore refuses a meta with a parent; only bad data has
+    // one, here placed after every top-level project
+    await fx.t.run((ctx) => ctx.db.patch(fx.sub._id, { type: 'meta', sort_order: 9 }))
     const out = (await fx.t.mutation(internal.machine.projects.restCreateProject, {
       ...rest(fx.admin),
       body: JSON.stringify({ name: 'Optics' }),
     })) as Json
-    // after TBED and SKNK, where the count over every project of the
-    // organization also counted the meta under TBED
-    expect((await projectRow(fx.t, out.id as string))?.sort_order).toBe(2)
+    // one past SKNK at 4, where a read of every project of the
+    // organization would also have taken the meta under TBED at 9
+    expect((await projectRow(fx.t, out.id as string))?.sort_order).toBe(5)
   })
 
-  it("counts a new top-level project's siblings from the top-level projects alone", async () => {
+  it("reads a new top-level project's siblings from the top-level projects alone", async () => {
     const fx = await setup()
     /* The project documents a top-level create by the admin reads, and the
      * organization's top-level projects stored before it. Each create

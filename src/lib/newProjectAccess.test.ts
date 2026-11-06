@@ -139,10 +139,17 @@ describe('afterProjectSaved', () => {
     })
   })
 
-  it('opens a sub-project as before', () => {
-    expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: false })).toEqual({
+  it('opens a sub-project the workspace holds', () => {
+    expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: true })).toEqual({
       message: 'Sub-project “Calibration” created',
       open: true,
+    })
+  })
+
+  it('stays put with the same message for a sub-project the workspace does not hold', () => {
+    expect(afterProjectSaved({ type: 'project', name: 'Calibration', visible: false })).toEqual({
+      message: 'Sub-project “Calibration” created',
+      open: false,
     })
   })
 })

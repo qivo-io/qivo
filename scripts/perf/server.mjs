@@ -277,11 +277,19 @@
 // through src/store/projectSettingsListsStandIn.setup.ts, over the whole
 // workspace and, for an admin, the hidden projects. The project writes
 // they lead to (projects:update, setAccess, removeAccess and inviteGuest)
-// change the workspace. So are the removal window's reads (accessRemovals:preview and
-// reassignChoices), through src/store/removalStandIn.setup.ts, which takes the
-// removed people's open tasks in the projects the change reaches as the lost
-// holdings and every person who can hold work as the choices, and answers a
-// chosen person's holder_eligible by that rule, without the server's rules.
+// change the workspace, and so does projects:create of the New project and
+// New sub-project dialogs, with the caller as lead when it names none, the
+// creator's own grant on a top-level project by the server's rule
+// (convex/lib/projectGrants.ts creatorGrant) and the server's place, one
+// past the siblings' largest; a sub-project of the hidden program joins
+// that program, so the workspace never holds it, as for a project an admin
+// creates under one they only manage after the admin access split
+// (role=admin&hidden=N). So are the removal window's reads
+// (accessRemovals:preview and reassignChoices), through
+// src/store/removalStandIn.setup.ts, which takes the removed people's open
+// tasks in the projects the change reaches as the lost holdings and every
+// person who can hold work as the choices, and answers a chosen person's
+// holder_eligible by that rule, without the server's rules.
 // So is Team sync's agenda (teamSync:agenda), through the stand-in the
 // jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
 // over the workspace held here, with no access rule or read budget, and the
@@ -290,6 +298,7 @@
 // case, or a number bare or as QN-12 in the organization asked only.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
+import { creatorGrant } from '../../convex/lib/projectGrants'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
@@ -1742,6 +1751,72 @@ async function mutate(name, args) {
     await emitWorkspace()
     writes++
     return null
+  }
+  // New project and New sub-project, stored as the server stores them
+  if (name === 'projects:create') {
+    const parent = args.parent_id ?? undefined
+    const unseen = parent !== undefined && parent === hidden.meta.id
+    const siblings = [...snapshot.projects, hidden.meta, ...hidden.children].filter((p) =>
+      parent === undefined
+        ? p.type === 'meta' && p.parent_id === undefined
+        : p.type === 'project' && p.parent_id === parent,
+    )
+    const [orgRow] = snapshot.orgs
+    const num = orgRow.next_project_num
+    const row = {
+      id: args.id,
+      org_id: args.org_id,
+      type: args.type,
+      ...(parent === undefined ? {} : { parent_id: parent }),
+      key: args.key,
+      num,
+      name: args.name,
+      lead_id: args.lead_id ?? me.id,
+      description: args.description ?? '',
+      // one past the largest place (convex/model/projects.ts nextSiblingPlace)
+      sort_order:
+        args.sort_order ?? siblings.reduce((place, p) => Math.max(place, p.sort_order + 1), 0),
+      track_delay: args.track_delay ?? true,
+      created_at: new Date().toISOString(),
+    }
+    snapshot.orgs = [{ ...orgRow, next_project_num: num + 1 }]
+    if (unseen) hidden.children.push(row)
+    else {
+      snapshot.projects = [...snapshot.projects, row]
+      const grants = new Map(
+        Object.entries(args.access ?? {}).filter(([, level]) => level && level !== 'lead'),
+      )
+      // the creator's own grant on a top-level project, as the server gives
+      // it (convex/model/projects.ts createProjectCore): User for a creator
+      // who is not an admin and names someone else as lead, unless the
+      // request names their own entry, a level or null for none
+      if (row.type === 'meta') {
+        const own = args.access?.[me.id]
+        const mine = creatorGrant({
+          admin: me.org_role === 'admin',
+          creator: me.id,
+          lead: row.lead_id,
+          own: own === 'lead' ? undefined : own,
+        })
+        if (mine === null) grants.delete(me.id)
+        else grants.set(me.id, mine)
+      }
+      snapshot.access = [
+        ...snapshot.access,
+        ...[...grants].map(([profile_id, level]) => ({ project_id: row.id, profile_id, level })),
+      ]
+      snapshot.teamAccess = [
+        ...snapshot.teamAccess,
+        ...Object.entries(args.team_access ?? {}).map(([team_id, level]) => ({
+          project_id: row.id,
+          team_id,
+          level,
+        })),
+      ]
+    }
+    await emitWorkspace()
+    writes++
+    return { id: row.id, num, key: row.key }
   }
   if (name === 'projects:inviteGuest') {
     const seat = snapshot.profiles.find((p) => p.email === args.email.trim().toLowerCase())

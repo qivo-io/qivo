@@ -20,8 +20,12 @@ import { grouped, LIMITS } from '../../convex/lib/limits'
 import { projectKeyBase, projectKeyCandidate } from '../../convex/lib/projectKeys'
 import { issueKey } from '../../convex/lib/taskRefs'
 import { LimitedInput, LimitedTextarea } from '../components/LimitedField'
+import { LeadPicker } from '../components/ProjectAccessEditor'
 import { ProjectAccessSelect } from '../components/ProjectAccessSelect'
+import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
+import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
+import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
 import { closeOrAsk } from '../lib/discardQuestion'
@@ -58,11 +62,17 @@ import {
   type ReassignChoice,
   type ReassignChoices,
   type RemovalAnswer,
+  type SubProjectParents,
   type TaskFamily,
   type TeamAccessLevel,
   teamNoun,
 } from '../store/planner'
+import { duplicateNameTags } from '../store/viewModels'
 import { useViewsNews } from '../views/useViewsNews'
+import { type ProjectSettingsRead, useProjectSettings } from './settings/useProjectSettings'
+
+/** A row of the New sub-project dialog's Project list. */
+type SubProjectParent = Extract<SubProjectParents, { state: 'ready' }>['rows'][number]
 
 const ctlClass = 'h-control w-full bg-surface-1 text-base font-sans'
 
@@ -483,13 +493,20 @@ function FooterNote({ tone, children }: { tone: 'muted' | 'warn'; children: Reac
   )
 }
 
-/* The footer note for a non-admin creator (see creatorNote). */
-function CreatorNote({ note, lead }: { note: ReturnType<typeof creatorNote>; lead: string }) {
+/* The footer note for a non-admin creator (see creatorNote), naming the
+   lead the dialog shows. */
+function CreatorNote({
+  note,
+  leadName,
+}: {
+  note: ReturnType<typeof creatorNote>
+  leadName: string
+}) {
   if (note === 'hidden') return <FooterNote tone="warn">You won't see this project.</FooterNote>
   if (note === 'lead') {
     return (
       <FooterNote tone="muted">
-        Only {P.user(lead)?.name || 'the lead'} and org admins can manage it.
+        Only {leadName || 'the lead'} and org admins can manage it.
       </FooterNote>
     )
   }
@@ -514,13 +531,24 @@ function NameRow({ nameRef, name, setName, submit }) {
   )
 }
 
+/** What a create dialog hands App with its project: whether to make a
+    starter task, and for a sub-project the organization its parent check
+    named (ProjectShown), which the create goes to. */
+type CreateOptions = { withStarter: boolean; shown?: { orgId: string } }
+
 /* New top-level project (program). A project is an organization-wide
    container, so it has a lead but no owning/managing team. Teams can still be
    added through the access picker below; sub-projects use the same model.
+   Lead and Project access read the server's choices only while their
+   popovers are open (projectSettings.leadCandidates and candidates for a
+   new project); the lead starts as the creator, named from their own
+   profile, and Create needs no answer, as nothing else can be chosen.
    A creator who is not an org admin and picks someone else as lead is shown
    in Project access as User, the grant the server gives them
    (lib/newProjectAccess.ts), and the footer says who will manage the project
-   or that the creator would not see it. */
+   or that the creator would not see it. Of the store it reads the
+   creator's own seat, the keys the name's preview avoids (genKey) and the
+   creator's teams for the footer (P.seesNewProject). */
 function NewProjectModal({
   init: _init = {},
   onClose,
@@ -528,10 +556,11 @@ function NewProjectModal({
 }: {
   init?: { team?: string }
   onClose: () => void
-  onCreate: (p: NewProjectInput, opts: { withStarter: boolean }) => void
+  onCreate: (p: NewProjectInput, opts: CreateOptions) => void
 }) {
+  const creatorName = P.user(P.CURRENT_USER)?.name ?? ''
   const [name, setName] = useStateM('')
-  const [lead, setLead] = useStateM(P.CURRENT_USER)
+  const [lead, setLead] = useStateM({ id: P.CURRENT_USER, name: creatorName })
   const [desc, setDesc] = useStateM('')
   const [teamAccess, setTeamAccess] = useStateM<Record<string, TeamAccessLevel>>({})
   const [draft, setDraft] = useStateM<AccessDraft>({ access: {}, self: 'none' })
@@ -542,25 +571,23 @@ function NewProjectModal({
   }, [])
 
   const creator = { id: P.CURRENT_USER, admin: P.isAdmin() }
-  const leadCandidates = P.homeAssignees()
-  const leadValid = leadCandidates.some((user) => user.id === lead)
-  const changeLead = (next: string) => {
+  const changeLead = (next: { id: string; name: string }) => {
     setLead(next)
-    setDraft((current) => afterLeadChange(current, next, creator))
+    setDraft((current) => afterLeadChange(current, next.id, creator))
   }
-  // A roster update must not submit a hidden or ineligible lead.
-  useEffectM(() => {
-    if (!leadValid) changeLead(leadCandidates[0]?.id || '')
-  }, [leadValid])
   const canSave =
     name.trim().length > 0 &&
     !overLimit(LIMITS.projectName, name) &&
     !overLimit(LIMITS.projectDescription, desc) &&
-    leadValid
+    !!lead.id
   const note = creatorNote({
     creator,
-    lead,
-    sees: P.seesNewProject({ lead, access: requestedAccess(draft, creator), teamAccess }),
+    lead: lead.id,
+    sees: P.seesNewProject({
+      lead: lead.id,
+      access: requestedAccess(draft, creator),
+      teamAccess,
+    }),
   })
 
   const submit = () => {
@@ -570,7 +597,7 @@ function NewProjectModal({
         key: genKey(name),
         name: name.trim(),
         type: 'meta',
-        lead: lead || undefined,
+        lead: lead.id || undefined,
         description: desc.trim() || undefined,
         teamAccess,
         access: requestedAccess(draft, creator),
@@ -589,24 +616,20 @@ function NewProjectModal({
       canSubmit={canSave}
       submitLabel="Create project"
       width={480}
-      footerLeft={<CreatorNote note={note} lead={lead} />}
+      footerLeft={<CreatorNote note={note} leadName={lead.name} />}
     >
       <NameRow nameRef={nameRef} name={name} setName={setName} submit={submit} />
       {/* Alone on its row, it keeps MField's 24px below it. As the last
           child of a row of its own, last:mb-0 took that gap away. */}
       <MField label="Lead">
-        <NativeSelect
-          aria-label="Lead"
-          value={leadValid ? lead : ''}
-          onChange={(e) => changeLead(e.target.value)}
-          className={ctlClass}
-        >
-          {leadCandidates.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.name}
-            </option>
-          ))}
-        </NativeSelect>
+        <LeadPicker
+          on={{ org_id: P.homeOrg }}
+          lead={lead}
+          disabled={!P.homeOrg}
+          busy={false}
+          modal
+          onPick={changeLead}
+        />
       </MField>
       <MField label="Description">
         <LimitedInput
@@ -619,14 +642,11 @@ function NewProjectModal({
       </MField>
       <MField label="Project access">
         <ProjectAccessSelect
-          teams={P.teams.filter((candidate) => candidate.org === P.homeOrg)}
-          users={P.homeUsers().filter(
-            (user) =>
-              !!access[user.id] || (user.active && user.id !== lead && user.orgRole !== 'admin'),
-          )}
+          on={{ org_id: P.homeOrg, lead_id: lead.id }}
           teamAccess={teamAccess}
           access={access}
           you={P.CURRENT_USER}
+          youName={creatorName}
           onTeamChange={(teamId, level) => {
             setTeamAccess((current) => {
               const updated = { ...current }
@@ -647,10 +667,73 @@ function NewProjectModal({
   )
 }
 
-/* New sub-project — needs lead-level on the parent project. It has its own
-   lead and receives any team or user permissions through the access controls.
-   A creator who is not an org admin and hands it to another lead keeps User
-   access through the parent, and the footer says who will manage it. */
+/** A parent the New sub-project dialog may create under: the opener's,
+    known by id, or a row its Project list answered, with that row's name,
+    number, tag among equal names and organization. */
+type ParentPick = { id: string; name?: string; tag?: string; org?: string }
+
+/** The Project list's words (projectSettings.projects with
+    sub_project_parents). Its access_unchecked answer is an `unavailable`
+    one with the server's sentence, which shows as it is. */
+const PARENT_WORDS: ChoiceWords = {
+  held: (held) =>
+    held?.state === 'not_ready'
+      ? "Projects can't be listed yet."
+      : held?.message
+        ? held.message
+        : "Projects can't be listed.",
+  failed: "Couldn't load projects.",
+  stopped: 'Showing the projects found so far.',
+  empty: 'Project Lead access is required to create sub-projects.',
+  none: 'No projects match.',
+}
+
+/** The parent check's line under the Project field, for the read of the
+    chosen parent's settings (projectSettings.get), or null when the
+    parent may take a sub-project. `opener` says the parent is the one the
+    dialog opened with. */
+function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boolean) {
+  const kept = read.answer
+  if (read.state === 'loading') return null
+  if (read.afterFailure || read.state === 'failed')
+    return kept ? `Couldn't check “${kept.project.name}” again.` : "Couldn't check the project."
+  if (read.state === 'archived' && read.archived)
+    return `“${read.archived.project.name}” is archived, so restore it before adding a sub-project.`
+  if (read.state === 'unavailable')
+    return opener || !picked.name
+      ? 'The project you opened this from is no longer available.'
+      : `“${picked.name}” is no longer available.`
+  if (kept && !kept.can_create_sub_project)
+    return kept.project.type === 'meta' && kept.parent === null
+      ? `Only the lead of “${kept.project.name}” or an organization admin can add sub-projects to it.`
+      : `“${kept.project.name}” can't take a sub-project.`
+  return null
+}
+
+/* New sub-project. Every opener names a parent, which the dialog checks on
+   the server while it is open (projectSettings.get, useProjectSettings),
+   whose answer names the parent's organization and whether the caller may
+   create under it (can_create_sub_project, by management). For a parent
+   that cannot take one the dialog says why and offers the Project list,
+   the server's parents in that organization (projectSettings.projects with
+   sub_project_parents), 25 at a time with a search, read only while open,
+   equal names tagged as duplicateNameTags tags them; a pick is checked in
+   turn. The Project and Lead popovers wait for the check unless the
+   workspace holds the parent, the Lead button reading Loading… meanwhile,
+   and use the home organization, else the first, only once it answers
+   `unavailable` or fails before it answered. The creator is the caller's seat in that organization
+   (P.seatIn), never the home seat, and leads until the Lead popover
+   (leadCandidates with the parent) offers someone else; a pick is kept
+   through a change of parent, which the create checks again. Create needs
+   a current answer that the parent may take a sub-project, so it is off
+   while the check loads, failed, refreshes after a failure, or answered
+   archived, unavailable or no. The create goes to the answer's
+   organization (CreateOptions `shown`). A starter task is offered only
+   under a parent the workspace holds, as P.addIssue creates tasks only in
+   a project it holds. Of the store it reads the caller's seats and their
+   names, the organizations' names, whether the workspace holds the parent,
+   the keys the name's preview avoids (genKey) and the creator's admin flag
+   for the footer; no list, choice or right. */
 function NewSubProjectModal({
   init = {},
   onClose,
@@ -659,42 +742,65 @@ function NewSubProjectModal({
 }: {
   init?: { parent?: string }
   onClose: () => void
-  onCreate: (p: NewProjectInput, opts: { withStarter: boolean }) => void
+  onCreate: (p: NewProjectInput, opts: CreateOptions) => void
   focusAfterClose?: () => HTMLElement | null
 }) {
-  const metas = P.projects.filter((p) => p.type === 'meta' && P.levelOn(p.id) === 'lead')
   const [name, setName] = useStateM('')
-  const [parent, setParent] = useStateM(init.parent || (metas[0] ? metas[0].id : null))
-  const [lead, setLead] = useStateM(P.CURRENT_USER)
+  const [parent, setParent] = useStateM<ParentPick | null>(init.parent ? { id: init.parent } : null)
+  const [picked, setPicked] = useStateM<{ id: string; name: string; org: string } | null>(null)
   const [withStarter, setWithStarter] = useStateM(true)
   const nameRef = useRefM(null)
   useEffectM(() => {
     nameRef.current?.focus()
   }, [])
 
-  const parentMeta = P.project(parent)
-  const leadCandidates = P.assigneesFor(parent || '')
-  const leadValid = leadCandidates.some((user) => user.id === lead)
-  useEffectM(() => {
-    if (!leadValid) setLead(parentMeta?.lead || leadCandidates[0]?.id || '')
-  }, [parentMeta?.lead, leadCandidates, lead])
-  // parentValid: an init.parent the caller doesn't lead (openNewIssue's
-  // redirect, the views' empty-state buttons) isn't among the options.
-  const parentValid = metas.some((m) => m.id === parent)
+  const read = useProjectSettings(parent?.id ?? null)
+  const answer = read.answer
+  const held = parent ? P.project(parent.id) : undefined
+  // the organization the popovers read in and the create goes to: the
+  // check's, a picked row's, the workspace's while it holds the parent,
+  // and after an `unavailable` answer or a check that failed before it
+  // answered the home organization, else the first, so the Project list
+  // stays open to another parent while Create waits for a check
+  const known =
+    answer?.project.org_id ?? read.archived?.project.org_id ?? parent?.org ?? held?.org ?? ''
+  const fallback =
+    read.state === 'unavailable' || read.state === 'failed' || !parent
+      ? P.homeOrg || P.orgs[0]?.id || ''
+      : ''
+  const org = known || fallback
+  const seat = org ? P.seatIn(org) : ''
+  const creatorLead = { id: seat, name: P.user(seat)?.name ?? '' }
+  const lead = picked && picked.org === org ? picked : creatorLead
+  // a current answer, or one kept while the read refreshes after the tab
+  // showed again, decides; one kept after a failure does not
+  const current = read.state === 'ok' || (read.state === 'refreshing' && !read.afterFailure)
+  const mayCreate =
+    !!parent &&
+    current &&
+    !!answer &&
+    answer.project.id === parent.id &&
+    answer.can_create_sub_project
   const canSave =
-    name.trim().length > 0 && !overLimit(LIMITS.projectName, name) && parentValid && leadValid
+    name.trim().length > 0 &&
+    !overLimit(LIMITS.projectName, name) &&
+    mayCreate &&
+    !!seat &&
+    !!lead.id
+  const note = parent ? parentNote(read, parent, parent.id === init.parent) : null
+  const orgName = P.orgs.length > 1 && org ? P.orgs.find((o) => o.id === org)?.name : undefined
 
   const submit = () => {
-    if (!canSave) return
+    if (!canSave || !parent || !answer) return
     onCreate(
       {
         key: genKey(name),
         name: name.trim(),
         type: 'project',
-        parent,
-        lead: lead || undefined,
+        parent: parent.id,
+        lead: lead.id,
       },
-      { withStarter },
+      { withStarter: !!held && withStarter, shown: { orgId: answer.project.org_id } },
     )
   }
 
@@ -710,67 +816,203 @@ function NewSubProjectModal({
       submitLabel="Create sub-project"
       width={480}
       footerLeft={
-        // the creator leads the parent, so they always see the sub-project
+        // the creator manages the parent, so they always see the sub-project
         <CreatorNote
           note={creatorNote({
-            creator: { id: P.CURRENT_USER, admin: P.isAdmin() },
-            lead,
+            creator: { id: seat, admin: !!seat && P.isAdmin(seat) },
+            lead: lead.id,
             sees: true,
           })}
-          lead={lead}
+          leadName={lead.name}
         />
       }
     >
-      {metas.length === 0 && (
-        <div className="mb-6 text-sm leading-normal text-text-3">
-          Project Lead access is required to create sub-projects.
-        </div>
-      )}
       <NameRow nameRef={nameRef} name={name} setName={setName} submit={submit} />
       <div className="flex flex-wrap gap-x-2">
         <MField label="Project" flex>
-          <NativeSelect
-            aria-label="Project"
-            value={parent || ''}
-            onChange={(e) => setParent(e.target.value)}
-            className={ctlClass}
-          >
-            {metas.map((m) => (
-              <option key={m.id} value={m.id}>
-                {P.projectLabel(m)}
-              </option>
-            ))}
-          </NativeSelect>
+          <ParentPicker org={org} parent={parent} read={read} onPick={(row) => setParent(row)} />
+          {orgName && (
+            <p data-new-subproject-org="" className="mt-1.5 text-sm text-text-2">
+              In {orgName}
+            </p>
+          )}
         </MField>
         <MField label="Lead" flex>
-          <NativeSelect
-            aria-label="Lead"
-            value={lead}
-            onChange={(e) => setLead(e.target.value)}
-            className={ctlClass}
-          >
-            {leadCandidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}
-              </option>
-            ))}
-          </NativeSelect>
+          <LeadPicker
+            on={parent ? { org_id: org, parent_id: parent.id } : { org_id: org }}
+            lead={seat ? lead : null}
+            emptyLabel={read.state === 'loading' ? 'Loading…' : undefined}
+            disabled={!org || !parent}
+            busy={false}
+            modal
+            onPick={(person) => setPicked({ ...person, org })}
+          />
         </MField>
       </div>
-      <label
-        htmlFor="subproject-starter"
-        className="flex flex-wrap items-center gap-2 [font-size:var(--fs-base)] [color:var(--text-1)] [margin-bottom:24px] [cursor:pointer]"
-      >
-        <Input
-          id="subproject-starter"
-          type="checkbox"
-          checked={withStarter}
-          onChange={(e) => setWithStarter(e.target.checked)}
-          className="[accent-color:var(--primary)]"
-        />
-        Create a starter task
-      </label>
+      {note && (
+        <div
+          role={read.afterFailure || read.state === 'failed' ? 'alert' : 'status'}
+          data-new-subproject-parent-note=""
+          className={cn(
+            'mb-6 flex flex-wrap items-center gap-2 text-sm leading-normal',
+            read.afterFailure || read.state === 'failed' ? 'text-danger' : 'text-text-2',
+          )}
+        >
+          {note}
+          {(read.afterFailure || read.state === 'failed') && (
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-control-sm text-sm"
+              onClick={read.retry}
+            >
+              Try again
+            </Button>
+          )}
+        </div>
+      )}
+      {held && (
+        <label
+          htmlFor="subproject-starter"
+          className="flex flex-wrap items-center gap-2 [font-size:var(--fs-base)] [color:var(--text-1)] [margin-bottom:24px] [cursor:pointer]"
+        >
+          <Input
+            id="subproject-starter"
+            type="checkbox"
+            checked={withStarter}
+            onChange={(e) => setWithStarter(e.target.checked)}
+            className="[accent-color:var(--primary)]"
+          />
+          Create a starter task
+        </label>
+      )}
     </ModalShell>
+  )
+}
+
+/* The New sub-project dialog's Project field: a button naming the parent
+   once the check answered that it may take a sub-project, "Choose a
+   project…" otherwise and "Loading…" while it checks, which opens the
+   server's parents in organization `org`. Its popover is modal, so its
+   list scrolls inside the modal dialog (qivo Popover). While the check
+   loads the button is marked disabled but stays focusable, and a press
+   opens nothing. A keyboard pick starts a check as the popover closes and
+   focus returns to the button, which a disabled one would drop to the
+   page. */
+function ParentPicker({
+  org,
+  parent,
+  read,
+  onPick,
+}: {
+  org: string
+  parent: ParentPick | null
+  read: ProjectSettingsRead
+  onPick: (row: ParentPick) => void
+}) {
+  const answer = read.answer && parent && read.answer.project.id === parent.id ? read.answer : null
+  const loading = read.state === 'loading' && !!parent
+  // the parent the check said may take a sub-project, named also while it
+  // refreshes or after a failure, when Create waits for a current answer
+  const shows = read.state === 'ok' || read.state === 'refreshing' || read.state === 'failed'
+  const named =
+    answer && shows && answer.can_create_sub_project
+      ? `${answer.project.name}${parent?.tag ? ` ${parent.tag}` : ''}`
+      : null
+  const label = loading ? 'Loading…' : (named ?? 'Choose a project…')
+  return (
+    <Popover
+      width={300}
+      backLayer
+      modal
+      onEscapeKeyDown={escapeClearsFirst('data-new-subproject-parent-search')}
+      wrapStyle={{ minWidth: 0 }}
+      button={(toggle, open) => (
+        <Button
+          type="button"
+          variant="outline"
+          data-new-subproject-parent={named ? (parent?.id ?? '') : ''}
+          data-on={open ? '' : undefined}
+          aria-label={`Project: ${named ?? 'none chosen'}`}
+          aria-busy={loading || undefined}
+          aria-disabled={loading || undefined}
+          disabled={!loading && !org}
+          onClick={(event) => {
+            // Radix's trigger opens only when the click is not prevented
+            if (loading) event.preventDefault()
+            else toggle()
+          }}
+          className="h-control w-full max-w-full justify-between gap-2 bg-surface-1 px-2.5 text-base font-normal text-text-1 aria-disabled:cursor-progress aria-disabled:opacity-55"
+        >
+          <span className={named ? 'min-w-0 truncate' : 'min-w-0 truncate text-text-2'}>
+            {label}
+          </span>
+          <Icon name="chevronDown" size={14} color="var(--text-2)" />
+        </Button>
+      )}
+    >
+      {(close) => (
+        <ParentChoiceList
+          org={org}
+          chosen={named ? (parent?.id ?? null) : null}
+          onPick={(row) => close(() => onPick(row))}
+        />
+      )}
+    </Popover>
+  )
+}
+
+/* The open Project list: a search and the server's parents with Load
+   more, read once a batch, tagged where names are equal among the loaded
+   rows. */
+function ParentChoiceList({
+  org,
+  chosen,
+  onPick,
+}: {
+  org: string
+  chosen: string | null
+  onPick: (row: ParentPick) => void
+}) {
+  const [text, setText] = useStateM('')
+  const { tooLong, settled: query } = useSettledSearch(text, LIMITS.search)
+  const list = usePagedList({
+    key: `${org}|${query}`,
+    source: { kind: 'once', read: (at) => P.subProjectParents(org, query, at.after) },
+    batch: (answer: SubProjectParents) => (answer.state === 'ready' ? answer : null),
+    id: (row: SubProjectParent) => row.id,
+    most: ACCESS_CAPS.choices,
+  })
+  const end = listEnd(list, query !== '')
+  const tags = duplicateNameTags(
+    list.rows.map((row) => ({ id: row.id, org, parent: undefined, name: row.name, num: row.num })),
+  )
+  return (
+    <div data-new-subproject-parents="" className="flex flex-col gap-1">
+      <PickerSearch
+        text={text}
+        onText={setText}
+        label="Search projects"
+        probe="data-new-subproject-parent-search"
+      />
+      <div className="max-h-[280px] overflow-y-auto">
+        {list.rows.map((row) => {
+          const tag = tags.get(row.id)
+          return (
+            <MenuItem
+              key={row.id}
+              active={chosen === row.id}
+              onClick={() => onPick({ id: row.id, name: row.name, tag, org })}
+              data-new-subproject-parent-choice={row.id}
+            >
+              <span className="min-w-0 truncate">{row.name}</span>
+              {tag && <span className="shrink-0 text-text-2">{tag}</span>}
+            </MenuItem>
+          )
+        })}
+        <ChoiceEnd end={end} tooLong={tooLong} list={list} words={PARENT_WORDS} />
+      </div>
+    </div>
   )
 }
 

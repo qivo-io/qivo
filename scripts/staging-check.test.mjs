@@ -40,6 +40,8 @@ import {
   PEOPLE_REFUSALS,
   PICKER_EXPECTED,
   PICKER_STEP,
+  PROJECT_DIALOGS_EXPECTED,
+  PROJECT_DIALOGS_STEP,
   PROJECT_SETTINGS_EXPECTED,
   PROJECT_SETTINGS_STEP,
   pace,
@@ -178,6 +180,55 @@ describe('staging check REST contract', () => {
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     expect(check.indexOf('await projectSettingsCheck()')).toBeGreaterThan(
       check.indexOf('await removalWindowCheck()'),
+    )
+  })
+  it("checks the New project and New sub-project dialogs on their own marks, after a project's Settings page", () => {
+    const source = [
+      '../src/panels/Modals.tsx',
+      '../src/components/ProjectAccessSelect.tsx',
+      '../src/components/ProjectAccessEditor.tsx',
+    ]
+      .map((file) => readFileSync(new URL(file, import.meta.url), 'utf8'))
+      .join('\n')
+    for (const mark of [
+      'data-project-lead-picker',
+      'probe="data-lead-picker-search"',
+      'data-lead-choice={person.id}',
+      'data-new-project-access',
+      'data-new-project-access-popup',
+      'probe="data-project-access-search"',
+      "'data-project-access-team-option': row.id",
+      "'data-project-team-role'",
+      "'data-project-access-user-option': row.id",
+      "'data-project-role'",
+      'data-new-subproject-parent=',
+      'probe="data-new-subproject-parent-search"',
+      'data-new-subproject-parent-choice={row.id}',
+      'id="subproject-starter"',
+    ])
+      expect(source).toContain(mark)
+    expect(PROJECT_DIALOGS_STEP).toBe('ui/project-dialogs')
+    expect(PROJECT_DIALOGS_EXPECTED).toEqual({ team: 'viewer', nora: 'user' })
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await projectDialogsCheck()')).toBeGreaterThan(
+      check.indexOf('await projectSettingsCheck()'),
+    )
+    // New sub-project opens on the run's project M and picks the step's
+    // own project from the list, so only a pick that changes the parent
+    // passes
+    const step = check.slice(
+      check.indexOf('async function projectDialogsCheck()'),
+      check.indexOf('export const BILLING_STORAGE_STEP'),
+    )
+    expect(step).toContain(`app.locator(\`aside [data-project-row="\${M.id}"]\`)`)
+    expect(step).toContain(`sub.locator(\`[data-new-subproject-parent="\${M.id}"]\`)`)
+    expect(step.indexOf(`[data-new-subproject-parent-choice="\${project.id}"]`)).toBeLessThan(
+      step.indexOf(`.locator(\`[data-new-subproject-parent="\${project.id}"]\`)`),
+    )
+    expect(step).toContain(`eq(madeSub.parent_id, project.id, "the sub-project's parent")`)
+    // its project goes in the cleanup
+    expect(check).toContain(
+      'if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)',
     )
   })
   it("checks Settings › Projects and Archived projects on the pages' own marks, after a project's Settings page", () => {

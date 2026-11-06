@@ -14,18 +14,15 @@
    asked for, one entry at a time, each live while it shows. Every row,
    chip and row right comes from those answers: an organization admin's
    rows are every project of the organization, anyone else's what their
-   seat sees, and Restore and Delete come from each row's own rights.
-   New sub-project… and Add sub-project are the one exception. They need
-   the row's own right and also the store's Lead level on a project the
-   workspace holds, because the New sub-project dialog they open still
-   takes its parents from the workspace and keeps Create off for any other
-   (offersSubProject). The pages read no task, and of the store only the
-   organizations to choose from, the home organization and whether the
-   login may create a project there (P.canCreateProject, for New project),
-   the login's seats for the page memory, that Lead level, and a
-   sub-project created here until its open list holds it or tells that it
-   does not. Each read stops while the tab is hidden and when the page is
-   left, and keeps no answer past it. */
+   seat sees, and Restore, Delete, New sub-project… and Add sub-project
+   come from each row's own rights; the New sub-project dialog checks its
+   parent on the server again. The pages read no task, and of the store
+   only the organizations to choose from, the home organization and
+   whether the login may create a project there (P.canCreateProject, for
+   New project), the login's seats for the page memory, and a sub-project
+   created here until its open list holds it or tells that it does not.
+   Each read stops while the tab is hidden and when the page is left, and
+   keeps no answer past it. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -416,18 +413,13 @@ function useMoveFocus(
 }
 
 /**
- * Whether New sub-project… and Add sub-project show for `row`. The row's
- * own `can_create_sub_project` must allow it, and so must the New
- * sub-project dialog's parent rule (Modals.tsx NewSubProjectModal), a
- * top-level project the workspace holds on which the store's level gives
- * the caller Lead. That dialog still takes its parents and the create's
- * organization from the workspace, so for any other project it would open
- * with Create off. t3/limits-project-dialogs moves the dialog onto the
- * server's parents and the list's organization, which removes the store's
- * half.
+ * Whether New sub-project… and Add sub-project show for `row`: its own
+ * `can_create_sub_project`, held by the workspace or not, since the New
+ * sub-project dialog checks its parent on the server and creates in that
+ * parent's organization (Modals.tsx NewSubProjectModal).
  */
-const offersSubProject = (row: Pick<SettingsProjectRow, 'id' | 'can_create_sub_project'>) =>
-  row.can_create_sub_project && P.project(row.id)?.type === 'meta' && P.levelOn(row.id) === 'lead'
+const offersSubProject = (row: Pick<SettingsProjectRow, 'can_create_sub_project'>) =>
+  row.can_create_sub_project
 
 /* What Settings › Projects keeps for the browser session, so Back from a
    project's page lands on the page it came from, read again: the
@@ -457,8 +449,7 @@ const projectsArgs = (org: string, search: string, after: string | null) => ({
  * search over its projects and sub-projects. A project row opens its live
  * sub-projects below it, one project at a time; a search lists matching
  * sub-projects too, each in its project. A row's New sub-project… needs
- * its own `can_create_sub_project` and the dialog's parent rule
- * (offersSubProject).
+ * its own `can_create_sub_project` (offersSubProject).
  */
 export function OrgProjectsPage({
   setPage,

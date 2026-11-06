@@ -46,10 +46,11 @@
  * A project's Settings page in the app reads all six
  * (src/panels/settings/ProjectSettings.tsx) and subProjects for its
  * Sub-projects section; Settings › Projects and Archived projects read the
- * four project lists (src/panels/settings/ProjectLists.tsx), and
- * t3/limits-project-dialogs moves the New project and New sub-project
- * dialogs onto candidates, leadCandidates and the sub-project parents. The
- * writes stay in projects.ts. */
+ * four project lists (src/panels/settings/ProjectLists.tsx). The New
+ * project dialog reads leadCandidates and candidates without a project,
+ * and the New sub-project dialog get for its parent, projects with
+ * sub_project_parents for another parent and leadCandidates with
+ * `parent_id` (src/panels/Modals.tsx). The writes stay in projects.ts. */
 
 import { v } from 'convex/values'
 import { authedQuery, orgQuery } from './lib/functions'

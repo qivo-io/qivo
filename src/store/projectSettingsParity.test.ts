@@ -8,10 +8,14 @@
  * of a new project, the three lead pickers and the invite lookup, cursors
  * compared by where they lead, as the server seals its own. It holds get's
  * fields and rights to the server for a user, a guest and a Viewer in
- * every access shape (convex/tests/accessShapes.setup.ts), and runs the
- * pickers with the people figure at the design size, 1,000 people, and the
- * users list with the grants on one project at the organization's 995,
- * each beside everyday values of the other figures. */
+ * every access shape (convex/tests/accessShapes.setup.ts), and the New
+ * sub-project dialog's parent checks (get and the lead picker with a
+ * parent) for a lead who is not an admin. It runs the pickers, the New
+ * project and New sub-project dialogs' included, with the people figure at
+ * the design size, 1,000 people, the New project dialog's with the teams
+ * figure at its 50, and the users list with the grants on one project at
+ * the organization's 995, each beside everyday values of the other
+ * figures. */
 
 import { makeFunctionReference } from 'convex/server'
 import { describe, expect, it, vi } from 'vitest'
@@ -24,6 +28,7 @@ import {
   NOW,
   newT,
   type OrgFixture,
+  plantProject,
   plantSeat,
   type T,
   uuid,
@@ -278,6 +283,43 @@ describe('the rights in every access shape', () => {
     })
 })
 
+describe("the New sub-project dialog's parent checks", () => {
+  it('answers get and the lead picker of a parent as the server does for a lead who is not an admin', async () => {
+    const t = newT()
+    const f: OrgFixture = await withOrg(t)
+    // a project the user sees as User and does not lead
+    const seen = await plantProject(t, { org_id: f.org.id, lead_id: f.admin.id })
+    await t.run((ctx) =>
+      ctx.db.insert('project_access', {
+        project_id: seen.id,
+        profile_id: f.user.id,
+        level: 'user',
+      }),
+    )
+    // Skunkworks, which the user leads, archived
+    await t.run((ctx) => ctx.db.patch(f.hidden._id, { archived_at: NOW }))
+    await keyOrg(t, f.org.id)
+    const ws = await workspaceOf(as(t, f.user))
+    if (!ws) throw new Error('no workspace')
+    const answers: string[] = []
+    for (const parent of [f.meta, seen, f.hidden, f.sub]) {
+      await same(t, f.user, ws, 'projectSettings:get', { id: parent.id })
+      const [server] = await same(t, f.user, ws, 'projectSettings:leadCandidates', {
+        org_id: f.org.id,
+        parent_id: parent.id,
+      })
+      const answer = server as Answer & { message?: string }
+      answers.push(answer.message ?? answer.state)
+    }
+    expect(answers).toEqual([
+      'ready',
+      'requires lead access to this project',
+      'the project is archived, so restore it first',
+      'sub-projects live directly under a project, never under another sub-project',
+    ])
+  })
+})
+
 /** Northstar grown to `total` people with active users named in a spread
     of words, keyed, and its workspace as Nora. The first `grants` of them
     get User on Nora's first top-level project. */
@@ -333,6 +375,46 @@ describe('at the design size', () => {
     await same(t, nora, ws, 'projectSettings:candidates', { ...base, search: 'holm 7' })
     await same(t, nora, ws, 'projectSettings:leadCandidates', base)
     await same(t, nora, ws, 'projectSettings:leadCandidates', { ...base, search: 'cedar' })
+    // the New project and New sub-project dialogs' pickers among them
+    const newProject = { org_id: org.id, lead_id: nora.id }
+    await same(t, nora, ws, 'projectSettings:candidates', newProject)
+    await same(t, nora, ws, 'projectSettings:candidates', { ...newProject, search: 'holm 7' })
+    const newSub = { org_id: org.id, parent_id: project.id }
+    await same(t, nora, ws, 'projectSettings:leadCandidates', newSub)
+    await same(t, nora, ws, 'projectSettings:leadCandidates', { ...newSub, search: 'cedar' })
+  })
+
+  it('offers the New project dialog the same choices among 50 teams, every batch', async () => {
+    const { t, org, nora, ws: before } = await northstar()
+    const teams = before.teams.filter((team) => team.org_id === org.id).length
+    await t.run(async (ctx) => {
+      for (let i = teams; i < 50; i++)
+        await ctx.db.insert('teams', {
+          id: uuid(),
+          org_id: org.id,
+          name: `Crew ${String(i).padStart(2, '0')}`,
+          track_delay_default: false,
+          created_at: NOW,
+        })
+    })
+    await keyOrg(t, org.id)
+    const ws = await workspaceOf(as(t, nora))
+    if (!ws) throw new Error('no workspace')
+    expect(ws.teams.filter((team) => team.org_id === org.id)).toHaveLength(50)
+    const batches = await same(
+      t,
+      nora,
+      ws,
+      'projectSettings:candidates',
+      { org_id: org.id, lead_id: nora.id },
+      true,
+    )
+    expect(batches.length).toBeGreaterThan(2)
+    await same(t, nora, ws, 'projectSettings:candidates', {
+      org_id: org.id,
+      lead_id: nora.id,
+      search: 'crew 4',
+    })
   })
 
   it('lists the same users among 995 grants on one project', async () => {

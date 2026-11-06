@@ -7081,6 +7081,9 @@ export type ProjectSettingsAnswer = FunctionReturnType<typeof api.projectSetting
 export type AccessChoices = FunctionReturnType<typeof api.projectSettings.candidates>
 /** One answer of a lead picker (projectSettings.leadCandidates). */
 export type LeadChoices = FunctionReturnType<typeof api.projectSettings.leadCandidates>
+/** One answer of the New sub-project dialog's Project list
+    (projectSettings.projects with sub_project_parents). */
+export type SubProjectParents = FunctionReturnType<typeof api.projectSettings.projects>
 /** The invite form's lookup of an address (projectSettings.inviteTarget). */
 export type InviteLookup = FunctionReturnType<typeof api.projectSettings.inviteTarget>
 
@@ -9196,6 +9199,9 @@ export const PLANNER = {
     const u = PLANNER.user(uid || CURRENT_USER)
     return !!(u && u.orgRole === 'admin')
   },
+  /** My seat in organization `orgId`, its profile id, or '' when I hold
+      none there, as the New sub-project dialog names its creator. */
+  seatIn: (orgId: string): string => profileIn(orgId),
   /* org admins lead every team — of THEIR OWN organization (0081). Being an
      admin at home says nothing about a team that shared a project with me,
      so the caller is resolved to the profile they hold in the team's org
@@ -9415,13 +9421,6 @@ export const PLANNER = {
     PLANNER.usersIn(PLANNER.orgOf(projectId)).filter(
       (u) => PLANNER.levelOn(projectId, u.id) !== null,
     ),
-  /* …and of those, the ones eligible for the New sub-project dialog's Lead
-     field (a project's Settings page reads projectSettings.leadCandidates).
-     A viewer may be given a read grant, so they stay in `usersFor`, but can
-     never lead. Task assignment requires project write access in
-     `issueAssigneesFor`. */
-  assigneesFor: (projectId: string) =>
-    PLANNER.usersFor(projectId).filter((u) => u.orgRole !== 'viewer'),
   /* Active people and agents need effective Edit or Lead access to hold new
      work. Existing assignments still render through `user`; this list
      governs new choices only, for the reviewer as well as the assignee
@@ -9625,10 +9624,11 @@ export const PLANNER = {
   removingAccess: (change: AccessRemoval): boolean => removing.has(removalKey(change)),
 
   /** One batch of a project's Add team or user picker, or of the New
-      project dialog's without `project_id` (projectSettings.candidates):
-      teams and then people in name order, matching `search`, after
-      `after`, an earlier batch's `next`, or from the start. Read once a
-      batch, never subscribed to; null when the read failed. */
+      project dialog's Project access without `project_id`, where `lead_id`
+      is the lead the dialog has chosen (projectSettings.candidates): teams
+      and then people in name order, matching `search`, after `after`, an
+      earlier batch's `next`, or from the start. Read once a batch, never
+      subscribed to; null when the read failed. */
   accessChoices: async (
     on: { org_id: string; project_id?: string; lead_id?: string },
     search: string,
@@ -9647,10 +9647,10 @@ export const PLANNER = {
   },
 
   /** One batch of a lead picker (projectSettings.leadCandidates): the
-      people a lead write accepts for project `project_id`'s Lead field, a
-      new sub-project under `parent_id` or, with neither, a new top-level
-      project, matching `search`, after `after` or from the start. Read once
-      a batch, never subscribed to; null when the read failed. */
+      people a lead write accepts for project `project_id`'s Lead field, the
+      New sub-project dialog's under `parent_id` or, with neither, the New
+      project dialog's, matching `search`, after `after` or from the start.
+      Read once a batch, never subscribed to; null when the read failed. */
   leadChoices: async (
     on: { org_id: string; project_id?: string; parent_id?: string },
     search: string,
@@ -9664,6 +9664,31 @@ export const PLANNER = {
       })
     } catch (e) {
       console.error('[qivo] lead choices failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of the New sub-project dialog's Project list
+      (projectSettings.projects with sub_project_parents): the live
+      top-level projects of organization `orgId` under which I may create a
+      sub-project, every one for an organization admin and the ones I lead
+      for anyone else, in name order, matching `search`, after `after` or
+      from the start. Read once a batch, never subscribed to; null when the
+      read failed. */
+  subProjectParents: async (
+    orgId: string,
+    search: string,
+    after: string | null,
+  ): Promise<SubProjectParents | null> => {
+    try {
+      return await convex.query(api.projectSettings.projects, {
+        org_id: orgId,
+        sub_project_parents: true,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] sub-project parents failed:', e)
       return null
     }
   },
@@ -9923,13 +9948,6 @@ export const PLANNER = {
      offers; `homeUsers` still lists everybody, because the Users page has to
      show you the person you switched off in order to switch them back on. */
   homeActiveUsers: () => PLANNER.homeUsers().filter((u) => u.active),
-  /* …and of THOSE, the ones who can be handed work or a lead role: the same
-     "not a viewer" narrowing as `assigneesFor`, one altitude up, for the
-     pickers that run before a project exists (New project's Lead). A viewer
-     still counts as a seat on the Billing page — being read-only is not being
-     free — which is why this is a separate selector and not a change to
-     `homeActiveUsers`. */
-  homeAssignees: () => PLANNER.homeActiveUsers().filter((u) => u.orgRole !== 'viewer'),
   /* …and the guests of my organization, listed apart (Settings › Users) */
   homeGuests: () => PLANNER.users.filter((u) => u.org === PLANNER.homeOrg && u.orgRole === 'guest'),
   /* every project of MINE this guest holds a grant on — what the Users
@@ -13565,16 +13583,42 @@ export const PLANNER = {
 
   /** Paints the project at once and returns its uuid. `onSaved` runs once the
       server has stored it. `onRefused` runs after the refusal toast, just
-      before the refusal takes the project away. */
-  addProject: (p: NewProjectInput, onSaved?: () => void, onRefused?: () => void) => {
-    const parentOrg = p.parent ? orgOfProject(p.parent) : ''
-    const orgRow = rows.orgs.get(parentOrg || HOME_ORG)
-    if (!orgRow || refusePausedEdit()) return
+      before the refusal takes the project away. `shown` is the organization
+      a dialog that read the parent from the server showed it in
+      (ProjectShown). The create then goes to that organization, with the
+      caller's seat there as lead when `p.lead` names none, and paints only
+      where the workspace holds the parent. Without it the create goes to the
+      organization of the parent the workspace holds, else the home
+      organization. It sends no sort_order, so the server places the project
+      after every sibling (convex/model/projects.ts nextSiblingPlace), and
+      the paint places it by the same rule over the siblings the workspace
+      holds in that organization. An organization the workspace has no row
+      for sends nothing and says so in a toast. */
+  addProject: (
+    p: NewProjectInput,
+    onSaved?: () => void,
+    onRefused?: () => void,
+    shown?: ProjectShown,
+  ) => {
+    const what = `${p.type === 'meta' ? 'project' : 'sub-project'} “${p.name}”`
+    const orgId = shown?.orgId || (p.parent ? orgOfProject(p.parent) : '') || HOME_ORG
+    const orgRow = rows.orgs.get(orgId)
+    if (!orgRow) {
+      window.showToast?.(
+        `Couldn't create ${what}. Its organization hasn't loaded, so reload Qivo and try again.`,
+        'error',
+      )
+      return
+    }
+    if (refusePausedEdit()) return
     const uuid = crypto.randomUUID()
-    const orgId = orgRow.id
-    const siblings = p.parent
-      ? [...rows.projects.values()].filter((x) => x.parent_id === p.parent)
-      : [...rows.projects.values()].filter((x) => x.type === 'meta')
+    // the siblings the workspace holds in that organization, archived ones
+    // included: the parent's sub-projects, or its top-level projects
+    const siblings = [...rows.projects.values()].filter((x) =>
+      p.parent
+        ? x.parent_id === p.parent && x.type === 'project'
+        : x.org_id === orgId && x.parent_id === undefined && x.type === 'meta',
+    )
     // projects.num is a per-org durable number used only in links (0050);
     // preview it like addIssue previews issue numbers, fixed by the answer
     const previewNum = (orgRow.next_project_num || 0) + 1
@@ -13588,7 +13632,12 @@ export const PLANNER = {
       name: p.name,
       lead_id: p.lead || profileIn(orgId),
       description: p.description || '',
-      sort_order: siblings.length,
+      // one past the largest place, as the server places it, skipping a
+      // place that is not a finite number as the server does
+      sort_order: siblings.reduce(
+        (place, x) => (Number.isFinite(x.sort_order) ? Math.max(place, x.sort_order + 1) : place),
+        0,
+      ),
       track_delay: true,
       created_at: new Date().toISOString(),
     }
@@ -13625,7 +13674,6 @@ export const PLANNER = {
         name: p.name,
         lead_id: row.lead_id,
         description: p.description || '',
-        sort_order: row.sort_order,
         track_delay: row.track_delay,
         access: p.access || {},
         team_access: p.teamAccess,
@@ -13637,10 +13685,7 @@ export const PLANNER = {
           return { workspace: projectPaint }
         },
         onError: (error) => {
-          toastCreateProjectError(
-            error,
-            `${p.type === 'meta' ? 'project' : 'sub-project'} “${p.name}”`,
-          )
+          toastCreateProjectError(error, what)
           onRefused?.()
         },
       },

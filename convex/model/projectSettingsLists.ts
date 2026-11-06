@@ -75,8 +75,8 @@
  *
  * Settings › Projects, Archived projects and a project page's Sub-projects
  * section read them (src/panels/settings/ProjectLists.tsx and
- * ProjectSettings.tsx), and t3/limits-project-dialogs moves the New
- * sub-project dialog's parents onto them. */
+ * ProjectSettings.tsx), and the New sub-project dialog reads its parents
+ * from projects with sub_project_parents (src/panels/Modals.tsx). */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

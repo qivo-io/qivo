@@ -117,7 +117,11 @@ const vTeamAccessMap = v.record(v.string(), vGrantLevel)
  * P.addProject, through model/projects.ts createProjectCore (the rule REST
  * and MCP use too). The client pre-generates the uuid and previews num and
  * key; it reconciles both from the returned values (the core may replace a
- * taken key). */
+ * taken key). Without `sort_order` the project goes after every sibling
+ * (model/projects.ts nextSiblingPlace), as REST and MCP creates go; the app
+ * leaves it out from the release after v0.1.140, and an earlier app's
+ * `sort_order` is stored as sent. The number validator lets NaN and the
+ * infinities through, which createProjectCore refuses (SORT_ORDER_SHAPE). */
 export const create = orgMutation({
   args: {
     id: v.string(),
@@ -128,7 +132,7 @@ export const create = orgMutation({
     name: v.string(),
     lead_id: v.optional(v.union(v.string(), v.null())),
     description: v.optional(v.union(v.string(), v.null())),
-    sort_order: v.number(),
+    sort_order: v.optional(v.number()),
     track_delay: v.optional(v.boolean()),
     access: v.optional(vCreateAccessMap),
     team_access: v.optional(vTeamAccessMap),

@@ -228,7 +228,11 @@ try {
   await page.locator('[data-new-project-access-popup]').waitFor()
   await activeField(access, 'Open project access selector')
   const accessPopup = page.locator('[data-new-project-access-popup]')
-  const checkbox = accessPopup.getByRole('checkbox').first()
+  // the first of the server's rows, once its first batch has answered
+  const checkbox = accessPopup
+    .locator('[data-project-access-team-option], [data-project-access-user-option]')
+    .first()
+  await checkbox.waitFor()
   const checkboxRest = await paint(checkbox)
   await checkbox.click()
   await quiet(checkbox, checkboxRest, 'Pointer-toggled draft checkbox', true)

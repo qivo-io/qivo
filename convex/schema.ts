@@ -176,8 +176,9 @@ const projectsTable = defineTable({
   .index('by_parent', ['parent_id'])
   // an organization's top-level projects (parent_id absent), which the label
   // write check reads once to tell a meta from a sub-project
-  // (lib/access.ts canWriteOrgLabels) and a REST or MCP create counts to
-  // place a new top-level project (model/projects.ts siblingCount)
+  // (lib/access.ts canWriteOrgLabels) and a create without a sort_order
+  // reads to place a new top-level project (model/projects.ts
+  // nextSiblingPlace)
   .index('by_org_parent', ['org_id', 'parent_id'])
   .index('by_team', ['team_id'])
   .index('by_lead', ['lead_id']) // projects_lead_idx — removeProfile's SET NULL
