@@ -46,7 +46,6 @@ TypeScript rules like any other code.
 - The `convex()` plugin no longer builds the `oidc-provider` plugin, which 1.7
   removed. Its after hooks and `/convex/.well-known/openid-configuration` are
   gone. `/convex/jwks`, `/convex/token` and the JWT are unchanged.
-- `registerRoutes` no longer redirects `/.well-known/openid-configuration`.
 - `updateOne` returns null when no row matches.
 - The cross-domain client clears the stored cookies at sign-out only after
   the server answers that it ended the session, so a refused sign-out keeps
@@ -79,13 +78,24 @@ TypeScript rules like any other code.
   `setUserId`, `clientApi`, `registerRoutesLazy` and the verbose logging.
   Qivo reads the caller's login with its own session check in
   `convex/lib/authUser.ts`, which loads no Better Auth.
+- From `createClient`: `registerRoutes` and its
+  `restoreOriginalForwardedHeaders`. `registerRoutes` builds a Better Auth
+  instance while the HTTP router loads, for the base path and the trusted
+  origins, and Convex loads the router for every HTTP action, so every REST,
+  MCP and image request paid for Better Auth. Qivo registers the `/api/auth/`
+  routes itself in `convex/lib/authRoutes.ts` (`registerAuthRoutes`, which
+  also holds `restoreOriginalForwardedHeaders`), with the same paths,
+  methods and CORS headers, and imports `convex/auth.ts` only inside the
+  handlers that need it (`convex/http.ts`). Neither registers upstream's
+  redirect of `/.well-known/openid-configuration` to the `convex()` plugin's
+  discovery document, which is gone.
 - From the `convex()` plugin: the static JWKS option, the deprecated
   `jwtExpirationSeconds`, the base path checks, `/convex/latest-jwks`,
   `/convex/rotate-keys`, the key rotation after a token error and the OpenAPI
   descriptions.
 - From `auth-config.ts`: the static JWKS option and `createPublicJwks`.
-- From `utils`: `getToken`, `parseJwks` and the context guards Qivo does not
-  call.
+- From `utils`: `getToken`, `parseJwks`, the context guards Qivo does not
+  call and the trusted origins type only `registerRoutes` read.
 - The check of the installed Convex version and the experimental joins
   override.
 - The runtime dependencies `@better-fetch/fetch`, `common-tags`, `jose`,

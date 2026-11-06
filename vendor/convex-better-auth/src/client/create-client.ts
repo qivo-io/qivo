@@ -1,16 +1,18 @@
 /* Copied from get-convex/better-auth src/client/create-client.ts at 3f41cbcf
  * (Apache-2.0, see ../../LICENSE). Qivo changed it:
- * - It keeps the members Qivo uses: adapter, getAuth, getHeaders,
- *   triggersApi and registerRoutes with CORS. safeGetAuthUser, getAuthUser,
- *   getAnyUserById, setUserId, clientApi, registerRoutesLazy and the verbose
- *   logging are left out. Qivo reads the caller's login with its own
- *   session check (convex/lib/authUser.ts), which loads no Better Auth.
- * - registerRoutes no longer redirects /.well-known/openid-configuration to
- *   the convex() plugin's discovery document, which is gone (see
- *   ../plugins/convex/index.ts).
- * - The CORS check reads the options' trusted origins when they set them,
- *   and only otherwise the static instance's context, whose plugin init
- *   (Better Auth 1.7's OAuth resource seed) fails without a database.
+ * - It keeps the members Qivo uses: adapter, getAuth, getHeaders and
+ *   triggersApi. safeGetAuthUser, getAuthUser, getAnyUserById, setUserId,
+ *   clientApi, registerRoutes, registerRoutesLazy and the verbose logging are
+ *   left out. Qivo reads the caller's login with its own session check
+ *   (convex/lib/authUser.ts), which loads no Better Auth.
+ * - Qivo registers the /api/auth/ routes and their CORS itself
+ *   (convex/lib/authRoutes.ts registerAuthRoutes, which also holds
+ *   restoreOriginalForwardedHeaders), because registerRoutes builds a Better
+ *   Auth instance while the HTTP router loads, which every HTTP action then
+ *   paid for. Qivo's registration keeps registerRoutes' paths, methods and
+ *   CORS headers, and it no longer redirects
+ *   /.well-known/openid-configuration to the convex() plugin's discovery
+ *   document, which is gone (see ../plugins/convex/index.ts).
  * - The component API includes incrementOne (see create-api.ts).
  * - Types replace `any`. */
 import type {
@@ -18,14 +20,12 @@ import type {
   GenericDataModel,
   GenericMutationCtx,
   GenericSchema,
-  HttpRouter,
   SchemaDefinition,
 } from 'convex/server'
-import { httpActionGeneric, internalMutationGeneric } from 'convex/server'
+import { internalMutationGeneric } from 'convex/server'
 import type { GenericValidator, Infer } from 'convex/values'
 import { v } from 'convex/values'
-import { corsRouter } from 'convex-helpers/server/cors'
-import type { CreateAuth, GenericCtx, TrustedOriginsOption } from '../utils'
+import type { CreateAuth, GenericCtx } from '../utils'
 import { type AdapterApi, convexAdapter } from './adapter'
 
 /** The app's internal mutations that run the triggers (triggersApi). */
@@ -60,19 +60,9 @@ export type Triggers<
   }
 }
 
-const restoreOriginalForwardedHeaders = (request: Request) => {
-  const originalHost = request.headers.get('x-better-auth-forwarded-host')
-  const originalProto = request.headers.get('x-better-auth-forwarded-proto')
-  if (!originalHost && !originalProto) return request
-  const headers = new Headers(request.headers)
-  if (originalHost) headers.set('x-forwarded-host', originalHost)
-  if (originalProto) headers.set('x-forwarded-proto', originalProto)
-  return new Request(request, { headers })
-}
-
 /**
- * The app's side of the Better Auth component: the database adapter, the
- * trigger functions and the HTTP routes.
+ * The app's side of the Better Auth component: the database adapter and
+ * the trigger functions.
  *
  * @param component - `components.betterAuth` from `./_generated/api`.
  * @param config.local - The component's schema.
@@ -144,69 +134,5 @@ export const createClient = <
         },
       }),
     }),
-
-    /** Routes Better Auth's requests under its base path, with CORS for the
-     * trusted origins and `cors.allowedOrigins`. */
-    registerRoutes: (
-      http: HttpRouter,
-      createAuth: CreateAuth<DataModel>,
-      opts: {
-        cors?:
-          | boolean
-          | {
-              // These values are appended to the default values
-              allowedOrigins?: string[]
-              allowedHeaders?: string[]
-              exposedHeaders?: string[]
-            }
-      } = {},
-    ) => {
-      const staticAuth = createAuth({} as GenericCtx<DataModel>)
-      const path = staticAuth.options.basePath ?? '/api/auth'
-      const authRequestHandler = httpActionGeneric(async (ctx, request) => {
-        const auth = createAuth(ctx as unknown as GenericCtx<DataModel>)
-        return await auth.handler(restoreOriginalForwardedHeaders(request))
-      })
-
-      if (!opts.cors) {
-        http.route({ pathPrefix: `${path}/`, method: 'GET', handler: authRequestHandler })
-        http.route({ pathPrefix: `${path}/`, method: 'POST', handler: authRequestHandler })
-        return
-      }
-      const corsOpts =
-        typeof opts.cors === 'boolean'
-          ? { allowedOrigins: [], allowedHeaders: [], exposedHeaders: [] }
-          : opts.cors
-      let trustedOriginsOption: TrustedOriginsOption | undefined
-      const cors = corsRouter(http, {
-        allowedOrigins: async (request) => {
-          // The options' own list when they set one: building the static
-          // instance's context would also run its plugins' init, such as the
-          // OAuth provider's resource seed, without a database.
-          trustedOriginsOption ??=
-            staticAuth.options.trustedOrigins ??
-            (await staticAuth.$context).options.trustedOrigins ??
-            []
-          const rawOrigins = Array.isArray(trustedOriginsOption)
-            ? trustedOriginsOption
-            : await trustedOriginsOption(request)
-          return rawOrigins
-            .filter((origin): origin is string => typeof origin === 'string')
-            .map((origin) =>
-              // Strip trailing wildcards, unsupported for allowedOrigins
-              origin.endsWith('*') && origin.length > 1 ? origin.slice(0, -1) : origin,
-            )
-            .concat(corsOpts.allowedOrigins ?? [])
-        },
-        allowCredentials: true,
-        allowedHeaders: ['Content-Type', 'Better-Auth-Cookie', 'Authorization'].concat(
-          corsOpts.allowedHeaders ?? [],
-        ),
-        exposedHeaders: ['Set-Better-Auth-Cookie'].concat(corsOpts.exposedHeaders ?? []),
-        enforceAllowOrigins: false,
-      })
-      cors.route({ pathPrefix: `${path}/`, method: 'GET', handler: authRequestHandler })
-      cors.route({ pathPrefix: `${path}/`, method: 'POST', handler: authRequestHandler })
-    },
   }
 }
