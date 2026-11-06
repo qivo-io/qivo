@@ -32,7 +32,9 @@
    - Load more is the last row while more people follow and fewer than
      PICKER_CAPS.mentions are kept, reachable with the arrow keys and
      Enter and by a press that keeps the editor's focus. The highlight
-     moves to the first new row when its batch lands.
+     moves to the first new row when its batch lands. After a failed read
+     Try again is the last row in its place, reached and pressed the same
+     way, and a retried Load more moves the highlight as Load more does.
    - The list tells a search on its way, names not ready, a refusal with
      the server's sentence, a failure with Try again, a stopped batch and
      the cap apart, and says "No matching members" only at the list's real
@@ -68,14 +70,16 @@ export const MENTION_DELAY_MS = 150
 const NONE_KEPT = 32
 
 /** What the popup shows now: its state (`data-mention-state`), its rows,
-    whether they are an older text's (`stale`), its Load more row, and the
-    lines under them, each with Try again or not. */
+    whether they are an older text's (`stale`), the lines under them, and
+    the action after the lines, which the keys reach after the rows: Load
+    more, Load more while its batch reads (`loading`), or Try again after a
+    failed read (`retry`). */
 type Shown = {
   state: 'loading' | 'stale' | 'ok' | 'held' | 'failed'
   rows: readonly MentionChoice[]
   stale: boolean
-  more: 'ready' | 'loading' | null
-  lines: { text: string; retry?: boolean }[]
+  lines: string[]
+  action: 'more' | 'loading' | 'retry' | null
 }
 
 export const mentionSuggestion: Omit<
@@ -135,24 +139,23 @@ export const mentionSuggestion: Omit<
 
     /** What the popup shows now (Shown). */
     function current(): Shown {
-      const empty = { rows: [], stale: false, more: null }
-      if (tooLong)
-        return { ...empty, state: 'held', lines: [{ text: limitSentence(LIMITS.search) }] }
-      if (knownNone() && !answered())
-        return { ...empty, state: 'ok', lines: [{ text: MENTION_WORDS.none }] }
+      const empty = { rows: [], stale: false, action: null }
+      if (tooLong) return { ...empty, state: 'held', lines: [limitSentence(LIMITS.search)] }
+      if (knownNone() && !answered()) return { ...empty, state: 'ok', lines: [MENTION_WORDS.none] }
       if (!answered())
         return {
           state: lastRows.length > 0 ? 'stale' : 'loading',
           rows: lastRows,
           stale: true,
-          more: null,
-          lines: [{ text: MENTION_WORDS.searching }],
+          action: null,
+          lines: [MENTION_WORDS.searching],
         }
       const view = list.view()
       const end = listEnd(view, words !== '')
       if (view.phase === 'held')
-        return { ...empty, state: 'held', lines: [{ text: MENTION_WORDS.held(view.answers[0]) }] }
+        return { ...empty, state: 'held', lines: [MENTION_WORDS.held(view.answers[0])] }
       if (view.phase === 'failed') {
+        // a refusal gives the server's sentence, which another read repeats
         const why = view.failure ? MENTION_WORDS.held(view.failure) : null
         const text =
           why ?? (view.rows.length === 0 ? MENTION_WORDS.failed : MENTION_WORDS.failedMore)
@@ -160,32 +163,40 @@ export const mentionSuggestion: Omit<
           state: 'failed',
           rows: view.rows,
           stale: false,
-          more: null,
-          lines: [{ text, retry: why === null }],
+          action: why === null ? 'retry' : null,
+          lines: [text],
         }
       }
-      const lines: Shown['lines'] = []
-      if (end === 'more' && view.stopped) lines.push({ text: MENTION_WORDS.stopped })
-      if (end === 'full') lines.push({ text: MENTION_WORDS.full })
-      if ((end === 'none' || end === 'end') && view.rows.length === 0)
-        lines.push({ text: MENTION_WORDS.none })
+      const lines: string[] = []
+      if (end === 'more' && view.stopped) lines.push(MENTION_WORDS.stopped)
+      if (end === 'full') lines.push(MENTION_WORDS.full)
+      if ((end === 'none' || end === 'end') && view.rows.length === 0) lines.push(MENTION_WORDS.none)
       return {
         state: 'ok',
         rows: view.rows,
         stale: false,
-        more: end === 'more' ? (view.phase === 'more' ? 'loading' : 'ready') : null,
+        action: end === 'more' ? (view.phase === 'more' ? 'loading' : 'more') : null,
         lines,
       }
     }
 
-    /** The rows the keys move over: the people, then Load more. */
-    const itemCount = (shown: Shown) => (shown.stale ? 0 : shown.rows.length + (shown.more ? 1 : 0))
+    /** The rows the keys move over: the people, then the action. */
+    const itemCount = (shown: Shown) =>
+      shown.stale ? 0 : shown.rows.length + (shown.action ? 1 : 0)
 
     /** Reads the next batch, unless one is on its way. */
     function more() {
       if (list.view().phase === 'more') return
       moreFrom = list.view().rows.length
       list.more()
+    }
+
+    /** Reads a failed batch again: the first, or a Load more's, whose batch
+        then moves the highlight as Load more's does. */
+    function retry() {
+      const view = list.view()
+      if (view.phase === 'failed' && view.rows.length > 0) moreFrom = view.rows.length
+      list.retry()
     }
 
     /** Forgets everything a popup typed, read and was asked, so the next
@@ -346,24 +357,26 @@ export const mentionSuggestion: Omit<
       const count = itemCount(shown)
       if (selected >= count) selected = Math.max(0, count - 1)
       for (const [i, u] of shown.rows.entries()) el.appendChild(rowOf(u, i, shown.stale))
-      for (const line of shown.lines) {
+      for (const text of shown.lines) {
         const end = document.createElement('div')
         end.className = 'mentionpop-empty'
         end.setAttribute('data-mention-end', '')
         end.setAttribute('role', 'status')
-        end.textContent = line.text
+        end.textContent = text
         el.appendChild(end)
-        if (line.retry) el.appendChild(actionOf('Try again', 'data-mention-retry', list.retry))
       }
-      if (shown.more) {
-        const loading = shown.more === 'loading'
-        const button = actionOf(
-          loading ? 'Loading…' : 'Load more',
-          'data-mention-more',
-          more,
-          selected === shown.rows.length,
-        )
-        if (loading) button.setAttribute('aria-disabled', 'true')
+      if (shown.action) {
+        const at = selected === shown.rows.length
+        const button =
+          shown.action === 'retry'
+            ? actionOf('Try again', 'data-mention-retry', retry, at)
+            : actionOf(
+                shown.action === 'loading' ? 'Loading…' : 'Load more',
+                'data-mention-more',
+                more,
+                at,
+              )
+        if (shown.action === 'loading') button.setAttribute('aria-disabled', 'true')
         el.appendChild(button)
       }
       const active = el.querySelector('.mentionpop-row.active')
@@ -407,8 +420,10 @@ export const mentionSuggestion: Omit<
         if (event.key === 'Enter' || event.key === 'Tab') {
           // consumed even with no match: letting Tab move focus out would
           // orphan the popup (the suggestion match survives the blur)
+          const onAction = !!shown.action && selected === shown.rows.length
           if (shown.stale) enterFor = typedKey
-          else if (shown.more && selected === shown.rows.length) more()
+          else if (onAction && shown.action === 'retry') retry()
+          else if (onAction) more()
           else {
             const u = shown.rows[selected]
             if (u) pick(u)

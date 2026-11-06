@@ -150,7 +150,8 @@ const lines = (p: Popup) =>
   [...(p.el()?.querySelectorAll('[data-mention-end]') ?? [])].map((line) => line.textContent)
 const active = (p: Popup) =>
   p.el()?.querySelector<HTMLElement>('.mentionpop-row.active')?.dataset.mentionId ??
-  (p.el()?.querySelector('.mentionpop-row.active[data-mention-more]') ? 'more' : null)
+  (p.el()?.querySelector('.mentionpop-row.active[data-mention-more]') ? 'more' : null) ??
+  (p.el()?.querySelector('.mentionpop-row.active[data-mention-retry]') ? 'retry' : null)
 const press = (element: Element | null | undefined) =>
   element?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
 
@@ -304,10 +305,57 @@ describe('the mention popup', () => {
     expect(ids(p)).toHaveLength(8)
     expect(state(p)).toBe('failed')
     expect(lines(p)).toEqual(["Couldn't load more people."])
+    expect(active(p)).toBe(ids(p)[0])
     press(p.el()?.querySelector('[data-mention-retry]'))
     expect(store.reads.at(-1)?.cursor).toBe(store.reads[1].cursor)
     await answer()
     expect(ids(p)).toHaveLength(16)
+    // its batch moves the highlight as Load more's does
+    expect(active(p)).toBe(ids(p)[8])
+  })
+
+  it('reaches Try again with the keys after a failed first read, where Enter and Tab read again', async () => {
+    const p = popup()
+    p.start('anna')
+    await rest()
+    await fail()
+    expect([state(p), lines(p)]).toEqual(['failed', ["Couldn't load people."]])
+    // the one row the keys reach
+    p.key('ArrowDown')
+    expect(active(p)).toBe('retry')
+    expect(p.key('Enter')).toBe(true)
+    expect(store.reads).toHaveLength(2)
+    await fail()
+    expect(active(p)).toBe('retry')
+    expect(p.key('Tab')).toBe(true)
+    expect(store.reads).toHaveLength(3)
+    await answer()
+    expect(ids(p)).toEqual(['anna'])
+    expect(p.command).not.toHaveBeenCalled()
+  })
+
+  it("reaches a failed Load more's Try again after the rows, and its batch moves the highlight to the first new row", async () => {
+    const p = popup()
+    p.start('person')
+    await rest()
+    await answer()
+    for (let i = 0; i < 8; i++) p.key('ArrowDown')
+    p.key('Enter')
+    await fail()
+    expect(lines(p)).toEqual(["Couldn't load more people."])
+    // the highlight stays in Load more's place, now Try again's
+    expect(active(p)).toBe('retry')
+    p.key('ArrowDown')
+    expect(active(p)).toBe(ids(p)[0])
+    p.key('ArrowUp')
+    expect(active(p)).toBe('retry')
+    p.key('Enter')
+    expect(store.reads).toHaveLength(3)
+    expect(store.reads[2].cursor).toBe(store.reads[1].cursor)
+    await answer()
+    expect(ids(p)).toHaveLength(16)
+    expect(active(p)).toBe(ids(p)[8])
+    expect(p.command).not.toHaveBeenCalled()
   })
 
   it('tells each state apart, and says No matching members only at the real end', async () => {
