@@ -1139,6 +1139,21 @@ them only at its next reset, and a seed refuses there until then. A seed of
 an absent or empty demo writes version 9, and the public demo's new copies
 have them.
 
+From the release after v0.1.141, `pickers.taskOwners`, `pickers.syncRecipients`
+and `pickers.canOwn` answer a task's owner pickers and Team sync's mention
+recipients 25 at a time in name order, with a search, from the same rules as
+the writes. `taskOwners` lists the people `issues.update` accepts as the
+task's new assignee or reviewer, `syncRecipients` the active people, not
+agents, who see the task and so hear a comment's mention of them, the caller
+left out, and `canOwn` answers, for up to 100 people by id, each one's row
+and whether they could be chosen now. No app calls them yet, so that release
+sets no rollback floor and needs no step, and returning the backend to a
+commit before it stays safe until an app reads them. The release whose app
+first calls them makes this release the backend's floor for that app, and
+its own paragraph here says so. The lists answer `not_ready` for an
+organization whose names are not ready. The release changes no table, field
+or index, and there is no backfill.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
