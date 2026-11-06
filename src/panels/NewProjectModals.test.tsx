@@ -1063,4 +1063,30 @@ describe('New sub-project', () => {
     )
     expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Aisha Rahman')
   })
+
+  it('keeps the Project list open to another parent after a failed first check of a parent the workspace does not hold', async () => {
+    await load('user', undefined, (copy) => {
+      copy.projects = copy.projects.filter((p) => p.id !== 'beacon-plan')
+    })
+    server.force = { fail: ['get'] }
+    await openSub('beacon-plan')
+    await type(nameField(), 'Docs')
+    expect(parentNote()).toContain("Couldn't check the project.")
+    expect(create().disabled).toBe(true)
+    // nothing loads, so the Lead names the home seat, not Loading…
+    expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Aisha Rahman')
+    expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(false)
+    // the Project list opens in the home organization
+    await click(parentButton())
+    expect(askedFor('projectSettings:projects')).toEqual([
+      { org_id: home, sub_project_parents: true },
+    ])
+    expect(parentRows()).toEqual(['Luma Sensor', 'Test#7', 'Test#9'])
+    // a pick is checked in turn, and its answer turns Create on
+    server.force = {}
+    await click('[data-new-subproject-parent-choice="sensor"]')
+    expect(parentButton().textContent).toBe('Luma Sensor')
+    expect(parentNote()).toBeUndefined()
+    expect(create().disabled).toBe(false)
+  })
 })

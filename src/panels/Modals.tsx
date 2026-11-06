@@ -721,7 +721,7 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    turn. The Project and Lead popovers wait for the check unless the
    workspace holds the parent, the Lead button reading Loading… meanwhile,
    and use the home organization, else the first, only once it answers
-   `unavailable`. The creator is the caller's seat in that organization
+   `unavailable` or fails before it answered. The creator is the caller's seat in that organization
    (P.seatIn), never the home seat, and leads until the Lead popover
    (leadCandidates with the parent) offers someone else; a pick is kept
    through a change of parent, which the create checks again. Create needs
@@ -759,10 +759,15 @@ function NewSubProjectModal({
   const held = parent ? P.project(parent.id) : undefined
   // the organization the popovers read in and the create goes to: the
   // check's, a picked row's, the workspace's while it holds the parent,
-  // and after an `unavailable` answer the home organization, else the first
+  // and after an `unavailable` answer or a check that failed before it
+  // answered the home organization, else the first, so the Project list
+  // stays open to another parent while Create waits for a check
   const known =
     answer?.project.org_id ?? read.archived?.project.org_id ?? parent?.org ?? held?.org ?? ''
-  const fallback = read.state === 'unavailable' || !parent ? P.homeOrg || P.orgs[0]?.id || '' : ''
+  const fallback =
+    read.state === 'unavailable' || read.state === 'failed' || !parent
+      ? P.homeOrg || P.orgs[0]?.id || ''
+      : ''
   const org = known || fallback
   const seat = org ? P.seatIn(org) : ''
   const creatorLead = { id: seat, name: P.user(seat)?.name ?? '' }
@@ -836,7 +841,7 @@ function NewSubProjectModal({
           <LeadPicker
             on={parent ? { org_id: org, parent_id: parent.id } : { org_id: org }}
             lead={seat ? lead : null}
-            emptyLabel="Loading…"
+            emptyLabel={read.state === 'loading' ? 'Loading…' : undefined}
             disabled={!org || !parent}
             busy={false}
             modal
