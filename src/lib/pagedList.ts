@@ -1217,9 +1217,10 @@ function pagesEngine<A, Row>(options: () => PagedPagesOptions<A, Row>, changed: 
  *   connection the socket holds now, and the new one then replaces it in
  *   one step, so the list never flashes empty. A move that fails keeps the
  *   page, with `failedMove`, and Retry tries it again. Where the page on
- *   screen failed too, Retry reads it first and then the move. An answer
- *   with no rows, such as not ready or a refusal, shows as `held` in place
- *   of the page, whichever page it answers.
+ *   screen failed too, Retry reads it first and then a failed Next, which
+ *   starts from that page's answer; a failed Previous starts at once. An
+ *   answer with no rows, such as not ready or a refusal, shows as `held` in
+ *   place of the page, whichever page it answers.
  * - A page that stopped before it was full offers Next and is never the
  *   end; one that stopped without moving past its start is `stuck`, with
  *   Retry.
