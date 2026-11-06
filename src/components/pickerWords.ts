@@ -74,6 +74,21 @@ export const LABEL_WORDS: ChoiceWords = {
   none: 'No matching labels.',
 }
 
+/** The editor's @ mention popup's words (components/mentionSuggestion.ts),
+    with the lines a list of people needs beside ChoiceWords': a search on
+    its way, a failed Load more under the kept rows, and the cap. */
+export const MENTION_WORDS: ChoiceWords & { searching: string; failedMore: string; full: string } =
+  {
+    held: (held) => heldLine(held, true),
+    searching: 'Searching…',
+    failed: "Couldn't load people.",
+    failedMore: "Couldn't load more people.",
+    stopped: 'Showing the people found so far.',
+    full: 'Keep typing to find more people.',
+    empty: 'No matching members',
+    none: 'No matching members',
+  }
+
 /** Keeps a picker's popover open on an Escape in its search box, marked
     `probe`, while the box holds text, which the box then clears. */
 export const escapeClearsFirst = (probe: string) => (event: KeyboardEvent) => {

@@ -7935,6 +7935,13 @@ export type LabelChoice = LabelPickerBatch['rows'][number]
 export type LabelChoices =
   | ({ state: 'ready' } & LabelPickerBatch)
   | { state: 'refused'; message: string }
+/** One answer of the editor's mention popup's read (P.mentionChoices,
+    pickers.mentions), or a refusal with the server's sentence. */
+export type MentionChoices =
+  | FunctionReturnType<typeof api.pickers.mentions>
+  | { state: 'refused'; message: string }
+/** A person the mention popup offers. */
+export type MentionChoice = Extract<MentionChoices, { state: 'ready' }>['rows'][number]
 
 /* `change` as the server names a removal (convex/model/removalPreview.ts
    vRemovalChange). */
@@ -12912,7 +12919,7 @@ export const PLANNER = {
     }
   },
 
-  /* --- the task label picker -------------------------------------------- */
+  /* --- the task label picker and the editor's mention popup ------------ */
   /** One batch of the task label picker for organization `org`
       (labels.picker), read once and never subscribed to: the labels whose
       name holds every word of `search`, after `cursor`, an earlier answer's
@@ -12938,6 +12945,32 @@ export const PLANNER = {
       if (code === 'bad_request' || code === 'rule')
         return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
       console.error('[qivo] label picker read failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of the editor's @ mention popup for organization `org`
+      (pickers.mentions), read once and never subscribed to: the people
+      whose name, initials and email hold every word of `search`, after
+      `cursor`, an earlier answer's `next`, or from the start. A search past
+      its limit or a cursor the server no longer accepts answers `refused`
+      with the server's sentence, and a failed read null. */
+  mentionChoices: async (
+    org: string,
+    search: string,
+    cursor: string | null,
+  ): Promise<MentionChoices | null> => {
+    try {
+      return await convex.query(api.pickers.mentions, {
+        org_id: org,
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { after: cursor }),
+      })
+    } catch (e) {
+      const { code, message } = errData(e)
+      if (code === 'bad_request' || code === 'rule')
+        return { state: 'refused', message: asSentence(message || 'Qivo refused this search.') }
+      console.error('[qivo] mention suggestions read failed:', e)
       return null
     }
   },
