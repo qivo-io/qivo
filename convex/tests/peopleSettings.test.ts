@@ -50,6 +50,7 @@ import {
   type OrgFixture,
   plantProject,
   plantSeat,
+  readableLiveSubProjects,
   type T,
   uuid,
   withOrg,
@@ -1004,11 +1005,12 @@ describe('at the design size', () => {
   it('reads a page holding a guest who reads 200 live sub-projects, in an everyday organization', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
     await fx.t.run(async (ctx) => {
-      // three sub-projects a project, the everyday value, under 67 new
-      // projects, so the organization stays within 200 live projects and
-      // 500 live sub-projects
+      // the guest reads Firmware and Board rev through its grant on
+      // Testbed platform, and 198 more here, three sub-projects a project,
+      // the everyday value, under 66 new projects, so the organization
+      // stays within 200 live projects and 500 live sub-projects
       const parents: string[] = []
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 198; i++) {
         if (i % 3 === 0) {
           const parent = uuid()
           await ctx.db.insert('projects', {
@@ -1048,6 +1050,7 @@ describe('at the design size', () => {
         })
       }
     })
+    expect(await readableLiveSubProjects(fx.t, fx.guest)).toBe(200)
     const page = await measured(fx.t, (ctx) => settingsPeopleOf(ctx, fx.admin, {}))
     logged(
       'settingsPage, a guest with 200 readable sub-projects',

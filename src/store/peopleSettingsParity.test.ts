@@ -24,6 +24,7 @@ import {
   NOW,
   newT,
   plantLogin,
+  readableLiveSubProjects,
   type T,
   uuid,
   workspaceOf,
@@ -238,6 +239,9 @@ describe("the Users page's stand-in", () => {
         })
       }
     })
+    // Northstar grants the planted guest nothing, so it reads these 200
+    // alone
+    expect(await readableLiveSubProjects(t, guest)).toBe(200)
     await keyOrg(t, org.id)
     const ws = await workspaceOf(as(t, nora))
     if (!ws) throw new Error('no workspace')
