@@ -443,6 +443,32 @@ describe('the task window keeps a bounded thread', () => {
       await settle()
       expect(P.comments.find((c) => c.id === 'comment-169')?.body).toBe('Theirs')
     })
+
+    it('reads a refused edit of a comment held apart after a release from the top let it go', async () => {
+      const { P } = store
+      openServed(300)
+      for (let i = 0; i < 3; i++) await earlier()
+      P.holdComment(pane, 'comment-100')
+      // two newer pages let the oldest rows go, #100 among them, which no
+      // run, gap or window lists any more
+      await newer()
+      await newer()
+      expect(P.pinnedComments).toEqual(['comment-100'])
+      const oldest = shown().find((id) => id !== 'comment-100')
+      expect(oldest).toBe('comment-180')
+      serve?.comments.splice(100, 1, { ...comment(100), body: 'Theirs' })
+      const reads = asked.length
+      const edit = P.updateComment('comment-100', 'Mine')
+      writes[0].answer.reject(
+        new ConvexError({ code: 'conflict', reason: 'field_changed', message: 'changed' }),
+      )
+      await edit
+      await settle()
+      // the pages before the oldest kept comment, back until one holds it
+      expect(asked.slice(reads).map((a) => a.before)).toEqual(['comment-180', 'comment-130'])
+      expect(P.comments.find((c) => c.id === 'comment-100')?.body).toBe('Theirs')
+      expect(P.pinnedComments).toEqual(['comment-100'])
+    })
   })
 
   const showAll = () => store.P.showHistory(pane, true)

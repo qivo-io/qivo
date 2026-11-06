@@ -6179,6 +6179,10 @@ function refusalSentence(e: unknown): string {
     the gap's first released id, not the first row below it, whose page can
     miss the comment. A released id the server calls no comment now was
     deleted, so it leaves the gap and the read asks before the next one. A
+    comment held apart for an editor that no run, gap or live window lists
+    any more went with a release from the top, the history's start or stop
+    or a start-over, so it is older than every comment they list, and the
+    read walks back from the oldest of them (refreshPinnedComment). A
     comment gone meanwhile leaves the thread. */
 async function refreshOlderComment(id: string) {
   const issueUuid = watchedComments
@@ -6191,8 +6195,12 @@ async function refreshOlderComment(id: string) {
     ...(commentsSnap ?? []).map((r) => r.id),
   ]
   const at = order.indexOf(id)
-  if (!issueUuid || !org || at === -1) return
+  if (!issueUuid || !org) return
   const current = () => watchedComments === issueUuid && commentsWatchEpoch === watchEpoch
+  if (at === -1) {
+    if (pinnedComments.has(id)) await refreshPinnedComment(id, order, issueUuid, org, current)
+    return
+  }
   for (let next = at + 1; next < order.length; next++) {
     const after = order[next]
     let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
@@ -6216,6 +6224,51 @@ async function refreshOlderComment(id: string) {
     patchHeldComment(id, fresh ? anchor([fresh])[0] : null, true)
     repaint({ thread: true })
     return
+  }
+}
+
+/** Reads comment `id` again, held apart for an editor and older than
+    every comment in `order` (refreshOlderComment). It reads the pages
+    before the oldest comment `order` lists, walking back until a page
+    holds it, which patches it, or starts the thread without it, which
+    drops it as deleted. An anchor the server calls no comment now gives
+    way to the next one in `order`. `current` says whether the same thread
+    is still watched. */
+async function refreshPinnedComment(
+  id: string,
+  order: readonly string[],
+  issueUuid: string,
+  org: string,
+  current: () => boolean,
+) {
+  let next = 0
+  let before: string | undefined = order[0]
+  // a thread holds at most the comment cap, 20 pages of 50, so this ends
+  for (let reads = 0; before !== undefined && reads < 100; reads++) {
+    let page: FunctionReturnType<typeof api.snapshot.commentsBefore>
+    try {
+      page = await convex.query(api.snapshot.commentsBefore, {
+        org_id: org,
+        issue_id: issueUuid,
+        before,
+      })
+    } catch (e) {
+      if (!current()) return
+      if (errData(e).code === 'bad_request' && before === order[next]) {
+        before = order[++next]
+        continue
+      }
+      console.error('[qivo] a comment held for its editor failed to load again:', e)
+      return
+    }
+    if (!current()) return
+    const fresh = page.comments.find((r) => r.id === id)
+    if (fresh || !page.earlier) {
+      patchHeldComment(id, fresh ? anchor([fresh])[0] : null, true)
+      repaint({ thread: true })
+      return
+    }
+    before = page.comments[0]?.id
   }
 }
 
