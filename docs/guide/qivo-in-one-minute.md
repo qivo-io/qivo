@@ -78,9 +78,9 @@ for good in **Settings → Projects → Deleted items**
 background needs room until you remove the old one. When an upload does not
 fit, Qivo says how much is free and how to free space, and deletes nothing to
 make room. A background that leaves no room for its preview shows without
-one, and Settings says so until Qivo makes the preview, within a minute or
-two of 1 MiB becoming free. **Sign up for Qivo** opens regular signup without
-transferring the demo's contents.
+one, and Settings says so until Qivo makes the preview, usually within a
+few minutes of 1 MiB becoming free. **Sign up for Qivo** opens regular
+signup without transferring the demo's contents.
 
 ## App updates
 
