@@ -701,38 +701,40 @@ describe('snapshot trouble', () => {
     )
   })
 
-  it('words a restore or delete refused after every seat is gone like the access notice', async () => {
-    await boot()
-    const { P } = store
-    const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
-    const restore = P.unarchiveProject(snapshot.projects[0].id)
-    const restored = P.restoreDeletedItems(items)
-    const purged = P.purgeDeletedItems(items)
-    await settle()
-    expect(sentNames()).toEqual([
-      'projects:unarchive',
-      'deletedItems:restore',
-      'deletedItems:purge',
-    ])
-    live().deliver(null)
-    const lost = new ConvexError({ code: 'forbidden', message: 'no profile in this organization' })
-    for (const request of sent) request.reject(lost)
-    expect(await restore).toBe(false)
-    expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
-    for (const outcome of [await restored, await purged])
-      expect(outcome).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
-    // with a seat, forbidden still reads as a permission refusal, once its
-    // organization's parts loaded again
-    live().deliver(structuredClone(snapshot))
-    await settle()
-    const again = P.unarchiveProject(snapshot.projects[0].id)
-    await settle()
-    sent[sent.length - 1].reject(
-      new ConvexError({ code: 'forbidden', message: 'no permission on this project' }),
-    )
-    expect(await again).toBe(false)
-    expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
-  })
+  // one Deleted items action runs at a time, so the restore and the delete
+  // each get a run of their own
+  it.each(['restore', 'purge'] as const)(
+    'words a %s of Deleted items refused after every seat is gone like the access notice',
+    async (kind) => {
+      await boot()
+      const { P } = store
+      const items = [{ id: 'item-a', org_id: snapshot.orgs[0].id }]
+      const restore = P.unarchiveProject(snapshot.projects[0].id)
+      const acted = kind === 'restore' ? P.restoreDeletedItems(items) : P.purgeDeletedItems(items)
+      await settle()
+      expect(sentNames()).toEqual(['projects:unarchive', `deletedItems:${kind}`])
+      live().deliver(null)
+      const lost = new ConvexError({
+        code: 'forbidden',
+        message: 'no profile in this organization',
+      })
+      for (const request of sent) request.reject(lost)
+      expect(await restore).toBe(false)
+      expect(showToast).toHaveBeenCalledWith(store.NO_ACCESS_TEXT, 'error')
+      expect(await acted).toMatchObject({ failed: ['item-a'], error: store.NO_ACCESS_TEXT })
+      // with a seat, forbidden still reads as a permission refusal, once its
+      // organization's parts loaded again
+      live().deliver(structuredClone(snapshot))
+      await settle()
+      const again = P.unarchiveProject(snapshot.projects[0].id)
+      await settle()
+      sent[sent.length - 1].reject(
+        new ConvexError({ code: 'forbidden', message: 'no permission on this project' }),
+      )
+      expect(await again).toBe(false)
+      expect(showToast).toHaveBeenLastCalledWith("You don't have permission for that", 'error')
+    },
+  )
 
   it('words a refusal for a lost seat like the access notice before the snapshot says so', async () => {
     await boot()

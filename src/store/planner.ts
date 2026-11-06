@@ -65,7 +65,7 @@ import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
 import { createAvatarSources } from '../lib/avatarSources'
 import { browserBackendUrl, configuredConvexDeploymentUrl } from '../lib/backendUrl'
-import { LANE_POOL, runLanes } from '../lib/batchRunner'
+import { LANE_POOL, type LaneStop, runLanes } from '../lib/batchRunner'
 import { convex, live } from '../lib/convex'
 import {
   clampBarDrag,
@@ -111,7 +111,27 @@ import {
   DELAY_UNKNOWN,
   type DelayInfo,
 } from '../lib/delay'
-import type { PurgeRefusal, RestoreRefusal } from '../lib/deletedItems'
+import {
+  blockedText,
+  DEFERRED_MOST,
+  type DeletedAction,
+  type DeletedItemsOutcome,
+  type DeletedLane,
+  type DeletedRow,
+  type DeletedStop,
+  type DeletedTarget,
+  deletedBusy,
+  endText,
+  faultText,
+  itemsNoun,
+  type PurgeRefusal,
+  pauseText,
+  planOf,
+  type RestoreRefusal,
+  refusalText,
+  stopText,
+  targetName,
+} from '../lib/deletedItems'
 import { attachmentTooLarge, DEMO_MODE, notifyDemoEnded } from '../lib/demoMode'
 import { DemoSessionEnded } from '../lib/demoSession'
 import { sentence as asSentence, cleanName, limitSentence } from '../lib/fieldLimits'
@@ -120,6 +140,7 @@ import { nameInitials } from '../lib/initials'
 import { groupProgress, groupSpan, isIssueDone, isIssueGroup } from '../lib/issueGroups'
 import { LABEL_COLORS } from '../lib/labelColors'
 import { hasUnsaved, holdUnsaved, leaveDeliberately } from '../lib/leaveGuard'
+import { watchLive } from '../lib/liveView'
 import { loadFailureText } from '../lib/loadFailure'
 import { watchLocalDay } from '../lib/localDay'
 import { pauseSentence } from '../lib/noticeText'
@@ -280,20 +301,7 @@ export type {
 export type AppearancePreferences = FunctionReturnType<typeof api.appearance.get>
 /** What archiving or deleting a project takes along, as P.projectRemovalSummary answers. */
 export type ProjectRemovalSummary = FunctionReturnType<typeof api.projects.removalSummary>
-/** What one restore or Delete now did over every call it took (P.restoreDeletedItems,
-    P.purgeDeletedItems): the ids the server restored or deleted for good, the
-    ids it refused with their reason, the ids it deferred until a project item
-    of the same call is back, and the ids of calls it refused whole, with the
-    sentence to show for them. `stepping` are the restored ids that go on in
-    steps; a purge has none. */
-export type DeletedItemsOutcome<Reason> = {
-  done: string[]
-  stepping: string[]
-  refused: { id: string; reason: Reason }[]
-  deferred: string[]
-  failed: string[]
-  error: string | null
-}
+export type { DeletedItemsOutcome } from '../lib/deletedItems'
 
 /* The workspace as the parts join into it (convex/lib/workspaceJoin.ts),
    derived from the server functions so the cache can never drift from what
@@ -6026,35 +6034,140 @@ function restoreErrorText(e: unknown): string {
    the fixed permission line, a rule's own sentence after what failed.
    Anything else (offline, a server fault) asks for another try. */
 function deletedItemsErrorText(e: unknown, failed: string): string {
-  const d = errData(e)
-  if (refusedAsPaused(e)) return refusalPauseText(e)
-  // read-only for billing or a scheduled deletion says why, in its own words
-  if (readOnly(d) && d.message) return d.message
-  if (orgDeleting(d)) return ORG_DELETING_TEXT
-  if (d.code === 'forbidden') return "You don't have permission for that."
-  if (d.code === 'rule' && d.message) {
-    const m = String(d.message)
-    return `${failed}. ${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? '' : '.'}`
-  }
-  return `${failed}. Try again.`
+  const { text, alone } = deletedReasonText(e)
+  return alone ? text : `${failed}. ${text}`
 }
 
-/* Sends `items` in calls of one organization and at most `limit.max` ids
-   each (LIMITS.restoreBatch or LIMITS.purgeBatch), one call after another,
-   and adds up the answers. A call refused whole fails only its own ids. */
-async function deletedItemsCalls<Reason>(
-  limit: Limit,
-  items: { id: string; org_id: string }[],
-  call: (
-    orgId: string,
-    ids: string[],
-  ) => Promise<
-    { refused: { id: string; reason: Reason }[]; deferred?: string[]; stepping?: string[] } & (
-      | { restored: string[] }
-      | { purged: string[] }
+/** Why the server refused a Deleted items call whole, as a sentence of its
+    own: the pause, billing's read-only sentence, the organization's
+    deletion and the permission line stand `alone`; a rule's sentence and
+    "Try again." follow what failed. */
+function deletedReasonText(e: unknown): { text: string; alone: boolean } {
+  const d = errData(e)
+  if (refusedAsPaused(e)) return { text: refusalPauseText(e), alone: true }
+  // read-only for billing or a scheduled deletion says why, in its own words
+  if (readOnly(d) && d.message) return { text: String(d.message), alone: true }
+  if (orgDeleting(d)) return { text: ORG_DELETING_TEXT, alone: true }
+  if (d.code === 'forbidden') return { text: "You don't have permission for that.", alone: true }
+  if (d.code === 'rule' && d.message) {
+    const m = String(d.message)
+    return {
+      text: `${m.charAt(0).toUpperCase()}${m.slice(1)}${/[.!?]$/.test(m) ? '' : '.'}`,
+      alone: false,
+    }
+  }
+  return { text: 'Try again.', alone: false }
+}
+
+/** What one restore or Delete now call answered, in the words both share. */
+type DeletedAnswer<Reason> = {
+  done: string[]
+  refused: { id: string; reason: Reason }[]
+  deferred: string[]
+  stepping: string[]
+}
+
+/** How the store sends one kind of Deleted items call. */
+type DeletedCalls<Reason> = {
+  kind: 'restore' | 'purge'
+  limit: Limit
+  ref: FunctionReference<'mutation'>
+  call: (orgId: string, ids: string[]) => Promise<DeletedAnswer<Reason>>
+  /** the start of a call's refusal sentence, "Couldn't restore" */
+  failed: string
+}
+
+/** What a restore or Delete now refuses while another one runs. */
+export const DELETED_BUSY_TEXT =
+  'Qivo is still restoring or deleting other items. Try again once it finishes.'
+
+/* The deferred items the store watches until it can send them again
+   (watchDeferred), each with the way to stop its watch. */
+const deferredWatches = new Map<string, () => void>()
+
+/** Sets P.deletedAction and shows it on the page. */
+function setDeletedAction(next: DeletedAction | null) {
+  PLANNER.deletedAction = next
+  emit('deleted')
+}
+
+/** Shows the deferred items the store watches (P.deletedWaiting). */
+function showDeletedWaiting() {
+  PLANNER.deletedWaiting = new Set(deferredWatches.keys())
+  emit('deleted')
+}
+
+/** Stops every deferred item's watch, as the store's end does. */
+function stopDeferredWatches() {
+  // a stop takes its own entry out, which a Map's walk allows
+  for (const stop of deferredWatches.values()) stop()
+  deferredWatches.clear()
+  PLANNER.deletedWaiting = new Set()
+}
+
+/* Sends restore calls (deletedItems.restore). */
+const RESTORE_CALLS = (bulk: boolean): DeletedCalls<RestoreRefusal> => ({
+  kind: 'restore',
+  limit: LIMITS.restoreBatch,
+  ref: api.deletedItems.restore,
+  call: async (orgId, ids) => {
+    const answer = await sendAwaited(
+      api.deletedItems.restore,
+      { org_id: orgId, ids, ...(bulk ? { bulk } : {}) },
+      'none',
     )
-  >,
-  failed: string,
+    // a server answer names every list; a missing one is empty
+    return {
+      done: answer.restored,
+      refused: answer.refused,
+      deferred: answer.deferred ?? [],
+      stepping: answer.stepping ?? [],
+    }
+  },
+  failed: "Couldn't restore",
+})
+
+/* Sends Delete now calls (deletedItems.purge). */
+const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
+  kind: 'purge',
+  limit: LIMITS.purgeBatch,
+  ref: api.deletedItems.purge,
+  call: async (orgId, ids) => {
+    const answer = await sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none')
+    return { done: answer.purged, refused: answer.refused, deferred: [], stepping: [] }
+  },
+  failed: "Couldn't delete it for good",
+}
+
+/* Runs a restore or Delete now of `items` on the shared runner
+   (lib/batchRunner.ts runLanes) by planOf's plan: one lane an organization,
+   its calls of at most the call's limit of ids one after another, a long
+   action on the app's shared lanes. 25 ids a call is the server's own cap
+   (LIMITS.restoreBatch, LIMITS.purgeBatch): a restore call spends one
+   budget shared by its items, a quarter of a step's
+   (convex/model/deletedItems.ts CALL), and leaves the rest of a large item
+   to its steps, so more ids make a call no longer than its budget; the
+   timing of 5 November 2026 restored the widest item family whole in 1.9
+   to 3.0 s on a local backend. Its progress is P.deletedAction, which the
+   page shows however often it is left and opened again; `resend`, the
+   second send of a deferred item, keeps out of it.
+
+   It sends nothing and answers the ids as failed while another action runs
+   (unless `resend`) or the pause refuses the write, which the page words.
+   A refusal stops its organization's lane and leaves its later ids unsent;
+   the pause stops every lane before its next call; a store epoch change
+   ends it quietly; a fault ends it, marks the ids of the calls in flight
+   unknown and says so. Each deferred id, at most DEFERRED_MOST an action,
+   is watched until it can be sent again (watchDeferred); the rest count as
+   unsent. An action of one round never toasts from here, as the page words
+   its outcome. A long one ends with a toast wherever the person is, each
+   organization a refusal stopped with a sticky toast, and the pause with
+   one; a later run that finishes in an organization takes its stop toast
+   away. */
+async function runDeletedItems<Reason>(
+  items: readonly DeletedTarget[],
+  calls: DeletedCalls<Reason>,
+  o: { bulk?: boolean; resend?: boolean } = {},
 ): Promise<DeletedItemsOutcome<Reason>> {
   const outcome: DeletedItemsOutcome<Reason> = {
     done: [],
@@ -6062,32 +6175,272 @@ async function deletedItemsCalls<Reason>(
     refused: [],
     deferred: [],
     failed: [],
+    unsent: [],
+    unknown: [],
     error: null,
   }
-  const byOrg = new Map<string, string[]>()
-  for (const { id, org_id } of items) {
-    const ids = byOrg.get(org_id) ?? []
-    if (!ids.includes(id)) ids.push(id)
-    byOrg.set(org_id, ids)
+  const ids = [...new Set(items.map((item) => item.id))]
+  if (ids.length === 0) return outcome
+  if (!o.resend && deletedBusy(PLANNER.deletedAction))
+    return { ...outcome, failed: ids, error: DELETED_BUSY_TEXT }
+  // the page says the pause in its own toast
+  if (refusePausedWrite(calls.ref, true))
+    return { ...outcome, failed: ids, error: pausedText(getFunctionName(calls.ref)) }
+  const { kind } = calls
+  const plan = planOf(items, calls.limit.max)
+  const epoch = storeEpoch
+  const live = () => epoch === storeEpoch
+  const known = new Map(items.map((item) => [item.id, item]))
+  const orgName = (org: string) =>
+    items.find((item) => item.org_id === org && item.org_name)?.org_name ??
+    rows.orgs.get(org)?.name ??
+    'an organization'
+  type LaneState = {
+    next: number
+    flying: readonly string[] | null
+    error: unknown
+    done: number
+    refused: number
   }
-  for (const [orgId, ids] of byOrg) {
-    for (let at = 0; at < ids.length; at += limit.max) {
-      const batch = ids.slice(at, at + limit.max)
-      try {
-        const answer = await call(orgId, batch)
-        outcome.done.push(...('restored' in answer ? answer.restored : answer.purged))
-        outcome.refused.push(...answer.refused)
-        outcome.deferred.push(...(answer.deferred ?? []))
-        outcome.stepping.push(...(answer.stepping ?? []))
-      } catch (e) {
-        console.error('[qivo] deleted items call failed:', e)
-        outcome.failed.push(...batch)
-        outcome.error ??= deletedItemsErrorText(e, failed)
+  const lanes = new Map<string, LaneState>(
+    plan.lanes.map((lane) => [
+      lane.org_id,
+      { next: 0, flying: null, error: undefined, done: 0, refused: 0 },
+    ]),
+  )
+  const laneOf = (lane: DeletedLane) => lanes.get(lane.org_id) as LaneState
+  const pending = new Set(ids)
+  const stops: DeletedStop[] = []
+  let lanesDone = 0
+  let action: DeletedAction | null = o.resend
+    ? null
+    : {
+        kind,
+        state: 'running',
+        long: plan.long,
+        noun: itemsNoun(items, plan.total),
+        total: plan.total,
+        done: 0,
+        refused: 0,
+        lanes: plan.lanes.length,
+        lanesDone: 0,
+        pending: ids,
+        stops: [],
       }
-    }
+  const show = (patch: Partial<DeletedAction>) => {
+    if (action === null) return
+    action = { ...action, ...patch, pending: [...pending] }
+    setDeletedAction(action)
   }
+  if (action) setDeletedAction(action)
+  const refusedCount = () => outcome.refused.length + outcome.failed.length
+  let ran: { finished: DeletedLane[]; stops: LaneStop<DeletedLane>[] } | null
+  try {
+    ran = await runLanes<DeletedLane, DeletedAnswer<Reason>>({
+      lanes: plan.lanes,
+      // a long action shares the app's lanes with every other large action
+      pool: plan.long ? LANE_POOL : undefined,
+      live,
+      send: async (lane) => {
+        const at = laneOf(lane)
+        const batch = lane.calls[at.next]
+        at.next += 1
+        at.flying = batch
+        try {
+          return await calls.call(lane.org_id, [...batch])
+        } catch (error) {
+          console.error('[qivo] deleted items call failed:', error)
+          at.error = error
+          throw error
+        }
+      },
+      more: (lane) => laneOf(lane).next < lane.calls.length,
+      pauseOf: (error) => (refusedAsPaused(error) ? refusalPauseText(error) : null),
+      reasonOf: (error) => deletedReasonText(error).text,
+      onAnswer: (lane, answer) => {
+        const at = laneOf(lane)
+        for (const id of at.flying ?? []) pending.delete(id)
+        at.flying = null
+        at.done += answer.done.length
+        at.refused += answer.refused.length
+        outcome.done.push(...answer.done)
+        outcome.refused.push(...answer.refused)
+        outcome.deferred.push(...answer.deferred)
+        outcome.stepping.push(...answer.stepping)
+        if (at.next >= lane.calls.length) lanesDone += 1
+        show({ done: outcome.done.length, refused: refusedCount(), lanesDone })
+      },
+      onStop: ({ lane, reason, paused }) => {
+        const at = laneOf(lane)
+        if (at.flying !== null) {
+          // the call the refusal answered, refused whole
+          outcome.failed.push(...at.flying)
+          at.refused += at.flying.length
+          for (const id of at.flying) pending.delete(id)
+          at.flying = null
+        }
+        const left = lane.calls.slice(at.next).flat()
+        outcome.unsent.push(...left)
+        for (const id of left) pending.delete(id)
+        outcome.error ??=
+          at.error === undefined ? reason : deletedItemsErrorText(at.error, calls.failed)
+        stops.push({
+          org_id: lane.org_id,
+          org_name: orgName(lane.org_id),
+          total: lane.calls.flat().length,
+          done: at.done,
+          refused: at.refused,
+          unsent: left.length,
+          reason,
+          paused,
+        })
+        show({ refused: refusedCount(), stops: [...stops] })
+      },
+    })
+  } catch (fault) {
+    if (!live()) return outcome
+    reportFault(fault)
+    for (const lane of plan.lanes) {
+      const at = laneOf(lane)
+      if (at.flying !== null) outcome.unknown.push(...at.flying)
+      outcome.unsent.push(...lane.calls.slice(at.next).flat())
+    }
+    pending.clear()
+    show({ state: 'stopped' })
+    toast(faultText(kind))
+    return outcome
+  }
+  if (ran === null) return outcome
+  // the deferred past what one action watches are left unsent
+  const overflow = outcome.deferred.splice(DEFERRED_MOST)
+  outcome.unsent.push(...overflow)
+  if (!o.resend) {
+    const deferred = new Set(outcome.deferred)
+    for (const id of outcome.deferred)
+      watchDeferred(known.get(id) ?? { id, org_id: '' }, o.bulk === true, deferred)
+  }
+  show({ state: stops.length > 0 ? 'stopped' : 'finished' })
+  if (!plan.long || o.resend) return outcome
+  const keyOf = (org: string) => `deleted-${kind}:${org}`
+  // an organization that finished now leaves no stop toast of an earlier run
+  for (const lane of ran.finished) dropStopToast(keyOf(lane.org_id))
+  if (stops.every((stop) => !stop.paused)) dropStopToast(keyOf('pause'))
+  const nounOf = (org: string) => (n: number) =>
+    itemsNoun(
+      items.filter((item) => item.org_id === org),
+      n,
+    )
+  for (const stop of stops)
+    if (!stop.paused) showStopToast(keyOf(stop.org_id), stopText(kind, stop, nounOf(stop.org_id)))
+  const pauses = stops.filter((stop) => stop.paused)
+  if (pauses.length > 0)
+    showStopToast(
+      keyOf('pause'),
+      pauseText(kind, pauses, (n) => itemsNoun(items, n)),
+    )
+  if (stops.length > 0) return outcome
+  const { text, tone } = endText({
+    kind,
+    asked: items,
+    done: outcome.done.length,
+    stepping: outcome.stepping.length,
+    refused: refusedCount(),
+    following: outcome.deferred.map((id) => known.get(id)),
+    unsent: outcome.unsent.map((id) => known.get(id)),
+  })
+  if (tone === 'success') toast(text, 'success')
+  else window.showToast?.(text, 'error', { sticky: true })
   return outcome
 }
+
+/* Watches deferred item `item` (deletedItems.item, through watchLive and
+   not the visibility gate, as a pending save goes on in a hidden tab)
+   until it can be sent again, and sends it in a call of its own, marked
+   bulk when its first call was. The watch goes on after the page is left
+   and ends quietly when the item leaves Deleted items, when it is sent
+   and restored, and when the store's epoch changes. It ends with
+   "Couldn't restore <name>. <reason>" when the second send is refused,
+   when the item's row says another reason than its deleted project once
+   that project is back, and when the project item it waits for went back
+   to ready or stuck after its restore failed; `siblings`, the action's
+   other deferred items, are watched for themselves, so one that waits for
+   another waits without judging it. A re-send skips the busy rule, so a
+   new action may run beside the watches, and honors the pause. */
+function watchDeferred(item: DeletedTarget, bulk: boolean, siblings: ReadonlySet<string>) {
+  if (deferredWatches.has(item.id)) return
+  const epoch = storeEpoch
+  let name = targetName(item)
+  let ended = false
+  let sending = false
+  let holder: { id: string; stop: () => void } | null = null
+  const stops: (() => void)[] = []
+  const end = (reason?: string) => {
+    if (ended) return
+    ended = true
+    for (const stop of stops) stop()
+    holder?.stop()
+    if (deferredWatches.get(item.id) === stopAll) {
+      deferredWatches.delete(item.id)
+      if (epoch === storeEpoch) showDeletedWaiting()
+    }
+    if (reason !== undefined && epoch === storeEpoch)
+      toast(`Couldn't restore ${name}. ${reason}`, 'error')
+  }
+  const stopAll = () => end()
+  const resend = (row: DeletedRow) => {
+    sending = true
+    void runDeletedItems([row], RESTORE_CALLS(bulk), { bulk, resend: true }).then((outcome) => {
+      sending = false
+      if (ended || epoch !== storeEpoch) return
+      const refused = outcome.refused.find((r) => r.id === row.id)
+      if (refused) return end(refusalText(refused.reason))
+      if (outcome.failed.includes(row.id) || outcome.unknown.includes(row.id))
+        return end(outcome.error === null ? 'Try again.' : reasonAfter(outcome.error))
+      end()
+    })
+  }
+  const watchHolder = (id: string) => {
+    if (holder?.id === id || siblings.has(id)) return
+    holder?.stop()
+    holder = {
+      id,
+      stop: watchLive<DeletedRow | null>(api.deletedItems.item, { id }, (result) => {
+        if (ended || !('value' in result)) return
+        const state = result.value?.state
+        // its project item's restore failed, so the item stays behind it
+        if (state === 'ready' || state === 'stuck') end("Its project couldn't be restored.")
+      }),
+    }
+  }
+  deferredWatches.set(item.id, stopAll)
+  showDeletedWaiting()
+  const stopRow = watchLive<DeletedRow | null>(api.deletedItems.item, { id: item.id }, (result) => {
+    if (ended) return
+    if (epoch !== storeEpoch) return end()
+    // a failed read keeps watching; the next answer decides
+    if (!('value' in result) || sending) return
+    const row = result.value
+    // the item left Deleted items
+    if (row === null) return end()
+    name = targetName(row)
+    if (row.state === 'stuck') return end(refusalText('stuck'))
+    if (row.state !== 'ready') return
+    if (row.can_restore) return resend(row)
+    const blocked = row.blocked
+    if (blocked?.reason === 'project_deleted' || blocked?.reason === 'parent_deleted') {
+      if (blocked.item_id !== undefined) watchHolder(blocked.item_id)
+      return
+    }
+    end((blocked ? blockedText(blocked) : null) ?? refusalText(blocked?.reason ?? 'no_access'))
+  })
+  // a watch that joined an answer can end before it hands back its stop
+  if (ended) stopRow()
+  else stops.push(stopRow)
+}
+
+/** A whole refusal's sentence without the "Couldn't restore." before it,
+    for a sentence that names the item first. */
+const reasonAfter = (error: string) => error.replace(/^Couldn't restore\. /, '')
 
 /* A refused project create names what disappeared, followed by the reason
    when a rule, billing or permission refusal carries one (a forbidden create
@@ -9549,6 +9902,10 @@ export const PLANNER = {
   inboxItem: null as InboxItemVM | null,
   // the bulk action running or last run, with its progress (store/inboxBulk.ts)
   inboxBulk: null as InboxBulk | null,
+  // the Deleted items restore or Delete now running or last run, with its
+  // progress (runDeletedItems), and the deferred items it watches
+  deletedAction: null as DeletedAction | null,
+  deletedWaiting: new Set<string>() as ReadonlySet<string>,
   // whether older messages exist than the Inbox lists (the snapshot's 500),
   // and which of Mark all as read and Remove all read reach some of them
   inboxCut: false,
@@ -14009,6 +14366,24 @@ export const PLANNER = {
     }
   },
 
+  /** One batch of Deleted items' people (deletedItems.people) for Deleted by
+      and Assigned to: organization `orgId`'s people and agents in name
+      order, matching `search`, from `cursor`, an earlier batch's `next`, or
+      from the start. Read once a batch, never subscribed to and kept out
+      of the workspace; null when the read failed. */
+  deletedPeople: async (orgId: string, search: string, cursor: string | null) => {
+    try {
+      return await convex.query(api.deletedItems.people, {
+        org_id: orgId,
+        ...(search === '' ? {} : { search }),
+        ...(cursor === null ? {} : { cursor }),
+      })
+    } catch (e) {
+      console.error('[qivo] Deleted items people failed:', e)
+      return null
+    }
+  },
+
   /** Revokes any credential in the home organization as its admin. Resolves
       whether the server accepted it; revoking one that is already revoked
       counts as accepted. */
@@ -14391,38 +14766,27 @@ export const PLANNER = {
 
   /** Restore Deleted items (Settings, Deleted items). Awaited, never
       optimistic: the work comes back through the snapshot, and the page's
-      list drops the items as the server does. Sent per organization, 25 ids
-      at a time. `bulk` marks every call as part of a restore of several
-      items, so that a call left with one task item sends no Restored notice;
-      a single row's Restore leaves it out. Never toasts; the page says what
-      happened. */
+      list drops the items as the server does. Runs on the shared runner
+      (runDeletedItems), per organization, 25 ids a call, its progress in
+      P.deletedAction, and refuses at once while another restore or Delete
+      now runs. `bulk` marks every call as part of a restore of several
+      items, so that a call left with one task item sends no Restored
+      notice; a single row's Restore leaves it out. A deferred item is sent
+      again once its project is back, also after the page is left. Toasts
+      only for an action of more than one round, which may end while the
+      page is gone; the page words every other outcome. */
   restoreDeletedItems: (
-    items: { id: string; org_id: string }[],
+    items: readonly DeletedTarget[],
     { bulk = false }: { bulk?: boolean } = {},
   ): Promise<DeletedItemsOutcome<RestoreRefusal>> =>
-    deletedItemsCalls(
-      LIMITS.restoreBatch,
-      items,
-      (orgId, ids) =>
-        sendAwaited(
-          api.deletedItems.restore,
-          { org_id: orgId, ids, ...(bulk ? { bulk } : {}) },
-          'none',
-        ),
-      "Couldn't restore",
-    ),
+    runDeletedItems(items, RESTORE_CALLS(bulk), { bulk }),
 
   /** Delete now, where an organization admin deletes Deleted items for good.
-      Awaited like restoreDeletedItems, and never toasts either. */
+      Awaited like restoreDeletedItems, on the same runner, and never toasts
+      for an action of one round either. */
   purgeDeletedItems: (
-    items: { id: string; org_id: string }[],
-  ): Promise<DeletedItemsOutcome<PurgeRefusal>> =>
-    deletedItemsCalls(
-      LIMITS.purgeBatch,
-      items,
-      (orgId, ids) => sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none'),
-      "Couldn't delete it for good",
-    ),
+    items: readonly DeletedTarget[],
+  ): Promise<DeletedItemsOutcome<PurgeRefusal>> => runDeletedItems(items, PURGE_CALLS),
 
   /* Move a project, its sub-projects and every task in them to Deleted
      items. Awaited, as the Archive or delete window asks. Nothing changes
@@ -16073,6 +16437,9 @@ export function disposeDemoStore() {
   PLANNER.inboxBulk = null
   inboxWrites.clear()
   stopToasts.clear()
+  // a Deleted items action and its deferred items' watches end with it too
+  PLANNER.deletedAction = null
+  stopDeferredWatches()
   stopDayWatch?.()
   stopDayWatch = null
   cancelDemoBoot?.()

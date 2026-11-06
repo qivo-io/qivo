@@ -2,13 +2,17 @@
    grid of the checkbox and icon, then the title over its place and deleter
    and any notes, then the time and the actions centred on the right.
 
+   The filters take two lines: Projects and the search, then the kind
+   control, Deleted by with its way and Assigned to, with the chosen
+   projects' chips, the progress line and the selection line under them.
+
    A narrow page gives each row three lines. They are the key and title, the
    place, then the deleter with the time, with the notes below. A row with
    no place puts its deleter on the second line. Restore and the row menu
-   keep only their icons, and the filters stack. Phones get it by their
-   width (760px or less, as useMobile), and any page narrower than 600px gets
-   it by a container query, like the personal token list. The two blocks
-   below must say the same thing. */
+   keep only their icons, and each filter takes a line of its own. Phones
+   get it by their width (760px or less, as useMobile), and any page
+   narrower than 600px gets it by a container query, like the personal
+   token list. The two blocks below must say the same thing. */
 
 [data-deleted-items] {
   container: deleted-items / inline-size;
@@ -48,26 +52,30 @@
   align-self: center;
 }
 /* The filters stay at the top while the list scrolls under them, on the
-   panel's own fill, so no box shows around them. The search box and the
-   Deleted by select give up width before the row would overflow, from the
+   panel's own fill, so no box shows around them. Projects and the search
+   share the first line, the search taking what Projects leaves; the people
+   triggers give up width before the second line would overflow, from the
    page's 600px down to where the filters stack. */
 .deleted-filter-block {
   background: var(--workspace-panel);
   -webkit-backdrop-filter: var(--workspace-panel-blur);
   backdrop-filter: var(--workspace-panel-blur);
 }
+.deleted-scope {
+  flex: 0 1 260px;
+}
 .deleted-search {
-  flex: 0 1 220px;
+  flex: 1 1 220px;
   min-width: 0;
 }
-.deleted-by {
-  flex: 0 1 270px;
+.deleted-person {
+  flex: 0 1 auto;
 }
 /* A control that takes keyboard focus scrolls clear of the sticky filters,
-   which are 80px tall and stick 16px above the scroller's padding: 80 - 16
-   plus 8px of air. */
+   which are about 128px tall with a line of chips and stick 16px above the
+   scroller's padding: 128 - 16 plus 8px of air. */
 .deleted-list :is(button, [tabindex]) {
-  scroll-margin-top: 72px;
+  scroll-margin-top: 120px;
 }
 /* the selection bar a phone keeps at the bottom of the page */
 .deleted-selection-bar {
@@ -75,17 +83,20 @@
 }
 
 @container deleted-items (max-width: 600px) {
-  .deleted-filters {
+  .deleted-filters-row {
     flex-direction: column;
     align-items: stretch;
   }
-  .deleted-filters > * {
+  .deleted-filters-row > *,
+  .deleted-filters-row .deleted-scope,
+  .deleted-filters-row .deleted-person {
     flex: none;
     width: 100%;
+    max-width: none;
   }
-  /* the stacked filters and the count line are 160px tall */
+  /* the stacked filters and the count line are about 250px tall */
   .deleted-list :is(button, [tabindex]) {
-    scroll-margin-top: 152px;
+    scroll-margin-top: 242px;
   }
   /* the actions sit beside the title and place, and the time under them,
      so the deleter and the notes get the row's whole width */
@@ -139,17 +150,20 @@
 }
 
 @media (max-width: 760px) {
-  .deleted-filters {
+  .deleted-filters-row {
     flex-direction: column;
     align-items: stretch;
   }
-  .deleted-filters > * {
+  .deleted-filters-row > *,
+  .deleted-filters-row .deleted-scope,
+  .deleted-filters-row .deleted-person {
     flex: none;
     width: 100%;
+    max-width: none;
   }
-  /* the stacked filters and the count line are 160px tall */
+  /* the stacked filters and the count line are about 250px tall */
   .deleted-list :is(button, [tabindex]) {
-    scroll-margin-top: 152px;
+    scroll-margin-top: 242px;
   }
   /* the actions sit beside the title and place, and the time under them,
      so the deleter and the notes get the row's whole width */
