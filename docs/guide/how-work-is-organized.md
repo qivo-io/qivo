@@ -141,14 +141,22 @@ and its sub-projects from active views and capacity planning. Tasks,
 comments, attachments, estimates and history remain stored. The planner stops
 loading the archived work. Restore the project before adding tasks.
 
-**Settings → Projects → Archived projects** lists archived projects, newest
-first. **Restore** returns them to active views; **Delete** moves them to
-[Deleted items](#deleted-items). Archiving, restoring and deleting require Lead
-access, which organization admins and project leads have.
+**Settings → Projects → Archived projects** lists archived projects 25 a
+page, newest first, with **Previous** and **Next** and a search that also
+finds sub-projects. With seats in several organizations, you choose the
+organization at the top. **Restore** returns a project to active views;
+**Delete** moves it to [Deleted items](#deleted-items). Archiving, restoring
+and deleting require Lead access, which organization admins and project
+leads have; organization admins can restore and delete every archived
+project of their organization.
 
 Sub-projects archived with a project return with it. A sub-project archived
 separately stays archived when its project returns and then has its own row
-in the archived list.
+in the archived list. **Show sub-projects** lists a project's archived
+sub-projects, a solid outline for those that return with it and a dashed one
+for those archived separately. A search result inside an archived project
+says whether it returns with that project and offers to restore the
+project.
 
 Archiving or restoring a project updates its sub-projects and the access
 entries of the people and teams who reach them in one change. A project and
