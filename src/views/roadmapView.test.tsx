@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
-import { act } from 'react'
+import { act, useLayoutEffect, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RoadmapAnswer } from '../../convex/lib/roadmap'
 import { TODAY_WEEK, weekToISO } from '../lib/dates'
 import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
+import { answerRoadmap } from '../store/roadmapStandIn.setup'
 import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
 import type { RoadmapRequest } from './Roadmap'
 
@@ -16,7 +18,9 @@ import type { RoadmapRequest } from './Roadmap'
    itself on the root and says why where it shows no tasks, with the toolbar
    usable beside it; a pan keeps the bars marked refreshing; the headings
    read the answer's counts; the arrows and Auto-move read the dependency
-   answer; a plan request waits for an answer that holds its task. */
+   answer; a plan request waits for an answer that holds its task, and its
+   planning panel reads the owner's load live; the phone's agenda and
+   landscape timeline show the same answer. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -56,6 +60,8 @@ beforeEach(() => {
   )
   vi.stubGlobal('cancelAnimationFrame', () => {})
   Element.prototype.scrollTo = () => {}
+  // jsdom has no pointer capture, which a bar's drag takes
+  Element.prototype.setPointerCapture = () => {}
   // each case opens on the default window, whatever an earlier one panned to
   localStorage.clear()
   window.showToast = vi.fn()
@@ -91,6 +97,9 @@ const rows = () =>
 const flush = async () => {
   while (frames.length) await act(async () => frames.shift()?.())
 }
+/* The store paints an answer that arrives while a painted write waits in
+   a task of its own (store/planner.ts owe), so a case lets it run. */
+const settle = () => act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
 
 /** The week `n` weeks from this one, as a stored day. */
 const week = (n: number) => weekToISO(TODAY_WEEK + n)
@@ -160,6 +169,71 @@ async function renderRoadmap(
 
 /* The plan requests the Roadmap took, by nonce. */
 let consumedPlans = vi.fn()
+
+/** Drags the bar of task handle `id` by `weeks` weeks on the Roadmap's
+    week width, and lets it go. */
+async function dragBar(id: string, weeks: number) {
+  const bar = document.querySelector<HTMLElement>(`[data-bar="${id}"]`)
+  if (!bar) throw new Error(`no bar of ${id}`)
+  // Team's strip shares the timeline's week width
+  const weekW = Number.parseFloat(
+    document
+      .querySelector<HTMLElement>('[data-split-strip]')
+      ?.style.getPropertyValue('--res-week') ?? '',
+  )
+  if (!(weekW > 0)) throw new Error('no week width')
+  const pointer = (type: string, clientX: number) =>
+    new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId: 1 })
+  await act(async () => bar.dispatchEvent(pointer('pointerdown', 100)))
+  await act(async () => bar.dispatchEvent(pointer('pointermove', 100 + weeks * weekW)))
+  await act(async () => bar.dispatchEvent(pointer('pointerup', 100 + weeks * weekW)))
+}
+
+/** The dates of every Roadmap change of task `uuid` sent since the
+    network's mocks were cleared, oldest first. */
+const datesSent = (uuid: string) =>
+  network.mutation.mock.calls
+    .filter(([ref]) => getFunctionName(ref) === 'roadmap:change')
+    .flatMap(
+      ([, args]) =>
+        (args as { operations: { kind: string; id: string; patch: Record<string, unknown> }[] })
+          .operations,
+    )
+    .filter((op) => op.kind === 'task' && op.id === uuid)
+    .map((op) => op.patch)
+
+/** The right edge of the bar of task `uuid` on the Roadmap, in pixels. */
+function barEnd(board: Board, uuid: string): number {
+  const id = board.P.viewTask('roadmap', uuid)?.id ?? uuid
+  const bar = document.querySelector<HTMLElement>(`[data-bar="${id}"]`)
+  if (!bar) throw new Error(`no bar of ${uuid}`)
+  return Number.parseFloat(bar.style.left) + Number.parseFloat(bar.style.width)
+}
+
+/** A plan request for one-1 (QN-1), with nonce `n`, as App sends it. */
+const planOne = (board: Board, n = 1): RoadmapRequest => ({
+  id: 'QN-1',
+  n,
+  key: 'QN-1',
+  uuid: 'one-1',
+  project: board.snapshot.projects[0].id,
+  start: TODAY_WEEK,
+  end: TODAY_WEEK + 1,
+})
+
+const planCard = (id = 'QN-1') => document.querySelector<HTMLElement>(`[data-plan-card="${id}"]`)
+
+/** A second person of the organization. */
+const OTHER = 'other-person'
+const addOther = (snap: Snapshot) =>
+  snap.profiles.push({
+    ...snap.profiles[0],
+    id: OTHER,
+    auth_user_id: undefined,
+    name: 'Other',
+    initials: 'OT',
+    org_role: 'user',
+  })
 
 /** The arguments of each tasks:roadmap subscription, newest last. */
 const roadmapAsks = (board: Board) =>
@@ -480,6 +554,103 @@ describe('the Roadmap from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(document.querySelector<HTMLButtonElement>('[data-auto-correct]')?.disabled).toBe(true)
   })
 
+  it('says Auto-move waits, by name, while a write is on its way', async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { start_week: week(0), end_week: week(0) })
+        snap.links.push({
+          id: 'link-1',
+          source_id: 'one-1',
+          target_id: 'two-1',
+          type: 'blocks',
+          pair_key: 'one-1:two-1',
+          created_at: '2026-09-01T08:00:00.000Z',
+        })
+      },
+      { scope: 'plan' },
+    )
+    await renderRoadmap(board)
+    const move = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
+    expect(move()?.disabled).toBe(false)
+    expect(move()?.dataset.autoMove).toBeUndefined()
+    // another write, which never answers here, holds Auto-move's one move
+    await act(async () => {
+      void board.P.updateIssue('QN-1', { status: 'progress' })
+    })
+    expect(move()?.disabled).toBe(true)
+    expect(move()?.dataset.autoMove).toBe('waiting')
+  })
+
+  it("draws a group's bar over its subtask's saved move before the answer runs again", async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues.push({ ...taskRow(snap, 'group', 'todo', 3) })
+        snap.issues.push({
+          ...taskRow(snap, 'sub-1', 'todo', 4),
+          parent_id: 'group',
+          start_week: week(0),
+          end_week: week(1),
+        })
+        snap.issues.push({
+          ...taskRow(snap, 'sub-2', 'todo', 5),
+          parent_id: 'group',
+          start_week: week(0),
+          end_week: week(0),
+        })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    await renderRoadmap(board)
+    // the group's bar ends with its later subtask
+    const before = barEnd(board, 'group')
+    expect(before).toBe(barEnd(board, 'sub-1'))
+    // the Roadmap's read answers nothing more while the move is saved
+    board.server.roadmap.hold = true
+    network.mutation.mockClear()
+    await dragBar(board.P.viewTask('roadmap', 'sub-1')?.id ?? 'sub-1', 3)
+    expect(datesSent('sub-1')).toEqual([{ start_week: week(3), end_week: week(4) }])
+    // the subtask and its group end three weeks later, at once
+    expect(barEnd(board, 'sub-1')).toBeGreaterThan(before)
+    expect(barEnd(board, 'group')).toBe(barEnd(board, 'sub-1'))
+  })
+
+  it("marks a bar Delay unknown, in the neutral hue, where its owner's load cannot be read", async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        // One and its top-level project track delays
+        snap.projects[0].track_delay = true
+        plan(snap)
+        Object.assign(snap.issues[0], {
+          status: 'progress',
+          remaining_hours: 10,
+          due_date: week(2),
+        })
+      },
+      { scope: 'plan' },
+    )
+    await renderRoadmap(board)
+    const bar = () => document.querySelector<HTMLElement>('[data-bar="QN-1"]')
+    const tooltip = async () => {
+      await act(async () => bar()?.focus())
+      const text = document.querySelector('[data-slot="tooltip-content"]')?.textContent ?? ''
+      await act(async () => bar()?.blur())
+      return text
+    }
+    // the owner's load reads: the bar is judged, never unknown
+    expect(bar()?.getAttribute('style')).not.toContain('--roadmap-bar-unknown')
+    expect(await tooltip()).not.toContain('Delay unknown')
+    board.server.unavailable = [board.snapshot.profiles[0].id]
+    await board.answer()
+    expect(bar()?.getAttribute('style')).toContain('--roadmap-bar-unknown')
+    expect(await tooltip()).toContain('Delay unknown')
+  })
+
   it('opens a task only its answer brings by a reference the window reads from the server', async () => {
     const board = await loadBoard(network, plan, { scope: 'plan' })
     const opened = vi.fn()
@@ -591,6 +762,195 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(document.querySelector('[data-plan-card]')).toBeNull()
   })
 
+  it('says the workload is unavailable and pauses auto-fit, a drag sending its own dates', async () => {
+    const board = await loadBoard(network, plan, { scope: 'plan' })
+    board.P.roadmapContext(true, false)
+    board.server.unavailable = [board.snapshot.profiles[0].id]
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await flush()
+    expect(planCard()?.textContent).toContain('Workload is unavailable. Auto-fit is paused.')
+    // a move keeps the dragged dates: no fitted end without the load
+    network.mutation.mockClear()
+    await dragBar('QN-1', 1)
+    expect(datesSent('one-1')).toEqual([{ start_week: week(1), end_week: week(2) }])
+    // once the load reads, a move fits the end to the free time instead,
+    // 2 hours in the first week
+    board.server.unavailable = []
+    await board.answer()
+    await settle()
+    expect(planCard()?.textContent).not.toContain('Workload is unavailable')
+    await dragBar('QN-1', 2)
+    expect(datesSent('one-1').at(-1)).toEqual({ start_week: week(3), end_week: week(3) })
+  })
+
+  it("places an unscheduled task's end once its owner's load first answers, and never again", async () => {
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        const one = snap.issues[0]
+        Reflect.deleteProperty(one, 'start_week')
+        Reflect.deleteProperty(one, 'end_week')
+        one.remaining_hours = 100
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    board.server.holdLoads = true
+    network.mutation.mockClear()
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { focusPlan: unscheduled })
+    await flush()
+    expect(planCard()).not.toBeNull()
+    expect(planCard()?.textContent).toContain('Loading…')
+    // the starter bar, this week and next, while the load is on its way
+    const starter = { start_week: week(0), end_week: week(1) }
+    expect(datesSent('one-1')).toEqual([starter])
+    board.server.holdLoads = false
+    await board.answer()
+    await settle()
+    await flush()
+    // the first load fits the end once: 100 hours over 32-hour weeks, less
+    // two-1's 1.5 hours a week, end in the fourth week
+    expect(datesSent('one-1')).toEqual([starter, { end_week: week(3) }])
+    // a later answer leaves the dates alone
+    await board.answer()
+    await settle()
+    await flush()
+    expect(datesSent('one-1')).toHaveLength(2)
+  })
+
+  it("follows the owner's work elsewhere while the session stays", async () => {
+    // One's Roadmap, which does not show two-1 in Two
+    const board = await loadBoard(network, plan)
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const consumed = consumedPlans
+    await renderRoadmap(board, { focusPlan: planOne(board) })
+    await flush()
+    expect(rows()).toEqual(['QN-1'])
+    expect(planCard()?.textContent).toMatch(/Two\s*3h/)
+    // two-1 gains hours elsewhere, and its owner's load answers again
+    const two = board.snapshot.issues.find((t) => t.id === 'two-1')
+    if (!two) throw new Error('no two-1')
+    two.remaining_hours = 7
+    await board.answer()
+    expect(planCard()?.textContent).toMatch(/Two\s*7h/)
+    expect(planCard()?.textContent).not.toMatch(/Two\s*3h/)
+    // the same session: one request taken
+    expect(consumed).toHaveBeenCalledTimes(1)
+  })
+
+  it("says a guest's panel counts only the projects they can see, for another person's task", async () => {
+    const board = await loadBoard(network, (snap) => {
+      plan(snap)
+      addOther(snap)
+      const me = snap.profiles[0]
+      me.org_role = 'guest'
+      snap.access.push({ project_id: snap.projects[0].id, profile_id: me.id, level: 'user' })
+      snap.issues.push({
+        ...taskRow(snap, 'theirs', 'todo', 3),
+        assignee_id: OTHER,
+        remaining_hours: 4,
+        start_week: week(0),
+        end_week: week(1),
+      })
+    })
+    // the guest's store names the tasks by uuid
+    const handle = (uuid: string) => board.P.viewTask('roadmap', uuid)?.id ?? uuid
+    await renderRoadmap(board, {
+      focusPlan: { ...planOne(board), id: 'QN-3', key: 'QN-3', uuid: 'theirs' },
+    })
+    await flush()
+    expect(planCard(handle('theirs'))).not.toBeNull()
+    expect(planCard(handle('theirs'))?.querySelector('[data-plan-own-only]')?.textContent).toBe(
+      'Counts only projects you can see.',
+    )
+    // the guest's own task: their own load is whole
+    await renderRoadmap(board, { focusPlan: planOne(board, 2) })
+    await flush()
+    expect(planCard(handle('one-1'))).not.toBeNull()
+    expect(planCard(handle('one-1'))?.querySelector('[data-plan-own-only]')).toBeNull()
+  })
+
+  it('takes a plan request that arrives as an earlier one resolves, and drops neither', async () => {
+    // one-1 and one-3 pass no filter: only a request sends them with the read
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        snap.issues.push({
+          ...taskRow(snap, 'one-3', 'todo', 3),
+          start_week: week(0),
+          end_week: week(0),
+        })
+      },
+      { scope: 'plan' },
+    )
+    board.P.roadmapContext(true, false)
+    consumedPlans = vi.fn()
+    const consumed = consumedPlans
+    const { Roadmap } = await import('./Roadmap')
+    const { WorkspaceShell } = await import('../components/WorkspaceShell')
+    const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
+      typeof Roadmap
+    >[0]['actions']
+    let ask: (request: RoadmapRequest) => void = () => {}
+    function Host({ info }: { info: Parameters<typeof Roadmap>[0]['info'] }) {
+      const [request, setRequest] = useState<RoadmapRequest | null>(null)
+      useLayoutEffect(() => {
+        ask = setRequest
+      }, [])
+      return (
+        <WorkspaceShell header={null}>
+          <Roadmap
+            info={info}
+            filters={{ ...ROW, priority: 'high' }}
+            actions={actions}
+            filterControls={() => null}
+            focusPlan={request}
+            onFocusConsumed={consumed}
+          />
+        </WorkspaceShell>
+      )
+    }
+    await board.renderView(root, (info) => <Host info={info} />)
+    expect(rows()).toEqual(['QN-2'])
+    // the first request waits for the read that carries its task
+    board.server.roadmap.hold = (name) => name === 'tasks:roadmap'
+    await act(async () => ask(planOne(board)))
+    expect(planCard()).toBeNull()
+    // that read answers in the same render as a second request arrives
+    const second = {
+      ...planOne(board, 2),
+      id: 'QN-3',
+      key: 'QN-3',
+      uuid: 'one-3',
+      end: TODAY_WEEK,
+    }
+    await act(async () => {
+      flushSync(() => {
+        ask(second)
+        for (const sub of board.server.roadmap.open)
+          sub.next(
+            structuredClone(
+              answerRoadmap(board.snapshot, sub.name, sub.args, {
+                sees: (id) => board.P.canSee(id),
+                canEdit: (id) => board.P.canWrite(id),
+              }),
+            ),
+          )
+      })
+    })
+    // the second request is the one that plans, once its read answers
+    board.server.roadmap.hold = false
+    await board.answer()
+    await flush()
+    expect(planCard('QN-3')).not.toBeNull()
+    expect(planCard('QN-1')).toBeNull()
+    expect(consumed).toHaveBeenCalledWith(2)
+  })
+
   it('pans to a Done task outside the window, then shows it', async () => {
     const board = await loadBoard(
       network,
@@ -617,5 +977,81 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(rows()).toContain('QN-1')
     expect(document.querySelector('[data-roadmap-revealed="QN-1"]')).not.toBeNull()
     expect(window.showToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('the phone over the answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
+  it("lists the answer's tasks with Planned and Unplanned, says why past the ceiling, and turns to the same timeline", async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query === '(max-width: 760px)',
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    )
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        // an unplanned task of the person's
+        snap.issues.push(taskRow(snap, 'one-2', 'todo', 3))
+      },
+      { scope: 'mine' },
+    )
+    await renderRoadmap(board, { filters: { ...ROW, mine: true } })
+    const schedule = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Task schedule',
+    )
+    await act(async () => schedule?.click())
+    const agenda = () =>
+      [...document.querySelectorAll<HTMLElement>('.mobile-roadmap-task-list [data-roadmap-row]')]
+        .map((el) => el.dataset.roadmapRow)
+        .sort()
+    expect(agenda()).toEqual(['QN-1', 'QN-2', 'QN-3'])
+    const show = async (value: string) => {
+      const select = document.querySelector<HTMLSelectElement>('#mobile-roadmap-task-state')
+      if (!select) throw new Error('no task choice')
+      select.value = value
+      await act(async () => select.dispatchEvent(new Event('change', { bubbles: true })))
+    }
+    await show('planned')
+    expect(agenda()).toEqual(['QN-1', 'QN-2'])
+    await show('unplanned')
+    expect(agenda()).toEqual(['QN-3'])
+    await show('all')
+    // the answer decides: a task it leaves out is not on the agenda
+    board.server.roadmap.edit = (name, answer) => {
+      const a = answer as RoadmapAnswer
+      return name === 'tasks:roadmap' && a.state === 'ok'
+        ? { ...a, rows: a.rows.filter((r) => r.id !== 'two-1') }
+        : a
+    }
+    await board.answer()
+    expect(agenda()).toEqual(['QN-1', 'QN-3'])
+    // past the ceiling: the note in place of the schedule, with the phone's hint
+    board.server.roadmap.force = ['over_ceiling']
+    await board.answer()
+    expect(agenda()).toEqual([])
+    expect(document.querySelector('[data-empty-state]')?.textContent).toContain(
+      'Narrow your filters, such as Priority, or open a project.',
+    )
+    // the landscape timeline over the same answer
+    board.server.roadmap.force = []
+    await board.answer()
+    expect(agenda()).toEqual(['QN-1', 'QN-3'])
+    const open = document.querySelector<HTMLButtonElement>('.mobile-roadmap-open-timeline button')
+    await act(async () => open?.click())
+    const landscape = document.querySelector('[data-roadmap-landscape]')
+    expect(landscape).not.toBeNull()
+    expect(
+      [
+        ...(landscape?.querySelectorAll<HTMLElement>(
+          '[data-roadmap-task-top] [data-roadmap-task-open]',
+        ) ?? []),
+      ]
+        .map((el) => el.dataset.roadmapTaskOpen)
+        .sort(),
+    ).toEqual(['QN-1', 'QN-3'])
   })
 })

@@ -2,14 +2,17 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TODAY_WEEK, weekToISO } from '../lib/dates'
+import type { IssueFilters } from '../store/planner'
 import type { Snapshot } from '../store/plannerFixture.setup'
-import { loadBoard, loadBoardWithTasks, taskRow } from './boardFixture.setup'
+import { loadBoard, loadBoardWithTasks, spread, taskRow } from './boardFixture.setup'
 
 /* The phone's task schedule mounts its first screen at once and the rest
    in slices, the Overview's lists show the server's batches with Load
    more, the Overview's group health shows the server's rows 10 at a time,
-   and the store's figures for many groups read them in one pass over the
-   tasks. */
+   the store's figures for many groups read them in one pass over the
+   tasks, and the Roadmap holds its figures at the design size, one figure
+   a case, from its server answer. */
 
 /* A list of more than SYNC_LIMIT tasks mounts in slices. These tests lower
    it from 300, so a list of LONG tasks in one sub-project, well inside the
@@ -286,6 +289,283 @@ describe('a delivery on the desktop Roadmap', () => {
     const after = rows()
     expect(after).toHaveLength(99)
     for (const row of after) expect(before).toContain(row)
+  })
+})
+
+/** The week `n` weeks from this one, as a stored day. */
+const week = (n: number) => weekToISO(TODAY_WEEK + n)
+
+/** About 80 characters of ordinary text, the title of task `n`. */
+const titleOf = (n: number) =>
+  `Prepare the quarterly review of supplier contracts and delivery terms, item ${n}`
+
+/** The filter row with nothing on, or My view's own. */
+const NO_FILTERS: IssueFilters = {
+  mine: false,
+  assignees: [],
+  priority: null,
+  stale: false,
+  focus: false,
+  search: '',
+}
+
+/** Renders the desktop Roadmap of the board's scope with `filters`, in
+    the shell whose toolbar row its toolbar portals into. */
+async function renderRoadmap(
+  board: Awaited<ReturnType<typeof loadBoard>>,
+  filters: IssueFilters = NO_FILTERS,
+) {
+  const { Roadmap } = await import('./Roadmap')
+  const { WorkspaceShell } = await import('../components/WorkspaceShell')
+  const actions = new Proxy({}, { get: () => () => {} }) as Parameters<typeof Roadmap>[0]['actions']
+  await board.renderView(root, (info) => (
+    <WorkspaceShell header={null}>
+      <Roadmap
+        info={info}
+        filters={filters}
+        actions={actions}
+        filterControls={() => null}
+        focusPlan={null}
+      />
+    </WorkspaceShell>
+  ))
+}
+
+const roadmapState = () =>
+  document.querySelector<HTMLElement>('[data-roadmap-root]')?.dataset.roadmapState
+
+/** `n` people of the organization besides the fixture's, by id. */
+function people(snap: Snapshot, n: number): string[] {
+  const ids = [snap.profiles[0].id]
+  for (let i = 1; i < n; i++) {
+    const id = `person-${String(i).padStart(2, '0')}`
+    snap.profiles.push({
+      ...snap.profiles[0],
+      id,
+      auth_user_id: undefined,
+      name: `Person ${i}`,
+      initials: 'PE',
+      org_role: 'user',
+    })
+    ids.push(id)
+  }
+  return ids
+}
+
+/** Plan, a top-level project over One (the fixture's), Two and Three,
+    holding a project's design size at its sum: 800 open and 200 Done
+    tasks, 267, 267 and 266 open and 67, 67 and 66 Done a sub-project.
+    Each task has an ordinary title, an everyday span of one or two weeks
+    inside the Roadmap's first window, 4 hours left while open, and one of
+    40 owners in turn, about 25 tasks a person. */
+const designProject = (snap: Snapshot) => {
+  const base = snap.projects[0]
+  snap.projects.push({ ...base, id: 'plan', type: 'meta', key: 'PLAN', num: 2, name: 'Plan' })
+  Object.assign(base, { parent_id: 'plan', name: 'One' })
+  snap.projects.push(
+    { ...base, id: 'two', key: 'TWO', num: 3, name: 'Two' },
+    { ...base, id: 'three', key: 'THR', num: 4, name: 'Three' },
+  )
+  const owners = people(snap, 40)
+  let n = 0
+  for (const [project, open, done] of [
+    [base.id, 267, 67],
+    ['two', 267, 67],
+    ['three', 266, 66],
+  ] as const)
+    for (let i = 0; i < open + done; i++) {
+      n++
+      const start = (n % 6) - 1
+      snap.issues.push({
+        ...taskRow(snap, `t${n}`, i < open ? 'todo' : 'done', n),
+        project_id: project,
+        title: titleOf(n),
+        assignee_id: owners[n % owners.length],
+        ...(i < open ? { remaining_hours: 4, remaining_set_at: new Date().toISOString() } : {}),
+        start_week: week(start),
+        end_week: week(start + (n % 2)),
+      })
+    }
+}
+
+/* Each case keeps to vitest's default timeout (vitest.config.mts). On 6
+   November 2026 the three cases at 1,000 rows took 4.0 to 5.3 s each, the
+   others under 0.4 s, on a large Boat sandbox. */
+describe('the Roadmap at the design size', () => {
+  it("shows a project's 800 open and 200 Done tasks at their sum, walking no list of the workspace's", async () => {
+    const board = await loadBoard(network, designProject, { scope: 'plan' })
+    // the store's whole-list readers, which throw before every task is held
+    // (store/planner.ts wholeListRead)
+    const scoped = vi.spyOn(board.P, 'scopedIssues')
+    const remaining = vi.spyOn(board.P, 'remainingByGroups')
+    const groupsRead = vi.spyOn(board.P, 'issuesInGroups')
+    const issues = vi.spyOn(board.P, 'issues', 'get')
+    await renderRoadmap(board)
+    expect(roadmapState()).toBe('ok')
+    expect(count('[data-roadmap-task-top]')).toBe(1000)
+    // the headings read the answer's counts, 267 or 266 open tasks of 4
+    // hours a sub-project
+    const headings = [...document.querySelectorAll('[data-track]')].map((el) => el.textContent)
+    expect(headings.join(' ')).toContain('1068h')
+    expect(headings.join(' ')).toContain('1064h')
+    expect(board.P.tasksHeld()).toBe(false)
+    expect(scoped).not.toHaveBeenCalled()
+    expect(remaining).not.toHaveBeenCalled()
+    expect(groupsRead).not.toHaveBeenCalled()
+    expect(issues).not.toHaveBeenCalled()
+  })
+
+  it("spreads Team over the owners of a design-size project's rows, every cell a figure", async () => {
+    const board = await loadBoard(network, designProject, { scope: 'plan' })
+    await renderRoadmap(board)
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-res-row]')]
+    expect(rows).toHaveLength(40)
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll<HTMLElement>('[data-load-box]')]
+      expect(cells.length).toBeGreaterThan(0)
+      for (const cell of cells) {
+        expect(cell.dataset.loadUnknown, row.dataset.resRow).toBeUndefined()
+        expect(cell.dataset.loadWaiting, row.dataset.resRow).toBeUndefined()
+        expect(cell.dataset.loadPct, row.dataset.resRow).toMatch(/^\d+$/)
+      }
+    }
+    // each person's open tasks fill some weeks: no row reads as free time
+    for (const row of rows)
+      expect(
+        [...row.querySelectorAll<HTMLElement>('[data-load-box]')].some(
+          (cell) => Number(cell.dataset.loadHours) > 0,
+        ),
+        row.dataset.resRow,
+      ).toBe(true)
+  })
+
+  it("shows My view at the ceiling, 1,000 of the person's own subtasks", async () => {
+    const subtasks: string[] = []
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        // 40 sub-projects, 3 to a top-level project, each with 30 open
+        // tasks: 5 tasks with subtasks another person owns, and their 25
+        // subtasks the person owns
+        const base = snap.projects[0]
+        const [me, lead] = people(snap, 2)
+        let n = 0
+        for (let s = 0; s < 40; s++) {
+          const top = `top${Math.floor(s / 3)}`
+          if (s % 3 === 0)
+            snap.projects.push({
+              ...base,
+              id: top,
+              type: 'meta',
+              key: `T${s}`,
+              num: 100 + s,
+              name: `Top ${s / 3}`,
+            })
+          const sub = s === 0 ? base.id : `sub${s}`
+          if (s === 0) Object.assign(base, { parent_id: top })
+          else
+            snap.projects.push({
+              ...base,
+              id: sub,
+              key: `S${s}`,
+              num: 200 + s,
+              name: `Sub ${s}`,
+              parent_id: top,
+            })
+          for (let g = 0; g < 5; g++) {
+            const group = `g${s}-${g}`
+            snap.issues.push({
+              ...taskRow(snap, group, 'todo', ++n),
+              project_id: sub,
+              title: titleOf(n),
+              assignee_id: lead,
+            })
+            for (let k = 0; k < 5; k++) {
+              const id = `${group}-${k}`
+              subtasks.push(id)
+              snap.issues.push({
+                ...taskRow(snap, id, 'todo', ++n),
+                project_id: sub,
+                parent_id: group,
+                title: titleOf(n),
+                assignee_id: me,
+                remaining_hours: 2,
+              })
+            }
+          }
+        }
+      },
+      { scope: 'mine' },
+    )
+    expect(subtasks).toHaveLength(1000)
+    await renderRoadmap(board, { ...NO_FILTERS, mine: true })
+    expect(roadmapState()).toBe('ok')
+    // every subtask of the person's has its row
+    const shown = new Set(
+      [...document.querySelectorAll<HTMLElement>('[data-roadmap-task-open]')].map(
+        (el) => el.dataset.roadmapTaskOpen,
+      ),
+    )
+    const missing = subtasks.filter(
+      (uuid) => !shown.has(board.P.viewTask('roadmap', uuid)?.id ?? uuid),
+    )
+    expect(missing).toEqual([])
+  })
+
+  it('shows the ceiling note one row past a lowered ceiling, and the rows at it', async () => {
+    // Plan over three sub-projects of 30 open tasks, 90 rows
+    const board = await loadBoard(network, spread(30), { scope: 'plan' })
+    board.server.roadmap.ceiling = 89
+    await renderRoadmap(board)
+    expect(roadmapState()).toBe('over_ceiling')
+    expect(document.querySelector('[data-empty-state-title]')?.textContent).toBe(
+      "This selection exceeds the Roadmap's 1,000-task limit.",
+    )
+    const choices = [...document.querySelectorAll<HTMLElement>('[data-roadmap-choice]')].map(
+      (el) => el.dataset.roadmapChoice,
+    )
+    expect(choices.sort()).toEqual([board.snapshot.projects[0].id, 'three', 'two'].sort())
+    expect(count('[data-roadmap-task-top]')).toBe(0)
+    board.server.roadmap.ceiling = 90
+    await board.answer()
+    expect(roadmapState()).toBe('ok')
+    expect(count('[data-roadmap-task-top]')).toBe(90)
+  })
+
+  it("disables Auto-move past a lowered size of the selection's dependency parts", async () => {
+    // 30 tasks of one sub-project in one chain, each blocking the next,
+    // all in this week, so Auto-move has 29 moves
+    const board = await loadBoard(network, (snap) => {
+      for (let n = 1; n <= 30; n++) {
+        snap.issues.push({
+          ...taskRow(snap, `t${n}`, 'todo', n),
+          title: titleOf(n),
+          start_week: week(0),
+          end_week: week(0),
+        })
+        if (n > 1)
+          snap.links.push({
+            id: `link-${n}`,
+            source_id: `t${n - 1}`,
+            target_id: `t${n}`,
+            type: 'blocks',
+            pair_key: `t${n - 1}:t${n}`,
+            created_at: `2026-09-01T08:${String(n).padStart(2, '0')}:00.000Z`,
+          })
+      }
+    })
+    board.server.roadmap.partTasks = 29
+    await renderRoadmap(board)
+    const button = () => document.querySelector<HTMLButtonElement>('[data-auto-correct]')
+    expect(roadmapState()).toBe('ok')
+    expect(button()?.disabled).toBe(true)
+    expect(button()?.dataset.autoMove).toBe('over_budget')
+    // at the part's size its inputs are whole, and it offers the moves
+    board.server.roadmap.partTasks = 30
+    await board.answer()
+    expect(button()?.disabled).toBe(false)
+    expect(button()?.dataset.autoMove).toBeUndefined()
+    expect(button()?.textContent).toContain('29')
   })
 })
 

@@ -46,6 +46,8 @@ beforeEach(() => {
     vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
   )
   vi.stubGlobal('requestAnimationFrame', () => 0)
+  // jsdom has no pointer capture, which a bar's drag takes
+  Element.prototype.setPointerCapture = () => {}
   localStorage.clear()
   window.showToast = vi.fn()
   container = document.createElement('div')
@@ -95,6 +97,30 @@ const plan = (snap: Snapshot) => {
 }
 
 type Board = Awaited<ReturnType<typeof loadBoard>>
+
+/** A second person of the organization, `kind` a person or an agent. */
+const OTHER = 'other-person'
+const other = (snap: Snapshot, kind: 'person' | 'agent' = 'person') =>
+  snap.profiles.push({
+    ...snap.profiles[0],
+    id: OTHER,
+    auth_user_id: undefined,
+    name: kind === 'agent' ? 'Agent' : 'Other',
+    initials: 'OT',
+    org_role: 'user',
+    kind,
+  })
+
+/** One task each for the fixture's person (mine, QN-1) and OTHER
+    (theirs, QN-2), 4 hours this week alone. */
+const twoPeople =
+  (kind: 'person' | 'agent' = 'person') =>
+  (snap: Snapshot) => {
+    other(snap, kind)
+    const dated = { remaining_hours: 4, start_week: week(0), end_week: week(0) }
+    snap.issues.push({ ...taskRow(snap, 'mine', 'todo', 1), ...dated })
+    snap.issues.push({ ...taskRow(snap, 'theirs', 'todo', 2), assignee_id: OTHER, ...dated })
+  }
 
 async function renderRoadmap(board: Board) {
   const { Roadmap } = await import('./Roadmap')
@@ -186,6 +212,72 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     board.server.unavailable = []
     await board.answer()
     expect(cells(me).find((c) => c.week === TODAY_WEEK)?.text).toMatch(/^\d+%$/)
+  })
+
+  it('reads unknown, never a figure, where the owner-load call failed', async () => {
+    const board = await loadBoard(network, plan, { scope: 'plan' })
+    const me = board.snapshot.profiles[0].id
+    board.server.failLoads = new Error('down')
+    await renderRoadmap(board)
+    const failed = cells(me)
+    expect(failed.length).toBeGreaterThan(0)
+    for (const cell of failed) {
+      expect(cell.unknown).toBe(true)
+      expect(cell.waiting).toBe(false)
+      expect(cell.text).toBe('unknown')
+      expect(cell.hours).toBeUndefined()
+      expect(cell.pct).toBeUndefined()
+      expect(cell.label).toContain('workload unknown')
+    }
+  })
+
+  it("moves only the dragged task's weeks while its bar is dragged", async () => {
+    const board = await loadBoard(network, twoPeople())
+    const me = board.snapshot.profiles[0].id
+    await renderRoadmap(board)
+    const hoursOf = (id: string) =>
+      Object.fromEntries(cells(id).map((c) => [c.week, Number(c.hours)]))
+    const mine = hoursOf(me)
+    const theirs = hoursOf(OTHER)
+    expect(mine[TODAY_WEEK]).toBe(4)
+    expect(mine[TODAY_WEEK + 1]).toBe(0)
+    expect(theirs[TODAY_WEEK]).toBe(4)
+    // drag the person's own bar one week later, and hold it there
+    const handle = board.P.viewTask('roadmap', 'mine')?.id
+    const bar = document.querySelector<HTMLElement>(`[data-bar="${handle}"]`)
+    if (!bar) throw new Error('no bar')
+    const weekW = Number.parseFloat(
+      document
+        .querySelector<HTMLElement>('[data-split-strip]')
+        ?.style.getPropertyValue('--res-week') ?? '',
+    )
+    expect(weekW).toBeGreaterThan(0)
+    const pointer = (type: string, clientX: number) =>
+      new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId: 1 })
+    await act(async () => bar.dispatchEvent(pointer('pointerdown', 100)))
+    await act(async () => bar.dispatchEvent(pointer('pointermove', 100 + weekW)))
+    // the dragged task's two weeks change, and nothing else of anyone's
+    const dragged = hoursOf(me)
+    expect(dragged[TODAY_WEEK]).toBe(0)
+    expect(dragged[TODAY_WEEK + 1]).toBe(4)
+    for (const week of Object.keys(mine).map(Number))
+      if (week !== TODAY_WEEK && week !== TODAY_WEEK + 1) expect(dragged[week]).toBe(mine[week])
+    expect(hoursOf(OTHER)).toEqual(theirs)
+  })
+
+  it("shows an agent's hours, not a percentage", async () => {
+    const board = await loadBoard(network, twoPeople('agent'))
+    await renderRoadmap(board)
+    const agent = cells(OTHER)
+    const thisWeek = agent.find((c) => c.week === TODAY_WEEK)
+    expect(thisWeek?.text).toBe('4 h')
+    expect(thisWeek?.hours).toBe('4')
+    expect(thisWeek?.pct).toBeUndefined()
+    for (const cell of agent) expect(cell.text).not.toContain('%')
+    // the person beside it reads a percentage of their week
+    expect(cells(board.snapshot.profiles[0].id).find((c) => c.week === TODAY_WEEK)?.text).toMatch(
+      /^\d+%$/,
+    )
   })
 
   it("reads a guest's people one call each, the 50 with the most rows, and the rest as unknown", async () => {

@@ -26,7 +26,8 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    (store/boardStandIn.setup.ts), at once and again on each delivery, unless
    a test holds, forces or fails it (`server`), and so do the owner loads
    the delays of tasks only its answer brings read (planning:ownerLoads,
-   store/ownerLoadsStandIn.setup.ts), past `server.unavailable`. The
+   store/ownerLoadsStandIn.setup.ts), past `server.unavailable`, unless a
+   test holds or fails them (`server.holdLoads`, `server.failLoads`). The
    Overview's queries (overview:summary, risk, attention and paused) answer
    through their stand-in (store/overviewStandIn.setup.ts) the same way,
    unless a test holds, forces, fails or edits them (`server.overview`), so
@@ -151,8 +152,14 @@ export async function loadBoard(
     unavailable: string[]
     /** whether the owner-load calls wait for `answer()` */
     holdLoads: boolean
+    /** what the owner-load calls fail with, while set */
+    failLoads: unknown
     /** the owner-load calls open now */
-    loads: Set<{ args: OwnerLoadsArgs; next: (value: unknown) => void }>
+    loads: Set<{
+      args: OwnerLoadsArgs
+      next: (value: unknown) => void
+      fail?: (e: unknown) => void
+    }>
     /** the Overview's queries: `hold` keeps their answers back, or those
         of the queries it names, `force` answers states the workspace
         cannot reach, `fail` fails a query `failing` names, `edit` changes
@@ -217,6 +224,7 @@ export async function loadBoard(
     open: new Set(),
     unavailable: [],
     holdLoads: false,
+    failLoads: undefined,
     loads: new Set(),
     roadmap: {
       hold: false,
@@ -272,6 +280,16 @@ export async function loadBoard(
     })
     sub.next(structuredClone(r.edit ? r.edit(sub.name, answer, sub.args) : answer))
   }
+  /** Answers owner-load call `call` from the snapshot as it is now, or
+      fails it, as the test says. */
+  const answerLoads = (call: {
+    args: OwnerLoadsArgs
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) =>
+    server.failLoads !== undefined
+      ? call.fail?.(server.failLoads)
+      : call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
   const answerOf = (args: BoardArgs): BoardAnswer => {
     const answer = boardStandIn(snapshot, args, { sees, force: server.force ?? undefined })
     return server.edit ? server.edit(answer) : answer
@@ -301,8 +319,7 @@ export async function loadBoard(
     for (const sub of server.open)
       if (server.fail !== undefined) sub.fail?.(server.fail)
       else sub.next(structuredClone(answerOf(sub.args)))
-    for (const call of server.loads)
-      call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
+    for (const call of server.loads) answerLoads(call)
     for (const sub of server.overview.open) answerOverview(sub)
     for (const sub of server.sync.open) answerSync(sub)
     for (const sub of server.roadmap.open) answerRoadmapSub(sub)
@@ -332,10 +349,9 @@ export async function loadBoard(
       return () => server.roadmap.open.delete(sub)
     }
     if (name === 'planning:ownerLoads') {
-      const call = { args: args as OwnerLoadsArgs, next }
+      const call = { args: args as OwnerLoadsArgs, next, fail }
       server.loads.add(call)
-      if (!server.holdLoads)
-        next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
+      if (!server.holdLoads) answerLoads(call)
       return () => server.loads.delete(call)
     }
     if (name === 'teamSync:agenda') {
