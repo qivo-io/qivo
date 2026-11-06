@@ -28,9 +28,9 @@ import { LIMITS } from '../../../convex/lib/limits'
 import { CopyValue } from '../../components/CopyValue'
 import { LimitedInput } from '../../components/LimitedField'
 import { PageFold } from '../../components/pageFold'
+import { pagesState, useMoveFocus } from '../../components/pageMoves'
 import { Avatar, Icon, Seg } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsGroup, SettingsSection } from '../../components/settingsPage'
-import { pagesState, useMoveFocus } from '../../components/useMoveFocus'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { cleanName, overLimit, sentence } from '../../lib/fieldLimits'
 import { nameInitials } from '../../lib/initials'
@@ -1077,10 +1077,10 @@ export function OrgUsersPage({
       hook="users"
       tooLong={search.tooLong}
       focus={move}
-      held={{
-        text: 'The user list is not ready yet. Try again in a few minutes.',
+      held={() => ({
+        line: 'The user list is not ready yet. Try again in a few minutes.',
         retry: false,
-      }}
+      })}
       words={{
         loading: 'Loading people…',
         failed: "Couldn't load people.",

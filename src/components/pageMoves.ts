@@ -1,17 +1,12 @@
-/* The focus that follows Previous, Next and Retry on a list shown a page at
-   a time (lib/pagedList.ts usePagedPages), and the state such a list shows
-   for its data attributes and aria-busy. Settings › Projects, Archived
-   projects and Settings › Users use them with their end line
-   (components/pageFold.tsx PageFold). */
-import React from 'react'
+/* The focus that follows Previous and Next on a list shown a page at a
+   time, and the list's state for its data attributes, beside the line
+   that ends the page (pageFold.tsx). Nothing here reads the store. */
+import { useLayoutEffect, useRef } from 'react'
 import { restoreFocus } from '../lib/focusVisibility'
 import type { PagedPages } from '../lib/pagedList'
 
-/** A page's Previous and Next, and its Retry, through useMoveFocus. */
-export type MoveFocus = { move: (to: 'next' | 'previous') => void; retry: () => void }
-
-/** A page list's state for its `data-*-state` and aria-busy: loading,
-    failed, refreshing after the tab showed again, or ok. */
+/** A page list's state for its `data-*-state` and aria-busy, which is
+    loading, failed, refreshing after the tab showed again, or ok. */
 export const pagesState = (page: Pick<PagedPages<unknown, unknown>, 'phase' | 'refreshing'>) =>
   page.phase === 'first'
     ? 'loading'
@@ -21,13 +16,17 @@ export const pagesState = (page: Pick<PagedPages<unknown, unknown>, 'phase' | 'r
         ? 'refreshing'
         : 'ok'
 
+/** A page's Previous and Next, and its Retry, through useMoveFocus. */
+export type MoveFocus = { move: (to: 'next' | 'previous') => void; retry: () => void }
+
 /**
- * Focus for a page shown a page at a time: after a move that replaced the
- * page, `first()`, the first row's button, else `rest()`, the search box;
- * after one that failed, its Retry. Only while focus is on the page's
- * fold or nowhere, so focus that moved on stays. Answers the move to call
- * for Previous and Next, and the page's Retry, which for a failed move
- * counts as that move again, since Retry leaves as the move starts.
+ * Focus for a page shown a page at a time. After a move that replaced the
+ * page it goes to `first()`, the first row's button, else to `rest()`, the
+ * search box, and after one that failed to its Retry. It moves only while
+ * focus is on the page's fold or nowhere, so focus that moved on stays.
+ * Answers the move to call for Previous and Next, and the page's Retry,
+ * which for a failed move counts as that move again, since Retry leaves as
+ * the move starts.
  */
 export function useMoveFocus(
   page: PagedPages<unknown, unknown>,
@@ -35,9 +34,9 @@ export function useMoveFocus(
   first: () => HTMLElement | null,
   rest: () => HTMLElement | null,
 ): MoveFocus {
-  const moved = React.useRef(false)
+  const moved = useRef(false)
   const at = `${page.starts.length}:${String(page.starts[page.starts.length - 1])}`
-  React.useLayoutEffect(() => {
+  useLayoutEffect(() => {
     if (!moved.current || page.moving !== null) return
     moved.current = false
     const active = document.activeElement

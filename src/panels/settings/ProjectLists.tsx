@@ -39,9 +39,9 @@ import type {
 import { LimitedInput } from '../../components/LimitedField'
 import { navRowDiv } from '../../components/navRow'
 import { PageFold } from '../../components/pageFold'
+import { pagesState, useMoveFocus } from '../../components/pageMoves'
 import { Icon, MenuItem, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsSection } from '../../components/settingsPage'
-import { pagesState, useMoveFocus } from '../../components/useMoveFocus'
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
 import {
   focusAround,
@@ -74,6 +74,14 @@ import {
 } from './projectListReads'
 
 const noteClass = 'text-sm text-text-2 px-0.5 py-1'
+
+/** What a Settings list's page says for an answer with no rows (PageFold
+    `held`): the server's sentence or `words`, with Retry unless the list is
+    not ready. */
+const heldLine = (
+  answer: SettingsListAnswer<unknown> | null,
+  words: { notReady: string; unavailable: string },
+) => ({ line: heldSentence(answer, words), retry: answer?.state !== 'not_ready' })
 
 /** The organizations a page lists from, the login's seats (P.orgs): the
     home organization first, then the others by name. */
@@ -225,14 +233,6 @@ function ListSearch({
     />
   )
 }
-
-/** What a page of the project lists says for an answer with no rows
-    (PageFold `held`): its sentence (heldSentence), with Retry except
-    while the organization is not ready. */
-const heldLine = (
-  answer: SettingsListAnswer<unknown> | null,
-  words: { notReady: string; unavailable: string },
-) => ({ text: heldSentence(answer, words), retry: answer?.state !== 'not_ready' })
 
 /**
  * Whether New sub-project… and Add sub-project show for `row`: its own
@@ -486,10 +486,12 @@ export function OrgProjectsPage({
               hook="settings-projects"
               tooLong={search.tooLong}
               focus={move}
-              held={heldLine(page.answer, {
-                notReady: "Projects can't be listed yet. Try again in a few minutes.",
-                unavailable: "Couldn't load projects.",
-              })}
+              held={(answer) =>
+                heldLine(answer, {
+                  notReady: "Projects can't be listed yet. Try again in a few minutes.",
+                  unavailable: "Couldn't load projects.",
+                })
+              }
               words={{
                 loading: 'Loading projects…',
                 failed: "Couldn't load projects.",
@@ -1175,10 +1177,12 @@ export function ArchivedProjectsPage() {
             hook="archived-projects"
             tooLong={search.tooLong}
             focus={move}
-            held={heldLine(page.answer, {
-              notReady: "Archived projects can't be listed yet. Try again in a few minutes.",
-              unavailable: "Couldn't load archived projects.",
-            })}
+            held={(answer) =>
+              heldLine(answer, {
+                notReady: "Archived projects can't be listed yet. Try again in a few minutes.",
+                unavailable: "Couldn't load archived projects.",
+              })
+            }
             words={{
               loading: 'Loading archived projects…',
               failed: "Couldn't load archived projects.",

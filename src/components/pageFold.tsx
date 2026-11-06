@@ -1,20 +1,23 @@
-/* The end line of a list shown a page at a time (lib/pagedList.ts
-   usePagedPages), with Previous and Next. Settings › Projects and Archived
-   projects (panels/settings/ProjectLists.tsx) and Settings › Users
-   (panels/settings/UsersSettings.tsx) share it, each with its own words and
-   data attributes, and the focus that follows its moves
-   (components/useMoveFocus.ts). */
-import type React from 'react'
+/* The line that ends a list shown a page at a time (lib/pagedList.ts
+   usePagedPages and pageEnd), with Previous and Next, and the focus that
+   follows them. Settings › Projects and Archived projects
+   (panels/settings/ProjectLists.tsx) and Settings › Users
+   (panels/settings/UsersSettings.tsx) share them, each with its own data
+   attributes and words; a later page shown a page at a time takes them
+   from here, with the focus and state of pageMoves.ts. Nothing here reads
+   the store. */
+import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { LIMITS } from '../../convex/lib/limits'
 import { limitSentence } from '../lib/fieldLimits'
 import type { PagedPages, PageEnd } from '../lib/pagedList'
-import type { MoveFocus } from './useMoveFocus'
+import type { MoveFocus } from './pageMoves'
 
 /** The sentences of one paged page (PageFold). `stopped` and
-    `stoppedEmpty` say that a page's read stopped part way, with rows and
-    without, and default to the list's own words. */
+    `stoppedEmpty` say that a page whose read stopped early goes on with
+    Next, with rows and without; `stuck` that a read stopped without
+    moving, beside Retry. */
 export type PageWords = {
   loading: string
   failed: string
@@ -23,20 +26,21 @@ export type PageWords = {
   nomore: string
   stopped?: string
   stoppedEmpty?: string
+  stuck?: string
 }
 
-/** What a page says for an answer with no rows (`held`): its sentence,
-    and whether it offers Retry, as a refusal does and not ready does not. */
-export type HeldLine = { text: string; retry: boolean }
+/** What an answer with no rows says (`held`), and whether Retry shows
+    beside it. */
+export type HeldLine = { line: string; retry: boolean }
 
 /**
- * The line that ends a page of a list shown a page at a time (lib/pagedList.ts
- * pageEnd), with Previous and Next. `hook` names its data attributes. A move
- * that runs keeps its button with static text and no action, so keyboard
- * focus stays on it; a move that failed keeps the page, says so with Retry,
- * and keeps the other move beside it. `focus` runs the moves and Retry, so
- * focus follows them (useMoveFocus). `held` is what an answer with no rows
- * says, which only the page knows how to read from its answer.
+ * The line that ends a page (lib/pagedList.ts pageEnd), with Previous and
+ * Next. `hook` names its data attributes. A move that runs keeps its
+ * button with static text and no action, so keyboard focus stays on it; a
+ * move that failed keeps the page, says so with Retry, and keeps the other
+ * move beside it. `held` words an answer with no rows. `focus` runs the
+ * moves and Retry, so focus follows them (useMoveFocus). `tooLong` says
+ * the search is past its limit, which asks nothing new.
  */
 export function PageFold<A>({
   page,
@@ -51,7 +55,7 @@ export function PageFold<A>({
   end: PageEnd
   hook: string
   words: PageWords
-  held: HeldLine
+  held: (answer: A | null) => HeldLine
   tooLong: boolean
   focus: MoveFocus
 }) {
@@ -88,9 +92,9 @@ export function PageFold<A>({
       {page.hasNext && failed !== 'next' && button('next')}
     </>
   )
-  let line: React.ReactNode = null
+  let line: ReactNode = null
   let alert = false
-  let action: React.ReactNode = null
+  let action: ReactNode = null
   if (tooLong) line = limitSentence(LIMITS.search)
   else if (page.failedMove !== null) {
     alert = true
@@ -101,17 +105,19 @@ export function PageFold<A>({
       case 'loading':
         line = words.loading
         break
-      case 'held':
-        line = held.text
-        action = held.retry ? retry : null
+      case 'held': {
+        const said = held(page.answer)
+        line = said.line
+        action = said.retry ? retry : null
         break
+      }
       case 'failed':
         alert = true
         line = words.failed
         action = retry
         break
       case 'stuck':
-        line = 'Qivo could not check part of the list.'
+        line = words.stuck ?? 'Qivo could not check part of the list.'
         action = retry
         break
       case 'more':
