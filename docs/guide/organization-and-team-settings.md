@@ -199,9 +199,9 @@ Guests have a separate capacity value in each organization that invites them.
 more** adds the next 25. The search finds any team by the words of its name,
 in any order and ignoring case and accents, also teams not shown yet. Team
 leaders who are not organization admins see the teams they lead. Each team
-shows how many members it has, or **Not counted yet** while Qivo counts them,
-never 0. Right after someone leaves the organization, the count can be one
-higher than the members listed for a moment. A new team shows once Qivo has
+shows how many members it has. Where Qivo has no count yet, it reads **Not
+counted yet**, never 0. Right after someone leaves the organization, the
+count can be one higher than the members listed for a moment. A new team shows once Qivo has
 created it. The organization's last team can't be deleted, so its **Delete**
 stays off.
 
