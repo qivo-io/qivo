@@ -68,6 +68,16 @@ const SECTION_ROWS = 25
 /** The most weeks a range spans (LIMITS.roadmapWeeks.max). */
 const RANGE_WEEKS = 260
 
+/** The server's numbers the stand-in copies, which its parity test
+    (src/store/milestoneStandInParity.test.ts) compares with the server's
+    own: the module imports none of the server's read code, which the
+    benchmark's worker cannot load. */
+export const MILESTONE_STAND_IN_NUMBERS = {
+  overflowDays: OVERFLOW_DAYS,
+  sectionRows: SECTION_ROWS,
+  rangeWeeks: RANGE_WEEKS,
+}
+
 /** The sentence of a read of several projects too large for one request. */
 export const MILESTONES_TOO_LARGE =
   'these projects need more reads than one request allows, so Qivo cannot show their milestones at once. Choose fewer projects.'
