@@ -46,6 +46,8 @@ let loads: Map<string, (value: OwnerLoadsJson) => void>
 /* the Board's answer, for a case that reads it beside the agenda */
 let boardAnswer: BoardAnswer
 let lastComments: { args: Record<string, unknown>; unsub: ReturnType<typeof vi.fn> }[]
+/* the task window's own reads, by ref */
+let taskReads: Map<string, (value: unknown) => void>
 let writes: {
   name: string
   args: Record<string, unknown>
@@ -151,6 +153,7 @@ beforeEach(async () => {
   asked = []
   loads = new Map()
   lastComments = []
+  taskReads = new Map()
   writes = []
   network.query.mockResolvedValue(null)
   network.mutation.mockImplementation((ref, args) =>
@@ -184,7 +187,8 @@ beforeEach(async () => {
       const unsub = vi.fn()
       lastComments.push({ args, unsub })
       return unsub
-    }
+    } else if (name === 'snapshot:threadComments') receive({ comments: [], earlier: false })
+    else if (name === 'taskWindow:task') taskReads.set(String(args.ref), receive)
     return () => {}
   })
   const { TASKS } = await import('./liveParts')
@@ -530,6 +534,80 @@ describe("a stopped meeting's rows", () => {
     const verdict = store.P.delayOf(store.P.viewTask('board:desktop', 'card') ?? '')
     expect(verdict?.status).not.toBe('ok')
     expect(verdict).not.toBeNull()
+  })
+})
+
+describe("a stale meeting's rows", () => {
+  it("never stand in for the cache's fresh spans of their tasks in the window's delay", async () => {
+    snapshot.projects[0].track_delay = true
+    deliver(snapshot)
+    await turn()
+    const week = store.P.TODAY_WEEK
+    // the meeting read Far at 4 hours this week, then stopped fitting, so
+    // it keeps that row while its read stays live
+    answer = ok([row('far', 9, { remaining_hours: 4, start_week: iso(week), end_week: iso(week) })])
+    await watch(await keyOf({ kind: 'all' }))
+    await serve({ state: 'over_budget' })
+    expect(store.P.syncTask('far')?.remaining).toBe(4)
+    // the window shows Card, the same person's 16 hours this week, due by
+    // the week's end
+    const end = weekToDate(week)
+    end.setDate(end.getDate() + 6)
+    const {
+      blocked_by: _b,
+      delay: _d,
+      ...card
+    } = row('card', 10, {
+      status: 'progress',
+      remaining_hours: 16,
+      start_week: iso(week),
+      end_week: iso(week),
+      due_date: isoFromDate(end),
+    })
+    store.P.watchComments('card', snapshot.orgs[0].id)
+    store.P.showSections({}, true)
+    const read = taskReads.get('card')
+    if (!read) throw new Error('no task read')
+    read({
+      state: 'ok',
+      task: { ...card, description: '' },
+      level: 'user',
+      labels: [],
+      follow: null,
+      parent: null,
+      subtasks: { rows: [], complete: true },
+    })
+    await turn()
+    // the cache answers the person's load as it is now, after someone gave
+    // Far 32 hours this week once the meeting stopped
+    const receive = loads.get(me())
+    if (!receive) throw new Error('no owner load asked')
+    receive({
+      hidden: 'counted',
+      owners: [
+        {
+          owner_id: me(),
+          state: 'ok',
+          spans: [
+            {
+              issue_id: 'far',
+              project_id: sub(),
+              start_week: iso(week),
+              end_week: iso(week),
+              remaining: 32,
+              remaining_set_at: null,
+            },
+          ],
+          paused: [],
+        },
+      ],
+    })
+    await turn()
+    const view = store.P.taskDetail('card')?.view
+    if (!view) throw new Error('no window view')
+    // the kept row's 4 hours would leave room for Card this week, which
+    // must fail, as the cache's 32 push it past its due date
+    expect(store.P.windowDelay(view)).toMatchObject({ status: 'late' })
   })
 })
 

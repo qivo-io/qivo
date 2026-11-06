@@ -203,9 +203,10 @@ export function createViewRows(
     any: () => anchors.size > 0,
     /** Whether more than one view holds rows. */
     shared: () => anchors.size > 1,
-    /** Whether a live view holds task `uuid`. */
-    liveHolds(uuid: string): boolean {
-      for (const [slot, rows] of anchors) if (live(slot) && rows.has(uuid)) return true
+    /** Whether a live view holds task `uuid`, or a view `which` names
+        when given. */
+    liveHolds(uuid: string, which: (slot: ViewSlot) => boolean = live): boolean {
+      for (const [slot, rows] of anchors) if (which(slot) && rows.has(uuid)) return true
       return false
     },
     /** Starts a repaint: every view's rows as its anchor holds them, the

@@ -39,12 +39,15 @@ export type ViewDelayCtx = {
   load: (org: string, owner: string) => OwnerLoad
   /** whether the workspace holds task `uuid` */
   held: (uuid: string) => boolean
-  /** whether a view's rows hold task `uuid` (its row on screen) */
+  /** whether a view's rows hold task `uuid` (its row on screen), among the
+      views whose rows still hear every change, so none whose read stopped
+      or kept its rows past a refusal or a failure (store/planner.ts
+      viewDelayCtx) */
   inView: (uuid: string) => boolean
   /** the spans of owner `owner`'s tasks the workspace holds, pending edits
       included (taskIndex.ts shownSpans) */
   heldSpans: (owner: string) => LoadSpan[]
-  /** every row the views hold that the workspace does not, painted */
+  /** every row those views hold that the workspace does not, painted */
   viewRows: () => Iterable<ViewRow>
   /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf) */
   capacity: (id: string) => number

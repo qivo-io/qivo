@@ -3793,20 +3793,30 @@ const milestoneOrg = (row: MilestoneRow): string =>
 const hideProjectMilestones = (id: string): Paint =>
   milestonePaint({ projects: [id] }, () => milestoneRows.hideProjects(new Set([id])))
 
+/* Whether view `slot`'s rows may stand in for the owner-load cache's spans
+   of their tasks in a delay, which needs its read live and its newest
+   result to have taken its rows, not kept them past a refusal or a failure
+   (ViewRead `behind`) as Team sync's stale meeting does. */
+const viewLends = (slot: ViewSlot) => viewLive(slot) && !viewReads.get(slot)?.behind
+
 /** What judging a task only a view holds reads from the store
     (store/viewDelay.ts). The rows that stand in for the cache's spans of
-    their tasks are those of the live reads: a stopped read's rows, as a
-    kept Team sync's or Overview's behind the Board, hear no change made
-    since, so the cache's spans of those tasks, which stay live while some
-    view reads their owner, are the newer. */
+    their tasks are those of the live reads whose newest result took its
+    rows (viewLends). A stopped read's rows, as a kept Team sync's or
+    Overview's behind the Board, and the rows a live read kept past a
+    refusal or a failure, as Team sync's stale meeting keeps, hear no
+    change made since, so the cache's spans of those tasks, which stay live
+    while some view reads their owner, are the newer. Which copies lead in
+    lookups and which reads hold a write stay with the live reads
+    (viewLive, viewPartHeld). */
 const viewDelayCtx: ViewDelayCtx = {
   load: (org, owner) => ownerLoads.loadOf(org, owner),
   held: (uuid) => uuidToKey.has(uuid),
-  inView: (uuid) => viewRows.liveHolds(uuid),
+  inView: (uuid) => viewRows.liveHolds(uuid, viewLends),
   heldSpans: (owner) => tasks.shownSpans(owner),
   *viewRows() {
     for (const [slot, held] of viewRows.views()) {
-      if (!viewLive(slot)) continue
+      if (!viewLends(slot)) continue
       for (const row of held.values()) if (!uuidToKey.has(row.id)) yield row
     }
   },
