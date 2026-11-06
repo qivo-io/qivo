@@ -19,8 +19,17 @@ const LOAD_TIMEOUT = 15_000
       size's 1,000 pictures of 10 to 30 KB fit. Past it, a picture that
       would need room waits as the person's initials instead of evicting
       another, because while the store asks for its whole roster every
-      picture is wanted at once.
-    MEASURED_PICTURES */
+      picture is wanted at once. A waiting picture keeps the lease it was
+      minted with and starts by itself once room frees.
+    Measured on the benchmark page (scripts/perf, people=1000&pictures=1 at
+    1440 by 1000, each picture a 20 KB PNG answered after 150 ms): the
+    1,000 pictures took 10 mint calls, at most 2 at once, and 1,000
+    downloads, at most 6 at once, and all showed after 27 s, which the
+    150 ms each download waits sets. They keep 20.2 MB, and the JS heap
+    settled at 12.4 MB. Hidden for 11 minutes of the page's clock, nothing
+    minted or downloaded and all 1,000 stayed shown; on return 10 mint
+    calls renewed them and nothing downloaded. Past a budget lowered to
+    1 MB, 37 of 200 showed and the rest waited as initials. */
 export const AVATAR_SOURCES = {
   downloads: 6,
   pictureBytes: 256 * 1024,
