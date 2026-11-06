@@ -5,9 +5,10 @@
    sub-projects as Settings › Projects lists them (ProjectLists.tsx), and
    sends every write with what it showed, so it works the same for a
    project the workspace does not hold, whose address then names it by its
-   uuid (lib/router.ts noteProjectPage). It reads the workspace only for
-   the names the removal window and the Archive or delete window give, and
-   the avatars. */
+   uuid (lib/router.ts noteProjectPage). It reads the workspace only to
+   know whether it holds the project, for the address and the page a
+   delete returns to, for the names the removal window and the Archive or
+   delete window give, and for the avatars. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'

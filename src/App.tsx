@@ -1610,8 +1610,8 @@ function App() {
     })
 
   // "New project" and "New sub-project" are separate dialogs; kind:"program"
-  // (sidebar header +, palette) opens the project one, everything else —
-  // always parented — opens the sub-project one. `onCreated` hears the id
+  // (sidebar header +, palette) opens the project one, everything else,
+  // always parented, opens the sub-project one. `onCreated` hears the id
   // of a sub-project the dialog creates, as Settings › Projects keeps it in
   // its open list until the server's list holds it.
   const openNewProject = (

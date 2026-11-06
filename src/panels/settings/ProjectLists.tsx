@@ -12,13 +12,15 @@
    scrolls into view or Load more is pressed, one project open at a time,
    and an archived project's sub-projects (archivedSubProjects) only when
    asked for, one entry at a time, each live while it shows. Every row,
-   right and chip comes from those answers: an organization admin's rows
-   are every project of the organization, anyone else's what their seat
-   sees, and New sub-project…, Restore and Delete come from each row's own
-   rights. The pages read no task, and of the store only the organizations
-   to choose from and a sub-project created here until the server's list
-   holds it. Each read stops while the tab is hidden and when the page is
-   left, and keeps no answer past it. */
+   chip and row right comes from those answers: an organization admin's
+   rows are every project of the organization, anyone else's what their
+   seat sees, and New sub-project…, Restore and Delete come from each row's
+   own rights. The pages read no task, and of the store only the
+   organizations to choose from, the home organization and whether the
+   login may create a project there (P.canCreateProject, for New project),
+   the login's seats for the page memory, and a sub-project created here
+   until the server's list holds it. Each read stops while the tab is
+   hidden and when the page is left, and keeps no answer past it. */
 import React, { useState as useStateS } from 'react'
 import { Button } from '@/components/ui/button'
 import { NativeSelect } from '@/components/ui/native-select'

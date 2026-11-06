@@ -1,11 +1,11 @@
 /* The Settings project lists (convex/projectSettings.ts projects,
- * subProjects, archived and archivedSubProjects) against what Settings ›
- * Projects and Archived projects show today. Each case boots the real
- * store from the caller's real workspace, as projectNavParity.test.ts
- * does, and compares, as sets over every batch: the projects list with
- * P.visibleProjects() and each row's right to a sub-project with today's
- * New sub-project rule (P.levelOn is 'lead', src/panels/settings/
- * ProjectSettings.tsx); each top-level project's sub-projects with the live
+ * subProjects, archived and archivedSubProjects) against the store's sets
+ * that Settings › Projects and Archived projects showed before they read
+ * these lists. Each case boots the real store from the caller's real
+ * workspace, as projectNavParity.test.ts does, and compares, as sets over
+ * every batch: the projects list with P.visibleProjects() and each row's
+ * right to a sub-project with the store's New sub-project rule (P.levelOn
+ * is 'lead'); each top-level project's sub-projects with the live
  * children P.canSee keeps; Archived projects with P.archivedProjects less
  * the rows beneath an archived parent, each row's parent and its Restore
  * and Delete with the store's `manage`, in the store's order wherever
@@ -354,7 +354,7 @@ describe('the stand-in at the design size', () => {
   it('lists an admin’s 300 archived top-level projects as the real query does, twelve batches', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // archived a few milliseconds apart, so the order is by archive time alone
+    // archived a second apart, so the order is by archive time alone
     const at = Date.parse('2026-10-01T08:00:00.000Z')
     const old = names('Archived ', 300)
     for (const [i, name] of old.entries())
