@@ -348,6 +348,33 @@ describe('the label picker', () => {
     expect(document.activeElement).toBe(rowOf(rows()[5].id ?? ''))
   })
 
+  it('moves focus after Load more to the first new row, past a task label the batch begins with', async () => {
+    const labels = many(12)
+    await load({ labels, on: [labels[5].id] })
+    force = { batch: 5 }
+    await open()
+    expect(rows().map((r) => r.name)).toEqual([
+      'Label 05',
+      'Label 00',
+      'Label 01',
+      'Label 02',
+      'Label 03',
+      'Label 04',
+    ])
+    const more = document.querySelector<HTMLButtonElement>('[data-picker-more]')
+    more?.focus()
+    await click(more)
+    // the new batch begins with Label 05, which shows at the top already
+    expect(reads.at(-1)?.args.after).toBeTruthy()
+    expect(rows().slice(6).map((r) => r.name)).toEqual([
+      'Label 06',
+      'Label 07',
+      'Label 08',
+      'Label 09',
+    ])
+    expect(document.activeElement).toBe(rowOf(labels[6].id))
+  })
+
   it('gathers at most PICKER_CAPS.labels, then asks for a search', async () => {
     await load({ labels: many(30) })
     // the picker's own copy of the module, which load imported afresh

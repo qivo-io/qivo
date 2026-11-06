@@ -137,9 +137,13 @@ export function LabelPickerPopup({
     })
   }
   const exact = ready?.exact ?? null
+  // the ids shown at their place in the server's order, where the rows of
+  // a Load more's batch begin; a task label and `exact` show above them
+  const inOrder = new Set<string>()
   for (const row of exact ? [exact, ...served] : served) {
     if (shown.has(row.id)) continue
     shown.add(row.id)
+    if (row !== exact) inOrder.add(row.id)
     rows.push({ id: row.id, name: row.name, color: row.color, current: false })
   }
 
@@ -201,7 +205,9 @@ export function LabelPickerPopup({
   })
 
   // Load more keeps focus while it reads; once its batch lands, focus on
-  // it, or nowhere, moves to the first new row, else the search box
+  // it, or nowhere, moves to the first row of the batch that shows in the
+  // server's order, not one shown above (a task label or `exact`), else
+  // to the search box
   const from = useRef<number | null>(null)
   useLayoutEffect(() => {
     if (from.current === null || list.phase === 'more') return
@@ -210,7 +216,8 @@ export function LabelPickerPopup({
     const active = document.activeElement
     const onMore = active instanceof HTMLElement && active.matches('[data-picker-more]')
     if (!onMore && active && active !== document.body && active.isConnected) return
-    const row = list.phase === 'ready' ? list.rows[at] : undefined
+    const row =
+      list.phase === 'ready' ? list.rows.slice(at).find((r) => inOrder.has(r.id)) : undefined
     const target = row
       ? [...(box.current?.querySelectorAll<HTMLElement>('[data-label-option]') ?? [])].find(
           (option) => option.dataset.labelOption === row.id,
