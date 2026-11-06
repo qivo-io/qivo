@@ -357,9 +357,16 @@
 //                        seat's items are not complete, so the count is a
 //                        lower bound and the item answers building)
 //   thread (0)           comments of ordinary text, a few sentences each,
-//                        some with a list, a link or a mention, on the task
-//                        the benchmark opens, the first task whose thread or
-//                        history the page asks for
+//                        some with a list, a link or a mention, every tenth
+//                        the signed-in person's, on the task the benchmark
+//                        opens, the first task whose thread or history the
+//                        page asks for
+//   threadunread         with thread, gives the thread to the first task
+//                        from the start instead, with an unread comment
+//                        message for the signed-in person at the time of
+//                        that comment number, so the Inbox lists the task
+//                        and its New line can fall among the rows the task
+//                        window lets go, for screenshots
 //   threadchanges (0)    changes in that task's history, their times spread
 //                        over the same weeks as its comments
 //   threadstate          a state the thread's earlier reads
@@ -1581,7 +1588,8 @@ function threadOf(issueId) {
     comments.push({
       id: id('8', n),
       issue_id: issueId,
-      author: profiles[1 + (n % Math.max(1, profiles.length - 1))]?.id ?? me.id,
+      author:
+        n % 10 === 0 ? me.id : (profiles[1 + (n % Math.max(1, profiles.length - 1))]?.id ?? me.id),
       body: threadBody(n),
       created_at: new Date(start + Math.round(((n + 0.5) / threadComments) * span)).toISOString(),
     })
@@ -1671,6 +1679,26 @@ let messageCount = 0
     detail: 'Status changed',
     created_at: new Date(start + n * 60_000).toISOString(),
   }))
+}
+/* threadunread=<n>: the first task's thread from the start, with an unread
+   comment message at the time of its comment n. */
+{
+  const at = parameters.get('threadunread')
+  const task = snapshot.issues.find((row) => row.id === id('4', 0))
+  if (at !== null && threadComments > 0 && task) {
+    threadOf(task.id)
+    const comment = comments[Math.min(Number(at), threadComments - 1)]
+    snapshot.messages.push({
+      id: id('6', messageCount++),
+      org_id: org,
+      recipient_id: me.id,
+      issue_id: task.id,
+      issue_title: task.title,
+      kind: 'comment',
+      detail: 'New comment',
+      created_at: comment.created_at,
+    })
+  }
 }
 const roadmapCounts = new Map()
 /* The windows of each organization's parts, as the app chooses them from

@@ -547,6 +547,36 @@ describe('the benchmark server', () => {
     })
   })
 
+  it('gives the first task the thread from the start with threadunread, and an unread message at that comment', async () => {
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&thread=200&threadunread=120',
+    )
+    await send({ type: 'query', id: 'q', name: 'snapshot:forMe', args: {} })
+    const snapshot = JSON.parse(posted.find((m) => m.to === 'q').text)
+    const first = id('4', 0)
+    const message = snapshot.messages.find((m) => m.issue_id === first)
+    expect(message).toMatchObject({ kind: 'comment', recipient_id: snapshot.myProfileIds[0] })
+    expect(message.read_at ?? null).toBeNull()
+    await send({
+      type: 'query',
+      id: 'live',
+      name: 'snapshot:threadComments',
+      args: { issue_id: first },
+    })
+    const live = JSON.parse(posted.find((m) => m.to === 'live').text)
+    expect(live.comments).toHaveLength(50)
+    // the message's time is comment #120's, among the released ones
+    expect(message.created_at < live.comments[0].created_at).toBe(true)
+    // every tenth comment is the signed-in person's
+    const mine = live.comments.filter((c) => c.author === snapshot.myProfileIds[0])
+    expect(mine).toHaveLength(5)
+    // without threadunread the first task holds no message
+    const usual = await server('tasks=20&latency=0&mbps=100000&thread=200')
+    await usual.send({ type: 'query', id: 'q', name: 'snapshot:forMe', args: {} })
+    const plain = JSON.parse(usual.posted.find((m) => m.to === 'q').text)
+    expect(plain.messages.filter((m) => m.issue_id === first)).toEqual([])
+  })
+
   it('fails or holds the thread reads that threadstate names, and only those', async () => {
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&thread=200&threadstate=newer-error',
