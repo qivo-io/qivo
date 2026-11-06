@@ -40,8 +40,9 @@
  * then the organization's retained Deleted items under deleted/, each
  * stored table read on its own and the items last, each item marked
  * complete or partial with the reason (model/orgExportRead.ts storedBatch,
- * itemsBatch). The step keeps when each live section ended, the items seen
- * changing (at most EXPORT_LIMITS.unsettled, past which the job fails with
+ * itemsBatch). The step keeps when each live section ended and which of
+ * them found a deleted item in flight, the items seen changing (at most
+ * EXPORT_LIMITS.unsettled, past which the job fails with
  * `deleted_changing`), the stored rows left out and the item tallies, for
  * the manifest. A job collecting at the deploy of format 4 goes on into
  * the Deleted items section and finishes as format 4.
@@ -706,6 +707,7 @@ const stepStateRef = makeFunctionReference<
 const vBatchJob = v.object({
   started_at: v.string(),
   ended: v.record(v.string(), v.string()),
+  in_flight: v.array(v.string()),
   unsettled: v.array(v.string()),
 })
 
@@ -754,6 +756,7 @@ const commitPartRef = makeFunctionReference<
     records: number
     skipped: number
     part?: Stored
+    in_flight?: boolean
     unsettled?: string[]
     left_out?: number
     items?: { complete: number; partial: number }
@@ -873,11 +876,14 @@ async function finish(
  * wide pages again. Whether to read narrow lives in the step's memory, not
  * in the stored read state.
  *
- * A Deleted items section's step passes each read the job's start, its
- * live sections' ends and its unsettled items, and gathers the items each
- * read saw changing, the stored rows it left out and the items it called
- * complete or partial for its commit. It stops reading once the unsettled
- * items pass EXPORT_LIMITS.unsettled, and the commit then fails the job. */
+ * A live section's step tells its commit whether any read found a deleted
+ * item in flight (`in_flight`). A Deleted items section's step passes each
+ * read the job's start, its live sections' ends, the live sections that
+ * found an item in flight and its unsettled items, and gathers the items
+ * each read saw changing, the stored rows it left out and the items it
+ * called complete or partial for its commit. It stops reading once the
+ * unsettled items pass EXPORT_LIMITS.unsettled, and the commit then fails
+ * the job. */
 export const step = internalAction({
   args: { export_id: v.string() },
   handler: async (ctx, { export_id }): Promise<null> => {
@@ -892,6 +898,7 @@ export const step = internalAction({
     const batchJob: BatchJob = {
       started_at: job.started_at,
       ended: job.step.ended ?? {},
+      in_flight: job.step.in_flight ?? [],
       unsettled: known,
     }
     // the items this step saw changing that the job did not know yet
@@ -910,6 +917,7 @@ export const step = internalAction({
     let skipped = 0
     let done = false
     let wide = true
+    let inFlight = false
     for (let read = 0; read < EXPORT_LIMITS.reads && raw < EXPORT_LIMITS.part && !done; read++) {
       const batch = await ctx.runQuery(readBatchRef, {
         org_id: job.org_id,
@@ -921,6 +929,7 @@ export const step = internalAction({
         wide = false
         continue
       }
+      if (batch.in_flight) inFlight = true
       for (const id of batch.unsettled ?? []) if (!known.includes(id)) unsettled.add(id)
       leftOut += batch.left_out ?? 0
       items.complete += batch.items?.complete ?? 0
@@ -951,6 +960,7 @@ export const step = internalAction({
       records,
       skipped,
       ...(part === undefined ? {} : { part }),
+      ...(inFlight ? { in_flight: true } : {}),
       ...(deleted ? { unsettled: [...unsettled], left_out: leftOut, items } : {}),
     })
     if (!committed && part !== undefined) await ctx.storage.delete(part.storage_id)
@@ -966,8 +976,10 @@ export const step = internalAction({
  * past EXPORT_LIMITS.parts, or the Deleted items seen changing pass
  * EXPORT_LIMITS.unsettled (`deleted_changing`), since past that the items
  * section could not tell which items to call partial. It records when a
- * live section's read ended (step.ended), and adds a Deleted items step's
- * unsettled items, left-out rows and item tallies to the step. */
+ * live section's read ended (step.ended) and a live section any of whose
+ * reads found a deleted item in flight (step.in_flight), and adds a
+ * Deleted items step's unsettled items, left-out rows and item tallies to
+ * the step. */
 export const commitPart = internalMutation({
   args: {
     export_id: v.string(),
@@ -977,6 +989,8 @@ export const commitPart = internalMutation({
     records: v.number(),
     skipped: v.number(),
     part: v.optional(vStored),
+    // a live section's step whose reads found a deleted item in flight
+    in_flight: v.optional(v.boolean()),
     ...vDeletedStep,
   },
   handler: async (ctx, a): Promise<boolean> => {
@@ -1021,6 +1035,11 @@ export const commitPart = internalMutation({
     const now = new Date().toISOString()
     const ended =
       section.kind === 'live' && a.done ? { ...job.step.ended, [name]: now } : job.step.ended
+    const known = job.step.in_flight ?? []
+    const inFlight =
+      section.kind === 'live' && a.in_flight === true && !known.includes(name)
+        ? [...known, name]
+        : job.step.in_flight
     const leftOut = a.left_out
       ? { ...job.step.left_out, [name]: (job.step.left_out?.[name] ?? 0) + a.left_out }
       : job.step.left_out
@@ -1037,6 +1056,7 @@ export const commitPart = internalMutation({
       bytes,
       counts,
       ...(ended === undefined ? {} : { ended }),
+      ...(inFlight === undefined ? {} : { in_flight: inFlight }),
       ...(unsettled.length === 0 ? {} : { unsettled }),
       ...(leftOut === undefined ? {} : { left_out: leftOut }),
       ...(items === undefined ? {} : { items }),

@@ -203,15 +203,16 @@ during export, or deleted during export. deleted_during_export is true for an
 item deleted after the export began. Its records can also be in data/, as
 the active tables read them before it was deleted; the export leaves out of
 deleted/ the records that data/ already holds for certain, those that existed
-before the export read their table and were deleted only after it. A record
-whose deleted_item_id deleted/items does not list belongs to an item restored
-or deleted for good while the export ran. An item restored while the export
-ran can be in neither part. A restore can also move a subtask or a link to
-another item while the export runs; each record is under the item that held
-it when its table was read, and a link moved while deleted/task_links was
-read can appear twice or not at all. manifest.json counts the items of each kind and
-any record left out because it named another organization or nothing it
-belongs to (deleted_items.left_out).
+before the export read their table and were deleted only after it, when no
+item was on its way to or from Deleted items while that table was read. A
+record whose deleted_item_id deleted/items does not list belongs to an item
+restored or deleted for good while the export ran. An item restored while
+the export ran can be in neither part. A restore can also move a subtask or
+a link to another item while the export runs; each record is under the item
+that held it when its table was read, and a link moved while
+deleted/task_links was read can appear twice or not at all. manifest.json
+counts the items of each kind and any record left out because it named
+another organization or nothing it belongs to (deleted_items.left_out).
 
 A task whose project was moving to or back from Deleted items while the
 export read tasks is left out of tasks, and manifest.json counts such tasks
@@ -496,6 +497,11 @@ export const vExportStep = v.object({
   // read), so the Deleted items section knows which deleted records the
   // live read held for certain; a section starts when the one before ended
   ended: v.optional(v.record(v.string(), v.string())),
+  // the live sections, by key, any of whose reads found a Deleted item in
+  // flight (model/orgExportRead.ts hasItemInFlight), whose rows the live
+  // read may have left out; the Deleted items section keeps every stored
+  // row of their tables, at most the nine tables it stores
+  in_flight: v.optional(v.array(v.string())),
   // the Deleted items seen moving or restoring, or whose records were
   // stored again, while the export read them, at most
   // model/orgExports.ts EXPORT_LIMITS.unsettled; the items section calls

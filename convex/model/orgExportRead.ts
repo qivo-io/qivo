@@ -250,6 +250,14 @@ export async function hasItemInFlight(ctx: QueryCtx, orgId: string): Promise<boo
   return false
 }
 
+/* The live sections whose tables Deleted items stores (lib/orgExport.ts
+ * JOB_ORDER), each of whose reads asks hasItemInFlight, so the Deleted
+ * items section knows which live reads may have left rows out
+ * (storedBatch). */
+const STORED_LIVE: ReadonlySet<OrgExportSection> = new Set(
+  JOB_ORDER.flatMap((section) => (section.kind === 'stored' ? [section.live] : [])),
+)
+
 /** The value `read` gives for `key`, read once while `cache` lasts. */
 function once<V>(cache: Map<string, Promise<V>>, key: string, read: () => Promise<V>): Promise<V> {
   let value = cache.get(key)
@@ -394,13 +402,18 @@ export async function exportDocs(
  * where its reads go on, whether the section is done, and how many tasks it
  * left out because a deleted item was in flight. `retry: 'narrow'` comes
  * with no rows and the cursor it was given, when a wide tasks page's texts
- * did not fit (TEXT_ROOM): read the same cursor again with `wide: false`. */
+ * did not fit (TEXT_ROOM): read the same cursor again with `wide: false`.
+ * `in_flight` comes with a live section of a table Deleted items stores
+ * when the read found a deleted item in flight (hasItemInFlight), so its
+ * rows under absent tasks or projects may have stayed out of it
+ * (storedBatch). */
 export type ExportBatch = {
   rows: OrgExportRow[]
   at: ExportCursor
   done: boolean
   skipped: number
   retry?: 'narrow'
+  in_flight?: true
   // a Deleted items batch: the items seen changing (storedBatch), the
   // stored rows it left out, and the items it called complete and partial
   unsettled?: string[]
@@ -498,7 +511,9 @@ async function parentPage(
  * call reads each such parent again first and skips it unless it still
  * belongs to the organization and still has children the export reads
  * (stillParent). Every child row that names an organization must name
- * this one (exportDocs).
+ * this one (exportDocs). A live section of a table Deleted items stores
+ * answers `in_flight` when it found a deleted item in flight, one indexed
+ * read a state (hasItemInFlight).
  *
  * A top-level section reads one page: at most PAGE_BYTES of rows and the
  * one row past them, plus the reads its rows make (pageSizeOf): six tasks'
@@ -550,9 +565,13 @@ export async function readBatch(
   }
   const parentTable = ORG_EXPORT_SECTIONS[section]
   const live = liveChecks(ctx)
+  // whether a deleted item is in flight, which only a table Deleted items
+  // stores needs to know. The tasks and their links and children then read
+  // projects and parents, and every such section reports it (in_flight).
+  const sawInFlight = STORED_LIVE.has(section) && (await hasItemInFlight(ctx, orgId))
   const inFlight =
-    (section === 'issues' || section === 'issue_links' || parentTable === 'issues') &&
-    (await hasItemInFlight(ctx, orgId))
+    (section === 'issues' || section === 'issue_links' || parentTable === 'issues') && sawInFlight
+  const flagged = sawInFlight ? { in_flight: true as const } : {}
   const pageSize = pageSizeOf(section, inFlight)
   const rows: OrgExportRow[] = []
   let skipped = 0
@@ -586,6 +605,7 @@ export async function readBatch(
       at: at(page.isDone ? null : page.continueCursor),
       done: page.isDone,
       skipped,
+      ...flagged,
     }
   }
   let cursor = from.cursor
@@ -597,7 +617,7 @@ export async function readBatch(
   let paged = false
   for (;;) {
     if (parents !== undefined && parents.at >= parents.ids.length && parents.done)
-      return { rows, at: at(null), done: true, skipped }
+      return { rows, at: at(null), done: true, skipped, ...flagged }
     if (!(await roomLeft(ctx))) break
     if (parents === undefined || parents.at >= parents.ids.length) {
       if (paged) break
@@ -638,7 +658,7 @@ export async function readBatch(
     parents = { ...parents, at: parents.at + 1 }
     cursor = null
   }
-  return { rows, at: at(cursor, parents), done: false, skipped }
+  return { rows, at: at(cursor, parents), done: false, skipped, ...flagged }
 }
 
 /* ---------------------------------------------- the Deleted items section
@@ -656,9 +676,15 @@ export async function readBatch(
  * (`itemsBatch`), each with how much of it the archive holds. */
 
 /** What a Deleted items batch knows of its job: when collection started,
- * when each live section's read ended (step.ended) and the items seen
- * changing so far (step.unsettled). */
-export type BatchJob = { started_at: string; ended: Record<string, string>; unsettled: string[] }
+ * when each live section's read ended (step.ended), the live sections any
+ * of whose reads found a deleted item in flight (step.in_flight) and the
+ * items seen changing so far (step.unsettled). */
+export type BatchJob = {
+  started_at: string
+  ended: Record<string, string>
+  in_flight: string[]
+  unsettled: string[]
+}
 
 /* The stored tables whose check reads another document a row, read
  * JOINED_PAGE_SIZE a page as the live joined sections are. */
@@ -780,9 +806,15 @@ async function storedEndOwned(
  * (storedEndOwned). It also leaves out the rows the live sections exported
  * for certain: a row of an item deleted after its table's live section
  * ended, which existed before that section began and was stored after it
- * ended, so it sat in its live table for the whole read (`job.ended`). Every
- * other row of an item deleted during the export goes out, and the items
- * section flags that item.
+ * ended, so it sat in its live table for the whole read (`job.ended`), when
+ * no read of that section found a deleted item in flight (`job.in_flight`).
+ * Only an item in flight leaves a live row under an absent task or project,
+ * which the live read never reaches, or a live link to a task under an
+ * absent project, which it drops (hasOwnedEndpoint); such a row, stored
+ * later by an item deleted after the read, was never exported, so after a
+ * read that found an item in flight the rule keeps every row, at worst a
+ * flagged duplicate. Every other row of an item deleted during the export
+ * goes out, and the items section flags that item.
  *
  * The answer's `unsettled` names the items whose records may be on both
  * sides or were stored again while the export ran: every item moving or
@@ -828,8 +860,11 @@ async function storedBatch(
   const projects = new Map<string, Promise<boolean>>()
   const projectLive = (id: string) =>
     once(projects, id, async () => (await byId(ctx, 'projects', id))?.org_id === orgId)
-  // the live section of this table: it began when the one before it ended
+  // the live section of this table: it began when the one before it ended,
+  // and it held its rows for certain only if no read of it found an item
+  // in flight
   const live = ORG_EXPORT_ORDER.indexOf(table)
+  const certain = !job.in_flight.includes(exportName(table))
   const ended = job.ended[exportName(table)]
   const began = live === 0 ? job.started_at : job.ended[exportName(ORG_EXPORT_ORDER[live - 1])]
   const startedMs = Date.parse(job.started_at)
@@ -845,6 +880,7 @@ async function storedBatch(
     if (item.deleted_at < job.started_at && stored._creationTime >= startedMs)
       unsettled.add(item.id)
     if (
+      certain &&
       ended !== undefined &&
       began !== undefined &&
       item.deleted_at > ended &&
