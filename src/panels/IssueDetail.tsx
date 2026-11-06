@@ -1524,8 +1524,8 @@ function CommentRow({
    `unread` overrides where this visit's unread part starts, and whether it
    holds a change (lib/spine.ts UnreadStart). The window normally freezes
    that itself on open, from the task's inbox item (P.inboxItem), but the
-   inbox marks an item read the moment you click its row — before this
-   component has rendered at all — so the only surviving answer is the one
+   inbox marks an item read the moment you click its row, before this
+   component has rendered at all, so the only surviving answer is the one
    the inbox froze first. The Inbox's pop-out passes a start of nothing,
    since the pane behind it showed this visit's New mark already.
    `holdThread` says somebody else owns the store's one comment cache — the
@@ -2060,8 +2060,8 @@ function IssueDetail({
 
   // Where this visit's unread part starts, frozen once a visit. Opening
   // marks the task read (below), so an unfrozen mark would vanish while you
-  // were looking at it. Assigned DURING render, before any effect runs —
-  // that ordering is the whole trick. Keyed on the uuid, not issueId: on a
+  // were looking at it. Assigned DURING render, before any effect runs.
+  // That ordering is the whole trick. Keyed on the uuid, not issueId: on a
   // cold deep link P.issueById[issueId] is still undefined on the first
   // render, and a null key would freeze "nothing unread" forever. It comes
   // from the task's inbox item, which the store reads beside the thread
