@@ -2,7 +2,9 @@
    search over the whole list and Load more, as Settings' lists and the
    pickers read them: API access's person filter, Settings › Labels,
    Billing's Storage by project (panels/BillingStorage.tsx, largest
-   first), the removal window's Reassign picker, the task window's
+   first), its API calls by account (panels/BillingApiAccounts.tsx, most
+   calls first) and its two name lists (panels/BillingAccountNames.tsx),
+   the removal window's Reassign picker, the task window's
    relation pickers, the shared project picker
    (components/ProjectPicker.tsx), the expanded sub-project lists and an
    archived project's sub-projects in Settings
@@ -19,8 +21,8 @@
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access, Billing's Storage by project and the removal window's Reassign
-     picker read everything. Load
+     access, Billing's lists and the removal window's Reassign picker read
+     everything. Load
      more reads after the last batch's `next`; one read runs at a time, so a
      second press or a Retry while one runs reads nothing. A failed batch
      keeps the rows and the place, and Retry reads it again, or starts again

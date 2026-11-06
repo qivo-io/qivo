@@ -18,14 +18,14 @@ import { convex } from '@/lib/convex'
 import { restoreFocus } from '@/lib/focusVisibility'
 import { beginUpdateBlock, useUpdateBlocker } from '@/lib/updateSafety'
 import { api } from '../../../convex/_generated/api'
-import type { BillingPlan, BillingSummary } from '../../../convex/lib/billingTypes'
+import type { BillingDetails, BillingPlan } from '../../../convex/lib/billingTypes'
 import { sendMutation } from '../convex'
 
 /* `seatsVersion` changes when the page reloads its people. The summary then
    reloads in place, so the billable counts follow invitations and cancels
    while a plan picked but not yet assigned stays picked. */
 export function OrgBilling({ orgId, seatsVersion = 0 }: { orgId: string; seatsVersion?: number }) {
-  const [summary, setSummary] = useState<BillingSummary | null>(null)
+  const [summary, setSummary] = useState<BillingDetails | null>(null)
   const [plans, setPlans] = useState<BillingPlan[]>([])
   const [planId, setPlanId] = useState('')
   const [error, setError] = useState('')

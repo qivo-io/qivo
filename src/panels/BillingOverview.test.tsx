@@ -4,16 +4,21 @@ import { flushSync } from 'react-dom'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import type { BillingSummary } from '../../convex/lib/billingTypes'
+import type { BillingDetails } from '../../convex/lib/billingTypes'
 import { endClosing, playClosingAnimations } from '../lib/closingAnimation.setup'
 import { BillingOverview } from './BillingOverview'
 
 /* Billing's Cancel subscription question as it closes. Keep subscription
    clears a refusal and a finished cancellation clears the page's busy, so
    the closing dialog keeps what it showed open. A summary refresh can take
-   the question's button away. Each cancellation is answered by hand. */
+   the question's button away. Each cancellation is answered by hand. The
+   name lists stay closed, so nothing is read (BillingAccountNames.test.tsx
+   opens them). */
 
-const SUMMARY: BillingSummary = {
+const network = vi.hoisted(() => ({ query: vi.fn() }))
+vi.mock('../lib/convex', () => ({ convex: network }))
+
+const SUMMARY: BillingDetails = {
   enabled: true,
   configured: true,
   plan: null,
@@ -26,8 +31,6 @@ const SUMMARY: BillingSummary = {
   inactive_users: 0,
   invited_users_with_own_billing: 0,
   billable_users: 7,
-  billable_accounts: [],
-  non_billable_accounts: [],
   billed_seats: 7,
   next_seats: 7,
   next_seat_amount_cents: 7000,
@@ -49,7 +52,7 @@ let container: HTMLDivElement
 let root: Root
 let answers: ((refusal: string | null) => void)[]
 // a summary refresh, as the page's subscription delivers one
-let refresh: (next: BillingSummary) => void
+let refresh: (next: BillingDetails) => void
 // whether the page's busy=false renders on its own, before the dialog hears
 // the answer
 let splitRender = false
@@ -65,6 +68,8 @@ function Billing() {
   return (
     <BillingOverview
       billing={billing}
+      orgId="org-1"
+      refresh={0}
       busy={busy}
       onCheckout={vi.fn()}
       onManage={vi.fn()}
@@ -104,6 +109,8 @@ afterEach(async () => {
   await act(async () => root.unmount())
   container.remove()
   document.body.innerHTML = ''
+  // the closed name lists read nothing
+  expect(network.query).not.toHaveBeenCalled()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })

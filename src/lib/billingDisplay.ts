@@ -1,5 +1,10 @@
 import { ConvexError } from 'convex/values'
-import type { BillingSummary, BillingUsage, StorageProjectRow } from '../../convex/lib/billingTypes'
+import type {
+  BillingDetails,
+  BillingPeriodHead,
+  BillingUsageFigures,
+  StorageProjectRow,
+} from '../../convex/lib/billingTypes'
 
 export function billingError(cause: unknown): string {
   if (cause instanceof ConvexError) {
@@ -41,7 +46,7 @@ export function billingBytes(bytes: number): string {
  * `currency` is the plan's; a charged period always has one. */
 export function usageHints(
   usage: Pick<
-    BillingUsage,
+    BillingPeriodHead,
     'period_kind' | 'waived' | 'api_overage_cents' | 'storage_overage_cents'
   >,
   currency: string | undefined,
@@ -76,6 +81,24 @@ export function usageHints(
     searching. Tests lower it. */
 export const STORAGE_LIST = { most: 2000 }
 
+/** The most rows Billing's API calls by account gathers with Load more, 80
+    batches; past it, a search narrows the list. A bucket's accounts are at
+    most the 1,000 people and agents the design size allows, with the
+    removed accounts whose calls still count, so every account inside it is
+    reachable without searching. The limits plan bounds Billing's lists
+    together: with Storage by project and the two name lists the page holds
+    at most 8,000 rows, about 1 MB, and drops them when Billing is left.
+    Tests lower it. */
+export const ACCOUNT_LIST = { most: 2000 }
+
+/** The most names each of Billing's Who counts toward your bill and Who
+    does not count toward your bill gathers with Load more; past it, a
+    search narrows the list. The two lists together name the
+    organization's people and agents, at most 1,000 at the design size, so
+    every name is reachable without searching, and a closed list holds
+    none. Tests lower it. */
+export const NAME_LIST = { most: 2000 }
+
 /** A Storage by project row's id: its project id and number, which name
     one totals row, since a project id can come back under another number. */
 export const storageRowId = (row: StorageProjectRow) => `${row.project_id}:${row.num ?? ''}`
@@ -88,16 +111,20 @@ export const STORAGE_COUNTS =
     being counted, in place of a figure, never 0. */
 export const STORAGE_COUNTING = 'Being counted. Check again later.'
 
+/** What Billing shows while the bucket's API calls are being counted
+    (billing.usageFigures answers null), in place of a figure, never 0. */
+export const CALLS_COUNTING = 'Being counted. Check again later.'
+
 /** The line under current storage that names the storage the paid
     period's sample measured at its start, which the period's storage
     charge uses and which leaves files in Deleted items out, so the page
     never implies the charge counts them. Null outside a paid period, and
     for a trial, which never gets a sample (convex/billingSync.ts apply
     records a period only for an active or past-due subscription).
-    `status` is the summary's. */
+    `status` is the details'. */
 export function storageSampleLine(
-  usage: Pick<BillingUsage, 'period_kind' | 'sampled_storage_bytes'>,
-  status: BillingSummary['status'] | undefined,
+  usage: Pick<BillingUsageFigures, 'period_kind' | 'sampled_storage_bytes'>,
+  status: BillingDetails['status'] | undefined,
 ): string | null {
   if (usage.period_kind !== 'paid' || status === 'trialing') return null
   return usage.sampled_storage_bytes === null
