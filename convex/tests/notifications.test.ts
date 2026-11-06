@@ -1457,8 +1457,10 @@ describe('inside Convex’s limits', () => {
   it('passes 1,000 groups of a project the seat no longer sees without reading their tasks', async () => {
     const t = newT()
     const { f, s } = await guestFixture(t)
-    // one eligible group from before the checkpoint
+    // one eligible group from before the checkpoint, which a minute before
+    // the items' first time leaves none of them at it
     await newsAt(t, f, -3)
+    clock(-1)
     expect(await resume(s)).toEqual({ state: 'baseline' })
     // the project figure: 800 open and 200 Done tasks over its 3
     // sub-projects, a group each, all after the checkpoint
@@ -1468,6 +1470,23 @@ describe('inside Convex’s limits', () => {
       await plantItems(t, f, f.guest, i === 2 ? 66 : 67, sub.id, { status: 'done' })
     }
     await revoke()
+    const checkpoint = new Date((await accountOf(t, s.authUserId))?.covered_at ?? 0).toISOString()
+    const after = await t.run(
+      async (ctx) =>
+        (
+          await ctx.db
+            .query('inbox_items')
+            .withIndex('by_recipient_unread_list', (q) =>
+              q
+                .eq('recipient_id', f.guest.id)
+                .eq('snoozed', false)
+                .eq('unread', true)
+                .gt('sort_at', checkpoint),
+            )
+            .collect()
+        ).length,
+    )
+    expect(after).toBe(1000)
     clock(300)
     await beat(s)
     const r = logged(

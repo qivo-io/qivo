@@ -26,7 +26,7 @@ import { ITEM_UNREAD_CAP } from './messages'
  * tasks of one project, one range) about a project the seat no longer
  * sees, each one index entry passed without reading its task. 2,000 holds
  * it with room. Measured in tests/notifications.test.ts "inside Convex's
- * limits", that case reads 1,006 documents in 17 ranges, 446 KiB, and
+ * limits", that case reads 1,012 documents in 17 ranges, 448 KiB, and
  * answers whole (`none`); the everyday Inbox, 60 groups over 3
  * sub-projects with 10 new, and 300 groups of one sub-project, all new,
  * each answer `summary` after 15 documents in 16 ranges, and the same 300
