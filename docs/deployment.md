@@ -1147,9 +1147,9 @@ rolls forward. From that release on, never return the backend to a commit
 before it; roll forward instead. Returning the app alone to an earlier
 release was safe while the backend kept `billing.usageReport`, which this
 release kept with its scan for tabs loaded before it; the release after
-v0.1.147 removed it, so it is on the Instant Rollback list above. The
+v0.1.150 removed it, so it is on the Instant Rollback list above. The
 period's storage sample scanned the attachment rows until the release after
-v0.1.147, which reads the stored-byte totals and adds a daily job that
+v0.1.150, which reads the stored-byte totals and adds a daily job that
 records them (below). There is no schema change, no backfill and no release
 step.
 
