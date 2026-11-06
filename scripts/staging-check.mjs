@@ -171,7 +171,13 @@
  * Upcoming (milestones.section), expands Past, which must show the past
  * milestone only once expanded and not after it was deleted over REST, and
  * renames and deletes the first one there, each of which REST then shows
- * (ui/milestones). It makes a task of the Standard agent's in Alpha over
+ * (ui/milestones). It makes another milestone over REST on its project in
+ * a free week of the Roadmap's default window, and a task of Nora's in
+ * Alpha, then a fresh load of the project's Roadmap must read the window's
+ * flags from the deployment's range read (milestones.between) and show the
+ * milestone in its header, and a fresh load of My view's Roadmap must show
+ * it on the project's own row with no header band, and drop it once it is
+ * deleted over REST (ui/roadmap-milestones). It makes a task of the Standard agent's in Alpha over
  * REST and opens Team sync on its project in a fresh load, which must
  * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
  * show the task's card on the agent's line from the rail (ui/team-sync).
@@ -5663,6 +5669,111 @@ async function milestoneWindowCheck() {
   })
 }
 
+/** The step that checks the Roadmap's milestone flags on the deployment's
+ *  range read (roadmapMilestonesCheck). */
+export const ROADMAP_MILESTONES_STEP = 'ui/roadmap-milestones'
+
+/** The Roadmap's read of the flags of the weeks on screen
+ *  (convex/milestones.ts between), which it subscribes in place of the
+ *  workspace's milestones. */
+export const MILESTONES_BETWEEN_QUERY = 'milestones:between'
+
+/** Whether `week` (a YYYY-MM-DD day) is in the Roadmap's default window,
+ *  two weeks before the week of `today` to six weeks after it, in an
+ *  organization whose weeks start on `weekStart`, with a week to spare at
+ *  either end: the browser places weeks by the runner's local day, whose
+ *  week can be one away from the UTC day's. */
+export function inDefaultWindow(week, today, weekStart) {
+  const now = weekOf(today, weekStart)
+  return week >= addDays(now, -7) && week <= addDays(now, 35)
+}
+
+/** The Roadmap's flags on the deployment's range read: the run makes
+ *  `<tag> Roadmap milestone` over REST on M in the first week from three
+ *  weeks on that M leaves free (freeMilestoneWeek), which must be in the
+ *  default window, and a To Do task of Nora's in Alpha, which she owns by
+ *  the Reviewer rule as its assignee, so M is a row of her My view. It
+ *  sets her Roadmap window to the default. A fresh load of M's Roadmap by
+ *  its address must subscribe MILESTONES_BETWEEN_QUERY, reach its ok state
+ *  with its flags ok (data-roadmap-milestones) and show the milestone in
+ *  the header's band; a fresh load of My view's Roadmap must reach the
+ *  same states and show it inside M's row, with no band in the header, and
+ *  drop it once the run deleted it over REST. It deletes the task at the
+ *  end, and the cleanup that deletes M removes whatever a failure left. It
+ *  runs while M is active, after ui/milestones, and leaves the saved view
+ *  on M's Board. */
+async function roadmapMilestonesCheck() {
+  const w = run.creds.writeToken
+  const { M, A } = run.projects
+  await check(ROADMAP_MILESTONES_STEP, async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const me = await restOk(w, 'GET', '/me')
+    const held = (await restOk(w, 'GET', `/projects/${M.id}`)).milestones ?? []
+    const date = freeMilestoneWeek(
+      held.map((m) => m.date),
+      todayUtc(),
+      me.organization.week_start,
+    )
+    expect(
+      inDefaultWindow(date, todayUtc(), me.organization.week_start),
+      `${M.key} leaves no week free from three weeks on in the Roadmap's default window (${date})`,
+    )
+    const made = await restOk(w, 'POST', `/projects/${M.id}/milestones`, {
+      name: `${run.tag} Roadmap milestone`,
+      date,
+    })
+    const task = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} roadmap milestone`,
+      status: 'todo',
+      assignee_id: run.nora.id,
+    })
+    run.created.push(task)
+    eq(task.assignee_id, run.nora.id, "the task's assignee")
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      await evaluate(app, () =>
+        window.PLANNER.saveUINow({ roadmapWin: window.PLANNER.DEFAULT_WIN }),
+      )
+      const fresh = async (url) => {
+        sent.length = 0
+        await app.goto(url, { waitUntil: 'domcontentloaded' })
+        await app
+          .locator(
+            '[data-workspace-view] [data-roadmap-root][data-roadmap-state="ok"][data-roadmap-milestones="ok"]',
+          )
+          .waitFor({ timeout: 60_000 })
+      }
+      const flag = `[data-msflag="${made.id}"]`
+      await fresh(`${cfg.appOrigin}/app/${ORG_SLUG}/roadmap/p/${M.num}`)
+      expect(
+        sent.some((f) => addsQuery(f, MILESTONES_BETWEEN_QUERY)),
+        "M's Roadmap did not subscribe the range read",
+      )
+      await app.locator(`[data-workspace-view] [data-msband] ${flag}`).waitFor({ timeout: 60_000 })
+      await fresh(`${cfg.appOrigin}/app/~/roadmap/mine`)
+      const row = app.locator(`[data-workspace-view] [data-track="${M.id}"] ${flag}`)
+      await row.waitFor({ timeout: 60_000 })
+      eq(
+        await app.locator('[data-workspace-view] [data-msband]').count(),
+        0,
+        "My view's header bands",
+      )
+      await restOk(w, 'DELETE', `/projects/${M.id}/milestones/${made.id}`)
+      await row.waitFor({ state: 'detached', timeout: 60_000 })
+      return `showed ${made.name} in ${M.key}'s header and on its row in My view from the deployment's range read, and dropped it once deleted over REST`
+    } finally {
+      app.off('websocket', record)
+      await rest(w, 'DELETE', `/tasks/${task.key}`)
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+    }
+  })
+}
+
 /** The step that checks Settings › Labels (settingsLabelsCheck). */
 export const LABELS_STEP = 'ui/settings-labels'
 
@@ -8706,6 +8817,9 @@ async function main() {
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()
+  // the Roadmap's flags from the deployment's range read, in M's header
+  // and on M's row in My view, with a milestone and a task of its own
+  await roadmapMilestonesCheck()
   // Team sync on the deployment's agenda, with a task of its own, while
   // the project is active
   await teamSyncCheck()
