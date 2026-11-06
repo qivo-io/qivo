@@ -227,6 +227,11 @@ const APP_OWNED: TableNames[] = [
   'account_appearance',
   'custom_backgrounds',
   'background_uploads',
+  // the visitor login's notification setting, sessions and delivery
+  // records, drained in the account phase
+  'account_notifications',
+  'notification_sessions',
+  'notification_deliveries',
   'deleted_items',
   'deleted_item_jobs',
   'deleted_item_parents',
