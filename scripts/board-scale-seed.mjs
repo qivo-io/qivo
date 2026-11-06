@@ -198,12 +198,14 @@
  * run waits when the server says to, and takes about N ÷ (10 × posters)
  * minutes; a sandbox's auto-stop must cover that. Each comment's id comes
  * from its number, so a rerun posts only what is missing. N goes up to the
- * 1,000-comment cap (LIMITS.comments), and a larger N is refused before
- * anything is seeded, as is one that would take the task past the cap with
- * the comments it holds already. The changes come from putting one label
- * the seed makes on the task and taking it off again through labels:toggle,
- * one change each, until the task's history, counted as Nora reads it
- * first, holds N rows, so a rerun adds none. It runs last. */
+ * 1,000-comment cap (LIMITS.comments). The arguments' check refuses a
+ * larger N before anything is seeded. The thread step runs last, after
+ * every other option has seeded, and refuses an N that would take the task
+ * past the cap with the comments it holds already before it posts any. The
+ * changes come from putting one label the seed makes on the task and
+ * taking it off again through labels:toggle, one change each, until the
+ * task's history, counted as Nora reads it first, holds N rows, so a rerun
+ * adds none. */
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

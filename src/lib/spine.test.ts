@@ -28,7 +28,7 @@ describe('mergeSpine', () => {
     expect(s[1].e).toBeDefined()
   })
 
-  it('breaks a tie of comments by id, ascending — so a refetch cannot swap two rows', () => {
+  it('breaks a tie of comments by id, ascending, so a refetch cannot swap two rows', () => {
     expect(mergeSpine([c('c9', 500), c('c1', 500)], []).map((x) => x.id)).toEqual(['c1', 'c9'])
   })
 

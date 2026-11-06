@@ -14243,7 +14243,9 @@ export const PLANNER = {
       time, and only once the live page is delivered. An answer that comes
       after the history stopped or the task changed is dropped. A failure
       shows as historyEarlier 'failed', and calling this again retries.
-      Never throws. */
+      Past the budget the store then lets go of the rows nearest the
+      newest end, outside the live page (keepThread), and keeps the page
+      and the row the window measures. Never throws. */
   loadEarlierHistory: async (): Promise<void> => {
     const issueUuid = watchedComments
     const epoch = historyEpoch

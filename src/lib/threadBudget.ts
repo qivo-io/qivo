@@ -42,7 +42,7 @@ import { LIMITS } from '../../convex/lib/limits'
     both), the row the window measures to keep the reader's place, or the
     rows on screen around the place a window reported (the reported row and
     the 50 after it), and it never splits an instant. So under All the
-    store can hold about 200 rows past a figure of 150 until the next
+    store can hold about 200 rows, past the figure of 150, until the next
     release, and a comment open in an editor is held besides, outside the
     count, until its editor closes or a page holds it again.
 
