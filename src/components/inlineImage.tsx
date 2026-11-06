@@ -56,85 +56,86 @@ export function InlineImageBody({ alt, attId, external, editor = false, iconSize
   }, [shows])
 
   const gone = attId ? image.state === 'gone' : !external || broken || outside.unavailable
-  if (gone) {
-    return (
-      <span ref={setReach} className="mdimgreach">
-        <HoverTooltip content={alt}>
-          <span className="mdimgph">
-            <Icon name="blocked" size={iconSize} />
-            Image unavailable
-          </span>
-        </HoverTooltip>
-        {!attId && external && outside.unavailable && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => outside.retry()}>
-            Retry
-          </Button>
-        )}
-      </span>
-    )
-  }
   const url = (attId ? image.url : external) as string
-  if (!shows) {
-    return (
-      <span ref={setReach} className="mdimgreach">
-        <span className="mdimgph mdimgbox" style={boxStyle(attId ? image.box : null)}>
-          Loading image…
-        </span>
-      </span>
-    )
-  }
   const freshUrl = async () => (attId ? await P.attachmentUrl(attId) : url)
   const open = () => void openImageFull(freshUrl)
   // keep focus in the editor
   const swallow = editor ? (e: MouseEvent) => e.preventDefault() : undefined
+  // One reach element whatever shows, so the loader's observer keeps
+  // watching the same element as the image loads.
   return (
     <span ref={setReach} className="mdimgreach">
-      <HoverTooltip content={alt}>
-        <img
-          className="mdimg"
-          src={url}
-          alt={alt}
-          decoding="async"
-          referrerPolicy="no-referrer"
-          {...(editor ? { onDoubleClick: open } : { onClick: open })}
-          onLoad={(e) => {
-            setShowing(true)
-            if (attId) {
-              const img = e.currentTarget
-              P.inlineImages.loaded(attId, { width: img.naturalWidth, height: img.naturalHeight })
-            } else outside.settled()
-          }}
-          onError={() => {
-            if (attId) P.inlineImages.loaded(attId, null)
-            else {
-              outside.settled()
-              setBroken(true)
-            }
-          }}
-        />
-      </HoverTooltip>
-      <span className="mdimgbtns" onMouseDown={swallow}>
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Copy image"
-          aria-label="Copy image"
-          onClick={() => void copyImage(freshUrl)}
-          variant="unstyled"
-        >
-          <Icon name="copy" size={iconSize} />
-        </Button>
-        <Button
-          type="button"
-          className="mdimgbtn"
-          title="Download image"
-          aria-label="Download image"
-          onClick={() => void downloadImage(attId, attId ? null : url)}
-          variant="unstyled"
-        >
-          <Icon name="download" size={iconSize} />
-        </Button>
-      </span>
+      {gone ? (
+        <>
+          <HoverTooltip content={alt}>
+            <span className="mdimgph">
+              <Icon name="blocked" size={iconSize} />
+              Image unavailable
+            </span>
+          </HoverTooltip>
+          {!attId && external && outside.unavailable && (
+            <Button type="button" variant="ghost" size="sm" onClick={() => outside.retry()}>
+              Retry
+            </Button>
+          )}
+        </>
+      ) : !shows ? (
+        <span className="mdimgph mdimgbox" style={boxStyle(attId ? image.box : null)}>
+          Loading image…
+        </span>
+      ) : (
+        <>
+          <HoverTooltip content={alt}>
+            <img
+              className="mdimg"
+              src={url}
+              alt={alt}
+              decoding="async"
+              referrerPolicy="no-referrer"
+              {...(editor ? { onDoubleClick: open } : { onClick: open })}
+              onLoad={(e) => {
+                setShowing(true)
+                if (attId) {
+                  const img = e.currentTarget
+                  P.inlineImages.loaded(attId, {
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                  })
+                } else outside.settled()
+              }}
+              onError={() => {
+                if (attId) P.inlineImages.loaded(attId, null)
+                else {
+                  outside.settled()
+                  setBroken(true)
+                }
+              }}
+            />
+          </HoverTooltip>
+          <span className="mdimgbtns" onMouseDown={swallow}>
+            <Button
+              type="button"
+              className="mdimgbtn"
+              title="Copy image"
+              aria-label="Copy image"
+              onClick={() => void copyImage(freshUrl)}
+              variant="unstyled"
+            >
+              <Icon name="copy" size={iconSize} />
+            </Button>
+            <Button
+              type="button"
+              className="mdimgbtn"
+              title="Download image"
+              aria-label="Download image"
+              onClick={() => void downloadImage(attId, attId ? null : url)}
+              variant="unstyled"
+            >
+              <Icon name="download" size={iconSize} />
+            </Button>
+          </span>
+        </>
+      )}
     </span>
   )
 }

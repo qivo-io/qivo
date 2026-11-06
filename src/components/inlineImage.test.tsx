@@ -94,9 +94,13 @@ describe('description images', () => {
     expect(box?.textContent).toBe('Loading image…')
     expect(box?.style.aspectRatio).toBe('4 / 3')
     expect(container.querySelector('img')).toBeNull()
+    const watched = container.querySelector('.mdimgreach')
     await moveAll(true)
     const img = container.querySelector('img')
     expect(img?.getAttribute('src')).toBe('blob:inline-1')
+    // the loader goes on watching the same element as the image shows
+    expect(container.querySelector('.mdimgreach')).toBe(watched)
+    expect(reach.observers.some((o) => watched && o.elements.has(watched))).toBe(true)
     expect(img?.getAttribute('decoding')).toBe('async')
     // far again: a placeholder of the recorded size
     await moveAll(false)
