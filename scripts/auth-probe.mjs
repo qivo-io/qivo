@@ -29,9 +29,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-/** How many times the probe sends a request that got no answer or a 5xx. */
+/** How many times the probe sends a request that got no answer, whose
+ * answer was cut off or that answered a 5xx. */
 export const PROBE_ATTEMPTS = 4
-/** How long the probe waits for each answer, in milliseconds. */
+/** How long the probe waits for each whole answer, body included, in
+ * milliseconds. */
 export const PROBE_TIMEOUT_MS = 15_000
 
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '[::1]'])
@@ -70,51 +72,56 @@ const cookiesOf = (headers) =>
  * get-session does with the token cookie, sets none. */
 const setsCookie = (response) => cookiesOf(response.headers).some(([, value]) => value !== '')
 
-const json = async (response) => {
+/* Whether a fetch or a body read failed because PROBE_TIMEOUT_MS ran out.
+ * The probe keeps only a fault's kind, because its message may quote the
+ * request. */
+const timedOut = (error) => error?.name === 'TimeoutError'
+
+/* `text` parsed as JSON, or undefined when it is not JSON, which the
+ * checks report as a wrong answer. */
+const json = (text) => {
   try {
-    return JSON.parse(await response.text())
+    return JSON.parse(text)
   } catch {
     return undefined
   }
 }
 
-/** The routes the probe calls, in order. Each one's `check` returns the
- * reason its answer is wrong, or null. `demo` false names the routes the
- * demo does not serve. */
+/** The routes the probe calls, in order. Each one's `check` takes the
+ * answer and its whole body as text, which the probe has read, and returns
+ * the reason the answer is wrong, or null. `demo` false names the routes
+ * the demo does not serve. */
 export const AUTH_PROBES = [
   {
     route: 'GET /api/auth/get-session',
     demo: true,
     init: { method: 'GET' },
-    check: async (response) => {
+    check: (response, text) => {
       if (response.status !== 200) return `answered ${response.status}, not 200`
       if (setsCookie(response)) return 'set a cookie without a session'
-      const text = (await response.text()).trim()
-      return text === 'null' ? null : 'answered a session without a cookie'
+      return text.trim() === 'null' ? null : 'answered a session without a cookie'
     },
   },
   {
     route: 'POST /api/auth/oauth2/token',
     demo: false,
     init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' },
-    check: async (response) => {
+    check: (response, text) => {
       if (response.status !== 400) return `answered ${response.status}, not 400`
       if (response.headers.get('Access-Control-Allow-Origin') !== '*')
         return 'answered without its public CORS'
       if (setsCookie(response) || response.headers.get('Set-Cookie') !== null)
         return 'answered with a cookie'
-      const body = await json(response)
-      return body?.error === 'invalid_request' ? null : 'answered without invalid_request'
+      return json(text)?.error === 'invalid_request' ? null : 'answered without invalid_request'
     },
   },
   {
     route: 'GET /.well-known/oauth-authorization-server',
     demo: false,
     init: { method: 'GET' },
-    check: async (response) => {
+    check: (response, text) => {
       if (response.status !== 200) return `answered ${response.status}, not 200`
-      const body = await json(response)
-      const methods = body?.token_endpoint_auth_methods_supported
+      const methods = json(text)?.token_endpoint_auth_methods_supported
       return Array.isArray(methods) && methods.length === 1 && methods[0] === 'none'
         ? null
         : 'answered metadata whose token endpoint takes another method than none'
@@ -126,11 +133,15 @@ export const AUTH_PROBES = [
  * Calls the sign-in route (GET /api/auth/get-session) of the deployment at
  * `site` and, unless `demo`, the OAuth token route with a JSON body it
  * refuses and the authorization server metadata, one after another, and
- * throws naming every route that answered wrongly and how. A request with
- * no answer within PROBE_TIMEOUT_MS or a 5xx answer is sent again, up to
- * PROBE_ATTEMPTS times, 1, 2 and 4 seconds apart. `site` must be an https:
- * origin, or with `local` a loopback http: one. `fetch`, `sleep` and `log`
- * are the tests' to replace.
+ * throws naming every route that answered wrongly and how.
+ *
+ * A request is sent again, up to PROBE_ATTEMPTS times, 1, 2 and 4 seconds
+ * apart, when it gets no answer, when its body is cut off or does not
+ * arrive in full within PROBE_TIMEOUT_MS of sending it, or when it answers
+ * a 5xx. An answer that arrives whole is checked as it stands, so a body
+ * that is not the JSON expected is a wrong answer and is not sent again. `site` must be an
+ * https: origin, or with `local` a loopback http: one. `fetch`, `sleep` and
+ * `log` are the tests' to replace.
  */
 export async function probeAuthRoutes(
   site,
@@ -159,18 +170,29 @@ export async function probeAuthRoutes(
           signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
         })
       } catch (error) {
-        // a network error's message may quote the request, so only its kind is kept
-        problem =
-          error?.name === 'TimeoutError'
-            ? `gave no answer in ${PROBE_TIMEOUT_MS / 1000} s`
-            : 'gave no answer'
+        problem = timedOut(error)
+          ? `gave no answer in ${PROBE_TIMEOUT_MS / 1000} s`
+          : 'gave no answer'
         log(`[auth-probe] ${route} no answer (attempt ${attempt})`)
+        continue
+      }
+      let text
+      try {
+        // The timeout also covers the body, which arrives after the status.
+        text = await response.text()
+      } catch (error) {
+        problem = timedOut(error)
+          ? `answered ${response.status}, but the rest of the answer did not arrive in ${PROBE_TIMEOUT_MS / 1000} s`
+          : `answered ${response.status}, but the answer was cut off`
+        log(
+          `[auth-probe] ${route} ${response.status} cut off after ${Date.now() - began} ms (attempt ${attempt})`,
+        )
         continue
       }
       log(
         `[auth-probe] ${route} ${response.status} in ${Date.now() - began} ms (attempt ${attempt})`,
       )
-      problem = await check(response)
+      problem = check(response, text)
       if (response.status < 500) break
     }
     if (problem !== null) failures.push(`${route} ${problem}`)

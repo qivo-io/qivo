@@ -38,6 +38,18 @@ const noWait = async () => {}
 const paths = (fetch) =>
   fetch.mock.calls.map(([url, init]) => `${init.method} ${new URL(url).pathname}`)
 
+/* The status and headers `answer` gives, with a body that fails with
+ * `fault` once read, as when the connection drops after the headers
+ * (undici's TypeError 'terminated') or the timeout runs out before the
+ * body arrives (a TimeoutError). */
+const cutOff = (answer, fault) => {
+  const { status, headers } = answer()
+  const body = new ReadableStream({ start: (controller) => controller.error(fault) })
+  return new Response(body, { status, headers })
+}
+const TERMINATED = new TypeError('terminated')
+const BODY_TIMEOUT = new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+
 describe('probeAuthRoutes', () => {
   afterEach(() => vi.restoreAllMocks())
 
@@ -180,6 +192,70 @@ describe('probeAuthRoutes', () => {
     await done
     expect(timeout.mock.calls).toEqual([[15_000], [15_000], [15_000], [15_000]])
     expect(lines[0]).toBe('[auth-probe] GET /api/auth/get-session no answer (attempt 1)')
+  })
+
+  it.each(Object.keys(ANSWERS))(
+    'tries %s again when its body is cut off after the headers, then passes',
+    async (path) => {
+      const answers = [cutOff(ANSWERS[path], TERMINATED), ANSWERS[path]()]
+      const fetch = vi.fn(async (url) =>
+        new URL(url).pathname === path ? answers.shift() : deployment()(url),
+      )
+      const sleep = vi.fn(noWait)
+      const lines = []
+      await probeAuthRoutes(SITE, { fetch, sleep, log: (line) => lines.push(line) })
+      expect(sleep.mock.calls).toEqual([[1000]])
+      expect(paths(fetch).filter((sent) => sent.endsWith(path))).toHaveLength(2)
+      expect(lines.filter((line) => line.includes('cut off'))).toEqual([
+        expect.stringMatching(/^\[auth-probe\] \S+ \S+ \d{3} cut off after \d+ ms \(attempt 1\)$/),
+      ])
+    },
+  )
+
+  it.each([
+    ['cut off', TERMINATED, 'answered 200, but the answer was cut off'],
+    ['late', BODY_TIMEOUT, 'answered 200, but the rest of the answer did not arrive in 15 s'],
+  ])(
+    'fails naming the route when its body is %s on every attempt, and still checks the others',
+    async (_name, fault, problem) => {
+      const fetch = vi.fn(async (url) =>
+        new URL(url).pathname === '/api/auth/get-session'
+          ? cutOff(ANSWERS['/api/auth/get-session'], fault)
+          : deployment()(url),
+      )
+      const sleep = vi.fn(noWait)
+      const error = await probeAuthRoutes(SITE, { fetch, sleep, log: () => {} }).catch(
+        (caught) => caught,
+      )
+      expect(error.message).toBe(
+        `The deployment's auth routes did not answer as expected: GET /api/auth/get-session ${problem}.`,
+      )
+      expect(sleep.mock.calls).toEqual([[1000], [2000], [4000]])
+      expect(paths(fetch)).toEqual([
+        ...Array(4).fill('GET /api/auth/get-session'),
+        'POST /api/auth/oauth2/token',
+        'GET /.well-known/oauth-authorization-server',
+      ])
+    },
+  )
+
+  it('fails at once on a whole answer whose body is not JSON, without trying again', async () => {
+    const fetch = deployment({
+      '/api/auth/oauth2/token': () =>
+        new Response('<html>Bad Gateway</html>', {
+          status: 400,
+          headers: { 'Access-Control-Allow-Origin': '*' },
+        }),
+    })
+    const sleep = vi.fn(noWait)
+    const error = await probeAuthRoutes(SITE, { fetch, sleep, log: () => {} }).catch(
+      (caught) => caught,
+    )
+    expect(error.message).toBe(
+      "The deployment's auth routes did not answer as expected: POST /api/auth/oauth2/token answered without invalid_request.",
+    )
+    expect(sleep).not.toHaveBeenCalled()
+    expect(fetch).toHaveBeenCalledTimes(3)
   })
 
   it('follows no redirect', async () => {

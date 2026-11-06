@@ -180,12 +180,16 @@ calls:
 - outside the demo, `GET /.well-known/oauth-authorization-server`, which
   must list `none` as the token endpoint's only method.
 
-It waits 15 seconds for each answer and sends a request that got no answer
-or a `5xx` again, up to 4 times, 1, 2 and 4 seconds apart. The build fails
-when a route still answers otherwise, and its log has one `[auth-probe]` line
-for each request with the route, the status and the time. A runtime that
-refuses the import answers all three with a `5xx`, and so does a backend
-whose `SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT` or demo
+It waits 15 seconds for each whole answer, body included. It sends a
+request again, up to 4 times, 1, 2 and 4 seconds apart, when it gets no
+answer, when its answer is cut off or has not arrived in full after those 15
+seconds, or when it answers a `5xx`. An answer that arrives whole and says
+something else fails at once. The build fails when a route still answers
+otherwise. Its log has one `[auth-probe]` line for each request with the
+route, the status and the time, which says `cut off` when the answer broke
+off after its status and `no answer` when none came. A runtime that refuses
+the import answers all three with a `5xx`, and so does a backend whose
+`SITE_URL`, `ADDITIONAL_APP_ORIGINS`, `QIVO_ENVIRONMENT` or demo
 settings Better Auth refuses. The probe sends no credential and creates no
 session, OAuth client or token. Outside the demo Better Auth still reads the
 deployment's OAuth resource row on each call and creates it on a new
@@ -210,9 +214,9 @@ mismatch worse:
 1. Read the `[auth-probe]` lines of the failed build. A `5xx` on every
    route it called means sign-in on that backend fails for everyone, from a
    refused import or a deployment setting, which the backend's function logs
-   name. No answer, or one `5xx` while the other routes answered as
-   expected, can be a brief fault of the network or of Convex while sign-in
-   works.
+   name. No answer, an answer cut off, or one `5xx` while the other routes
+   answered as expected, can be a brief fault of the network or of Convex
+   while sign-in works.
 2. Call the routes by hand as above. When they answer as expected, deploy
    the same commit again. Run **Deploy staging** from main for staging. For
    production and the demo, re-run the failed **Production release** run of
