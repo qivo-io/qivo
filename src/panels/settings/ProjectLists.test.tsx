@@ -359,13 +359,16 @@ async function projects() {
   await settle()
 }
 
-/** Shows Archived projects. */
+/** Shows Archived projects, with the question a window asks before it
+    closes with unsent text. */
 async function archived() {
   const lists = await import('./ProjectLists')
+  const { DiscardPrompt } = await import('../../components/DiscardPrompt')
   await act(async () =>
     root.render(
       <TooltipProvider>
         <Live page={() => <lists.ArchivedProjectsPage />} />
+        <DiscardPrompt />
       </TooltipProvider>,
     ),
   )
@@ -1121,7 +1124,7 @@ describe('Archived projects', () => {
     )
   })
 
-  it('lists the home organization once the chosen one’s seat goes while it shows', async () => {
+  it('lists the home organization once the chosen one’s seat goes while it shows, and keeps a typed deletion reason to copy', async () => {
     // an admin of Acme, so Acme pilot offers Delete, with Pilot API
     // archived with it
     await load((snap) => {
@@ -1153,15 +1156,53 @@ describe('Archived projects', () => {
     expect(chipLists).toEqual([{ org_id: 'acme', project_id: 'acme-old' }])
     await click(find('[data-delete-project="acme-old"]'))
     expect(text('[data-modal-shell] h2')).toBe('Delete “Acme pilot”?')
+    const reason = find<HTMLTextAreaElement>('[data-fate-reason]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(
+        reason,
+        'Pilot ended',
+      )
+      reason.dispatchEvent(new Event('input', { bubbles: true }))
+    })
     await elsewhere(noAcmeSeat)
-    // the Delete window and the chips close with Acme, the chips never
-    // asking the home organization for Acme pilot, not even for one render
-    expect(has('[data-modal-shell]')).toBe(false)
-    expect(sent('projects:deleteDeep')).toEqual([])
+    // the chips close with Acme, never asking the home organization for
+    // Acme pilot, not even for one render
     expect(chipLists.filter((args) => args.org_id !== 'acme')).toEqual([])
     expect(openLists()).toEqual([{ name: 'archived', org_id: org }])
     expect(entries()).toEqual(['side', 'old'])
     expect(has('[data-archived-projects-org]')).toBe(false)
+    // the Delete window stays with Acme, says Acme pilot is gone, sends
+    // nothing and keeps the reason to copy
+    expect(text('[data-modal-shell] h2')).toBe('Delete “Acme pilot”?')
+    expect(text('[data-fate-gone]')).toBe(
+      'Acme pilot is no longer here. It was archived or deleted, or you can no longer open it. The reason you typed for it was not used. Copy it to keep it.',
+    )
+    expect(text('[data-fate-gone-reason] p')).toBe('Pilot ended')
+    const shell = find('[data-modal-shell]')
+    expect([...shell.querySelectorAll('button')].map((b) => b.textContent?.trim())).toEqual([
+      '',
+      'Copy reason',
+      'Close',
+    ])
+    expect(sent('projects:deleteDeep')).toEqual([])
+    expect(
+      network.query.mock.calls
+        .filter(([ref]) => getFunctionName(ref) === 'projects:removalSummary')
+        .map(([, a]) => a.org_id),
+    ).toEqual(['acme'])
+    // until the reason is copied, Close asks first
+    await click(button('Close', shell))
+    expect(text('[data-discard-prompt] h2')).toBe('Discard your unsent reason?')
+    await click(button('Keep editing'))
+    expect(has('[data-modal-shell]')).toBe(true)
+    const writeText = vi.fn(async (_text: string) => {})
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await click(button('Copy reason'))
+    expect(writeText).toHaveBeenCalledWith('Pilot ended')
+    await click(button('Close'))
+    expect(has('[data-discard-prompt]')).toBe(false)
+    expect(has('[data-modal-shell]')).toBe(false)
+    expect(sent('projects:deleteDeep')).toEqual([])
   })
 
   it('says each state at the end of the page, and no archived project only at a real end', async () => {

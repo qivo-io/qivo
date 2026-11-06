@@ -1048,6 +1048,10 @@ const archivedArgs = (org: string, search: string, after: string | null) => ({
     loaded one comes back with it, and whether every one has loaded. */
 type ChipsInfo = { id: string; withParent: boolean; complete: boolean }
 
+/** The entry whose Delete window is open, with the organization the page
+    listed when it opened, which the window keeps. */
+type Deleting = { row: ArchivedProjectRow; orgId: string }
+
 /**
  * Archived projects: one organization's archive 25 entries a page from the
  * server (projectSettings.archived), newest archived first, with a search
@@ -1061,18 +1065,18 @@ type ChipsInfo = { id: string; withParent: boolean; complete: boolean }
 export function ArchivedProjectsPage() {
   // the entry whose Delete window is open, and the rows on either side of
   // it when it opened, for focus
-  const [deleting, setDeleting] = useStateS<ArchivedProjectRow | null>(null)
+  const [deleting, setDeleting] = useStateS<Deleting | null>(null)
   const deleteSides = React.useRef<{ next?: string; previous?: string }>({})
   // the entry whose sub-projects show, and what they told its Restore
   const [chipsOpen, setChipsOpen] = useStateS<string | null>(null)
   const [chips, setChips] = useStateS<ChipsInfo | null>(null)
-  // a Delete window and an entry's open sub-projects for the organization
-  // that went close with it (onGone); the sub-projects also close as the
-  // page or the organization changes (pageAt)
+  // an entry's open sub-projects for the organization that went close with
+  // it (onGone), and also as the page or the organization changes (pageAt).
+  // A Delete window stays with the organization it opened in, said to be
+  // gone once that seat goes (deleteGone).
   const [org, setOrg] = useChosenOrg(
     () => orgFor(null),
     () => {
-      setDeleting(null)
       setChipsOpen(null)
       setChips(null)
     },
@@ -1121,8 +1125,14 @@ export function ArchivedProjectsPage() {
     const entries = rows.filter((row) => !row.under)
     const at = entries.findIndex((row) => row.id === r.id)
     deleteSides.current = { next: entries[at + 1]?.id, previous: entries[at - 1]?.id }
-    setDeleting(r)
+    setDeleting({ row: r, orgId: org })
   }
+  /* Whether the Delete window's organization went, as when its seat was
+     removed or deactivated while the window was open. The window then
+     sends nothing and keeps a typed reason to copy, as a project page's
+     window does when its project leaves (ArchiveOrDeleteProjectModal
+     gone), until the person closes it. */
+  const deleteGone = !!deleting && !P.orgs.some((o) => o.id === deleting.orgId)
   /* Where focus goes when the Delete window closes. That is the row's Delete
      while the row is there, else the next row's first button, the previous
      row's, or the page heading, so focus never falls to the page body. */
@@ -1189,8 +1199,8 @@ export function ArchivedProjectsPage() {
     })
   }
   // the window waits for the server, so a refusal leaves it open
-  const del = async (r: ArchivedProjectRow, reason: string) => {
-    if (!(await P.removeProject(r.id, reason, { orgId: org }))) return false
+  const del = async ({ row: r, orgId }: Deleting, reason: string) => {
+    if (!(await P.removeProject(r.id, reason, { orgId }))) return false
     setDeleting(null)
     window.showToast?.(`Deleted “${r.name}”`)
     return true
@@ -1368,17 +1378,18 @@ export function ArchivedProjectsPage() {
       </SettingsSection>
       {deleting && (
         <ArchiveOrDeleteProjectModal
-          key={deleting.id}
+          key={deleting.row.id}
           project={{
-            id: deleting.id,
-            name: deleting.name,
-            type: deleting.parent === null ? 'meta' : 'project',
-            orgId: org,
+            id: deleting.row.id,
+            name: deleting.row.name,
+            type: deleting.row.parent === null ? 'meta' : 'project',
+            orgId: deleting.orgId,
           }}
           deleteOnly
+          gone={deleteGone}
           onClose={() => setDeleting(null)}
           onDelete={(reason) => del(deleting, reason)}
-          focusAfterClose={() => afterDelete(deleting.id)}
+          focusAfterClose={() => afterDelete(deleting.row.id)}
         />
       )}
     </>
