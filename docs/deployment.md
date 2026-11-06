@@ -1647,7 +1647,7 @@ every function it calls. The reads answer `not_ready` for an organization
 whose names are not ready, and the release changes no table, field or
 index and has no backfill and no release step.
 
-From the release after v0.1.148, an organization admin can download a ready
+From the release after v0.1.152, an organization admin can download a ready
 organization export from `/exports/<id>` through a link of two minutes that
 `orgExport.claimDownload` answers, which also records one automatic attempt
 for each admin who asked for the job. The route checks the admin's
