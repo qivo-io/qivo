@@ -25,11 +25,12 @@
  *
  * - settings: the mode. It reads the account row only.
  * - setDelivery: writes the mode, counting one demo write. A change sets
- *   changed_at, before which no live alert is granted; a switch to 'all'
- *   keeps the account's checkpoint as every session's floor (all_from), and
- *   a switch to 'recent' takes the checkpoint and a baseline now and names
- *   no session as the one that moved it (covered_by), so a mode change
- *   replays nothing and the first claim after it is not sent to summarize.
+ *   changed_at, NOTIFY.lag_ms before which no live alert is granted; a
+ *   switch to 'all' keeps the account's checkpoint as every session's floor
+ *   (all_from), and a switch to 'recent' takes the checkpoint and a
+ *   baseline now and names no session as the one that moved it
+ *   (covered_by), so a mode change replays nothing and the first claim
+ *   after it is not sent to summarize.
  * - beat: registers the caller's session and keeps it live, with whether
  *   it can notify (`can_notify`) and whether the person used it since the
  *   last report (`active`, written at most every NOTIFY.active_ms; a first
@@ -49,9 +50,12 @@
  *   summarizes before its claim can move the checkpoint past what arrived
  *   while it was not the target. It grants an event once in its scope,
  *   never one at or before the latest of the live window
- *   (NOTIFY.live_window_ms), the last mode change and the scope's last
- *   summary, and records each grant for NOTIFY.keep_ms. Past the scope's
- *   rate window it grants no more and answers `limited`. `through` moves
+ *   (NOTIFY.live_window_ms) and NOTIFY.lag_ms before the last mode change
+ *   and before the scope's last summary, and records each grant for
+ *   NOTIFY.keep_ms. Within that minute before a summary its records refuse
+ *   what it announced, so a notice stored late with an earlier time that
+ *   the summary never saw is still granted. Past the scope's rate window
+ *   it grants no more and answers `limited`. `through` moves
  *   the scope's checkpoint, and in 'recent' names the caller's session as
  *   the one that moved it. It reads the account row, in 'recent' the
  *   session rows up to the target, and one or two record ranges an event,
@@ -94,7 +98,10 @@
  *   a claim from a session past liveness answers `not_target`. It calls
  *   claimSummary after a `limited` claim too, which held the checkpoint
  *   before the first event it refused. It shows the generic summary only on
- *   `summary`, and never alerts an event at or before its own summary.
+ *   `summary`. After a summary it goes on offering each new feed event,
+ *   also one whose time is before the summary, since the server refuses
+ *   what the summary announced and grants a notice stored late that the
+ *   summary never saw.
  * - When a claim answers `summarize_first`, it calls claimSummary, then
  *   offers the same events again. The session became the target after
  *   another session moved the checkpoint, and the summary covers what
@@ -293,10 +300,13 @@ export const claimAlerts = sessionMutation({
     )
       return { state: 'summarize_first' as const }
     const { scope, holder } = scopeOf(ctx, delivery, account, row)
+    // NOTIFY.lag_ms before a mode change or a summary, for a notice stored
+    // late with an earlier time; the summary's records of its last
+    // NOTIFY.lag_ms refuse what it announced there
     const floor = Math.max(
       now - NOTIFY.live_window_ms,
-      account?.changed_at ?? -Infinity,
-      holder?.summarized_at ?? -Infinity,
+      (account?.changed_at ?? -Infinity) - NOTIFY.lag_ms,
+      (holder?.summarized_at ?? -Infinity) - NOTIFY.lag_ms,
     )
     const offered = new Map<string, number>()
     for (const { key, at } of events) if (!offered.has(key)) offered.set(key, Math.min(at, now))

@@ -603,32 +603,41 @@ describe('claimAlerts in the default mode', () => {
     expect(await accountRows(t)).toEqual([])
   })
 
-  it('refuses an event older than the live window or at a summary or a mode change, with no record', async () => {
+  it('refuses an event older than the live window or a minute before a summary or a mode change, with no record', async () => {
     const t = newT()
     const s = await signIn(t, await lonelyLogin(t))
     clock(20)
     await beat(s)
     const old = ev('old', 20 - NOTIFY.live_window_ms / MINUTE)
     expect(await claim(s, [old, ev('fresh', 19)])).toMatchObject({ keys: ['fresh'] })
-    // a summary at minute 21 floors live alerts at it
+    // a summary at minute 21 floors live alerts NOTIFY.lag_ms before it, and
+    // a baseline recorded nothing, so a later time in that minute is granted
     clock(21)
     await beat(s)
     expect(await summary(s)).toEqual({ state: 'baseline' })
     clock(22)
-    expect(await claim(s, [ev('summed', 21), ev('after', 21.5)])).toMatchObject({
-      keys: ['after'],
+    expect(await claim(s, [ev('summed', 20), ev('late', 20.5), ev('after', 21.5)])).toMatchObject({
+      keys: ['late', 'after'],
     })
     // so does a change of the mode, there and back
     clock(23)
     await setDelivery(s, 'all')
     await setDelivery(s, 'recent')
     await beat(s)
-    expect(await claim(s, [ev('changed', 23), ev('later', 22.5)])).toMatchObject({ keys: [] })
+    expect(await claim(s, [ev('changed', 22), ev('later', 22.5)])).toMatchObject({
+      keys: ['later'],
+    })
     clock(24)
-    expect(await claim(s, [ev('changed', 23), ev('next', 23.5)])).toMatchObject({
+    expect(await claim(s, [ev('changed', 22), ev('later', 22.5), ev('next', 23.5)])).toMatchObject({
       keys: ['next'],
     })
-    expect((await records(t)).map((r) => r.key).sort()).toEqual(['after', 'fresh', 'next'])
+    expect((await records(t)).map((r) => r.key).sort()).toEqual([
+      'after',
+      'fresh',
+      'late',
+      'later',
+      'next',
+    ])
     // an event from the future is taken at now
     expect(await claim(s, [ev('future', 99)])).toMatchObject({ keys: ['future'] })
   })
@@ -769,11 +778,12 @@ describe('mode changes', () => {
       changed_at: START + 2 * MINUTE,
       all_from: first.at,
     })
-    // events at the change are not live; a session without a checkpoint of
+    // what 'recent' alerted stays refused, and an event at the change that
+    // no session alerted is still live; a session without a checkpoint of
     // its own takes a baseline
     const atChange = eventOf((await newsAt(t, f, 2)).message)
     clock(3)
-    expect(await claim(a, [first, atChange])).toMatchObject({ keys: [] })
+    expect(await claim(a, [first, atChange])).toMatchObject({ keys: [atChange.key] })
     expect(await summary(b)).toEqual({ state: 'baseline' })
     const second = eventOf((await newsAt(t, f, 3.5)).message)
     clock(4)
@@ -783,7 +793,8 @@ describe('mode changes', () => {
     clock(5)
     expect(await summary(a)).toEqual({ state: 'none' })
     // back to 'recent': the switch is a baseline, so nothing before it
-    // counts and no live alert at it is granted
+    // counts, what 'all' alerted is refused and what no session alerted in
+    // its last minute is still live
     const third = eventOf((await newsAt(t, f, 5)).message)
     await setDelivery(a, 'recent')
     expect(await accountOf(t, a.authUserId)).toMatchObject({
@@ -793,7 +804,7 @@ describe('mode changes', () => {
       baseline_at: START + 5 * MINUTE,
     })
     await beat(a)
-    expect(await claim(a, [second, third])).toMatchObject({ keys: [] })
+    expect(await claim(a, [second, third])).toMatchObject({ keys: [third.key] })
     clock(9)
     expect(await resume(a)).toEqual({ state: 'none' })
     // no key was granted twice in one scope
@@ -1027,6 +1038,29 @@ describe('claimSummary', () => {
       keys: [alerted.key],
     })
     clock(12)
+    expect(await resume(s)).toEqual({ state: 'none' })
+  })
+
+  it('leaves a notice stored after a summary and a claim, with a time just before the summary, to a live alert', async () => {
+    const t = newT()
+    const { f, s } = await guestFixture(t)
+    expect(await resume(s)).toEqual({ state: 'baseline' })
+    clock(5)
+    expect(await resume(s)).toEqual({ state: 'none' })
+    // a claim after the summary moves the checkpoint past it
+    const news = eventOf((await newsAt(t, f, 6.5)).message)
+    clock(7)
+    await beat(s)
+    expect(await claim(s, [news], news.at)).toMatchObject({ keys: [news.key] })
+    // a background step stores a notice with its write's time, 20 s before
+    // the summary, which the summary never saw
+    const late = eventOf((await newsAt(t, f, 5 - 20 / 60)).message)
+    expect(await claim(s, [late], news.at)).toEqual({
+      state: 'granted',
+      keys: [late.key],
+      limited: false,
+    })
+    clock(8)
     expect(await resume(s)).toEqual({ state: 'none' })
   })
 

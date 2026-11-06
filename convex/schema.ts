@@ -729,7 +729,8 @@ export default defineSchema({
   account_notifications: defineTable({
     auth_user_id: v.string(),
     delivery: v.union(v.literal('recent'), v.literal('all')),
-    // the last change of `delivery`; no live alert for an event at or before it
+    // the last change of `delivery`; no live alert for an event at or before
+    // NOTIFY.lag_ms before it
     changed_at: v.optional(v.number()),
     // the checkpoint in 'recent', every eligible event before it alerted,
     // summarized or taken as a baseline
@@ -738,7 +739,8 @@ export default defineSchema({
     // in 'recent', absent after a switch to 'recent'; a claim of another
     // target answers summarize_first (notifications.ts claimAlerts)
     covered_by: v.optional(v.string()),
-    // the last summary in 'recent'; no live alert for an event at or before it
+    // the last summary in 'recent'; no live alert for an event at or before
+    // NOTIFY.lag_ms before it, or one it recorded
     summarized_at: v.optional(v.number()),
     // the last baseline in 'recent'; no summary counts an event at or before it
     baseline_at: v.optional(v.number()),

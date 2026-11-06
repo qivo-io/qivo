@@ -48,12 +48,15 @@ export const NOTIFY = {
    * takes about three minutes (live_beats), so a late alert stays live. */
   live_window_ms: 600_000,
   /** How far a catch-up reads back before its checkpoint for items that
-   * were stored after it with an earlier time. Convex stamps a row with
-   * its mutation's start, not its commit, and background steps store
-   * follower and mention notices with their write's earlier created_at
-   * (model/messages.ts itemMessages). The app allows the same minute
-   * (src/store/planner.ts COMMIT_SLACK_MS). A step delayed past it stays a
-   * miss until messages carry a commit timestamp. */
+   * were stored after it with an earlier time, and how far before a
+   * summary or a mode change a live claim may still be granted, so such an
+   * item reaches an alert or a later summary (notifications.ts
+   * claimAlerts). Convex stamps a row with its mutation's start, not its
+   * commit, and background steps store follower and mention notices with
+   * their write's earlier created_at (model/messages.ts itemMessages). The
+   * app allows the same minute (src/store/planner.ts COMMIT_SLACK_MS). A
+   * step delayed past it stays a miss until messages carry a commit
+   * timestamp. */
   lag_ms: 60_000,
   /** How long a delivery or summary record is kept. Longer than
    * live_window_ms, so a record outlives every grant it must refuse, and
