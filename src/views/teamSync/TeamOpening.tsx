@@ -12,6 +12,7 @@ import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { DeferredList } from '@/components/DeferredList'
 import { Avatar, Icon, IssueKey, ProjectNameOf } from '@/components/qivo'
 import { Button } from '@/components/ui/button'
+import { HoverTooltip } from '@/components/ui/tooltip'
 import { SYNC_LIMIT } from '@/lib/boardGroups'
 import { relativeWeek, weekToISO } from '@/lib/dates'
 import { limitSentence } from '@/lib/fieldLimits'
@@ -248,11 +249,13 @@ function useSyncMilestoneReads(metaIds: Set<string>, todayWeek: number, owner: n
 
 /** The muted "unknown" the strip shows for a fact Qivo could not read
     whole, with what it means on hover. */
-function Unknown({ title }: { title: string }) {
+function Unknown({ why }: { why: string }) {
   return (
-    <div data-sync-fact="unknown" title={title} className="text-base text-text-3">
-      unknown
-    </div>
+    <HoverTooltip content={why}>
+      <div data-sync-fact="unknown" className="w-fit text-base text-text-3">
+        unknown
+      </div>
+    </HoverTooltip>
   )
 }
 
@@ -359,11 +362,12 @@ export function TeamOpening({
           ) : milestones.next.kind === 'none' ? (
             <div className="text-base text-text-3">None scheduled</div>
           ) : milestones.next.kind === 'loading' ? (
-            <div className="text-base text-text-3" title="Loading the next milestone">
-              …
+            <div className="text-base text-text-3">
+              <span aria-hidden="true">…</span>
+              <span className="sr-only">Loading the next milestone</span>
             </div>
           ) : (
-            <Unknown title="Qivo could not read every milestone of these projects." />
+            <Unknown why="Qivo could not read every milestone of these projects." />
           )}
         </div>
       </div>
