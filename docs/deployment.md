@@ -193,8 +193,13 @@ the import answers all three with a `5xx`, and so does a backend whose
 settings Better Auth refuses. The probe sends no credential and creates no
 session, OAuth client or token. Outside the demo Better Auth still reads the
 deployment's OAuth resource row on each call and creates it on a new
-backend. The same calls by hand, with the deployment's Convex site origin
-as `SITE` (the app's Account › MCP address shows it), are:
+backend.
+
+The same calls by hand take the host of the deployment's Convex site URL as
+`SITE`, such as `name.eu-west-1.convex.site`. The Convex dashboard shows
+that URL for every deployment, the demo's included, as the HTTP Actions URL
+in the deployment's settings. Keep the region label, because the bare
+`name.convex.site` answers `404`. The calls are:
 
 ```sh
 curl -sS -w '\n%{http_code}\n' https://SITE/api/auth/get-session
