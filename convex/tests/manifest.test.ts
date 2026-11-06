@@ -663,6 +663,9 @@ panoramaImages:summary query public {"type":"object","value":{}}
 panoramaUploads:addFile action public {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"location":{"fieldType":{"type":"string"},"optional":true},"creator":{"fieldType":{"type":"string"},"optional":false},"rights_confirmed":{"fieldType":{"type":"boolean"},"optional":false},"source_url":{"fieldType":{"type":"string"},"optional":true}}}
 panoramaUploads:retainFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"location":{"fieldType":{"type":"string"},"optional":true},"creator":{"fieldType":{"type":"string"},"optional":false},"rights_confirmed":{"fieldType":{"type":"boolean"},"optional":false},"source_url":{"fieldType":{"type":"string"},"optional":true},"width":{"fieldType":{"type":"number"},"optional":false},"height":{"fieldType":{"type":"number"},"optional":false},"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 panoramaUploads:uploadUrl mutation public {"type":"object","value":{}}
+pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:assigneeLoad query public {"type":"object","value":{"assignee_id":{"fieldType":{"type":"string"},"optional":false}}}
 planning:ownerLoads query public {"type":"object","value":{"owner_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 prefs:get query public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":true}}}
@@ -1160,6 +1163,11 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // preview and the Reassign picker's people. Each runs the writes' own
   // checks and is read once, never subscribed.
   accessRemovals: { preview: 'orgQuery', reassignChoices: 'orgQuery' },
+  // A task's people pickers: who could become its assignee or reviewer,
+  // whom Team sync's Mention window may notify about it, and a check of a
+  // few people by id. Each runs the write's own gate and rule, and is read
+  // once a batch, never subscribed.
+  pickers: { canOwn: 'orgQuery', syncRecipients: 'orgQuery', taskOwners: 'orgQuery' },
   // Removing a person's or team's access stays open to org admins during a
   // billing pause; giving or changing access does not. A restore schedules
   // regroup:restoredStep (internal), which clears the own hours of parents
@@ -1283,7 +1291,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 236
+const PUBLIC_COUNT = 239
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

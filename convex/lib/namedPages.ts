@@ -7,10 +7,12 @@
  * Projects with its search and sub-projects and the archived sub-projects
  * of an archived project (model/projectSettingsLists.ts), Deleted items'
  * people for Deleted by and the assignee filter
- * (model/deletedItemsChoices.ts peopleBatch), the REST and MCP lists of
- * people, labels, teams and a team's members (lib/listCursor.ts
- * namedListPage), and later the people and team lists of Settings and the
- * other REST and MCP lists. A list is
+ * (model/deletedItemsChoices.ts peopleBatch), the removal window's
+ * Reassign picker (model/removalPreview.ts reassignChoicesOf), a task's
+ * owner pickers and Team sync's mention recipients (model/pickers.ts), the
+ * REST and MCP lists of people, labels, teams and a team's members
+ * (lib/listCursor.ts namedListPage), and later the people and team lists
+ * of Settings and the other REST and MCP lists. A list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -631,7 +633,9 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * without its end moving, and one that would hold more than four times
  * `limit` stops there as if the read budget stopped it, and the app splits
  * it, as model/labels.ts labelBatch does. The project settings lists and
- * pickers (model/projectSettings.ts), the project navigation lists
+ * pickers (model/projectSettings.ts), the Reassign picker
+ * (model/removalPreview.ts), a task's owner and recipient pickers
+ * (model/pickers.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
  * (model/projectSettingsLists.ts), the REST and MCP lists in name order
  * (lib/listCursor.ts namedListPage) and Billing's Storage by project
