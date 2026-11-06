@@ -10,6 +10,7 @@ import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setu
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
 import { isProjectListRead, projectListsServer } from './store/projectSettingsListsStandIn.setup'
+import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* Where focus goes as App's New sub-project and Milestones dialogs close,
    on App and the real store. The Planner leads Plan. New sub-project opens
@@ -141,6 +142,10 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}) {
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name.startsWith('overview:') && !wrote) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(snap, name, args, next, fail)
+    // the Roadmap's reads answer whenever they subscribe: a milestone's
+    // write paints the workspace's rows, which their answers do not hold
+    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
+      next(answerRoadmap(snap, name, args))
     return () => {}
   })
   network.query.mockResolvedValue(null)

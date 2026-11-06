@@ -15,6 +15,7 @@ import {
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import { answerRoadmap, type ForcedRoadmap } from '../store/roadmapStandIn.setup'
 import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSyncStandIn.setup'
 
 /* The Board on the real store for jsdom tests. A test file mocks
@@ -32,7 +33,10 @@ import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSy
    renderView can show the Overview over the same store. Team sync's agenda
    (teamSync:agenda) answers through its stand-in
    (store/teamSyncStandIn.setup.ts) the same way (`server.sync`), and its
-   last comments with none, so renderView can show Team sync too. */
+   last comments with none, so renderView can show Team sync too. So do the
+   Roadmap's two reads (tasks:roadmap and tasks:roadmapDependencies,
+   store/roadmapStandIn.setup.ts, `server.roadmap`), so renderView shows the
+   Roadmap from the server's answer too. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -153,6 +157,27 @@ export async function loadBoard(
         an answer, `asked` is every subscription's query and arguments,
         newest last, and `open` those
         open now */
+    /** the Roadmap's two reads: `hold` keeps their answers back, or those
+        of the query it names, `force` answers states the workspace cannot
+        reach, `fail` fails them, `ceiling` and `partTasks` lower the
+        Roadmap's bounds, `edit` changes an answer, `asked` is every
+        subscription's query and arguments, newest last, and `open` those
+        open now */
+    roadmap: {
+      hold: boolean | ((name: string) => boolean)
+      force: ForcedRoadmap[]
+      fail: unknown
+      ceiling?: number
+      partTasks?: number
+      edit: ((name: string, answer: unknown, args: unknown) => unknown) | null
+      asked: { name: string; args: unknown }[]
+      open: Set<{
+        name: string
+        args: unknown
+        next: (value: unknown) => void
+        fail?: (e: unknown) => void
+      }>
+    }
     overview: {
       hold: boolean | ((query: OverviewQuery) => boolean)
       force: ForcedOverview
@@ -190,6 +215,14 @@ export async function loadBoard(
     open: new Set(),
     unavailable: [],
     loads: new Set(),
+    roadmap: {
+      hold: false,
+      force: [],
+      fail: undefined,
+      edit: null,
+      asked: [],
+      open: new Set(),
+    },
     overview: {
       hold: false,
       force: {},
@@ -216,6 +249,25 @@ export async function loadBoard(
     if (s.fail !== undefined) return sub.fail?.(s.fail)
     const answer = teamSyncStandIn(snapshot, sub.args, { sees, writes, force: s.force })
     sub.next(structuredClone(s.edit ? s.edit(answer, sub.args) : answer))
+  }
+  /** Answers Roadmap subscription `sub` from the snapshot as it is now, or
+      fails it, as the test says. */
+  const answerRoadmapSub = (sub: {
+    name: string
+    args: unknown
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) => {
+    const r = server.roadmap
+    if (r.fail !== undefined) return sub.fail?.(r.fail)
+    const answer = answerRoadmap(snapshot, sub.name, sub.args, {
+      sees,
+      canEdit: writes,
+      force: r.force,
+      ceiling: r.ceiling,
+      partTasks: r.partTasks,
+    })
+    sub.next(structuredClone(r.edit ? r.edit(sub.name, answer, sub.args) : answer))
   }
   const answerOf = (args: BoardArgs): BoardAnswer => {
     const answer = boardStandIn(snapshot, args, { sees, force: server.force ?? undefined })
@@ -250,6 +302,7 @@ export async function loadBoard(
       call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
     for (const sub of server.overview.open) answerOverview(sub)
     for (const sub of server.sync.open) answerSync(sub)
+    for (const sub of server.roadmap.open) answerRoadmapSub(sub)
   }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -266,6 +319,14 @@ export async function loadBoard(
         if (server.fail !== undefined) fail?.(server.fail)
         else next(structuredClone(answerOf(sub.args)))
       return () => server.open.delete(sub)
+    }
+    if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
+      const sub = { name, args, next, fail }
+      server.roadmap.asked.push({ name, args })
+      server.roadmap.open.add(sub)
+      const hold = server.roadmap.hold
+      if (!(typeof hold === 'function' ? hold(name) : hold)) answerRoadmapSub(sub)
+      return () => server.roadmap.open.delete(sub)
     }
     if (name === 'planning:ownerLoads') {
       const call = { args: args as OwnerLoadsArgs, next }

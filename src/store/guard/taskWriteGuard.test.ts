@@ -25,7 +25,8 @@ const AT = '2026-09-14T08:00:00.000Z'
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 /* The task writes: every api.issues mutation the store sends and the label,
-   file and Roadmap task writes, which need a held task as much. */
+   file and Roadmap task writes, which need a held task as much. A Roadmap
+   change needs one only for a task operation, and its undo none. */
 const HELD_WRITES = [
   'issues:update',
   'issues:move',
@@ -40,8 +41,10 @@ const HELD_WRITES = [
   'files:attach',
   'files:removeAttachment',
   'roadmap:change',
-  'roadmap:undo',
 ]
+/* What a Roadmap change of a task operation sends. */
+const TASK_CHANGE = { operations: [{ kind: 'task', id: 'task-1', patch: {} }] }
+const argsOf = (name: string) => (name === 'roadmap:change' ? TASK_CHANGE : undefined)
 const CREATES = ['issues:create', 'issues:createParent', 'issues:createLinked']
 
 describe('the guard against task writes before the ask', () => {
@@ -103,11 +106,22 @@ describe('the guard against task writes before the ask', () => {
 
   it('faults a write that needs a held task, and passes one a server answer names', () => {
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
-    for (const name of HELD_WRITES) expect(probe.guardWrite(name), name).toHaveLength(1)
-    // the window's answer writes, the pickers' relation writes and the view
-    // write carry the mark
     for (const name of HELD_WRITES)
-      expect(probe.guardWrite(name, { task: 'task-1', answer: true }), name).toEqual([])
+      expect(probe.guardWrite(name, undefined, argsOf(name)), name).toHaveLength(1)
+    // the window's answer writes, the pickers' relation writes, the view
+    // writes and a Roadmap change of a task an answer brings carry the mark
+    for (const name of HELD_WRITES)
+      expect(probe.guardWrite(name, { task: 'task-1', answer: true }, argsOf(name)), name).toEqual(
+        [],
+      )
+    // a Roadmap undo restores the server's journal and paints nothing, and a
+    // change of milestones alone holds no task
+    expect(probe.guardWrite('roadmap:undo')).toEqual([])
+    expect(
+      probe.guardWrite('roadmap:change', undefined, {
+        operations: [{ kind: 'milestone_update', id: 'm-1', patch: {} }],
+      }),
+    ).toEqual([])
     // a mark that names the task alone is no answer's
     expect(probe.guardWrite('issues:update', { task: 'task-1' })).toHaveLength(1)
     // a restore, and writes that are no task writes
@@ -121,9 +135,9 @@ describe('the guard against task writes before the ask', () => {
       expect(probe.guardWrite(name), name).toHaveLength(1)
       expect(probe.guardWrite(name, { task: 'task-1', answer: true }), name).toHaveLength(1)
     }
-    store.P.askTasks('roadmap')
+    store.P.askTasks('inbox')
     for (const name of [...CREATES, ...HELD_WRITES])
-      expect(probe.guardWrite(name), name).toEqual([])
+      expect(probe.guardWrite(name, undefined, argsOf(name)), name).toEqual([])
   })
 
   it("faults a held task's edit and archive sent before the ask, also an awaited one", async () => {

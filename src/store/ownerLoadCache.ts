@@ -1,10 +1,12 @@
 /* One cache of people's loads, read live through planning.ownerLoads
    (convex/planning.ts), for the delays of tasks the workspace does not
-   hold or cannot judge yet: the Board's cards a view's answer brings
-   (store/planner.ts viewDelay), every card in a session that never asked
-   for every task (store/planner.ts P.askTasks), the task window's task
-   (P.windowDelay), and the people an organization Viewer's Team sync shows,
-   whose agenda reads no load (P.watchSyncPeople), later the Roadmap.
+   hold or cannot judge yet: the Board's and the Roadmap's bars a view's
+   answer brings (store/planner.ts viewDelay), every card in a session that
+   never asked for every task (store/planner.ts P.askTasks), the task
+   window's task (P.windowDelay), and the people an organization Viewer's
+   Team sync shows, whose agenda reads no load (P.watchSyncPeople); and for
+   the Roadmap's Team utilization and planning panel (store/viewDelay.ts
+   ownerItemsOf).
 
    - A view registers the owners whose loads its cards need, by
      organization, and releases them when it closes. The cache subscribes
@@ -25,7 +27,9 @@
      groups double and almost every call changes. A guest or Viewer gets
      one owner a call (the server answers one), and a view gets at most
      GUEST_CALLS of those, its owners with the most cards first; the others
-     are `capped`.
+     are `capped`. The Roadmap registers its bars' owners and Team
+     utilization's people under one view key, so one Roadmap holds at most
+     GUEST_CALLS such calls besides its planning panel's one.
    - An owner a call answered `not_read` (its room ran out) is asked again in
      a call of its own owners, which the server always starts reading.
    - The cache follows the hidden-tab gate (lib/viewVisibility.ts): while the
@@ -34,14 +38,16 @@
    - An owner's state is `waiting` until its first answer, then `ok` with its
      spans, `unavailable` (past the reader's bounds), `failed` (the call
      failed) or `capped`. None of them but `ok` is a load: the delay rules
-     never read missing work as free time (src/lib/delay.ts).
-   - It keeps each `ok` answer's spans as sent, their `project_id` included
-     and unread, and never keeps an answer's `paused` list, so a change to
-     an owner's paused tasks alone repaints nothing while that owner stays
-     `ok` and the call's `not_read` start does not move. Paused work that
-     takes an owner past the reader's bounds makes them `unavailable`, as
-     other work does. The Roadmap view stage adds what Team utilization
-     reads. */
+     never read missing work as free time (src/lib/delay.ts), and Team
+     utilization shows such a person's cells as unknown.
+   - It keeps each `ok` answer as sent, each span's `project_id` and the
+     owner's `paused` list included, and gives Team utilization both
+     (`team`). The delays read only the spans, so a change to an owner's
+     paused tasks alone tells the views once and changes no Board card's
+     delay. An answer from a backend before v0.1.125, without the paused
+     list or a span's `project_id`, has no `team`, which Team and the
+     planning panel show as unknown. Paused work that takes an owner past
+     the reader's bounds makes them `unavailable`, as other work does. */
 
 import type { FunctionReference } from 'convex/server'
 import type { Value } from 'convex/values'
@@ -57,10 +63,28 @@ export const CALL_OWNERS = 25
 /** The most owner calls one view holds for a guest or Viewer. */
 export const GUEST_CALLS = 50
 
-/** What the cache knows of one owner's load. */
+/** One paused task of an owner as Team utilization reads it, on the week
+    grid of now, its end at least its start. */
+export type PausedItem = { issueUuid: string; project: string; start: number; end: number }
+
+/** What Team utilization reads of an `ok` answer beside its spans: each
+    span's project, in the order of the spans, null for a span without its
+    task, and the owner's paused tasks in projects the reader can see. */
+export type TeamLoad = {
+  projects: readonly (string | null)[]
+  paused: readonly PausedItem[]
+}
+
+/** What the cache knows of one owner's load. `team` is absent for an
+    answer from a backend that sent no project or paused list. */
 export type OwnerLoad =
   | { state: 'waiting' }
-  | { state: 'ok'; spans: readonly LoadSpan[]; hidden: OwnerLoadsJson['hidden'] }
+  | {
+      state: 'ok'
+      spans: readonly LoadSpan[]
+      hidden: OwnerLoadsJson['hidden']
+      team?: TeamLoad
+    }
   | { state: 'unavailable' | 'failed' | 'capped' }
 
 /** An owner a view's cards need, with how many cards, which orders a
@@ -116,8 +140,14 @@ export function staffCalls(org: string, owners: readonly string[]): Call[] {
   return calls.filter((call) => call.owners.length > 0)
 }
 
+/** One owner's ok answer as it may arrive: a backend before v0.1.125
+    sends no `paused` list and no span's `project_id`. */
+type AnswerOk = Omit<Extract<OwnerLoadsJson['owners'][number], { state: 'ok' }>, 'paused'> & {
+  paused?: Extract<OwnerLoadsJson['owners'][number], { state: 'ok' }>['paused']
+}
+
 /** One owner's spans as an answer sends them, in ISO weeks and stamps. */
-type AnswerSpans = Extract<OwnerLoadsJson['owners'][number], { state: 'ok' }>['spans']
+type AnswerSpans = AnswerOk['spans']
 
 /** What one owner of a planning.ownerLoads answer says, as the views read
     it, or null for `not_read`, which is no answer. */
@@ -126,9 +156,28 @@ export function ownerLoadOf(
   hidden: OwnerLoadsJson['hidden'],
 ): OwnerLoad | null {
   if (one.state === 'not_read') return null
-  return one.state === 'ok'
-    ? { state: 'ok', spans: spansOf(one.spans), hidden }
-    : { state: 'unavailable' }
+  if (one.state !== 'ok') return { state: 'unavailable' }
+  const team = teamOf(one.spans, one.paused)
+  return { state: 'ok', spans: spansOf(one.spans), hidden, ...(team ? { team } : {}) }
+}
+
+/** What Team utilization reads of an answer's `spans` and `paused`, on the
+    week grid of now, or null for an answer from a backend that sent no
+    paused list or no span's project, read for the whole answer. */
+function teamOf(spans: AnswerSpans, paused: AnswerOk['paused']): TeamLoad | null {
+  if (paused === undefined || !spans.every((span) => 'project_id' in span)) return null
+  return {
+    projects: spans.map((span) => span.project_id ?? null),
+    paused: paused.map((span) => {
+      const start = isoToWeek(span.start_week)
+      return {
+        issueUuid: span.issue_id,
+        project: span.project_id,
+        start,
+        end: Math.max(start, isoToWeek(span.end_week)),
+      }
+    }),
+  }
 }
 
 /** The spans of one owner of an answer, as the app's load spans on the week
@@ -144,11 +193,16 @@ const spansOf = (spans: AnswerSpans) =>
     }),
   )
 
-/** What the cache keeps of one owner's answer: an ok answer's spans as the
-    server sent them, so they convert on the week grid of the moment they
-    are read (loadOf). */
+/** What the cache keeps of one owner's answer: an ok answer's spans and
+    paused list as the server sent them, so they convert on the week grid of
+    the moment they are read (loadOf). */
 type Kept =
-  | { state: 'ok'; spans: AnswerSpans; hidden: OwnerLoadsJson['hidden'] }
+  | {
+      state: 'ok'
+      spans: AnswerSpans
+      paused?: AnswerOk['paused']
+      hidden: OwnerLoadsJson['hidden']
+    }
   | { state: 'unavailable' | 'failed' }
 
 /** Creates the cache over `deps`. */
@@ -219,7 +273,12 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
         set(
           owner,
           one.state === 'ok'
-            ? { state: 'ok', spans: one.spans, hidden: answer.hidden }
+            ? {
+                state: 'ok',
+                spans: one.spans,
+                ...((one as AnswerOk).paused === undefined ? {} : { paused: one.paused }),
+                hidden: answer.hidden,
+              }
             : { state: 'unavailable' },
         )
     }
@@ -391,7 +450,13 @@ export function createOwnerLoadCache(deps: OwnerLoadDeps) {
       const grid = TIMELINE_START.getTime()
       const was = converted.get(key)
       if (was?.kept === kept && was.grid === grid) return was.load
-      const load: OwnerLoad = { state: 'ok', spans: spansOf(kept.spans), hidden: kept.hidden }
+      const team = teamOf(kept.spans, kept.paused)
+      const load: OwnerLoad = {
+        state: 'ok',
+        spans: spansOf(kept.spans),
+        hidden: kept.hidden,
+        ...(team ? { team } : {}),
+      }
       converted.set(key, { kept, grid, load })
       return load
     },

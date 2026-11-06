@@ -1,6 +1,7 @@
 /* The message a view shows in place of what it cannot show: the Board's
-   (views/board/BoardNote.tsx), the Overview's (views/Overview.tsx) and
-   Team sync's (views/teamSync/SyncNote.tsx) choosers, limits and failures. Each is an empty state (data-empty-state),
+   (views/board/BoardNote.tsx), the Roadmap's (views/roadmap/RoadmapNote.tsx),
+   the Overview's (views/Overview.tsx) and Team sync's
+   (views/teamSync/SyncNote.tsx) choosers, limits and failures. Each is an empty state (data-empty-state),
    where focus goes once a task window closes over it (lib/taskFocus.ts). */
 
 import { Icon, ProjectName } from '@/components/qivo'
@@ -22,7 +23,7 @@ export function ViewNote({
   onProject,
   action,
 }: {
-  hooks: 'board' | 'ov' | 'sync'
+  hooks: 'board' | 'roadmap' | 'ov' | 'sync'
   phone: boolean
   icon: string
   title: string

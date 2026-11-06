@@ -134,16 +134,8 @@ describe('a long list on another view', () => {
     await board.renderView(root, (info) => (
       <MobileRoadmap
         info={info}
-        windowStart={board.P.TODAY_WEEK - 4}
-        windowEnd={board.P.TODAY_WEEK + 12}
-        filters={{
-          mine: false,
-          assignees: [],
-          priority: null,
-          stale: false,
-          focus: false,
-          search: '',
-        }}
+        // the Roadmap's tasks, as its answer brings them
+        tasks={board.P.issues}
         filterControls={null}
         actions={{}}
         onTimeline={noop}
@@ -189,6 +181,23 @@ describe('a delivery on the desktop Roadmap', () => {
       // so every row draws its due mark when it renders
       for (let n = 1; n <= 300; n++)
         snap.issues.push({ ...taskRow(snap, `t${n}`, 'todo', n), due_date: '2026-12-01' })
+      // t150 blocks t151, both scheduled, so they are a part Auto-move reads
+      for (const [id, start, end] of [
+        ['t150', '2026-09-14', '2026-09-21'],
+        ['t151', '2026-10-12', '2026-10-19'],
+      ] as const)
+        Object.assign(snap.issues.find((issue) => issue.id === id) ?? {}, {
+          start_week: start,
+          end_week: end,
+        })
+      snap.links.push({
+        id: 'link-1',
+        source_id: 't150',
+        target_id: 't151',
+        type: 'blocks',
+        pair_key: 't150:t151',
+        created_at: '2026-09-01T08:00:00.000Z',
+      })
     })
     const { Roadmap } = await import('./Roadmap')
     const actions = new Proxy({}, { get: () => () => {} }) as Parameters<
@@ -224,10 +233,11 @@ describe('a delivery on the desktop Roadmap', () => {
     // the renamed task's chunk of rows, not all 300
     expect(drawn.mock.calls.length).toBeGreaterThan(0)
     expect(drawn.mock.calls.length).toBeLessThanOrEqual(64)
-    // a title is neither a date nor a link: Auto-move and the arrows stand
+    // a title is neither a date nor a link: Auto-move stands, and the
+    // arrows come from the dependency answer, never a walk of every task
     expect(schedule.moves).toBe(before.moves)
-    expect(schedule.pairs).toBe(before.pairs)
-    // a date is: Auto-move works it out again
+    expect(schedule.pairs).toBe(0)
+    // a date of a part's task is: Auto-move works it out again
     const { weekToISO } = await import('../lib/dates')
     Object.assign(row, {
       start_week: weekToISO(board.P.TODAY_WEEK + 2),

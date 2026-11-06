@@ -56,6 +56,7 @@ import {
 } from '../../convex/lib/projectCreators'
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/review'
+import type { DependencyAnswer, DependencyRow, RoadmapAnswer } from '../../convex/lib/roadmap'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
 import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
@@ -91,7 +92,6 @@ import {
   TODAY_ISO,
   TODAY_POS,
   TODAY_WEEK,
-  tsToWeek,
   WEEK_ONE_RULES,
   WEEKDAYS,
   weekLabel,
@@ -171,7 +171,7 @@ import {
   type OverviewView,
   splitAt,
 } from './overviewLists'
-import { createOwnerLoadCache } from './ownerLoadCache'
+import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoadCache'
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
@@ -206,6 +206,9 @@ import {
   issueNeedsLoad,
   judgeDelay,
   needsLoad,
+  type OwnerItem,
+  type OwnerItemsCtx,
+  ownerItemsOf,
   type ViewDelayCtx,
   viewDelay,
   viewLoadOf,
@@ -2964,6 +2967,11 @@ type ViewQuery = {
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
   milestones?: (value: unknown, key: string) => { ask: MilestoneAsk; take: MilestoneTake }
   keepsOnError?: boolean
+  /** the rows of a value whose cards a view draws, by uuid, where it
+      draws fewer than it brings: only their owners register with the
+      owner-load cache for delays (reshapeViews). Without it every row's
+      owner does. */
+  judged?: (value: unknown) => ReadonlySet<string> | null
 }
 
 /** The Board's read: an ok answer brings its rows and its parents. */
@@ -2990,6 +2998,37 @@ const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
     return answer.rows.map(({ at_risk: _risk, ...row }) => row)
   },
 })
+
+/** The Roadmap's read (tasks.roadmap): an ok answer brings its rows, the
+    shown parents above them and the shown subtasks of its group rows, so
+    a group's bar, stale fade and due mark read its family from the answer
+    (views/roadmap/useRoadmapView.ts). Only its rows draw bars, so only
+    their owners register for delays. */
+const ROADMAP_QUERY: ViewQuery = {
+  ref: api.tasks.roadmap,
+  rows: (value) => {
+    const answer = value as RoadmapAnswer
+    return answer.state === 'ok' ? [...answer.rows, ...answer.parents, ...answer.subtasks] : null
+  },
+  judged: (value) => {
+    const answer = value as RoadmapAnswer
+    return answer.state === 'ok' ? new Set(answer.rows.map((row) => row.id)) : null
+  },
+}
+
+/** The Roadmap's dependency read (tasks.roadmapDependencies). It brings
+    no rows, as the Overview's summary brings none: its slim rows are
+    never drawn, and a write of a task only it holds paints nothing
+    (P.moveDependencyTask). */
+const DEPENDENCIES_QUERY: ViewQuery = { ref: api.tasks.roadmapDependencies }
+
+/** The view slots of the Roadmap's two reads (P.watchRoadmap,
+    P.watchRoadmapDependencies), and the owner-load cache's view key of
+    its planning panel (P.watchPlanLoad). Team utilization's people
+    register under the Roadmap's own slot (P.watchRoadmapTeam). */
+export const ROADMAP_SLOT = 'roadmap'
+export const ROADMAP_DEPS_SLOT = 'roadmap:deps'
+const PLAN_LOADS = 'roadmap:plan'
 
 /** The Overview's reads by query. The health table's rows are projects
     with figures, not tasks, so its answer brings no rows and holds no
@@ -3073,6 +3112,9 @@ type ViewRead = {
       when a refusal or a failure that kept its rows took its place, null
       while it is current; null once its rows went */
   fitted: { key: string; value: unknown; until: number | null } | null
+  /** the rows whose owners register for delays (ViewQuery `judged`), null
+      for every row */
+  judged: ReadonlySet<string> | null
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -3197,6 +3239,7 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
       read.fitted = rows ? { key, value: next.value, until: null } : null
+      read.judged = rows ? (read.query.judged?.(next.value) ?? null) : null
       read.delivered = ++viewDeliveries
       read.behind = false
       dropHeldViewParts()
@@ -3263,7 +3306,9 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
     read.held = null
     read.behind = false
     read.fitted = null
+    read.judged = null
   }
+  slotDelayOwners.delete(slot)
   ownerLoads.release(slot)
   const rows = viewRows.holds(slot)
   if (rows) {
@@ -3325,6 +3370,7 @@ function watchView(
       delivered: 0,
       behind: false,
       fitted: null,
+      judged: null,
     }
     viewReads.set(slot, read)
   }
@@ -3828,6 +3874,18 @@ const viewDelayCtx: ViewDelayCtx = {
   orgOf: (id) => rows.profiles.get(id)?.org_id,
 }
 
+/* What reconciling a person's work for Team utilization and the planning
+   panel reads from the store (store/viewDelay.ts ownerItemsOf). Its
+   `filed` holds while the rows hold still, until the next reshape. */
+const ownerItemsCtx: OwnerItemsCtx = {
+  held: viewDelayCtx.held,
+  inView: viewDelayCtx.inView,
+  viewRows: viewDelayCtx.viewRows,
+  projectLive: viewDelayCtx.projectLive,
+  orgOf: viewDelayCtx.orgOf,
+  heldItems: (owner) => tasks.shownItems(owner),
+}
+
 /* The delay of each task only a view holds, by uuid, as the last reshape
    judged it. */
 let viewDelays = new Map<string, DelayInfo | typeof DELAY_UNKNOWN | null>()
@@ -3962,12 +4020,37 @@ function syncWindowLoad() {
   windowLoadNews = true
 }
 
+/* The owners each view slot's cards need for their delays, as the last
+   reshape found them (reshapeViews), and the owners a view registers
+   besides, under the same slot: Team utilization's people under the
+   Roadmap's (P.watchRoadmapTeam). One slot is one view key of the
+   owner-load cache, so a guest's or Viewer's calls for both stay under one
+   GUEST_CALLS cap. */
+const slotDelayOwners = new Map<ViewSlot, OwnerNeed[]>()
+const slotExtraOwners = new Map<ViewSlot, OwnerNeed[]>()
+
+/** Registers view `slot`'s owners with the owner-load cache, its cards'
+    and the others it named, each owner once with its counts added, live
+    while `live`. */
+function registerViewOwners(slot: ViewSlot, live: boolean) {
+  const merged = new Map<string, OwnerNeed>()
+  for (const need of [...(slotDelayOwners.get(slot) ?? []), ...(slotExtraOwners.get(slot) ?? [])]) {
+    const key = `${need.org}\u0000${need.owner}`
+    const was = merged.get(key)
+    merged.set(key, was ? { ...was, cards: was.cards + need.cards } : { ...need })
+  }
+  if (merged.size === 0) ownerLoads.release(slot)
+  else ownerLoads.register(slot, [...merged.values()], live)
+}
+
 /** Registers with the owner-load cache the owners whose loads the cards of
-    the views that show delays need, judges those cards' delays and shapes
-    the models of the tasks only the views hold. Answers whether any model
-    changed. */
+    the views that show delays need, with the other owners a view named
+    (slotExtraOwners), judges those cards' delays and shapes the models of
+    the tasks only the views hold. Answers whether any model changed. */
 function reshapeViews(): boolean {
   reshaping = true
+  // the rows may have changed since the views' work was filed
+  ownerItemsCtx.filed = undefined
   try {
     const views = viewRows.views()
     // first what each view needs, so the judging below reads the cap and any
@@ -3981,6 +4064,8 @@ function reshapeViews(): boolean {
       const needs = new Map<string, { org: string; owner: string; cards: number }>()
       for (const row of rows.values()) {
         if (uuidToKey.has(row.id)) continue
+        // a row the view draws no card for needs no verdict
+        if (read.judged && !read.judged.has(row.id)) continue
         // a card whose verdict reads its owner's load registers the owner,
         // where its project shows delays
         const owner = taskOwnerId(row, row.has_subtasks)
@@ -3996,7 +4081,8 @@ function reshapeViews(): boolean {
         needs.set(key, need)
       }
       // a view whose read stops keeps its owners' loads, without reading them
-      ownerLoads.register(slot, [...needs.values()], read.want !== null)
+      slotDelayOwners.set(slot, [...needs.values()])
+      registerViewOwners(slot, read.want !== null)
     }
     for (const slot of viewReads.keys()) if (!views.has(slot)) ownerLoads.release(slot)
     // each owner's load is built once for every card that reads it
@@ -4237,17 +4323,26 @@ const TASK_CREATES = new Set([
 /* A restore paints nothing in the workspace and needs no task. */
 const RESTORE = getFunctionName(api.issues.unarchive)
 
+/* The Roadmap's writes. An undo restores what the server's journal holds
+   and paints nothing, so it needs no task the workspace holds; a change
+   needs one only for a task operation. */
+const ROADMAP_UNDO = getFunctionName(api.roadmap.undo)
+const ROADMAP_CHANGE = getFunctionName(api.roadmap.change)
+
 /** Test builds only (STRICT_LAYERS): a task write that goes out before the
     store asked for every task is a fault, unless a server answer names
     its task (WriteAbout.answer) or it is a restore. A create needs the ask
     whatever its mark. So a write from a held task's path, which only a
     store that holds every task can take, never goes out while tasks are
-    not asked. */
-function guardTaskWrite(name: string, about: WriteAbout | undefined) {
+    not asked. The Roadmap's undo passes by its name, and a Roadmap change
+    with no task operation, such as a milestone's, passes too. */
+function guardTaskWrite(name: string, about: WriteAbout | undefined, args?: unknown) {
   if (asked) return
   const create = TASK_CREATES.has(name)
   if (!create && !name.startsWith('issues:') && !TASK_WRITES.has(name)) return
-  if (!create && (about?.answer || name === RESTORE)) return
+  if (!create && (about?.answer || name === RESTORE || name === ROADMAP_UNDO)) return
+  const operations = (args as { operations?: { kind: string }[] } | undefined)?.operations
+  if (name === ROADMAP_CHANGE && !(operations ?? []).some((op) => op.kind === 'task')) return
   reportFault(
     new Error(
       `${name} went out before the store asked for every task: ${create ? 'a create asks first (P.askTasks)' : 'mark a write whose task comes from a server answer (WriteAbout.answer)'}`,
@@ -4269,7 +4364,7 @@ function start<M extends FunctionReference<'mutation'>, T>(
   refusal: (error: unknown) => T,
 ): Promise<T> {
   const name = getFunctionName(m)
-  if (STRICT_LAYERS) guardTaskWrite(name, o.about)
+  if (STRICT_LAYERS) guardTaskWrite(name, o.about, args)
   const batch = target !== 'none' && 'id' in target ? target : null
   const paused =
     DEMO_MODE && demoDisposed
@@ -4663,6 +4758,14 @@ export const __layerProbe = STRICT_LAYERS
       /** The spans of owner `owner`'s tasks the workspace holds, as the
           views' delays take them (store/viewDelay.ts heldSpans). */
       shownSpans: (owner: string) => tasks.shownSpans(owner),
+      /** Owner `owner` of organization `org`'s work as Team utilization and
+          the planning panel spread it from cache answer `load`, reconciled
+          with the rows this person holds (store/viewDelay.ts ownerItemsOf,
+          P.ownerItems), for the parity of a cache the test feeds itself. */
+      ownerItems: (org: string, owner: string, load: Extract<OwnerLoad, { state: 'ok' }>) => {
+        ownerItemsCtx.filed = undefined
+        return ownerItemsOf(org, owner, load, ownerItemsCtx)
+      },
       /** Turns the test-only checks, which rebuild and walk every row,
           off or back on, so a test can count what a step costs. */
       uncheck(off: boolean) {
@@ -4671,11 +4774,11 @@ export const __layerProbe = STRICT_LAYERS
       /** The faults the store caught and reported, and forgets them. */
       faults: () => faults.splice(0),
       /** Runs the guard against task writes before the ask
-          (guardTaskWrite) on write `name` with mark `about`, as start()
-          does, and answers the faults it reported. */
-      guardWrite(name: string, about?: WriteAbout) {
+          (guardTaskWrite) on write `name` with mark `about` and arguments
+          `args`, as start() does, and answers the faults it reported. */
+      guardWrite(name: string, about?: WriteAbout, args?: unknown) {
         const before = faults.length
-        guardTaskWrite(name, about)
+        guardTaskWrite(name, about, args)
         return faults.splice(before)
       },
       /** The reasons P.askTasks was called with since the last call, in
@@ -4829,6 +4932,7 @@ function submitRoadmapChanges(
   }
   visit.pending++
   const answer = send(api.roadmap.change, { session_id: visit.id, operations }, target, {
+    ...roadmapAbout(operations),
     notice: { batch: operations.length },
     keepDraft,
     keep: (result) => (result.count <= visit.count ? null : undefined),
@@ -4845,13 +4949,32 @@ function submitRoadmapChanges(
   return answer
 }
 
+/* What a Roadmap write is about for the guard against task writes before
+   every task is asked (guardTaskWrite): a task operation whose task the
+   workspace does not hold comes from a server answer, a Roadmap row or the
+   dependency answer, and marks the write, naming the task when it is the
+   only one. */
+function roadmapAbout(operations: readonly RoadmapOperation[]): { about?: WriteAbout } {
+  const unheld = operations.filter((op) => op.kind === 'task' && !rows.issues.has(op.id))
+  if (unheld.length === 0) return {}
+  const only = operations.length === 1 ? unheld[0] : undefined
+  return { about: { ...(only ? { task: only.id } : {}), answer: true } }
+}
+
 /* Records an operation in the open Roadmap visit's journal with `view`, its
    paint, in the open batch when there is one. `over` holds the values on
    screen it changes, read now, after the paints of the batch's earlier
    operations, and goes with the operation as its `expected`. `keepDraft`
    is an editor's, for an operation sent on its own (SendOptions). Returns
    null when no visit records it, so the caller sends it directly, or else
-   the server's answer. */
+   the server's answer.
+
+   A batch folds each operation's `workspace`, `view` and `milestones`
+   paints into its one layer (foldPaints), the `view` ones registered with
+   the tasks they change (viewPaint), so an Auto-move over tasks only the
+   Roadmap's answer holds stays painted until a delivery holds it, and one
+   refusal takes the whole batch away. A `detail` paint never folds: a
+   batch never runs while a task window is open (batchRoadmapChanges). */
 function recordRoadmapChange(
   change: RoadmapOperation,
   view: View,
@@ -4865,15 +4988,32 @@ function recordRoadmapChange(
   if (!batch) return submitRoadmapChanges([operation], view, keepDraft)
   batch.operations.push(operation)
   const had = batch.layer.view
+  let viewPart = had.view || view.view ? foldPaints(had.view, view.view) : undefined
+  if (had.view && view.view) {
+    // the tasks the folded paint changes: every part's, or none known when
+    // a part named none, which every read with rows then holds
+    const known = [had.view, view.view].map((part) => viewPaintTasks.get(part))
+    if (known.every((tasks) => tasks !== undefined))
+      viewPart = viewPaint(
+        known.flatMap((tasks) => [...(tasks ?? [])]),
+        viewPart,
+      )
+  }
   batch.layer.view = {
     ...(had.workspace || view.workspace
       ? { workspace: foldPaints(had.workspace, view.workspace) }
       : {}),
+    ...(viewPart ? { view: viewPart } : {}),
     ...(had.milestones || view.milestones
       ? { milestones: foldPaints(had.milestones, view.milestones) }
       : {}),
   }
-  showPaint(view)
+  // only the parts the layer holds show, so none stays without its layer
+  showPaint({
+    ...(view.workspace ? { workspace: view.workspace } : {}),
+    ...(view.view ? { view: view.view } : {}),
+    ...(view.milestones ? { milestones: view.milestones } : {}),
+  })
   return new Promise((resolve) => batch.saved.push(resolve))
 }
 
@@ -7292,21 +7432,35 @@ function reviewHoursForProject(projectId: string): number {
 }
 
 /* The fields updateViewTask writes: the Board's drop and owner picker
-   (status, assignee and reviewer), and Team sync's Remaining box and
-   Pause (remaining and paused). */
-const VIEW_WRITES = new Set(['status', 'assignee', 'reviewer', 'remaining', 'paused'])
+   (status, assignee and reviewer), Team sync's Remaining box and Pause
+   (remaining and paused), and the Roadmap's drag, Cancel and Auto-move
+   (start and end). */
+const VIEW_WRITES = new Set([
+  'status',
+  'assignee',
+  'reviewer',
+  'remaining',
+  'paused',
+  'start',
+  'end',
+])
 
 /** P.updateIssue on a task only an open view's answer brings
-    (store/viewRows.ts), which the Board's drop and owner picker and Team
-    sync's cards send: its status, assignee and reviewer, and Team sync's
-    Remaining and Pause, with the roster check the workspace's tasks get. A
-    Remaining patch on a group drops, as the held path drops one on a
-    parent, since a group has no hours of its own. The write paints the views' rows of the task, the task
-    window's own answer of it (`detail`), which shows once a window opens
-    on the task while the write waits, and the workspace's, which skips
-    until the workspace holds the task, so it shows whichever source the
-    screen takes the task from (store/layers.ts View). Its `expected`
-    values are the view's row on screen. Resolves false for any other
+    (store/viewRows.ts), which the Board's drop and owner picker, Team
+    sync's cards and the Roadmap's bars send: its status, assignee and
+    reviewer, Team sync's Remaining and Pause, and the Roadmap's dates,
+    with the roster check the workspace's tasks get. A Remaining patch on a
+    group drops, as the held path drops one on a parent, since a group has
+    no hours of its own. The write paints the views' rows of the task, the
+    task window's own answer of it (`detail`), which shows once a window
+    opens on the task while the write waits, and the workspace's, which
+    skips until the workspace holds the task, so it shows whichever source
+    the screen takes the task from (store/layers.ts View). Its `expected`
+    values are the view's row on screen. A write of dates alone joins the
+    Roadmap's history, in its open batch, as a held task's does
+    (recordRoadmapChange), and goes out as an ordinary write where no visit
+    records it. A group's dates come from its subtasks, so a date patch for
+    one drops, as the held path drops it. Resolves false for any other
     field. A write on the task a window shows from a current answer goes
     through updateAnswerTask instead (P.updateIssue). */
 function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
@@ -7318,6 +7472,12 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   if ('remaining' in patch && it.isGroup) {
     patch = { ...patch }
     delete patch.remaining
+    if (!Object.keys(patch).length) return Promise.resolve(true)
+  }
+  if (('start' in patch || 'end' in patch) && (it.isGroup || row.has_subtasks)) {
+    patch = { ...patch }
+    delete patch.start
+    delete patch.end
     if (!Object.keys(patch).length) return Promise.resolve(true)
   }
   if (refusePausedEdit()) return Promise.resolve(false)
@@ -7359,11 +7519,45 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
     // skips until the workspace holds the task, then paints it there too
     workspace: () => patchIssueRow(uuid, paintDb, at),
   }
-  return send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
-    over: overOf('issues', row, Object.keys(wire)),
-    // the task comes from a view's answer, not the workspace
-    about: { task: uuid, answer: true },
-  })
+  const over = overOf('issues', row, Object.keys(wire))
+  const planningOnly = Object.keys(wire).every((key) => ['start_week', 'end_week'].includes(key))
+  return (
+    (planningOnly && recordRoadmapChange({ kind: 'task', id: uuid, patch: wire }, view, over)) ||
+    send(api.issues.update, { org_id: row.org_id, id: uuid, patch: wire }, view, {
+      over,
+      // the task comes from a view's answer, not the workspace
+      about: { task: uuid, answer: true },
+    })
+  )
+}
+
+/** Moves task `row`, which only the Roadmap's dependency answer holds, to
+    the weeks `start` to `end`, for Auto-move: the same task operation a
+    shown task's move sends, in the open batch, with the row's stored dates
+    as its `expected` values, or an ordinary write where no visit records
+    it. It paints nothing, since no screen shows the task, and the
+    dependency read's next answer, which Convex delivers before the write
+    resolves, holds it. A group's dates come from its subtasks, so it
+    writes none. */
+function moveDependencyTask(row: DependencyRow, start: number, end: number): Promise<boolean> {
+  if (row.has_subtasks) return Promise.resolve(true)
+  if (refusePausedEdit()) return Promise.resolve(false)
+  const wire: IssueWirePatch = {}
+  const startWeek = weekToISO(start)
+  const endWeek = weekToISO(end)
+  if (startWeek !== (row.start_week ?? null)) wire.start_week = startWeek
+  if (endWeek !== (row.end_week ?? null)) wire.end_week = endWeek
+  if (!Object.keys(wire).length) return Promise.resolve(true)
+  const over = overOf('issues', row, Object.keys(wire))
+  return (
+    recordRoadmapChange({ kind: 'task', id: row.id, patch: wire }, {}, over) ||
+    send(
+      api.issues.update,
+      { org_id: row.org_id, id: row.id, patch: wire },
+      {},
+      { over, about: { task: row.id, answer: true } },
+    )
+  )
 }
 
 /** What P.updateIssue takes besides the patch: what an editor showed when
@@ -8705,6 +8899,9 @@ export const PLANNER = {
         })
     }
   },
+  /** Moves a task only the Roadmap's dependency answer holds, for
+      Auto-move (moveDependencyTask). */
+  moveDependencyTask,
   undoRoadmap: (all = false) => {
     expireRoadmapHistory()
     const visit = roadmapVisit
@@ -9073,12 +9270,14 @@ export const PLANNER = {
     }
   },
   /** The tasks a scope holds, its sub-projects', narrowed by the scope's
-      own `only` predicate, from the workspace's tasks. Only a reader that
-      waits for every task calls it: the phone Roadmap (views/MobileRoadmap),
-      which mounts behind the Roadmap's ask, and the parity oracles and
-      tests of a store that holds every task. It goes with
-      t3/limits-roadmap-view. Typed on the two fields it reads, so any
-      scopeInfo() result passes. */
+      own `only` predicate, from the workspace's tasks. No app reader calls
+      it: the Roadmap reads its tasks from the server (tasks.roadmap). Its
+      callers are the parity oracles and tests of a store that holds every
+      task (store/roadmapOracle.setup.ts, store/overviewOracle.setup.ts and
+      the parity and spy tests), which t3/limits-retire-task-windows ends.
+      The guard's scan keeps any app reader out
+      (store/guard/layerGuard.test.ts). Typed on the two fields it reads,
+      so any scopeInfo() result passes. */
   scopedIssues: (info: { subIdSet: Set<string>; only: ((it: IssueVM) => boolean) | null }) => {
     if (STRICT_LAYERS) wholeListRead('P.scopedIssues')
     return tasks
@@ -9087,8 +9286,11 @@ export const PLANNER = {
   },
   /** The summed remaining hours of the not-done leaf tasks in each of
       `groups`, lists of sub-projects, in one pass, own hours only (0066),
-      for the Roadmap (views/Roadmap.tsx), which waits for every task, and
-      its oracle. It goes with t3/limits-roadmap-view. */
+      from the workspace's tasks. No app reader calls it: the Roadmap's
+      headings read the answer's counts. The Roadmap's oracle
+      (store/roadmapOracle.setup.ts) and the parity tests call it, and
+      t3/limits-retire-task-windows ends it; the guard's scan keeps any app
+      reader out. */
   remainingByGroups: (groups: string[][], only?: ((it: IssueVM) => boolean) | null) => {
     const sums = groups.map(() => 0)
     for (const it of PLANNER.issuesInGroups(groups, only))
@@ -9097,7 +9299,8 @@ export const PLANNER = {
   },
   /** The leaf tasks in any of `groups` that `only` keeps, in task order,
       each with the indexes of the groups whose sub-projects hold it, from
-      the workspace's tasks, for a reader that waits for every task. */
+      the workspace's tasks, for P.remainingByGroups and the tests that
+      call it, which t3/limits-retire-task-windows ends. */
   issuesInGroups: function* (groups: string[][], only?: ((it: IssueVM) => boolean) | null) {
     if (STRICT_LAYERS) wholeListRead('P.issuesInGroups')
     const groupsOf = new Map<string, number[]>()
@@ -10136,6 +10339,84 @@ export const PLANNER = {
   },
   /** Forgets view `slot`'s read and rows: its page left. */
   releaseView,
+  /** Registers the Roadmap's read of tasks.roadmap for the arguments `key`,
+      JSON in views/roadmap/roadmapArgs.ts's fixed order, or none with null
+      while its page or the tab is hidden, by P.watchBoard's rules for
+      `attempt` and `owner`. Arguments that `keep` the held answer
+      (roadmapArgs.ts keepsRoadmap: the same scope with another window or
+      planned task, or typing that only narrows the text filter) keep that
+      answer and its rows, which the Roadmap shows as refreshing, until the
+      answer for `key` replaces them; any other change drops them. Its
+      rows' owners register with the owner-load cache for their bars'
+      delays, with Team utilization's people (P.watchRoadmapTeam). */
+  watchRoadmap: (key: string | null, attempt = 0, owner = 0, keep = false) =>
+    watchView(ROADMAP_SLOT, ROADMAP_QUERY, key, attempt, owner, true, keep),
+  /** What the Roadmap's read holds (P.boardRead's fields). */
+  roadmapRead: () => {
+    const { value, ...read } = viewRead(ROADMAP_SLOT)
+    return { ...read, ...(value === undefined ? {} : { value: value as RoadmapAnswer }) }
+  },
+  /** Registers the Roadmap's read of tasks.roadmapDependencies for the
+      arguments `key`, its scope alone, or none with null, by
+      P.watchRoadmap's rules. A pan, a filter or a keystroke never changes
+      it. */
+  watchRoadmapDependencies: (key: string | null, attempt = 0, owner = 0) =>
+    watchView(ROADMAP_DEPS_SLOT, DEPENDENCIES_QUERY, key, attempt, owner, false),
+  /** What the Roadmap's dependency read holds (P.boardRead's fields). */
+  roadmapDependenciesRead: () => {
+    const { value, ...read } = viewRead(ROADMAP_DEPS_SLOT)
+    return { ...read, ...(value === undefined ? {} : { value: value as DependencyAnswer }) }
+  },
+  /** Registers Team utilization's people, `owners`, each with how many of
+      the Roadmap's shown rows they own, with the owner-load cache under the
+      Roadmap's own slot, beside its bars' owners, so a guest's or Viewer's
+      calls for both stay under one GUEST_CALLS cap, the owners with the
+      most rows first. They read while the Roadmap's read asks, and keep
+      their last answers while it is stopped. */
+  watchRoadmapTeam: (owners: readonly OwnerNeed[]) => {
+    const was = slotExtraOwners.get(ROADMAP_SLOT) ?? []
+    if (
+      was.length === owners.length &&
+      was.every((need, i) => {
+        const next = owners[i]
+        return need.org === next?.org && need.owner === next.owner && need.cards === next.cards
+      })
+    )
+      return
+    if (owners.length) slotExtraOwners.set(ROADMAP_SLOT, [...owners])
+    else slotExtraOwners.delete(ROADMAP_SLOT)
+    registerViewOwners(ROADMAP_SLOT, (viewReads.get(ROADMAP_SLOT)?.want ?? null) !== null)
+  },
+  /** Registers the planning panel's owner, owner `owner` of organization
+      `org`, with the owner-load cache under the panel's own view key, one
+      owner a call that never meets a guest's cap, as the task window's, or
+      releases it with null. It reads while `live`, which the Roadmap sets
+      while its page shows. */
+  watchPlanLoad: (need: { org: string; owner: string } | null, live = true) => {
+    if (need) ownerLoads.register(PLAN_LOADS, [{ ...need, cards: 1 }], live)
+    else ownerLoads.release(PLAN_LOADS)
+  },
+  /** Owner `owner` of organization `org`'s load as the owner-load cache
+      knows it now (store/ownerLoadCache.ts OwnerLoad). */
+  ownerLoad: (org: string, owner: string): OwnerLoad => ownerLoads.loadOf(org, owner),
+  /** Owner `owner` of organization `org`'s work as Team utilization and the
+      planning panel spread it (store/viewDelay.ts ownerItemsOf): the
+      cache's spans and paused tasks reconciled by task with the rows this
+      person holds, pending edits counted once. Null while the load is not
+      `ok`, and where an older backend sent no project or paused list, so
+      the caller shows it as unknown, never as free time. */
+  ownerItems: (org: string, owner: string): OwnerItem[] | null => {
+    const load = ownerLoads.loadOf(org, owner)
+    return load.state === 'ok' && load.team ? ownerItemsOf(org, owner, load, ownerItemsCtx) : null
+  },
+  /** Forgets the Roadmap's reads, their rows and the owners Team
+      utilization and the planning panel registered: its page left. */
+  releaseRoadmap: () => {
+    slotExtraOwners.delete(ROADMAP_SLOT)
+    releaseView(ROADMAP_SLOT)
+    releaseView(ROADMAP_DEPS_SLOT)
+    ownerLoads.release(PLAN_LOADS)
+  },
   /** Registers the Overview's reads for `key` (store/overviewLists.ts
       overviewKey: its scope and its clock), or none with null while its
       page or the tab is hidden, which stops them and keeps what they held:
@@ -11001,38 +11282,6 @@ export const PLANNER = {
 
   setStatus: (id: string, status: Row<'issues'>['status']) => {
     PLANNER.updateIssue(id, { status })
-  },
-
-  /** A person's org-wide owned workload for resource-aware planning
-      (api.planning.assigneeLoad, the plan_assignee_load port): the tasks
-      they are assigned, except those waiting In Review with another
-      reviewer, plus the ones they review while In Review (#314). The server
-      resolves the person's own org and fences both ends; each item's
-      project is attributed only when the CALLER can see it — hidden ones
-      arrive visible:false with a null project so the client folds them into
-      "Other projects". Weeks are converted to the client's grid indexes.
-      Returns null on a transport error, and when the server refuses because
-      it could not read all of the person's planned work in one request or
-      finish checking which projects the caller can see; the plan card then
-      says the workload is unavailable (fence misses are empty arrays). */
-  assigneeLoad: async (assigneeUuid: string) => {
-    let data: FunctionReturnType<typeof api.planning.assigneeLoad>
-    try {
-      data = await convex.query(api.planning.assigneeLoad, { assignee_id: assigneeUuid })
-    } catch (e) {
-      console.error('[qivo] assignee load failed:', e)
-      return null
-    }
-    return data.map((r) => ({
-      issueUuid: r.issue_id || null,
-      projectId: r.project_id || null,
-      projectName: r.project_name || null,
-      start: isoToWeek(r.start_week),
-      end: isoToWeek(r.end_week),
-      remaining: r.remaining != null ? Number(r.remaining) : 0,
-      remainingSet: r.remaining_set_at != null ? tsToWeek(r.remaining_set_at) : null,
-      visible: !!r.visible,
-    }))
   },
 
   /** Whether the server would carry subtasks along if the task `id` moved
@@ -14719,7 +14968,7 @@ let tasksNext = false
 
 /** What asked for every task (P.askTasks): the readers that need every one
     of them, and the scripts and the benchmark. */
-export type AskReason = 'roadmap' | 'create' | 'inbox' | 'script' | 'benchmark'
+export type AskReason = 'create' | 'inbox' | 'script' | 'benchmark'
 
 /** Why a task load stopped while the rest of the workspace stays live:
     the sentence the readers that wait for every task show beside Try

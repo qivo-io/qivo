@@ -35,7 +35,9 @@ vi.mock('../../lib/auth', () => ({
 const STORE = 'src/store/planner.ts'
 const { source, program } = parseFile(STORE)
 
-/* The whole-list walks of the workspace's tasks and of their rows. */
+/* The whole-list walks of the workspace's tasks and of their rows, the
+   store's sums over every task among them, which only tests and scripts
+   call now (store/planner.ts remainingByGroups, issuesInGroups). */
 const WALKS = [
   /\bP\.issues\b/,
   /\bPLANNER\.issues\b/,
@@ -45,6 +47,8 @@ const WALKS = [
   /\brows\.attachments\.values\(/,
   /\brows\.issueSubs\b/,
   /peekList\('issue(Subs|Labels)'\)/,
+  /\bremainingByGroups\b/,
+  /\bissuesInGroups\b/,
 ]
 
 type Call = { node: AstNode; ancestors: AstNode[] }
@@ -289,6 +293,8 @@ describe('the writes from the task window’s own answer', () => {
       '[...rows.attachments.values()]',
       'rows.issueSubs.push(row)',
       "workspaceRows.peekList('issueSubs')",
+      'PLANNER.remainingByGroups(groups, only)',
+      'for (const it of PLANNER.issuesInGroups(groups)) {}',
     ]
     expect(samples.map((text) => WALKS.some((walk) => walk.test(text)))).toEqual(
       samples.map(() => true),
@@ -310,20 +316,8 @@ describe('the readers of every task', () => {
   const ALLOWED: Record<string, { reason: string; reads: string[] }> = {
     'src/store/planner.ts': {
       reason:
-        'the field itself: rebuild assigns it, its test-build accessor keeps it, and the Roadmap’s sums walk it behind their own check (wholeListRead)',
+        'the field itself: rebuild assigns it, its test-build accessor keeps it, and the sums its tests and scripts call walk it behind their own check (wholeListRead)',
       reads: ['rebuild: P.issues', 'remainingByGroups: issuesInGroups', '(module): PLANNER.issues'],
-    },
-    'src/views/Roadmap.tsx': {
-      reason: 'the Roadmap waits for every task and asks (App’s TasksLoadingView, roadmap)',
-      reads: ['Roadmap: P.issues', 'headRemaining: remainingByGroups'],
-    },
-    'src/views/MobileRoadmap.tsx': {
-      reason: 'the phone Roadmap mounts inside the Roadmap, behind its ask',
-      reads: ['MobileRoadmap: scopedIssues'],
-    },
-    'src/views/Resources.tsx': {
-      reason: 'the Resources strip mounts inside the Roadmap, behind its ask',
-      reads: ['ResourceStrip: P.issues'],
     },
   }
   const FUNCTION_TYPES = new Set([

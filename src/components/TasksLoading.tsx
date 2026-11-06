@@ -1,5 +1,4 @@
-import { useEffect } from 'react'
-import { type AskReason, P, TASKS_FAILED_TEXT } from '../store/planner'
+import { P, TASKS_FAILED_TEXT } from '../store/planner'
 import { usePlannerVersion } from '../store/usePlannerVersion'
 import { Button } from './ui/button'
 import { Progress } from './ui/progress'
@@ -13,7 +12,7 @@ import { Progress } from './ui/progress'
     load P.taskLoad reports): "Loading tasks…" with a bar that moves
     without a share, on one line. Once the load stopped it says why and
     that changes show as made until tasks load, with Try again
-    (P.retryTasks), as the pages that wait for every task do. A stopped
+    (P.retryTasks), as the Inbox's search does (TasksFailedNote). A stopped
     load also goes on once a task window answers again. It floats, so it
     covers little and the page does not move when it goes, as a large
     Board would lay itself out again. Gone before any ask and once every
@@ -69,48 +68,6 @@ export function TasksFailedNote({ reason, retrying }: { reason: string; retrying
       <Button variant="outline" onClick={() => P.retryTasks()} disabled={retrying}>
         Try again
       </Button>
-    </div>
-  )
-}
-
-/** What a page that needs every task shows until they are held: `what`
-    names it, as in "The roadmap". It asks for every task as it mounts, for
-    `reason`, and shows the load without a share, or the stopped load with
-    Try again. `onBack`, when given, leaves it. */
-export function TasksLoadingView({
-  what,
-  reason,
-  onBack,
-}: {
-  what: string
-  reason: AskReason
-  onBack?: () => void
-}) {
-  usePlannerVersion()
-  useEffect(() => {
-    P.askTasks(reason)
-  }, [reason])
-  const load = P.taskLoad()
-  return (
-    <div
-      data-tasks-loading-view
-      data-task-load={load.state}
-      className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-text-2"
-    >
-      <p className="max-w-sm">{what} opens once every task has loaded.</p>
-      {load.state === 'failed' ? (
-        <TasksFailedNote reason={load.reason} retrying={load.retrying} />
-      ) : (
-        <>
-          <p className="font-medium text-text-1">Loading tasks…</p>
-          <Progress className="h-1.5 w-48" value={null} aria-label="Loading tasks" />
-        </>
-      )}
-      {onBack && (
-        <Button variant="outline" onClick={onBack}>
-          Back
-        </Button>
-      )}
     </div>
   )
 }

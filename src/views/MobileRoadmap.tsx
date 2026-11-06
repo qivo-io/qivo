@@ -7,34 +7,35 @@ import { SYNC_LIMIT } from '../lib/boardGroups'
 import { focusAround } from '../lib/focusWhenGone'
 import { StaticControlsContext, useLiveControls } from '../lib/liveControls'
 import { createMountScheduler, useMountGuards } from '../lib/mountScheduler'
-import { isRoadmapTaskVisible } from '../lib/roadmapVisibility'
 import { autoMoveTitle } from '../lib/schedule'
 import { useLatest } from '../lib/useLatest'
-import {
-  type IssueFilters,
-  type IssueVM,
-  type MilestoneVM,
-  P,
-  type ScopeInfo,
-} from '../store/planner'
+import { type IssueVM, type MilestoneVM, P, type ScopeInfo } from '../store/planner'
 import type { StoreVersion } from '../store/updates'
 
 type MobileRoadmapProps = {
   info: ScopeInfo
-  windowStart: number
-  windowEnd: number
-  filters: IssueFilters
+  /** the tasks the Roadmap shows (views/roadmap/useRoadmapView.ts), in its
+      answer's order, checked on screen against the window and the filters */
+  tasks: readonly IssueVM[]
+  /** whether `tasks` are a current answer's, so an empty list may say that
+      nothing matches */
+  settled?: boolean
   filterControls: React.ReactNode
   actions: Record<string, (...args: unknown[]) => void>
   onTimeline: () => void
   onAutoCorrect: () => void
   corrections: number
+  /** Auto-move's tooltip where its inputs are not there or a write is on
+      its way, in place of the one for no moves */
+  correctionsTitle?: string
   undoControls: React.ReactNode
   section: 'milestones' | 'tasks'
   onSectionChange: (section: 'milestones' | 'tasks') => void
   taskState: 'all' | 'planned' | 'unplanned'
   onTaskStateChange: (state: 'all' | 'planned' | 'unplanned') => void
-  /** The note of a scope with nothing to schedule (Roadmap's emptyNote). */
+  /** The note in place of the task schedule (Roadmap's emptyNote): a scope
+      with nothing to schedule, or the Roadmap's answer's note
+      (roadmap/RoadmapNote.tsx). */
   empty?: React.ReactNode
 }
 
@@ -99,8 +100,11 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
   )
 })
 
-/** The phone entry to the same roadmap. Dates, editing and access rules still
- * come from the planner; the timeline remains available for spatial planning.
+/** The phone entry to the same roadmap. Its tasks are the Roadmap's, from the
+ * server's answer for the selection, the window and the filters, which it
+ * sorts and narrows only to planned or unplanned. Dates, editing and access
+ * rules still come from the planner; the timeline remains available for
+ * spatial planning.
  * A toolbar row under Timeline & team holds Undo and Auto-move.
  * With `empty`, the agenda keeps what the desktop's empty roadmap keeps in its
  * toolbar (Undo, Auto-move and New milestone) and shows the note in
@@ -109,14 +113,14 @@ const MobileRoadmapRow = memo(function MobileRoadmapRow({
  * flags. */
 export function MobileRoadmap({
   info,
-  windowStart,
-  windowEnd,
-  filters,
+  tasks: shown,
+  settled = true,
   filterControls,
   actions,
   onTimeline,
   onAutoCorrect,
   corrections,
+  correctionsTitle,
   undoControls,
   section,
   onSectionChange,
@@ -127,9 +131,7 @@ export function MobileRoadmap({
   const milestones = info.milestones.slice().sort((a, b) => a.week - b.week)
   const upcoming = milestones.filter((m) => m.week >= P.TODAY_WEEK)
   const past = milestones.filter((m) => m.week < P.TODAY_WEEK)
-  const tasks = P.scopedIssues(info)
-    .filter((it) => isRoadmapTaskVisible(it, P.isDone(it), windowStart, windowEnd))
-    .filter((it) => P.passesFilters(it, filters))
+  const tasks = shown
     .filter(
       (it) =>
         taskState === 'all' || (taskState === 'planned' ? it.start != null : it.start == null),
@@ -153,8 +155,10 @@ export function MobileRoadmap({
   if (eager.key !== eagerKey) setEager({ key: eagerKey, rows: firstScreen() })
   const initial =
     tasks.length <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : eager.key === eagerKey ? eager.rows : 0
-  // App makes its actions again every render; the rows keep one identity
-  const openIssue = useLatest((id: string) => actions.openIssue(id))
+  // App makes its actions again every render; the rows keep one identity. A
+  // task only the Roadmap's answer brings opens by a reference the window
+  // reads from the server (P.openTarget)
+  const openIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const renderRow = (it: IssueVM) => (
     <MobileRoadmapRow
       key={it.id}
@@ -210,7 +214,7 @@ export function MobileRoadmap({
         type="button"
         onClick={onAutoCorrect}
         disabled={corrections === 0}
-        title={autoMoveTitle(corrections)}
+        title={correctionsTitle ?? autoMoveTitle(corrections)}
       >
         <Icon name="arrowRightFromLine" size={16} />
         Auto-move{corrections > 0 ? ` (${corrections})` : ''}
@@ -343,7 +347,7 @@ export function MobileRoadmap({
               label={pendingRows}
             />
           </div>
-          {tasks.length === 0 && (
+          {tasks.length === 0 && settled && (
             <p className="mobile-roadmap-note">No tasks match these filters.</p>
           )}
           {!info.wide && P.canWrite(info.id) && info.subIds.length > 0 && (

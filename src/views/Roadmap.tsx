@@ -1,13 +1,18 @@
 /* Roadmap owns the timeline window, folds, planning sessions and dependency
    corrections. Drag previews commit on release; grid epochs reject stale dates.
    TimelineMarks renders tasks/milestones, WindowControls edits the viewport,
-   and PlanCard shows workload while ResourceStrip shares the same week grid. */
+   and PlanCard shows workload while ResourceStrip shares the same week grid.
+   Which tasks it shows, their headings' Remaining, the arrows and Auto-move's
+   inputs come from the server's Roadmap reads (roadmap/useRoadmapView.ts),
+   never from the workspace's task lists, and Team utilization and the
+   planning panel read people's loads from the owner-load cache. */
 import type React from 'react'
 import {
   memo,
   useCallback,
   useEffect as useEffectR,
   useLayoutEffect as useLayoutEffectR,
+  useMemo as useMemoR,
   useRef as useRefR,
   useState as useStateR,
 } from 'react'
@@ -16,31 +21,42 @@ import { HoverTooltip } from '@/components/ui/tooltip'
 import { focusAround } from '@/lib/focusWhenGone'
 import { REVEAL_MS } from '@/lib/reveal'
 import { isRoadmapTaskVisible } from '@/lib/roadmapVisibility'
-import { useTaskMemo } from '@/lib/taskMemo'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
+import { useViewVisibility } from '@/lib/viewVisibility'
+import type { PlannedTask } from '../../convex/lib/roadmap'
 import { NoProjects } from '../components/NoProjects'
 import { EmptyState, Icon } from '../components/qivo'
 import { RoadmapUndo } from '../components/RoadmapUndo'
 import { WorkspaceToolbar } from '../components/WorkspaceShell'
-import { winWeeks } from '../lib/dates'
-import { groupSpan } from '../lib/issueGroups'
-import { autoMoves, autoMoveTitle, dependencyPairs } from '../lib/schedule'
+import { isoToWeek, winWeeks } from '../lib/dates'
+import { isIssueGroup } from '../lib/issueGroups'
+import { type AutoMove, autoMoveTitle } from '../lib/schedule'
 import { captureWeekDates, restoreWeekDates } from '../lib/weekDrafts'
 import { fitEndWeekAgainst, type LoadItem, plannableHoursOf } from '../lib/workload'
-import { type IssueFilters, type IssueVM, P, type ScopeInfo } from '../store/planner'
+import { type IssueFilters, type IssueVM, P, ROADMAP_SLOT, type ScopeInfo } from '../store/planner'
+import type { OwnerItem } from '../store/viewDelay'
 import { LandscapeRoadmap } from './LandscapeRoadmap'
 import { MobileRoadmap } from './MobileRoadmap'
-import { ResourceStrip } from './Resources'
+import { ResourceStrip, type TeamPerson } from './Resources'
 import { STRIP_HEAD_H, stripHeight } from './resourcesLayout'
+import { autoMoveMoves, autoMoveTasks } from './roadmap/autoMoveInputs'
 import { type ChunkMemory, type LaidRow, stableChunks } from './roadmap/chunks'
 import { type FlagView, flagBandHeight, flagLanesIn, layoutFlags } from './roadmap/flagLanes'
 import { GRID_X, GUTTER_W, HEAD_STICK, LABEL_W, ROW_H, SUB_STICK } from './roadmap/layout'
 import { PlanCard, type PlanSession } from './roadmap/PlanCard'
+import { RoadmapNote } from './roadmap/RoadmapNote'
 import { createRowObserver } from './roadmap/rowObserver'
 import { FlagBand, MilestoneFlag } from './roadmap/TimelineMarks'
 import { TimelineRow } from './roadmap/TimelineRow'
+import {
+  arrowsMissing,
+  autoMoveUnavailable,
+  cannotPlanReason,
+  type RoadmapView,
+  useRoadmapView,
+} from './roadmap/useRoadmapView'
 import { WinMenu, WinRangePicker } from './roadmap/WindowControls'
 import '../styles/mobile-views.css'
 import './Roadmap.css'
@@ -66,34 +82,63 @@ const CANVAS_PAD_B = 24
    Keep it equal to the token. */
 const PANEL_GAP = 8
 
-/* What the Roadmap's memos read of a task: its links for the dependency
-   arrows; its dates, status, hierarchy and links for Auto-move (its
-   project's write access comes with P.contextVersion); and what the
-   headings' remaining hours and My view's narrowing read. The store gives
-   a changed task new arrays, so arrays are compared by their contents. */
-const linksKey = (it: IssueVM) => (it.links ?? []).map((l) => `${l.type}:${l.id}`).join()
-const linkReads = (it: IssueVM) => [linksKey(it)]
-const scheduleReads = (it: IssueVM) => [
-  it.start,
-  it.end,
-  it.status,
-  it.project,
-  it.isGroup,
-  it.hasHiddenSubtasks,
-  (it.children ?? []).join(),
-  linksKey(it),
-]
-const remainingReads = (it: IssueVM) => [
-  it.project,
-  it.status,
-  it.remaining,
-  it.owner,
-  it.assignee,
-  it.reviewer,
-  it.isGroup,
-  it.hasHiddenSubtasks,
-  (it.children ?? []).join(),
-]
+/** A request to show a task on the Roadmap, from its window's Plan on
+    roadmap (focusPlan) or Team sync's jump (revealTask): its handle, a
+    nonce, the key a sentence names it by, and what its source knows of it,
+    its uuid, sub-project and weeks, so the Roadmap pans to it and asks the
+    server to keep it before it looks it up. */
+export type RoadmapRequest = {
+  id: string
+  n: number
+  key?: string
+  uuid?: string
+  project?: string
+  start?: number | null
+  end?: number | null
+}
+
+/** A request the Roadmap takes and waits to resolve against an answer:
+    planning or a read-only reveal. */
+type PendingRequest = RoadmapRequest & { kind: 'plan' | 'reveal' }
+
+/* No request of either kind. */
+const NO_REQUESTS = { plan: null, reveal: null }
+
+/** The planning panel's work items from a person's reconciled work
+    (P.ownerItems): every item with hours, a task the reader is shown by
+    its project, busy time elsewhere as Other projects. Paused work adds
+    no hours. */
+const loadItemsOf = (items: readonly OwnerItem[]): LoadItem[] =>
+  items
+    .filter((item) => !item.paused)
+    .map((item) => ({
+      issueUuid: item.uuid,
+      projectId: item.project,
+      projectName: item.project ? (P.project(item.project)?.name ?? null) : null,
+      start: item.start,
+      end: item.end,
+      remaining: item.remaining,
+      remainingSet: item.remainingSet,
+      visible: item.uuid !== null && item.project !== null,
+    }))
+
+/** The Roadmap's own root, which names its state for drives, tests and the
+    benchmark (data-roadmap-root, data-roadmap-state) and is busy while it
+    waits for an answer. */
+function RoadmapRoot({ view, children }: { view: RoadmapView; children: React.ReactNode }) {
+  return (
+    <div
+      data-roadmap-root
+      data-roadmap-state={view.state}
+      aria-busy={view.busy || undefined}
+      // the root lays nothing out: the timeline, the landscape portal and the
+      // phone's agenda keep the places they had in the page
+      className="[display:contents]"
+    >
+      {children}
+    </div>
+  )
+}
 
 /** A stretch of a track's task rows. It renders again only when `deps`
     changed or one of its rows did: another task, offset, height, bar or
@@ -145,15 +190,16 @@ function Roadmap({
   filters: IssueFilters
   actions: Record<string, (...args: unknown[]) => void>
   filterControls: (mobile: boolean) => React.ReactNode
-  /** Plan a task from its window: its handle, a nonce, and the key the
-      sentence names when the Roadmap does not hold the task */
-  focusPlan: { id: string; n: number; key?: string } | null
+  /** Plan a task from its window: its handle, a nonce, the key the
+      sentence names when the Roadmap does not show the task, and what its
+      window knew of it (RoadmapRequest) */
+  focusPlan: RoadmapRequest | null
   /** Gets the nonce of the request taken. */
   onFocusConsumed?: (n: number) => void
-  /* Show a task without planning it (Team sync's Roadmap jump): { id, n }
-     like focusPlan, n a nonce. Its bar scrolls into view and wears the
+  /* Show a task without planning it (Team sync's Roadmap jump): like
+     focusPlan, n a nonce. Its bar scrolls into view and wears the
      planning spotlight for a moment; no session, no card, nothing written. */
-  revealTask?: { id: string; n: number; key?: string } | null
+  revealTask?: RoadmapRequest | null
   onRevealConsumed?: (n: number) => void
 }) {
   const phone = useMobile()
@@ -181,9 +227,12 @@ function Roadmap({
       .querySelector<HTMLButtonElement>('.mobile-roadmap-open-timeline button')
       ?.focus({ preventScroll: true })
   }, [mobileLayout])
-  // App makes its actions again every render; the rows keep one identity
-  const onOpenIssue = useLatest(actions.openIssue)
+  // App makes its actions again every render; the rows keep one identity.
+  // A task only the Roadmap's answer brings opens by a reference the task
+  // window reads from the server (P.openTarget), as a Board card does
+  const onOpenIssue = useLatest((id: string) => actions.openIssue(P.openTarget(id)))
   const onScope = useLatest(actions.setScope)
+  const { visible } = useViewVisibility()
   // `wide` = a scope that names no project (All projects, My view); `mine` is
   // the one that also narrows to my own tasks
   const wide = info.wide
@@ -196,35 +245,40 @@ function Roadmap({
   const [session, setSession] = useStateR<PlanSession | null>(null)
   useUpdateBlocker(!!session)
   const sessionRef = useRefR<PlanSession | null>(null)
-  const planRequest = useRefR(0)
+  /* The plan and reveal requests the Roadmap took and resolves once an
+     answer on screen holds their task or says it cannot (`pending`), one
+     of each kind, and the ones it resolved, which the effect below acts on
+     once each (`resolved`). The task a plan request names goes with the
+     Roadmap's read from the request on (`planAsk`), so the answer it waits
+     for keeps the task past the filter row. */
+  type Requests<T> = { plan: T | null; reveal: T | null }
+  const [pending, setPending] = useStateR<Requests<PendingRequest>>(NO_REQUESTS)
+  const [resolved, setResolved] =
+    useStateR<Requests<{ req: PendingRequest; id: string }>>(NO_REQUESTS)
+  const acted = useRefR<Set<number>>(new Set())
+  const [planAsk, setPlanAsk] = useStateR<PlannedTask | null>(null)
   /* The planning session's task and the answers to its date changes, so
      Confirm says it was planned only once every change saved. */
-  const planned = useRefR<{ id: string; writes: Promise<boolean>[] } | null>(null)
+  const plannedWrites = useRefR<{ id: string; writes: Promise<boolean>[] } | null>(null)
   /* Sends a task's new dates, and keeps the answer when it is the session's. */
   const sendDates = (id, patch) => {
     const saved = P.updateIssue(id, patch)
-    if (planned.current?.id === id) planned.current.writes.push(saved)
+    if (plannedWrites.current?.id === id) plannedWrites.current.writes.push(saved)
   }
   sessionRef.current = session
   // the session ends when the Roadmap goes, and when it hides (a kept page,
-  // components/KeptView): leaving the page leaves the planning
+  // components/KeptView): leaving the page leaves the planning, and the
+  // requests it had not resolved
   useEffectR(
     () => () => {
       sessionRef.current = null
       setSession(null)
+      setPending(NO_REQUESTS)
+      setResolved(NO_REQUESTS)
+      setPlanAsk(null)
     },
     [],
   )
-  const planningBacklog = session && P.issueById[session.issueId]?.status === 'backlog'
-  // a task that gains a subtask mid-session takes its dates from it from then
-  // on, so there is nothing left to plan
-  const planningGroup = !!session && P.isGroup(session.issueId)
-  useEffectR(() => {
-    if (P.roadmapUndo.disabled || planningBacklog || planningGroup) {
-      sessionRef.current = null
-      setSession(null)
-    }
-  }, [P.roadmapUndo.disabled, planningBacklog, planningGroup])
   const undoPlanning = () => {
     // A late workload reply must not re-apply auto-fit after Undo. Ending the
     // planning card also prevents Cancel from restoring its older baseline.
@@ -262,10 +316,34 @@ function Roadmap({
   }
   const { w0, w1, capped } = P.resolveWin(win)
   const NW = w1 - w0 + 1
-  // Planning can bypass toolbar filters, but never the roadmap's status rule.
-  const passes = (it: IssueVM) =>
-    isRoadmapTaskVisible(it, P.isDone(it), w0, w1) &&
-    ((session && session.issueId === it.id) || P.passesFilters(it, filters))
+  /* What the Roadmap shows, from the server's answer for the selection, the
+     filter row and this window. Planning can bypass the toolbar filters,
+     but never the roadmap's status rule: the session's task, or the task a
+     plan request names, goes with the read (`planned`), by its current
+     sub-project, and skips the filters on screen too. */
+  const sessionModel = session
+    ? (P.anyTask(session.issueId) ?? P.viewTask(ROADMAP_SLOT, session.uuid))
+    : undefined
+  const planned: PlannedTask | null = session
+    ? { id: session.uuid, project_id: sessionModel?.project ?? session.project }
+    : planAsk
+  const view = useRoadmapView(info, filters, w0, w1, planned)
+  /** The task handle `id` names on the Roadmap: one its answer brings, else
+      the workspace's or another view's. */
+  const taskOf = (id: string): IssueVM | undefined => view.family.byId[id] ?? P.anyTask(id)
+  // for the callbacks that keep one identity across renders
+  const taskOfRef = useRefR(taskOf)
+  taskOfRef.current = taskOf
+  const planningBacklog = !!session && sessionModel?.status === 'backlog'
+  // a task that gains a subtask mid-session takes its dates from it from then
+  // on, so there is nothing left to plan
+  const planningGroup = !!sessionModel && isIssueGroup(sessionModel)
+  useEffectR(() => {
+    if (P.roadmapUndo.disabled || planningBacklog || planningGroup) {
+      sessionRef.current = null
+      setSession(null)
+    }
+  }, [P.roadmapUndo.disabled, planningBacklog, planningGroup])
   /* Is a filter the Clear button can undo switched on? The same question the
      board asks (its `clearable`), and it gates the same two things here: the
      pruning below, and the zero-match note. **Focus** is not one of them: it
@@ -286,30 +364,25 @@ function Roadmap({
      way; the sort lives here (not in the store) because it is this view's. */
   const allTracks = info.groups.slice().sort((a, b) => a.proj.name.localeCompare(b.proj.name))
 
-  /* One pass to bucket the scoped issues by sub-project; everything below
-     reads the buckets. Filtering P.issues per group instead would rescan every
-     issue twice per sub-project — on every render, which during a bar drag is
-     every pointermove. Two questions come out of the same walk, and they are
-     NOT the same question:
+  /* One pass to bucket the shown tasks by sub-project; everything below
+     reads the buckets. Two questions, and they are NOT the same question:
      · `held` — which sub-projects does the SCOPE put a task in? My view spans
        every project, so without this the rail would print one empty track per
        project I hold no task in, each labelled with that project's whole
-       remaining hours. Null wherever the scope narrows nothing.
-     · `bucket` — which of them hold a task that also passes the TOOLBAR
-       filters, and which tasks those are. */
-  const held = info.only ? new Set() : null
+       remaining hours. The answer names them (held_sub_projects); null
+       wherever the scope narrows nothing.
+     · `bucket` — which of them hold a task the answer shows that also passes
+       the TOOLBAR filters on screen, and which tasks those are. */
+  const held = view.held
+  // the rows show while an answer for this scope is on screen; any note
+  // takes their place
+  const showing = view.state === 'ok' || view.state === 'refreshing'
   const bucket = new Map()
-  P.issues.forEach((i) => {
-    // the scope's own narrowing, then the toolbar's. `filters` already carries
-    // My view's `mine` (App derives it), but the scope predicate is what makes
-    // the row set honest no matter who passes what
-    if (!info.subIdSet.has(i.project) || (info.only && !info.only(i))) return
-    if (held) held.add(i.project)
-    if (!passes(i)) return
+  for (const i of view.tasks) {
     const b = bucket.get(i.project) || { dated: [], undated: [] }
     ;(i.start != null ? b.dated : b.undated).push(i)
     bucket.set(i.project, b)
-  })
+  }
   /* Does this sub-project earn a place on the rail? Two independent gates, and
      both altitudes — the track list and the sub-project bands under a track —
      ask this one predicate, so the rail never opens onto a stack of empty
@@ -335,7 +408,7 @@ function Roadmap({
      Its rail stays bare, like the rail of a project without sub-projects. */
   const pruning = !!held || clearable
   const tracks =
-    info.subIds.length === 0
+    info.subIds.length === 0 || !showing
       ? []
       : pruning
         ? allTracks.filter((tr) => tr.subIds.some(shows))
@@ -614,20 +687,22 @@ function Roadmap({
   const liveRef = useRefR({})
   const draftEpoch = useRefR(P.gridEpoch)
   const draftCurrent = draftEpoch.current === P.gridEpoch
-  /* A group's bar is its calculated span (it.start/it.end, from the store).
-     While a subtask is dragged the span is recalculated with the live drafts,
-     once per group per render, so the group bar and its arrows follow the
-     drag. A group's own draft (a bar that gained a subtask mid-drag) is never
-     read. */
+  /* A group's bar is its calculated span. The workspace's model holds it
+     with the person's pending edits; a model shaped from the answer's row
+     holds the server's, so its span is recalculated over its family on
+     screen (view.family), which the answer brings whole and the person's
+     pending writes paint, and it follows a subtask's saved move at once.
+     While a subtask is dragged the span is recalculated with the live
+     drafts too, once per group per render, so the group bar and its arrows
+     follow the drag. A group's own draft (a bar that gained a subtask
+     mid-drag) is never read. Where a subtask has no model the group keeps
+     its own span. */
   const dragging = draftCurrent && Object.keys(live).length > 0
-  const liveSpans = new Map<string, ReturnType<typeof groupSpan>>()
+  const liveSpans = new Map<string, ReturnType<typeof view.family.span>>()
   const liveSpan = (it: IssueVM) => {
-    if (!dragging || !P.isGroup(it)) return null
+    if (!P.isGroup(it) || (!dragging && P.handleOf(it.uuid) !== null)) return null
     if (!liveSpans.has(it.id))
-      liveSpans.set(
-        it.id,
-        groupSpan(it, P.issueById, (leaf) => live[leaf.id]),
-      )
+      liveSpans.set(it.id, view.family.span(it, dragging ? (leaf) => live[leaf.id] : undefined))
     return liveSpans.get(it.id)
   }
   const getS = (it: IssueVM) => {
@@ -638,6 +713,13 @@ function Roadmap({
     if (P.isGroup(it)) return liveSpan(it)?.end ?? it.end
     return draftCurrent && live[it.id] ? live[it.id].end : it.end
   }
+  // the drafts by task uuid, which Team utilization's items are keyed by
+  const liveByUuid: Record<string, { start: number; end: number }> = {}
+  if (draftCurrent)
+    for (const [id, l] of Object.entries(live as Record<string, { start: number; end: number }>)) {
+      const it = taskOf(id)
+      if (it) liveByUuid[it.uuid] = l
+    }
   const onSched = useCallback((id, start, end) => {
     const n = { ...liveRef.current, [id]: { start, end } }
     liveRef.current = n
@@ -647,12 +729,12 @@ function Roadmap({
     // A realtime status/date change can hide a bar during a drag. Its removed
     // pointer target may never release, so discard that invisible draft here.
     const entries = Object.entries(liveRef.current)
-    const visible = entries.filter(([id]) => {
-      const it = P.issueById[id]
+    const shown = entries.filter(([id]) => {
+      const it = taskOfRef.current(id)
       return it && isRoadmapTaskVisible(it, P.isDone(it), w0, w1)
     })
-    if (visible.length === entries.length) return
-    const next = Object.fromEntries(visible)
+    if (shown.length === entries.length) return
+    const next = Object.fromEntries(shown)
     liveRef.current = next
     setLive(next)
   })
@@ -667,28 +749,20 @@ function Roadmap({
       window.showToast?.('The week grid changed mid-drag. Reschedule discarded.', 'error')
       return
     }
-    const it = P.issueById[id]
+    const it = taskOfRef.current(id)
     // a bar that gained a subtask mid-drag now takes its dates from it
     if (!l || !it || P.isGroup(it)) return
     const sess = sessionRef.current
+    const load = planLoadRef.current
     // auto-fit: the planned issue's end follows the owner's free capacity —
     // a move sets the start and recomputes the end; dragging the end is
     // overridden by the same recompute ("checked against the rest of the plan")
-    if (
-      sess &&
-      sess.issueId === id &&
-      sess.autoFit &&
-      it.owner &&
-      sess.loadOwner === it.owner &&
-      sess.loadEpoch === P.gridEpoch &&
-      it.remaining > 0 &&
-      sess.load
-    ) {
+    if (sess && sess.issueId === id && sess.autoFit && it.owner && it.remaining > 0 && load) {
       // the fit consumes capacity from the week the remaining hours were
       // measured (never before the dragged start) — the same anchor the delay
       // projection walks from, so the fitted end and the status agree
       const from = it.remainingSet != null ? Math.max(l.start, it.remainingSet) : l.start
-      const end = fitEndWeekAgainst(sess.load, it.uuid, from, it.remaining, capacityFor(it))
+      const end = fitEndWeekAgainst(load, it.uuid, from, it.remaining, capacityFor(it))
       if (l.start !== it.start || end !== it.end) sendDates(id, { start: l.start, end })
       return
     }
@@ -795,73 +869,92 @@ function Roadmap({
      the effective owner's capacity. focusPlan.n distinguishes repeat requests;
      onFocusConsumed acknowledges each one. Resolve owner capacity on every use
      so reassignment or review transitions update both workload and capacity.
-     Unowned tasks use the default but cannot auto-fit. */
+     Unowned tasks use the default but cannot auto-fit.
+
+     The panel reads its owner's load live from the owner-load cache, under
+     its own view key, while the session is open and the page shows
+     (P.watchPlanLoad), reconciled with the person's own rows by task
+     (P.ownerItems). So it follows changes made elsewhere, the person's own
+     edits, an owner change and a moved grid, not only the session's
+     start. */
   const capacityFor = (it) => plannableHoursOf(it?.owner ? P.user(it.owner) : null)
+  const sessionOwner = sessionModel?.owner ?? null
+  const sessionOrg = sessionModel?.org ?? null
+  const sessionOpen = !!session
+  useEffectR(() => {
+    if (!sessionOpen || !sessionOwner || !sessionOrg) P.watchPlanLoad(null)
+    else P.watchPlanLoad({ org: sessionOrg, owner: sessionOwner }, visible)
+  }, [sessionOpen, sessionOwner, sessionOrg, visible])
+  useEffectR(() => () => P.watchPlanLoad(null), [])
+  /* The session owner's load as the panel and auto-fit read it: still
+     loading, unavailable (no items), or the owner's work with hours. A
+     guest or Viewer reads another person's load without the projects they
+     cannot see (`ownOnly`). */
+  const planLoad = (() => {
+    if (!sessionModel || !sessionOwner || !sessionOrg) return null
+    const load = P.ownerLoad(sessionOrg, sessionOwner)
+    if (load.state === 'waiting') return { loading: true, items: null, ownOnly: false }
+    const items = P.ownerItems(sessionOrg, sessionOwner)
+    return {
+      loading: false,
+      items: items ? loadItemsOf(items) : null,
+      ownOnly: load.state === 'ok' && load.hidden === 'own_only' && !P.isMine(sessionModel),
+    }
+  })()
+  const planLoadRef = useRefR<LoadItem[] | null>(null)
+  planLoadRef.current = planLoad?.items ?? null
   const autoFitEnd = (id, startW, load, capacity, uuid, remaining) => {
     // same measurement-week anchor as the drag commit and the delay projection
-    const rs = P.issueById[id]?.remainingSet
+    const rs = taskOf(id)?.remainingSet
     const from = rs != null ? Math.max(startW, rs) : startW
     sendDates(id, {
       start: startW,
       end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
     })
   }
-  const receivePlanningLoad = (s: PlanSession, load: LoadItem[] | null) => {
-    const loaded = { ...s, load, loading: false, fitOnLoad: false }
-    sessionRef.current = loaded
-    setSession(loaded)
-    const it = P.issueById[s.issueId]
-    // Initial placement waits for valid workload, including a reload after
-    // the grid changes. Later reloads leave the user's chosen dates alone.
-    if (
-      s.fitOnLoad &&
-      s.autoFit &&
-      load &&
-      it?.owner &&
-      !P.isGroup(it) &&
-      it.remaining > 0 &&
-      it.start != null
-    )
+  // Initial placement waits for valid workload. Later answers leave the
+  // user's chosen dates alone.
+  useEffectR(() => {
+    const s = sessionRef.current
+    const load = planLoad?.items
+    if (!s?.fitOnLoad || !load) return
+    const placed = { ...s, fitOnLoad: false }
+    sessionRef.current = placed
+    setSession(placed)
+    const it = taskOf(s.issueId)
+    if (s.autoFit && it?.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null)
       autoFitEnd(it.id, it.start, load, capacityFor(it), it.uuid, it.remaining)
-  }
+  })
   const toggleAutoFit = () => {
     const s = sessionRef.current
     if (!s) return
     const autoFit = !s.autoFit
     setSession({ ...s, autoFit })
-    const it = P.issueById[s.issueId]
+    const it = taskOf(s.issueId)
+    const load = planLoadRef.current
     // side effect OUTSIDE the state updater — a store write there would setState
     // on App (its store subscription) mid-render
-    if (
-      autoFit &&
-      it?.owner &&
-      s.loadOwner === it.owner &&
-      s.loadEpoch === P.gridEpoch &&
-      !P.isGroup(it) &&
-      it.remaining > 0 &&
-      s.load &&
-      it.start != null
-    )
-      autoFitEnd(s.issueId, it.start, s.load, capacityFor(it), it.uuid, it.remaining)
+    if (autoFit && it?.owner && !P.isGroup(it) && it.remaining > 0 && load && it.start != null)
+      autoFitEnd(s.issueId, it.start, load, capacityFor(it), it.uuid, it.remaining)
   }
   const confirmPlanning = () => {
     const s = sessionRef.current
     sessionRef.current = null
     setSession(null)
-    const plan = planned.current
-    planned.current = null
+    const plan = plannedWrites.current
+    plannedWrites.current = null
     if (!s || plan?.id !== s.issueId) return
     void Promise.all(plan.writes).then((saved) => {
-      if (saved.every(Boolean)) window.showToast?.(`Planned ${s.issueId}`)
+      if (saved.every(Boolean)) window.showToast?.(`Planned ${s.key}`)
     })
   }
   const cancelPlanning = () => {
     const s = sessionRef.current
     sessionRef.current = null
-    planned.current = null
+    plannedWrites.current = null
     // a task that became a group has calculated dates, so nothing to restore
-    if (s && P.issueById[s.issueId] && !P.isGroup(s.issueId))
-      P.updateIssue(s.issueId, restoreWeekDates(s.orig))
+    const it = s ? taskOf(s.issueId) : undefined
+    if (s && it && !P.isGroup(it)) P.updateIssue(s.issueId, restoreWeekDates(s.orig))
     setSession(null)
   }
   /* The two ways here that must SHOW one task (planning and the read-only
@@ -879,26 +972,27 @@ function Roadmap({
       return n
     })
   }
+  /** Pans the window to include weeks `ps` to `pe`, with two weeks either
+      side, where they reach past it. */
+  const panTo = (ps: number | null | undefined, pe: number | null | undefined) => {
+    if (ps == null || pe == null) return
+    const { w0: cw0, w1: cw1 } = P.resolveWin(win)
+    if (ps >= cw0 + 1 && pe <= cw1 - 1) return
+    const pad = 2
+    setWin({
+      start: { mode: 'date', value: P.isoFromDate(P.weekToDate(ps - pad)) },
+      end: { mode: 'date', value: P.isoFromDate(P.weekToDate(pe + pad)) },
+    })
+  }
   /* Pan the window to include the task's bar, then center it below the
      pinned headings once the expanded groups, restored task pane and new date
      window have laid out (a task with no bar centers its revealed row).
      `done` runs in that same frame; the returned cleanup cancels the frames,
      so a consumer that clears its signal must do it through `done`. */
-  const bringIntoView = (id: string, done?: () => void) => {
-    const it = P.issueById[id]
-    const ps = it ? it.start : null,
-      pe = it ? it.end : null
-    if (ps != null) {
-      const { w0: cw0, w1: cw1 } = P.resolveWin(win)
-      if (ps < cw0 + 1 || pe > cw1 - 1) {
-        const pad = 2
-        setWin({
-          start: { mode: 'date', value: P.isoFromDate(P.weekToDate(ps - pad)) },
-          end: { mode: 'date', value: P.isoFromDate(P.weekToDate(pe + pad)) },
-        })
-      }
-    }
-    const track = it ? trackIdOf(it.project) : null
+  const bringIntoView = (it: IssueVM, done?: () => void) => {
+    const id = it.id
+    panTo(it.start, it.end)
+    const track = trackIdOf(it.project)
     let r1 = 0,
       r2 = 0
     r1 = requestAnimationFrame(() => {
@@ -908,7 +1002,7 @@ function Roadmap({
         const row =
           el?.closest('[data-roadmap-task-top]') ||
           pane?.querySelector(`[data-roadmap-revealed="${id}"]`)
-        if (pane && it && row) {
+        if (pane && row) {
           const stickyH = ROW_H.track + 1 + (track !== it.project ? ROW_H.sub + 1 : 0)
           // Layout coordinates also work in the phone's rotated timeline.
           // Center below pinned headings and to the right of the name rail;
@@ -940,9 +1034,9 @@ function Roadmap({
      revealTask.n like focusPlan; `revealed` holds the ring after the signal
      is consumed. */
   const [revealed, setRevealed] = useStateR<{ id: string; n: number } | null>(null)
-  /* Says that the task asked for is not on the roadmap any more, when the
-     loaded Roadmap does not hold it, rather than dropping the request
-     without a word. */
+  /* Says that the task asked for is not on the roadmap any more, when a
+     current answer for the arguments on screen does not hold it, rather
+     than dropping the request without a word. */
   const notOnRoadmap = (key?: string) =>
     window.showToast?.(`${key ?? 'This task'} is not on the roadmap any more.`, 'error')
   /* The nonces of the requests taken. A kept Roadmap (components/KeptView)
@@ -950,28 +1044,27 @@ function Roadmap({
      be a request it took before it hid: that one goes, not again. */
   const takenReveal = useRefR<number | null>(null)
   const takenPlan = useRefR<number | null>(null)
+  /** Takes request `req`: pans the window to the weeks its source knows,
+      sends a task to plan with the Roadmap's read from now on, so the answer
+      keeps it past the filter row, and waits until an answer on screen
+      resolves the request (below). */
+  const take = (req: PendingRequest) => {
+    if (mobile) setMobileLayout('timeline')
+    if (req.kind === 'plan' && req.uuid && req.project)
+      setPlanAsk({ id: req.uuid, project_id: req.project })
+    panTo(req.start, req.end ?? req.start)
+    setPending((was) => ({ ...was, [req.kind]: req }))
+  }
   useEffectR(() => {
     if (!revealTask) return
     // App drops the request only while it is still this one
     const { n } = revealTask
-    const consumed = () => onRevealConsumed?.(n)
     if (n === takenReveal.current) {
-      consumed()
+      onRevealConsumed?.(n)
       return
     }
     takenReveal.current = n
-    if (mobile) setMobileLayout('timeline')
-    const it = P.issueById[revealTask.id]
-    if (!it) {
-      // archived, deleted or hidden since it was asked for, as a task
-      // planned from a window that showed it from its own read can be
-      if (revealTask.key) notOnRoadmap(revealTask.key)
-      consumed()
-      return
-    }
-    openTo(it)
-    setRevealed(revealTask)
-    return bringIntoView(it.id, consumed)
+    take({ ...revealTask, kind: 'reveal' })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revealTask?.n])
   useEffectR(() => {
@@ -979,38 +1072,82 @@ function Roadmap({
     const t = window.setTimeout(() => setRevealed(null), REVEAL_MS)
     return () => window.clearTimeout(t)
   }, [revealed?.n])
-
   useEffectR(() => {
     if (!focusPlan) return
     const { n } = focusPlan
-    const consumed = () => onFocusConsumed?.(n)
     if (n === takenPlan.current) {
-      consumed()
+      onFocusConsumed?.(n)
       return
     }
     takenPlan.current = n
-    if (mobile) setMobileLayout('timeline')
-    const it = P.issueById[focusPlan.id]
-    // A group's dates come from its subtasks, so it has nothing to plan. A
-    // request for one (it can gain a subtask after the detail window asked)
-    // shows it read-only instead, like revealTask, and leaves any open
-    // session and its pending workload reply alone.
-    if (it && P.isGroup(it)) {
-      openTo(it)
-      setRevealed(focusPlan)
-      return bringIntoView(it.id, consumed)
+    take({ ...focusPlan, kind: 'plan' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPlan?.n])
+  /* Resolves the request taken once the Roadmap can say: where the tasks on
+     screen, from a current answer or the last one for this scope, hold its
+     task, it acts at once; where the Roadmap shows a note instead, it says
+     why the task cannot be planned or shown here; and where a current
+     answer for the arguments on screen does not hold it, that it is not on
+     the roadmap any more. Meanwhile it waits. */
+  useEffectR(() => {
+    for (const req of [pending.plan, pending.reveal]) {
+      if (!req) continue
+      const done = () => setPending((was) => ({ ...was, [req.kind]: null }))
+      const it = view.tasks.find((t) => (req.uuid ? t.uuid === req.uuid : t.id === req.id))
+      if (it) {
+        done()
+        setResolved((was) => ({ ...was, [req.kind]: { req, id: it.id } }))
+        continue
+      }
+      const why = cannotPlanReason(view)
+      if (!why && view.state !== 'ok') continue
+      done()
+      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
+      if (req.kind === 'plan') onFocusConsumed?.(req.n)
+      else onRevealConsumed?.(req.n)
+      if (why)
+        window.showToast?.(
+          `${req.key ?? 'This task'} can't be ${req.kind === 'plan' ? 'planned' : 'shown'} here. ${why}`,
+          'error',
+        )
+      else if (req.kind === 'plan' || req.key) notOnRoadmap(req.key)
     }
-    const request = ++planRequest.current
-    const loadEpoch = P.gridEpoch
-    const undoDisabledAtStart = P.roadmapUndo.disabled
+  })
+  /* Acts on the request resolved: a reveal, or a plan request for a group,
+     whose dates come from its subtasks, shows the task read-only and leaves
+     any open session alone; a plan request opens a session over the task. */
+  const resolvedReveal = resolved.reveal
+  useEffectR(() => {
+    if (!resolvedReveal || acted.current.has(resolvedReveal.req.n)) return
+    acted.current.add(resolvedReveal.req.n)
+    return act(resolvedReveal)
+  }, [resolvedReveal?.req.n])
+  const resolvedPlan = resolved.plan
+  useEffectR(() => {
+    if (!resolvedPlan || acted.current.has(resolvedPlan.req.n)) return
+    acted.current.add(resolvedPlan.req.n)
+    return act(resolvedPlan)
+  }, [resolvedPlan?.req.n])
+  /** Acts on request `req`, resolved to the task with handle `id`; answers
+      the cleanup of the frames that bring it into view. */
+  function act({ req, id }: { req: PendingRequest; id: string }) {
+    const consumed = () =>
+      req.kind === 'plan' ? onFocusConsumed?.(req.n) : onRevealConsumed?.(req.n)
+    const it = taskOf(id)
     if (!it) {
-      notOnRoadmap(focusPlan.key)
       consumed()
       return
+    }
+    if (req.kind === 'reveal' || P.isGroup(it)) {
+      if (req.kind === 'plan' && !sessionRef.current) setPlanAsk(null)
+      openTo(it)
+      setRevealed({ id: it.id, n: req.n })
+      return bringIntoView(it, consumed)
     }
     // The task can change after the detail window requested planning.
     if (it.status === 'backlog') {
       window.showToast?.('Move this task out of Backlog before planning it on the roadmap', 'error')
+      setPlanAsk(null)
       consumed()
       return
     }
@@ -1019,7 +1156,7 @@ function Roadmap({
     openTo(it)
     const wasUnscheduled = it.start == null
     const orig = captureWeekDates(it)
-    planned.current = { id: it.id, writes: [] }
+    plannedWrites.current = { id: it.id, writes: [] }
     // give an unscheduled issue a provisional bar to plan (due-capped, like the
     // Plan pickers); auto-fit refines its end once the workload arrives
     if (wasUnscheduled) {
@@ -1028,70 +1165,40 @@ function Roadmap({
       if (dueWeek != null) end = Math.min(end, dueWeek)
       sendDates(it.id, { start: Math.min(P.TODAY_WEEK, end), end })
     }
-    setSession({
+    const started: PlanSession = {
       issueId: it.id,
+      uuid: it.uuid,
+      key: it.key,
+      project: it.project,
       autoFit: true,
       fitOnLoad: wasUnscheduled,
       orig,
-      loadOwner: it.owner ?? null,
-      loadEpoch,
-      load: null,
-      loading: !!it.owner,
-    })
-    if (it.owner) {
-      P.assigneeLoad(it.owner).then((load) => {
-        const s = sessionRef.current
-        if (
-          P.roadmapUndo.disabled !== undoDisabledAtStart ||
-          loadEpoch !== P.gridEpoch ||
-          request !== planRequest.current ||
-          !s ||
-          s.issueId !== it.id ||
-          P.issueById[it.id]?.owner !== it.owner
-        )
-          return
-        receivePlanningLoad(s, load)
-      })
     }
+    sessionRef.current = started
+    setSession(started)
+    // the session sends its task with the read from now on
+    setPlanAsk(null)
     // Pan to the (possibly just placed) bar and center it. Consuming earlier
     // changes focusPlan and cancels these frames in the effect cleanup
     // before the task can be scrolled into view.
-    return bringIntoView(it.id, consumed)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusPlan?.n])
-
-  const sessionOwner = session ? (P.issueById[session.issueId]?.owner ?? null) : null
+    return bringIntoView(it, consumed)
+  }
+  /* A session whose task an answer for its arguments no longer holds, as it
+     moved where the filter row hides it or left the selection, or whose
+     Roadmap shows a note instead, ends with a word, writing nothing more. */
   useEffectR(() => {
     const s = sessionRef.current
-    if (!s || (s.loadOwner === sessionOwner && s.loadEpoch === P.gridEpoch)) return
-    // Workload indexes belong to both an owner and a grid. A handoff or
-    // re-anchor invalidates them, including any pending response.
-    const request = ++planRequest.current
-    const loadEpoch = P.gridEpoch
-    const refreshed = {
-      ...s,
-      fitOnLoad: s.loadOwner === sessionOwner && s.fitOnLoad,
-      loadOwner: sessionOwner,
-      loadEpoch,
-      load: null,
-      loading: !!sessionOwner,
-    }
-    sessionRef.current = refreshed
-    setSession(refreshed)
-    if (!sessionOwner) return
-    P.assigneeLoad(sessionOwner).then((load) => {
-      const current = sessionRef.current
-      if (
-        request !== planRequest.current ||
-        loadEpoch !== P.gridEpoch ||
-        !current ||
-        current.issueId !== s.issueId ||
-        P.issueById[s.issueId]?.owner !== sessionOwner
-      )
-        return
-      receivePlanningLoad(current, load)
-    })
-  }, [session?.issueId, sessionOwner, P.gridEpoch])
+    if (!s) return
+    const gone =
+      view.state === 'ok'
+        ? !view.tasks.some((t) => t.uuid === s.uuid)
+        : cannotPlanReason(view) !== null
+    if (!gone) return
+    sessionRef.current = null
+    plannedWrites.current = null
+    setSession(null)
+    window.showToast?.(`${s.key} left this roadmap. Its dates stay as they were saved.`, 'info')
+  })
 
   /* WHAT THE WINDOW IS, in words — the accessible name and the tooltip of a
      glyph that has no label. Two endpoint chips used to say this at rest, in
@@ -1103,9 +1210,75 @@ function Roadmap({
     winCut ? `. ${winCut}, the most the Roadmap shows` : ''
   }`
 
+  /* Auto-move works on the dependency answer's parts, the tasks linked to
+     this Roadmap's tasks, here or in other projects, with the dates on
+     screen for each task the Roadmap or the workspace shows, so the count
+     follows a saved drag at once. It moves nothing from part of its inputs:
+     while they load, did not fit or failed, the button says why. It also
+     waits while a write is on its way (P.roadmapUndo.busy), a Roadmap
+     write or any other, so a press never sends expected values a pending
+     write has made stale. Above the early returns, as hooks. */
+  const autoMoveInputs = view.deps.autoMove.state === 'ok' ? view.deps.autoMove.inputs : null
+  const viewsNow = P.updates.views.getSnapshot()
+  const partTasks = useMemoR(
+    () =>
+      autoMoveInputs &&
+      autoMoveTasks(autoMoveInputs, isoToWeek, (uuid) => {
+        const handle = P.handleOf(uuid)
+        const it = handle === null ? P.viewTask(ROADMAP_SLOT, uuid) : P.issueById[handle]
+        return it ? { start: it.start, end: it.end, status: it.status } : undefined
+      }),
+    // the views' news covers every model and paint the dates come from
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [autoMoveInputs, viewsNow, P.gridEpoch],
+  )
+  // what the solver reads of the parts, so a delivery that changed none of
+  // their dates, statuses, families, links or write levels moves nothing
+  const partsRead = useMemoR(
+    () =>
+      autoMoveInputs && partTasks
+        ? JSON.stringify([
+            autoMoveInputs.editable_projects,
+            partTasks.map((t) => [t.id, t.start, t.end, t.status, t.children, t.links]),
+          ])
+        : '',
+    [autoMoveInputs, partTasks],
+  )
+  const pendingMoves: AutoMove[] = useMemoR(
+    () => (autoMoveInputs && partTasks ? autoMoveMoves(autoMoveInputs, partTasks) : []),
+    [partsRead],
+  )
+  const autoMoveBlock =
+    autoMoveUnavailable(view.deps) ??
+    (P.roadmapUndo.busy && pendingMoves.length > 0
+      ? 'Auto-move waits until your changes, here or elsewhere, are saved.'
+      : null)
+  const moves = autoMoveBlock ? [] : pendingMoves
+  const autoMoveSays = autoMoveBlock ?? autoMoveTitle(moves.length)
+  // the line beside the toolbar that says why no dependency arrow shows
+  const depsLine = arrowsMissing(view.deps)
+  const autoArrange = () => {
+    if (!moves.length || !partTasks || P.refusePausedEdit()) return
+    const rowOf = new Map(partTasks.map((t) => [t.id, t.row]))
+    P.batchRoadmapChanges(() => {
+      for (const m of moves) {
+        // a task the Roadmap or the workspace shows moves as its bar does;
+        // one only the dependency answer holds moves from its stored dates
+        const handle = P.handleOf(m.id) ?? P.viewTask(ROADMAP_SLOT, m.id)?.id
+        if (handle) P.updateIssue(handle, { start: m.start, end: m.end })
+        else {
+          const row = rowOf.get(m.id)
+          if (row) void P.moveDependencyTask(row, m.start, m.end)
+        }
+      }
+    })
+    window.showToast?.(
+      `Moved ${moves.length} task${moves.length > 1 ? 's' : ''} after their blockers`,
+    )
+  }
+
   // Keep controls available in empty states so filters can be cleared. Pass
-  // moves explicitly and defer autoArrange through the click handler: empty
-  // returns occur before those bindings are initialized.
+  // moves explicitly, as an empty Roadmap offers none.
   const toolbarRow = (moves: { id: string; start: number; end: number }[]) => (
     /* The 12px top inset combines with the shell's 12px bottom inset for
        the 24px band below the view switcher. Controls sit one panel gap
@@ -1162,9 +1335,14 @@ function Roadmap({
             variant="quiet"
             className="rounded-sm"
             data-auto-correct
+            // why Auto-move has no moves to offer, where its inputs are not
+            // there or a write is on its way
+            data-auto-move={autoMoveBlock ? view.deps.autoMove.state : undefined}
             onClick={() => autoArrange()}
             disabled={moves.length === 0}
-            title={autoMoveTitle(moves.length)}
+            title={
+              moves.length === 0 && autoMoveBlock ? autoMoveBlock : autoMoveTitle(moves.length)
+            }
           >
             <Icon name="arrowRightFromLine" size={16} />
             Auto-move
@@ -1177,6 +1355,16 @@ function Roadmap({
           <RoadmapUndo ground="well" onUndo={undoPlanning} />
         </div>
       </div>
+      {/* why no dependency arrow shows, while the rows show */}
+      {showing && depsLine && (
+        <p
+          data-roadmap-deps={view.deps.state}
+          role="status"
+          className="[flex-basis:100%] [text-align:center] [font-size:var(--fs-xs)] [color:var(--text-3)]"
+        >
+          {depsLine}
+        </p>
+      )}
     </div>
   )
 
@@ -1235,13 +1423,13 @@ function Roadmap({
   ) => (
     <MobileRoadmap
       info={info}
-      windowStart={w0}
-      windowEnd={w1}
-      filters={filters}
+      tasks={empty ? [] : view.tasks}
+      settled={view.current}
       filterControls={filterControls}
       actions={actions}
       onTimeline={() => setMobileLayout('timeline')}
       corrections={corrections}
+      correctionsTitle={corrections === 0 && empty === undefined ? autoMoveSays : undefined}
       onAutoCorrect={onAutoCorrect}
       undoControls={<RoadmapUndo onUndo={undoPlanning} />}
       section={mobileAgendaSection}
@@ -1267,6 +1455,11 @@ function Roadmap({
     ) : (
       timeline
     )
+  /** `timeline` with the Roadmap's root around it, the landscape portal
+      on a phone. */
+  const withRoot = (timeline: React.ReactNode) => (
+    <RoadmapRoot view={view}>{withMobileTimeline(timeline)}</RoadmapRoot>
+  )
   const timelineToolbar = (moves: { id: string; start: number; end: number }[]) =>
     mobile ? (
       <details className="mobile-roadmap-timeline-tools mobile-roadmap-tools">
@@ -1290,38 +1483,38 @@ function Roadmap({
           </div>,
         )
 
-  /* Dependency pairs and the auto-move answer read only the tasks and the
-     write access canWrite reads, so they are worked out again only when one
-     of them changed: P.issues keeps its identity while no task changed, and
-     P.contextVersion covers the access. Above the early returns, as hooks. */
   // each track's chunks (stableChunks), kept across renders
   const chunkMemory = useRefR(new Map<string, ChunkMemory>())
-  const allDeps = useTaskMemo(P.issues, linkReads, dependencyPairs, [])
-  const pendingMoves = useTaskMemo(
-    P.issues,
-    scheduleReads,
-    (issues) =>
-      autoMoves({
-        issues,
-        byId: P.issueById,
-        canWrite: (it) => P.canWrite(it.project),
-      }),
-    [P.contextVersion],
-  )
-  /* The remaining hours each heading shows, in one pass over the tasks,
-     again only when a task changed in what the sum reads. Above the early
-     returns, as hooks; the headings are the scope's tracks and their
-     sub-project bands. */
-  const headSubIds = info.groups.flatMap((g) => [g.subIds, ...g.subIds.map((id) => [id])])
-  const headRemaining = useTaskMemo(
-    P.issues,
-    remainingReads,
-    () => {
-      const sums = P.remainingByGroups(headSubIds, info.only)
-      return new Map(headSubIds.map((ids, i) => [ids.join(), sums[i]]))
-    },
-    [headSubIds.map((ids) => ids.join()).join(';'), info.only],
-  )
+
+  /* ---------- Team utilization: people owning work in the visible window ----------
+     Membership follows what the roadmap displays: the shown tasks with a
+     start and an owner that meet the window (collapsed tracks still count —
+     folding a track hides its rows, it doesn't remove them from the
+     roadmap). Each person's load comes from the owner-load cache, registered
+     under the Roadmap's own slot with how many shown rows they own, so a
+     guest's or Viewer's capped calls keep the people with the most rows. */
+  const team: TeamPerson[] = []
+  {
+    const byOwner = new Map<string, { org: string; rows: number }>()
+    for (const it of view.tasks) {
+      if (it.start == null || !it.owner) continue
+      if (getE(it) < w0 || getS(it) > w1) continue
+      const was = byOwner.get(it.owner)
+      if (was) was.rows++
+      else byOwner.set(it.owner, { org: it.org, rows: 1 })
+    }
+    for (const [id, place] of byOwner) {
+      const user = P.user(id)
+      if (user) team.push({ user, ...place })
+    }
+    team.sort((a, b) => a.user.name.localeCompare(b.user.name))
+  }
+  const teamKey = team.map((p) => `${p.org}:${p.user.id}:${p.rows}`).join()
+  useEffectR(() => {
+    P.watchRoadmapTeam(team.map((p) => ({ org: p.org, owner: p.user.id, cards: p.rows })))
+    // the people's signature covers the list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teamKey])
 
   /* ---------- empty state ---------- */
   /* Why a scope has nothing to schedule. Without a milestone the note is the
@@ -1329,6 +1522,7 @@ function Roadmap({
      does behind "Nothing matches your filters", so its flags still show
      (and the phone's agenda lists them): the empty state says why there are
      no rows, not that the scope plans nothing. */
+  const note = <RoadmapNote view={view} info={info} actions={actions} phone={mobile} />
   let emptyNote: React.ReactNode = null
   if (info.subIds.length === 0) {
     emptyNote = !wide ? (
@@ -1352,18 +1546,24 @@ function Roadmap({
         hint="Tasks live in sub-projects."
       />
     )
-  } else if (mine && held && held.size === 0) {
+  } else if (!showing) {
+    // All projects' chooser, or the answer's state: a wait, a limit, a
+    // failure, never part of a Roadmap
+    emptyNote = note
+  } else if (mine && view.state === 'ok' && held && held.size === 0) {
     /* My view empties for a reason of its own, and the test above can't see
        it: the sub-projects all exist, they just hold none of my work — so the
        rail is empty while `subIds` is not. Without this it renders as a bare
        grid of weeks with nothing in it and no explanation. (The Board and
        Overview reach the same state through their own `scoped.length === 0`.)
-       Asked of the SCOPE's own set, never of `tracks`: since deviation #50 a
-       toolbar filter can empty the rail too, and that has its own note — one
-       the Clear button can actually act on. */
+       Asked of the SCOPE's own set, the answer's held sub-projects, never of
+       `tracks`: since deviation #50 a toolbar filter can empty the rail too,
+       and that has its own note — one the Clear button can actually act on.
+       Only a current answer says so, never a wait or a refusal. */
     emptyNote = <EmptyState icon="user" title="Nothing assigned to you" />
   }
-  if (emptyNote && info.milestones.length === 0) return emptyFrame(emptyNote)
+  if (emptyNote && info.milestones.length === 0)
+    return <RoadmapRoot view={view}>{emptyFrame(emptyNote)}</RoadmapRoot>
 
   /* Build rows; tasks within a group ordered by COMMITTED start date, so the
      list re-sorts only when a drag is released, never mid-drag.
@@ -1430,7 +1630,8 @@ function Roadmap({
      it with a full-screen empty state: the window controls, the week grid and
      the milestone flags are still the answer to "what am I looking at", and a
      filter is a thing you undo, not a state you are in. */
-  const noMatches = clearable && tracks.length === 0
+  // only a current answer says nothing matches, never one on its way
+  const noMatches = clearable && tracks.length === 0 && view.current
 
   // vertical layout + bar geometry for dependency arrows (windowed bars only)
   const laid: LaidRow[] = []
@@ -1444,7 +1645,8 @@ function Roadmap({
       h,
       start: row.issue ? getS(row.issue) : null,
       end: row.issue ? getE(row.issue) : null,
-      stale: row.kind !== 'track' && row.kind !== 'sub' && !!row.issue && P.isStale(row.issue),
+      stale:
+        row.kind !== 'track' && row.kind !== 'sub' && !!row.issue && view.family.stale(row.issue),
     })
     if (row.kind === 'task' && getS(row.issue) != null) {
       const s = getS(row.issue),
@@ -1467,26 +1669,11 @@ function Roadmap({
   })
   const totalH = top
 
-  /* ---------- resource strip: people owning work in the visible window ---------- */
-  // membership follows what the roadmap displays: scoped issues that pass the
-  // filters and intersect the window (collapsed tracks still count — folding a
-  // track hides its rows, it doesn't remove them from the roadmap)
-  const stripUsers = (() => {
-    const ids = new Set()
-    P.issues.forEach((it) => {
-      if (!info.subIdSet.has(it.project) || (info.only && !info.only(it))) return
-      if (it.start == null || !it.owner) return
-      if (!passes(it)) return
-      if (getE(it) < w0 || getS(it) > w1) return
-      ids.add(it.owner)
-    })
-    return P.users.filter((u) => ids.has(u.id)).sort((a, b) => a.name.localeCompare(b.name))
-  })()
   // effective highlight: only while the selected person is actually in the strip
-  const hl = hlUser && stripUsers.some((u) => u.id === hlUser) ? hlUser : null
+  const hl = hlUser && team.some((p) => p.user.id === hlUser) ? hlUser : null
   const activeResourceWeek =
     stripMode !== 'min' &&
-    stripUsers.length > 0 &&
+    team.length > 0 &&
     resourceWeek !== null &&
     resourceWeek >= w0 &&
     resourceWeek <= w1
@@ -1506,7 +1693,7 @@ function Roadmap({
     splitT -
       PANEL_GAP -
       canvasPadB -
-      stripHeight(Math.min(1, stripUsers.length)) -
+      stripHeight(Math.min(1, team.length)) -
       (HEAD_PAD_T + WEEK_BAND_H + 1 + 2) -
       Math.min(totalH, ROW_H.track + ROW_H.sub + ROW_H.task),
   )
@@ -1528,42 +1715,27 @@ function Roadmap({
   const roadMinimum = Math.min(roadContentH, headH + ROW_H.track + ROW_H.sub + ROW_H.task * 3 + 6)
   const stripCap = Math.min(
     620,
-    Math.max(
-      stripHeight(Math.min(1, stripUsers.length)),
-      splitT - PANEL_GAP - canvasPadB - roadMinimum,
-    ),
+    Math.max(stripHeight(Math.min(1, team.length)), splitT - PANEL_GAP - canvasPadB - roadMinimum),
   )
   const stripH =
-    stripMode === 'min' ? STRIP_HEAD_H + 2 : Math.min(stripHeight(stripUsers.length), stripCap)
+    stripMode === 'min' ? STRIP_HEAD_H + 2 : Math.min(stripHeight(team.length), stripCap)
 
-  // dependency pairs (blocker -> blocked), dedup, both bars visible
-  const deps = allDeps.filter((dp) => geom[dp.blocker] && geom[dp.blocked])
-  const depColor = (dp) =>
-    getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked])
-      ? 'var(--danger)'
-      : 'var(--success)'
+  /* Dependency pairs (blocker -> blocked) from the dependency answer, every
+     blocks link between two of the selection's tasks with a span, kept
+     where both bars are on screen. Their colors and rings read the bars'
+     live dates, so they follow a drag. A task scheduled by a pending write
+     shows its arrows once the write saved and the read answered again. */
+  const deps = view.deps.pairs.filter((dp) => geom[dp.blocker] && geom[dp.blocked])
+  const late = (dp: { blocker: string; blocked: string }) => {
+    const blocker = taskOf(dp.blocker)
+    const blocked = taskOf(dp.blocked)
+    return !!blocker && !!blocked && getE(blocker) >= getS(blocked)
+  }
+  const depColor = (dp) => (late(dp) ? 'var(--danger)' : 'var(--success)')
   const barRing: Record<string, string> = {}
   deps.forEach((dp) => {
-    if (getE(P.issueById[dp.blocker]) >= getS(P.issueById[dp.blocked]))
-      barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
+    if (late(dp)) barRing[dp.blocked] = 'color-mix(in oklab, var(--danger) 67%, transparent)'
   })
-
-  // Auto-move: push blocked tasks past their blockers, cascading. Worked out
-  // with the tasks (pendingMoves, above) so the button can disable itself
-  // when there is nothing to move. Only leaves move, and a group's span
-  // follows them. A pair that would move a task this person cannot edit
-  // keeps its red arrow instead (see autoMoves in src/lib/schedule.ts).
-  const autoArrange = () => {
-    if (!pendingMoves.length || P.refusePausedEdit()) return
-    P.batchRoadmapChanges(() => {
-      pendingMoves.forEach((m) => {
-        P.updateIssue(m.id, { start: m.start, end: m.end })
-      })
-    })
-    window.showToast?.(
-      `Moved ${pendingMoves.length} task${pendingMoves.length > 1 ? 's' : ''} after their blockers`,
-    )
-  }
 
   // month boundaries across the window — the weeks whose first workday opens
   // a new month, so every month line sits on a week boundary (the window's
@@ -1596,6 +1768,10 @@ function Roadmap({
     if (P.isDone(iss)) {
       color = 'var(--text-3)'
       state = 'complete'
+    } else if (P.delayUnknown(iss)) {
+      // the owner's load could not be read, so the plan says nothing either way
+      color = 'var(--text-3)'
+      state = 'Delay unknown'
     } else if (di && di.status === 'late') {
       color = 'var(--danger)'
       state = iss.due < P.TODAY_ISO ? 'overdue' : 'projected to finish after the due date'
@@ -1614,7 +1790,7 @@ function Roadmap({
     } else if (wkEnd != null && dueT <= wkEnd) {
       color = 'var(--warn)'
       state = 'tight, due falls in the final planned week'
-    } else if (P.isGroup(iss) && P.progressOf(iss).unknown) {
+    } else if (P.isGroup(iss) && view.family.partial(iss)) {
       // subtasks outside this view may end later, so the visible plan cannot
       // show the group finishing before its due date
       color = 'var(--text-3)'
@@ -1728,15 +1904,17 @@ function Roadmap({
 
   // an empty scope offers no moves, as its emptyFrame does
   if (showMobileAgenda)
-    return emptyNote
-      ? mobileAgenda(0, () => {}, emptyNote)
-      : mobileAgenda(pendingMoves.length, autoArrange)
+    return (
+      <RoadmapRoot view={view}>
+        {emptyNote ? mobileAgenda(0, () => {}, emptyNote) : mobileAgenda(moves.length, autoArrange)}
+      </RoadmapRoot>
+    )
 
-  return withMobileTimeline(
+  return withRoot(
     <div className="roadmap-view [flex:1] [display:flex] [flex-direction:column] [overflow:hidden] [background:var(--bg)]">
       {/* The row is drawn by `toolbarRow` above, so that the empty states can
           draw it too — see its header for why that matters. */}
-      {timelineToolbar(emptyNote ? [] : pendingMoves)}
+      {timelineToolbar(emptyNote ? [] : moves)}
 
       {winPops}
 
@@ -2096,7 +2274,7 @@ function Roadmap({
                     // planning and a read-only reveal wear the same spotlight
                     const revealing = !isGroup && revealed?.id === row.issue.id
                     const spotlit = planning || revealing
-                    const remH = isGroup ? (headRemaining.get(row.subIds.join()) ?? 0) : 0
+                    const remH = isGroup ? (view.remaining(row.subIds) ?? 0) : 0
                     // stale rows fade label contents + timeline cell, NOT the row div:
                     // opacity on the row would wrap the sticky label in a stacking
                     // context and hoist the dependency-arrow overlay above it
@@ -2291,7 +2469,8 @@ function Roadmap({
           timeline that starts a gutter further right and a strip that does not
           would put every load box a fifth of a column off the week it counts. */}
           <ResourceStrip
-            users={stripUsers}
+            people={team}
+            status={view.current ? 'ok' : view.busy ? 'waiting' : 'none'}
             w0={w0}
             w1={w1}
             weekW={weekW}
@@ -2301,7 +2480,7 @@ function Roadmap({
             info={info}
             panelRef={stripPanelRef}
             bodyRef={stripBodyRefBox.current}
-            livePositions={live}
+            livePositions={liveByUuid}
             mode={stripMode}
             onMode={changeStripMode}
             selectedUser={hl}
@@ -2311,14 +2490,15 @@ function Roadmap({
             // Horizontal wheel, scrollbar and keyboard focus in either pane
             // keep each cell under the timeline's week. Ignore an empty strip's
             // clamp-to-zero so clearing filters cannot pan the timeline.
-            onBodyScroll={stripUsers.length > 0 ? syncRailClip : undefined}
+            onBodyScroll={team.length > 0 ? syncRailClip : undefined}
           />
         </div>
       </div>
-      {session && P.issueById[session.issueId] && (
+      {session && sessionModel && (
         <PlanCard
-          issue={P.issueById[session.issueId]}
+          issue={sessionModel}
           session={session}
+          load={planLoad}
           onToggleAutoFit={toggleAutoFit}
           onConfirm={confirmPlanning}
           onCancel={cancelPlanning}

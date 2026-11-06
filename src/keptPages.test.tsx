@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
+import { answerRoadmap } from './store/roadmapStandIn.setup'
 import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
 
@@ -109,6 +110,11 @@ type Snapshot = ReturnType<typeof plannerFixture>
 /* Whether boot's server answers the task window's read of a task
    (windowTask), which the suite of Plan on roadmap turns on. */
 let answersTasks = false
+/* The Roadmap's reads boot's server holds back until `answerRoadmaps`
+   answers them from the snapshot (store/roadmapStandIn.setup.ts), while
+   `holdRoadmaps` is on. */
+let holdRoadmaps = false
+let answerRoadmaps = () => {}
 
 /** The task window's read (convex/taskWindow.ts task) of the task `ref`
     names in `snap`, by its number (QN-n) or uuid, as an editor's, with its
@@ -159,7 +165,17 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
           writes: (id) => P?.canWrite(id) ?? false,
         }),
       )
-    else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies') {
+      const answer = () => next(structuredClone(answerRoadmap(snap, name, args)))
+      if (!holdRoadmaps) answer()
+      else {
+        const before = answerRoadmaps
+        answerRoadmaps = () => {
+          before()
+          answer()
+        }
+      }
+    } else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) {
       answerMilestones(snap, name, args, next, fail)
       const watch = { name, stopped: false }
@@ -375,7 +391,7 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(live()).toEqual([])
   })
 
-  it("opens an all-project sync row's Board jump on the task's sub-project, and its Roadmap jump on All projects", async () => {
+  it("opens an all-project sync row's Board and Roadmap jumps on the task's sub-project", async () => {
     // the fixture's project as a sub-project (p/1) of a top-level one
     const org = await boot((snap) => void underProgram(snap))
     const { P } = await import('./store/planner')
@@ -397,8 +413,15 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       'the Roadmap jump',
     )
     await act(async () => roadmap.click())
-    await shownPage('roadmap')
-    expect(location.pathname).toBe('/app/~/roadmap/all')
+    const page = await shownPage('roadmap')
+    // All projects has no Roadmap, so the jump opens the task's sub-project
+    expect(location.pathname).toBe(`/app/${org}/roadmap/p/1`)
+    await waitFor(
+      () =>
+        page.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-state') === 'ok' &&
+        page.querySelector('[data-roadmap-task-open="QN-1"]'),
+      "the task's row",
+    )
     sync = await later()
     const board = await waitFor(
       () => sync.querySelector<HTMLElement>('[data-sync-board="QN-1"]'),
@@ -504,30 +527,25 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     expect(inbox.querySelector('[data-unread-divider]')).toBeNull()
   })
 
-  it('shows a page kept while the tasks loaded as itself once they have', async () => {
+  it('opens the Roadmap of All projects on its chooser at once, asking for no task', async () => {
     // 12,800 task numbers make 64 task windows; the last starts at fc000000
     const org = await boot((snap) => {
+      underProgram(snap)
       snap.orgs[0].next_issue_num = 64 * 200
     }, 'fc000000')
-    // the Roadmap waits for every task; the Overview no longer does
+    const { __layerProbe } = await import('./store/planner')
+    // what the boot asked for
+    __layerProbe?.asks()
     await go(`/app/${org}/roadmap/all`)
     const roadmap = await shownPage('roadmap')
-    expect(roadmap.textContent).toContain('opens once every task has loaded')
-    await go(`/app/${org}/inbox`)
-    await shownPage('inbox')
-    await act(async () => {
-      double.live?.holdWindow(null)
-      await new Promise((resolve) => realTimeout(resolve, 0))
-    })
-    const { P } = await import('./store/planner')
-    expect(P.stillLoading()).toBeNull()
-    // the Roadmap's code, which the app loads in the background
-    await (await import('./lib/workspaceChunks')).loadRoadmap()
-    // the commit that shows it holds no notice, before any frame paints
-    vi.stubGlobal('requestAnimationFrame', () => 0)
-    await go(`/app/${org}/roadmap/all`)
-    expect(await shownPage('roadmap')).toBe(roadmap)
+    await waitFor(() => roadmap.querySelector('[data-roadmap-choices]'), 'the chooser')
+    expect(roadmap.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-state')).toBe(
+      'choose',
+    )
+    expect(roadmap.textContent).toContain('The Roadmap shows one project at a time.')
     expect(roadmap.textContent).not.toContain('opens once every task has loaded')
+    // the Roadmap asks for no task of the workspace
+    expect(__layerProbe?.asks()).toEqual([])
   })
 
   it('mounts the pages of a new scope anew, and keeps the Inbox', async () => {
@@ -582,20 +600,25 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
   })
 })
 
-describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
+describe('Plan on roadmap while the Roadmap reads its answer', { timeout: 30_000 }, () => {
   /* QN-5, Plan the launch, unassigned and unplanned. The store boots
      without the workspace's tasks, as the app does, so its window shows it
-     from its own read, and Plan on roadmap opens the Roadmap, which asks
-     for every task and waits while the last task window, from fc000000,
-     still loads. */
+     from its own read, and Plan on roadmap opens the Roadmap at once, which
+     asks the server for its tasks, the planned one among them, and asks for
+     no task of the workspace. Boot's server holds the Roadmap's answers
+     back until `answerRoadmaps`. */
   const LAUNCH = '01000000-0000-4000-8000-000000000005'
   beforeEach(async () => {
     answersTasks = true
+    holdRoadmaps = true
+    answerRoadmaps = () => {}
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = false
   })
   afterEach(async () => {
     answersTasks = false
+    holdRoadmaps = false
+    answerRoadmaps = () => {}
     const { TASKS } = await import('./store/liveParts')
     TASKS.atBoot = true
     // no write went out on a path that needs every task, and no paint threw
@@ -611,13 +634,11 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
 
   /** Boots without the tasks, opens QN-5's window and presses Plan on
       roadmap, or Show on roadmap when `group` gives QN-5 a subtask, which
-      asks for every task and shows the Roadmap's notice meanwhile. Answers
-      the organization's slug. */
+      opens the Roadmap of QN-5's top-level project at once with its
+      answer on its way. Answers the organization's slug. */
   async function planWhileLoading(group = false) {
-    // 12,800 task numbers make 64 task windows; the last starts at fc000000
     const org = await boot((snap) => {
       underProgram(snap)
-      snap.orgs[0].next_issue_num = 64 * 200
       snap.issues.push({
         ...taskRow(snap, LAUNCH, 'todo', 5),
         title: 'Plan the launch',
@@ -628,7 +649,7 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
           ...taskRow(snap, '01000000-0000-4000-8000-000000000006', 'todo', 6),
           parent_id: LAUNCH,
         })
-    }, 'fc000000')
+    })
     network.mutation.mockClear()
     // the journal answers how many operations the visit holds, as the
     // server's roadmap.change does
@@ -645,41 +666,53 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
     expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     await act(async () => plan.click())
     const roadmap = await shownPage('roadmap')
-    expect(roadmap.textContent).toContain('opens once every task has loaded')
-    // the Roadmap asked for every task as it mounted, and nothing else did
-    expect(P.taskLoad()).toEqual({ state: 'arriving' })
+    await waitFor(
+      () =>
+        roadmap.querySelector('[data-roadmap-root]')?.getAttribute('data-roadmap-state') ===
+        'loading',
+      'the Roadmap waiting for its answer',
+    )
+    expect(roadmap.textContent).not.toContain('opens once every task has loaded')
+    // the Roadmap asked for no task of the workspace
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
     const { __layerProbe } = await import('./store/planner')
-    expect(__layerProbe?.asks()).toEqual(['roadmap'])
+    expect(__layerProbe?.asks()).toEqual([])
     return org
   }
 
-  /** Lets the last task window arrive, and loads the Roadmap's code. */
-  async function loadEveryTask() {
+  /** Lets the Roadmap's held answers arrive, and those it asks for later. */
+  async function loadTheAnswer() {
+    holdRoadmaps = false
     await act(async () => {
-      double.live?.holdWindow(null)
+      answerRoadmaps()
+      answerRoadmaps = () => {}
       await new Promise((resolve) => realTimeout(resolve, 0))
     })
-    const { P } = await import('./store/planner')
-    expect(P.stillLoading()).toBeNull()
     await (await import('./lib/workspaceChunks')).loadRoadmap()
   }
 
-  it('plans the task once every task has loaded, while the person waits on the Roadmap', async () => {
+  it("plans the task once the Roadmap's answer holds it, while the person waits on the Roadmap", async () => {
     await planWhileLoading()
-    await loadEveryTask()
+    await loadTheAnswer()
     await waitFor(() => dateWrites().length > 0, "the planning session's starter bar")
+    await waitFor(() => document.querySelector('[data-plan-card]'), 'the planning card')
+    // the session's task went with the Roadmap's read, past its filters
+    const asked = network.onUpdate.mock.calls
+      .filter(([ref]) => getFunctionName(ref) === 'tasks:roadmap')
+      .map(([, args]) => args as { planned_task?: { id: string } })
+    expect(asked.some((args) => args.planned_task?.id === LAUNCH)).toBe(true)
   })
 
   it('starts no planning session at a later visit when the person left the Roadmap while it waited', async () => {
     const org = await planWhileLoading()
     await go(`/app/${org}/board/all`)
     await shownPage('kanban')
-    await loadEveryTask()
-    await go(`/app/${org}/roadmap/all`)
+    await loadTheAnswer()
+    await go(`/app/${org}/roadmap/p/99`)
     const roadmap = await shownPage('roadmap')
     await waitFor(
-      () => roadmap.querySelector('[data-roadmap-panel]'),
-      'the Roadmap once every task has loaded',
+      () => roadmap.querySelector('[data-roadmap-root][data-roadmap-state="ok"]'),
+      'the Roadmap with its answer',
     )
     await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
     expect(document.querySelector('[data-plan-card]')).toBeNull()
@@ -691,12 +724,12 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
     const org = await planWhileLoading()
     await go(`/app/${org}/inbox`)
     await shownPage('inbox')
-    await loadEveryTask()
-    await go(`/app/${org}/roadmap/all`)
+    await loadTheAnswer()
+    await go(`/app/${org}/roadmap/p/99`)
     const roadmap = await shownPage('roadmap')
     await waitFor(
-      () => roadmap.querySelector('[data-roadmap-panel]'),
-      'the Roadmap once every task has loaded',
+      () => roadmap.querySelector('[data-roadmap-root][data-roadmap-state="ok"]'),
+      'the Roadmap with its answer',
     )
     await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
     expect(document.querySelector('[data-plan-card]')).toBeNull()
@@ -707,12 +740,12 @@ describe('Plan on roadmap while every task loads', { timeout: 30_000 }, () => {
     const org = await planWhileLoading(true)
     await go(`/app/${org}/overview/all`)
     await shownPage('overview')
-    await loadEveryTask()
-    await go(`/app/${org}/roadmap/all`)
+    await loadTheAnswer()
+    await go(`/app/${org}/roadmap/p/99`)
     const roadmap = await shownPage('roadmap')
     await waitFor(
-      () => roadmap.querySelector('[data-roadmap-panel]'),
-      'the Roadmap once every task has loaded',
+      () => roadmap.querySelector('[data-roadmap-root][data-roadmap-state="ok"]'),
+      'the Roadmap with its answer',
     )
     await act(async () => new Promise((resolve) => realTimeout(resolve, 50)))
     expect(document.querySelector('[data-roadmap-revealed]')).toBeNull()

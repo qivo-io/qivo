@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from './store/plannerFixture.setup'
+import { answerRoadmap } from './store/roadmapStandIn.setup'
 
 /* The pages of a person who can see no active project, on the real store
    and App: they land on All projects rather than on a page with no view,
@@ -110,6 +111,8 @@ async function app(snap: Snapshot, path = '/app/testbed') {
       publish(snap)
     } else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
     else if (name === 'tasks:board') next(boardStandIn(server, args as BoardArgs))
+    else if (name === 'tasks:roadmap' || name === 'tasks:roadmapDependencies')
+      next(answerRoadmap(server, name, args))
     else if (name.startsWith('overview:')) answerOverview(server, name, args, next, fail)
     else if (isMilestoneRead(name)) answerMilestones(server, name, args, next, fail)
     return () => {}
