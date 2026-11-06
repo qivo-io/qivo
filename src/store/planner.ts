@@ -965,9 +965,9 @@ function joinEmptyRun() {
    run up to it with no gap. When the window no longer meets what was
    loaded, because more comments arrived between two deliveries than it
    holds, the thread starts over from the window, with no gap, and a
-   comment open in an editor among the comments it lets go is held apart
-   (pinEditing). A comment held apart for an editor stays through every one
-   of these. */
+   comment open in an editor among the comments it lets go, the previous
+   window's included, is held apart (pinEditing). A comment held apart for
+   an editor stays through every one of these. */
 function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
@@ -1000,9 +1000,19 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
         commentsGap = before
       } else if (inGap === 0) dropCommentsGap()
       else {
-        // starting over lets go of loaded comments that still exist, so
-        // the one open in an editor is held apart
-        if (kept === -1) pinEditing([...olderComments, ...newerComments])
+        // Starting over lets go of loaded comments that still exist, the
+        // previous live window's included, so the one open in an editor is
+        // held apart, with my accepted edit on it. One the new window holds
+        // goes back to it (syncPinned).
+        if (kept === -1)
+          pinEditing([
+            ...olderComments,
+            ...newerComments,
+            ...prev.flatMap((r) => {
+              const change = acceptedCommentChanges.get(r.id)
+              return change === null ? [] : [change ? { ...r, ...change } : r]
+            }),
+          ])
         dropCommentsGap()
         olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
         if (kept === -1) threadStart = false
