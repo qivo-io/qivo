@@ -1166,12 +1166,17 @@ describe("the pickers inside Convex's limits", () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const atlas = await projectWith(t, f, 'Atlas', 30, 40)
+    const platform = await keyedTeam(t, f, 'Platform')
+    const ops = await keyedTeam(t, f, 'Ops')
     await keyOrg(t, f.org.id)
-    const [pia, rae] = await people(t, f, ['Pia', 'Rae'])
+    // three teams a person and 30 open tasks a sub-project, the everyday
+    // values; no team shares a project here
+    const [pia, rae] = await people(t, f, ['Pia', 'Rae'], [f.team.id, platform, ops])
     for (const p of [pia, rae]) await grant(t, f.sub, p)
     // the lead and Rae reach Atlas through its last archived sub-project
     for (const p of [f.user, rae]) await grant(t, atlas.all[69], p, 'viewer')
-    for (const sub of atlas.subs) await openTasks(t, f, sub, 3)
+    for (const sub of atlas.subs) await openTasks(t, f, sub, 30)
+    await openTasks(t, f, f.sub, 29)
     const parent = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const subtask = await plantIssue(t, {
       org_id: f.org.id,
@@ -1192,12 +1197,16 @@ describe("the pickers inside Convex's limits", () => {
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const atlas = await projectWith(t, f, 'Atlas', 30, 40)
+    const platform = await keyedTeam(t, f, 'Platform')
+    const ops = await keyedTeam(t, f, 'Ops')
     await keyOrg(t, f.org.id)
-    const [kim, lou] = await people(t, f, ['Kim', 'Lou'])
+    // three teams a person and 30 open tasks a sub-project, the everyday
+    // values; no team shares a project here
+    const [kim, lou] = await people(t, f, ['Kim', 'Lou'], [f.team.id, platform, ops])
     await grant(t, atlas.meta, kim)
     // Lou reaches Atlas only through its last archived sub-project
     await grant(t, atlas.all[69], lou)
-    for (const sub of atlas.subs) await openTasks(t, f, sub, 3)
+    for (const sub of atlas.subs) await openTasks(t, f, sub, 30)
     const issue = await plantIssue(t, { org_id: f.org.id, project_id: atlas.meta.id })
     const first = await whole(
       'recipients, a task on a top-level project of 30 and 40 archived sub-projects',
