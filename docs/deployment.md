@@ -1480,7 +1480,7 @@ after another, and sends a deferred item again once its project is back,
 each with the arguments earlier apps sent. The release changes no server
 function, so it has no server change and no release step.
 
-From the release after v0.1.148, the backend's HTTP router no longer loads
+From the release after v0.1.149, the backend's HTTP router no longer loads
 Better Auth when a request starts. It registers the `/api/auth/` routes with
 the same paths, methods, CORS headers and trusted origins, and imports
 `convex/auth.ts` only in the sign-in, OAuth token, registration and
