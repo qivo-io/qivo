@@ -185,6 +185,27 @@ describe('the address of a project page the workspace does not hold', { timeout:
     await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
   })
 
+  it('keeps its uuid address while its Archive or delete window is open, and after it closes', async () => {
+    await boot(`/app/testbed/settings/project/${AWAY}`)
+    await waitFor(() => heading().includes('Away'), 'the page')
+    const remove = await waitFor(
+      () => document.querySelector<HTMLButtonElement>(`[data-remove-project="${AWAY}"]`),
+      'Archive or delete…',
+    )
+    await act(async () => remove.click())
+    await settle()
+    const shell = await waitFor(() => document.querySelector('[data-modal-shell]'), 'the window')
+    expect(location.pathname).toBe(`/app/testbed/settings/project/${AWAY}`)
+    const cancel = [...shell.querySelectorAll<HTMLButtonElement>('button')].find(
+      (b) => b.textContent?.trim() === 'Cancel',
+    )
+    if (!cancel) throw new Error('no Cancel')
+    await act(async () => cancel.click())
+    await settle()
+    expect(document.querySelector('[data-modal-shell]')).toBeNull()
+    expect(location.pathname).toBe(`/app/testbed/settings/project/${AWAY}`)
+  })
+
   it('never opens a uuid under an organization this login cannot resolve', async () => {
     await boot(`/app/elsewhere/settings/project/${AWAY}`)
     await waitFor(() => location.pathname === '/app/~/settings/account' || null, 'the reset')
