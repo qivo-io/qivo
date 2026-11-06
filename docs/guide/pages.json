@@ -10,7 +10,7 @@
       "slug": "qivo-in-one-minute",
       "title": "Qivo in one minute",
       "order": 1,
-      "description": "Your organization contains projects, each with sub-projects where tasks live. Select a project in the sidebar, All projects for everything you can access, or…"
+      "description": "Your organization contains projects, each with sub-projects where tasks live. Select a project in the sidebar, or My view for your own tasks; All projects lists every…"
     },
     {
       "file": "microsoft-sign-in-and-administrator-approval.md",

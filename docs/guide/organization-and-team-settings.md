@@ -97,8 +97,8 @@ changes stamp them again. The move changes no activity, so the task's history
 still shows when it was completed.
 
 The export excludes [Deleted items](./how-work-is-organized.md#deleted-items),
-personal inboxes, subscriptions, preferences, private backgrounds, login
-data, OAuth connections and credentials.
+personal inboxes, subscriptions, preferences, project favorites, private
+backgrounds, login data, OAuth connections and credentials.
 Agent-key metadata contains neither the key nor its hash. Billing plans,
 subscriptions, usage and delivery records are also excluded. Review current
 usage in **Billing** and invoices through **Manage billing**.

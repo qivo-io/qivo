@@ -1,6 +1,6 @@
 Your organization contains projects, each with sub-projects where tasks live.
-Select a project in the sidebar, **All projects** for everything you can
-access, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)). Each scope has three views:
+Select a project in the sidebar, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)); **All projects** lists every project you can
+access, your favorites first ([All projects](./finding-your-way-around.md#all-projects)). Each project and My view has three views:
 
 - **Overview** summarizes progress, risks and milestones.
 - **Board** groups tasks by status.
@@ -108,7 +108,7 @@ to pass on to support. Text you were typing stays in its field. A change
 Qivo had already sent when the notice appeared still saves and stays on
 screen, unless the notice says you were signed out or lost access. An upload
 still under way stops and says why. Marking
-messages read and your own preferences still save. You can still revoke keys
+messages read, your own preferences and your favorite projects still save. You can still revoke keys
 and tokens, and admins can still deactivate or remove people. If you were
 signed out, the notice offers **Reload** to sign in again. Until then nothing
 in the workspace saves, and a change you try says you are signed out instead of
@@ -188,8 +188,9 @@ project. It appears when you belong to an organization.
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in
 the landscape Roadmap. The exceptions are the **Overview**'s health cards,
-which show a search once there are more than 10, and **Archived tasks** and
-**Deleted items** in Settings, which keep their search boxes. Status and
+which show a search once there are more than 10, **Projects**, whose search
+asks the server, and **Archived tasks** and **Deleted items** in Settings,
+which keep their search boxes. Status and
 other filters remain available, as do searches inside people, label and
 relationship pickers. The relationship pickers search every task you could
 choose on the server.
@@ -201,10 +202,13 @@ space; searching the page or printing loads them all first. Use **+** to
 create a task with the project and sub-project pickers. Project pages also
 list tasks; tap one to edit it.
 
-**Projects** lists projects, sub-projects and **People & settings**. In
-project settings, **Manage people** opens user, team and email invitation
-controls. Project actions also include sub-project creation and archived
-tasks. Your permissions determine which actions are available.
+**Projects** opens the same project directory as **All projects** on a
+desktop: your favorites first, 25 projects a page, a star on each project,
+**Sub-projects** under each and a search that also finds sub-projects
+([All projects](./finding-your-way-around.md#all-projects)). Each project
+has **People & settings**; in project settings, **Manage people** opens
+user, team and email invitation controls. Its **…** menu holds **Archived
+tasks** and, where you may add one, **New sub-project…**.
 
 **Overview** shows sortable health cards, 10 at a time with **Load more**,
 and a search once there are more than 10. **Roadmap** starts on milestones;
