@@ -1332,4 +1332,37 @@ describe("the task window's labels", { timeout: 20_000 }, () => {
     expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far A'])
     expect(document.querySelector('[data-labels-retry]')).toBeNull()
   })
+
+  it('offers Try again when a read fails after the labels were named, keeping their names', async () => {
+    const next = labelled()
+    next.issueLabels = next.issueLabels.filter((il) => il.label_id !== 'label-gone')
+    await load(next)
+    await openTask()
+    await answer('labels:byIds', {
+      rows: [far('label-far-a', 'Far A'), far('label-far-b', 'Far B')],
+    })
+    expect(document.querySelector('[data-labels-retry]')).toBeNull()
+    network.mutation.mockImplementation(async (ref, args) => {
+      if (getFunctionName(ref) === 'labels:toggle') {
+        snap.issueLabels = snap.issueLabels.filter((il) => il.label_id !== args.label_id)
+        publish()
+      }
+      return null
+    })
+    // taking Far A off reads Far B again, and that read fails
+    await act(async () => removeOf('Far A')?.click())
+    expect(one('labels:byIds').args.ids).toEqual(['label-far-b'])
+    await fail('labels:byIds')
+    // Far B keeps the name it was given, which may be out of date now
+    expect(chips().map((c) => [c.text, c.failed])).toEqual([
+      ['Hardware', false],
+      ['Far B', false],
+    ])
+    const retry = document.querySelectorAll<HTMLButtonElement>('[data-labels-retry]')
+    expect(retry).toHaveLength(1)
+    await act(async () => retry[0].click())
+    await answer('labels:byIds', { rows: [far('label-far-b', 'Far B renamed')] })
+    expect(chips().map((c) => c.text)).toEqual(['Hardware', 'Far B renamed'])
+    expect(document.querySelector('[data-labels-retry]')).toBeNull()
+  })
 })

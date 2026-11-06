@@ -38,8 +38,9 @@ export type TaskLabel =
   | { id: string; state: 'ok'; name: string; color: string }
   | { id: string; state: 'loading' | 'failed' | 'gone' }
 
-/** A task's labels as useTaskLabels answers them, whether a read of them
-    failed, and its Try again. */
+/** A task's labels as useTaskLabels answers them, whether a current read
+    of them failed, also one whose labels show names kept from before, and
+    its Try again. */
 export type TaskLabels = { labels: TaskLabel[]; failed: boolean; retry: () => void }
 
 /** What labels.byIds answers. */
@@ -56,7 +57,9 @@ type ByIds = { rows: LabelChoice[] }
  * `gone`, as byIds looked it up. Rows an earlier answer or the picker
  * named stay `ok` while the current read has no answer, so a hidden tab
  * or a new set of ids turns no named label back to loading. Otherwise a
- * label is `loading`, or `failed` after a failed read, with `retry`.
+ * label is `loading`, or `failed` after a failed read. `failed` says that
+ * a current read failed, whether or not its labels show kept names, so a
+ * name that may be out of date comes with `retry`.
  */
 export function useTaskLabels(it: { org: string; labels?: readonly string[] } | null): TaskLabels {
   const org = it?.org ?? ''
@@ -102,7 +105,7 @@ export function useTaskLabels(it: { org: string; labels?: readonly string[] } | 
   })
   return {
     labels,
-    failed: labels.some((label) => label.state === 'failed'),
+    failed: failedIds.size > 0,
     retry: () => {
       for (const read of reads) if ('error' in read) read.retry()
     },
