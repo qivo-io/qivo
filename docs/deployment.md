@@ -1134,8 +1134,10 @@ backend to a commit before it; roll forward instead. Returning the app alone
 to an earlier release is safe, because that app lists the workspace's
 milestones and asks at most 25. The release has no schema change, no
 backfill and no release step. Northstar's dataset becomes version 9 with
-nine past milestones, which a deployment gets only at its next seed or reset
-and the public demo in its new copies.
+nine past milestones. A deployment whose Northstar is already seeded gets
+them only at its next reset, and a seed refuses there until then. A seed of
+an absent or empty demo writes version 9, and the public demo's new copies
+have them.
 
 ## Node.js version
 
