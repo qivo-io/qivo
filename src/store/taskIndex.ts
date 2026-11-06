@@ -254,7 +254,7 @@ export function createTaskIndex(loadMoved: (owner: string) => void = () => {}) {
 
   /** Every task's label ids: those the workspace holds by label name, then
       id, and after them, by id, those it does not, which the task window
-      names from labels.byIds (panels/LabelPicker.tsx useTaskLabels). A
+      names from labels.byIds (panels/taskLabels.ts useTaskLabels). A
       task's labels are whole, so a label not loaded is never taken for
       one taken off, and the cap counts what the server counts. */
   function labelIndex(): Map<string, string[]> {
