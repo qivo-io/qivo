@@ -1677,8 +1677,10 @@ partial. The item keeps the field until it is restored or deleted for good,
 and a rollback is refused while one does.
 Returning the app alone, Vercel Instant Rollback included, is safe, because
 no app calls the new functions. A job writes this release's step fields
-when it ends a section after the deploy, so a rollback is refused from then
-on; a job returned to the earlier backend before that finishes as format 3.
+when it ends a section after the deploy, or earlier when a read of a live
+section finds a Deleted item that is not ready, so a rollback is refused
+from then on; a job returned to the earlier backend before that finishes as
+format 3.
 A job collecting at the deploy goes on into the Deleted items section and
 finishes as format 4. The release adds the index `org_exports.by_streaming`,
 which Convex builds at deploy with no backfill, adds no table and needs no
@@ -2375,7 +2377,8 @@ so roll forward instead. It is refused too once a Deleted item holds
 `received_at`, which a restore writes when it hands a subtask or a link to
 another item, until that item is restored or deleted for good. A job
 writes this release's step fields when it ends a section after the deploy,
-so a rollback is refused from then on; a job returned to the earlier
+or earlier when a read of a live section finds a Deleted item that is not
+ready, so a rollback is refused from then on; a job returned to the earlier
 backend before that finishes as format 3.
 Returning the app alone changes nothing, because no app calls the link or
 the route.
