@@ -10,15 +10,25 @@
  * removal's rows left out (projectLevelsForProfiles `without`), which must
  * equal projectLevelsForPeople's with the same rows left out, the reads the
  * removal's own findLost makes, and checks its room before each read
- * (`guard`). */
+ * (`guard`).
+ *
+ * The task owner pickers and Team sync's mention recipients
+ * (model/pickers.ts) ask canBeAssignedFor and canSeeProjectFor, the same
+ * levels as many-profile answers of profileCanBeAssigned and canSeeProject,
+ * the second with the navigation a top-level project gives whoever reaches
+ * one of its sub-projects, live or archived. */
 import { describe, expect, it } from 'vitest'
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import {
   canAccessProject,
+  canBeAssignedFor,
+  canSeeProject,
+  canSeeProjectFor,
   orgProjects,
   profileCanBeAssigned,
+  projectLevelReads,
   projectLevelsForPeople,
   projectLevelsForProfiles,
   type RemovedAccess,
@@ -322,5 +332,188 @@ describe('projectLevelsForProfiles with a removal left out', () => {
       })
       expect(stopped, `refused at run ${k}`).toBeLessThanOrEqual(k - 1)
     }
+  })
+})
+
+describe('canSeeProjectFor and canBeAssignedFor', () => {
+  // which answers the shapes reached, over every shape: seen with a level,
+  // seen only through a sub-project (navigation), unseen, and assignable
+  const reached = new Set<string>()
+
+  it.each(SHAPES)(
+    'equal canSeeProject and profileCanBeAssigned for every profile, role, kind and state: %s',
+    async (name, plant) => {
+      const t = newT()
+      const f = await withOrg(t)
+      const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+      await t.run((ctx) => plant(ctx, f, subject))
+      await t.run(async (ctx) => {
+        // as the shape left them, leads and archive marks included
+        const projects = await Promise.all(
+          [f.meta, f.sub, f.sub2, f.hidden].map(
+            async (p) => (await ctx.db.get(p._id)) as Doc<'projects'>,
+          ),
+        )
+        for (const org_role of ORG_ROLES) {
+          for (const kind of PROFILE_KINDS) {
+            for (const active of [true, false]) {
+              await ctx.db.patch(subject._id, { org_role, kind, active })
+              const people = [
+                ...(await ctx.db
+                  .query('profiles')
+                  .withIndex('by_org', (q) => q.eq('org_id', f.org.id))
+                  .collect()),
+                f.otherAdmin,
+              ]
+              for (const project of projects) {
+                const sees = await canSeeProjectFor(ctx, project)
+                const takes = await canBeAssignedFor(ctx, project)
+                const levelOf = await projectLevelsForProfiles(ctx, project)
+                for (const p of people) {
+                  const why = `${name}: ${active ? 'active' : 'inactive'} ${org_role} ${kind} ${p.name} on ${project.key}`
+                  const seen = await canSeeProject(ctx, p, project)
+                  expect(sees(p), why).toBe(seen)
+                  expect(takes(p), why).toBe(await profileCanBeAssigned(ctx, p, project))
+                  if (p.id !== subject.id) continue
+                  reached.add(!seen ? 'unseen' : levelOf(p) === null ? 'navigation' : 'level')
+                  if (takes(p)) reached.add('assignable')
+                }
+              }
+            }
+          }
+        }
+      })
+    },
+  )
+
+  it('reach every answer over the shapes, navigation through a live and an archived sub-project included', () => {
+    expect([...reached].sort()).toEqual(['assignable', 'level', 'navigation', 'unseen'])
+  })
+
+  it('show a top-level project through an archived sub-project alone, and not through a sub-project of another organization', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    const archived = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+      archived_at: NOW,
+    })
+    const foreign = await plantProject(t, {
+      org_id: f.otherOrg.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    const grant = (project: Doc<'projects'>) =>
+      t.run((ctx) =>
+        ctx.db.insert('project_access', {
+          project_id: project.id,
+          profile_id: subject.id,
+          level: 'viewer',
+        }),
+      )
+    const answer = () =>
+      t.run(async (ctx) => {
+        const me = (await ctx.db.get(subject._id)) as Doc<'profiles'>
+        return {
+          many: (await canSeeProjectFor(ctx, f.meta))(me),
+          one: await canSeeProject(ctx, me, f.meta),
+        }
+      })
+    await grant(foreign)
+    expect(await answer()).toEqual({ many: false, one: false })
+    await grant(archived)
+    expect(await answer()).toEqual({ many: true, one: true })
+  })
+
+  it('run their guard before each read, so a guard that refuses stops them before they read more', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const subject = await plantSeat(t, { org_id: f.org.id, name: 'Subject' })
+    await t.run(async (ctx) => {
+      await ctx.db.insert('project_team_access', {
+        project_id: f.sub2.id,
+        team_id: f.team.id,
+        level: 'user',
+      })
+      await ctx.db.insert('project_access', {
+        project_id: f.sub.id,
+        profile_id: subject.id,
+        level: 'viewer',
+      })
+    })
+    const ranges = (ctx: QueryCtx) =>
+      ctx.meta.getTransactionMetrics().then((m) => m.databaseQueries.used)
+    // TBED with its two sub-projects, and FW alone
+    const asks = [
+      (ctx: QueryCtx, guard: () => Promise<void>) => canSeeProjectFor(ctx, f.meta, { guard }),
+      (ctx: QueryCtx, guard: () => Promise<void>) => canBeAssignedFor(ctx, f.sub, { guard }),
+    ]
+    for (const ask of asks) {
+      const { calls, read } = await t.run(async (ctx) => {
+        const before = await ranges(ctx)
+        let calls = 0
+        await ask(ctx, async () => {
+          calls++
+        })
+        return { calls, read: (await ranges(ctx)) - before }
+      })
+      expect(read).toBeGreaterThan(3)
+      expect(calls).toBeGreaterThanOrEqual(read)
+      for (let k = 1; k <= calls; k++) {
+        const stopped = await t.run(async (ctx) => {
+          const before = await ranges(ctx)
+          let run = 0
+          try {
+            await ask(ctx, async () => {
+              if (++run === k) throw new Error('full')
+            })
+          } catch (e) {
+            if (!(e instanceof Error) || e.message !== 'full') throw e
+            return (await ranges(ctx)) - before
+          }
+          throw new Error(`the guard's run ${k} did not stop it`)
+        })
+        expect(stopped, `refused at run ${k}`).toBeLessThanOrEqual(k - 1)
+      }
+    }
+  })
+
+  it("read a top-level project's grants and shares once when their calls share reads", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    await t.run((ctx) =>
+      ctx.db.insert('project_team_access', {
+        project_id: f.meta.id,
+        team_id: f.team.id,
+        level: 'user',
+      }),
+    )
+    const counted = (step: (ctx: QueryCtx) => Promise<unknown>) =>
+      t.run(async (ctx) => {
+        const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+        await step(ctx)
+        return (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
+      })
+    // alone, PCB reads its root, the grants and shares on PCB and TBED,
+    // and Hardware, which shares TBED, with its members
+    const alone = await counted((ctx) => canSeeProjectFor(ctx, f.sub2))
+    expect(alone).toBe(7)
+    const shared = await counted(async (ctx) => {
+      const reads = projectLevelReads()
+      await canBeAssignedFor(ctx, f.sub, { reads })
+      const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      await canSeeProjectFor(ctx, f.sub2, { reads })
+      const second = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
+      // after FW, PCB reads its root and its own grants and shares only
+      expect(second).toBe(3)
+      // and TBED with its navigation reads its sub-projects, one range,
+      // and each one's root again, nothing more
+      const again = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
+      await canSeeProjectFor(ctx, f.meta, { reads })
+      expect((await ctx.meta.getTransactionMetrics()).databaseQueries.used - again).toBe(3)
+    })
+    expect(shared).toBeLessThan(3 * alone)
   })
 })
