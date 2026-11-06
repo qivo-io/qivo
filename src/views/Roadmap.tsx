@@ -908,17 +908,26 @@ function Roadmap({
       end: fitEndWeekAgainst(load, uuid, from, remaining, capacity),
     })
   }
-  // Initial placement waits for valid workload. Later answers leave the
-  // user's chosen dates alone.
+  /** Session `s`'s task as the Roadmap's answer names it, while no note
+      takes the Roadmap's place, else undefined. Auto-fit places only this
+      task. One the answer no longer names, as after another person moved
+      it out of the selection, keeps the dates it has, and the session ends
+      below with a word (the session-gone effect), though the workspace or
+      another view may still hold the task (taskOf). */
+  const sessionTask = (s: PlanSession): IssueVM | undefined =>
+    cannotPlanReason(view) === null ? view.family.byId[s.issueId] : undefined
+  // Initial placement waits for valid workload and for an answer that
+  // names the task. Later answers leave the user's chosen dates alone.
   useEffectR(() => {
     const s = sessionRef.current
     const load = planLoad?.items
     if (!s?.fitOnLoad || !load) return
+    const it = sessionTask(s)
+    if (!it) return
     const placed = { ...s, fitOnLoad: false }
     sessionRef.current = placed
     setSession(placed)
-    const it = taskOf(s.issueId)
-    if (s.autoFit && it?.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null)
+    if (s.autoFit && it.owner && !P.isGroup(it) && it.remaining > 0 && it.start != null)
       autoFitEnd(it.id, it.start, load, capacityFor(it), it.uuid, it.remaining)
   })
   const toggleAutoFit = () => {
@@ -926,7 +935,7 @@ function Roadmap({
     if (!s) return
     const autoFit = !s.autoFit
     setSession({ ...s, autoFit })
-    const it = taskOf(s.issueId)
+    const it = sessionTask(s)
     const load = planLoadRef.current
     // side effect OUTSIDE the state updater — a store write there would setState
     // on App (its store subscription) mid-render

@@ -866,6 +866,50 @@ describe('Plan on roadmap from the answer', { timeout: BOARD_TEST_TIMEOUT }, () 
     expect(datesSent('one-1')).toHaveLength(2)
   })
 
+  it('places no task that left the roadmap as its first load arrives, and ends the session', async () => {
+    // One's Roadmap, and the workspace holds every task, as after Team
+    // sync loaded them, so one-1 is still found once its answer drops it
+    const board = await loadBoard(network, (snap) => {
+      plan(snap)
+      const one = snap.issues[0]
+      Reflect.deleteProperty(one, 'start_week')
+      Reflect.deleteProperty(one, 'end_week')
+      one.remaining_hours = 100
+    })
+    await board.ask()
+    board.P.roadmapContext(true, false)
+    board.server.holdLoads = true
+    network.mutation.mockClear()
+    const { start: _start, end: _end, ...unscheduled } = planOne(board)
+    await renderRoadmap(board, { focusPlan: unscheduled })
+    await flush()
+    expect(planCard()?.textContent).toContain('Loading…')
+    const starter = { start_week: week(0), end_week: week(1) }
+    expect(datesSent('one-1')).toEqual([starter])
+    // another person moves one-1 to Two, out of One's Roadmap, and the
+    // answer that drops it arrives with the first load
+    const one = board.snapshot.issues.find((t) => t.id === 'one-1')
+    if (!one) throw new Error('no one-1')
+    one.project_id = 'two'
+    board.server.holdLoads = false
+    await board.deliver()
+    // the session's read then names one-1 in Two, whose answer leaves it out
+    // as well, so a few of the store's tasks run
+    for (let turn = 0; turn < 3; turn++) await settle()
+    await flush()
+    expect(board.P.anyTask('QN-1')?.project).toBe('two')
+    // no fitted end went to the task that left
+    expect(datesSent('one-1')).toEqual([starter])
+    expect(
+      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'issues:update'),
+    ).toEqual([])
+    expect(planCard()).toBeNull()
+    expect(window.showToast).toHaveBeenCalledWith(
+      'QN-1 left this roadmap. Its dates stay as they were saved.',
+      'info',
+    )
+  })
+
   it("follows the owner's work elsewhere while the session stays", async () => {
     // One's Roadmap, which does not show two-1 in Two
     const board = await loadBoard(network, plan)
