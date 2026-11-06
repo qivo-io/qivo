@@ -27,8 +27,9 @@
  * - setDelivery: writes the mode, counting one demo write. A change sets
  *   changed_at, before which no live alert is granted; a switch to 'all'
  *   keeps the account's checkpoint as every session's floor (all_from), and
- *   a switch to 'recent' takes the checkpoint and a baseline now, so a mode
- *   change replays nothing.
+ *   a switch to 'recent' takes the checkpoint and a baseline now and names
+ *   no session as the one that moved it (covered_by), so a mode change
+ *   replays nothing and the first claim after it is not sent to summarize.
  * - beat: registers the caller's session and keeps it live, with whether
  *   it can notify (`can_notify`) and whether the person used it since the
  *   last report (`active`, written at most every NOTIFY.active_ms; a first
@@ -42,12 +43,17 @@
  *   and its checkpoint, and a later beat makes the session live again.
  * - claimAlerts: which of the events the caller offers it may show. It
  *   answers `not_registered` without a row that can notify, and in 'recent'
- *   `not_target` unless the caller is the target. It grants an event once
- *   in its scope, never one at or before the latest of the live window
+ *   `not_target` unless the caller is the target, and `summarize_first`,
+ *   writing nothing, when another session's claim or summary moved the
+ *   checkpoint last (covered_by), so a session that became the target
+ *   summarizes before its claim can move the checkpoint past what arrived
+ *   while it was not the target. It grants an event once in its scope,
+ *   never one at or before the latest of the live window
  *   (NOTIFY.live_window_ms), the last mode change and the scope's last
  *   summary, and records each grant for NOTIFY.keep_ms. Past the scope's
  *   rate window it grants no more and answers `limited`. `through` moves
- *   the scope's checkpoint. It reads the account row, in 'recent' the
+ *   the scope's checkpoint, and in 'recent' names the caller's session as
+ *   the one that moved it. It reads the account row, in 'recent' the
  *   session rows up to the target, and one or two record ranges an event,
  *   and writes a record a grant and the account row ('recent') or the
  *   caller's row ('all'). It reads no message or item. The keys and times
@@ -60,8 +66,9 @@
  *   (in 'all', where the caller's session has none of its own), `summary`
  *   when it found eligible activity, `none` when it read everything and
  *   found none, and `unchecked` when a budget or a seat not ready stopped
- *   it first, then moves the checkpoint and the summary floor to now, so
- *   the same gap answers `none` from any session and any retry. It holds no
+ *   it first, then moves the checkpoint and the summary floor to now, in
+ *   'recent' naming the caller's session as the one that moved it, so the
+ *   same gap answers `none` from any session and any retry. It holds no
  *   count.
  *
  * What a client does with the answers:
@@ -88,6 +95,12 @@
  *   claimSummary after a `limited` claim too, which held the checkpoint
  *   before the first event it refused. It shows the generic summary only on
  *   `summary`, and never alerts an event at or before its own summary.
+ * - When a claim answers `summarize_first`, it calls claimSummary, then
+ *   offers the same events again. The session became the target after
+ *   another session moved the checkpoint, and the summary covers what
+ *   arrived in between; its records refuse what it announced. A login
+ *   without a checkpoint and a switch to 'recent' name no session, so no
+ *   claim answers it until a claim or a summary has moved the checkpoint.
  * - It sends end when the last tab of its browser profile closes. */
 
 import { makeFunctionReference } from 'convex/server'
@@ -132,21 +145,27 @@ type Checkpoint = Partial<
 >
 
 /* Writes `patch` to the scope's row: the caller's session row in 'all', the
- * account row in 'recent', which it adds when the login has none. */
+ * account row in 'recent', which it adds when the login has none. On the
+ * account row a move of covered_at also names the caller's session in
+ * covered_by, which claimAlerts compares with the next target's. */
 async function saveHolder(
-  ctx: MutationCtx & { authUserId: string },
+  ctx: MutationCtx & { authUserId: string; sessionId: string },
   holder: Holder | null,
   patch: Checkpoint,
 ): Promise<void> {
   if (Object.keys(patch).length === 0) return
+  if (holder !== null && 'session_id' in holder) {
+    await ctx.db.patch(holder._id, patch)
+    return
+  }
+  const account = patch.covered_at === undefined ? patch : { ...patch, covered_by: ctx.sessionId }
   if (holder === null)
     await ctx.db.insert('account_notifications', {
       auth_user_id: ctx.authUserId,
       delivery: 'recent',
-      ...patch,
+      ...account,
     })
-  else if ('session_id' in holder) await ctx.db.patch(holder._id, patch)
-  else await ctx.db.patch(holder._id, patch)
+  else await ctx.db.patch(holder._id, account)
 }
 
 /* The scope of a call by the caller's session in `delivery`, and the row
@@ -180,7 +199,7 @@ export const setDelivery = sessionMutation({
     const change =
       delivery === 'all'
         ? { delivery, changed_at: now, all_from: account?.covered_at ?? now }
-        : { delivery, changed_at: now, covered_at: now, baseline_at: now }
+        : { delivery, changed_at: now, covered_at: now, baseline_at: now, covered_by: undefined }
     if (account === null)
       await ctx.db.insert('account_notifications', { auth_user_id: ctx.authUserId, ...change })
     else await ctx.db.patch(account._id, change)
@@ -264,6 +283,15 @@ export const claimAlerts = sessionMutation({
     const now = Date.now()
     if (delivery === 'recent' && (await targetOf(ctx, ctx.authUserId, now))?._id !== row._id)
       return { state: 'not_target' as const }
+    // a target that another session's claim or summary preceded summarizes
+    // first, so this claim cannot move the checkpoint past what arrived
+    // while it was not the target, which nobody alerted
+    if (
+      delivery === 'recent' &&
+      account?.covered_by !== undefined &&
+      account.covered_by !== ctx.sessionId
+    )
+      return { state: 'summarize_first' as const }
     const { scope, holder } = scopeOf(ctx, delivery, account, row)
     const floor = Math.max(
       now - NOTIFY.live_window_ms,

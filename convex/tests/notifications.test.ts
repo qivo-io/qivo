@@ -136,11 +136,12 @@ const accountOf = async (t: T, authUserId: string) =>
   (await accountRows(t)).find((row) => row.auth_user_id === authUserId) ?? null
 
 /** Which of `sessions` the default mode grants to now, by a claim of no
- * events and no `through`, which writes nothing; -1 for none. */
+ * events and no `through`, which writes nothing; -1 for none. A target
+ * that must summarize first counts as the target. */
 async function targetIndex(sessions: readonly Session[]): Promise<number> {
   const granted: number[] = []
   for (const [i, s] of sessions.entries())
-    if ((await claim(s, [])).state === 'granted') granted.push(i)
+    if (['granted', 'summarize_first'].includes((await claim(s, [])).state)) granted.push(i)
   expect(granted.length).toBeLessThanOrEqual(1)
   return granted[0] ?? -1
 }
@@ -518,16 +519,73 @@ describe('claimAlerts in the default mode', () => {
       ['k2', undefined, START + 0.5 * MINUTE + NOTIFY.keep_ms],
       ['k3', undefined, START + 0.5 * MINUTE + NOTIFY.keep_ms],
     ])
-    // recency moves to b, so the next keys go to b, and what a recorded is
-    // refused to it
+    // recency moves to b, which summarizes first, as a new target does, so
+    // the next keys go to b, and what a recorded is refused to it
     clock(1)
     await beat(b, { active: true })
-    expect(await claim(a, [ev('k4', 1)])).toEqual({ state: 'not_target' })
-    expect(await claim(b, [ev('k3', 0.4), ev('k4', 1)])).toEqual({
+    expect(await claim(a, [ev('k4', 1.25)])).toEqual({ state: 'not_target' })
+    expect(await claim(b, [ev('k3', 0.4), ev('k4', 1.25)])).toEqual({ state: 'summarize_first' })
+    expect(await summary(b)).toEqual({ state: 'none' })
+    clock(1.5)
+    expect(await claim(b, [ev('k3', 0.4), ev('k4', 1.25)])).toEqual({
       state: 'granted',
       keys: ['k4'],
       limited: false,
     })
+  })
+
+  it('sends a session that became the target after another moved the checkpoint to summarize first', async () => {
+    const t = newT()
+    const { f, s: a } = await guestFixture(t)
+    const b = await signIn(t, a.authUserId)
+    await beat(b)
+    await beat(a)
+    clock(0.5)
+    await beat(a, { active: true })
+    expect(await summary(a)).toEqual({ state: 'baseline' })
+    // a, the target, sleeps but stays live; b, live and idle, sees E first
+    clock(1)
+    await beat(b)
+    const e = eventOf((await newsAt(t, f, 1)).message)
+    expect(await claim(b, [e], e.at)).toEqual({ state: 'not_target' })
+    // a lapses, so b is the target, and F arrives past E's live window
+    for (const minute of [2, 3, 4]) {
+      clock(minute)
+      await beat(b)
+    }
+    const account = await accountOf(t, a.authUserId)
+    clock(20)
+    await beat(b)
+    const later = eventOf((await newsAt(t, f, 19.5)).message)
+    expect(await claim(b, [later], later.at)).toEqual({ state: 'summarize_first' })
+    expect(await accountOf(t, a.authUserId)).toEqual(account)
+    expect(await records(t)).toEqual([])
+    // the summary covers E, and records F, which it found in its last minute
+    expect(await summary(b)).toEqual({ state: 'summary' })
+    expect((await records(t)).map((r) => r.key)).toEqual([later.key])
+    expect(await accountOf(t, a.authUserId)).toMatchObject({
+      covered_at: START + 20 * MINUTE,
+      covered_by: b.sessionId,
+    })
+    const next = eventOf((await newsAt(t, f, 20.25)).message)
+    clock(20.5)
+    expect(await claim(b, [later, next], next.at)).toEqual({
+      state: 'granted',
+      keys: [next.key],
+      limited: false,
+    })
+    clock(21)
+    expect(await summary(b)).toEqual({ state: 'none' })
+    // a switch to 'recent' names no session, so the first claim after it is
+    // not sent to summarize, whichever session is the target
+    clock(22)
+    await setDelivery(b, 'all')
+    await setDelivery(b, 'recent')
+    expect((await accountOf(t, a.authUserId))?.covered_by).toBeUndefined()
+    clock(23)
+    await beat(a, { active: true })
+    expect(await claim(a, [], START + 22.5 * MINUTE)).toMatchObject({ state: 'granted' })
+    expect((await accountOf(t, a.authUserId))?.covered_by).toBe(a.sessionId)
   })
 
   it('answers not_registered for a session without a row or that cannot notify', async () => {
@@ -847,9 +905,12 @@ describe('claimSummary', () => {
     await beat(b)
     expect(await resume(a)).toEqual({ state: 'baseline' })
     expect(await summary(b)).toEqual({ state: 'not_target' })
-    // a sleeps; b takes over and alerts the new message live
+    // a sleeps; b takes over, summarizes first, and alerts the new message
+    // live
     clock(2)
     await beat(b, { active: true })
+    expect(await claim(b, [], START + 2 * MINUTE)).toEqual({ state: 'summarize_first' })
+    expect(await summary(b)).toEqual({ state: 'none' })
     const live = eventOf((await newsAt(t, f, 2.5)).message)
     clock(3)
     await beat(b)
