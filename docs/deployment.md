@@ -259,10 +259,10 @@ with the fingerprint of its named key from a one-shot key read
 (`tokens.agentKeys`), opens its keys, and checks that **Organization →
 General**'s creators line (`orgs.projectCreators`) names and counts what
 `GET /v1/users` implies for the fixture's setting; under **Selected users**
-REST cannot tell who was chosen, so it checks the line's first name only
+REST cannot tell who was chosen, so it checks the admins the line names
 (`ui/settings-users`). Against a backend from before the release whose app
-reads Users from the server that step fails, as the page cannot load. It then makes a sub-project of its own under its
-second project, with
+reads Users from the server that step fails, as the page cannot load. It
+then makes a sub-project of its own under its second project, with
 a User grant and a To Do task for the Standard agent, removes the agent's
 grant in that sub-project's settings, waits for the removal window to list
 the task from the deployment's preview (`accessRemovals.preview`), chooses
