@@ -559,7 +559,7 @@ describe("New project's Project access", () => {
     expect(
       find('[data-project-access-selected-option="user:nora"]').getAttribute('data-state'),
     ).toBe('checked')
-    expect(find<HTMLSelectElement>('[data-project-access-selected-role="nora"]').value).toBe(
+    expect(find<HTMLSelectElement>('[data-project-access-selected-role="user:nora"]').value).toBe(
       'viewer',
     )
     // Load more goes on past the first batch
@@ -593,6 +593,13 @@ describe("New project's Project access", () => {
     expect(
       all('[data-project-access-selected-option]').map((b) =>
         b.getAttribute('data-project-access-selected-option'),
+      ),
+    ).toEqual(['team:crew', 'user:leo'])
+    // each role select is marked as its checkbox is, as a team's id can
+    // equal a person's
+    expect(
+      all('[data-project-access-selected-role]').map((select) =>
+        select.getAttribute('data-project-access-selected-role'),
       ),
     ).toEqual(['team:crew', 'user:leo'])
     // unchecking in Selected keeps the row until Selected is taken again

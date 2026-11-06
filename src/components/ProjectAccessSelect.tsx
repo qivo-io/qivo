@@ -273,6 +273,10 @@ function AccessChoiceList({
     list.more()
   }
   const selected = typed === '' && members.teams.length + members.people.length > 0
+  // a row's checkbox carries `hook` and its role select `roleHook`, valued
+  // team:<id> or user:<id> in Selected, as a team's id can equal a
+  // person's, and the id alone in the server's rows, whose attributes
+  // already tell teams from people
   const teamRow = (id: string, name: string, hook: Record<string, string>, roleHook: string) => {
     const level = teamAccess[id]
     const box = `${inputId}-${hook['data-project-access-selected-option'] ? 'selected-' : ''}team-${id}`
@@ -290,7 +294,7 @@ function AccessChoiceList({
         </label>
         {level && (
           <NativeSelect
-            {...{ [roleHook]: id }}
+            {...{ [roleHook]: hook['data-project-access-selected-option'] ?? id }}
             aria-label={`Project role for ${name}`}
             value={level}
             onChange={(event) => onTeamLevel(id, event.target.value as TeamAccessLevel)}
@@ -331,7 +335,7 @@ function AccessChoiceList({
         </label>
         {level && (
           <NativeSelect
-            {...{ [roleHook]: id }}
+            {...{ [roleHook]: hook['data-project-access-selected-option'] ?? id }}
             aria-label={`Project role for ${name}`}
             value={level}
             disabled={viewerOnly}
