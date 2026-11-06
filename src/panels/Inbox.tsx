@@ -404,8 +404,9 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
   const bulkRuns = bulkBusy(bulk)
   // where the bulk action was pressed: a toolbar button, or the row menu
   const bulkFrom = useRef<BulkAction | 'menu' | null>(null)
-  // also true while the server's bounded read left rows unexamined, which
-  // these actions still reach (P.canMarkAllRead, P.canRemoveRead)
+  // true while the unread summary has no answer, else from its seat flags,
+  // which also count messages the list does not show (P.canMarkAllRead,
+  // P.canRemoveRead, store/planner.ts deriveInboxFlags)
   const hasReadMessages = P.canRemoveRead
   const hasUnreadMessages = P.canMarkAllRead
   const runBulkAction = (action: BulkAction) => {
