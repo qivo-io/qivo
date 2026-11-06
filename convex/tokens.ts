@@ -154,13 +154,14 @@ export type AgentKeysRow = { agent_id: string; keys: ReturnType<typeof pubKey>[]
  * for anyone but an organization admin before any read; then an empty list
  * and more than LIST_BATCH (25) ids, counted raw, are refused as bad
  * requests. Each distinct id that names an agent of the organization gets
- * its keys, newest first by created_at among the AGENT_KEYS.most + 1 last
- * stored, each without its hash, and `more` when that range held more than
- * AGENT_KEYS.most. An id that names no agent of the organization (unknown,
- * a person, or another organization's agent) is left out, a definite
- * answer, as myAgentKey treats such a target alike. It reads one
- * organization, where listAgentKeys read every organization the caller
- * administers, at most 25 lookups and 25 ranges of 51 keys.
+ * its AGENT_KEYS.most newest keys by created_at, read in that order
+ * (agent_keys by_profile_created, the id breaking ties), each without its
+ * hash, and `more` when the agent holds another. An id that names no agent
+ * of the organization (unknown, a person, or another organization's agent)
+ * is left out, a definite answer, as myAgentKey treats such a target
+ * alike. It reads one organization, where listAgentKeys read every
+ * organization the caller administers, at most 25 lookups and 25 ranges
+ * of 51 keys.
  */
 export const agentKeys = orgQuery({
   args: { agent_ids: v.array(v.string()) },
@@ -183,14 +184,14 @@ export async function agentKeysOf(
   for (const id of new Set(agentIds)) {
     const agent = await byId(ctx, 'profiles', id)
     if (agent === null || agent.org_id !== me.org_id || agent.kind !== 'agent') continue
+    // in created_at order before the bound, since rows ported from 0100
+    // may carry a created_at that differs from the order they were stored in
     const rows = await ctx.db
       .query('agent_keys')
-      .withIndex('by_profile', (q) => q.eq('profile_id', agent.id))
+      .withIndex('by_profile_created', (q) => q.eq('profile_id', agent.id))
       .order('desc')
       .take(AGENT_KEYS.most + 1)
-    // rows ported from 0100 may carry a created_at that differs from the
-    // order they were stored in
-    const keys = byCreatedDesc(rows.map(pubKey))
+    const keys = rows.map(pubKey)
     agents.push({
       agent_id: agent.id,
       keys: keys.slice(0, AGENT_KEYS.most),

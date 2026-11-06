@@ -693,6 +693,21 @@ describe('agentKeys', () => {
     expect((await read.keys(fx.t, fx.admin, [fx.agent.id])).agents[0].more).toBe(false)
   })
 
+  it('answers the newest keys by created_at past the bound, also when the newest was stored first', async () => {
+    const fx = await setup()
+    // stored first, but the newest, as a row ported from 0100 can be
+    await plantKeys(fx.t, fx.agent, [
+      { name: 'newest', created_at: '2026-04-01T00:00:00.000Z' },
+      { name: 'oldest', created_at: '2026-01-01T00:00:00.000Z' },
+      { name: 'second', created_at: '2026-03-01T00:00:00.000Z' },
+      { name: 'third', created_at: '2026-02-01T00:00:00.000Z' },
+    ])
+    AGENT_KEYS.most = 2
+    const capped = (await read.keys(fx.t, fx.admin, [fx.agent.id])).agents[0]
+    expect(capped.keys.map((k) => k.name)).toEqual(['newest', 'second'])
+    expect(capped.more).toBe(true)
+  })
+
   it('refuses a non-admin, an empty list, 26 ids and the demo', async () => {
     const fx = await setup()
     for (const who of [fx.user, fx.viewer, fx.guest])

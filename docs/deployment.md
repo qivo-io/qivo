@@ -1292,7 +1292,10 @@ because that app reads the workspace's roster and `tokens.listAgentKeys`,
 which this release keeps, deprecated, for it, and `invites.deliveries`
 without `profile_ids` answers as before. A later release removes
 `tokens.listAgentKeys` and adds it to the Instant Rollback list above.
-There is no schema change, no backfill and no release step.
+The release adds the index `agent_keys.by_profile_created`, through which
+`tokens.agentKeys` reads an agent's newest keys by `created_at`, and which
+Convex builds at deploy with no backfill. There is no other schema change
+and no release step.
 
 ## Node.js version
 
