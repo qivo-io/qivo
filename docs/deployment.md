@@ -1162,6 +1162,28 @@ its own paragraph here says so. The lists answer `not_ready` for an
 organization whose names are not ready. The release changes no table, field
 or index, and there is no backfill.
 
+From the release after v0.1.141, **Settings → Organization → Teams** lists
+teams from `teams.settingsPage`, 25 at a time with a search, each with its
+member count from `team_counts`, a team's page reads the team and the
+caller's rights from `teams.get` and its members from `teams.members`, 25 at
+a time with a search, and its **Add member** list reads `teams.addable` only
+while it is open. That release first ships these four queries, so it is the
+backend's floor for its app, a floor the ones above do not hold. An app from
+it, against a backend before it, says on Settings › Teams and on every team's
+page that it could not load them, also in a tab that was open when the
+backend went back, until the backend rolls forward. From that release on,
+never return the backend to a commit before it; roll forward instead.
+Returning the app alone to an earlier release is safe, because that app
+reads the workspace's teams and memberships, which the backend still sends.
+The same release checks a team leader's right to set plannable hours against
+at most 256 of the person's team memberships, in the app, REST `PATCH
+/v1/users/{id}` and MCP `update_user`, and refuses a person in more teams
+with its own sentence, which an older app shows as any refusal. The counts
+read `team_counts`, which every deployment holds since
+`internal/teamCountsBackfill` ran on 2026-10-28, and the lists read the name
+keys every deployment holds, so there is no schema change, no backfill and
+no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
