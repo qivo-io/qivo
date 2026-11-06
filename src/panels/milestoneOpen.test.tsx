@@ -534,7 +534,11 @@ describe('a milestone that goes away', () => {
     expect(q('[data-milestone-editor="beta"]')).not.toBeNull()
     expect(nameBox()?.value).toBe('Beta 2')
     expect(nameBox()?.readOnly).toBe(true)
-    expect(q('[data-milestone-locked-note]')).not.toBeNull()
+    // the window cannot tell a deleted milestone from lost access, so it
+    // claims neither
+    expect(q('[data-milestone-locked-note]')?.textContent).toBe(
+      'This window can no longer confirm your access. Close the window and open this milestone again to change it.',
+    )
     expect(q('[data-milestone-new]')).toBeNull()
   })
 

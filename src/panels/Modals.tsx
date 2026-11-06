@@ -2501,11 +2501,15 @@ function MilestoneModal({
   // whether the person may change the opened milestone: what the answer
   // says, and nothing once it names no milestone
   const openedCanWrite = !!answer?.canWrite
-  // whether they may add milestones and change the others: opened on a
-  // milestone, what the answer says while it names the project, and after
-  // their own delete of the milestone what the last such answer said while
-  // the store still gives them User access; no right once the milestone
-  // went for another reason. Else their level on the project.
+  // the window cannot tell the person's right on the project once the
+  // answer names no project for a reason other than their own delete,
+  // since a deleted milestone and lost access answer alike
+  const rightUnknown = !!init.id && !answer?.project && !deletedHere
+  // whether they may add milestones and change the others. Opened on a
+  // milestone, that is what the answer says while it names the project,
+  // and after their own delete of the milestone what the last such answer
+  // said while the store still gives them User access. No right while the
+  // window cannot tell (rightUnknown). Else their level on the project.
   const canWrite = !init.id
     ? levelWrites
     : answer?.project
@@ -2559,7 +2563,8 @@ function MilestoneModal({
   /* A milestone of the window: the opened one from the answer, with its
      stored name and day as the answer holds them when asked, any other
      from the list, the workspace's. An open editor stays, locked with its
-     draft, once the person may no longer change its milestone. */
+     draft, once the person may no longer change its milestone, and says
+     so, or says that the window can no longer tell (rightUnknown). */
   const item = (m: MilestoneVM, own: boolean) => {
     const right = own ? openedCanWrite : canWrite
     const editing = m.id === editId && (!own || answered)
@@ -2571,6 +2576,11 @@ function MilestoneModal({
           own ? () => shownAnswer(P.milestoneRead(MILESTONE_OPEN))?.stored.get(m.id) : undefined
         }
         locked={!right}
+        lockedNote={
+          rightUnknown
+            ? 'This window can no longer confirm your access. Close the window and open this milestone again to change it.'
+            : undefined
+        }
         onClose={() => setEditId(null)}
         onDelete={own ? () => setDeletedHere(true) : undefined}
       />
@@ -2822,18 +2832,21 @@ function MilestoneRowView({
    refused save rebases on them as they are once the store took its paint
    back.
    `locked` keeps the typed text read-only once the person may no longer
-   change the milestone. The Name box takes focus when the editor opens,
-   unless the person already moved focus inside the window. */
+   change the milestone, and `lockedNote` says why under it. The Name box
+   takes focus when the editor opens, unless the person already moved focus
+   inside the window. */
 function MilestoneEditor({
   m,
   storedOf,
   locked = false,
+  lockedNote = 'You can no longer change this milestone.',
   onClose,
   onDelete,
 }: {
   m: MilestoneVM
   storedOf?: () => { name: string; week: string } | undefined
   locked?: boolean
+  lockedNote?: string
   onClose: () => void
   /** runs as the person deletes the milestone here */
   onDelete?: () => void
@@ -2981,7 +2994,7 @@ function MilestoneEditor({
       </div>
       {locked && (
         <p data-milestone-locked-note className="mt-2 mb-0 pl-6 text-sm text-text-2">
-          You can no longer change this milestone.
+          {lockedNote}
         </p>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
