@@ -5073,16 +5073,18 @@ export const IMAGE_SPACER =
   'The bench rig ran the full thermal cycle overnight. Each probe logged its reading every ten seconds, and the enclosure held its seal through all twelve cycles. The fan curve kept the regulator under its limit, and the logs show no brown-out on any rail. The next run adds the humidity chamber and the second firmware build, so the results can be compared side by side before the review. Keep the cables routed behind the rack, as the photos show, and label each probe before the next run starts. Note any reading that drifts from nominal in the log, with the time and the rail it was on.'
 
 /** A task's description images load as they come near view, from the
- *  deployment's gateway through fetch: over REST it makes a task in A with
+ *  deployment's gateway through fetch. Over REST it makes a task in A with
  *  six small PNG attachments and a description that shows them one a
  *  paragraph with IMAGE_SPACER between (a description save shows the task's
  *  own files, model/descriptionImages.ts settleDescriptionImages). In the
- *  app at 390 by 844 it opens the task and its Details: the first image shows (naturalWidth
- *  above 0) from bytes (a blob: src, which only a fetch the gateway answers
- *  with the app's origin gives), the last has asked the gateway for nothing
- *  yet, and once the window scrolls to the end all six show from blob:
- *  srcs with at most four /files/ downloads in flight at once. It deletes
- *  the task over REST. It runs after ui/attachment-upload. */
+ *  app at 390 by 844 it opens the task and its Details. The first image
+ *  must show (naturalWidth above 0) from bytes, a blob: src, which only a
+ *  fetch the gateway answers with the app's origin gives, while the last
+ *  has asked the gateway for nothing yet. As the window scrolls to each in
+ *  turn all six must show from blob: srcs, with at most four /files/
+ *  downloads in flight at once. An image scrolled far away shows its
+ *  placeholder again, so each is checked in its place. It deletes the task
+ *  over REST. It runs after ui/attachment-upload. */
 async function descriptionImagesCheck() {
   const w = run.creds.writeToken
   const { A } = run.projects
@@ -5153,15 +5155,17 @@ async function descriptionImagesCheck() {
       )
       const last = ids[ids.length - 1]
       expect(!asked.has(last), 'the last image was asked for before it came near view')
-      await app.locator(`[role="dialog"] [data-att="${last}"]:visible`).scrollIntoViewIfNeeded()
+      // each image shows once it comes near; one scrolled far away shows
+      // its placeholder again, so each is checked in its place
       for (const id of ids) {
+        await app.locator(`[role="dialog"] [data-att="${id}"]:visible`).scrollIntoViewIfNeeded()
         await image(id).waitFor({ timeout: 60_000 })
         expect(await until(() => shows(id)), `image ${ids.indexOf(id) + 1} does not show`)
       }
       expect(most <= 4, `${most} images downloaded at once`)
       eq(asked.size, 6, 'images downloaded')
       eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
-      return `the first image showed from a blob: URL before the last was asked for, and all six after the scroll, at most ${most} downloads at once`
+      return `the first image showed from a blob: URL before the last was asked for, and each of the six in its place, at most ${most} downloads at once`
     } finally {
       app.off('request', started)
       app.off('requestfinished', ended)
