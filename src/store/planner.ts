@@ -3843,8 +3843,44 @@ const hideProjectMilestones = (id: string): Paint =>
    of their tasks in a delay and in a person's work, which needs its read
    live and its newest result to have taken its rows, not kept them past a
    refusal or a failure (ViewRead `behind`) as Team sync's stale meeting
-   does. */
+   does. A row of a task that a write of the person's own still waits on
+   stands in from any view that holds it, live or stopped
+   (viewWritesWaiting), as viewDelayCtx says. */
 const viewLends = (slot: ViewSlot) => viewLive(slot) && !viewReads.get(slot)?.behind
+
+/* Every view, for the rows a waiting write lends (viewDelayCtx). */
+const anyView = () => true
+
+/* No task, while no write waits (viewWritesWaiting). */
+const NO_TASKS: ReadonlySet<string> = new Set()
+
+/** The tasks, by uuid, that a write of the person's own paints in the
+    views and the server has not answered yet, open or pending, as each such
+    layer's `view` part names them (viewPaint). */
+function viewWritesWaiting(): ReadonlySet<string> {
+  if (!layers.paintedPending('view')) return NO_TASKS
+  const out = new Set<string>()
+  for (const layer of layers.ordered()) {
+    if (layer.state === 'saved' || !layer.view.view) continue
+    for (const uuid of viewPaintTasks.get(layer.view.view) ?? []) out.add(uuid)
+  }
+  return out
+}
+
+/** Whether view part `paint`, while its write waited, lent the delay
+    context a row that no view lends otherwise (viewDelayCtx), a row of a
+    task it changes that the workspace does not hold and that only views
+    that do not lend hold, such as a kept Board's behind the Roadmap. */
+function lentWhileWaiting(paint: Paint): boolean {
+  for (const uuid of viewPaintTasks.get(paint) ?? [])
+    if (
+      !uuidToKey.has(uuid) &&
+      !viewRows.liveHolds(uuid, viewLends) &&
+      viewRows.liveHolds(uuid, anyView)
+    )
+      return true
+  return false
+}
 
 /** What judging a task only a view holds reads from the store
     (store/viewDelay.ts), and with it what reconciling a person's work for
@@ -3857,17 +3893,40 @@ const viewLends = (slot: ViewSlot) => viewLive(slot) && !viewReads.get(slot)?.be
     change made since, so the cache's spans of those tasks, which stay live
     while some view reads their owner, are the newer. So a task such a read
     still holds counts at its hours now, and not at all once it is Done.
+
+    A row of a task that a write of the person's own still waits on
+    (viewWritesWaiting) is the exception. The write shows in every view's
+    row of the task and maybe not yet in the cache's spans, so the row
+    stands in from any view that holds it, after the lending views' rows,
+    and its pending hours, dates, pause or owner count at once. Once the
+    server answers, Convex has brought the cache's live spans up to date
+    (lib/convexOrdering.test.ts), and such a view's row stands in no more
+    (settleAccepted), though its paint stays until the view reads again.
     Which copies lead in lookups and which reads hold a write stay with the
     live reads (viewLive, viewPartHeld). */
 const viewDelayCtx: ViewDelayCtx = {
   load: (org, owner) => ownerLoads.loadOf(org, owner),
   held: (uuid) => uuidToKey.has(uuid),
-  inView: (uuid) => viewRows.liveHolds(uuid, viewLends),
+  inView: (uuid) =>
+    viewRows.liveHolds(uuid, viewLends) ||
+    (viewWritesWaiting().has(uuid) && viewRows.liveHolds(uuid, anyView)),
   heldSpans: (owner) => tasks.shownSpans(owner),
   *viewRows() {
-    for (const [slot, held] of viewRows.views()) {
+    const views = viewRows.views()
+    for (const [slot, held] of views) {
       if (!viewLends(slot)) continue
       for (const row of held.values()) if (!uuidToKey.has(row.id)) yield row
+    }
+    // then the other views' rows of the tasks a write waits on, so a
+    // lending view's copy of such a task comes first
+    const waiting = viewWritesWaiting()
+    if (waiting.size === 0) return
+    for (const [slot, held] of views) {
+      if (viewLends(slot)) continue
+      for (const uuid of waiting) {
+        const row = held.get(uuid)
+        if (row && !uuidToKey.has(uuid)) yield row
+      }
     }
   },
   capacity: (id) => {
@@ -3881,8 +3940,10 @@ const viewDelayCtx: ViewDelayCtx = {
 /* What reconciling a person's work for Team utilization and the planning
    panel reads from the store (store/viewDelay.ts ownerItemsOf). It reads
    the delay context's rows, so only a live, current view's rows replace
-   the cache's spans (viewLends). Its `filed` holds while the rows hold
-   still, until the next reshape. */
+   the cache's spans (viewLends), and any view's row of a task a write of
+   the person's own waits on. Its `filed` holds while the rows and those
+   writes hold still, until the next reshape, or until an answered write
+   ends a stopped view's row's stand-in (settleAccepted). */
 const ownerItemsCtx: OwnerItemsCtx = {
   held: viewDelayCtx.held,
   inView: viewDelayCtx.inView,
@@ -4526,6 +4587,15 @@ function settleAccepted(layer: Layer, next: View | null | undefined) {
   const milestones =
     view.milestones && needs?.size ? scopedMilestonePaint(view.milestones, needs) : undefined
   layers.save(layer, { workspace, thread, view: viewPart, detail, milestones })
+  // while it waited, the write had a stopped or behind view's row of its
+  // task stand in for the owner-load cache (viewDelayCtx); answered, it
+  // does no more, so the work filed from the rows goes and the views judge
+  // their delays again
+  if (sent.view && lentWhileWaiting(sent.view)) {
+    ownerItemsCtx.filed = undefined
+    viewReadsChanged = true
+    owed.view = true
+  }
   if (sent.workspace && !workspace) owed.workspace = true
   if (sent.thread && !thread && sent.thread.task === watchedComments) owed.thread = true
   if (sent.view && !viewPart) {

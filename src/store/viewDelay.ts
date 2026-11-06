@@ -28,11 +28,15 @@
    hold taken from those rows, so a task counts once whichever list holds
    it. viewLoadOf's answers, which the delays read, stay as they were.
 
-   The rows that stand in for the cache's spans are only those of views
-   whose rows still hear every change (ViewDelayCtx inView). A stopped
-   read's rows, as a kept Board's behind the Roadmap, never do, so the
-   cache's span of such a task, the newer, counts at its hours now, and the
-   task counts not at all once it is Done. */
+   The rows that stand in for the cache's spans are those of views whose
+   rows still hear every change (ViewDelayCtx inView). A stopped read's
+   rows, as a kept Board's behind the Roadmap, do not, so the cache's span
+   of such a task, the newer, counts at its hours now, and the task counts
+   not at all once it is Done. A row of a task that a write of the
+   person's own still waits on stands in from any view, a stopped one too,
+   as the write shows in every view's row of the task and maybe not yet in
+   the cache's spans. So its pending hours, dates, pause or owner count at
+   once, until the server answers it (store/planner.ts viewDelayCtx). */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'
@@ -53,13 +57,15 @@ export type ViewDelayCtx = {
   held: (uuid: string) => boolean
   /** whether a view's rows hold task `uuid` (its row on screen), among the
       views whose rows still hear every change, so none whose read stopped
-      or kept its rows past a refusal or a failure (store/planner.ts
+      or kept its rows past a refusal or a failure, or among every view for
+      a task a write of the person's own still waits on (store/planner.ts
       viewDelayCtx) */
   inView: (uuid: string) => boolean
   /** the spans of owner `owner`'s tasks the workspace holds, pending edits
       included (taskIndex.ts shownSpans) */
   heldSpans: (owner: string) => LoadSpan[]
-  /** every row those views hold that the workspace does not, painted */
+  /** every row those views hold that the workspace does not, painted,
+      then the other views' rows of the tasks such a write waits on */
   viewRows: () => Iterable<ViewRow>
   /** person `id`'s plannable hours a week (lib/workload.ts plannableHoursOf) */
   capacity: (id: string) => number

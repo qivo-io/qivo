@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,11 +12,11 @@ import type { RoadmapRequest } from './Roadmap'
 /* Team utilization under the Roadmap (views/Resources.tsx): its people are
    the owners of the Roadmap's shown tasks, and each person's hours come
    from the owner-load cache (planning.ownerLoads) reconciled with the rows
-   on screen, never with a stopped read's kept rows. A person whose load is
-   on its way shows "…", one whose load could not be read or is past a
-   guest's cap shows unknown, and neither ever shows a figure that reads as
-   free time. The store boots without the workspace's tasks, as the app
-   does. */
+   on screen, never with a stopped read's kept rows but for a task the
+   person's own write still waits on. A person whose load is on its way
+   shows "…", one whose load could not be read or is past a guest's cap
+   shows unknown, and neither ever shows a figure that reads as free time.
+   The store boots without the workspace's tasks, as the app does. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -382,5 +383,149 @@ describe('Team utilization from the owner loads', { timeout: BOARD_TEST_TIMEOUT 
     await board.answer()
     expect(thisWeek()).toBe('1')
     expect(panel()).not.toMatch(/Two\s*\d/)
+  })
+
+  it("counts a stopped Board's row of a task at the hours the person's own write gives it until the write is answered", async () => {
+    // two-1, of high priority, this week alone, which the Roadmap's filter
+    // leaves out
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        plan(snap)
+        Object.assign(snap.issues[1], { priority: 'high', start_week: week(0), end_week: week(0) })
+      },
+      { scope: 'plan' },
+    )
+    const me = board.snapshot.profiles[0].id
+    const org = board.snapshot.orgs[0].id
+    const two = board.snapshot.issues[1]
+    await board.render(root)
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(3)
+    // its window over the Board shows it from the window's own read
+    let windowRead: ((value: unknown) => void) | null = null
+    const inner = network.onUpdate.getMockImplementation()
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
+      if (getFunctionName(ref) !== 'taskWindow:task') return inner?.(ref, args, next, fail)
+      windowRead = next
+      return () => {}
+    })
+    /** Delivers the window's own answer of two-1 as the server holds it. */
+    const windowShows = () =>
+      act(async () => {
+        windowRead?.({
+          state: 'ok',
+          task: { ...two, description: '', has_hidden_subtasks: false, has_hidden_parent: false },
+          level: 'lead',
+          labels: [],
+          follow: null,
+          parent: null,
+          subtasks: { rows: [], complete: true },
+        })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+    await act(async () => board.P.watchComments('two-1', org))
+    await windowShows()
+    const handle = board.P.taskDetail('two-1')?.view?.id
+    if (!handle) throw new Error('the window shows no two-1 from its answer')
+    // its Remaining goes from 3 to 28 hours, and the server's answer waits
+    let answerWrite: (value: unknown) => void = () => {}
+    const writes = network.mutation.getMockImplementation()
+    network.mutation.mockImplementation((ref, ...rest) =>
+      getFunctionName(ref) === 'issues:update'
+        ? new Promise((resolve) => {
+            answerWrite = resolve
+          })
+        : writes?.(ref, ...rest),
+    )
+    await act(async () => {
+      void board.P.updateIssue(handle, { remaining: 28 })
+    })
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(28)
+    // the Roadmap takes the Board's place behind the window, which stops the
+    // Board's read and keeps its rows
+    await act(async () => board.P.roadmapContext(true, true))
+    await renderRoadmap(board, {
+      filters: { ...ROW, priority: 'medium' },
+      focusPlan: {
+        id: 'QN-1',
+        n: 1,
+        key: 'QN-1',
+        uuid: 'one-1',
+        project: board.snapshot.projects[0].id,
+        start: TODAY_WEEK,
+        end: TODAY_WEEK + 1,
+      },
+    })
+    // the store paints an answer that arrives while a painted write waits in
+    // a task of its own (store/planner.ts owe), and the Roadmap's answer
+    // asks for the owners' loads, so a step lets a few such tasks run
+    const settle = async () => {
+      for (let turn = 0; turn < 3; turn++)
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 0)))
+    }
+    await settle()
+    expect(board.P.viewTask('roadmap', 'two-1')).toBeUndefined()
+    const thisWeek = () => cells(me).find((c) => c.week === TODAY_WEEK)?.hours
+    const panel = () => document.querySelector('[data-plan-card]')?.textContent ?? ''
+    // two-1 once in the person's work, at the hours the store holds for it
+    const twoOne = () =>
+      (board.P.ownerItems(org, me) ?? []).filter((i) => i.uuid === 'two-1').map((i) => i.remaining)
+    // the stopped Board's row carries the waiting write, so this week holds
+    // one-1's 1 hour and two-1's 28, where the cache's span still says 3
+    expect(thisWeek()).toBe('29')
+    expect(panel()).toMatch(/Two\s*28h/)
+    expect(twoOne()).toEqual([28])
+    // the server saved it, and the cache's span says so before the answer,
+    // yet the hours count once
+    two.remaining_hours = 28
+    await board.answer()
+    await settle()
+    expect(thisWeek()).toBe('29')
+    expect(twoOne()).toEqual([28])
+    /** Answers the waiting write, and answers whether a write still waits
+        and two-1's hours in the person's work the moment it settles, before
+        anything renders again. */
+    const answered = async () => {
+      let seen: { busy: boolean; hours: number[] } | null = null
+      await act(async () => {
+        answerWrite(null)
+        for (let tick = 0; tick < 20 && board.P.roadmapUndo.busy; tick++) await Promise.resolve()
+        seen = { busy: board.P.roadmapUndo.busy, hours: twoOne() }
+      })
+      return seen
+    }
+    // once the answer lands, the Board's row keeps its paint until the Board
+    // reads again, and the cache's span alone counts
+    expect(await answered()).toEqual({ busy: false, hours: [28] })
+    await settle()
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(28)
+    expect(twoOne()).toEqual([28])
+    expect(thisWeek()).toBe('29')
+    // so someone else's change counts at once, past the Board's painted row
+    two.remaining_hours = 10
+    await board.answer()
+    await settle()
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(28)
+    expect(thisWeek()).toBe('11')
+    expect(panel()).toMatch(/Two\s*10h/)
+    expect(twoOne()).toEqual([10])
+    // a write sent while the Board's read is stopped counts at once too
+    await windowShows()
+    await act(async () => {
+      void board.P.updateIssue(handle, { remaining: 20 })
+    })
+    expect(board.P.viewTask('board:desktop', 'two-1')?.remaining).toBe(20)
+    expect(thisWeek()).toBe('21')
+    expect(twoOne()).toEqual([20])
+    // its answer ends the stand-in in the same task, with nothing delivered
+    // since the write went, so two-1 counts once, from the cache's span, which
+    // here has not heard of the write yet
+    two.remaining_hours = 20
+    expect(await answered()).toEqual({ busy: false, hours: [10] })
+    await board.answer()
+    await settle()
+    expect(thisWeek()).toBe('21')
+    expect(twoOne()).toEqual([20])
   })
 })
