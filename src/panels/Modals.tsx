@@ -2644,7 +2644,10 @@ function UnusedReason({
    milestone out of its rows while it shows elsewhere. An editor whose
    milestone no section shows reads it with milestones.get under
    milestone:kept, which gives it its stored values, its organization and
-   its right, and says when it is gone. */
+   its right, and says when it is gone. That read's failure says so above
+   the sections with Retry, and its refusal gives the server's sentence;
+   before any answer a refusal also locks the editor with its draft, and
+   after one, a failure or refusal keeps that answer and its right. */
 
 /* The store's slots of the window's reads: the milestone it opened on, the
    milestone of an editor no section shows, and its two sections' asks. */
@@ -2693,19 +2696,24 @@ function shownAnswer(read: MilestoneRead | null): MilestoneAnswer | null {
   return read.state === 'failed' || read.state === 'refused' ? read.kept : null
 }
 
-/* A line the window shows in place of, or above, its milestones. */
+/* A line the window shows in place of, or above, its milestones, about the
+   milestone it opened on, or with `kept` about the milestone of an editor
+   no section shows (milestone:kept). */
 function MilestoneLine({
   state,
+  kept = false,
   children,
   retry,
 }: {
   state: 'loading' | 'unavailable' | 'refused' | 'failed' | 'gone'
+  kept?: boolean
   children: ReactNodeM
   retry?: () => void
 }) {
   return (
     <div
       data-milestone-open={state}
+      data-milestone-kept={kept ? '' : undefined}
       className={cn(
         'flex flex-wrap items-center gap-x-3 gap-y-1 text-base',
         state === 'loading' ? 'text-text-3' : 'text-text-2',
@@ -2918,7 +2926,9 @@ function MilestoneModal({
       ? editId
       : null
   const kept = useMilestoneGet(MILESTONE_KEPT, keptId)
-  const keptAnswer = keptId ? shownAnswer(kept.read) : null
+  const keptRead = keptId ? kept.read : null
+  // its answer, kept through a failure or a refusal and while it refreshes
+  const keptAnswer = shownAnswer(keptRead)
   // a kept editor whose milestone the server no longer answers closes and
   // says so, as the opened milestone's does
   const [keptGone, setKeptGone] = useStateM(false)
@@ -2960,12 +2970,20 @@ function MilestoneModal({
   /* The editor of `m`. It stays, locked with its draft, once the person may
      no longer change its milestone, and says so, or says that the window
      can no longer tell (rightUnknown). A kept editor takes its right from
-     its own read once it answered. */
+     its own read once it answered, keeps it through a later failure or
+     refusal, and has none while that read was refused before any answer,
+     as the server could not confirm it. */
   const editorOf = (m: MilestoneVM) => {
     const own = m.id === init.id
     lastEdited.current = m
-    const keptRight = !own && keptId === m.id && keptAnswer !== null
-    const right = own ? openedCanWrite : keptRight ? !!keptAnswer?.canWrite : canWrite
+    const isKept = !own && keptId === m.id
+    const keptRight = isKept && keptAnswer !== null
+    const keptRefused = isKept && !keptRight && keptRead?.state === 'refused'
+    const right = own
+      ? openedCanWrite
+      : keptRight
+        ? !!keptAnswer?.canWrite
+        : !keptRefused && canWrite
     return (
       <MilestoneEditor
         key={m.id}
@@ -2973,7 +2991,7 @@ function MilestoneModal({
         storedOf={storedOf(m.id)}
         locked={!right}
         lockedNote={
-          rightUnknown && !keptRight
+          (rightUnknown && !keptRight) || keptRefused
             ? 'This window can no longer confirm your access. Close the window and open this milestone again to change it.'
             : undefined
         }
@@ -3105,7 +3123,12 @@ function MilestoneModal({
           <div className="text-base text-text-2">Open a project to add a milestone.</div>
         ) : (
           <div className="flex flex-col gap-6">
-            {(read?.state === 'failed' || read?.state === 'refused' || gone || keptGone) && (
+            {(read?.state === 'failed' ||
+              read?.state === 'refused' ||
+              keptRead?.state === 'failed' ||
+              keptRead?.state === 'refused' ||
+              gone ||
+              keptGone) && (
               <div className="flex flex-col gap-2">
                 {read?.state === 'failed' && (
                   <MilestoneLine state="failed" retry={opened.retry}>
@@ -3114,6 +3137,17 @@ function MilestoneModal({
                 )}
                 {read?.state === 'refused' && (
                   <MilestoneLine state="refused">{read.sentence}</MilestoneLine>
+                )}
+                {/* the read of the milestone an editor no section shows */}
+                {keptRead?.state === 'failed' && (
+                  <MilestoneLine state="failed" kept retry={kept.retry}>
+                    Couldn't load the latest version of this milestone.
+                  </MilestoneLine>
+                )}
+                {keptRead?.state === 'refused' && (
+                  <MilestoneLine state="refused" kept>
+                    {keptRead.sentence}
+                  </MilestoneLine>
                 )}
                 {(gone || keptGone) && (
                   <MilestoneLine state="gone">

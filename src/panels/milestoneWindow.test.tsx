@@ -10,7 +10,9 @@ import {
   answerMilestones,
   type ForcedMilestones,
   isMilestoneRead,
+  MILESTONE_TOO_LARGE,
   MILESTONES_TOO_LARGE,
+  MILESTONES_UNCHECKED,
 } from '../store/milestoneStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
@@ -780,6 +782,80 @@ describe('an open editor whose row moves', { timeout: 30_000 }, () => {
       expect(document.activeElement).toBe(nameBox())
     },
   )
+})
+
+/** Opens the window on Plan with three upcoming milestones, opens u2's
+    editor with a draft, and moves u2 into the past on the server, so the
+    editor stays where it opened and reads u2 on its own (milestone:kept)
+    with `forced` held for that read. */
+async function keepEditor(forced: ForcedMilestones = {}) {
+  fixture({ up: 3 })
+  await start()
+  await open({ project: 'plan' })
+  await press(q('[data-milestone-row="u2"] button[aria-label^="Edit"]'))
+  await typeInto(nameBox(), 'Step two, drafted')
+  force = { ...forced }
+  moveOnServer('u2', mondayIn(-2))
+  await rerun()
+  expect(
+    live(subs)
+      .filter((s) => s.name === 'milestones:get')
+      .map((s) => s.args),
+  ).toEqual([{ id: 'u2' }])
+}
+const keptLine = () => q('[data-milestone-open][data-milestone-kept]')
+const gets = () => subs.filter((s) => s.name === 'milestones:get')
+const editorButton = (text: string) => button(text, q('[data-milestone-editor]') ?? document)
+
+describe("a kept editor's own read", { timeout: 30_000 }, () => {
+  it('says its read failed before any answer, with Retry, and keeps the draft', async () => {
+    await keepEditor({ get: 'error' })
+    expect(keptLine()?.getAttribute('data-milestone-open')).toBe('failed')
+    expect(keptLine()?.textContent).toBe("Couldn't load the latest version of this milestone.Retry")
+    expect(nameBox()?.value).toBe('Step two, drafted')
+    // Retry asks the kept read again, and its answer takes the line away
+    force = {}
+    const before = gets().length
+    await press(button('Retry', keptLine() ?? document))
+    expect(gets()).toHaveLength(before + 1)
+    expect(keptLine()).toBeNull()
+    expect(nameBox()?.value).toBe('Step two, drafted')
+    expect(q('[data-milestone-editor="u2"]')?.hasAttribute('data-milestone-locked')).toBe(false)
+  })
+
+  it.each([
+    ['too large', 'refused' as const, MILESTONE_TOO_LARGE],
+    ['unchecked', 'unchecked' as const, MILESTONES_UNCHECKED],
+  ])(
+    'gives the refusal of its read before any answer (%s) and locks the editor',
+    async (_, forced, sentence) => {
+      await keepEditor({ get: forced })
+      expect(keptLine()?.getAttribute('data-milestone-open')).toBe('refused')
+      expect(keptLine()?.textContent).toContain(sentence.slice(1))
+      expect(button('Retry', keptLine() ?? document)).toBeUndefined()
+      const editor = q('[data-milestone-editor="u2"]')
+      expect(editor?.hasAttribute('data-milestone-locked')).toBe(true)
+      expect(nameBox()?.value).toBe('Step two, drafted')
+      expect(nameBox()?.readOnly).toBe(true)
+      expect(editorButton('Save')?.disabled).toBe(true)
+      expect(editorButton('Delete')?.disabled).toBe(true)
+      expect(q('[data-milestone-locked-note]')?.textContent).toBe(
+        'This window can no longer confirm your access. Close the window and open this milestone again to change it.',
+      )
+    },
+  )
+
+  it('keeps the answer it had through a later failure, with its right', async () => {
+    await keepEditor({ canWrite: false })
+    expect(q('[data-milestone-editor="u2"]')?.hasAttribute('data-milestone-locked')).toBe(true)
+    force = { get: 'error' }
+    await rerun()
+    expect(keptLine()?.getAttribute('data-milestone-open')).toBe('failed')
+    // the answer's right stays, and the window's own right does not return
+    expect(q('[data-milestone-editor="u2"]')?.hasAttribute('data-milestone-locked')).toBe(true)
+    expect(editorButton('Save')?.disabled).toBe(true)
+    expect(nameBox()?.value).toBe('Step two, drafted')
+  })
 })
 
 describe('opened on a milestone', { timeout: 30_000 }, () => {
