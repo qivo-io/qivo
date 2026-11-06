@@ -245,10 +245,12 @@ describe('files.mintUrls caps', () => {
       }),
     ).rejects.toThrow('profile_ids must name at most 1000 profiles')
     // a repeated id counts as sent, since the cap is on the array
-    const repeated = Array.from({ length: 101 }, () => fx.user.id)
     await expect(
-      as(t, fx.user).query(api.files.mintUrls, { org_id: fx.org.id, profile_ids: repeated }),
-    ).resolves.toBeDefined()
+      as(t, fx.user).query(api.files.mintUrls, {
+        org_id: fx.org.id,
+        attachment_ids: Array.from({ length: 101 }, () => tooMany.attachment_ids[0] as string),
+      }),
+    ).rejects.toThrow('attachment_ids must name at most 100 attachments')
     await expect(
       as(t, fx.user).query(api.files.mintUrls, {
         org_id: fx.org.id,
