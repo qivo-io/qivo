@@ -4052,10 +4052,11 @@ function IssueDetail({
                           (capped at the due week) to drag into place. A group
                           is only shown there, read-only. */}
                               <div className="task-plan-actions">
-                                {/* the Roadmap opens once every task has loaded and
-                                    spotlights the task, also one shown from a
-                                    current answer, whoever looks; an archived one
-                                    says why its fields are off */}
+                                {/* the Roadmap opens at once, asks the server to
+                                    keep the task past its filters and spotlights
+                                    it once its answer holds it, also one shown
+                                    from a current answer, whoever looks; an
+                                    archived one says why its fields are off */}
                                 <Button
                                   type="button"
                                   variant="ghost"

@@ -242,11 +242,12 @@ export type OwnerLoadsJson = {
  * left, paused ones in projects the caller can see included. So a change
  * to those reruns it, such as a subtask added to a paused task, and no
  * other change in the organization does. The app's owner-load cache
- * (src/store/ownerLoadCache.ts) reads its spans for the delays of Board
- * cards the workspace does not hold yet and of the task window's task,
- * and keeps no paused list; the Roadmap view will read both lists for
- * Team utilization, and the other views read it once they stop reading
- * the workspace's load rows.
+ * (src/store/ownerLoadCache.ts) reads its spans for the delays of the
+ * Board's and the Roadmap's bars the workspace does not hold yet and of
+ * the task window's task, and keeps both lists for the Roadmap's Team
+ * utilization and planning panel, which read each span's project and the
+ * paused list (src/store/viewDelay.ts ownerItemsOf); the other views read
+ * it once they stop reading the workspace's load rows.
  */
 export const ownerLoads = orgQuery({
   args: { owner_ids: v.array(v.string()) },

@@ -20,7 +20,13 @@
    task's own spans never count, whichever list holds them, since the
    projection leaves them out by uuid (convex/lib/workload.ts), so a task
    the window shows from its answer, painted with the person's pending
-   edits (store/taskDetail.ts), needs no span of its own here. */
+   edits (store/taskDetail.ts), needs no span of its own here.
+
+   Team utilization and the planning panel read a person's work by the same
+   rule (ownerItemsOf): the cache's spans with each one's project and the
+   person's paused tasks, with the work of every task this person's rows
+   hold taken from those rows, so a task counts once whichever list holds
+   it. viewLoadOf's answers, which the delays read, stay as they were. */
 
 import { delayProjector } from '../../convex/lib/delay'
 import { loadRowFor } from '../../convex/lib/loadRows'

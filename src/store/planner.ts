@@ -8093,8 +8093,10 @@ function answerFamilyOf(it: IssueVM, answer: TaskOk): TaskFamily | null {
     pair. It paints the answer (`detail`), every view copy (`view`) and the
     workspace's row (`workspace`, which skips until the workspace holds the
     task), and sends to the answer's organization, marked as a write from
-    the answer (WriteAbout). It joins no Roadmap history: the Roadmap opens
-    only once every task is held. */
+    the answer (WriteAbout). It joins no Roadmap history: a visit records
+    nothing while a task window is open (recordRoadmapChange), so a drag on
+    the Roadmap under the window saves as an ordinary write, as a held
+    task's does. */
 function updateAnswerTask(a: AnswerTask, patch: IssuePatch, opts: UpdateOptions): Promise<boolean> {
   if (refusePausedEdit()) return Promise.resolve(false)
   // a new parent comes from the Parent picker's row, which the window's
@@ -14910,8 +14912,8 @@ export const PLANNER = {
    part is the new anchor the rows are built from (owe).
 
    Tasks load on demand. The workspace holds no task until something that
-   needs every task asks for them (P.askTasks), such as the Roadmap, Team
-   sync, a create or the Inbox's search, and keeps them once asked until
+   needs every task asks for them (P.askTasks), such as a create or the
+   Inbox's search, and keeps them once asked until
    the store resets (`asked`). The views show the server's own answers
    meanwhile. From the ask until every task window answered, the registry's
    reports are partial and carry no task: they repaint the projects, people

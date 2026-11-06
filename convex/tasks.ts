@@ -1,8 +1,9 @@
 /* The task views' live queries, which answer one Board or Roadmap selection
  * with its filters applied on the server. The desktop Board, the phone list
- * and My view's Board read board (src/views/board/useBoardView.ts); no app
- * reader calls roadmap or roadmapDependencies yet, which the Roadmap view
- * stage switches to. Readers and budgets are in lib/board.ts and
+ * and My view's Board read board (src/views/board/useBoardView.ts); the
+ * desktop Roadmap, the phone's agenda and landscape timeline read roadmap
+ * and roadmapDependencies (src/views/roadmap/useRoadmapView.ts). Readers and
+ * budgets are in lib/board.ts and
  * lib/roadmap.ts, on the shared view reader lib/viewReads.ts and the filter
  * row's read lib/viewFilters.ts.
  *

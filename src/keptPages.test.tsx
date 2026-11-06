@@ -17,8 +17,8 @@ import { taskRow } from './views/boardFixture.setup'
    page, hidden, and shows again as the same elements; Settings goes when
    the person leaves it; and once the person leaves the app alone for 30
    minutes, every kept page but the one shown goes. A Plan on roadmap made
-   while the Roadmap waits for every task plans the task once they have
-   loaded, only while the person stays on the Roadmap. */
+   while the Roadmap waits for its answer plans the task once the answer
+   holds it, only while the person stays on the Roadmap. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 const double = vi.hoisted(() => ({
