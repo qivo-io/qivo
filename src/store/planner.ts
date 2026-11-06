@@ -8956,12 +8956,10 @@ function toggleAnswerLabel(a: AnswerTask, labelId: string, created?: Promise<boo
     view: marker,
     workspace: labelRowsPaint(uuid, labelId, on),
   }
-  void send(
-    api.labels.toggle,
-    { org_id: a.org, issue_id: uuid, label_id: labelId, on },
-    view,
-    { about: { task: uuid, answer: true }, onError: labelToggleRefused(labelId, created) },
-  )
+  void send(api.labels.toggle, { org_id: a.org, issue_id: uuid, label_id: labelId, on }, view, {
+    about: { task: uuid, answer: true },
+    onError: labelToggleRefused(labelId, created),
+  })
 }
 
 /** P.setIssueSubscribed on the watched task the window shows from its

@@ -366,12 +366,11 @@ describe('the label picker', () => {
     await click(more)
     // the new batch begins with Label 05, which shows at the top already
     expect(reads.at(-1)?.args.after).toBeTruthy()
-    expect(rows().slice(6).map((r) => r.name)).toEqual([
-      'Label 06',
-      'Label 07',
-      'Label 08',
-      'Label 09',
-    ])
+    expect(
+      rows()
+        .slice(6)
+        .map((r) => r.name),
+    ).toEqual(['Label 06', 'Label 07', 'Label 08', 'Label 09'])
     expect(document.activeElement).toBe(rowOf(labels[6].id))
   })
 

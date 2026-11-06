@@ -170,7 +170,8 @@ export const mentionSuggestion: Omit<
       const lines: string[] = []
       if (end === 'more' && view.stopped) lines.push(MENTION_WORDS.stopped)
       if (end === 'full') lines.push(MENTION_WORDS.full)
-      if ((end === 'none' || end === 'end') && view.rows.length === 0) lines.push(MENTION_WORDS.none)
+      if ((end === 'none' || end === 'end') && view.rows.length === 0)
+        lines.push(MENTION_WORDS.none)
       return {
         state: 'ok',
         rows: view.rows,
