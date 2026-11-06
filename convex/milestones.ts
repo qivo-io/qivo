@@ -2,8 +2,12 @@
  * readMilestones, visibleMilestone). They are meant for Overview, the
  * Milestones window, the Roadmap and Team sync, to read their milestones a
  * batch or a range of days at a time instead of every milestone of every
- * project the workspace's projects part sends. Until those views move here,
- * no app code calls them and the projects part still sends every milestone.
+ * project the workspace's projects part sends. The app holds them in its
+ * store (src/store/planner.ts P.watchMilestones): the Milestones window
+ * opened on a milestone reads it with `get`, and Team sync's opening reads
+ * its next milestone with `section` and those of this week and next with
+ * `between`. The Overview, the window's list and the Roadmap still read
+ * the workspace's copy, and the projects part still sends every milestone.
  * The writes are in projects.ts.
  *
  * Each read names projects of any of the caller's organizations and judges
