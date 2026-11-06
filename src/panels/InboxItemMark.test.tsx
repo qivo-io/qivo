@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { getFunctionName } from 'convex/server'
+import { ConvexError } from 'convex/values'
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,8 +21,9 @@ import type { Row } from '../store/rows'
    and never for a snoozed item, a seat whose items are building, a failed
    read or no item. An Inbox row's press only opens its task, whose pane
    freezes the start from the item as any window does, and the pane and its
-   pop-out send one read for one `through`. Once the person marks the open
-   task unread, nothing reads it again while it stays open. */
+   pop-out send one read for one `through`. A read the server refused is
+   not sent again for its `through`. Once the person marks the open task
+   unread, nothing reads it again while it stays open. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 type Double = ReturnType<typeof import('../store/guard/liveDouble.setup').liveOver>
@@ -54,8 +56,13 @@ let me: string
 let publish: () => void
 // the thread subscriptions the store made, and whether each stopped
 let threads: { next: (value: unknown) => void; closed: boolean }[]
-// the writes the store sent, which wait until a test answers them
-let writes: { name: string; args: Record<string, unknown>; answer: () => void }[]
+// the writes the store sent, which wait until a test answers or refuses them
+let writes: {
+  name: string
+  args: Record<string, unknown>
+  answer: () => void
+  refuse: () => void
+}[]
 
 const comment = (n: number): Row<'comments'> => ({
   id: `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`,
@@ -148,7 +155,14 @@ async function load(
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     if (name === 'identity:claimMySeats') return Promise.resolve(null)
-    return new Promise((resolve) => writes.push({ name, args, answer: () => resolve(null) }))
+    return new Promise((resolve, reject) =>
+      writes.push({
+        name,
+        args,
+        answer: () => resolve(null),
+        refuse: () => reject(new ConvexError({ code: 'forbidden', message: 'no' })),
+      }),
+    )
   })
   const store = await import('../store/planner')
   P = store.P
@@ -360,6 +374,20 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     await act(async () => writes[1].answer())
     await settle()
     expect(itemReads()).toHaveLength(2)
+  })
+
+  it('never sends a read the server refused again for its through', async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    expect(itemReads()).toHaveLength(1)
+    await act(async () => writes[0].refuse())
+    await settle()
+    // a later answer at the same through, still unread
+    beyond = beyond.map((m) => ({ ...m, dropped: 1 }))
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, dropped: 1 })
+    expect(itemReads()).toHaveLength(1)
   })
 
   it('sends nothing for a snoozed item', async () => {
