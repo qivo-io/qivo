@@ -528,7 +528,8 @@ export function DeletedItemsPage() {
     const canRestore = ready && !item.redacted && (item.can_restore || opensWindow)
     const holder = blocked?.item_id === undefined ? undefined : onPage.get(blocked.item_id)
     const refused = refusals.get(item.id)
-    const restoring = pending.has(item.id)
+    // what a running action is doing to the row, which its button says
+    const acting = pending.has(item.id) ? action?.kind : undefined
     // the reason given at deletion, then why the row cannot be restored now
     const rowNotes: { key: string; text: ReactNode }[] = []
     if (!hit && item.reason && !hidden)
@@ -661,7 +662,8 @@ export function DeletedItemsPage() {
           </span>
         </HoverTooltip>
         {/* at least the width of Restore and the menu, so the times line up,
-            and wider while a row says Restoring…, which never runs into its time */}
+            and wider while a row says Restoring… or Deleting…, which never runs
+            into its time */}
         <div
           className={cn(
             'deleted-row-actions flex shrink-0 items-center justify-end gap-0.5',
@@ -679,7 +681,9 @@ export function DeletedItemsPage() {
               onClick={() => restoreLine(line, k)}
             >
               <Icon name="rotateCcw" size={16} />
-              <span className="deleted-restore-label">{restoring ? 'Restoring…' : 'Restore'}</span>
+              <span className="deleted-restore-label">
+                {acting === 'restore' ? 'Restoring…' : acting === 'purge' ? 'Deleting…' : 'Restore'}
+              </span>
             </Button>
           )}
           {item.can_purge && !hit && (

@@ -993,4 +993,20 @@ describe('Delete now', () => {
     ])
     expect(toasts()).toContain('Deleted QN-10 for good.')
   })
+
+  it('says Deleting… on the row while Delete now runs, and Restoring… only while a restore does', async () => {
+    await open(world({ tasks: 2 }))
+    await choose(`all:${ORG}`)
+    holding = true
+    const label = (num: number) => text(`[data-deleted-row="${taskItem(num)}"] [data-restore]`)
+    await click(find(`[data-deleted-row="${taskItem(10)}"] [data-row-menu]`))
+    await click(find('[data-delete-now]'))
+    await click(button('Delete for good'))
+    expect(label(10)).toBe('Deleting…')
+    await release(calls.find((c) => c.name === 'deletedItems:purge'))
+    expect(has(`[data-deleted-row="${taskItem(10)}"]`)).toBe(false)
+    await click(find(`[data-deleted-row="${taskItem(11)}"] [data-restore]`))
+    expect(label(11)).toBe('Restoring…')
+    await release(restores()[0])
+  })
 })
