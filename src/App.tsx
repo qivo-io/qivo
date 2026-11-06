@@ -864,11 +864,12 @@ function App() {
   // issue URLs carry no scope segment (the issue names its own project):
   // keep the saved scope when the issue lives inside it, else jump to the
   // issue's sub-project — link recipients land on a board that shows it.
-  // On the Board, which has no All projects selection, a saved All projects
-  // gives way to the issue's sub-project too (scopeForIssueOn). A task over
-  // Team sync is the exception: the page names its own scope, and the one
-  // underneath stays the saved one. A task the workspace does not hold
-  // keeps the saved scope until its answer names its project (pendingTask).
+  // On the Board, the Overview and the Roadmap, which have no All projects
+  // selection, a saved All projects gives way to the issue's sub-project
+  // too (scopeForIssueOn). A task over Team sync is the exception, as that
+  // page names its own scope, and the one underneath stays the saved one.
+  // A task the workspace does not hold keeps the saved scope until its
+  // answer names its project (pendingTask).
   const r0Scope =
     r0 && !r0.sync
       ? r0.scope ||

@@ -54,11 +54,10 @@ The Board, the Overview and the Roadmap show one project at a time
 [The Roadmap](./the-roadmap.md)), so in All projects they list your
 top-level projects, and choosing one opens its Board, its Overview or its
 Roadmap. **My view** shows your own tasks across every project on all
-three. A task link that names no project, such as
-`…/tasks/qn-12`, opens the Board or the Overview of the task's sub-project
-instead when it would open on All projects. A link that names All projects,
-such as `…/board/all/tasks/qn-12`, keeps it, with the task's window over the
-list.
+three. A task link that names no project, such as `…/tasks/qn-12`, opens
+the Board, the Overview or the Roadmap of the task's sub-project instead
+when it would open on All projects. A link that names All projects, such as
+`…/board/all/tasks/qn-12`, keeps it, with the task's window over the list.
 
 To create a task, open its project first. On a desktop, the Board's project
 list and empty states offer no way to create a task; on a phone, **New

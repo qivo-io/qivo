@@ -893,16 +893,14 @@ describe('scopeForIssue', () => {
 })
 
 describe('scopeForIssueOn', () => {
-  it("opens the issue's sub-project on the Board and the Overview, which have no All projects", () => {
+  it("opens the issue's sub-project on the Board, the Overview and the Roadmap, which have no All projects", () => {
     expect(scopeForIssueOn('kanban', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
     expect(scopeForIssueOn('kanban', scopeTask('uuid-acme-5'), 'all')).toBe(
       scopeForIssue(scopeTask('uuid-acme-5'), null),
     )
     expect(scopeForIssueOn('overview', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
-  })
-
-  it('keeps All projects on the Roadmap', () => {
-    expect(scopeForIssueOn('roadmap', scopeTask('QN-5'), 'all')).toBe('all')
+    // the Roadmap asks to choose a project on All projects
+    expect(scopeForIssueOn('roadmap', scopeTask('QN-5'), 'all')).toBe('p-home-1a')
   })
 
   it('keeps All projects under an Inbox task address, which shows no Board', () => {

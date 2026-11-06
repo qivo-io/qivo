@@ -266,18 +266,19 @@ export const viewBehindTask = (r: Route, view: string): string | null =>
   r.inbox ? null : r.view || view
 
 /* The scope to show behind a task link on `view` (viewBehindTask). The
-   Board and the Overview have no All projects selection (convex/tasks.ts
-   board, convex/overview.ts): where scopeForIssue keeps All projects, they
-   show the task's own sub-project instead, so its card or its figures can
-   be shown. The Roadmap and the Inbox, which shows no view, keep All
-   projects. */
+   Board, the Overview and the Roadmap have no All projects selection
+   (convex/tasks.ts board and roadmap, convex/overview.ts), so on All
+   projects each asks to choose a project. Where scopeForIssue keeps All
+   projects, they show the task's own sub-project instead, so its card, its
+   figures or its bar can be shown. The Inbox, which shows no view, keeps
+   All projects. */
 export const scopeForIssueOn = (
   view: string | null,
   it: ScopeTask | undefined,
   preferred?: string | null,
 ): string | undefined => {
   const scope = scopeForIssue(it, preferred)
-  return (view === 'kanban' || view === 'overview') && scope === ALL_SCOPE
+  return (view === 'kanban' || view === 'overview' || view === 'roadmap') && scope === ALL_SCOPE
     ? (it?.project ?? scope)
     : scope
 }
