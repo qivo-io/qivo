@@ -10286,7 +10286,9 @@ export const PLANNER = {
      snapshot hands back, from every organization I hold a seat in — so any
      picker that writes a profile id into a row must narrow to that row's
      organization first: a foreign assignee/lead/grant is rejected by the
-     same-org fences, and a foreign @mention would render but never notify. */
+     same-org fences, and a foreign @mention would render but never notify.
+     The editor's @ mention popup reads the server's people of the editor's
+     organization instead (P.mentionChoices, pickers.mentions). */
   usersIn: (orgId: string) => PLANNER.users.filter((u) => u.org === orgId),
   /* The active candidate roster for a project = its owning organization's
      profiles minus anyone switched off. This broad list deliberately does

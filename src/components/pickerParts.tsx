@@ -4,8 +4,9 @@
    A project's Settings page uses them for its Add team or user picker and
    its Lead field (components/ProjectAccessEditor.tsx), and the New project
    and New sub-project dialogs for their Project access, Project and Lead
-   lists (panels/Modals.tsx, components/ProjectAccessSelect.tsx). Nothing
-   here reads the store. */
+   lists (panels/Modals.tsx, components/ProjectAccessSelect.tsx), and the
+   task label picker for the end of its list (panels/LabelPicker.tsx).
+   Nothing here reads the store. */
 import { Button } from '@/components/ui/button'
 import { LIMITS } from '../../convex/lib/limits'
 import { limitSentence } from '../lib/fieldLimits'
