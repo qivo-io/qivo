@@ -413,6 +413,17 @@ describe('the inline image loader', () => {
     expect(late).toEqual([3])
   })
 
+  it('names the attachment a blob URL it made shows, for a pasted copy, and nothing for another', async () => {
+    const h = harness()
+    const v = h.view('pasted')
+    v.near()
+    await settle()
+    expect(h.loader.attachmentOf('blob:image-1')).toBe('pasted')
+    expect(h.loader.attachmentOf('blob:elsewhere')).toBeNull()
+    h.loader.clear()
+    expect(h.loader.attachmentOf('blob:image-1')).toBeNull()
+  })
+
   it('revokes every blob URL when the store clears', async () => {
     const h = harness()
     const [a, b] = ['a', 'b'].map((id) => h.view(id))

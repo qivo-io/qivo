@@ -567,6 +567,13 @@ export function createInlineImages(
         publish(entry)
       }
     },
+    /** The attachment whose image shows at `url`, a blob: URL this loader
+        made, or null, for a copy of a rendered image pasted into an
+        editor. */
+    attachmentOf(url: string): string | null {
+      for (const entry of entries.values()) if (entry.url === url) return entry.id
+      return null
+    },
     /** What a view of attachment `id` shows. */
     snapshot(id: string): InlineImage {
       return entries.get(id)?.shown ?? WAITING

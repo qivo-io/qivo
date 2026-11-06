@@ -83,12 +83,18 @@ import { Icon } from './qivo'
 const IS_MAC = typeof navigator !== 'undefined' && /Mac|iP(hone|ad|od)/.test(navigator.platform)
 const MOD = IS_MAC ? '⌘' : 'Ctrl+'
 
-/* A copy from the read-only rendered view carries the 5-minute signed URL,
-   not the att: pseudo-src — normalize it back so ownership rules (and
-   permanence) apply instead of baking an expiring token into the text. */
+/* A copy from the read-only rendered view carries the URL the image
+   shows instead of the att: pseudo-src. That is a blob: URL of the store's
+   inline image loader, the gateway's /files/<uuid> URL where the loader
+   fell back to it, or the retired signed URL. Normalize each back so
+   ownership rules (and permanence) apply instead of baking a URL that
+   ends into the text. */
 const SIGNED_ATT = /\/storage\/v1\/object\/sign\/attachments\/[0-9a-f-]{36}\/([0-9a-f-]{36})\//
+const GATEWAY_ATT = /\/files\/([0-9a-f]{8}-[0-9a-f-]{27})\?/
 const normalizeImgSrc = (src: string) => {
-  const m = SIGNED_ATT.exec(src)
+  const shown = src.startsWith('blob:') ? P.inlineImages.attachmentOf(src) : null
+  if (shown) return `att:${shown}`
+  const m = SIGNED_ATT.exec(src) ?? GATEWAY_ATT.exec(src)
   return m ? `att:${m[1]}` : src
 }
 /** True when this issue may NOT keep a pasted image reference: it neither
