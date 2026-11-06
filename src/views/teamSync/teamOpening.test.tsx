@@ -327,7 +327,8 @@ describe('the projects figure', () => {
       expect(cell()?.getAttribute('data-sync-next-milestone')).toBe('unknown')
       expect(note()?.getAttribute('data-sync-milestones-note')).toBe('too_many')
       expect(note()?.textContent).toBe(
-        'The app reads the milestones of at most 200 projects at once. Choose fewer projects.',
+        'The app reads the milestones of at most 200 projects at once. Choose fewer projects. ' +
+          'Pick a team or a project with fewer top-level projects.',
       )
     } finally {
       loaded.store.MILESTONE_READS.projects = cap

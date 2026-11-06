@@ -192,6 +192,11 @@ const ASK_LIST =
    (P.watchMilestones). */
 let syncReaders = 0
 
+/* What Team sync offers for a scope of more top-level projects than one
+   milestone read names, after the limit's own sentence: its Scope menu
+   picks a team or a project. */
+const TOO_MANY_HINT = 'Pick a team or a project with fewer top-level projects.'
+
 /** The opening's two milestone reads, which it registers with the store
     while it and the tab show: its next milestone, the first row of the
     upcoming section of the scope's top-level projects `metaIds` from this
@@ -438,7 +443,7 @@ export function TeamOpening({
                   : ahead.note === 'failed'
                     ? "Couldn't load milestones."
                     : ahead.note === 'too_many'
-                      ? limitSentence(LIMITS.milestoneProjects)
+                      ? `${limitSentence(LIMITS.milestoneProjects)} ${TOO_MANY_HINT}`
                       : ahead.sentence}
                 {ahead.note === 'failed' && (
                   <Button type="button" variant="ghost" size="sm" onClick={milestones.retry}>
