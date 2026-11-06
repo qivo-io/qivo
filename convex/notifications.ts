@@ -247,10 +247,13 @@ export const claimAlerts = sessionMutation({
     for (const { key, at } of events) {
       if (key.length === 0 || key.length > NOTIFY.key_chars)
         throw badRequest(`an event key must be 1 to ${NOTIFY.key_chars} characters`)
-      if (!Number.isFinite(at)) throw badRequest('an event time must be a finite number')
+      if (!Number.isFinite(at) || at < 0)
+        throw badRequest('an event time must be epoch milliseconds')
     }
-    if (through !== undefined && !Number.isFinite(through))
-      throw badRequest('through must be a finite number')
+    // never negative, so every stored checkpoint lies between 0 and now and
+    // the catch-up's read back from it is a time a Date holds
+    if (through !== undefined && (!Number.isFinite(through) || through < 0))
+      throw badRequest('through must be epoch milliseconds')
     const row = await sessionRow(ctx, ctx.authUserId, ctx.sessionId)
     if (row === null || !row.can_notify) return { state: 'not_registered' as const }
     const account = await accountRow(ctx, ctx.authUserId)

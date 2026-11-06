@@ -409,6 +409,10 @@ describe('beat and end', () => {
     await expectRefusal(claim(s, [ev('k'.repeat(129), 0)]), 'bad_request', /key/)
     await expectRefusal(claim(s, [{ key: 'k', at: Number.NaN }]), 'bad_request', /time/)
     await expectRefusal(claim(s, [], Number.POSITIVE_INFINITY), 'bad_request', /through/)
+    // times are epoch milliseconds, never negative, so no checkpoint a
+    // later summary reads back from leaves Date's range
+    await expectRefusal(claim(s, [{ key: 'k', at: -1 }]), 'bad_request', /time/)
+    await expectRefusal(claim(s, [], -1e300), 'bad_request', /through/)
     expect(await claim(s, [ev('k'.repeat(128), 0)])).toEqual({ state: 'not_registered' })
   })
 })
