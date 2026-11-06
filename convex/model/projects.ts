@@ -366,9 +366,10 @@ export type NewProject = {
  * place by the same rule over the siblings the workspace holds). 0 when
  * there is no sibling. A sibling whose sort_order is not a finite number,
  * which createProjectCore refuses but an older backend stored as sent, is
- * skipped. One past NaN is NaN and one past Infinity is Infinity, and byOrder
- * cannot sort either, so counting it would hand its place on to every later
- * create in the list. */
+ * skipped. One past NaN is NaN, which byOrder cannot compare with a number,
+ * and one past Infinity is Infinity, which ties every later create at one
+ * place, so counting either would hand its place on to every later create in
+ * the list. */
 async function nextSiblingPlace(
   ctx: QueryCtx,
   orgId: string,
