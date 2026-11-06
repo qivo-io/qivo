@@ -13,6 +13,7 @@ import { makeFunctionReference } from 'convex/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc, Id } from '../_generated/dataModel'
+import type { QueryCtx } from '../_generated/server'
 import type { DeletedItemState } from '../lib/enums'
 import { TEXT_MAX } from '../lib/limits'
 import {
@@ -29,8 +30,16 @@ import {
 } from '../lib/orgExport'
 import { REMOVAL_BUDGET } from '../model/cascade'
 import { checkStoredFiles } from '../model/demoUploads'
+import { descriptionOf } from '../model/descriptions'
 import { deleteOrgStep, wipeWorkStep } from '../model/orgDeletion'
-import { PAGE_BYTES, PAGE_SIZE, readBatch } from '../model/orgExportRead'
+import {
+  IN_FLIGHT_ISSUES_PAGE_SIZE,
+  ISSUES_PAGE_SIZE,
+  PAGE_BYTES,
+  PAGE_SIZE,
+  readBatch,
+  TEXT_ROOM,
+} from '../model/orgExportRead'
 import {
   ARCHIVE_TTL_MS,
   AUTHORITY_READS,
@@ -68,6 +77,7 @@ import {
 import { assertNoDanglingRefs } from './refs.setup'
 
 const DEFAULTS = { ...EXPORT_LIMITS }
+const DEFAULT_TEXT_ROOM = { ...TEXT_ROOM }
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -75,6 +85,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   Object.assign(EXPORT_LIMITS, DEFAULTS)
+  Object.assign(TEXT_ROOM, DEFAULT_TEXT_ROOM)
   vi.clearAllTimers()
   vi.useRealTimers()
 })
@@ -84,6 +95,11 @@ const page = makeFunctionReference<
   { org_id: string; section: OrgExportSection; parent_id?: string; cursor: string | null },
   OrgExportPage
 >('orgExport:page')
+
+/** A task's text of about 600 characters, the `n`th, as people write
+ * ordinary descriptions. */
+const ordinaryText = (n: number) =>
+  `<p>Bench run ${n}: replaced the fan controller, logged the readings at idle and under load, and compared them with the last calibration. The intake temperature stayed within two degrees of the target, and the exhaust fan held its speed through the whole run.</p><p>Next: repeat the run with the lid closed, attach the log to this task and ask the review group to sign off before the rig goes back into the shared pool for the week.</p>`
 
 /** Every section as the browser export reads it through `page`, by archive
  * name, each row as the archive writes it (lib/orgExport.ts archiveRow). */
@@ -1100,21 +1116,30 @@ describe('organization export job', () => {
     }
     const issues = ORG_EXPORT_ORDER.indexOf('issues')
     let at: Parameters<typeof readBatch>[2] = { section: issues, cursor: null }
-    const reads: number[] = []
+    const reads: (number | 'narrow')[] = []
+    // as a step reads: wide until a page's texts do not fit, then narrow
+    let wide = true
     for (let guard = 0; guard < 20; guard++) {
       const read = await t.run(async (ctx) => {
-        const batch = await readBatch(ctx, f.org.id, at)
+        const batch = await readBatch(ctx, f.org.id, at, { wide })
         const m = await ctx.meta.getTransactionMetrics()
         return { batch, bytes: m.bytesRead.used }
       })
       expect(read.bytes).toBeLessThan(16 * 1024 * 1024)
       // what the step receives stays far under a query's 16 MiB answer
       expect(JSON.stringify(read.batch).length).toBeLessThan(8 * 1024 * 1024)
+      if (read.batch.retry === 'narrow') {
+        expect(read.batch).toMatchObject({ rows: [], done: false, at })
+        reads.push('narrow')
+        wide = false
+        continue
+      }
       reads.push(read.batch.rows.length)
       if (read.batch.done) break
       at = read.batch.at
     }
-    expect(reads).toEqual([6, 3])
+    // the wide page's nine texts of 900 KiB do not fit in TEXT_ROOM
+    expect(reads).toEqual(['narrow', 6, 3])
     // and the whole job runs within the limits, a texts part of about 8 MiB
     const exportId = await exportAs(t, f.admin, f.org.id)
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
@@ -1122,6 +1147,104 @@ describe('organization export job', () => {
       part.entry.startsWith('data/tasks/'),
     )
     expect(tasks.reduce((sum, part) => sum + part.records, 0)).toBe(9)
+  })
+
+  it('reads 300 open tasks of ordinary text 100 a page with their texts, as page reads them', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    // a sub-project's open tasks at their design size, everyday elsewhere
+    const planted: string[] = []
+    for (let i = 0; i < 300; i++)
+      planted.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: ordinaryText(i),
+          })
+        ).id,
+      )
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    let at: Parameters<typeof readBatch>[2] = { section: issues, cursor: null }
+    const reads: number[] = []
+    for (let guard = 0; guard < 10; guard++) {
+      const batch = await t.run((ctx) => readBatch(ctx, f.org.id, at))
+      expect(batch.retry).toBeUndefined()
+      reads.push(batch.rows.length)
+      if (batch.done) break
+      at = batch.at
+    }
+    // Convex's cursor learns that the range ended on the read after it
+    expect(reads).toEqual([100, 100, 100, 0])
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    const archive = await archiveOf(t, exportId)
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual(planted)
+    // each text is the one descriptionOf reads
+    const texts = await t.run(async (ctx) => {
+      const out: string[] = []
+      for (const id of planted) {
+        const task = await ctx.db
+          .query('issues')
+          .withIndex('by_uuid', (q) => q.eq('id', id))
+          .unique()
+        if (task === null) throw new Error('a planted task is gone')
+        out.push(await descriptionOf(ctx.db, task))
+      }
+      return out
+    })
+    expect(archive.tables.tasks.map((row) => row.description)).toEqual(texts)
+    expect(texts[7]).toBe(ordinaryText(7))
+    // and the browser export's page still reads the same tasks
+    const expected = await pagedRows(t, f.admin, f.org.id)
+    expect(archive.tables.tasks).toEqual(expected.tasks)
+  })
+
+  it("reads the same cursor six a page when a wide page's texts do not fit, losing no task", async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const planted: string[] = []
+    for (let i = 0; i < 20; i++)
+      planted.push(
+        (
+          await plantIssue(t, {
+            org_id: f.org.id,
+            project_id: f.sub.id,
+            description: ordinaryText(i),
+          })
+        ).id,
+      )
+    // room for the page and no text
+    TEXT_ROOM.bytes = 2 * 1024 * 1024
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const from = { section: issues, cursor: null }
+    const wide = await t.run((ctx) => readBatch(ctx, f.org.id, from))
+    expect(wide).toEqual({ rows: [], at: from, done: false, skipped: 0, retry: 'narrow' })
+    const narrow = await t.run((ctx) => readBatch(ctx, f.org.id, from, { wide: false }))
+    expect(narrow.rows.map((row) => row.id)).toEqual(planted.slice(0, ISSUES_PAGE_SIZE))
+    // a whole job reads every task once, in order, with its text
+    const exportId = await exportAs(t, f.admin, f.org.id)
+    const archive = await archiveOf(t, exportId)
+    expect(archive.tables.tasks.map((row) => row.id)).toEqual(planted)
+    expect(archive.tables.tasks.map((row) => row.description)).toEqual(
+      planted.map((_, i) => ordinaryText(i)),
+    )
+  })
+
+  it('keeps two tasks a page while a deleted item is in flight', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    for (let i = 0; i < 5; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    const moving = await plantProject(t, {
+      org_id: f.org.id,
+      type: 'project',
+      parent_id: f.meta.id,
+    })
+    await plantProjectItem(t, moving, 'moving')
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const batch = await t.run((ctx) => readBatch(ctx, f.org.id, { section: issues, cursor: null }))
+    expect(batch.retry).toBeUndefined()
+    expect(batch.rows).toHaveLength(IN_FLIGHT_ISSUES_PAGE_SIZE)
   })
 
   it('reads the children of many parents in one query, paging a parent whose children do not fit', async () => {
@@ -1452,6 +1575,38 @@ describe('organization export teardowns', () => {
     vi.advanceTimersByTime(HISTORY_MS + 60_000)
     await t.mutation(internal.orgExport.sweep, {})
     expect(await exportRowsLeft(t, f.org.id)).toBe(0)
+  })
+})
+
+describe("the export's reads inside Convex's limits", () => {
+  /* What one transaction that runs `read` read, with what it answered. */
+  const measured = <R>(t: T, read: (ctx: QueryCtx) => Promise<R>) =>
+    t.run(async (ctx) => {
+      const answer = await read(ctx)
+      const m = await ctx.meta.getTransactionMetrics()
+      return {
+        answer,
+        ranges: m.databaseQueries.used,
+        documents: m.documentsRead.used,
+        mib: Math.round((m.bytesRead.used / 1024 / 1024) * 1000) / 1000,
+        answer_kib: Math.round(JSON.stringify(answer).length / 1024),
+      }
+    })
+
+  it('reads a wide tasks page among 300 open tasks of ordinary text whole', async () => {
+    const t = newT({ transactionLimits: true })
+    const f = await withOrg(t)
+    for (let i = 0; i < 300; i++)
+      await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id, description: ordinaryText(i) })
+    const issues = ORG_EXPORT_ORDER.indexOf('issues')
+    const read = await measured(t, (ctx) =>
+      readBatch(ctx, f.org.id, { section: issues, cursor: null }),
+    )
+    const { answer, ...reads } = read
+    console.info('export: a wide tasks page among 300 open tasks', reads)
+    expect(answer.retry).toBeUndefined()
+    expect(answer.rows).toHaveLength(PAGE_SIZE)
+    expect(read.mib).toBeLessThan(TEXT_ROOM.bytes / 1024 / 1024)
   })
 })
 

@@ -686,14 +686,16 @@ const stepStateRef = makeFunctionReference<
 >('orgExport:stepState')
 
 /** One bounded read of a job's current section (model/orgExportRead.ts
- * readBatch), for its step. */
+ * readBatch), for its step; `wide: false` after a wide tasks page answered
+ * `retry: 'narrow'`. */
 export const readBatch = internalQuery({
-  args: { org_id: v.string(), at: vExportCursor },
-  handler: (ctx, { org_id, at }): Promise<ExportBatch> => readExportBatch(ctx, org_id, at),
+  args: { org_id: v.string(), at: vExportCursor, wide: v.optional(v.boolean()) },
+  handler: (ctx, { org_id, at, wide }): Promise<ExportBatch> =>
+    readExportBatch(ctx, org_id, at, { wide }),
 })
 const readBatchRef = makeFunctionReference<
   'query',
-  { org_id: string; at: ExportCursor },
+  { org_id: string; at: ExportCursor; wide?: boolean },
   ExportBatch
 >('orgExport:readBatch')
 
@@ -817,7 +819,12 @@ async function finish(
  * (model/orgExports.ts PART_RAW_BYTES), and makes at most
  * EXPORT_LIMITS.reads reads before it stores what it has. A step whose
  * reads found no row and did not end the section commits its read state
- * without a part. */
+ * without a part. Tasks are read 100 a page with their texts; once a page's
+ * texts do not fit (`retry: 'narrow'`), the step reads the same cursor six
+ * a page for the rest of the step, so a run of long texts costs one wasted
+ * read a step rather than one every six tasks, and the next step tries
+ * wide pages again. Whether to read narrow lives in the step's memory, not
+ * in the stored read state. */
 export const step = internalAction({
   args: { export_id: v.string() },
   handler: async (ctx, { export_id }): Promise<null> => {
@@ -838,8 +845,17 @@ export const step = internalAction({
     let records = 0
     let skipped = 0
     let done = false
+    let wide = true
     for (let read = 0; read < EXPORT_LIMITS.reads && raw < EXPORT_LIMITS.part && !done; read++) {
-      const batch = await ctx.runQuery(readBatchRef, { org_id: job.org_id, at })
+      const batch = await ctx.runQuery(readBatchRef, {
+        org_id: job.org_id,
+        at,
+        ...(wide ? {} : { wide: false }),
+      })
+      if (batch.retry === 'narrow') {
+        wide = false
+        continue
+      }
       if (batch.rows.length > 0) {
         const text = batch.rows.map((row) => JSON.stringify(archiveRow(row))).join(',\n')
         const bytes = encoder.encode(records > 0 ? `,\n${text}` : text)

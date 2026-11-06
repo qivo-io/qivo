@@ -10,8 +10,11 @@
  * is not ready leaves tasks in issues under an absent project, so the
  * issues section reads each task's parent only while the organization has
  * one, on a smaller page still. Each task's text comes from its description
- * rows (model/descriptions.ts descriptionOf), two documents at most a row,
- * so the issues section reads a smaller page too.
+ * rows (model/descriptions.ts), two documents at most a row. The job reads
+ * tasks 100 a page with their texts under TEXT_ROOM (descriptionsOf) while
+ * nothing is in flight, and six a page, each text through a range of its
+ * own (descriptionOf), when a page's texts do not fit, as the browser
+ * export's `page` always does.
  *
  * Convex runs one paginated read in a query, so readBatch pages at most
  * once and reads the children of further parents as whole ranges. */
@@ -23,6 +26,7 @@ import type { QueryCtx } from '../_generated/server'
 import { byId, usedMoreThan } from '../lib/db'
 import { DELETED_ITEM_STATES } from '../lib/enums'
 import { notFound } from '../lib/functions'
+import { MIB } from '../lib/limits'
 import {
   type ExportCursor,
   ORG_EXPORT_ORDER,
@@ -30,7 +34,7 @@ import {
   type OrgExportRow,
   type OrgExportSection,
 } from '../lib/orgExport'
-import { descriptionOf } from './descriptions'
+import { descriptionOf, descriptionsOf } from './descriptions'
 import { countersOf } from './orgs'
 import { stampRow } from './syncStamps'
 
@@ -39,9 +43,10 @@ export const PAGE_SIZE = 100
  * related documents at Convex's 1 MiB document cap stay inside its 16 MiB
  * read limit with the page itself. */
 export const JOINED_PAGE_SIZE = 10
-/* An issues page, whose rows each read the task's text, two description
- * rows at most of up to Convex's 1 MiB document limit: 6 rows read 12 MiB
- * beside the page's own rows. */
+/* A narrow issues page, whose rows each read the task's text, two
+ * description rows at most of up to Convex's 1 MiB document limit: 6 rows
+ * read 12 MiB beside the page's own rows. The browser export's `page` reads
+ * it, and the job when a wide page's texts do not fit (TEXT_ROOM). */
 export const ISSUES_PAGE_SIZE = 6
 /* An issue_links page read while a project item is in flight. Each row can
  * also read its target task, up to Convex's 1 MiB document limit, and the
@@ -55,6 +60,23 @@ export const IN_FLIGHT_LINKS_PAGE_SIZE = 4
  * plus the page's own rows stay under the 16 MiB read limit. */
 export const IN_FLIGHT_ISSUES_PAGE_SIZE = 2
 export const PAGE_BYTES = 1024 * 1024
+
+/** The reads a wide tasks page of the job may make in all, its PAGE_SIZE
+ * tasks within PAGE_BYTES and their texts through descriptionsOf
+ * (model/descriptions.ts), which charges each text two description rows at
+ * Convex's 1 MiB document limit before it reads and answers null once the
+ * texts left do not fit. The transaction's reads, the page's own included,
+ * stay under `bytes`, so the answer holds at most about 7 MiB, the most
+ * model/orgExports.ts PART_RAW_BYTES allows for one answer, and the texts
+ * of a page fit whenever they hold under about 5 MiB in all. The ranges
+ * (one a text, the page and the in-flight check) and documents (the page
+ * and two a text) stay far under Convex's 4,096 ranges and 32,000
+ * documents. A page whose texts do not fit answers no rows and
+ * `retry: 'narrow'`, and the job reads the same cursor again six tasks a
+ * page (ISSUES_PAGE_SIZE). Measured on 300 open tasks of ordinary text in
+ * one sub-project (convex/tests/orgExportJob.test.ts, the design size
+ * block): see that block's log. A mutable object, so tests can lower it. */
+export const TEXT_ROOM = { ranges: 1024, documents: 4096, bytes: 7 * MIB }
 const JOINED_SECTIONS: ReadonlySet<OrgExportSection> = new Set([
   'team_members',
   'project_access',
@@ -301,7 +323,8 @@ export async function organizationRow(ctx: QueryCtx, orgId: string): Promise<Org
  * their project is not live. `inFlight` says whether a deleted item is in
  * flight, which only the issues and issue_links sections ask: only then
  * does a task's project or parent, or a link target's project, need a read.
- * An issues row reads the task's text. */
+ * An issues row takes its text from `texts` by task id when the caller read
+ * them already (descriptionsOf), else reads it (descriptionOf). */
 export async function exportDocs(
   ctx: QueryCtx,
   orgId: string,
@@ -309,6 +332,7 @@ export async function exportDocs(
   docs: readonly Doc<PagedSection>[],
   inFlight: boolean,
   live: LiveChecks,
+  texts?: ReadonlyMap<string, string>,
 ): Promise<{ rows: OrgExportRow[]; skipped: number }> {
   // Only an item in flight leaves a task in issues under an absent project,
   // or a task under a parent whose project is absent (the move detaches it
@@ -344,7 +368,7 @@ export async function exportDocs(
       delete row.parent_id
     // a task, the one row with a title, takes its text from its
     // description row
-    if ('title' in doc) row.description = await descriptionOf(ctx.db, doc)
+    if ('title' in doc) row.description = texts?.get(doc.id) ?? (await descriptionOf(ctx.db, doc))
     if (await hasOwnedEndpoint(ctx, section, row, orgId, inFlight ? live.project : undefined))
       rows.push(row)
   }
@@ -353,13 +377,20 @@ export async function exportDocs(
 
 /** What one readBatch gives the export job: rows of one section in order,
  * where its reads go on, whether the section is done, and how many tasks it
- * left out because a deleted item was in flight. */
+ * left out because a deleted item was in flight. `retry: 'narrow'` comes
+ * with no rows and the cursor it was given, when a wide tasks page's texts
+ * did not fit (TEXT_ROOM): read the same cursor again with `wide: false`. */
 export type ExportBatch = {
   rows: OrgExportRow[]
   at: ExportCursor
   done: boolean
   skipped: number
+  retry?: 'narrow'
 }
+
+/** How readBatch reads: `wide: false` reads the tasks section six a page
+ * (ISSUES_PAGE_SIZE) instead of 100 with their texts under TEXT_ROOM. */
+export type BatchOptions = { wide?: boolean }
 
 /* Whether readBatch may start another read: under PAGE_BYTES read so far
  * and under half of each of Convex's other limits for one transaction. */
@@ -449,7 +480,12 @@ async function parentPage(
  * A top-level section reads one page: at most PAGE_BYTES of rows and the
  * one row past them, plus the reads its rows make (pageSizeOf): six tasks'
  * texts at two description rows each, or two tasks' projects, parents and
- * texts, about 2 + 12 MiB. A child section starts each read under
+ * texts, about 2 + 12 MiB. While no deleted item is in flight and `wide` is
+ * not false, the tasks section reads PAGE_SIZE tasks within PAGE_BYTES
+ * and their texts within TEXT_ROOM instead, at most 7 MiB in all; when the
+ * texts do not fit it answers no rows, its cursor unchanged and
+ * `retry: 'narrow'`, and the caller reads the same cursor again narrow, so
+ * no page is lost. A child section starts each read under
  * PAGE_BYTES read and under half of Convex's other limits (roomLeft):
  * either a parent page, at most PAGE_BYTES of parents and one more, with
  * up to ten of their projects while a deleted item is in flight, or one
@@ -461,12 +497,14 @@ async function parentPage(
  * most Convex's 1 MiB, so a call reads at most about 1 + 2 + 2 + 10 MiB,
  * under the 16 MiB a query may read. Its answer holds only rows it read
  * and their texts: an issues page's ISSUES_PAGE_SIZE texts with their
- * rows, about 7 MiB at most, and about 3 MiB for any other section.
+ * rows, or a wide page's within TEXT_ROOM, about 7 MiB at most, and about
+ * 3 MiB for any other section.
  */
 export async function readBatch(
   ctx: QueryCtx,
   orgId: string,
   from: ExportCursor,
+  opts: BatchOptions = {},
 ): Promise<ExportBatch> {
   const section = ORG_EXPORT_ORDER[from.section]
   if (section === undefined) throw new Error(`no export section ${from.section}`)
@@ -488,10 +526,27 @@ export async function readBatch(
   const pageSize = pageSizeOf(section, inFlight)
   const rows: OrgExportRow[] = []
   let skipped = 0
-  const add = async (docs: readonly Doc<PagedSection>[]) => {
-    const out = await exportDocs(ctx, orgId, section, docs, inFlight, live)
+  const add = async (docs: readonly Doc<PagedSection>[], texts?: ReadonlyMap<string, string>) => {
+    const out = await exportDocs(ctx, orgId, section, docs, inFlight, live, texts)
     rows.push(...out.rows)
     skipped += out.skipped
+  }
+  if (section === 'issues' && !inFlight && opts.wide !== false) {
+    const page = await ctx.db
+      .query('issues')
+      .withIndex('by_org', (q) => q.eq('org_id', orgId))
+      .paginate({
+        numItems: PAGE_SIZE,
+        cursor: from.cursor,
+        maximumRowsRead: PAGE_SIZE,
+        maximumBytesRead: PAGE_BYTES,
+      })
+    const texts = await descriptionsOf(ctx, page.page, TEXT_ROOM)
+    // Convex's cursor cannot point inside a page, so the caller reads the
+    // same page again, narrow
+    if (texts === null) return { rows: [], at: from, done: false, skipped: 0, retry: 'narrow' }
+    await add(page.page, texts)
+    return { rows, at: at(page.isDone ? null : page.continueCursor), done: page.isDone, skipped }
   }
   if (parentTable === null) {
     const page = await readPage(ctx, section, orgId, from.cursor, pageSize)
