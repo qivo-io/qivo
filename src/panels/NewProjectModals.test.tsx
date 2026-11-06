@@ -990,6 +990,8 @@ describe('New sub-project', () => {
     server.reads.hold(true)
     await openSub('beacon-plan')
     expect(find<HTMLButtonElement>('[data-project-lead-picker]').disabled).toBe(true)
+    // no seat is known yet, so the Lead names nobody
+    expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Loading…')
     expect(parentButton().disabled).toBe(true)
     server.reads.hold(false)
     await rerun()
@@ -997,5 +999,6 @@ describe('New sub-project', () => {
     expect(find('[data-project-lead-picker]').getAttribute('data-project-lead-picker')).toBe(
       'aisha-b',
     )
+    expect(find('[data-project-lead-picker]').getAttribute('aria-label')).toBe('Lead: Aisha Rahman')
   })
 })

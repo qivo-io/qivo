@@ -718,20 +718,21 @@ function parentNote(read: ProjectSettingsRead, picked: ParentPick, opener: boole
    sub_project_parents), 25 at a time with a search, read only while open,
    equal names tagged as duplicateNameTags tags them; a pick is checked in
    turn. The Project and Lead popovers wait for the check unless the
-   workspace holds the parent, and use the home organization, else the
-   first, only once it answers `unavailable`. The creator is the caller's
-   seat in that organization (P.seatIn), never the home seat, and leads
-   until the Lead popover (leadCandidates with the parent) offers someone
-   else; a pick is kept through a change of parent, which the create checks
-   again. Create needs a current answer that the parent may take a
-   sub-project, so it is off while the check loads, failed, refreshes after
-   a failure, or answered archived, unavailable or no. The create goes to
-   the answer's organization (CreateOptions `shown`). A starter task is
-   offered only under a parent the workspace holds, as P.addIssue creates
-   tasks only in a project it holds. Of the store it reads the caller's
-   seats and their names, the organizations' names, whether the workspace
-   holds the parent, the keys the name's preview avoids (genKey) and the
-   creator's admin flag for the footer; no list, choice or right. */
+   workspace holds the parent, the Lead button reading Loading… meanwhile,
+   and use the home organization, else the first, only once it answers
+   `unavailable`. The creator is the caller's seat in that organization
+   (P.seatIn), never the home seat, and leads until the Lead popover
+   (leadCandidates with the parent) offers someone else; a pick is kept
+   through a change of parent, which the create checks again. Create needs
+   a current answer that the parent may take a sub-project, so it is off
+   while the check loads, failed, refreshes after a failure, or answered
+   archived, unavailable or no. The create goes to the answer's
+   organization (CreateOptions `shown`). A starter task is offered only
+   under a parent the workspace holds, as P.addIssue creates tasks only in
+   a project it holds. Of the store it reads the caller's seats and their
+   names, the organizations' names, whether the workspace holds the parent,
+   the keys the name's preview avoids (genKey) and the creator's admin flag
+   for the footer; no list, choice or right. */
 function NewSubProjectModal({
   init = {},
   onClose,
@@ -833,7 +834,8 @@ function NewSubProjectModal({
         <MField label="Lead" flex>
           <LeadPicker
             on={parent ? { org_id: org, parent_id: parent.id } : { org_id: org }}
-            lead={lead}
+            lead={seat ? lead : null}
+            emptyLabel="Loading…"
             disabled={!org || !parent}
             busy={false}
             onPick={(person) => setPicked({ ...person, org })}

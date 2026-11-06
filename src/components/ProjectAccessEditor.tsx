@@ -933,25 +933,27 @@ export type LeadPickerFor = { org_id: string; project_id?: string; parent_id?: s
  * A Lead field: a button naming the lead that opens the people a lead
  * write accepts (projectSettings.leadCandidates), read once a batch while
  * it is open, with a search and Load more. `lead` is the person the
- * button names, `busy` that a pick is on its way, and `onPick` hears the
- * person picked. While `disabled` or `busy`, an open list keeps reading
- * but its choices are off, so a pick made as the page's writes turn off
- * sends nothing.
+ * button names, and with no lead it names `emptyLabel`, else "No lead".
+ * `busy` says a pick is on its way, and `onPick` hears the person picked.
+ * While `disabled` or `busy`, an open list keeps reading but its choices
+ * are off, so a pick made as the page's writes turn off sends nothing.
  */
 export function LeadPicker({
   on,
   lead,
+  emptyLabel,
   disabled,
   busy,
   onPick,
 }: {
   on: LeadPickerFor
   lead: { id: string; name: string } | null
+  emptyLabel?: string
   disabled: boolean
   busy: boolean
   onPick: (person: { id: string; name: string }) => void
 }) {
-  const label = lead?.name ?? 'No lead'
+  const label = lead?.name ?? emptyLabel ?? 'No lead'
   const off = disabled || busy
   return (
     <Popover
