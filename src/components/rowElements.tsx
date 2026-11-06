@@ -293,12 +293,14 @@ export function portraitFace(compact: boolean, face: ReactNode) {
 }
 
 /** The owner trigger's props after its variant's, for the owner `shown`:
-    its hooks, name, hover text and the press that runs `toggle`. */
+    its hooks, name, hover text and the press that runs `toggle`.
+    `offTitle` is the hover text of a trigger that is off. */
 export function ownerTrigger(
   issue: IssueVM,
   shown: 'assignee' | 'reviewer',
   canWrite: boolean,
   toggle: (event: MouseEvent<HTMLElement>) => void,
+  offTitle = 'Read-only project access',
 ) {
   const name = P.user(issue[shown])?.name || (shown === 'reviewer' ? 'No reviewer' : 'Unassigned')
   return {
@@ -306,7 +308,7 @@ export function ownerTrigger(
     'data-owner-field': shown,
     'data-focus-key': 'owner',
     'aria-label': `Change ${shown} for ${issue.title}: ${name}`,
-    title: canWrite ? `Change ${shown} · ${name}` : 'Read-only project access',
+    title: canWrite ? `Change ${shown} · ${name}` : offTitle,
     disabled: !canWrite,
     draggable: false,
     onDragStart: (event: DragEvent) => {

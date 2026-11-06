@@ -1,6 +1,9 @@
 /* A Team sync row and the quiet items around it: the card with its marks
    and one-click controls, the mention window, the Done-since and Waiting-on-
-   review items, and the load chip. Everything reads the live store; every
+   review items, and the load chip. A card shows its task as the page's
+   meeting gives it (views/teamSync/useSyncMeeting.ts), the workspace's
+   model or the one shaped from the agenda's row, with the agenda's verdict
+   and blockers; its controls write through the store either way. Every
    change made from a card stamps the page owner and ticks the row
    (deviation #316). */
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -28,7 +31,6 @@ import { closeOrAsk, questionOpen } from '@/lib/discardQuestion'
 import { overLimit } from '@/lib/fieldLimits'
 import { type UnsentScope, UnsentScopeContext, useUnsaved, useUnsentScope } from '@/lib/leaveGuard'
 import {
-  bannerVerdict,
   dayLabel,
   type LoadFigure,
   mentionBody,
@@ -36,17 +38,18 @@ import {
   type SinceMark,
   type SyncCardPlace,
   type SyncDay,
+  type SyncLoad,
+  type SyncVerdict,
   waitingLabel,
 } from '@/lib/teamSync'
 import { useUpdateBlocker } from '@/lib/updateSafety'
 import { useMenuBackLayer, useMobileBackLayer } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
 import { fmtHours } from '@/lib/workload'
-import { type IssueVM, P, type UserVM } from '@/store/planner'
+import { type IssueVM, P } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { LIMITS } from '../../../convex/lib/limits'
 import { DelayBanner } from '../kanbanCards'
-import { weekFigure } from './weekFigure'
 
 /** What every card on one page shares: whose page it is, their reading
     point, and the page's callbacks. */
@@ -63,15 +66,22 @@ export type PageCtx = {
   stamp: () => void
   /** a change was made from this row: stamp the page owner and tick it */
   touched: (it: IssueVM) => void
-  /** the row whose reviewer prompt is open, after a move into In Review */
+  /** the row whose reviewer prompt is open, after a move into In Review;
+      the page clears it, and the card hides it, while the meeting is stale
+      (`frozen`) */
   prompt: string | null
   setPrompt: (handle: string | null) => void
   onOpenTask: (handle: string) => void
   onShowTask: (view: 'kanban' | 'roadmap', handle: string) => void
   /** each mounted card's scope of unsent text, with its task and section's
-      person, which a scope switch reads to ask only about the cards it
-      takes away */
+      person, which a scope switch asks about */
   cards: Map<UnsentScope, SyncCardPlace>
+  /** while the meeting stopped updating (state stale), the title of the
+      task controls it turns off (stoppedTitle), else null: the cards'
+      typed text stays and a mention still sends, while an owner list, the
+      status menu or the reviewer prompt open before it closes and writes
+      nothing */
+  frozen: string | null
 }
 
 /** The scope of the text typed in one card, inside the page's, registered
@@ -100,9 +110,35 @@ const LOAD_FILL: Record<LoadFigure['tone'], string> = {
   agent: 'bg-[color-mix(in_oklab,var(--primary)_8%,transparent)]',
 }
 
-/** "88% of 32 h this week", or an agent's "12 h scheduled this week". */
-export function LoadChip({ user }: { user: UserVM }) {
-  const f = weekFigure(user)
+/** "88% of 32 h this week", or an agent's "12 h scheduled this week"; a
+    muted "…" while an organization Viewer's read of the week is on its
+    way, and a muted "unknown" where it could not be read, never a 0. */
+export function LoadChip({ load }: { load: SyncLoad }) {
+  if (load.state === 'waiting')
+    return (
+      <HoverTooltip content="Loading this week's load">
+        <span
+          data-sync-load="waiting"
+          className="inline-flex items-baseline gap-1.5 whitespace-nowrap text-sm text-text-3"
+        >
+          <span aria-hidden="true" className="rounded-sm px-1.5 py-px !font-mono font-medium">
+            …
+          </span>
+          <span className="sr-only">Loading this week's load</span>
+        </span>
+      </HoverTooltip>
+    )
+  if (load.state === 'unknown')
+    return (
+      <span
+        data-sync-load="unknown"
+        className="inline-flex items-baseline gap-1.5 whitespace-nowrap text-sm text-text-3"
+      >
+        <span className="rounded-sm px-1.5 py-px font-medium">unknown</span>
+        this week
+      </span>
+    )
+  const f = load.figure
   return (
     <span
       data-sync-load={f.tone}
@@ -176,7 +212,18 @@ function SinceText({ mark, now }: { mark: SinceMark; now: number }) {
     Pause / Resume) behind a select-look trigger showing the dot and the
     dropdown arrow (deviation #326). A move into In Review with no reviewer
     offers the reviewer picker right after. */
-function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite: boolean }) {
+function StatusCtl({
+  it,
+  ctx,
+  canWrite,
+  offTitle,
+}: {
+  it: IssueVM
+  ctx: PageCtx
+  canWrite: boolean
+  /** why the control is off */
+  offTitle: string
+}) {
   return (
     <span data-sync-status={it.id} className="inline-flex shrink-0">
       <FieldSelect
@@ -185,7 +232,7 @@ function StatusCtl({ it, ctx, canWrite }: { it: IssueVM; ctx: PageCtx; canWrite:
         menuWidth={180}
         backLayer
         disabled={!canWrite}
-        title={canWrite ? undefined : READ_ONLY}
+        title={canWrite ? undefined : offTitle}
         className="min-w-control [&_[data-slot=select-value]>.truncate]:hidden"
         options={P.STATUSES.map((s) => ({
           value: s.id,
@@ -549,6 +596,11 @@ type SyncCardProps = {
   it: IssueVM
   ctx: PageCtx
   later?: boolean
+  /** the agenda's verdict of the row (its banner), null for none */
+  verdict: SyncVerdict
+  /** the keys of its open blockers the agenda names, the same array while
+      they stay the same */
+  blockedBy: readonly string[]
   /** P.contextVersion, for what the row reads besides its task */
   context: StoreVersion
   /** the task's latest comment (P.lastComments), which the marks read */
@@ -560,14 +612,18 @@ type SyncCardProps = {
 /** One row of a person's page, as a board card: the delay banner, the
     title, the meta and marks lines, then the controls. `later` quiets a
     To Do row planned past this week. */
-function SyncCardView({ it, ctx, later }: SyncCardProps) {
+function SyncCardView({ it, ctx, later, verdict, blockedBy }: SyncCardProps) {
   const ownerRef = useRef<HTMLSpanElement>(null)
+  // the project's level decides (the projects part holds every level a
+  // card reads), and a stale meeting turns the task controls off
   const canWrite = P.canWrite(it.project)
+  const editable = canWrite && ctx.frozen === null
+  const offTitle = canWrite ? (ctx.frozen ?? READ_ONLY) : READ_ONLY
   const marks = rowMarks(it, {
     person: ctx.owner,
     since: ctx.since,
-    verdict: bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
-    issueById: P.issueById,
+    verdict,
+    blockedBy,
     // absent until an answer covers this task, so no since mark shows
     lastCommentAt: P.lastComments.get(it.uuid),
   })
@@ -597,7 +653,7 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
           later && 'opacity-60 focus-within:opacity-100 hover:opacity-100',
         )}
       >
-        <DelayBanner it={it} />
+        <DelayBanner it={it} verdict={verdict} />
         <div className="flex flex-col gap-2 p-2">
           <div className="flex items-start gap-2">
             <TitleButton
@@ -665,18 +721,24 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
             >
               <RemainingInput
                 it={it}
-                title={canWrite ? 'Remaining hours. Leave empty for no estimate' : READ_ONLY}
+                title={
+                  canWrite
+                    ? (ctx.frozen ?? 'Remaining hours. Leave empty for no estimate')
+                    : READ_ONLY
+                }
                 disabled={!canWrite}
+                readOnly={ctx.frozen !== null}
                 onCommit={ctx.touched}
                 className={cn(ctx.mobile && 'w-12', it.remaining == null && 'border-warning')}
               />
               <span className="text-sm text-text-3">h</span>
-              <StatusCtl it={it} ctx={ctx} canWrite={canWrite} />
+              <StatusCtl it={it} ctx={ctx} canWrite={editable} offTitle={offTitle} />
               <span ref={ownerRef} data-sync-owner={it.id} className="inline-flex shrink-0">
                 <AssigneeAvatar
                   issue={it}
                   variant="chevron"
                   backLayer
+                  offTitle={ctx.frozen ?? undefined}
                   onPick={() => ctx.touched(it)}
                 />
               </span>
@@ -688,24 +750,32 @@ function SyncCardView({ it, ctx, later }: SyncCardProps) {
             </span>
           </div>
         </div>
-        {ctx.prompt === it.id && <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />}
+        {/* a stale meeting writes nothing, so the prompt goes with it */}
+        {ctx.prompt === it.id && ctx.frozen === null && (
+          <ReviewerPrompt it={it} ctx={ctx} anchor={ownerRef} />
+        )}
       </div>
     </UnsentScopeContext.Provider>
   )
 }
 
 /* A person's page renders every card again on each store change. A card
-   renders the same while its task keeps its object (P.issues keeps it while
-   the task, its delay, its family and the tasks linked to it stay the
-   same), with the same context, comment, tick and prompt, the same page
-   owner and reading point, on the same day (every label it shows counts
-   whole days) and layout, so it skips. Its callbacks act the same for the
-   same page owner: TeamSync keeps onOpenTask and onShowTask, and the
-   reviewed set's mark and toggle update its latest state. */
+   renders the same while its task keeps its object (the workspace and the
+   views' shaped models keep it while the task's data stays the same), with
+   the same verdict and the same blockers array (the meeting keeps it while
+   its keys stay the same), the same context, comment, tick and prompt, the
+   same page owner and reading point, on the same day (every label it
+   shows counts whole days), layout and stale state, so it skips. Its
+   callbacks act the same for the same page owner: TeamSync keeps
+   onOpenTask and onShowTask, and the reviewed set's mark and toggle update
+   its latest state. */
 export const SyncCard = memo(
   SyncCardView,
   (a, b) =>
     a.it === b.it &&
+    a.verdict === b.verdict &&
+    a.blockedBy === b.blockedBy &&
+    a.ctx.frozen === b.ctx.frozen &&
     a.later === b.later &&
     a.context === b.context &&
     a.lastComment === b.lastComment &&

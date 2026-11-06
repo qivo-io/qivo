@@ -68,7 +68,11 @@
  * task's address in fresh loads, neither of which may subscribe the
  * workspace's task windows (workspace.tasks), then the Roadmap, which must
  * subscribe them and show the task's row (ui/tasks-on-demand), so the
- * deployment's app loads every task only for a page that needs them. The
+ * deployment's app loads every task only for a page that needs them. It
+ * makes a task of the Standard agent's in Alpha over REST and opens Team
+ * sync on its project in a fresh load, which must subscribe Team sync's
+ * agenda (teamSync.agenda) and no task window, and show the task's
+ * card on the agent's line from the rail (ui/team-sync). The
  * relation pickers step waits for each window's Link task and Add subtask
  * to turn on, which they do once the window's own read of its task has
  * answered, since a task address loads no task window. It makes a label with
@@ -4273,6 +4277,60 @@ async function attachmentUploadCheck() {
   })
 }
 
+/** The step that opens Team sync on the deployment's agenda
+ *  (teamSyncCheck). */
+export const TEAM_SYNC_STEP = 'ui/team-sync'
+
+/** The query Team sync subscribes for its meeting (convex/teamSync.ts
+ *  agenda), which reads no task window. */
+export const AGENDA_QUERY = 'teamSync:agenda'
+
+/** Team sync reads its meeting from the deployment: a task of the Standard
+ *  agent's, In Progress in Alpha, made over REST, shows on the agent's
+ *  line of a fresh load of Team sync for the run project M by its address,
+ *  on ui/task-link's fresh-load approach. The load's frames must add
+ *  AGENDA_QUERY at least once, as a reconnect or a new day or week grid
+ *  during the load adds it again on a correct app, and TASK_WINDOWS_QUERY
+ *  never, and the page must reach its ok state (data-sync-state). It
+ *  writes nothing in the app: the address saves no scope and opening a step
+ *  stamps no one.
+ *  The cleanup, which deletes M, removes the task. It runs before the run
+ *  archives M. */
+async function teamSyncCheck() {
+  const w = run.creds.writeToken
+  const { M, A } = run.projects
+  const std = run.agents.std
+  await check(TEAM_SYNC_STEP, async () => {
+    expect(Number.isInteger(M.num), 'the run project has no number')
+    const t = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} team sync`,
+      status: 'progress',
+      assignee_id: std.id,
+    })
+    run.created.push(t)
+    eq(t.assignee_id, std.id, "the task's assignee")
+    const sent = []
+    const record = (ws) => ws.on('framesent', (frame) => sent.push(String(frame.payload)))
+    app.on('websocket', record)
+    try {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const page = app.locator('[data-workspace-view] [data-sync-page][data-sync-state="ok"]')
+      await page.waitFor({ timeout: 60_000 })
+      const adds = (query) => sent.filter((f) => addsQuery(f, query)).length
+      expect(adds(AGENDA_QUERY) >= 1, 'the load did not subscribe the agenda')
+      eq(adds(TASK_WINDOWS_QUERY), 0, 'Team sync subscribed task windows')
+      await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
+      await page.locator(`[data-sync-card="${t.key}"]`).waitFor({ timeout: 60_000 })
+      return `opened ${M.key}'s meeting on the agenda without task windows, with ${t.key} on its agent's line`
+    } finally {
+      app.off('websocket', record)
+    }
+  })
+}
+
 /** What the Overview of the run's own sub-project shows once the
  *  deployment answered (overviewCheck): its two tasks, one To do and due
  *  OVERVIEW_OVERDUE_DAYS ago, one paused with no due date, neither assigned,
@@ -6647,6 +6705,9 @@ async function main() {
   // the Milestones window opened from the project's Overview, on a
   // milestone of its own, while the project is active
   await milestoneWindowCheck()
+  // Team sync on the deployment's agenda, with a task of its own, while
+  // the project is active
+  await teamSyncCheck()
   // archived tasks and projects, then delete the projects in the app
   await archiveChecks()
   await check('cleanup/app/delete-project', async () => {

@@ -261,25 +261,20 @@ describe('memoized task rows', () => {
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 
-  it('render a Team sync card again only for its task and the tasks it is linked to', async () => {
-    const blockedByTwo = (snap: Snapshot) => {
-      snap.links.push({
-        id: 'link-1',
-        // stored as the blocker's link
-        source_id: 'two',
-        target_id: 'one',
-        type: 'blocks',
-        pair_key: 'one:two',
-        created_at: AT,
-      })
-    }
-    // what the page holds besides the store, as TeamSync keeps it
+  it('render a Team sync card again only for its task, its verdict and its blockers', async () => {
+    // what the page holds besides the store, as TeamSync keeps it: the
+    // agenda's verdicts and blockers by task, each blockers array the same
+    // while its keys stay the same (views/teamSync/useSyncMeeting.ts)
     const page = {
       ticked: new Set<string>(),
       prompt: null as string | null,
       since: 0,
       now: Date.now(),
+      frozen: null as string | null,
+      verdicts: {} as Record<string, 'late' | 'behind' | 'unknown' | null>,
+      blocked: { one: ['QN-2'] } as Record<string, readonly string[]>,
     }
+    const none: readonly string[] = []
     await mount(({ P, SyncCard, syncDay }) => {
       // a new page context every render, as TeamSync builds it
       const ctx = {
@@ -301,18 +296,21 @@ describe('memoized task rows', () => {
         onOpenTask: noop,
         onShowTask: noop,
         cards: new Map(),
+        frozen: page.frozen,
       }
       return P.issues.map((it) => (
         <SyncCard
           key={it.uuid}
           it={it}
           ctx={ctx}
+          verdict={page.verdicts[it.uuid] ?? null}
+          blockedBy={page.blocked[it.uuid] ?? none}
           context={P.contextVersion}
           lastComment={P.lastComments.get(it.uuid)}
           reviewed={ctx.reviewed.has(it.uuid)}
         />
       ))
-    }, blockedByTwo)
+    })
     const { P } = await import('../store/planner')
     const handle = (id: string) => P.issues.find((it) => it.uuid === id)!.id
     // nothing changed: no card renders
@@ -331,13 +329,19 @@ describe('memoized task rows', () => {
     expect(await rerenderedBy(() => (page.now = nextDay))).toEqual(['one', 'three', 'two'])
     expect(await renderedBy(rename('three'))).toEqual(['three'])
     expect(await renderedBy(() => {})).toEqual([])
-    // the blocker is done, so the card it blocks drops its mark
-    expect(
-      await renderedBy((snap) => {
-        snap.issues.find((issue) => issue.id === 'two')!.status = 'done'
-      }),
-    ).toEqual(['one', 'two'])
+    expect(document.querySelector('[data-sync-blocked]')?.textContent).toContain('QN-2')
+    // the agenda's next answer no longer names the blocker: that card alone
+    expect(await rerenderedBy(() => (page.blocked = { one: none }))).toEqual(['one'])
     expect(document.querySelector('[data-sync-blocked]')).toBeNull()
+    // a verdict renders its card, and the banner draws it alone
+    expect(await rerenderedBy(() => (page.verdicts = { two: 'unknown' }))).toEqual(['two'])
+    expect(document.querySelector('[data-delay="unknown"]')).not.toBeNull()
+    // a meeting that stops updating renders every card read-only
+    expect(await rerenderedBy(() => (page.frozen = 'This meeting stopped updating.'))).toEqual([
+      'one',
+      'three',
+      'two',
+    ])
     expect(await renderedBy(renamePerson)).toEqual(['one', 'three', 'two'])
   })
 
@@ -354,12 +358,16 @@ describe('memoized task rows', () => {
       return (
         <TeamOpening
           rows={P.issues}
-          humans={P.users}
+          tasks={P.issues}
+          humans={[]}
           subIds={new Set(P.projects.map((p) => p.id))}
           metaIds={new Set()}
           day={syncDay(now)}
           now={now}
           onOpenTask={noop}
+          verdictOf={() => null}
+          blockedOf={() => []}
+          loadOf={() => ({ state: 'unknown' })}
         />
       )
     }, unowned)

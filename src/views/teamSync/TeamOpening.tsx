@@ -1,12 +1,17 @@
 /* The team opening, the walk's first step: the state of the team before
-   anyone speaks. The Overview's facts over the walk's rows, the people near
-   or over capacity, the milestones this week and next, and the two lists
-   that ask for a person: work with no owner and reviews with no reviewer.
+   anyone speaks. The Overview's facts over the walk's rows, with the
+   agenda's verdicts and blockers, the people near or over capacity from
+   the agenda's weeks, the milestones this week and next, and the two lists
+   that ask for a person: work with no owner and reviews with no reviewer,
+   over the tasks the agenda names (views/teamSync/useSyncMeeting.ts). A
+   figure whose inputs are not all known says unknown, never 0, and while
+   some task the agenda names has not reached the page the counts show "…".
    Naming someone here stamps no one: it is not a change made on a person's
-   page. Finished work is not listed: it belongs to each person's page,
-   since each person's "since" differs. The milestones come from the
-   server's bounded reads over the scope's top-level projects
-   (useSyncMilestoneReads); the rest still reads the workspace. */
+   page, and a meeting that stopped updating turns it off, as on the cards.
+   Finished work is not listed: it belongs to each person's page, since
+   each person's "since" differs. The milestones come from the server's
+   bounded reads over the scope's top-level projects the agenda names
+   (useSyncMilestoneReads); the rest comes from the agenda. */
 import { memo, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AssigneeAvatar } from '@/components/AssigneeAvatar'
 import { DeferredList } from '@/components/DeferredList'
@@ -18,13 +23,15 @@ import { relativeWeek, weekToISO } from '@/lib/dates'
 import { limitSentence } from '@/lib/fieldLimits'
 import { createMountScheduler, useMountGuards } from '@/lib/mountScheduler'
 import {
-  bannerVerdict,
   nearCapacity,
   needsOwner,
   needsReviewer,
   openingFacts,
   SYNC_MILESTONE_SLOTS,
   type SyncDay,
+  type SyncLoad,
+  type SyncPerson,
+  type SyncVerdict,
   syncMilestones,
   syncSentence,
   waitingLabel,
@@ -32,34 +39,47 @@ import {
 import { cn } from '@/lib/utils'
 import { useViewVisibility } from '@/lib/viewVisibility'
 import type { MilestoneAsk } from '@/store/milestoneRows'
-import { type IssueVM, type MilestoneVM, P, type UserVM } from '@/store/planner'
+import { type IssueVM, type MilestoneVM, P } from '@/store/planner'
 import type { StoreVersion } from '@/store/updates'
 import { LIMITS } from '../../../convex/lib/limits'
 import { useViewsNews } from '../useViewsNews'
 import { LoadChip, type PageCtx, TitleButton } from './SyncCard'
-import { weekFigure } from './weekFigure'
 
+/* One figure of the facts strip; null is a figure Qivo could not work out,
+   which reads a muted "unknown", never a number, and `waiting` one whose
+   tasks have not all reached the page, a muted "…". */
 function Fact({
   label,
   value,
   tone,
 }: {
   label: string
-  value: number
+  value: number | null | 'waiting'
   tone?: 'danger' | 'warning'
 }) {
   return (
     <div className="min-w-0">
       <div className="text-sm text-text-2">{label}</div>
-      <div
-        className={cn(
-          '!font-mono text-2xl leading-tight text-text-1',
-          value > 0 && tone === 'danger' && 'text-danger',
-          value > 0 && tone === 'warning' && 'text-warning',
-        )}
-      >
-        {value}
-      </div>
+      {value === 'waiting' ? (
+        <div data-sync-fact="waiting" className="text-2xl leading-tight text-text-3">
+          <span aria-hidden="true">…</span>
+          <span className="sr-only">Still counting</span>
+        </div>
+      ) : value === null ? (
+        <div data-sync-fact="unknown" className="text-2xl leading-tight text-text-3">
+          unknown
+        </div>
+      ) : (
+        <div
+          className={cn(
+            '!font-mono text-2xl leading-tight text-text-1',
+            value > 0 && tone === 'danger' && 'text-danger',
+            value > 0 && tone === 'warning' && 'text-warning',
+          )}
+        >
+          {value}
+        </div>
+      )}
     </div>
   )
 }
@@ -110,18 +130,20 @@ function AskRow({
   )
 }
 
-/* The two lists can hold a large share of the organization's tasks, and the
-   opening renders again on each store change. A row renders the same while
-   its task keeps its object (P.issues), with the same context
+/* The two lists can hold many of the meeting's tasks, and the opening
+   renders again on each store change. A row renders the same while its
+   task keeps its object (the meeting's model of it), with the same context
    (P.contextVersion) and label, so it skips. TeamSync keeps onOpenTask. */
 
-/** A "Needs an owner" row. */
+/** A "Needs an owner" row; `offTitle` turns its picker off, saying why. */
 const OwnerAsk = memo(function OwnerAsk({
   it,
   onOpenTask,
+  offTitle,
 }: {
   it: IssueVM
   onOpenTask: (handle: string) => void
+  offTitle?: string
   context: StoreVersion
 }) {
   const urgent = it.priority === 'urgent'
@@ -143,20 +165,25 @@ const OwnerAsk = memo(function OwnerAsk({
           {it.due && <span className="!font-mono">due {P.fmtISO(it.due)}</span>}
         </>
       }
-      control={<AssigneeAvatar issue={it} field="assignee" variant="label" backLayer />}
+      control={
+        <AssigneeAvatar issue={it} field="assignee" variant="label" backLayer offTitle={offTitle} />
+      }
     />
   )
 })
 
-/** A "Needs a reviewer" row; `waiting` is its age, or null when unknown. */
+/** A "Needs a reviewer" row; `waiting` is its age, or null when unknown,
+    and `offTitle` turns its picker off, saying why. */
 const ReviewerAsk = memo(function ReviewerAsk({
   it,
   waiting,
   onOpenTask,
+  offTitle,
 }: {
   it: IssueVM
   waiting: string | null
   onOpenTask: (handle: string) => void
+  offTitle?: string
   context: StoreVersion
 }) {
   return (
@@ -172,7 +199,9 @@ const ReviewerAsk = memo(function ReviewerAsk({
           {waiting != null && <span>{waiting}</span>}
         </>
       }
-      control={<AssigneeAvatar issue={it} field="reviewer" variant="label" backLayer />}
+      control={
+        <AssigneeAvatar issue={it} field="reviewer" variant="label" backLayer offTitle={offTitle} />
+      }
     />
   )
 })
@@ -271,27 +300,48 @@ function Unknown({ why }: { why: string }) {
 
 export function TeamOpening({
   rows,
+  tasks,
   humans,
   subIds,
   metaIds,
   day,
   now,
   onOpenTask,
+  verdictOf,
+  blockedOf,
+  loadOf,
+  counted = true,
+  frozen = null,
 }: {
   /** the walk's rows: open leaf tasks in scope */
   rows: IssueVM[]
+  /** every task the agenda names: rows, asks and Done tasks */
+  tasks: IssueVM[]
   /** the people in the walk */
-  humans: UserVM[]
+  humans: SyncPerson[]
   subIds: Set<string>
-  /** the scope's top-level projects, whose milestones the opening reads */
+  /** the scope's top-level projects, as the agenda names them
+      (answer.top_projects), whose milestones the opening reads */
   metaIds: Set<string>
   day: SyncDay
   now: number
   onOpenTask: (handle: string) => void
+  /** a row's verdict, by uuid, as the agenda gives it */
+  verdictOf: (uuid: string) => SyncVerdict
+  /** a row's open blockers, by uuid, as the agenda names them */
+  blockedOf: (uuid: string) => readonly string[]
+  /** a person's week as the agenda gives it */
+  loadOf: (person: SyncPerson) => SyncLoad
+  /** whether every task the agenda names reached the page, so its counts
+      are whole (SyncMeeting counted); else they show "…" */
+  counted?: boolean
+  /** while the meeting stopped updating, the title of the pickers it turns
+      off (PageCtx frozen), else null */
+  frozen?: string | null
 }) {
   const facts = openingFacts(rows, {
-    verdictOf: (it) => bannerVerdict(P.delayOf(it), P.tracksDelay(it)),
-    issueById: P.issueById,
+    verdictOf: (it) => verdictOf(it.uuid),
+    blockedOf: (it) => blockedOf(it.uuid),
     today: day.today,
   })
   // this mounted opening, which owns the milestone reads while it asks
@@ -299,8 +349,9 @@ export function TeamOpening({
   const milestones = useSyncMilestoneReads(metaIds, day.todayWeek, owner)
   const next = milestones.next.kind === 'milestone' ? milestones.next.milestone : null
   const ahead = milestones.ahead
-  const busy = nearCapacity(humans, weekFigure)
-  const unowned = needsOwner(P.issues, subIds, day)
+  const capacity = nearCapacity(humans, loadOf)
+  const busy = capacity.busy
+  const unowned = needsOwner(tasks, subIds, day)
   const unreviewed = needsReviewer(rows).map((ask) => ask.issue)
   /* Lists of more than SYNC_LIMIT asks mount the rows of the first screen
      at once and the rest in slices, in the page's scrolling pane. */
@@ -315,8 +366,15 @@ export function TeamOpening({
   const [firstScreen] = useState(() => Math.ceil((window.innerHeight + 500) / ASK_MIN_PX))
   const initialOf = (count: number) =>
     count <= SYNC_LIMIT ? Number.POSITIVE_INFINITY : firstScreen
+  const offTitle = frozen ?? undefined
   const ownerRow = (it: IssueVM) => (
-    <OwnerAsk key={it.uuid} it={it} onOpenTask={onOpenTask} context={P.contextVersion} />
+    <OwnerAsk
+      key={it.uuid}
+      it={it}
+      onOpenTask={onOpenTask}
+      offTitle={offTitle}
+      context={P.contextVersion}
+    />
   )
   const reviewerRow = (it: IssueVM) => (
     <ReviewerAsk
@@ -324,39 +382,44 @@ export function TeamOpening({
       it={it}
       waiting={it.reviewAt != null ? waitingLabel(it.reviewAt, now) : null}
       onOpenTask={onOpenTask}
+      offTitle={offTitle}
       context={P.contextVersion}
     />
   )
+  /** A count of the rows, or "…" while some have not reached the page. */
+  const count = (n: number | null) => (counted ? n : 'waiting')
   return (
     <div ref={opening} data-sync-opening className="@container">
       <p data-sync-sentence className="m-0 mb-5 max-w-[64ch] text-md text-text-1">
-        {syncSentence(facts).map((part, i) =>
-          typeof part === 'string' ? (
-            part
-          ) : (
-            <b
-              // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one sentence never reorder
-              key={i}
-              className={cn(
-                '!font-mono font-semibold',
-                part.tone === 'danger' ? 'text-danger' : 'text-warning',
-              )}
-            >
-              {part.n}
-            </b>
-          ),
-        )}
+        {!counted
+          ? "Qivo shows this meeting's counts once every task it names has arrived."
+          : syncSentence(facts).map((part, i) =>
+              typeof part === 'string' ? (
+                part
+              ) : (
+                <b
+                  // biome-ignore lint/suspicious/noArrayIndexKey: the parts of one sentence never reorder
+                  key={i}
+                  className={cn(
+                    '!font-mono font-semibold',
+                    part.tone === 'danger' ? 'text-danger' : 'text-warning',
+                  )}
+                >
+                  {part.n}
+                </b>
+              ),
+            )}
       </p>
 
       <div
         data-sync-facts
         className="mb-6 grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-x-6 gap-y-3 rounded-lg border border-border p-4"
       >
-        <Fact label="Overdue" value={facts.overdue} tone="danger" />
-        <Fact label="Projected to miss" value={facts.projected} tone="danger" />
-        <Fact label="Slipping" value={facts.slipping} tone="warning" />
-        <Fact label="Blocked" value={facts.blocked} />
-        <Fact label="Paused" value={facts.paused} />
+        <Fact label="Overdue" value={count(facts.overdue)} tone="danger" />
+        <Fact label="Projected to miss" value={count(facts.projected)} tone="danger" />
+        <Fact label="Slipping" value={count(facts.slipping)} tone="warning" />
+        <Fact label="Blocked" value={count(facts.blocked)} />
+        <Fact label="Paused" value={count(facts.paused)} />
         <div
           data-sync-next-milestone={milestones.next.kind}
           className="min-w-0 [grid-column:span_2] max-[520px]:[grid-column:auto]"
@@ -385,16 +448,28 @@ export function TeamOpening({
       {/* two columns once each list has room for a row and its control */}
       <div className="grid grid-cols-1 gap-x-8 gap-y-6 @min-[720px]:grid-cols-2">
         <div className="min-w-0">
-          <ListHeading title="Near or over capacity" count={busy.length} />
+          {/* a count only when every week is known, so the list never
+              reads as whole while some are left out */}
+          <ListHeading
+            title="Near or over capacity"
+            count={capacity.unknown === 0 ? busy.length : undefined}
+          />
           <div data-sync-capacity className="flex flex-col gap-1.5">
-            {busy.map(({ user }) => (
+            {busy.map(({ user, figure }) => (
               <div key={user.id} className="flex min-w-0 items-center gap-2">
                 <Avatar id={user.id} size={20} />
                 <span className="min-w-0 flex-1 truncate text-sm text-text-1">{user.name}</span>
-                <LoadChip user={user} />
+                <LoadChip load={{ state: 'ok', figure }} />
               </div>
             ))}
-            {!busy.length && <Empty>Everyone is under 90% this week</Empty>}
+            {capacity.unknown > 0 && (
+              <div data-sync-capacity-unknown className="text-sm text-text-3">
+                Load unknown for {capacity.unknown} {capacity.unknown === 1 ? 'person' : 'people'}
+              </div>
+            )}
+            {!busy.length && capacity.unknown === 0 && (
+              <Empty>Everyone is under 90% this week</Empty>
+            )}
           </div>
 
           <div className="mt-6">
@@ -477,7 +552,7 @@ export function TeamOpening({
         </div>
 
         <div className="min-w-0">
-          <ListHeading title="Needs an owner" count={unowned.length} />
+          <ListHeading title="Needs an owner" count={counted ? unowned.length : undefined} />
           {unowned.length ? (
             <div className={cn('mb-6', ASK_LIST)}>
               <DeferredList
@@ -498,7 +573,7 @@ export function TeamOpening({
             </div>
           )}
 
-          <ListHeading title="Needs a reviewer" count={unreviewed.length} />
+          <ListHeading title="Needs a reviewer" count={counted ? unreviewed.length : undefined} />
           {unreviewed.length ? (
             <div className={ASK_LIST}>
               <DeferredList

@@ -252,6 +252,123 @@ describe('the benchmark server', () => {
     expect((await board('tasks=100&board=over_budget')).answer.state).toBe('over_budget')
   }, 60_000)
 
+  it("answers Team sync's agenda from its stand-in, with the states the page asks for", async () => {
+    /** What teamSync:agenda answers for the first program on a workspace
+        with page parameters `params`, and ways to read it again and to send
+        the server a write. */
+    const agenda = async (params) => {
+      const { posted, send } = await server(`latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      // a Monday-start week of the clock as the app sends it
+      const week = '2026-11-02'
+      const start = Date.parse('2026-11-02T00:00:00.000Z')
+      const args = {
+        org_id: snap.orgs[0].id,
+        scope: { kind: 'project', project_id: program.id },
+        day: '2026-11-04',
+        week,
+        week_starts: Array.from({ length: 53 }, (_, i) => start - (52 - i) * 7 * 86_400_000),
+        week_end: start + 7 * 86_400_000,
+      }
+      const read = async (at) => {
+        await send({ type: 'query', id: at, name: 'teamSync:agenda', args })
+        const answer = posted.find((m) => m.to === at)
+        return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+      }
+      return { answer: await read('agenda'), read, send, org: args.org_id }
+    }
+    const ok = await agenda('tasks=200')
+    expect(ok.answer.state).toBe('ok')
+    expect(ok.answer.rows.length).toBeGreaterThan(0)
+    expect(ok.answer.people.length).toBeGreaterThan(0)
+    expect(ok.answer.hidden).toBe('counted')
+    expect(ok.answer.people.every((p) => p.week.state === 'ok')).toBe(true)
+    // a card's change stamps the page owner, whom the next answer carries so
+    const person = ok.answer.people.find((p) => p.stamp === null)
+    await ok.send({
+      type: 'mutation',
+      id: 'stamp',
+      name: 'teamSync:stamp',
+      args: { org_id: ok.org, profile_id: person.id },
+    })
+    const stamped = (await ok.read('stamped')).people.find((p) => p.id === person.id)
+    expect(stamped.stamp?.at).toEqual(expect.any(String))
+    for (const state of ['over_ceiling', 'over_budget', 'unavailable'])
+      expect((await agenda(`tasks=200&sync=${state}`)).answer.state).toBe(state)
+    expect((await agenda('tasks=200&sync=access_unchecked')).answer).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    const weeks = await agenda('tasks=200&sync=weeks-unknown')
+    expect(weeks.answer.people.every((p) => p.week.state === 'unavailable')).toBe(true)
+    const viewer = await agenda('tasks=200&sync=viewer')
+    expect(viewer.answer.hidden).toBe('own_only')
+    expect((await agenda('tasks=200&sync=error')).answer.error).toContain('sync=error')
+    // the agenda's own ceiling rules at a lowered ceiling, never seeded past
+    // the design size. The meeting fits a ceiling of all its tasks, and its
+    // rows and asks alone pass one below theirs
+    const fixed = ok.answer.rows.length + ok.answer.asks.length
+    const all = fixed + ok.answer.done.length
+    expect((await agenda(`tasks=200&sync=ceiling:${all}`)).answer.state).toBe('ok')
+    expect((await agenda(`tasks=200&sync=ceiling:${fixed - 1}`)).answer).toEqual({
+      state: 'over_ceiling',
+      ceiling: fixed - 1,
+    })
+    // a meeting that stops fitting while it is open
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const stale = await agenda('tasks=200&sync=stale')
+      expect(stale.answer.state).toBe('ok')
+      vi.setSystemTime(Date.now() + 5000)
+      expect((await stale.read('later')).state).toBe('over_ceiling')
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 60_000)
+
+  it("posts a replaced server's late timer to its own port, never into a later server's messages", async () => {
+    // sync=stale arms a real timer that outlives its case; the server posts
+    // through the port it was loaded with, so the timer's transition lands in
+    // the finished case's messages and never in the next server's
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+    try {
+      /** Sends `message` and lets the server's own short timers run. */
+      const sent = async (send, message) => {
+        const done = send(message)
+        await vi.advanceTimersByTimeAsync(100)
+        await done
+      }
+      const first = await server('tasks=200&latency=0&mbps=100000&sync=stale')
+      await sent(first.send, { type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(first.posted.find((m) => m.to === 'snap').text)
+      const program = snap.projects.find((p) => p.type === 'meta')
+      const start = Date.parse('2026-11-02T00:00:00.000Z')
+      await sent(first.send, {
+        type: 'query',
+        id: 'agenda',
+        name: 'teamSync:agenda',
+        args: {
+          org_id: snap.orgs[0].id,
+          scope: { kind: 'project', project_id: program.id },
+          day: '2026-11-04',
+          week: '2026-11-02',
+          week_starts: Array.from({ length: 53 }, (_, i) => start - (52 - i) * 7 * 86_400_000),
+          week_end: start + 7 * 86_400_000,
+        },
+      })
+      expect(JSON.parse(first.posted.find((m) => m.to === 'agenda').text).state).toBe('ok')
+      const second = await server('tasks=40&latency=0&mbps=100000')
+      const before = second.posted.length
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(second.posted.length).toBe(before)
+      expect(first.posted.some((m) => m.type === 'transition')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("answers the task window's comment page and, apart, its history page", async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     const args = { issue_id: TASK_1 }

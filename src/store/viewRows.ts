@@ -1,7 +1,7 @@
 /* The task rows the open views' answers bring (store/planner.ts view
-   reads: the Board's tasks.board answer, P.watchBoard, and each batch of the
-   Overview's two lists, P.watchOverview), and the view models shaped from
-   them.
+   reads: the Board's tasks.board answer, P.watchBoard, each batch of the
+   Overview's two lists, P.watchOverview, and Team sync's teamSync.agenda
+   answer, P.watchSync), and the view models shaped from them.
 
    - A view's read is its row source: the whole answer of one live query,
      which names each task with its row and a group with its facts
@@ -203,9 +203,10 @@ export function createViewRows(
     any: () => anchors.size > 0,
     /** Whether more than one view holds rows. */
     shared: () => anchors.size > 1,
-    /** Whether a live view holds task `uuid`. */
-    liveHolds(uuid: string): boolean {
-      for (const [slot, rows] of anchors) if (live(slot) && rows.has(uuid)) return true
+    /** Whether a live view holds task `uuid`, or a view `which` names
+        when given. */
+    liveHolds(uuid: string, which: (slot: ViewSlot) => boolean = live): boolean {
+      for (const [slot, rows] of anchors) if (which(slot) && rows.has(uuid)) return true
       return false
     },
     /** Starts a repaint: every view's rows as its anchor holds them, the

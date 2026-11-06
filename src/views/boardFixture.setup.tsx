@@ -3,6 +3,7 @@ import { act, type ReactNode, useLayoutEffect, useState } from 'react'
 import type { Root } from 'react-dom/client'
 import { afterEach, expect, vi } from 'vitest'
 import type { BoardAnswer } from '../../convex/lib/board'
+import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import type { RevealRequest } from '../lib/reveal'
 import { type BoardArgs, boardStandIn, type ForcedBoard } from '../store/boardStandIn.setup'
 import type { OverviewQuery } from '../store/overviewLists'
@@ -14,6 +15,7 @@ import {
 import { type OwnerLoadsArgs, ownerLoadsStandIn } from '../store/ownerLoadsStandIn.setup'
 import type { IssueFilters, ScopeInfo } from '../store/planner'
 import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFixture.setup'
+import { type ForcedSync, type SyncArgs, teamSyncStandIn } from '../store/teamSyncStandIn.setup'
 
 /* The Board on the real store for jsdom tests. A test file mocks
    ../lib/convex with `network` and ../lib/auth as memoRows.test.tsx does,
@@ -27,7 +29,10 @@ import { plannerFixture, type Snapshot, underProgram } from '../store/plannerFix
    Overview's queries (overview:summary, risk, attention and paused) answer
    through their stand-in (store/overviewStandIn.setup.ts) the same way,
    unless a test holds, forces, fails or edits them (`server.overview`), so
-   renderView can show the Overview over the same store. */
+   renderView can show the Overview over the same store. Team sync's agenda
+   (teamSync:agenda) answers through its stand-in
+   (store/teamSyncStandIn.setup.ts) the same way (`server.sync`), and its
+   last comments with none, so renderView can show Team sync too. */
 
 type Network = {
   mutation: ReturnType<typeof vi.fn>
@@ -162,6 +167,20 @@ export async function loadBoard(
         fail?: (e: unknown) => void
       }>
     }
+    /** Team sync's agenda: `hold` keeps its answers back, `force` answers
+        states and unknown figures the workspace cannot reach, `fail`
+        fails the read, `edit` changes an answer, `asked` is every
+        subscription's arguments, newest last, and `open` those open now */
+    sync: {
+      hold: boolean
+      force: ForcedSync
+      fail: unknown
+      edit: ((answer: AgendaAnswer, args: SyncArgs) => AgendaAnswer) | null
+      asked: SyncArgs[]
+      open: Set<{ args: SyncArgs; next: (value: unknown) => void; fail?: (e: unknown) => void }>
+    }
+    /** the last comments' subscriptions open now, each with its owners */
+    comments: Set<{ owners: string[] }>
   } = {
     hold: false,
     force: null,
@@ -180,9 +199,24 @@ export async function loadBoard(
       asked: [],
       open: new Set(),
     },
+    sync: { hold: false, force: {}, fail: undefined, edit: null, asked: [], open: new Set() },
+    comments: new Set(),
   }
-  // the store's canSee, once the store loaded
+  // the store's canSee and canWrite, once the store loaded
   let sees: (id: string) => boolean = () => true
+  let writes: (id: string) => boolean = () => true
+  /** Answers Team sync subscription `sub` from the snapshot as it is now,
+      or fails it. */
+  const answerSync = (sub: {
+    args: SyncArgs
+    next: (value: unknown) => void
+    fail?: (e: unknown) => void
+  }) => {
+    const s = server.sync
+    if (s.fail !== undefined) return sub.fail?.(s.fail)
+    const answer = teamSyncStandIn(snapshot, sub.args, { sees, writes, force: s.force })
+    sub.next(structuredClone(s.edit ? s.edit(answer, sub.args) : answer))
+  }
   const answerOf = (args: BoardArgs): BoardAnswer => {
     const answer = boardStandIn(snapshot, args, { sees, force: server.force ?? undefined })
     return server.edit ? server.edit(answer) : answer
@@ -215,6 +249,7 @@ export async function loadBoard(
     for (const call of server.loads)
       call.next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
     for (const sub of server.overview.open) answerOverview(sub)
+    for (const sub of server.sync.open) answerSync(sub)
   }
   network.query.mockResolvedValue(null)
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
@@ -237,6 +272,19 @@ export async function loadBoard(
       server.loads.add(call)
       next(ownerLoadsStandIn(snapshot, call.args, { unavailable: server.unavailable }))
       return () => server.loads.delete(call)
+    }
+    if (name === 'teamSync:agenda') {
+      const sub = { args: args as SyncArgs, next, fail }
+      server.sync.asked.push(sub.args)
+      server.sync.open.add(sub)
+      if (!server.sync.hold) answerSync(sub)
+      return () => server.sync.open.delete(sub)
+    }
+    if (name === 'teamSync:lastComments') {
+      const sub = { owners: [...((args as { owner_ids: string[] }).owner_ids ?? [])] }
+      server.comments.add(sub)
+      next({ rows: [], complete: true })
+      return () => server.comments.delete(sub)
     }
     if (name.startsWith('overview:')) {
       const sub = {
@@ -262,6 +310,7 @@ export async function loadBoard(
   await store.initStore()
   lastProbe = store.__layerProbe
   sees = (id) => store.P.canSee(id)
+  writes = (id) => store.P.canWrite(id)
   const { usePlannerVersion } = await import('../store/usePlannerVersion')
   const { TooltipProvider } = await import('../components/ui/tooltip')
   const { Kanban } = await import('./Kanban')

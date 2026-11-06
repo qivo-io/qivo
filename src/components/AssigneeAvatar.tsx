@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Avatar, Icon, Popover } from '@/components/qivo'
 import { OWNER_WRAP, ownerTrigger, PORTRAIT_CLASS, portraitFace } from '@/components/rowElements'
 import { Button } from '@/components/ui/button'
@@ -21,23 +22,34 @@ export type OwnerField = 'assignee' | 'reviewer'
  * writes the live task's owner field, re-read at the pick: a status move
  * while the list was open can hand the task between assignee and reviewer.
  * `onClose` runs on every accepted pick, changed or not, and is handed the
- * write as `then`, to run once the list has closed (see useMenuBackLayer). */
+ * write as `then`, to run once the list has closed (see useMenuBackLayer).
+ * `off` says why the list may no longer write, such as Team sync's stale
+ * meeting. Given it, its rows read disabled with that title and write
+ * nothing, also a pick made before the list closes, and the list closes at
+ * once through `onClose`, also one that was open before `off` came. */
 export function OwnerPickList({
   issue,
   field,
   onClose,
   onPick,
+  off,
 }: {
   issue: IssueVM
   field?: OwnerField
   onClose: (then: () => void) => void
   onPick?: (profileId: string | null) => void
+  off?: string
 }) {
   const shown = field ?? issue.ownerField
   const current = issue[shown] || null
   const choices = P.taskAssigneesFor(issue)
   const none = shown === 'reviewer' ? 'No reviewer' : 'Unassigned'
   const find = shown === 'reviewer' ? 'Find a reviewer' : 'Find an assignee'
+  // an open list closes as soon as it may no longer write
+  const closes = !!off
+  useEffect(() => {
+    if (closes) onClose(() => {})
+  }, [closes])
   return (
     <Command aria-label={`Choose ${shown}`} onClick={(event) => event.stopPropagation()}>
       <CommandInput placeholder={`${find}…`} aria-label={find} />
@@ -50,7 +62,10 @@ export function OwnerPickList({
             key={user.id || 'unassigned'}
             value={user.id || 'unassigned'}
             keywords={[user.name]}
+            disabled={closes}
+            title={off}
             onSelect={() => {
+              if (off) return
               // a task only the Board's answer brings is changed there too
               const live = P.anyTask(issue.id)
               if (!live) return
@@ -107,6 +122,7 @@ export function AssigneeAvatar({
   onPick,
   variant = 'portrait',
   backLayer = false,
+  offTitle,
 }: {
   issue: IssueVM
   compact?: boolean
@@ -114,10 +130,14 @@ export function AssigneeAvatar({
   onPick?: (profileId: string | null) => void
   variant?: 'portrait' | 'chevron' | 'label'
   backLayer?: boolean
+  /** why the control is off although the person may edit the task, such
+      as Team sync's stale meeting. Given it, the picker does not open, and
+      a list already open closes and writes nothing (OwnerPickList `off`) */
+  offTitle?: string
 }) {
   const shown = field ?? issue.ownerField
   const who = issue[shown]
-  const canWrite = P.canWrite(issue.project)
+  const canWrite = P.canWrite(issue.project) && !offTitle
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
   if (variant === 'portrait' && !canWrite) return portrait
 
@@ -160,14 +180,22 @@ export function AssigneeAvatar({
             variant={variant === 'label' ? 'default' : 'unstyled'}
             size={variant === 'label' ? 'sm' : undefined}
             data-field-trigger={variant === 'portrait' ? undefined : ''}
-            {...ownerTrigger(issue, shown, canWrite, toggle)}
+            {...ownerTrigger(issue, shown, canWrite, toggle, offTitle)}
             className={faceClass}
           >
             {face}
           </Button>
         )}
       >
-        {(close) => <OwnerPickList issue={issue} field={field} onClose={close} onPick={onPick} />}
+        {(close) => (
+          <OwnerPickList
+            issue={issue}
+            field={field}
+            onClose={close}
+            onPick={onPick}
+            off={offTitle}
+          />
+        )}
       </Popover>
     </span>
   )

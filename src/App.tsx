@@ -788,9 +788,12 @@ function ToastHost({ toasts, dismiss }: { toasts: Toast[]; dismiss: (id: number)
 }
 
 /* Where a Team sync address opens the page for this viewer (the router's
-   rule: the saved scope, and the phone's own page for the bare link only). */
+   rule: the scope the person last picked, else none, which asks to choose,
+   and the phone's own page for the bare link only). The pick is saved
+   under its own key (UIPrefs.teamSyncScope): the older key held fallbacks
+   to All projects the person never chose, so it reads as nothing. */
 function syncPlaceFor(r: NonNullable<Route['sync']>, mobile: boolean): SyncPlace {
-  return syncPlaceOf(r, { saved: P.loadUI().syncScope, me: P.CURRENT_USER, mobile })
+  return syncPlaceOf(r, { saved: P.loadUI().teamSyncScope, me: P.CURRENT_USER, mobile })
 }
 
 /* The page under Settings or Team sync, restored when it
@@ -1044,11 +1047,14 @@ function App() {
   useEffect(() => {
     if (!overviewKept) P.releaseOverview()
   }, [overviewKept])
-  // and so does Team sync's page, its opening's milestone reads, which
-  // stop while a person's page shows and keep their answers until then
+  // and so does Team sync, its agenda's read and rows, an organization
+  // Viewer's people's loads and the last comments' marks, also when Done
+  // ends the sitting, and its opening's milestone reads, which stop while
+  // a person's page shows and keep their answers until then
   const syncKept = keep.pages.includes('sync')
   useEffect(() => {
     if (syncKept) return
+    P.releaseSync()
     for (const slot of Object.values(SYNC_MILESTONE_SLOTS)) P.releaseMilestones(slot)
   }, [syncKept])
   /** The id a page's ViewKeeper keeps it under: its scope for a page that
@@ -1219,8 +1225,9 @@ function App() {
   // workspace does not hold once its read answers (lib/router.ts
   // noteProjectPage), which the address follows in place.
   const pagesRev = useSyncExternalStore(subscribeProjectPages, projectPagesRev)
-  // The Roadmap and Team sync need every task: they ask for them as they
-  // mount (TasksLoadingView) and wait until the workspace holds them
+  // The Roadmap needs every task: it asks for them as it mounts
+  // (TasksLoadingView) and waits until the workspace holds them. Team sync
+  // reads its meeting from the server and waits for none.
   const tasksLoading = !P.tasksHeld()
   useTasksLoadingNews()
 
@@ -1760,17 +1767,22 @@ function App() {
 
   /* ---- Team sync's hand-offs (the TeamSync props) ---- */
   // a step or a scope from the page; the address follows in place (the
-  // router's sync rule), and a new scope is the viewer's saved choice
+  // router's sync rule), and a new scope is the person's pick, the only
+  // thing that saves one
   const placeSync = (next: SyncPlace, closes?: UnsentScope[]) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    // a scope switch names the cards it takes away; the others keep their text
-    if (closes) closeOrAsk(closes, () => correctSync(next))
-    else move({ sync: next }, () => correctSync(next))
+    const apply = () => {
+      if (next.scope && next.scope !== sync?.scope) P.saveUINow({ teamSyncScope: next.scope })
+      correctSync(next)
+    }
+    // a scope switch names the cards it asks about
+    if (closes) closeOrAsk(closes, apply)
+    else move({ sync: next }, apply)
   }
-  // …and the page's own correction of a place it cannot show, unasked
+  // …and the page's own correction of a step it cannot show, unasked; it
+  // saves nothing, so no default or refusal becomes the person's choice
   const correctSync = (next: SyncPlace) => {
     if (sync && next.scope === sync.scope && next.step === sync.step) return
-    if (next.scope !== sync?.scope) P.saveUINow({ syncScope: next.scope })
     setSync(next)
   }
   // Done on the last step: back to the page it was opened from (the Inbox,
@@ -1796,12 +1808,14 @@ function App() {
      is missing. The Board opens the task window over it, as showOnBoard
      does, and reveals its card behind it; the Roadmap reveals its bar
      read-only. Either way the task is scrolled into view and ringed for a
-     moment: no planning session, nothing written. */
+     moment: no planning session, nothing written. A task only Team sync's
+     agenda brings is found among the views' models (P.anyTask), and its
+     window opens through the window's own read (P.openTarget). */
   const showTaskOn = (v: 'kanban' | 'roadmap', handle: string) => {
-    const it = P.issueById[handle]
+    const it = P.anyTask(handle)
     if (!it) return
     const to = v === 'roadmap' && sync?.scope === 'all' ? P.ALL_SCOPE : it.project
-    const task = v === 'kanban' ? handle : null
+    const task = v === 'kanban' ? P.openTarget(handle) : null
     move({ sync: null, scope: to, view: v, openIssue: task }, () => {
       clearFilters()
       setSync(null)
@@ -1831,6 +1845,17 @@ function App() {
       setSync(null)
       setScope(to)
       setView(v)
+      setOpenIssue(null)
+    })
+  }
+  /* A sub-project's Board, from Team sync's note for one past its limits:
+     leave the page for the Board of that sub-project. */
+  const showBoardOf = (projectId: string) => {
+    if (!P.project(projectId)) return
+    move({ sync: null, scope: projectId, view: 'kanban', openIssue: null }, () => {
+      setSync(null)
+      setScope(projectId)
+      setView('kanban')
       setOpenIssue(null)
     })
   }
@@ -2276,14 +2301,14 @@ function App() {
           </UnsentScopeContext.Provider>
         )
       case 'sync':
-        /* Team sync, over the scope and view it returns to. Its tasks open in
-           the floating window below (openTask, not navOpenIssue: opening one
-           must not leave the page), and Escape does not close it: a meeting
-           page must not vanish on a stray key. */
+        /* Team sync, over the scope and view it returns to, at once in every
+           state: its meeting comes from the server, and it waits for no
+           task. Its tasks open in the floating window below (openTask, not
+           navOpenIssue: opening one must not leave the page), and Escape
+           does not close it: a meeting page must not vanish on a stray
+           key. */
         if (!syncPlace) return null
-        return tasksLoading ? (
-          <TasksLoadingView what="Team sync" reason="team_sync" />
-        ) : (
+        return (
           <TeamSync
             place={syncPlace}
             onPlace={placeSync}
@@ -2292,6 +2317,7 @@ function App() {
             onOpenTask={openTask}
             onShowTask={showTaskOn}
             onShowPerson={showPersonOn}
+            onShowBoard={showBoardOf}
           />
         )
       case 'overview':
@@ -2369,8 +2395,8 @@ function App() {
       another one renders it at once, and the Inbox drops its task pane as
       it hides. */
   const pageVariant = (page: MainPage) => {
-    // the pages that wait for every task show a notice until then
-    const waits = tasksLoading && (page === 'sync' || page === 'roadmap')
+    // the page that waits for every task shows a notice until then
+    const waits = tasksLoading && page === 'roadmap'
     const layout = `${mobile ? 'phone' : 'desktop'}${waits ? ':loading' : ''}`
     if (page === 'inbox') return `${layout}:${inboxTask ?? ''}`
     if (page === 'sync')

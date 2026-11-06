@@ -225,8 +225,10 @@ export const BOARD_SLOTS: Record<BoardVariant, string> = {
   phone: 'board:phone',
 }
 
-/** `active` once it held for STALL.ms under the same `key`. */
-function useStall(active: boolean, key: string): boolean {
+/** `active` once it held for STALL.ms under the same `key`. Team sync's
+    meeting waits the same way for the tasks its answer names
+    (views/teamSync/useSyncMeeting.ts). */
+export function useStall(active: boolean, key: string): boolean {
   const [fired, setFired] = useState<string | null>(null)
   useEffect(() => {
     if (!active) {

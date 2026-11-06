@@ -57,6 +57,7 @@ import {
 import { creatorGrant, grantsAfterHandover } from '../../convex/lib/projectGrants'
 import { resolveReviewHours, reviewStamp, taskOwnerId } from '../../convex/lib/review'
 import { firstSittingDay, nextSyncStamp, SYNC_OWNERS_MAX } from '../../convex/lib/teamSync'
+import type { AgendaAnswer } from '../../convex/lib/teamSyncAgenda'
 import { armConvexAuth, authClient, signOut as authSignOut } from '../lib/auth'
 import { NO_QUERY, SignOutFailed } from '../lib/authSession'
 import { avatarCacheScope, createAvatarImageCache } from '../lib/avatarImageCache'
@@ -127,6 +128,7 @@ import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatu
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
 import { type RefParts, refParts, taskRef } from '../lib/taskReference'
 import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '../lib/taskSections'
+import { type SyncVerdict, syncMeetingOf, weekHoursOf } from '../lib/teamSync'
 import type { ToastTone } from '../lib/toasts'
 import { type UnconfirmedChange, unconfirmedNote, unconfirmedText } from '../lib/unconfirmedNote'
 import { beginUpdateBlock } from '../lib/updateSafety'
@@ -206,6 +208,7 @@ import {
   needsLoad,
   type ViewDelayCtx,
   viewDelay,
+  viewLoadOf,
 } from './viewDelay'
 import {
   type ActivityVM,
@@ -414,6 +417,9 @@ const delayMap = tasks.delays
    in the order asked), or '' for none. */
 let watchedSyncOrg: string | null = null
 let watchedSyncOwners = ''
+/* Whether the page asked to pause the watch while it or the tab is hidden:
+   no part subscribes, and the marks stay as they were. */
+let syncPaused = false
 let syncWatchEpoch = 0
 /* One latest-comment subscription for some of the watched people, and its
    last answer (null until it arrives). */
@@ -900,11 +906,14 @@ function watchedOrgOf(): string | undefined {
 
 /* The organization of task `uuid` for a comment write or read: its row's
    while the workspace holds it, else the watched task's kept one
-   (watchedOrg) when it is the watched task, or undefined. */
+   (watchedOrg) when it is the watched task, else the row an open view's
+   answer brings, as a Team sync card's mention names its task, or
+   undefined. The server checks the comment either way. */
 function orgOfTask(uuid: string): string | undefined {
   const row = rows.issues.get(uuid)
   if (row) return row.org_id
-  return uuid === watchedComments ? (watchedOrg ?? undefined) : undefined
+  if (uuid === watchedComments && watchedOrg) return watchedOrg
+  return viewRows.peek(uuid)?.org_id
 }
 
 /* The tasks this store created that the server took, by uuid, with their
@@ -2914,12 +2923,13 @@ function pay() {
    arguments on screen, or none while its page or the tab is hidden: the
    Board its answer (P.watchBoard), the Overview its summary, its delays,
    its lists' batches and its health table (P.watchOverview and
-   P.watchOverviewTable, store/overviewLists.ts). Each read names its query
-   and the rows its answer brings (ViewQuery); the health table's brings
-   none. The store
+   P.watchOverviewTable, store/overviewLists.ts), and Team sync its agenda
+   (P.watchSync). Each read names its query and the rows its answer brings
+   (ViewQuery); the health table's brings none. The store
    subscribes, takes each result in the transition that brings it and keeps
    a read's rows (store/viewRows.ts) while it stops, until the view asks for
-   other arguments or its page leaves (P.releaseView, P.releaseOverview).
+   other arguments or its page leaves (P.releaseView, P.releaseOverview,
+   P.releaseSync).
    A stopped read's rows never stand in for a live read's, as a kept
    Overview's when it hides behind the Board of its scope: the live reads'
    copies of a task lead in lookups, writes and delays, their deliveries
@@ -2946,11 +2956,14 @@ const KEEP_ROWS = Symbol('keep the rows')
     A milestone read's `milestones` answers the ask its arguments `key`
     make and the milestones a value brings (store/milestoneRows.ts), which
     hold the milestone writes the read's deliveries hold
-    (milestoneNeeds). */
+    (milestoneNeeds). `keepsOnError` keeps the rows of a read that fails
+    as KEEP_ROWS does, so its view can show its last answer under the
+    failure, as Team sync keeps a meeting's cards with their unsent text. */
 type ViewQuery = {
   ref: FunctionReference<'query'>
   rows?: (value: unknown, key: string) => readonly ViewRow[] | null | typeof KEEP_ROWS
   milestones?: (value: unknown, key: string) => { ask: MilestoneAsk; take: MilestoneTake }
+  keepsOnError?: boolean
 }
 
 /** The Board's read: an ok answer brings its rows and its parents. */
@@ -2989,6 +3002,37 @@ const OVERVIEW_QUERIES: Record<OverviewQuery, ViewQuery> = {
   health: { ref: api.overview.health },
 }
 
+/** Team sync's view slot (P.watchSync), its agenda's read and rows. */
+const SYNC_SLOT: ViewSlot = 'sync'
+
+/** The owner-load cache's view key of the people an organization Viewer's
+    Team sync shows (P.watchSyncPeople). */
+const SYNC_PEOPLE = 'sync:people'
+
+/** Team sync's read (convex/teamSync.ts agenda). An ok answer brings its
+    rows, without the blockers and verdicts the page reads from the answer
+    itself, as an Overview batch's leave out At risk, its asks, its Done
+    tasks and their shown parents. A meeting that stops fitting
+    (over_ceiling, over_budget) and a read that fails keep the rows it last
+    held, so the page shows that meeting with its cards' unsent text as no
+    longer updating; unavailable takes them away at once, as access to the
+    scope may have gone. */
+const SYNC_QUERY: ViewQuery = {
+  ref: api.teamSync.agenda,
+  keepsOnError: true,
+  rows: (value) => {
+    const answer = value as AgendaAnswer
+    if (answer.state === 'ok')
+      return [
+        ...answer.rows.map(({ blocked_by: _blocked, delay: _delay, ...row }) => row),
+        ...answer.asks,
+        ...answer.done,
+        ...answer.parents,
+      ]
+    return answer.state === 'unavailable' ? null : KEEP_ROWS
+  },
+}
+
 /** One view's read. */
 type ViewRead = {
   /** what it subscribes and the rows its answer brings */
@@ -3021,6 +3065,14 @@ type ViewRead = {
       so its rows may lack a write that result held: it holds none until a
       delivery takes rows again */
   behind: boolean
+  /** the last result whose rows it took, for the arguments `key`, which a
+      view that keeps its rows past a refusal or a failure shows under it
+      (Team sync's stale meeting), and `until`, when it stopped being the
+      live subscription's current result, the earliest of when its
+      subscription stopped, when a reconnect left it to arrive again and
+      when a refusal or a failure that kept its rows took its place, null
+      while it is current; null once its rows went */
+  fitted: { key: string; value: unknown; until: number | null } | null
 }
 const viewReads = new Map<ViewSlot, ViewRead>()
 /* The socket's newest connection count a view read's handler saw: after a
@@ -3104,6 +3156,13 @@ function settleOverview() {
   })
 }
 
+/** Marks view read `read`'s last result whose rows it took as no longer
+    the current one from now (ViewRead fitted `until`), keeping an earlier
+    mark, so a view that shows it later says when it stopped updating. */
+function fittedStops(read: ViewRead) {
+  if (read.fitted && read.fitted.until === null) read.fitted = { ...read.fitted, until: Date.now() }
+}
+
 /** Takes view `slot`'s result of its live subscription `token`: its rows
     become the view's anchor, a delivery that brings rows holds the writes
     it changed (dropHeldViewParts), the Overview's lists take it in once the
@@ -3124,11 +3183,20 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     read.connection = latestConnection
     if (next.value !== undefined) read.answered = true
     const take = read.query.rows
-    const rows = take && next.value !== undefined ? take(next.value, key) : null
-    if (take && rows === KEEP_ROWS) read.behind = true
-    else if (take && rows !== KEEP_ROWS) {
+    const rows =
+      take && next.value !== undefined
+        ? take(next.value, key)
+        : next.error !== undefined && read.query.keepsOnError
+          ? KEEP_ROWS
+          : null
+    if (take && rows === KEEP_ROWS) {
+      read.behind = true
+      // a refusal or a failure that keeps the rows ends their result's run
+      fittedStops(read)
+    } else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
+      read.fitted = rows ? { key, value: next.value, until: null } : null
       read.delivered = ++viewDeliveries
       read.behind = false
       dropHeldViewParts()
@@ -3157,6 +3225,7 @@ function syncViewRead(slot: ViewSlot) {
     read.stop = null
     read.live = null
     read.current = false
+    fittedStops(read)
   }
   if (read.want === null || read.live !== null) return
   const key = read.want
@@ -3166,6 +3235,9 @@ function syncViewRead(slot: ViewSlot) {
   const stopTransitions = live.onTransition(
     (transition) => {
       latestConnection = Math.max(latestConnection, transition.connection)
+      // a reconnect leaves the read's result to arrive again, so from now
+      // it is not current (viewRead)
+      if (read.live === key && read.current && read.connection < latestConnection) fittedStops(read)
       if (read.live === key && transition.tokens.has(watch.token))
         takeViewResult(slot, read, key, watch.token)
     },
@@ -3180,15 +3252,17 @@ function syncViewRead(slot: ViewSlot) {
 
 /** Forgets view `slot`'s rows, its owners' loads and what its read held,
     and repaints the views when it held any, such as a failure Try again
-    leaves, so the view shows its wait at once. A milestone read's Retry
-    keeps its last answer (`keepMilestones`), as the view keeps the person's
-    draft over it (P.milestoneRead). */
+    leaves on a read that kept no answer (watchView), so the view shows its
+    wait at once. A milestone read's Retry keeps its last answer
+    (`keepMilestones`), as the view keeps the person's draft over it
+    (P.milestoneRead). */
 function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
   const read = viewReads.get(slot)
   const held = !!read?.held
   if (read) {
     read.held = null
     read.behind = false
+    read.fitted = null
   }
   ownerLoads.release(slot)
   const rows = viewRows.holds(slot)
@@ -3209,8 +3283,20 @@ function releaseViewRows(slot: ViewSlot, keepMilestones = false) {
  * a fixed key order, or none with null, as the view's effect runs: the
  * rules of P.watchBoard, which every view read follows. Another query or
  * other arguments, or a new `attempt`, drop what the read held. Other
- * arguments that only narrow what the held answer shows (`narrows`) keep
- * that answer and its rows until the answer for `key` replaces them.
+ * arguments the held answer may stand in for (`hold`) keep that answer and
+ * its rows, never as current, until the answer for `key` replaces them: a
+ * text filter that only narrows the Board's (views/board/useBoardView.ts
+ * narrowsText), and the same Team sync meeting on a new day or week grid
+ * (P.watchSync). The view decides when it holds; the store keeps one rule.
+ * A new `attempt` on a read that keeps its rows past a failure
+ * (ViewQuery keepsOnError) and still holds the last answer whose rows it
+ * took (ViewRead fitted) asks afresh without dropping anything. The held
+ * result, that answer, its rows and whether it is behind stay, not
+ * current, until the attempt's result replaces them as any result does.
+ * So Team sync's Try again keeps a stale meeting's cards with their
+ * unsent text. A new attempt on any other read drops what it held, so the
+ * view shows its wait at once, except that a milestone read's Retry keeps
+ * its last answer (releaseViewRows `keepMilestones`).
  */
 function watchView(
   slot: ViewSlot,
@@ -3219,7 +3305,7 @@ function watchView(
   attempt = 0,
   owner = 0,
   delays = true,
-  narrows = false,
+  hold = false,
 ) {
   let read = viewReads.get(slot)
   if (read && key === null && read.owner !== owner) return
@@ -3238,6 +3324,7 @@ function watchView(
       delays,
       delivered: 0,
       behind: false,
+      fitted: null,
     }
     viewReads.set(slot, read)
   }
@@ -3250,15 +3337,21 @@ function watchView(
   const retry = attempt !== read.attempt
   read.attempt = attempt
   const other =
-    key !== null &&
-    (read.query !== query || (read.held !== null && read.held.key !== key && !narrows))
+    key !== null && (read.query !== query || (read.held !== null && read.held.key !== key && !hold))
   if (key !== null && (retry || other)) {
+    // a new attempt keeps the answer a read that keeps its rows still shows
+    const keeps = !other && !!read.query.keepsOnError && read.fitted !== null
     read.stop?.()
     read.stop = null
     read.live = null
     read.current = false
     read.query = query
-    releaseViewRows(slot, retry && !other && !!query.milestones)
+    if (keeps) {
+      fittedStops(read)
+      // the view shows the kept answer as waiting for the attempt's
+      viewReadsChanged = true
+      owe('view')
+    } else releaseViewRows(slot, retry && !other && !!query.milestones)
   }
   if (read.want === key && !retry && !other) return
   const wasLive = read.live !== null
@@ -3279,8 +3372,9 @@ function watchView(
 
 /** What view `slot`'s read holds: the arguments' key its result answers
     (null for none), its value or error, whether it is the live
-    subscription's on the current connection, and whether the read held
-    a value before, so a wait is a refresh. */
+    subscription's on the current connection, whether the read held a
+    value before, so a wait is a refresh, and the last result whose rows it
+    took (ViewRead fitted). */
 function viewRead(slot: ViewSlot) {
   const read = viewReads.get(slot)
   const held = read?.held ?? null
@@ -3291,6 +3385,7 @@ function viewRead(slot: ViewSlot) {
     current:
       !!read && read.current && read.live === held?.key && read.connection === latestConnection,
     answered: !!read?.answered,
+    fitted: read?.fitted ?? null,
   }
 }
 
@@ -3698,16 +3793,32 @@ const milestoneOrg = (row: MilestoneRow): string =>
 const hideProjectMilestones = (id: string): Paint =>
   milestonePaint({ projects: [id] }, () => milestoneRows.hideProjects(new Set([id])))
 
+/* Whether view `slot`'s rows may stand in for the owner-load cache's spans
+   of their tasks in a delay, which needs its read live and its newest
+   result to have taken its rows, not kept them past a refusal or a failure
+   (ViewRead `behind`) as Team sync's stale meeting does. */
+const viewLends = (slot: ViewSlot) => viewLive(slot) && !viewReads.get(slot)?.behind
+
 /** What judging a task only a view holds reads from the store
-    (store/viewDelay.ts). */
+    (store/viewDelay.ts). The rows that stand in for the cache's spans of
+    their tasks are those of the live reads whose newest result took its
+    rows (viewLends). A stopped read's rows, as a kept Team sync's or
+    Overview's behind the Board, and the rows a live read kept past a
+    refusal or a failure, as Team sync's stale meeting keeps, hear no
+    change made since, so the cache's spans of those tasks, which stay live
+    while some view reads their owner, are the newer. Which copies lead in
+    lookups and which reads hold a write stay with the live reads
+    (viewLive, viewPartHeld). */
 const viewDelayCtx: ViewDelayCtx = {
   load: (org, owner) => ownerLoads.loadOf(org, owner),
   held: (uuid) => uuidToKey.has(uuid),
-  inView: (uuid) => viewRows.peek(uuid) !== undefined,
+  inView: (uuid) => viewRows.liveHolds(uuid, viewLends),
   heldSpans: (owner) => tasks.shownSpans(owner),
   *viewRows() {
-    for (const [, held] of viewRows.views())
+    for (const [slot, held] of viewRows.views()) {
+      if (!viewLends(slot)) continue
       for (const row of held.values()) if (!uuidToKey.has(row.id)) yield row
+    }
   },
   capacity: (id) => {
     const person = PLANNER.user(id)
@@ -7180,13 +7291,17 @@ function reviewHoursForProject(projectId: string): number {
   return resolveReviewHours(p?.review_hours, parent?.review_hours)
 }
 
-/* The fields updateViewTask writes: the Board's drop and owner picker. */
-const VIEW_WRITES = new Set(['status', 'assignee', 'reviewer'])
+/* The fields updateViewTask writes: the Board's drop and owner picker
+   (status, assignee and reviewer), and Team sync's Remaining box and
+   Pause (remaining and paused). */
+const VIEW_WRITES = new Set(['status', 'assignee', 'reviewer', 'remaining', 'paused'])
 
 /** P.updateIssue on a task only an open view's answer brings
-    (store/viewRows.ts), which the Board's drop and owner picker send: its
-    status, assignee and reviewer, with the roster check the workspace's
-    tasks get. The write paints the views' rows of the task, the task
+    (store/viewRows.ts), which the Board's drop and owner picker and Team
+    sync's cards send: its status, assignee and reviewer, and Team sync's
+    Remaining and Pause, with the roster check the workspace's tasks get. A
+    Remaining patch on a group drops, as the held path drops one on a
+    parent, since a group has no hours of its own. The write paints the views' rows of the task, the task
     window's own answer of it (`detail`), which shows once a window opens
     on the task while the write waits, and the workspace's, which skips
     until the workspace holds the task, so it shows whichever source the
@@ -7199,6 +7314,12 @@ function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   const row = it && viewRows.peek(it.uuid)
   if (!it || !row) return Promise.resolve(false)
   if (Object.keys(patch).some((key) => !VIEW_WRITES.has(key))) return Promise.resolve(false)
+  // a group has no hours of its own (0066): drop a stray Remaining
+  if ('remaining' in patch && it.isGroup) {
+    patch = { ...patch }
+    delete patch.remaining
+    if (!Object.keys(patch).length) return Promise.resolve(true)
+  }
   if (refusePausedEdit()) return Promise.resolve(false)
   for (const holder of [patch.assignee, patch.reviewer]) {
     const unseen = holder ? PLANNER.unseenAbove(it, holder) : null
@@ -9785,9 +9906,12 @@ export const PLANNER = {
      delay projection spreads it: the rows of the tasks on screen through
      the server's fence (convex/lib/loadRows.ts, paused, Done, unscheduled
      work and groups left out), and the snapshot's anonymous rows of
-     projects this viewer cannot see. The Team sync header shows it because
-     capacity is org-wide; the Team strip's figure covers visible tasks only.
-     A pending hours or owner edit moves it at once (store/taskIndex.ts). */
+     projects this viewer cannot see. A pending hours or owner edit moves
+     it at once (store/taskIndex.ts). Team sync read it until it took each
+     person's week from its agenda (convex/teamSync.ts agenda); its readers
+     now are Team sync's parity oracle (store/teamSyncOracle.setup.ts) and
+     the tests of the workspace's load rows (store/derivedLoad.test.ts,
+     store/teamSync.test.ts), until the stage that removes those rows. */
   weekLoadOf: (profileId: string, week: number): number => {
     let byWeek = committedByOwner.get(profileId)
     if (!byWeek) {
@@ -10007,7 +10131,7 @@ export const PLANNER = {
       it is the live subscription's on the current connection, and whether
       the read held a value before, so a wait is a refresh. */
   boardRead: (slot: ViewSlot) => {
-    const { value, ...read } = viewRead(slot)
+    const { value, fitted: _fitted, ...read } = viewRead(slot)
     return { ...read, ...(value === undefined ? {} : { value: value as BoardAnswer }) }
   },
   /** Forgets view `slot`'s read and rows: its page left. */
@@ -10154,6 +10278,178 @@ export const PLANNER = {
         owe('view')
       }
     })
+  },
+  /** Registers Team sync's read of its agenda (convex/teamSync.ts agenda)
+      for the arguments `key` (lib/teamSync.ts syncAgendaKey), or none with
+      null while its page or the tab is hidden, which stops it and keeps
+      what it held, read again with the same arguments when the page asks
+      for them again. `owner` names the mounted page and a new `attempt`
+      (Try again) asks afresh, as P.watchBoard's, but keeps the meeting it
+      last fitted, not current, until the attempt's answer arrives
+      (watchView), so a stale meeting's cards keep their unsent text; with
+      no meeting kept it drops what it held. The same meeting, its
+      organization and scope, on another day or week grid keeps the meeting
+      it held, never as current, until the new day's answer arrives
+      (watchView `hold`), so a card's unsent text survives midnight. A key
+      whose day is not the local day now asks for nothing and moves the
+      store to the new day, as P.watchOverview's. The read registers no
+      owner with the owner-load cache: the answer carries its verdicts and
+      weeks. */
+  watchSync: (key: string | null, owner = 0, attempt = 0) => {
+    const now = new Date()
+    const today = isoFromDate(now)
+    const day = key === null ? null : JSON.parse(key).day
+    const stale = day !== null && day !== today
+    const held = viewReads.get(SYNC_SLOT)?.held?.key ?? null
+    const meeting = key === null ? null : syncMeetingOf(key)
+    const hold = meeting !== null && held !== null && syncMeetingOf(held) === meeting
+    watchView(SYNC_SLOT, SYNC_QUERY, stale ? null : key, attempt, owner, false, hold)
+    if (stale && PLANNER.loaded && PLANNER.TODAY_ISO !== today) {
+      rebuild(now)
+      emit()
+    }
+  },
+  /** What Team sync's read holds: the arguments' key its result answers
+      (null for none), its value or error, whether it is the live
+      subscription's on the current connection, whether the read held a
+      value before, and `fitted`, the last ok answer whose rows it holds,
+      which the page shows under a refusal or a failure that kept them,
+      with `until`, when it stopped being the current answer (ms), the
+      earliest of the read stopping, as in a hidden tab or on a new day, a
+      reconnect leaving it to arrive again and the refusal or failure
+      arriving, null while it is current. */
+  syncRead: () => {
+    const { value, fitted, ...read } = viewRead(SYNC_SLOT)
+    return {
+      ...read,
+      ...(value === undefined ? {} : { value: value as AgendaAnswer }),
+      fitted: fitted as {
+        key: string
+        value: Extract<AgendaAnswer, { state: 'ok' }>
+        until: number | null
+      } | null,
+    }
+  },
+  /** Forgets Team sync's read and rows, an organization Viewer's people's
+      loads and the last comments' marks: its page left, or Done ended the
+      sitting. */
+  releaseSync: () => {
+    releaseView(SYNC_SLOT)
+    ownerLoads.release(SYNC_PEOPLE)
+    PLANNER.watchTeamSync(null)
+  },
+  /** Task `uuid` of Team sync's answer as the page shows it: the
+      workspace's model where it holds the task, none where the workspace
+      held it and the person's own pending archive or delete took it away,
+      else the model shaped from the answer's row (P.ownOnScreen). */
+  syncTask: (uuid: string): IssueVM | undefined => PLANNER.ownOnScreen(SYNC_SLOT, uuid),
+  /** Task `uuid`'s row as the page shows it, painted with the person's own
+      pending writes: the workspace's where it holds the task, else Team
+      sync's row of it. */
+  syncRowOnScreen: (uuid: string) => rows.issues.get(uuid) ?? viewRows.rowsOf(SYNC_SLOT)?.get(uuid),
+  /** How the person's own pending writes move each owner's hours in week
+      `week` (the app's week index), over the tasks of the answer Team sync
+      shows, `saved` by uuid as it sent them (its rows, asks and Done
+      tasks): for each such task a live layer changed (P.ownPaintedTasks),
+      the hours its row on screen adds for its owner less those its saved
+      row adds (lib/teamSync.ts weekHoursOf), unrounded, by owner. So a
+      pending Remaining, status, pause or owner edit moves the figure at
+      once, an owner change moves the hours from one person to the other,
+      and once the answer holds the write the two rows agree and add
+      nothing, so nothing counts twice. */
+  syncLoadChanges: (saved: ReadonlyMap<string, ViewRow>, week: number): Map<string, number> => {
+    const out = new Map<string, number>()
+    const add = (hit: { owner: string; hours: number } | null, sign: number) => {
+      if (hit) out.set(hit.owner, (out.get(hit.owner) ?? 0) + sign * hit.hours)
+    }
+    for (const uuid of PLANNER.ownPaintedTasks()) {
+      const before = saved.get(uuid)
+      if (!before) continue
+      const after = PLANNER.syncRowOnScreen(uuid)
+      const factsOf = (row: { project_id: string; org_id: string }, group: boolean) => ({
+        isGroup: group,
+        projectLive: !!PLANNER.project(row.project_id),
+        ownerInOrg: (id: string) => rows.profiles.get(id)?.org_id === row.org_id,
+      })
+      add(weekHoursOf(before, factsOf(before, before.has_subtasks), week), -1)
+      if (after) {
+        const handle = uuidToKey.get(uuid)
+        const group =
+          handle === undefined
+            ? !!viewRows.rowsOf(SYNC_SLOT)?.get(uuid)?.has_subtasks
+            : PLANNER.isGroup(handle)
+        add(weekHoursOf(after, factsOf(after, group), week), 1)
+      }
+    }
+    return out
+  },
+  /** Registers with the owner-load cache, under Team sync's own view key,
+      the people an organization Viewer's page shows (the person of a person
+      step and of the steps beside it, or the expanded agents), and whether
+      it reads now (`live`, while the page and the tab show). A Viewer gets
+      one owner a call (store/ownerLoadCache.ts). None releases them. */
+  watchSyncPeople: (owners: readonly string[], live: boolean) => {
+    const org = PLANNER.homeOrg
+    if (!org || owners.length === 0) return ownerLoads.release(SYNC_PEOPLE)
+    ownerLoads.register(
+      SYNC_PEOPLE,
+      owners.map((owner) => ({ org, owner, cards: 1 })),
+      live,
+    )
+  },
+  /** Person `owner`'s hours in this week as an organization Viewer's Team
+      sync shows them, from the projects the Viewer can see: their load from
+      the owner-load cache with the rows on screen, pending edits included,
+      in place of the cache's spans of the same tasks (store/viewDelay.ts
+      viewLoadOf), rounded to tenths; `waiting` while it is on its way and
+      `unknown` where it is unavailable, failed or past the cap. */
+  syncPersonLoad: (
+    owner: string,
+  ): { state: 'ok'; hours: number } | { state: 'waiting' | 'unknown' } => {
+    const org = PLANNER.homeOrg
+    const load = ownerLoads.loadOf(org, owner)
+    if (load.state === 'waiting') return { state: 'waiting' }
+    if (load.state !== 'ok') return { state: 'unknown' }
+    const spans = viewLoadOf(org, owner, load, viewDelayCtx)
+    const week = TODAY_WEEK
+    const hours = committedByWeek(spans, null, { from: week, to: week }).get(week) ?? 0
+    return { state: 'ok', hours: roundTenths(hours) }
+  },
+  /** The verdicts of Team sync's tasks `uuids` for an organization Viewer,
+      judged by the Board's rule (store/viewDelay.ts judgeDelay) against
+      their owners' loads from the owner-load cache (P.watchSyncPeople):
+      null while a load is on its way, as a Board card shows no mark then,
+      and `unknown` where it is unavailable, failed or past the cap. The
+      page asks only for rows whose agenda verdict is unknown and whose
+      owner it registered. */
+  syncViewerVerdicts: (uuids: readonly string[]): Map<string, SyncVerdict> => {
+    const out = new Map<string, SyncVerdict>()
+    viewDelayCtx.memo = new Map()
+    viewDelayCtx.filed = undefined
+    try {
+      for (const uuid of uuids) {
+        const it = PLANNER.syncTask(uuid)
+        if (!it) continue
+        const issue = delayIssueOfTask(
+          it,
+          { isGroup: false, isDone: it.status === 'done', partial: false },
+          viewDelayCtx.capacity,
+        )
+        const verdict = judgeDelay(issue, it.org, viewDelayCtx)
+        out.set(
+          uuid,
+          verdict === DELAY_UNKNOWN
+            ? 'unknown'
+            : verdict === null || verdict.status === 'ok'
+              ? null
+              : verdict.status,
+        )
+      }
+    } finally {
+      viewDelayCtx.memo = undefined
+      viewDelayCtx.filed = undefined
+    }
+    return out
   },
   /** Task `uuid` as the rows on screen show it to view `slot`, for a task
       the person's own pending writes changed (P.ownPaintedTasks): the
@@ -12133,20 +12429,27 @@ export const PLANNER = {
      asked again as two halves, down to one person. Someone whose own answer
      is still cut short is listed in P.lastCommentsCut, which the page names
      so no card lacks its mark without a word. The page calls this with the
-     home organization whenever they change, and with null on unmount. No
+     home organization whenever they change, and follows the hidden-tab
+     gate (lib/viewVisibility.ts) with `live`: false while the page or the
+     tab is hidden, and on unmount, stops every part and keeps the marks it
+     has; true asks again, the kept marks shown until every part has
+     answered. Null, when the page leaves the kept pages or Done ends the
+     sitting (P.releaseSync), stops the parts and empties the marks. No
      owners means no subscription. A new organization empties the marks; new
      owners in the same one keep the old marks until every part has
      answered, so stepping through the walk does not blank them. A part that
      fails shows no marks for its people until its subscription answers
      again. Nothing here is optimistic, so no paint gate is needed. */
-  watchTeamSync: (orgId: string | null, ownerIds: readonly string[] = []) => {
+  watchTeamSync: (orgId: string | null, ownerIds: readonly string[] = [], live = true) => {
     const owners = orgId ? [...new Set(ownerIds)] : []
     const key = owners.join(',')
-    if (watchedSyncOrg === orgId && watchedSyncOwners === key) return
+    const paused = !!orgId && !live
+    if (watchedSyncOrg === orgId && watchedSyncOwners === key && syncPaused === paused) return
     const watchEpoch = ++syncWatchEpoch
     syncFallback = PLANNER.lastComments
     stopSyncParts()
     watchedSyncOwners = key
+    syncPaused = paused
     if (watchedSyncOrg !== orgId) {
       watchedSyncOrg = orgId
       syncFallback = new Map()
@@ -12154,7 +12457,7 @@ export const PLANNER = {
       PLANNER.lastCommentsCut = []
       emit('teamSync')
     }
-    if (!orgId || !owners.length) return
+    if (paused || !orgId || !owners.length) return
     const publish = () => {
       const answered = syncParts.every((part) => part.rows !== null)
       const marks = new Map(answered ? [] : syncFallback)
@@ -14416,7 +14719,7 @@ let tasksNext = false
 
 /** What asked for every task (P.askTasks): the readers that need every one
     of them, and the scripts and the benchmark. */
-export type AskReason = 'roadmap' | 'team_sync' | 'create' | 'inbox' | 'script' | 'benchmark'
+export type AskReason = 'roadmap' | 'create' | 'inbox' | 'script' | 'benchmark'
 
 /** Why a task load stopped while the rest of the workspace stays live:
     the sentence the readers that wait for every task show beside Try
@@ -14868,6 +15171,7 @@ export function disposeDemoStore() {
   syncFallback = new Map()
   watchedSyncOrg = null
   watchedSyncOwners = ''
+  syncPaused = false
   PLANNER.lastComments = new Map()
   PLANNER.lastCommentsCut = []
   pendingRestores.clear()

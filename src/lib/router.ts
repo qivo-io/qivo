@@ -45,10 +45,12 @@ export type Route = {
   inbox?: boolean
   projects?: boolean
   /* The Team sync page. `scope` is 'all' | 'team:<uuid>' | 'project:<uuid>'
-     (absent: the viewer's saved scope); `step` is 'agents' or a profile uuid
+     | 'unresolved:<segment>' for a project the app cannot resolve (absent:
+     the viewer's saved scope); `step` is 'agents' or a profile uuid
      (absent: the default step). Team and profile uuids pass through
-     unvalidated, as `settings/team:<uuid>` does: the page falls back when
-     one resolves to nothing. */
+     unvalidated, as `settings/team:<uuid>` does: the server answers a team
+     it cannot honour as unavailable and the page asks to choose, and a step
+     that resolves to nothing falls back to the opening. */
   sync?: { scope?: string; step?: string }
 }
 
@@ -320,8 +322,10 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
   if (seg[0] === 'sync') {
     /* Team sync: scope, then step, then a task. Under a slug this login
        cannot resolve, nothing past the page resolves, uuids included (the
-       rule proj() and issue() follow, applied to the whole address). An
-       unresolvable project leaves the scope absent: the saved one opens. */
+       rule proj() and issue() follow, applied to the whole address). A
+       project the app cannot resolve stays a scope the page cannot honour
+       (`unresolved:<segment>`, as typed), which asks to choose, never the
+       saved scope or All projects. */
     r.sync = {}
     if (orgUnknown) return r
     let i = 1
@@ -331,7 +335,7 @@ function parseSegments(seg: string[], org: string | undefined, orgUnknown: boole
     } else if (seg[1] === 'p' || seg[1] === 'team') {
       if (seg[1] === 'p') {
         const p = proj(seg[2])
-        if (p) r.sync.scope = `project:${p.id}`
+        r.sync.scope = p ? `project:${p.id}` : `unresolved:${seg[2] ?? ''}`
       } else if (seg[2]) r.sync.scope = `team:${seg[2].toLowerCase()}`
       i = 3
     }
@@ -650,17 +654,20 @@ export type UiState = {
 }
 
 /** Where a Team sync route opens the page. No scope: the viewer's `saved`
-    one, else all projects. No step: the team opening, except that the bare
-    page link (`/sync`, no scope either) opens the viewer's own page on a
-    phone; the page falls back to the opening when they own nothing in scope.
-    Every address the app writes names a scope, so a reload, Back or a task
-    closing over the opening lands on the opening, phone or not. */
+    one, the scope they last picked, else none (`''`), where the page asks
+    to choose; never All projects by default. No step: the team opening,
+    except that the bare page link (`/sync`, no scope either) opens the
+    viewer's own page on a phone, also behind the picker, so a pick lands
+    there; the page falls back to the opening when they own nothing in
+    scope. Every address the app writes for a scope names it, so a reload,
+    Back or a task closing over the opening lands on the opening, phone or
+    not. */
 export function syncPlaceOf(
   r: NonNullable<Route['sync']>,
   viewer: { saved?: string; me: string; mobile: boolean },
 ): { scope: string; step: string } {
   return {
-    scope: r.scope || viewer.saved || 'all',
+    scope: r.scope || viewer.saved || '',
     step: r.step || (viewer.mobile && !r.scope ? viewer.me : 'team'),
   }
 }
@@ -673,8 +680,13 @@ export function syncPlaceOf(
    would read another task. */
 function syncPath(sync: { scope: string; step: string }, openIssue?: string | null): string {
   let org: string | null | undefined = P.homeOrg
-  let rest = '/sync/all'
-  if (sync.scope.indexOf('project:') === 0) {
+  // no scope is the bare page; a project the app cannot resolve keeps the
+  // segment it was typed as, encoded as parsePath decodes it, so a '/', '?'
+  // or '#' in it stays inside the segment
+  let rest = sync.scope === 'all' ? '/sync/all' : '/sync'
+  if (sync.scope.indexOf('unresolved:') === 0)
+    rest = `/sync/p/${encodeURIComponent(sync.scope.slice(11))}`
+  else if (sync.scope.indexOf('project:') === 0) {
     const id = sync.scope.slice(8)
     const p = P.project(id)
     if (p) org = p.org

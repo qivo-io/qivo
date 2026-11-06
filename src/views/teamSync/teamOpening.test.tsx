@@ -144,7 +144,8 @@ async function load() {
   const { usePlannerVersion } = await import('../../store/usePlannerVersion')
   const { TooltipProvider } = await import('../../components/ui/tooltip')
   /* The opening over top-level projects `metaIds`, `weeks` weeks after
-     this one, rendering again on every store change. One component for
+     this one, with no task or person of the agenda, rendering again on
+     every store change. One component for
      the whole load, so a render with other props updates the mounted
      opening. */
   function Screen({ metaIds, weeks, now }: { metaIds: string[]; weeks: number; now: number }) {
@@ -154,12 +155,16 @@ async function load() {
       <TooltipProvider>
         <TeamOpening
           rows={[]}
-          humans={store.P.users}
+          tasks={[]}
+          humans={[]}
           subIds={new Set()}
           metaIds={new Set(metaIds)}
           day={{ ...day, todayWeek: day.todayWeek + weeks }}
           now={now}
           onOpenTask={() => {}}
+          verdictOf={() => null}
+          blockedOf={() => []}
+          loadOf={() => ({ state: 'unknown' })}
         />
       </TooltipProvider>
     )

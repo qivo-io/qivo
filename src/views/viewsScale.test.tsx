@@ -298,12 +298,16 @@ describe("Team sync's opening", () => {
         {show && (
           <TeamOpening
             rows={board.P.issues}
-            humans={board.P.users}
+            tasks={board.P.issues}
+            humans={[]}
             subIds={info.subIdSet}
             metaIds={new Set()}
             day={syncDay(Date.now())}
             now={Date.now()}
             onOpenTask={() => {}}
+            verdictOf={() => null}
+            blockedOf={() => []}
+            loadOf={() => ({ state: 'unknown' })}
           />
         )}
       </div>

@@ -1,8 +1,8 @@
 /* Team sync: the meeting page's server reads and its stamp. `agenda`
  * answers one meeting for one scope (lib/teamSyncAgenda.ts): the tasks the
  * page shows, the people it walks with their stamps and loads, within
- * Team sync's budget and ceiling. No app reader calls it yet; the Team sync
- * view moves onto it. `stamp` records that a change was made on a person
+ * Team sync's budget and ceiling. The app's Team sync page reads its meeting
+ * from it (src/views/teamSync/useSyncMeeting.ts). `stamp` records that a change was made on a person
  * through the sync page (the person's sync_stamps row, model/syncStamps.ts,
  * read through the sitting rule in lib/teamSync.ts; the app's people part
  * sends it on its profile rows as sync_at and sync_since). `lastComments`
@@ -302,10 +302,9 @@ export async function latestComments(
  * four per person and one more for each 64 of their open tasks, at most
  * six for each live project asked about, and one per task answered.
  *
- * For the Team sync view stage, an answer cut short by the projects bound,
- * the guard or the caller's own access bound still makes the page say the
- * person "holds more open tasks than Qivo checks at once" (src/views/
- * TeamSync.tsx marksCutLine), which is then not why. */
+ * The page says that Qivo could not check all of the person's open tasks
+ * at once (src/views/TeamSync.tsx marksCutLine), which names no cause, as
+ * any of these bounds can cut an answer short. */
 export const lastComments = orgQuery({
   args: { owner_ids: v.array(v.string()) },
   handler: (ctx, { owner_ids }) => latestComments(ctx, ctx.me, owner_ids),

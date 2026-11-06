@@ -15,18 +15,18 @@ and flags projected delays. Other users see saved changes live.
 Views and dialogs may show **Loading…** the first time you open them.
 
 Qivo loads every task only when a page or action needs every one of them:
-the Roadmap, Team sync, a new task and the Inbox's search. A note at the
+the Roadmap, a new task and the Inbox's search. A note at the
 bottom of the page then says **Loading tasks…**, with a bar that moves but
-does not say how far it has got. The Board, the task list, the Overview
-and Search show what the server answers for them, before and while every
-task loads. On a slow connection their answers come after the tasks
+does not say how far it has got. The Board, the task list, the Overview,
+Team sync and Search show what the server answers for them, before and while
+every task loads. On a slow connection their answers come after the tasks
 already on their way. A task you open from
 Search, a link, a bookmark, Back or Forward, an Inbox row, or a task's
 subtasks or linked tasks shows at once, and you can change it at once, its
 parent, its subtasks and its links included. A task opened by the number
 in its link takes changes once the window has read it on its own. Moving,
 archiving and deleting such a task work at once too, once its window has
-read every subtask of it. The Roadmap and Team sync open once every task
+read every subtask of it. The Roadmap opens once every task
 has loaded, and so do moving, archiving and deleting a task you have just
 created, unless its window has read every subtask of it. An open task's
 subtasks, linked tasks and attachments load on their own, and its
@@ -182,7 +182,8 @@ tray icon. The Linux app does not check spelling.
 The bottom navigation has **Inbox**, **My tasks**, **Projects** and **Sync**.
 Opening the app without a page link starts in Inbox. Direct links still open
 their named page. **Sync** opens Team sync ([Team sync](./planning-against-real-capacity.md#team-sync)), starting on your page when
-you own work in its scope. It appears when you belong to an organization.
+you own work in its scope. The first time it asks you to choose a team or
+project. It appears when you belong to an organization.
 
 Use the search icon in the header to find tasks and projects. Phone pages
 have no separate text filter and ignore desktop text queries, including in

@@ -535,6 +535,30 @@ describe('the Team sync store', () => {
     expect(P.lastComments.get(f.review.id)).toBe(Date.parse(at))
   })
 
+  it('stops every part while the page or the tab is hidden, keeps the marks, and asks again on return', () => {
+    P.watchTeamSync(f.org, [f.aisha])
+    const at = ago(HOUR)
+    watches[0].next({ rows: [{ issue_id: f.todo.id, at }], complete: true })
+    // hidden: no subscription, the marks stay
+    P.watchTeamSync(f.org, [f.aisha], false)
+    expect(watches[0].unsub).toHaveBeenCalledOnce()
+    expect(watches).toHaveLength(1)
+    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
+    // hidden again subscribes nothing
+    P.watchTeamSync(f.org, [f.aisha], false)
+    expect(watches).toHaveLength(1)
+    // shown again: asks again, the kept marks shown until the answer
+    P.watchTeamSync(f.org, [f.aisha], true)
+    expect(watches).toHaveLength(2)
+    expect(P.lastComments.get(f.todo.id)).toBe(Date.parse(at))
+    watches[1].next({ rows: [{ issue_id: f.review.id, at }], complete: true })
+    expect([...P.lastComments]).toEqual([[f.review.id, Date.parse(at)]])
+    // the page leaving the kept pages empties them (P.releaseSync)
+    P.releaseSync()
+    expect(watches[1].unsub).toHaveBeenCalledOnce()
+    expect(P.lastComments.size).toBe(0)
+  })
+
   it('empties the marks of another organization', () => {
     P.watchTeamSync(f.org, [f.aisha])
     watches[0].next({ rows: [{ issue_id: f.todo.id, at: NOW }], complete: true })

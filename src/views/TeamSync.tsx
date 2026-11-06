@@ -6,8 +6,20 @@
    agents. Rows are the open leaf tasks each person OWNS inside the scope
    (convex/lib/review.ts: the reviewer while a task waits In Review with one,
    else the assignee); the rules live in src/lib/teamSync.ts.
-   · Everything is live: rows re-derive from the store on every render, so a
-     change made here or on anyone's screen moves rows between pages.
+   · The meeting is the server's agenda for the scope (convex/teamSync.ts
+     agenda, views/teamSync/useSyncMeeting.ts): its tasks, its people with
+     their stamps and weeks, each row's blockers and verdict. The page never
+     reads the workspace's task lists, so it opens without every task and
+     asks for none. It is live: a change made here or on anyone's screen
+     reruns the agenda, and the person's own pending writes move rows
+     between sections at once.
+   · A scope comes from a pick or an address only. With none, or one the
+     server cannot honour, the page asks to choose, never All projects. A
+     meeting past its limits says so in place of the meeting, and one that
+     stops fitting while it is open stays as it last fitted, marked as no
+     longer updating, so its cards keep their unsent text. One some of whose
+     tasks have not reached the page shows without its counts, and STALL.ms
+     later under a note that says so.
    · Every change made from a card (Remaining, status, pause, owner, a
      mention) stamps the page owner (P.syncStamp) and ticks the row. The tick
      alone stamps nothing, and naming someone from the team opening stamps
@@ -15,7 +27,8 @@
    · Ticks are session-local; the one stored value is each person's
      last-sync stamp.
    · Where the page is (scope and step) lives in App and the URL; the page
-     reports moves through `onPlace` and corrects a place it cannot show. */
+     reports moves through `onPlace` and corrects a step it cannot show once
+     its meeting has answered. It never corrects a scope. */
 import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { NoProjects } from '@/components/NoProjects'
 import { Avatar, FieldSelect, Icon } from '@/components/qivo'
@@ -25,58 +38,69 @@ import { flushWalkInput, useReviewed } from '@/components/walkRows'
 import type { UnsentScope } from '@/lib/leaveGuard'
 import { seesNoProject, syncNoProjectsHint } from '@/lib/noProjects'
 import {
-  bannerVerdict,
-  cardsClosedBy,
   dayLabel,
   doneSince,
   parseSyncScope,
   personGroups,
   previousSync,
-  resolveSyncScope,
-  type ScopeWorld,
   type SyncCardPlace,
   type SyncDay,
   type SyncGroupId,
-  type SyncScope,
-  scopeMetaIds,
-  scopeProjectIds,
+  type SyncLoad,
+  type SyncPerson,
+  type SyncPlaceScope,
+  type SyncVerdict,
   stampLabel,
   syncDay,
-  syncRoster,
-  syncRows,
   syncScopeKey,
   waitingOnReview,
 } from '@/lib/teamSync'
 import { useLatest } from '@/lib/useLatest'
 import { useMobile } from '@/lib/useMobile'
 import { cn } from '@/lib/utils'
-import { type IssueVM, P, type UserVM } from '@/store/planner'
+import { useViewVisibility } from '@/lib/viewVisibility'
+import { type IssueVM, P } from '@/store/planner'
 import { usePlannerVersion } from '@/store/usePlannerVersion'
-import { syncSince } from '../../convex/lib/teamSync'
 import { DoneItem, LoadChip, type PageCtx, SyncCard, WaitingItem } from './teamSync/SyncCard'
+import { IncompleteNote, StaleNote, SyncNote } from './teamSync/SyncNote'
 import { TeamOpening } from './teamSync/TeamOpening'
+import {
+  type SyncMeeting,
+  stoppedTitle,
+  useSyncFigures,
+  useSyncMeeting,
+} from './teamSync/useSyncMeeting'
 import { useOverviewPanelClipping } from './useOverviewPanelClipping'
 import './Overview.css'
 import '../styles/mobile-views.css'
 
-/** Where the page is: `scope` as `UIPrefs.syncScope` (`'all'`,
-    `'team:<uuid>'`, `'project:<uuid>'`); `step` is `'team'`, `'agents'` or a
-    person's profile uuid (an agent's opens the agents step with it open). */
+/** Where the page is: `scope` as `UIPrefs.teamSyncScope` (`'all'`,
+    `'team:<uuid>'`, `'project:<uuid>'`), `'unresolved:<segment>'` for an
+    address's project the app cannot resolve, or `''` for none; `step` is
+    `'team'`, `'agents'` or a person's profile uuid (an agent's opens the
+    agents step with it open). */
 export type SyncPlace = { scope: string; step: string }
 
-/** The walk over scope `key`: its projects, rows, people and steps. */
-function walkOf(key: string, world: ScopeWorld) {
-  const scope = resolveSyncScope(parseSyncScope(key), world)
-  const subIds = scopeProjectIds(scope, world)
-  const rows = syncRows(P.issues, subIds)
-  const { humans, agents } = syncRoster(rows, P.users, scope)
-  const steps = ['team', ...humans.map((u) => u.id), ...(agents.length ? ['agents'] : [])]
-  return { scope, scopeKey: syncScopeKey(scope), subIds, rows, humans, agents, steps }
+/** What a person's page and the agents' lines read besides the meeting:
+    the week and the verdicts of the people on screen (useSyncFigures). */
+type Figures = {
+  verdict: (uuid: string) => SyncVerdict
+  load: (person: SyncPerson) => SyncLoad
 }
 
-/* The walk's scope choice, saved per user by App: all projects, each team of
-   the home organization, each of its projects. */
-function ScopeCtl({ scope, onPick }: { scope: SyncScope; onPick: (key: string) => void }) {
+/* The walk's scope choice: all projects, each team of the home
+   organization, each of its projects. It names the scope the page shows,
+   and "Choose a scope" with nothing chosen where the page asks to choose
+   (`named` false). */
+function ScopeCtl({
+  scope,
+  named,
+  onPick,
+}: {
+  scope: SyncPlaceScope
+  named: boolean
+  onPick: (key: string) => void
+}) {
   const teams = P.teams
     .filter((t) => t.org === P.homeOrg)
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -88,7 +112,8 @@ function ScopeCtl({ scope, onPick }: { scope: SyncScope; onPick: (key: string) =
     <span data-sync-scope className="inline-flex min-w-0">
       <FieldSelect
         aria-label="Sync scope"
-        value={syncScopeKey(scope)}
+        value={named ? syncScopeKey(scope) : null}
+        placeholder="Choose a scope"
         menuWidth={220}
         backLayer
         className="max-w-[260px] text-sm"
@@ -117,7 +142,9 @@ function SyncCol({
 }: {
   id: 'done' | 'onit' | 'next'
   title: string
-  count: number
+  /** the column's count, or null, "…", while some task the meeting names
+      has not reached the page */
+  count: number | null
   className?: string
   bodyClassName?: string
   children: ReactNode
@@ -128,7 +155,7 @@ function SyncCol({
       className={cn('flex min-w-0 flex-col rounded-lg border border-border', className)}
     >
       <h3 className="m-0 flex items-baseline gap-2 border-b border-border px-3 py-2 text-base font-semibold text-text-1">
-        {title} <span className="text-sm font-normal text-text-3">{count}</span>
+        {title} <span className="text-sm font-normal text-text-3">{count ?? '…'}</span>
       </h3>
       <div className={cn('flex flex-col gap-2 p-2', bodyClassName)}>{children}</div>
     </div>
@@ -141,24 +168,25 @@ function Empty({ children }: { children: ReactNode }) {
 
 /** One person's three columns: Done since their reading point, On it (In
     Progress, In Review, then the quiet Waiting on review foot), Next (this
-    week, then Later behind a toggle). The person page and each expanded
-    agent draw the same. Laid out by the width it gets (a container query,
-    so an agent's inset columns follow too): three columns from 820px; below
-    that Done since becomes a band over On it and Next side by side, its
-    items flowing in a grid; below 560px, and always on a phone, one column.
-    A card's controls wrap to a second line rather than clip. */
+    week, then Later behind a toggle), over the meeting's tasks. The person
+    page and each expanded agent draw the same. Laid out by the width it
+    gets (a container query, so an agent's inset columns follow too): three
+    columns from 820px; below that Done since becomes a band over On it and
+    Next side by side, its items flowing in a grid; below 560px, and always
+    on a phone, one column. A card's controls wrap to a second line rather
+    than clip. */
 function PersonColumns({
   person,
   ctx,
-  rows,
-  subIds,
+  meeting,
+  figures,
   laterOpen,
   onToggleLater,
 }: {
-  person: UserVM
+  person: SyncPerson
   ctx: PageCtx
-  rows: IssueVM[]
-  subIds: Set<string>
+  meeting: SyncMeeting
+  figures: Figures
   laterOpen: boolean
   onToggleLater: () => void
 }) {
@@ -169,19 +197,23 @@ function PersonColumns({
       it={it}
       ctx={ctx}
       later={later}
+      verdict={figures.verdict(it.uuid)}
+      blockedBy={meeting.blockedBy(it.uuid)}
       context={P.contextVersion}
       lastComment={P.lastComments.get(it.uuid)}
       reviewed={ctx.reviewed.has(it.uuid)}
     />
   )
-  const groups = personGroups(person.id, rows, ctx.day)
+  const groups = personGroups(person.id, meeting.rows, ctx.day)
   const group = (id: SyncGroupId) => groups.find((g) => g.id === id)?.rows ?? []
   const onIt = [...group('progress'), ...group('review')]
   const week = group('week')
   const later = group('later')
-  const waiting = waitingOnReview(person.id, rows)
-  const done = doneSince(person.id, P.issues, subIds, ctx.since)
+  const waiting = waitingOnReview(person.id, meeting.rows)
+  const done = doneSince(person.id, meeting.tasks, meeting.subIds, ctx.since)
   const sinceLabel = dayLabel(ctx.since, ctx.now)
+  // the counts wait while some task the meeting names has not arrived
+  const count = (n: number) => (meeting.counted ? n : null)
   return (
     <div className="@container">
       <div
@@ -194,7 +226,7 @@ function PersonColumns({
         <SyncCol
           id="done"
           title={`Done since ${sinceLabel}`}
-          count={done.length}
+          count={count(done.length)}
           className={cn(!ctx.mobile && '@min-[560px]:col-span-2 @min-[820px]:col-span-1')}
           bodyClassName={cn(
             !ctx.mobile &&
@@ -212,13 +244,14 @@ function PersonColumns({
           ))}
           {!done.length && <Empty>Nothing finished since {sinceLabel}</Empty>}
         </SyncCol>
-        <SyncCol id="onit" title="On it" count={onIt.length}>
+        <SyncCol id="onit" title="On it" count={count(onIt.length)}>
           {onIt.map((it) => card(it))}
           {!onIt.length && <Empty>Nothing under way</Empty>}
           {waiting.length > 0 && (
             <div data-sync-waiting-foot className="mt-1 flex flex-col gap-1.5">
               <div className="px-1 text-sm font-semibold text-text-2">
-                Waiting on review <span className="font-normal text-text-3">{waiting.length}</span>
+                Waiting on review{' '}
+                <span className="font-normal text-text-3">{count(waiting.length) ?? '…'}</span>
               </div>
               {waiting.map((w) => (
                 <WaitingItem
@@ -233,7 +266,7 @@ function PersonColumns({
             </div>
           )}
         </SyncCol>
-        <SyncCol id="next" title="Next" count={week.length + later.length}>
+        <SyncCol id="next" title="Next" count={count(week.length + later.length)}>
           {week.map((it) => card(it))}
           {!week.length && !later.length && <Empty>Nothing planned</Empty>}
           {later.length > 0 && (
@@ -247,7 +280,7 @@ function PersonColumns({
               className="gap-1.5 self-start px-1.5 text-sm font-semibold"
             >
               <Icon name={laterOpen ? 'chevronDown' : 'chevronRight'} size={14} />
-              Later <span className="font-normal text-text-3">{later.length}</span>
+              Later <span className="font-normal text-text-3">{count(later.length) ?? '…'}</span>
             </Button>
           )}
           {laterOpen && later.map((it) => card(it, true))}
@@ -263,7 +296,7 @@ function PersonJumps({
   person,
   onShowPerson,
 }: {
-  person: UserVM
+  person: SyncPerson
   onShowPerson: (view: 'kanban' | 'roadmap', profileId: string) => void
 }) {
   const first = person.name.split(' ')[0]
@@ -297,21 +330,23 @@ function PersonJumps({
 
 /* The agents' page: each agent collapsed to one line (hours this week, what
    they are on, and a Delayed / Slipping count so a late agent task is not
-   missed), expanding to the same three columns. Their supervisor answers. */
+   missed, or "Delays unknown" where the agenda could not judge one of
+   their rows), expanding to the same three columns. Their supervisor
+   answers. */
 function AgentsPage({
   agents,
-  rows,
-  subIds,
+  meeting,
+  figures,
   ctxFor,
   open,
   onToggle,
   laterOpen,
   onToggleLater,
 }: {
-  agents: UserVM[]
-  rows: IssueVM[]
-  subIds: Set<string>
-  ctxFor: (owner: UserVM) => PageCtx
+  agents: SyncPerson[]
+  meeting: SyncMeeting
+  figures: Figures
+  ctxFor: (owner: SyncPerson) => PageCtx
   open: Set<string>
   onToggle: (id: string) => void
   laterOpen: Set<string>
@@ -324,12 +359,13 @@ function AgentsPage({
       </h2>
       {agents.map((a) => {
         const ctx = ctxFor(a)
-        const groups = personGroups(a.id, rows, ctx.day)
+        const groups = personGroups(a.id, meeting.rows, ctx.day)
         const count = (ids: string[]) =>
           groups.filter((g) => ids.includes(g.id)).reduce((n, g) => n + g.rows.length, 0)
-        const verdicts = rows
+        const verdicts = meeting.rows
           .filter((it) => it.owner === a.id)
-          .map((it) => bannerVerdict(P.delayOf(it), P.tracksDelay(it)))
+          .map((it) => figures.verdict(it.uuid))
+        const unknown = verdicts.includes('unknown')
         const delayed = verdicts.filter((v) => v === 'late').length
         const slipping = verdicts.filter((v) => v === 'behind').length
         const expanded = open.has(a.id)
@@ -346,15 +382,25 @@ function AgentsPage({
               <Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={14} />
               <Avatar id={a.id} size={28} />
               <span className="text-base font-semibold text-text-1">{a.name}</span>
-              <LoadChip user={a} />
+              <LoadChip load={figures.load(a)} />
               <span className="text-sm text-text-3">
-                {count(['progress', 'review'])} on it, {count(['week', 'later'])} next
+                {meeting.counted
+                  ? `${count(['progress', 'review'])} on it, ${count(['week', 'later'])} next`
+                  : '…'}
               </span>
-              {delayed > 0 && (
-                <span className="text-sm font-semibold text-danger">{delayed} Delayed</span>
-              )}
-              {slipping > 0 && (
-                <span className="text-sm font-semibold text-warning">{slipping} Slipping</span>
+              {!meeting.counted ? null : unknown ? (
+                <span data-sync-agent-delays="unknown" className="text-sm text-text-3">
+                  Delays unknown
+                </span>
+              ) : (
+                <>
+                  {delayed > 0 && (
+                    <span className="text-sm font-semibold text-danger">{delayed} Delayed</span>
+                  )}
+                  {slipping > 0 && (
+                    <span className="text-sm font-semibold text-warning">{slipping} Slipping</span>
+                  )}
+                </>
               )}
             </Button>
             {expanded && (
@@ -362,8 +408,8 @@ function AgentsPage({
                 <PersonColumns
                   person={a}
                   ctx={ctx}
-                  rows={rows}
-                  subIds={subIds}
+                  meeting={meeting}
+                  figures={figures}
                   laterOpen={laterOpen.has(a.id)}
                   onToggleLater={() => onToggleLater(a.id)}
                 />
@@ -384,14 +430,16 @@ function flipped(set: Set<string>, id: string): Set<string> {
   return n
 }
 
-/** The notice for cards without a since-last-sync mark, because `names`
-    hold more open tasks than one latest-comment read covers. */
-const marksCutLine = (names: string[]) =>
-  `Some cards show no mark for what changed since the last sync, because ${
-    names.length === 1
-      ? `${names[0]} holds`
-      : `${names.slice(0, -1).join(', ')} and ${names.at(-1)} hold`
-  } more open tasks than Qivo checks at once.`
+/** The notice for cards without a since-last-sync mark, because the
+    latest-comment read of `names` came back cut short. It names no cause,
+    as a read is cut short for more than one reason (convex/teamSync.ts
+    lastComments). */
+const marksCutLine = (names: string[]) => {
+  const own = names.map((name) => `${name}'s`)
+  const whose =
+    own.length === 1 ? own[0] : `${own.slice(0, -1).join(', ')} and ${own.at(-1) as string}`
+  return `Some cards show no mark for what changed since the last sync, because Qivo could not check all of ${whose} open tasks at once.`
+}
 
 export function TeamSync({
   place,
@@ -401,26 +449,31 @@ export function TeamSync({
   onOpenTask: openTask,
   onShowTask: showTask,
   onShowPerson,
+  onShowBoard,
 }: {
   place: SyncPlace
-  /** App stores it, saves the scope when it changed, and REPLACES the URL;
-      it asks first while the step holds unsent text, or while `closes`, the
-      windows the move takes away when the page knows them, holds some */
+  /** App stores it, saves a new scope as the person's pick, and REPLACES
+      the URL; it asks first while the step holds unsent text, or while
+      `closes`, the windows the move takes away, holds some */
   onPlace: (next: SyncPlace, closes?: UnsentScope[]) => void
-  /** as onPlace, without asking, for a place the walk cannot show */
+  /** as onPlace, without asking or saving, for a step the walk cannot show */
   onCorrect?: (next: SyncPlace) => void
   /** Done on the last step: App returns to the scope and view underneath */
   onClose: () => void
-  /** the task window over the page */
-  onOpenTask: (handle: string) => void
+  /** the task window over the page, by what opening a task passes on
+      (P.openTarget), so a task only the agenda brings opens too */
+  onOpenTask: (target: string) => void
   onShowTask: (view: 'kanban' | 'roadmap', handle: string) => void
   onShowPerson: (view: 'kanban' | 'roadmap', profileId: string) => void
+  /** a sub-project's Board, for one past Team sync's limits */
+  onShowBoard: (projectId: string) => void
 }) {
   usePlannerVersion('teamSync')
   // App makes these again every render; the memoized rows keep one identity
-  const onOpenTask = useLatest(openTask)
+  const onOpenTask = useLatest((handle: string) => openTask(P.openTarget(handle)))
   const onShowTask = useLatest(showTask)
   const mobile = useMobile()
+  const { visible } = useViewVisibility()
   const { paneRef } = useOverviewPanelClipping(!mobile)
   // the page's scroller, which the clipping hook also measures
   const scroller = useRef<HTMLDivElement | null>(null)
@@ -446,24 +499,24 @@ export function TeamSync({
   // oxlint-disable-next-line react/purity -- Team sync shows today, read from the clock at each render
   const now = Date.now()
   const day: SyncDay = syncDay(now)
-  const world: ScopeWorld = {
-    homeOrg: P.homeOrg,
-    projects: P.projects,
-    teams: P.teams,
-    canSee: (id) => P.canSee(id),
-  }
-  const { scope, scopeKey, subIds, rows, humans, agents, steps } = walkOf(place.scope, world)
+  const scopeKey = place.scope
+  const scope = parseSyncScope(scopeKey)
+  const meeting = useSyncMeeting(scopeKey, now)
+  const { humans, agents } = meeting
+  const steps = ['team', ...humans.map((u) => u.id), ...(agents.length ? ['agents'] : [])]
   const walkers = new Set([...humans, ...agents].map((u) => u.id))
   // the footer's total: every row on some page of the walk (the Waiting on
   // review foot and the Done column are not rows)
-  const counted = rows.filter((it) => walkers.has(it.owner))
+  const walked = meeting.rows.filter((it) => walkers.has(it.owner))
 
   /* The step `place` asks for, as the walk can show it: an agent's id opens
      the agents step; the person just shown who has left the walk (their last
      row handed on) gives their place to the neighbour at the same index;
      anything else unknown, the phone's default own page included when the
      viewer owns nothing in scope, opens the team. So does a new scope the
-     person has nothing in: its walk is another list, with no neighbour. */
+     person has nothing in: its walk is another list, with no neighbour.
+     While no meeting shows, the place keeps its step, as nothing is known
+     of the walk yet. */
   const want = place.step
   let step = 'team'
   if (steps.includes(want)) step = want
@@ -472,10 +525,11 @@ export function TeamSync({
     step = steps[Math.min(shown.current.idx, steps.length - 1)]
   const idx = steps.indexOf(step)
 
-  // the latest comment per open task, the one fact the snapshot lacks, for
+  // the latest comment per open task, the one fact the agenda lacks, for
   // the people whose cards this step shows and then those of the steps on
   // either side, so Next and Previous open with their marks. The order
-  // matters, because an answer cut short covers the first ones.
+  // matters, because an answer cut short covers the first ones. An
+  // organization Viewer's page reads the same people's loads.
   const cardOwners = (s: string | undefined): string[] =>
     s === 'agents'
       ? agents.filter((a) => openAgents.has(a.id)).map((a) => a.id)
@@ -486,20 +540,24 @@ export function TeamSync({
     ...new Set([...cardOwners(step), ...cardOwners(steps[idx - 1]), ...cardOwners(steps[idx + 1])]),
   ]
   const ownerKey = syncOwners.join(',')
-  // the people on this step whose open tasks are too many for one
-  // latest-comment read, so some of their cards lack a mark (P.watchTeamSync)
+  const figures: Figures = useSyncFigures(meeting, syncOwners)
+  // the people on this step whose latest-comment read came back cut short,
+  // so some of their cards lack a mark (P.watchTeamSync)
   const marksCut = cardOwners(step)
     .filter((id) => P.lastCommentsCut.includes(id))
-    .map((id) => P.user(id)?.name ?? 'Someone')
+    .map((id) => [...humans, ...agents].find((u) => u.id === id)?.name ?? 'Someone')
+  // on the hidden-tab gate: hidden, or a kept page behind another
+  // (components/KeptView), the parts stop and the marks stay; App's
+  // P.releaseSync empties them when the page leaves the kept pages
   useEffect(() => {
-    P.watchTeamSync(P.homeOrg || null, ownerKey ? ownerKey.split(',') : [])
-  }, [P.homeOrg, ownerKey])
-  // gone or hidden (a kept page, components/KeptView), it empties the
-  // marks, so none shows on its return until an answer covers it
-  useEffect(() => () => P.watchTeamSync(null), [])
+    const org = P.homeOrg || null
+    const owners = ownerKey ? ownerKey.split(',') : []
+    P.watchTeamSync(org, owners, visible)
+    return () => P.watchTeamSync(org, owners, false)
+  }, [ownerKey, visible])
 
   useEffect(() => {
-    shown.current = { step, idx, scope: scopeKey }
+    if (meeting.shows) shown.current = { step, idx, scope: scopeKey }
   })
   // each step opens at its top, header first (Next sits at the bottom of a
   // long page); instant, since the page never animates. A kept page shown
@@ -511,30 +569,29 @@ export function TeamSync({
     scrolledFor.current = at
     scroller.current?.scrollTo({ top: 0, behavior: 'instant' })
   }, [step, scopeKey])
-  // correct a place the walk cannot show, in place (App replaces the URL);
-  // only once the store has loaded, or a deep link would fall back to the
-  // team before the roster exists
+  // correct a step the walk cannot show, in place (App replaces the URL);
+  // only once a current ok answer for the scope came, so a deep link to a
+  // person keeps its step while the meeting loads. The scope is never
+  // corrected.
+  const ready = meeting.state === 'ok'
   useEffect(() => {
-    if (!P.loaded) return
+    if (!ready) return
     if (agents.some((u) => u.id === place.step)) setOpenAgents((s) => new Set(s).add(place.step))
-    if (scopeKey !== place.scope || step !== place.step)
-      onCorrectRef.current({ scope: scopeKey, step })
-  }, [P.loaded, scopeKey, step, place.scope, place.step])
+    if (step !== place.step) onCorrectRef.current({ scope: place.scope, step })
+  }, [ready, step, place.scope, place.step])
 
-  const go = (next: string, nextScope = scopeKey) => {
+  const go = (next: string) => {
     flushWalkInput()
     setPrompt(null)
-    onPlace({ scope: nextScope, step: next })
+    onPlace({ scope: scopeKey, step: next })
   }
-  /* Another scope keeps the step when it still walks it, and with it each
-     card whose task it still holds and whose section's person it still
-     walks: the cards then keep their text, so the switch asks only about the
-     cards it takes away (cardsClosedBy). */
+  /* Another scope keeps the step (the phone's own page included), and asks
+     about every card that holds unsent text, as the new scope's walk is not
+     known until its answer arrives. A typed Remaining is committed first. */
   const pickScope = (key: string) => {
-    const closes = cardsClosedBy(cards, step, walkOf(key, world))
     flushWalkInput()
     setPrompt(null)
-    onPlace({ scope: key, step }, closes)
+    onPlace({ scope: key, step: meeting.shows ? step : place.step }, [...cards.keys()])
   }
   const pick = (id: string) => {
     if (agents.some((u) => u.id === id)) {
@@ -547,13 +604,20 @@ export function TeamSync({
     onClose()
   }
 
-  const ctxFor = (owner: UserVM): PageCtx => {
+  // a stale meeting's task controls are off, their title saying why, and
+  // the reviewer prompt a move into In Review opened closes with them
+  const frozen = meeting.state === 'stale' ? stoppedTitle(meeting.note) : null
+  useEffect(() => {
+    if (frozen !== null) setPrompt(null)
+  }, [frozen])
+  const ctxFor = (owner: SyncPerson): PageCtx => {
     // P.syncStamp sends nothing for a viewer who is not staff (the server's
     // rule), so a read-only visitor earns no refusal toasts
     const stamp = () => P.syncStamp(owner.id)
     return {
       owner: owner.id,
-      since: syncSince(owner.sync ?? null, now, P.org.weekStart ?? 1),
+      // from the agenda's stamp, which its Done tasks were read by
+      since: meeting.since(owner),
       now,
       day,
       mobile,
@@ -568,23 +632,37 @@ export function TeamSync({
       onOpenTask,
       onShowTask,
       cards,
+      frozen,
     }
   }
 
   const person = humans.find((u) => u.id === step) || null
-  // the owners with a counted task still to review, found once per render
-  const unfinished = new Set(counted.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
-  const allDone = (uid: string) => !unfinished.has(uid)
+  // the owners with a counted task still to review, found once per render;
+  // no one reads as done while some task the meeting names has not
+  // arrived, as the missing one may be theirs
+  const unfinished = new Set(walked.filter((it) => !reviewed.has(it.uuid)).map((it) => it.owner))
+  const allDone = (uid: string) => meeting.counted && !unfinished.has(uid)
   const today = new Date(now)
   const last = idx >= steps.length - 1
+  // the scope the menu names: none where the page asks to choose
+  const named = meeting.state !== 'choose' && meeting.state !== 'unavailable'
 
   let body: ReactNode
   // with no project of the home organization to see, no step has anything to show
   if (seesNoProject(P.homeOrg))
     body = <NoProjects icon="people" title="Nothing to review yet" hint={syncNoProjectsHint()} />
+  else if (!meeting.shows)
+    body = (
+      <SyncNote
+        meeting={meeting}
+        scopeKey={scopeKey}
+        onPick={pickScope}
+        onShowBoard={onShowBoard}
+      />
+    )
   else if (person) {
     const ctx = ctxFor(person)
-    const prev = previousSync(person.sync ?? null, now)
+    const prev = previousSync(person.stamp, now)
     body = (
       <>
         <div data-sync-person={person.id} className="mb-5 flex flex-wrap items-center gap-3">
@@ -597,7 +675,7 @@ export function TeamSync({
               </span>
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <LoadChip user={person} />
+              <LoadChip load={figures.load(person)} />
               {prev != null && (
                 <span data-sync-last className="text-sm text-text-3">
                   {stampLabel(prev, now)}
@@ -611,8 +689,8 @@ export function TeamSync({
         <PersonColumns
           person={person}
           ctx={ctx}
-          rows={rows}
-          subIds={subIds}
+          meeting={meeting}
+          figures={figures}
           laterOpen={laterOpen.has(person.id)}
           onToggleLater={() => setLaterOpen((s) => flipped(s, person.id))}
         />
@@ -622,8 +700,8 @@ export function TeamSync({
     body = (
       <AgentsPage
         agents={agents}
-        rows={rows}
-        subIds={subIds}
+        meeting={meeting}
+        figures={figures}
         ctxFor={ctxFor}
         open={openAgents}
         onToggle={(id) => setOpenAgents((s) => flipped(s, id))}
@@ -632,15 +710,22 @@ export function TeamSync({
       />
     )
   } else {
+    // the opening is the agenda's, an organization Viewer's included
     body = (
       <TeamOpening
-        rows={rows}
+        rows={meeting.rows}
+        tasks={meeting.tasks}
         humans={humans}
-        subIds={subIds}
-        metaIds={scopeMetaIds(scope, world)}
+        subIds={meeting.subIds}
+        metaIds={meeting.metaIds}
         day={day}
         now={now}
         onOpenTask={onOpenTask}
+        verdictOf={meeting.verdict}
+        blockedOf={meeting.blockedBy}
+        loadOf={meeting.load}
+        counted={meeting.counted}
+        frozen={frozen}
       />
     )
   }
@@ -649,6 +734,9 @@ export function TeamSync({
     <div
       ref={setPane}
       data-sync-page
+      data-sync-state={meeting.state}
+      data-sync-stale={frozen !== null ? '' : undefined}
+      aria-busy={meeting.busy || undefined}
       data-scroll
       data-screen-label="Team sync"
       className="overview-view [flex:1] [overflow:auto]"
@@ -657,13 +745,13 @@ export function TeamSync({
         <section className="overview-section">
           <div className="overview-section-body">
             <div className="mb-6 flex flex-wrap items-center gap-3">
-              <ScopeCtl scope={scope} onPick={pickScope} />
+              <ScopeCtl scope={scope} named={named} onPick={pickScope} />
               <span data-sync-today className="whitespace-nowrap text-sm text-text-3">
                 {P.WEEKDAYS[today.getDay()].slice(0, 3)} {P.fmtDate(today)}
               </span>
               <div className="flex-1" />
               <WalkRail
-                people={[...humans, ...agents]}
+                people={meeting.shows ? [...humans, ...agents] : []}
                 gapAt={humans.length}
                 isCurrent={(id) =>
                   id === step || (step === 'agents' && agents.some((u) => u.id === id))
@@ -676,39 +764,56 @@ export function TeamSync({
                     'w-full [flex-wrap:nowrap] [justify-content:flex-start] overflow-x-auto p-0.5',
                 )}
                 lead={
-                  <Button
-                    type="button"
-                    variant="unstyled"
-                    data-sync-jump="team"
-                    onClick={() => go('team')}
-                    title="Team"
-                    aria-label="Team opening"
-                    aria-current={step === 'team' ? 'true' : undefined}
-                    className="mr-1 grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm border-none bg-transparent p-0 aria-[current=true]:shadow-[0_0_0_2px_var(--primary)]"
-                  >
-                    <span className="grid size-7 place-items-center rounded-[5px] border border-border bg-surface-1">
-                      <Icon name="people" size={15} color="var(--text-2)" />
-                    </span>
-                  </Button>
+                  meeting.shows ? (
+                    <Button
+                      type="button"
+                      variant="unstyled"
+                      data-sync-jump="team"
+                      onClick={() => go('team')}
+                      title="Team"
+                      aria-label="Team opening"
+                      aria-current={step === 'team' ? 'true' : undefined}
+                      className="mr-1 grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm border-none bg-transparent p-0 aria-[current=true]:shadow-[0_0_0_2px_var(--primary)]"
+                    >
+                      <span className="grid size-7 place-items-center rounded-[5px] border border-border bg-surface-1">
+                        <Icon name="people" size={15} color="var(--text-2)" />
+                      </span>
+                    </Button>
+                  ) : undefined
                 }
               />
             </div>
+            {!seesNoProject(P.homeOrg) && (
+              <>
+                <StaleNote
+                  meeting={meeting}
+                  scopeKey={scopeKey}
+                  onPick={pickScope}
+                  onShowBoard={onShowBoard}
+                />
+                {meeting.state === 'incomplete' && <IncompleteNote onRetry={meeting.retry} />}
+              </>
+            )}
             {body}
-            {marksCut.length > 0 && (
+            {meeting.shows && marksCut.length > 0 && (
               <p data-sync-marks-cut className="mt-4 text-sm text-text-3">
                 {marksCutLine(marksCut)}
               </p>
             )}
-            <div className="mt-6 flex items-center gap-2 border-t border-border pt-4">
-              <WalkFooter
-                reviewed={reviewed.count(counted)}
-                total={counted.length}
-                atStart={idx <= 0}
-                last={last}
-                onPrev={() => go(steps[Math.max(0, idx - 1)])}
-                onNext={() => (last ? close() : go(steps[idx + 1]))}
-              />
-            </div>
+            {meeting.shows && (
+              <div className="mt-6 flex items-center gap-2 border-t border-border pt-4">
+                {/* no total while tasks the answer names have not arrived:
+                    a total of 0 shows none */}
+                <WalkFooter
+                  reviewed={reviewed.count(walked)}
+                  total={meeting.counted ? walked.length : 0}
+                  atStart={idx <= 0}
+                  last={last}
+                  onPrev={() => go(steps[Math.max(0, idx - 1)])}
+                  onNext={() => (last ? close() : go(steps[idx + 1]))}
+                />
+              </div>
+            )}
           </div>
           <div className="overview-section-foot" aria-hidden="true" />
         </section>

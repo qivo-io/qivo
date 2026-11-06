@@ -828,12 +828,12 @@ and no release step.
 From the release after v0.1.127, `teamSync.agenda` answers one Team sync
 meeting for one scope, a project, a team or All projects, with every task
 the page shows, the people it walks and their week's hours, within Team
-sync's ceiling of 1,000 tasks. No app calls it yet, so that release sets
-no rollback floor and needs no step, and returning the backend to a commit
-before it stays safe until the Team sync view reads the agenda. The release
-whose app does makes this release the backend's floor for that app, and its
-own paragraph here says so. The same release moves `teamSync.lastComments`
-off its read of every project of the organization. It asks the caller's
+sync's ceiling of 1,000 tasks. That release's app did not call it, so the
+release set no rollback floor and needed no step. The Team sync page reads
+it from the release after v0.1.138, which makes this release, v0.1.128, the
+backend's floor for that app, as its own paragraph below says. The same
+release moves `teamSync.lastComments` off its read of every project of the
+organization. It asks the caller's
 access only about the projects its owners' tasks name, counts a task in a
 project the caller cannot see at a fixed size, so its text no longer moves
 `complete`, and answers `complete: false` past 200 such projects or where a
@@ -1042,6 +1042,26 @@ above already hold. v0.1.103 (`fbcf0214`) made the reads refuse with
 `access_unchecked` where a bound of the caller's own access reads stops a
 check; against an earlier backend such a check fails as an error, which
 the app shows as a failure with Retry, so it fails closed either way.
+
+From the release after v0.1.138, the app's Team sync reads its meeting, its
+people and their week's hours from `teamSync.agenda`, which v0.1.128
+(`941d9d15`) first shipped, so it opens without loading every task, and
+asks to choose a team or project instead of falling back to All projects.
+It saves the scope the person picks under a new preference key,
+`teamSyncScope`, so a scope an older app saved, which held its fallbacks to
+All projects too, reads as nothing once. An app from this release against a
+backend before v0.1.128 says on every Team sync scope that Team sync could
+not be loaded, also in a tab that was open when the backend went back,
+until the backend rolls forward. So this app needs a backend from v0.1.128
+on. The upload floor above, v0.1.136 (`31f3e45f`), already holds that, so
+this release sets no new floor. From it on, as from that one, never return
+the backend to a commit before v0.1.136; roll forward instead. Returning the
+app alone to an earlier release is safe against a later backend, because
+that app derives the meeting from the workspace's tasks and asks for every
+task first, and `teamSync.lastComments` keeps its arguments. Such an app
+reads the older `syncScope` key, which this release no longer writes, so
+it opens the scope it last saved. The release changes no server function
+and needs no step.
 
 ## Node.js version
 

@@ -7,12 +7,11 @@ import {
 } from '../../convex/internal/marketingDemoData'
 import { taskOwnerId } from '../../convex/lib/review'
 import { syncSince } from '../../convex/lib/teamSync'
+import { isoFromDate, weekToDate } from './dates'
 import { parseMd } from './md'
 import {
-  type BlockerIssue,
+  agendaScopeOf,
   bannerVerdict,
-  blockersOf,
-  cardsClosedBy,
   dayLabel,
   doneSince,
   loadFigure,
@@ -21,29 +20,31 @@ import {
   needsOwner,
   needsReviewer,
   openingFacts,
+  PROJECTED_UNKNOWN,
   parseSyncScope,
   personGroups,
   previousSync,
-  resolveSyncScope,
   rowMarks,
-  type ScopeWorld,
   type SentencePart,
   type SinceMark,
   type SyncDay,
   type SyncIssue,
+  type SyncLoad,
   type SyncMilestoneRead,
-  type SyncProject,
-  scopeMetaIds,
-  scopeProjectIds,
+  type SyncVerdict,
   stampLabel,
+  syncAgendaKey,
+  syncClockOf,
   syncDay,
+  syncMeetingOf,
   syncMilestones,
-  syncRoster,
   syncRows,
   syncScopeKey,
   syncSentence,
+  syncWalk,
   waitingLabel,
   waitingOnReview,
+  weekHoursOf,
 } from './teamSync'
 
 /* A sync morning: Tuesday 29 Sep 2026, 10:00 local, week index 11. */
@@ -82,126 +83,65 @@ const task = (o: Partial<SyncIssue> & { key: string }): SyncIssue => {
   return t
 }
 const keys = (list: readonly { key: string }[]) => list.map((t) => t.key)
-const byId = (...list: SyncIssue[]): Record<string, BlockerIssue> =>
-  Object.fromEntries(list.map((t) => [t.id, t]))
 
 describe('sync scope', () => {
-  it('round-trips the saved forms and reads anything else as all', () => {
-    for (const key of ['all', 'team:t-1', 'project:p-1']) {
+  it('round-trips the saved forms', () => {
+    for (const key of ['all', 'team:t-1', 'project:p-1', 'unresolved:42', '']) {
       expect(syncScopeKey(parseSyncScope(key))).toBe(key)
     }
     expect(parseSyncScope('team:t-1')).toEqual({ kind: 'team', id: 't-1' })
     expect(parseSyncScope('project:p-1')).toEqual({ kind: 'project', id: 'p-1' })
-    for (const bad of [undefined, null, '', 'mine', 'team:', 'p-1', 'org:o-1']) {
-      expect(parseSyncScope(bad)).toEqual({ kind: 'all' })
+    expect(parseSyncScope('unresolved:42')).toEqual({ kind: 'unresolved', segment: '42' })
+  })
+  it('reads nothing and anything else as none, never as All projects', () => {
+    for (const bad of [undefined, null, '', 'mine', 'team:', 'p-1', 'org:o-1', 'ALL']) {
+      expect(parseSyncScope(bad)).toEqual({ kind: 'none' })
+      // the rule before the agenda read these as All projects, which must fail
+      expect(parseSyncScope(bad)).not.toEqual({ kind: 'all' })
     }
+    expect(parseSyncScope('all')).toEqual({ kind: 'all' })
   })
-
-  // M1 (S1, hidden S2) and M2 (S3) at home; a foreign org's F1 (FS1).
-  // Team T1 is shared with M1 and, on its own, with S3.
-  const meta = (id: string, children: string[], o: Partial<SyncProject> = {}): SyncProject => ({
-    id,
-    type: 'meta',
-    org: 'home',
-    parent: undefined,
-    children,
-    teamAccess: {},
-    ...o,
+  it("names the agenda's scope as the server takes it", () => {
+    expect(agendaScopeOf({ kind: 'all' })).toEqual({ kind: 'all' })
+    expect(agendaScopeOf({ kind: 'team', id: 't-1' })).toEqual({ kind: 'team', team_id: 't-1' })
+    expect(agendaScopeOf({ kind: 'project', id: 'p-1' })).toEqual({
+      kind: 'project',
+      project_id: 'p-1',
+    })
   })
-  const sub = (id: string, parent: string, o: Partial<SyncProject> = {}): SyncProject => ({
-    id,
-    type: 'project',
-    org: 'home',
-    parent,
-    children: undefined,
-    teamAccess: {},
-    ...o,
-  })
-  const world: ScopeWorld = {
-    homeOrg: 'home',
-    projects: [
-      meta('M1', ['S1', 'S2'], { teamAccess: { T1: 'user' } }),
-      sub('S1', 'M1'),
-      sub('S2', 'M1'),
-      meta('M2', ['S3']),
-      sub('S3', 'M2', { teamAccess: { T1: 'viewer' } }),
-      meta('F1', ['FS1'], { org: 'away' }),
-      sub('FS1', 'F1', { org: 'away' }),
-    ],
-    teams: [
-      { id: 'T1', org: 'home' },
-      { id: 'T2', org: 'away' },
-    ],
-    canSee: (id) => id !== 'S2',
-  }
-  const ids = (s: Set<string>) => [...s].sort()
-
-  it('covers every visible home sub-project for all', () => {
-    expect(ids(scopeProjectIds({ kind: 'all' }, world))).toEqual(['S1', 'S3'])
-    expect(ids(scopeMetaIds({ kind: 'all' }, world))).toEqual(['M1', 'M2'])
-  })
-  it("covers a team's shares, a meta's through its visible children", () => {
-    const team = { kind: 'team', id: 'T1' } as const
-    expect(ids(scopeProjectIds(team, world))).toEqual(['S1', 'S3'])
-    expect(ids(scopeMetaIds(team, world))).toEqual(['M1', 'M2'])
-  })
-  it('covers one project, or one sub-project', () => {
-    expect(ids(scopeProjectIds({ kind: 'project', id: 'M1' }, world))).toEqual(['S1'])
-    expect(ids(scopeProjectIds({ kind: 'project', id: 'S3' }, world))).toEqual(['S3'])
-    expect(ids(scopeMetaIds({ kind: 'project', id: 'S3' }, world))).toEqual(['M2'])
-  })
-  it('falls back to all for a team or project that is gone, foreign or hidden', () => {
-    for (const s of [
-      { kind: 'team', id: 'gone' },
-      { kind: 'team', id: 'T2' },
-      { kind: 'project', id: 'gone' },
-      { kind: 'project', id: 'F1' },
-      { kind: 'project', id: 'S2' },
-    ] as const) {
-      expect(resolveSyncScope(s, world)).toEqual({ kind: 'all' })
-      expect(ids(scopeProjectIds(s, world))).toEqual(['S1', 'S3'])
-    }
-    expect(resolveSyncScope({ kind: 'team', id: 'T1' }, world)).toEqual({ kind: 'team', id: 'T1' })
-  })
-})
-
-describe('cardsClosedBy', () => {
-  const cards = new Map([
-    ['card a', { task: 'task-a', owner: 'aisha' }],
-    ['card b', { task: 'task-b', owner: 'aisha' }],
-  ])
-  const walk = (steps: string[], people: string[], ...tasks: string[]) => ({
-    steps,
-    rows: tasks.map((uuid) => ({ uuid })),
-    humans: people.map((id) => ({ id })),
-    agents: [],
-  })
-
-  it('keeps the cards whose task and person the new scope still walks on the same step', () => {
-    const next = walk(['team', 'aisha'], ['aisha'], 'task-a', 'task-c')
-    expect(cardsClosedBy(cards, 'aisha', next)).toEqual(['card b'])
+  it("keys the agenda's arguments in a fixed order, and tells a meeting on another day", () => {
+    const clock = { day: '2026-09-29', week: '2026-09-28', week_starts: [1, 2], week_end: 3 }
+    const scope = { kind: 'team', team_id: 't-1' } as const
+    const key = syncAgendaKey({ org_id: 'o', scope, ...clock })
+    // the same arguments in another order make the same key
     expect(
-      cardsClosedBy(cards, 'aisha', walk(['team', 'aisha'], ['aisha'], 'task-a', 'task-b')),
-    ).toEqual([])
-  })
-
-  it('closes every card when the new scope does not walk the step', () => {
-    const next = walk(['team', 'emil'], ['emil'], 'task-a', 'task-b')
-    expect(cardsClosedBy(cards, 'aisha', next)).toEqual(['card a', 'card b'])
-  })
-
-  it("closes an agent's cards when the agents step stays but the agent leaves the walk", () => {
-    const agents = new Map([
-      ['atlas card', { task: 'task-a', owner: 'atlas' }],
-      ['nova card', { task: 'task-b', owner: 'nova' }],
+      syncAgendaKey({
+        week_end: 3,
+        week_starts: [1, 2],
+        week: clock.week,
+        day: clock.day,
+        scope,
+        org_id: 'o',
+      }),
+    ).toBe(key)
+    expect(Object.keys(JSON.parse(key))).toEqual([
+      'org_id',
+      'scope',
+      'day',
+      'week',
+      'week_starts',
+      'week_end',
     ])
-    // a team that shares both tasks' projects, with Nova but not Atlas
-    const next = { ...walk(['team', 'agents'], [], 'task-a', 'task-b'), agents: [{ id: 'nova' }] }
-    expect(cardsClosedBy(agents, 'agents', next)).toEqual(['atlas card'])
+    const tomorrow = syncAgendaKey({ org_id: 'o', scope, ...clock, day: '2026-09-30' })
+    expect(tomorrow).not.toBe(key)
+    expect(syncMeetingOf(tomorrow)).toBe(syncMeetingOf(key))
+    const other = syncAgendaKey({ org_id: 'o', scope: { kind: 'all' }, ...clock })
+    expect(syncMeetingOf(other)).not.toBe(syncMeetingOf(key))
+    expect(syncClockOf(tomorrow)).toEqual({ day: '2026-09-30', week: '2026-09-28' })
+    expect(syncMeetingOf('not a key')).toBeNull()
   })
 })
-
-describe('rows and roster', () => {
+describe('rows and the walk', () => {
   const scope = new Set(['S1'])
   const rows = syncRows(
     [
@@ -229,15 +169,12 @@ describe('rows and roster', () => {
   it('keeps open leaf tasks in scope only', () => {
     expect(keys(rows)).toEqual(['QN-1', 'QN-2', 'QN-3', 'QN-4', 'QN-9'])
   })
-  it('walks the owners by name, agents last, a reviewer in place of the assignee', () => {
-    const r = syncRoster(rows, users, { kind: 'all' })
-    expect(r.humans.map((u) => u.id)).toEqual(['aisha', 'ben', 'nora'])
+  it('walks the people by name, agents last, the same name by id', () => {
+    const r = syncWalk([...users, { id: 'aaron', name: 'Aisha Rahman', isAgent: false, teams: [] }])
+    expect(r.humans.map((u) => u.id)).toEqual(['aaron', 'aisha', 'ben', 'emil', 'leo', 'nora'])
     expect(r.agents.map((u) => u.id)).toEqual(['atlas'])
-  })
-  it("keeps only the team's members in team scope", () => {
-    const r = syncRoster(rows, users, { kind: 'team', id: 'T1' })
-    expect(r.humans.map((u) => u.id)).toEqual(['ben', 'nora'])
-    expect(r.agents.map((u) => u.id)).toEqual(['atlas'])
+    // the walk takes whoever the agenda names, also with no row of their own
+    expect(syncWalk([]).humans).toEqual([])
   })
 })
 
@@ -295,7 +232,7 @@ describe('rowMarks', () => {
     person: 'aisha',
     since: SINCE,
     verdict: null,
-    issueById: {},
+    blockedBy: [] as readonly string[],
     lastCommentAt: null,
   } as const
 
@@ -441,27 +378,20 @@ describe('rowMarks', () => {
     const own = task({ key: 'QN-4', status: 'review', assignee: 'aisha', reviewer: 'aisha' })
     expect(rowMarks(own, base).reviewFor).toBeNull()
   })
-  it('carries the verdict, the pause, a missing estimate and the open blockers', () => {
-    const open = task({ key: 'QN-12', status: 'progress' })
-    const done = task({ key: 'QN-13', status: 'done' })
-    const t = task({
-      key: 'QN-1',
-      paused: true,
-      remaining: undefined,
-      links: [
-        { type: 'blocked_by', id: 'QN-12' },
-        { type: 'blocked_by', id: 'QN-13' },
-        { type: 'blocked_by', id: 'QN-99' }, // not visible to the viewer
-        { type: 'blocks', id: 'QN-14' },
-      ],
-    })
-    const m = rowMarks(t, { ...base, verdict: 'late', issueById: byId(open, done) })
+  it("carries the agenda's verdict and blockers, the pause and a missing estimate", () => {
+    // a task only the agenda brings has no links: its blockers are the
+    // answer's, whatever the task's own links say
+    const t = task({ key: 'QN-1', paused: true, remaining: undefined, links: [] })
+    const blockedBy = ['QN-12']
+    const m = rowMarks(t, { ...base, verdict: 'late', blockedBy })
     expect(m).toMatchObject({
       verdict: 'late',
       paused: true,
       noEstimate: true,
-      blockedBy: ['QN-12'],
     })
+    // the same array, so a card's memo holds while the keys stay the same
+    expect(m.blockedBy).toBe(blockedBy)
+    expect(rowMarks(t, { ...base, verdict: 'unknown' }).verdict).toBe('unknown')
     expect(rowMarks(task({ key: 'QN-2' }), base)).toMatchObject({
       verdict: null,
       paused: false,
@@ -471,21 +401,13 @@ describe('rowMarks', () => {
   })
 })
 
-describe('bannerVerdict and blockersOf', () => {
+describe('bannerVerdict', () => {
   it('follows the board banner: tracked, and never on track', () => {
     expect(bannerVerdict({ status: 'late' }, true)).toBe('late')
     expect(bannerVerdict({ status: 'behind' }, true)).toBe('behind')
     expect(bannerVerdict({ status: 'ok' }, true)).toBeNull()
     expect(bannerVerdict({ status: 'late' }, false)).toBeNull()
     expect(bannerVerdict(null, true)).toBeNull()
-  })
-  it('treats a group blocker as open until all its leaves are done', () => {
-    const leafA = task({ key: 'QN-2', status: 'done' })
-    const leafB = task({ key: 'QN-3', status: 'progress' })
-    const group = task({ key: 'QN-1', status: 'todo', children: ['QN-2', 'QN-3'] })
-    const t = task({ key: 'QN-9', links: [{ type: 'blocked_by', id: 'QN-1' }] })
-    expect(blockersOf(t, byId(group, leafA, leafB))).toEqual(['QN-1'])
-    expect(blockersOf(t, byId(group, leafA, { ...leafB, status: 'done' }))).toEqual([])
   })
 })
 
@@ -542,12 +464,13 @@ describe('waitingOnReview and doneSince', () => {
 })
 
 describe('the team opening', () => {
-  const verdicts: Record<string, 'behind' | 'late' | null> = {
+  const verdicts: Record<string, SyncVerdict> = {
     'QN-1': 'late',
     'QN-2': 'late',
     'QN-3': 'behind',
   }
-  const blocker = task({ key: 'QN-50', status: 'todo' })
+  const blocked: Record<string, readonly string[]> = { 'QN-4': ['QN-50'] }
+  const blockedOf = (it: SyncIssue) => blocked[it.key] ?? []
   const rows = [
     task({ key: 'QN-1', due: '2026-09-20' }), // overdue and Delayed
     task({ key: 'QN-2', due: '2026-10-20' }), // projected to miss
@@ -560,7 +483,7 @@ describe('the team opening', () => {
   ]
   const facts = openingFacts(rows, {
     verdictOf: (it) => verdicts[it.key] ?? null,
-    issueById: byId(blocker),
+    blockedOf,
     today: DAY.today,
   })
 
@@ -573,6 +496,24 @@ describe('the team opening', () => {
       blocked: 1,
       paused: 1,
     })
+  })
+  it('reads the verdicts unknown, never 0, where one row is unknown, and keeps the stored facts', () => {
+    const unknown = openingFacts(rows, {
+      verdictOf: (it) => (it.key === 'QN-6' ? 'unknown' : (verdicts[it.key] ?? null)),
+      blockedOf,
+      today: DAY.today,
+    })
+    expect(unknown).toEqual({
+      overdue: 2,
+      projected: null,
+      delayed: null,
+      slipping: null,
+      blocked: 1,
+      paused: 1,
+    })
+    // a count that left the unknown row out would read as complete
+    expect(unknown.projected).not.toBe(1)
+    expect(unknown.slipping).not.toBe(0)
   })
 
   const text = (parts: SentencePart[]) =>
@@ -601,6 +542,15 @@ describe('the team opening', () => {
     expect(syncSentence({ overdue: 0, projected: 0, blocked: 0 })).toEqual([
       'No task is overdue, projected to miss its due date, or blocked.',
     ])
+  })
+  it('leaves the projected clause out where some delay is unknown, and says so', () => {
+    expect(text(syncSentence({ overdue: 2, projected: null, blocked: 1 }))).toBe(
+      `2 tasks are overdue and 1 is blocked. ${PROJECTED_UNKNOWN}`,
+    )
+    const calm = text(syncSentence({ overdue: 0, projected: null, blocked: 0 }))
+    expect(calm).toBe(`No task is overdue or blocked. ${PROJECTED_UNKNOWN}`)
+    // never the calm line that says nothing is projected to miss
+    expect(calm).not.toContain('projected to miss')
   })
 })
 
@@ -765,19 +715,75 @@ describe('load figures', () => {
       tone: 'agent',
     })
   })
+  const people = [
+    { id: 'a', name: 'Aisha', isAgent: false },
+    { id: 'b', name: 'Ben', isAgent: false },
+    { id: 'd', name: 'Daniel', isAgent: false },
+    { id: 'x', name: 'Atlas', isAgent: true },
+  ]
+  const ok = (hours: number, capacity: number): SyncLoad => ({
+    state: 'ok',
+    figure: loadFigure(hours, capacity),
+  })
   it('lists the people near or over capacity, highest first', () => {
-    const people = [
-      { id: 'a', name: 'Aisha', isAgent: false, teams: [] },
-      { id: 'b', name: 'Ben', isAgent: false, teams: [] },
-      { id: 'd', name: 'Daniel', isAgent: false, teams: [] },
-      { id: 'x', name: 'Atlas', isAgent: true, teams: [] },
-    ]
     const hours: Record<string, number> = { a: 28, b: 32, d: 42, x: 400 }
-    const got = nearCapacity(people, (u) => loadFigure(hours[u.id], u.isAgent ? Infinity : 32))
-    expect(got.map((x) => [x.user.id, x.figure.pct])).toEqual([
+    const got = nearCapacity(people, (u) => ok(hours[u.id], u.isAgent ? Infinity : 32))
+    expect(got.busy.map((x) => [x.user.id, x.figure.pct])).toEqual([
       ['d', 131],
       ['b', 100],
     ])
+    expect(got.unknown).toBe(0)
+  })
+  it('counts the people whose week is unknown or loading, and lists only known ones', () => {
+    const loads: Record<string, SyncLoad> = {
+      a: { state: 'unknown' },
+      b: ok(32, 32),
+      d: { state: 'waiting' },
+      x: ok(400, Infinity),
+    }
+    const got = nearCapacity(people, (u) => loads[u.id])
+    expect(got.busy.map((x) => x.user.id)).toEqual(['b'])
+    expect(got.unknown).toBe(2)
+  })
+})
+
+describe('the week hours of a task', () => {
+  const week = 11
+  const facts = { isGroup: false, projectLive: true, ownerInOrg: () => true }
+  const row = {
+    id: 't1',
+    status: 'todo' as const,
+    assignee_id: 'aisha',
+    reviewer_id: undefined,
+    start_week: undefined as string | undefined,
+    end_week: undefined as string | undefined,
+    paused: false,
+    remaining_hours: 10 as number | undefined,
+    remaining_set_at: undefined,
+    archived_at: undefined,
+  }
+  // the weeks of the grid's week 11 and the one after it
+  const iso = (w: number) => isoFromDate(weekToDate(w))
+  it('spreads its hours over its weeks the server way, for its owner', () => {
+    const one = { ...row, start_week: iso(week), end_week: iso(week + 1) }
+    expect(weekHoursOf(one, facts, week)).toEqual({ owner: 'aisha', hours: 5 })
+    expect(weekHoursOf(one, facts, week + 1)).toEqual({ owner: 'aisha', hours: 5 })
+    // in review its reviewer owns it
+    expect(weekHoursOf({ ...one, status: 'review', reviewer_id: 'leo' }, facts, week)?.owner).toBe(
+      'leo',
+    )
+  })
+  it('adds nothing for a Done, paused, unscheduled or unestimated task or a group', () => {
+    const one = { ...row, start_week: iso(week), end_week: iso(week) }
+    expect(weekHoursOf(one, facts, week)?.hours).toBe(10)
+    expect(weekHoursOf({ ...one, status: 'done' }, facts, week)).toBeNull()
+    expect(weekHoursOf({ ...one, paused: true }, facts, week)).toBeNull()
+    expect(weekHoursOf({ ...one, start_week: undefined }, facts, week)).toBeNull()
+    expect(weekHoursOf({ ...one, remaining_hours: undefined }, facts, week)).toBeNull()
+    expect(weekHoursOf(one, { ...facts, isGroup: true }, week)).toBeNull()
+    // a move into Backlog keeps the hours: the fence leaves out only Done
+    // and paused work
+    expect(weekHoursOf({ ...one, status: 'backlog' }, facts, week)?.hours).toBe(10)
   })
 })
 
@@ -907,7 +913,7 @@ describe('the Northstar seed', () => {
         person: t.owner,
         since: sinceOf(t.owner),
         verdict: null,
-        issueById: {},
+        blockedBy: [],
         lastCommentAt: lastComment.get(t.key) ?? null,
       }).since
       if (m) byKind.set(m.kind, [...(byKind.get(m.kind) ?? []), t.key].sort())

@@ -38,6 +38,19 @@
 // drag over it, going back to the Overview and then to the Board again,
 // each with the longest frame after the view first showed and the longest
 // key press delay of the switch, and the phone's Roadmap task schedule.
+// It also opens a third page on a workspace whose one project holds 1,000
+// tasks over 3 sub-projects, a fifth of them Done (the design size's 800
+// open and 200 Done tasks of a project, at their sum), with that project
+// saved as Team sync's scope (scripts/perf/server.mjs syncscope=program),
+// and measures Team sync: opening it from the sidebar until the opening's
+// facts show (syncOpen, with the longest frame after they first showed,
+// syncLongestFrameMs), Next to the first person's columns (syncNext) and a
+// Remaining typed on that person's first card and Enter until the person's
+// load moves (syncEdit). On this branch the meeting is the server's agenda
+// and the card is one only the agenda brings; a build whose Team sync asks
+// for every task first (--baseline before the agenda view) loads every
+// task inside syncOpen and edits a task the workspace holds, so its
+// complete means every task held and the meeting derived from them.
 // Each sample records the machine's load average in `loads`. --serve only
 // builds and serves the pages, on --host (127.0.0.1 by default), until it
 // is stopped.
@@ -159,6 +172,9 @@ const PHASES = [
         'variedBoardReturnComplete',
         'variedPhoneRoadmap',
         'variedPhoneRoadmapComplete',
+        'syncOpen',
+        'syncNext',
+        'syncEdit',
       ]
     : []),
 ]
@@ -221,6 +237,11 @@ const COMPARED = [
         'variedBoardReturnComplete',
         'variedBoardReturnLongestFrameMs',
         'variedBoardReturnKeyDelayMs',
+        'syncOpen',
+        'syncNext',
+        'syncEdit',
+        'syncLongestFrameMs',
+        'syncOpenWireBytes',
       ]
     : []),
 ]
@@ -1109,6 +1130,92 @@ async function runVariedSample(origin, tasks, metrics, query = '') {
   await context.close()
 }
 
+/** Runs one sample of Team sync on a project of 1,000 tasks over 3
+    sub-projects, a fifth Done, saved as the scope (see the header). */
+async function runSyncSample(origin, metrics, query = '') {
+  phase('syncStartup')
+  const opened = await openPage(
+    origin,
+    1000,
+    metrics,
+    `&subprojects=3&done=0.2&syncscope=program${query}`,
+  )
+  const { context, page, errors, settle, timed } = opened
+  await page.locator('[data-view-switch]').waitFor()
+  await settle()
+  const nav = await handle(page.locator('[data-sync-nav]'))
+  const watch = await watchInput(page)
+  let shownAt = Number.POSITIVE_INFINITY
+  try {
+    phase('syncOpen')
+    metrics.syncOpen.push(
+      await timed(async () => {
+        await nav.click({ timeout: timeout * 10 })
+        // the opening's facts, on the frame that first shows them
+        const shown = await page.waitForFunction(
+          () =>
+            !!document.querySelector('[data-sync-page] [data-sync-facts]')?.checkVisibility() &&
+            performance.now(),
+          null,
+          { timeout: timeout * 10 },
+        )
+        shownAt = await shown.jsonValue()
+      }),
+    )
+  } finally {
+    await watch.stop()
+  }
+  metrics.syncLongestFrameMs.push((await watch.read(shownAt)).frame)
+  await settle()
+  phase('syncNext')
+  const next = await handle(page.locator('[data-sync-next]'))
+  metrics.syncNext.push(
+    await timed(async () => {
+      await next.click({ timeout: timeout * 10 })
+      await shows(page, '[data-sync-person]')
+      await shows(page, '[data-sync-col="onit"]')
+    }),
+  )
+  await settle()
+  // the first card of the person's that this week's load counts, which a
+  // Remaining moves, and their load chip
+  const card = await page.evaluate(() => {
+    const P = window.PLANNER
+    for (const row of document.querySelectorAll('[data-sync-card]')) {
+      const it = P.anyTask(row.dataset.syncCard)
+      if (
+        it &&
+        !it.paused &&
+        it.start != null &&
+        it.end != null &&
+        it.start <= P.TODAY_WEEK &&
+        P.TODAY_WEEK <= it.end
+      )
+        return row.dataset.syncCard
+    }
+    return null
+  })
+  assert.ok(card, "Team sync's first person has a card this week's load counts")
+  const chip = page.locator('[data-sync-person] [data-sync-load]')
+  const box = page.locator(`[data-sync-card="${card}"] [data-sync-input]`)
+  const before = await chip.textContent()
+  const hours = String(Number((await box.inputValue()) || '0') + 37)
+  await box.fill(hours)
+  phase('syncEdit')
+  metrics.syncEdit.push(
+    await timed(async () => {
+      await box.press('Enter')
+      await page.waitForFunction(
+        (was) => document.querySelector('[data-sync-person] [data-sync-load]')?.textContent !== was,
+        before,
+        { timeout: timeout * 10 },
+      )
+    }),
+  )
+  assert.deepEqual(errors, [], 'Browser errors on Team sync')
+  await context.close()
+}
+
 /** Empty metric lists for one size. */
 const emptyMetrics = () =>
   Object.fromEntries(
@@ -1133,6 +1240,7 @@ const emptyMetrics = () =>
       'variedOverviewKeyDelayMs',
       'variedBoardReturnLongestFrameMs',
       'variedBoardReturnKeyDelayMs',
+      'syncLongestFrameMs',
     ].map((key) => [key, []]),
   )
 
@@ -1203,7 +1311,10 @@ try {
             target.query,
             searchRowsOf(target, tasks),
           )
-          if (varied) await runVariedSample(target.origin, tasks, target.metrics, target.query)
+          if (varied) {
+            await runVariedSample(target.origin, tasks, target.metrics, target.query)
+            await runSyncSample(target.origin, target.metrics, target.query)
+          }
           // the machine's load, which moves single numbers a lot
           const load = loadavg()[0]
           report.loads.push({ target: target.label, tasks, sample: sample + 1, load })

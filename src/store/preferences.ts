@@ -8,7 +8,12 @@ export type UIPrefs = Partial<{
   metaViz: string
   roadmapWin: RoadmapWin
   roadmapWinDefault: RoadmapWin
+  /** the Team sync scope apps before the agenda's release saved, fallbacks
+      to All projects included; read by none since, as it cannot tell a
+      choice from a fallback */
   syncScope: string
+  /** the Team sync scope the person last picked; only a pick writes it */
+  teamSyncScope: string
 }>
 
 export type PreferencesRow = {

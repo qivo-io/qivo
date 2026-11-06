@@ -199,6 +199,27 @@
 //                        projects one read names to none, scripts/perf/
 //                        entry.tsx, so the opening asks nothing); several
 //                        joined by commas
+//   sync                 states Team sync's agenda (teamSync:agenda)
+//                        answers whatever the workspace says
+//                        (src/store/teamSyncStandIn.setup.ts), for the
+//                        page's notes and screenshots: over_ceiling,
+//                        over_budget, unavailable, access_unchecked,
+//                        delays-unknown (every verdict that needs a load),
+//                        weeks-unknown (every person's week), viewer (as an
+//                        organization Viewer's agenda reads it: no load,
+//                        those verdicts unknown), stale (an ok answer that
+//                        turns over_ceiling four seconds later), error
+//                        (every read fails) and ceiling:<n> (the agenda's
+//                        own ceiling rules at a ceiling of n tasks, so a
+//                        small workspace reaches over_ceiling or
+//                        over_budget without seeding past 1,000); several
+//                        joined by commas. Open a Viewer's page with
+//                        role=viewer too
+//   syncscope=program    the first program saved as the signed-in
+//                        person's Team sync scope (prefs:get), under the
+//                        key this app reads and the one apps before the
+//                        agenda view read, for the benchmark's Team sync
+//                        phase
 //   grants (0)           User grants on the first program for that many
 //                        more people, with more people in the
 //                        organization when it needs them, so the Users
@@ -241,13 +262,17 @@
 // removed people's open tasks in the projects the change reaches as the lost
 // holdings and every person who can hold work as the choices, and answers a
 // chosen person's holder_eligible by that rule, without the server's rules.
-// The task window's read of a task resolves its ref
+// So is Team sync's agenda (teamSync:agenda), through the stand-in the
+// jsdom tests use (src/store/teamSyncStandIn.setup.ts): the agenda's rules
+// over the workspace held here, with no access rule or read budget, and the
+// ceiling of 1,000 tasks. The task window's read of a task resolves its ref
 // as the server does (convex/lib/taskWindow.ts taskByRef): a uuid in any
 // case, or a number bare or as QN-12 in the organization asked only.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { matchesTerms, scoreOf, searchTerms } from '../../convex/lib/searchTerms'
 import { parseIssueRef } from '../../convex/lib/taskRefs'
+import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
 import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
@@ -263,12 +288,18 @@ import {
 import { projectSettingsStandIn } from '../../src/store/projectSettingsStandIn.setup'
 import { relationPickerStandIn } from '../../src/store/relationPickerStandIn.setup'
 import { reassignChoicesStandIn, removalPreviewStandIn } from '../../src/store/removalStandIn.setup'
+import { teamSyncStandIn } from '../../src/store/teamSyncStandIn.setup'
 
 // the page passes its parameters as the worker's name (scripts/perf/transport.mjs)
 /* The most rows one bulk inbox batch changes, convex/model/messages.ts
    INBOX_BATCH, which this worker cannot import with the server code. */
 const INBOX_BATCH = 160
-const parameters = new URLSearchParams(self.name)
+/* The worker port this instance was loaded with. Messages go through it,
+   not through the global `self` read at call time, so a timer of an
+   instance the tests have replaced (vi.resetModules) posts to its own,
+   finished test, never into a later one's messages. */
+const port = self
+const parameters = new URLSearchParams(port.name)
 const option = (name, fallback) => {
   const value = parameters.get(name)
   return value === null ? fallback : Number(value)
@@ -369,6 +400,23 @@ const forcedMilestones = (() => {
   }
   return force
 })()
+/* Team sync's forced states (the `sync` parameter). */
+const forcedSync = new Set((parameters.get('sync') ?? '').split(',').filter(Boolean))
+/* Team sync's lowered ceiling (sync=ceiling:<n>), or undefined. */
+const syncCeiling = (() => {
+  const value = [...forcedSync].find((s) => s.startsWith('ceiling:'))?.slice(8)
+  if (value === undefined) return undefined
+  const n = Number(value)
+  if (!Number.isInteger(n) || n < 0) throw new Error(`sync=ceiling:${value} is not a task count`)
+  return n
+})()
+/* How long an agenda read answers ok before sync=stale turns it, in ms. */
+const SYNC_STALE_MS = 4000
+/* When the first agenda read was asked, for sync=stale, or null, and
+   whether the meeting has stopped fitting. The first read's timer sets it,
+   then sends the watched agenda again in a transition. */
+let syncAskedAt = null
+let syncTurned = false
 /* The relation pickers' forced states (the `relations` parameter), as the
    stand-in's `force` takes them. */
 const forcedRelations = (() => {
@@ -997,7 +1045,7 @@ function deliver(to, result) {
 }
 /** Posts `message` to the page with the counters it mirrors. */
 const post = (message) =>
-  self.postMessage({
+  port.postMessage({
     ...message,
     writes,
     held: held.length,
@@ -1290,8 +1338,17 @@ const read = (name, args = {}) => {
     case 'snapshot:forMe':
       snapshot.delivered_at = new Date().toISOString()
       return wireSnapshot()
-    case 'prefs:get':
-      return null
+    case 'prefs:get': {
+      // syncscope=program: the first program saved as Team sync's scope
+      if (parameters.get('syncscope') !== 'program') return null
+      const program = snapshot.projects.find((p) => p.type === 'meta')
+      const scope = program ? `project:${program.id}` : ''
+      return {
+        profile_id: snapshot.myProfileIds[0],
+        prefs: { syncScope: scope, teamSyncScope: scope },
+        updated_at: new Date().toISOString(),
+      }
+    }
     case 'appearance:get':
       return { mode: appearance, image_source: 'none', custom_image: null }
     case 'appearance:dailyImage':
@@ -1313,6 +1370,8 @@ const read = (name, args = {}) => {
       return { events: [], earlier: false, next: null }
     case 'teamSync:lastComments':
       return { rows: [], complete: true }
+    case 'teamSync:agenda':
+      return syncAgenda(args)
     case 'admin:isOperator':
       return false
     case 'search:page':
@@ -1505,6 +1564,41 @@ function patchTask(taskId, patch) {
 /* The subscriptions by id, each with its query and args. */
 const subscriptions = new Map()
 
+/** Team sync's agenda for `args` from the workspace (the stand-in), with
+    the forced states of the `sync` parameter. */
+function syncAgenda(args) {
+  if (forcedSync.has('error')) throw new Error("Team sync's agenda fails, as sync=error asks")
+  // sync=stale: the meeting stops fitting while it is open, which the app,
+  // watching the agenda as a view read, hears in the next transition
+  if (forcedSync.has('stale') && syncAskedAt === null)
+    setTimeout(() => {
+      syncTurned = true
+      void transition()
+    }, SYNC_STALE_MS)
+  syncAskedAt ??= Date.now()
+  const turned =
+    forcedSync.has('stale') && (syncTurned || Date.now() - syncAskedAt >= SYNC_STALE_MS)
+  const state = ['over_ceiling', 'over_budget', 'unavailable', 'access_unchecked'].find((s) =>
+    forcedSync.has(s),
+  )
+  const force = {
+    ...(turned ? { state: 'over_ceiling' } : state ? { state } : {}),
+    ...(forcedSync.has('delays-unknown') ? { delays: 'unknown' } : {}),
+    ...(forcedSync.has('weeks-unknown') ? { weeks: 'loads' } : {}),
+    ...(syncCeiling === undefined ? {} : { ceiling: syncCeiling }),
+  }
+  // as an organization Viewer's agenda reads it, whatever the role
+  const workspace = forcedSync.has('viewer')
+    ? {
+        ...snapshot,
+        profiles: snapshot.profiles.map((p) =>
+          snapshot.myProfileIds.includes(p.id) ? { ...p, org_role: 'viewer' } : p,
+        ),
+      }
+    : snapshot
+  return teamSyncStandIn(workspace, args, { force })
+}
+
 /** Runs mutation `name` with `args` and answers its result. */
 async function mutate(name, args) {
   if (name === 'identity:claimMySeats' || name === 'prefs:save') return null
@@ -1620,6 +1714,21 @@ async function mutate(name, args) {
     await emitWorkspace()
     writes++
     return { id: seat.id, emailed: false }
+  }
+  if (name === 'teamSync:stamp') {
+    // a Team sync card's change stamps the page owner (convex/teamSync.ts
+    // stamp), which the workspace's profile and the agenda then carry
+    const at = new Date().toISOString()
+    snapshot.profiles = snapshot.profiles.map((profile) => {
+      if (profile.id !== args.profile_id) return profile
+      const prev =
+        profile.sync_at === undefined ? null : { at: profile.sync_at, since: profile.sync_since }
+      const { at: sync_at, since: sync_since } = nextSyncStamp(prev, at, args.first_since)
+      return { ...profile, sync_at, sync_since }
+    })
+    await emitWorkspace()
+    writes++
+    return null
   }
   if (name === 'roadmap:change') {
     // Only dates change here, so no task becomes or stops being a group.
@@ -1770,7 +1879,7 @@ async function write(data, turn) {
   }
 }
 
-self.onmessage = async ({ data }) => {
+port.onmessage = async ({ data }) => {
   switch (data.type) {
     case 'subscribe': {
       const { id: sub, name, args } = data

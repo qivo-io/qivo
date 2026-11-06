@@ -8,6 +8,7 @@ import { type BoardArgs, boardStandIn } from './store/boardStandIn.setup'
 import { answerMilestones, isMilestoneRead } from './store/milestoneStandIn.setup'
 import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, underProgram } from './store/plannerFixture.setup'
+import { type SyncArgs, teamSyncStandIn } from './store/teamSyncStandIn.setup'
 import { taskRow } from './views/boardFixture.setup'
 
 /* The main pages stay loaded while the person moves between them, on App
@@ -145,10 +146,19 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   prepare(snap)
   threads.length = 0
   milestoneWatches.length = 0
+  // the store, once it loaded, for what the person sees and may edit
+  let P: typeof import('./store/planner')['P'] | null = null
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
+    else if (name === 'teamSync:agenda')
+      next(
+        teamSyncStandIn(snap, args as SyncArgs, {
+          sees: (id) => P?.canSee(id) ?? true,
+          writes: (id) => P?.canWrite(id) ?? false,
+        }),
+      )
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     else if (isMilestoneRead(name)) {
       answerMilestones(snap, name, args, next, fail)
@@ -177,6 +187,7 @@ async function boot(prepare: (snap: Snapshot) => void = () => {}, held: string |
   network.query.mockResolvedValue(null)
   network.mutation.mockResolvedValue(null)
   const store = await import('./store/planner')
+  P = store.P
   double.live?.holdWindow(held)
   await store.initStore()
   const { syncStatus } = await import('./lib/syncStatus')
@@ -261,7 +272,9 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
   })
 
   it('keeps Team sync through its sitting, where it was, and opens it anew after Done', async () => {
-    const org = await boot()
+    // the fixture's project as a sub-project (p/1) of a top-level one, as
+    // the agenda answers only those
+    const org = await boot((snap) => void underProgram(snap))
     const { P } = await import('./store/planner')
     const me = P.CURRENT_USER
     await go(`/app/${org}/sync/p/1/people/${me}`)
@@ -285,11 +298,15 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     page.scrollTop = 120
     await waitFor(() => P.lastComments.size > 0, 'the comment marks')
 
-    // a jump to the Board keeps the page; its marks wait for a new answer
+    // a jump to the Board keeps the page, which reads no comment while it
+    // hides and keeps its marks for its return
+    const marks = P.lastComments.size
     await go(`/app/${org}/board/all`)
     await shownPage('kanban')
     expect(sync.dataset.hiddenView).toBe('sync')
-    expect(P.lastComments.size).toBe(0)
+    expect(P.lastComments.size).toBe(marks)
+    // and its agenda's read stops, keeping its meeting
+    expect(P.syncRead()).toMatchObject({ current: false, value: { state: 'ok' } })
     // the sidebar's Team sync goes back to the same page, where it was
     const nav = await waitFor(
       () => document.querySelector<HTMLElement>('[data-sync-nav]'),
@@ -312,6 +329,9 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       if (done) break
     }
     await waitFor(() => !sync.isConnected, 'the ended sitting gone')
+    // the ended sitting let its meeting and its marks go
+    expect(P.lastComments.size).toBe(0)
+    expect(P.syncRead().key).toBeNull()
     await act(async () => nav.click())
     const again = await shownPage('sync')
     expect(again).not.toBe(sync)
