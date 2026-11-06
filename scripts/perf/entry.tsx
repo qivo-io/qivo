@@ -20,10 +20,12 @@ async function boot() {
   const tasks = Reflect.get(liveParts, 'TASKS') as { atBoot: boolean } | undefined
   const parameters = new URLSearchParams(location.search)
   if (tasks && parameters.get('taskload') === 'boot') tasks.atBoot = true
-  // milestones=sync-too-many: no milestone read may name a project, so Team
-  // sync's opening asks nothing and says why (scripts/perf/server.mjs)
+  // milestones=sync-too-many or roadmap-too-many: no milestone read may
+  // name a project, so Team sync's opening and the Roadmap's flags ask
+  // nothing and say why (scripts/perf/server.mjs)
   const reads = Reflect.get(planner, 'MILESTONE_READS') as { projects: number } | undefined
-  if (reads && (parameters.get('milestones') ?? '').split(',').includes('sync-too-many'))
+  const states = (parameters.get('milestones') ?? '').split(',')
+  if (reads && (states.includes('sync-too-many') || states.includes('roadmap-too-many')))
     reads.projects = 0
   // milestonecap=<n>: the Milestones window's sections read batches of n
   // and hold at most 2n rows (src/lib/milestoneSection.ts), so the moved-on

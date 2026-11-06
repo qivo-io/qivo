@@ -1118,6 +1118,48 @@ describe('the benchmark server', () => {
     expect(
       (await read('milestones=sync-loading', 'milestones:between', range)).answer,
     ).toBeUndefined()
+    // the Roadmap's states force the range read alone
+    expect(
+      (await read('milestones=roadmap-loading', 'milestones:between', range)).answer,
+    ).toBeUndefined()
+    expect(
+      (await read('milestones=roadmap-error', 'milestones:between', range)).answer.error,
+    ).toContain('failed')
+    expect(
+      (await read('milestones=roadmap-refused', 'milestones:between', range)).answer.data,
+    ).toMatchObject({ reason: 'milestone_read_too_large' })
+    expect(
+      (await read('milestones=roadmap-unchecked', 'milestones:between', range)).answer.data,
+    ).toMatchObject({ reason: 'access_unchecked' })
+    const stopped = await read('milestones=roadmap-partial', 'milestones:between', range)
+    expect(stopped.answer.rows).toHaveLength(1)
+    expect(stopped.answer.stopped).not.toBeNull()
+    // must fail: a Roadmap state that held back Team sync's next milestone
+    const nextOne = (snap) => ({
+      projects: projects(snap),
+      from: snap.milestones[1].week,
+      side: 'upcoming',
+      limit: 1,
+    })
+    expect(
+      (await read('milestones=roadmap-loading', 'milestones:section', nextOne)).answer.rows,
+    ).toHaveLength(1)
+  }, 60_000)
+
+  it('plants the milestones on the first programs milestoneprograms names', async () => {
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&programs=3&milestoneprograms=2',
+    )
+    await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+    const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+    const tops = snap.projects.filter((p) => !p.parent_id && !p.archived_at)
+    const on = new Map()
+    for (const m of snap.milestones) on.set(m.project_id, (on.get(m.project_id) ?? 0) + 1)
+    // four on each of the first two programs, none on the third
+    expect([...on.values()]).toEqual([4, 4])
+    expect(on.has(tops.find((p) => p.name === 'Testbed program').id)).toBe(true)
+    expect(on.has(tops.find((p) => p.name === 'Testbed program 3').id)).toBe(false)
+    expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
   it("plants weekly milestones and forces the Milestones window's section states", async () => {
