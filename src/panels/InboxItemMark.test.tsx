@@ -23,7 +23,9 @@ import type { Row } from '../store/rows'
    freezes the start from the item as any window does, and the pane and its
    pop-out send one read for one `through`. A read the server refused is
    not sent again for its `through`. Once the person marks the open task
-   unread, nothing reads it again while it stays open. */
+   unread, nothing reads it again while it stays open, from the moment the
+   write goes out. A refused or failed unread write takes away only its own
+   part of that hold, and a write of an earlier visit holds nothing. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 type Double = ReturnType<typeof import('../store/guard/liveDouble.setup').liveOver>
@@ -56,12 +58,14 @@ let me: string
 let publish: () => void
 // the thread subscriptions the store made, and whether each stopped
 let threads: { next: (value: unknown) => void; closed: boolean }[]
-// the writes the store sent, which wait until a test answers or refuses them
+// the writes the store sent, which wait until a test answers, refuses or
+// fails them
 let writes: {
   name: string
   args: Record<string, unknown>
   answer: () => void
   refuse: () => void
+  fail: () => void
 }[]
 
 const comment = (n: number): Row<'comments'> => ({
@@ -161,6 +165,7 @@ async function load(
         args,
         answer: () => resolve(null),
         refuse: () => reject(new ConvexError({ code: 'forbidden', message: 'no' })),
+        fail: () => reject(new Error('Server Error')),
       }),
     )
   })
@@ -415,6 +420,105 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     expect(itemReads()).toEqual([])
   })
 
+  it('reads the open task when its snooze ends after the server refused its Unsnooze', async () => {
+    const until = new Date(Date.now() + 86_400_000).toISOString()
+    await load([], [message('task-a', 5, { kind: 'comment', snoozed_until: until })])
+    await openTask()
+    await act(async () => P.snoozeMessages(['message-task-a-5'], null))
+    const wake = writes.find((w) => w.name === 'messages:snooze')
+    if (!wake) throw new Error('no snooze write went out')
+    await act(async () => wake.refuse())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, snoozed_until: until })
+    expect(itemReads()).toEqual([])
+    // another device ends the snooze, at the same through
+    snap.messages = snap.messages.map(({ snoozed_until: _, ...m }) => m)
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, snoozed_until: null })
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(5)) },
+    ])
+  })
+
+  it('reads an update that came while an unread write waited, once the server refuses it', async () => {
+    await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
+    await openTask()
+    await act(async () => P.markMessagesUnread(['message-task-a-5']))
+    const unread = writes.find((w) => w.name === 'messages:markUnread')
+    if (!unread) throw new Error('no unread write went out')
+    // the update stays unread while the write waits
+    snap.messages = [...snap.messages, mine(message('task-a', 12, { kind: 'comment' }))]
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(12)) })
+    expect(itemReads()).toEqual([])
+    // and is read once the refusal takes the hold away
+    await act(async () => unread.refuse())
+    await settle()
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(12)) },
+    ])
+  })
+
+  it('keeps the hold of an accepted unread write when an earlier one of the task fails', async () => {
+    await load(
+      [],
+      [
+        message('task-a', 5, { kind: 'comment', read_at: at(6) }),
+        message('task-a', 7, { kind: 'comment', read_at: at(8) }),
+      ],
+    )
+    await openTask()
+    await act(async () => P.markMessagesUnread(['message-task-a-5']))
+    await act(async () => P.markMessagesUnread(['message-task-a-7']))
+    const [earlier, later] = writes.filter((w) => w.name === 'messages:markUnread')
+    if (!later) throw new Error('two unread writes did not go out')
+    // the server accepts the later write, then the earlier one fails
+    snap.messages = snap.messages.map((m) => {
+      if (m.id !== 'message-task-a-7') return m
+      const { read_at: _, ...unread } = m
+      return unread
+    })
+    await act(async () => publish())
+    await act(async () => later.answer())
+    await act(async () => earlier.fail())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(7)) })
+    // nothing reads the task, also for a later update
+    snap.messages = [...snap.messages, mine(message('task-a', 12, { kind: 'comment' }))]
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 2, through: Date.parse(at(12)) })
+    expect(itemReads()).toEqual([])
+  })
+
+  it('holds nothing in the next visit for an unread write of an earlier one', async () => {
+    await load([], [message('task-a', 5, { kind: 'comment', read_at: at(6) })])
+    await openTask()
+    await act(async () => P.markMessagesUnread(['message-task-a-5']))
+    const unread = writes.find((w) => w.name === 'messages:markUnread')
+    if (!unread) throw new Error('no unread write went out')
+    // the window closes and opens the task again while the write waits
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    await openTask()
+    // the server accepts it, and the new visit reads the task on open
+    snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
+    await act(async () => publish())
+    await act(async () => unread.answer())
+    await settle()
+    expect(itemReads()).toEqual([
+      { org_id: snap.orgs[0].id, issue_id: 'task-a', through: Date.parse(at(5)) },
+    ])
+    // and a later update too
+    snap.messages = [...snap.messages, mine(message('task-a', 12, { kind: 'comment' }))]
+    await act(async () => publish())
+    await settle()
+    expect(itemReads()).toHaveLength(2)
+    expect(itemReads()[1]).toMatchObject({ through: Date.parse(at(12)) })
+  })
+
   it("reads only the task it shows, in that task's organization", async () => {
     await load([message('task-a', 5), message('task-b', 6)])
     await openTask('task-b')
@@ -537,7 +641,11 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
   }
   const popOut = () => document.querySelector('[role="dialog"]:not(.inbox-detail-frame *)')
 
-  it('leaves the open task unread after Mark as unread from its row, also for later answers', async () => {
+  /* Opens task-a, with one loaded update, from its Inbox row, lets the
+     server read the item and confirm the pane's read, then sends Mark as
+     unread from the open task's own row menu. Answers the row and the
+     unread write, which waits. */
+  async function markOpenRowUnread() {
     // the row menu places itself with a ResizeObserver, which jsdom lacks
     vi.stubGlobal(
       'ResizeObserver',
@@ -573,6 +681,11 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     await settle()
     const unread = writes.find((w) => w.name === 'messages:markUnread')
     if (!unread) throw new Error('the row menu sent no unread')
+    return { rowOf, unread }
+  }
+
+  it('leaves the open task unread after Mark as unread from its row, also for later answers', async () => {
+    const { rowOf, unread } = await markOpenRowUnread()
     // the server marked it unread, at the same through
     snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
     await act(async () => publish())
@@ -587,6 +700,24 @@ describe('the Inbox pane and its pop-out', { timeout: 20_000 }, () => {
     expect(P.inboxItem?.item).toMatchObject({ unread_count: 2, through: Date.parse(at(12)) })
     expect(itemReads()).toHaveLength(1)
     expect(rowOf()?.hasAttribute('data-unread')).toBe(true)
+  })
+
+  it('reads the open task again once the server refuses Mark as unread from its row', async () => {
+    const { rowOf, unread } = await markOpenRowUnread()
+    await act(async () => unread.refuse())
+    await settle()
+    // the refusal undid the row's unread, and the item stays read
+    expect(rowOf()?.hasAttribute('data-unread')).toBe(false)
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 0 })
+    expect(itemReads()).toHaveLength(1)
+    // a later answer with unread at the same through, as after another
+    // device's Mark as unread, gets the one more read the rule allows
+    snap.messages = snap.messages.map(({ read_at: _, ...m }) => m)
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(5)) })
+    expect(itemReads()).toHaveLength(2)
+    expect(itemReads()[1]).toEqual(itemReads()[0])
   })
 
   it("draws the pane's divider at the item's first unread, and sends one read for one through from both", async () => {

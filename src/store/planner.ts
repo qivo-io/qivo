@@ -511,11 +511,20 @@ let itemConnection = 0
    visit (itemNews), which it does once. Forgotten when the thread changes
    or stops. */
 let itemRerun = false
-/* Whether this client marked the open task unread this visit, with Mark
-   as unread or a snooze or its end (P.markMessagesUnread,
-   P.snoozeMessages), which holds off every further read on open of it
-   (P.readOnOpen). Forgotten when the thread changes or stops. */
-let itemHeldUnread = false
+/* A hold on the open task's read on open that holds nothing, which each
+   visit starts with (itemHold). */
+const freeHold = () => ({ waiting: 0, accepted: false, keptBack: false })
+/* This client's hold on the open task's read on open this visit
+   (P.readOnOpen), from its Mark as unread or a snooze or its end on the
+   task (holdUnreadOf). It counts those writes that still wait and says
+   whether the server accepted one, and while either holds, no read on
+   open goes out. A write the server refused or that failed only stops
+   waiting, so the hold is as it would be without that write. `keptBack`
+   says whether the hold turned away a read on open the window asked for,
+   which runs again once nothing holds. Each visit gets a new hold, so a
+   write of an earlier visit changes nothing. Forgotten when the thread
+   changes or stops. */
+let itemHold = freeHold()
 /* How many answers of the open task's inbox item arrived, so the read on
    open can tell an answer that came after its read went out
    (P.readOnOpen). */
@@ -1083,7 +1092,7 @@ function subscribeItem(issueUuid: string, orgId: string) {
     itemRead = null
     itemFresh = false
     itemRerun = false
-    itemHeldUnread = false
+    itemHold = freeHold()
   }
   const args = parts.sideArgs('item')
   const watching = args?.org_id === orgId && args.issue_id === issueUuid
@@ -1100,18 +1109,42 @@ function stopItem() {
   itemRead = null
   itemFresh = false
   itemRerun = false
-  itemHeldUnread = false
+  itemHold = freeHold()
 }
 
-/* Holds off the read on open of the watched task for the rest of the
-   visit when the loaded messages `ids` name one of its messages, as the
-   person's own Mark as unread or snooze does (itemHeldUnread). */
-function holdUnreadOf(ids: readonly string[]) {
+/* Holds off the read on open of the watched task while a write about the
+   loaded messages `ids` waits, when they name one of its messages, as the
+   person's own Mark as unread or snooze does (itemHold), and answers the
+   handlers send() runs for that write. The hold stays for the rest of the
+   visit once the server accepts the write. A refusal or a failure takes
+   away only this write's part, so an unread choice the server accepted,
+   before or since, still holds. Once nothing holds, a read on open the
+   hold turned away runs again, so an update that arrived while the write
+   waited is read as it would have been without it. A write of an earlier
+   visit changes nothing. Call it just before the write goes out. */
+function holdUnreadOf(ids: readonly string[]): SendOptions<unknown> {
   const watched = threadWatched
-  if (!watched) return
-  for (const id of ids) {
+  if (!watched) return {}
+  const ofTask = ids.some((id) => {
     const row = rows.messages.get(id)
-    if (row?.issue_id === watched.task && row.org_id === watched.org) itemHeldUnread = true
+    return row?.issue_id === watched.task && row.org_id === watched.org
+  })
+  if (!ofTask) return {}
+  const hold = itemHold
+  hold.waiting++
+  return {
+    onOk: () => {
+      if (hold === itemHold) hold.accepted = true
+    },
+    onSettled: () => {
+      if (hold !== itemHold) return
+      hold.waiting--
+      // refused or failed, so the read the window asked for meanwhile goes
+      // out, unless another unread choice still holds
+      if (hold.waiting > 0 || hold.accepted || !hold.keptBack) return
+      hold.keptBack = false
+      PLANNER.readOnOpen(watched.task)
+    },
   }
 }
 
@@ -13490,23 +13523,29 @@ export const PLANNER = {
       read item or a snoozed one, or for a task the store does not watch.
       Once the person marked the task unread from this client, with Mark as
       unread, a snooze or its end, it sends nothing more until the thread
-      changes or stops, so their choice holds while the task stays open
-      (holdUnreadOf). It sends each `through` once a visit of the watched
-      task, so the Inbox pane and its pop-out send one read, and once more
-      when the server confirmed that read and the item's answer, one that
-      came after the read went out, still holds unread messages at the same
-      `through`, as for a message whose mutation started before the read
-      and committed after it. It checks that at the confirmation too, since
-      Convex brings the answer that holds the read before the read's
-      promise resolves, so the answer that came with it may hold such a
-      message, and no later answer may come. A paused read is refused
-      quietly and goes out once the pause ends, and a refusal by the server
-      is not sent again for its `through`. Answers whether it sent one. */
+      changes or stops, so their choice holds while the task stays open,
+      from the moment that write goes out. One the server refused or that
+      failed holds nothing once answered, and a read it turned away runs
+      again then (holdUnreadOf). It sends each `through` once a visit of
+      the watched task, so the Inbox pane and its pop-out send one read,
+      and once more when the server confirmed that read and the item's
+      answer, one that came after the read went out, still holds unread
+      messages at the same `through`, as for a message whose mutation
+      started before the read and committed after it. It checks that at
+      the confirmation too, since Convex brings the answer that holds the
+      read before the read's promise resolves, so the answer that came with
+      it may hold such a message, and no later answer may come. A paused
+      read is refused quietly and goes out once the pause ends, and a
+      refusal by the server is not sent again for its `through`. Answers
+      whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
-    // the person chose unread for this visit
-    if (itemHeldUnread) return false
+    // the person chose unread for this visit, or the write that does waits
+    if (itemHold.waiting > 0 || itemHold.accepted) {
+      itemHold.keptBack = true
+      return false
+    }
     const item = shown.item
     if (!item || item.unread_count === 0 || item.snoozed_until !== null) return false
     const last = itemRead?.task === task && itemRead.org === shown.org ? itemRead : null
@@ -13586,14 +13625,14 @@ export const PLANNER = {
   /* Back to unread, the same column the other way. Nothing is pruned by
      it: the rows it re-opens are no longer read, which is exactly what the
      server's prune asks. Marking the open task's messages unread holds off
-     its read on open for the rest of the visit (holdUnreadOf). */
+     its read on open for the rest of the visit, unless the server refuses
+     it or it fails (holdUnreadOf). */
   markMessagesUnread: (ids: string[]) => {
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r?.read_at
     })
     if (!hit.length || refusePausedWrite(api.messages.markUnread)) return
-    holdUnreadOf(hit)
     messagesByOrg(hit).forEach((list, org) => {
       const view: View = {
         workspace: () =>
@@ -13602,7 +13641,7 @@ export const PLANNER = {
             if (row) row.read_at = undefined
           }),
       }
-      void send(api.messages.markUnread, { org_id: org, ids: list }, view)
+      void send(api.messages.markUnread, { org_id: org, ids: list }, view, holdUnreadOf(list))
     })
   },
   /* Removing an item removes every message in it — the caller passes the
@@ -13686,11 +13725,11 @@ export const PLANNER = {
      timed return is the server's scheduled wake (messages.wake), never a
      client timer, so every device shows it at the same instant. Since both
      leave it unread, either on the open task holds off its read on open
-     for the rest of the visit (holdUnreadOf). */
+     for the rest of the visit, unless the server refuses it or it fails
+     (holdUnreadOf). */
   snoozeMessages: (ids: string[], until: string | null) => {
     const hit = ids.filter((id) => rows.messages.has(id))
     if (!hit.length || refusePausedWrite(api.messages.snooze)) return
-    holdUnreadOf(hit)
     const pairOf = (r: Row<'messages'>) => `${r.recipient_id}\n${r.issue_id}`
     messagesByOrg(hit).forEach((list, org) => {
       // the items, named before the paint
@@ -13716,7 +13755,7 @@ export const PLANNER = {
               }
             }),
       }
-      void send(api.messages.snooze, { org_id: org, ids: list, until }, view)
+      void send(api.messages.snooze, { org_id: org, ids: list, until }, view, holdUnreadOf(list))
     })
   },
 
@@ -16064,7 +16103,7 @@ export function disposeDemoStore() {
   PLANNER.inboxItem = null
   itemRead = null
   itemRerun = false
-  itemHeldUnread = false
+  itemHold = freeHold()
   summaryFresh = false
   summaryConnection = 0
   itemFresh = false
