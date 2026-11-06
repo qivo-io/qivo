@@ -100,10 +100,17 @@
  * (ui/project-dialogs). It makes a sub-project of its own under its
  * project with one task, uploads a file there over REST and opens Billing,
  * whose current storage must show a figure rather than Being counted
- * (billing.currentUsage) and whose Storage by project, searched for its run
+ * (billing.usageFigures) and whose Storage by project, searched for its run
  * tag and the word storage, must list that sub-project alone with the
  * file's size (billing.storageProjects), then deletes the file
- * (ui/billing-storage). It makes a project of its own with two
+ * (ui/billing-storage). It calls GET /v1/me once with each of its agents'
+ * keys and opens Billing again, whose API calls must show a figure rather
+ * than Being counted (billing.usageFigures) and whose API calls by
+ * account, searched for its run tag, must list its two agents alone with
+ * their calls (billing.apiAccounts); the Standard agent's View credentials
+ * must open API access on that agent and Billing's period, and Who counts
+ * toward your bill, searched for the run tag, must list both agents
+ * (billing.accountList) (ui/billing-accounts). It makes a project of its own with two
  * sub-projects, finds it by its run tag in Settings › Projects from the
  * deployment's list (projectSettings.projects) and opens its sub-projects
  * (subProjects), archives one sub-project alone and then the project over
@@ -5214,7 +5221,7 @@ export const BILLING_STORAGE_EXPECTED = {
 }
 
 /** Checks Billing's storage figures on the deployment's answers
- *  (billing.currentUsage and billing.storageProjects). The run makes
+ *  (billing.usageFigures and billing.storageProjects). The run makes
  *  `<tag> Billing storage` under its project M over REST, a sub-project no
  *  other step uploads to, with one task, and uploads one file of
  *  BILLING_STORAGE_EXPECTED.bytes to it over REST. In the app, as Nora, an
@@ -5226,9 +5233,9 @@ export const BILLING_STORAGE_EXPECTED = {
  *  file is deleted over REST at the end, also after a failure, and the
  *  cleanup, which deletes M, takes the sub-project and its task. It runs
  *  while the run's projects are active, after ui/removal-window, and needs
- *  a backend from the release that ships billing.currentUsage. Against an
- *  older one the page cannot read its usage and the step fails waiting for
- *  it. */
+ *  a backend from the release that ships billing.usageFigures and
+ *  billing.details. Against an older one the page cannot read its details
+ *  or its usage and the step fails waiting for them. */
 async function billingStorageCheck() {
   const w = run.creds.writeToken
   const { M } = run.projects
@@ -5287,6 +5294,107 @@ async function billingStorageCheck() {
       )
     }
     return `found ${sub.name} by its run tag with ${BILLING_STORAGE_EXPECTED.row} in Storage by project, current storage ${current}, and deleted the file`
+  })
+}
+
+/** The step that checks Billing's API calls by account and its names
+ *  (billingAccountsCheck). */
+export const BILLING_ACCOUNTS_STEP = 'ui/billing-accounts'
+
+/** The marks the step reads on Billing (src/panels/BillingUsage.tsx,
+ *  BillingApiAccounts.tsx and BillingAccountNames.tsx) and on API access
+ *  (src/panels/settings/ApiAccessSettings.tsx). */
+export const BILLING_ACCOUNTS_MARKS = {
+  calls: 'data-billing-calls',
+  period: 'data-billing-period',
+  search: 'data-billing-accounts-search',
+  row: 'data-billing-account',
+  rowCalls: 'data-billing-account-calls',
+  view: 'data-billing-view-credentials',
+  namesToggle: 'data-billing-names-toggle',
+  namesSearch: 'data-billing-names-search',
+  billable: 'data-billable-account',
+  person: 'data-api-access-person',
+  accessPeriod: 'data-api-access-period',
+}
+
+/** Checks Billing's API calls by account and its names on the
+ *  deployment's answers (billing.usageFigures, billing.apiAccounts and
+ *  billing.accountList). It first makes one GET /v1/me with each of the
+ *  run's agent keys still in use, the Standard agent's named key and the
+ *  Viewer agent's, so both have calls in the bucket Billing shows now,
+ *  whatever the clock did earlier in the run; those calls write only
+ *  usage. In the app, as Nora, an admin, Billing's API calls must show a
+ *  figure, never Being counted, which says the deployment's aggregates are
+ *  complete, and API calls by account, searched for the run tag, must list
+ *  the two agents alone, each with at least one call. The Standard agent's
+ *  View credentials must open API access with that agent chosen and the
+ *  period Billing showed. Back on Billing, Who counts toward your bill,
+ *  searched for the run tag, must list both agents. It writes nothing
+ *  else, and needs a backend from the release that ships
+ *  billing.apiAccounts and billing.accountList; against an older one the
+ *  page cannot read its details and the step fails waiting for them. */
+async function billingAccountsCheck() {
+  const c = run.creds
+  const m = BILLING_ACCOUNTS_MARKS
+  await check(BILLING_ACCOUNTS_STEP, async () => {
+    for (const cred of [c.stdKey, c.viewerKey]) await restOk(cred, 'GET', '/me')
+    const { std, viewer } = run.agents
+    const billing = `${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-billing`
+    await app.goto(billing, { waitUntil: 'domcontentloaded' })
+    const figure = app.locator(`[data-billing-usage] [${m.calls}]`)
+    await figure.waitFor({ timeout: 60_000 })
+    const calls = ((await figure.textContent()) ?? '').trim()
+    expect(
+      calls !== BILLING_STORAGE_EXPECTED.counting,
+      "API calls read Being counted, so the deployment's usage aggregates are not complete",
+    )
+    expect(/^[0-9]/.test(calls), `API calls read ${short(calls)}`)
+    const period = await app.locator(`[${m.period}]`).getAttribute(m.period)
+    expect(period, 'Billing names no period')
+    await app.locator(`[${m.search}]`).fill(run.tag)
+    const rows = app.locator(`[data-billing-accounts] [${m.row}]`)
+    const rowOf = (agent) => app.locator(`[${m.row}="${agent.id}"]`)
+    expect(
+      await until(
+        async () =>
+          (await rows.count()) === 2 &&
+          (await rowOf(std).count()) === 1 &&
+          (await rowOf(viewer).count()) === 1,
+        30_000,
+      ),
+      'a search for the run tag does not list the two agents alone in API calls by account',
+    )
+    for (const agent of [std, viewer]) {
+      const text = ((await rowOf(agent).textContent()) ?? '').trim()
+      expect(text.includes(agent.name), `its row reads ${short(text)}, without ${agent.name}`)
+      const shown = ((await rowOf(agent).locator(`[${m.rowCalls}]`).textContent()) ?? '').trim()
+      const n = Number(shown.replace(/[^0-9]/g, ''))
+      expect(/^[0-9][0-9,.]* calls?$/.test(shown) && n >= 1, `${agent.name} shows ${short(shown)}`)
+    }
+    await app.locator(`[${m.view}="${std.id}"]`).click()
+    const person = app.locator(`[${m.person}]`)
+    expect(
+      await until(async () => ((await person.textContent()) ?? '').trim() === std.name, 30_000),
+      `API access does not open on ${std.name}`,
+    )
+    eq(await app.locator(`[${m.accessPeriod}]`).inputValue(), period, "API access's period")
+
+    await app.goto(billing, { waitUntil: 'domcontentloaded' })
+    await app.locator(`[${m.namesToggle}="billable"] summary`).click()
+    await app.locator(`[${m.namesSearch}="billable"]`).fill(run.tag)
+    const names = app.locator(`[data-billing-names-list="billable"] [${m.billable}]`)
+    expect(
+      await until(
+        async () =>
+          (await names.count()) === 2 &&
+          (await app.locator(`[${m.billable}="${std.id}"]`).count()) === 1 &&
+          (await app.locator(`[${m.billable}="${viewer.id}"]`).count()) === 1,
+        30_000,
+      ),
+      'Who counts toward your bill, searched for the run tag, does not list the two agents',
+    )
+    return `API calls ${calls}; found ${std.name} and ${viewer.name} by the run tag in API calls by account and Who counts toward your bill, and View credentials opened API access on ${std.name} for ${period}`
   })
 }
 
@@ -7034,6 +7142,9 @@ async function main() {
   await projectDialogsCheck()
   // Billing's current storage and Storage by project, with a file of its own
   await billingStorageCheck()
+  // Billing's API calls by account and Who counts toward your bill, with
+  // the run's agents
+  await billingAccountsCheck()
   // a file attached through the task window, on an upload ticket
   await attachmentUploadCheck()
   // Settings › Projects and Archived projects on the server's lists, on a
