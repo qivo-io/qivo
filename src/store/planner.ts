@@ -6105,37 +6105,50 @@ function stopDeferredWatches() {
   PLANNER.deletedWaiting = new Set()
 }
 
-/* Sends restore calls (deletedItems.restore). */
+/** Sends one restore call of `ids` in organization `orgId`
+    (deletedItems.restore), marked `bulk` as part of a restore of several
+    items, and answers it in the words both kinds of call share. */
+async function restoreCall(
+  orgId: string,
+  ids: string[],
+  bulk: boolean,
+): Promise<DeletedAnswer<RestoreRefusal>> {
+  const answer = await sendAwaited(
+    api.deletedItems.restore,
+    { org_id: orgId, ids, ...(bulk ? { bulk } : {}) },
+    'none',
+  )
+  // a server answer names every list; a missing one is empty
+  return {
+    done: answer.restored,
+    refused: answer.refused,
+    deferred: answer.deferred ?? [],
+    stepping: answer.stepping ?? [],
+  }
+}
+
+/** Sends one Delete now call of `ids` in organization `orgId`
+    (deletedItems.purge), answered as restoreCall answers. */
+async function purgeCall(orgId: string, ids: string[]): Promise<DeletedAnswer<PurgeRefusal>> {
+  const answer = await sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none')
+  return { done: answer.purged, refused: answer.refused, deferred: [], stepping: [] }
+}
+
+/* Sends restore calls (restoreCall). */
 const RESTORE_CALLS = (bulk: boolean): DeletedCalls<RestoreRefusal> => ({
   kind: 'restore',
   limit: LIMITS.restoreBatch,
   ref: api.deletedItems.restore,
-  call: async (orgId, ids) => {
-    const answer = await sendAwaited(
-      api.deletedItems.restore,
-      { org_id: orgId, ids, ...(bulk ? { bulk } : {}) },
-      'none',
-    )
-    // a server answer names every list; a missing one is empty
-    return {
-      done: answer.restored,
-      refused: answer.refused,
-      deferred: answer.deferred ?? [],
-      stepping: answer.stepping ?? [],
-    }
-  },
+  call: (orgId, ids) => restoreCall(orgId, ids, bulk),
   failed: "Couldn't restore",
 })
 
-/* Sends Delete now calls (deletedItems.purge). */
+/* Sends Delete now calls (purgeCall). */
 const PURGE_CALLS: DeletedCalls<PurgeRefusal> = {
   kind: 'purge',
   limit: LIMITS.purgeBatch,
   ref: api.deletedItems.purge,
-  call: async (orgId, ids) => {
-    const answer = await sendAwaited(api.deletedItems.purge, { org_id: orgId, ids }, 'none')
-    return { done: answer.purged, refused: answer.refused, deferred: [], stepping: [] }
-  },
+  call: purgeCall,
   failed: "Couldn't delete it for good",
 }
 
