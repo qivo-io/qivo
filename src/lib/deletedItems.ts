@@ -671,6 +671,13 @@ export function progressText(action: DeletedAction): string {
 const follows = (n: number, who = n.toLocaleString('en-US')) =>
   n === 1 ? `${who} follows once its project is back.` : `${who} follow once their project is back.`
 
+/** "1 of them finishes restoring in the background.", "3 of them finish
+    restoring in the background." */
+const background = (n: number) =>
+  n === 1
+    ? '1 of them finishes restoring in the background.'
+    : `${n.toLocaleString('en-US')} of them finish restoring in the background.`
+
 /** What a whole action did, for its end toast (endText). */
 export type DeletedTally = {
   kind: 'restore' | 'purge'
@@ -701,12 +708,7 @@ export function endText(t: DeletedTally): { text: string; tone: 'success' | 'err
       ? `${did} ${itemsNoun(t.asked)}${t.kind === 'purge' ? ' for good' : ''}.`
       : `${did} ${t.done.toLocaleString('en-US')} of ${itemsNoun(t.asked)}${t.kind === 'purge' ? ' for good' : ''}.`
   const parts = [what]
-  if (t.stepping > 0)
-    parts.push(
-      t.stepping === 1
-        ? '1 of them finishes restoring in the background.'
-        : `${t.stepping.toLocaleString('en-US')} of them finish restoring in the background.`,
-    )
+  if (t.stepping > 0) parts.push(background(t.stepping))
   if (t.following.length > 0) parts.push(follows(t.following.length))
   if (t.refused > 0)
     parts.push(
@@ -755,33 +757,59 @@ export function stopText(
   return `${what}${leftText(kind, stop.refused, stop.unsent)} ${stop.reason}`
 }
 
+/** What one organization's lane of an action did, as its answers
+    confirmed: the items done, those of them that go on in the background
+    (`stepping`) and the deferred ones the store watches (`following`),
+    those refused, one by one or with their call, and those never sent. */
+export type LaneTally = Readonly<{
+  org_name: string
+  done: number
+  stepping: number
+  following: number
+  refused: number
+  unsent: number
+}>
+
 /**
- * The one toast of the pause, which stops every organization: the
- * organizations where something was done and how much, what was left,
- * then the pause's sentence. "Restoring stopped after 100 tasks in
- * Northstar Labs and 25 in Partner Co. 55 were not sent. They stay in
- * Deleted items. Qivo is offline."
+ * The one toast of the pause, which stops every organization, from
+ * `lanes`, every organization of the action that no refusal stopped,
+ * whether it finished or the pause stopped it (a refused one has its own
+ * toast): the organizations where something was done and how much, what
+ * goes on in the background or follows, what was refused and what was
+ * never sent, counted apart, then the pause's sentence `reason`.
+ * "Restoring stopped after 100 tasks in Northstar Labs and 25 in Partner
+ * Co. 55 were not sent. They stay in Deleted items. Qivo is offline."
  */
 export function pauseText(
   kind: 'restore' | 'purge',
-  stops: readonly DeletedStop[],
+  lanes: readonly LaneTally[],
   noun: (n: number) => string,
+  reason: string,
 ): string {
   const doing = kind === 'restore' ? 'Restoring' : 'Deleting for good'
   const did = kind === 'restore' ? 'restored' : 'deleted'
-  const worked = stops.filter((stop) => stop.done > 0)
+  const worked = lanes.filter((lane) => lane.done > 0)
   const what =
     worked.length === 0
       ? `${doing} stopped before it ${did} any item.`
       : `${doing} stopped after ${andList(
           worked.map(
-            (stop, i) =>
-              `${i === 0 ? noun(stop.done) : stop.done.toLocaleString('en-US')} in ${stop.org_name}`,
+            (lane, i) =>
+              `${i === 0 ? noun(lane.done) : lane.done.toLocaleString('en-US')} in ${lane.org_name}`,
           ),
         )}.`
-  const refused = stops.reduce((n, stop) => n + stop.refused, 0)
-  const unsent = stops.reduce((n, stop) => n + stop.unsent, 0)
-  return `${what}${leftText(kind, refused, unsent)} ${stops[0]?.reason ?? ''}`.trim()
+  const sum = (count: (lane: LaneTally) => number) => lanes.reduce((n, lane) => n + count(lane), 0)
+  const parts = [what]
+  const stepping = sum((lane) => lane.stepping)
+  if (stepping > 0) parts.push(background(stepping))
+  const following = sum((lane) => lane.following)
+  if (following > 0) parts.push(follows(following))
+  const left = leftText(
+    kind,
+    sum((lane) => lane.refused),
+    sum((lane) => lane.unsent),
+  )
+  return `${parts.join(' ')}${left} ${reason}`.trim()
 }
 
 /** The toast of an action a fault in Qivo ended. */

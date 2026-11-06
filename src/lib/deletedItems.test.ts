@@ -400,15 +400,37 @@ describe('a restore in steps', () => {
     expect(stopText('restore', { ...stop, done: 0, refused: 0, unsent: 1 }, noun)).toBe(
       'Restoring stopped in Northstar Labs before it restored any item. 1 was not sent. They stay in Deleted items. Restoring is paused while the organization is read-only.',
     )
-    const paused = { ...stop, refused: 0, reason: 'Qivo is offline.', paused: true }
+    const lane = { org_name: 'Northstar Labs', done: 100, stepping: 0, following: 0 }
+    const paused = { ...lane, refused: 0, unsent: 55 }
     expect(
       pauseText(
         'restore',
         [paused, { ...paused, org_name: 'Partner Co', done: 25, unsent: 5 }],
         noun,
+        'Qivo is offline.',
       ),
     ).toBe(
       'Restoring stopped after 100 tasks in Northstar Labs and 25 in Partner Co. 60 were not sent. They stay in Deleted items. Qivo is offline.',
+    )
+    // a finished organization counts, its background restores and
+    // deferred items too, and refused and unsent work apart
+    expect(
+      pauseText(
+        'restore',
+        [
+          { ...lane, done: 30, stepping: 2, following: 1, refused: 0, unsent: 0 },
+          { ...lane, org_name: 'Partner Co', done: 0, refused: 25, unsent: 5 },
+        ],
+        noun,
+        'Qivo is offline.',
+      ),
+    ).toBe(
+      "Restoring stopped after 30 tasks in Northstar Labs. 2 of them finish restoring in the background. 1 follows once its project is back. 25 couldn't be restored and 5 were not sent. They stay in Deleted items. Qivo is offline.",
+    )
+    expect(
+      pauseText('purge', [{ ...lane, done: 0, refused: 0, unsent: 3 }], noun, 'Qivo is offline.'),
+    ).toBe(
+      'Deleting for good stopped before it deleted any item. 3 were not sent. They stay in Deleted items. Qivo is offline.',
     )
     expect(faultText('purge')).toBe(
       'Deleting for good stopped after a fault in Qivo. What it already did stays done.',

@@ -272,6 +272,34 @@ describe('a restore of more than one round', () => {
     ])
   })
 
+  it('counts every organization in the pause toast, those that finished before it too', async () => {
+    await load()
+    const done = P.restoreDeletedItems([project(A, 'pa'), project(B, 'pb'), project(C, 'pc')], {
+      bulk: true,
+    })
+    await settle()
+    expect(calls.map((c) => c.args.org_id)).toEqual([A, B])
+    // A's project restores, in steps, and C's call goes out
+    await answerNext({ stepping: ['pa'] })
+    expect(calls.map((c) => c.args.org_id)).toEqual([B, C])
+    // the pause meets C's call while B's lands
+    calls[1].reject(new ConvexError({ code: 'paused', message: 'Qivo is offline.' }))
+    calls.splice(1, 1)
+    await settle()
+    await answerNext()
+    const outcome = await done
+    expect(outcome.done).toEqual(['pa', 'pb'])
+    const sticky = showToast.mock.calls.filter(([, , o]) => o?.sticky)
+    expect(sticky).toEqual([
+      [
+        "Restoring stopped after 1 project in Testbed Labs and 1 in Partner Co. 1 of them finishes restoring in the background. 1 couldn't be restored. They stay in Deleted items. Qivo is offline.",
+        'error',
+        expect.objectContaining({ key: 'deleted-restore:pause' }),
+      ],
+    ])
+    expect(toastTexts().some((text) => text.includes('before it restored any item'))).toBe(false)
+  })
+
   it('says how many go on restoring in the background', async () => {
     await load()
     const items = tasks(A, 30)
