@@ -1654,16 +1654,19 @@ for each admin who asked for the job. The route checks the admin's
 authority again on every request and before the backend reads each part,
 and streams the archive as one ZIP. At most two backend reads of an archive
 run at once, and 16 on the whole public demo, with `429` past them. An
-archive served whole sets `organizations.last_export_at` and the job's
-`served_at`, so a deletion reminder counts a downloaded archive and not one
-that was only prepared; the browser export's `recordExport` still sets it
-as before. Served whole means the backend read every byte into the
-response. On a local backend the runtime read an 11 MB archive within a
-second, whatever the client took, so a download the client abandons is
-recorded too. The caps and the checks before each part therefore cover the
-backend's reads, not the downloads clients run. Archives are format 4, with
-the organization's Deleted items under `deleted/`, and the export reads 100
-tasks a page. No app calls the link or the route yet. The release adds
+archive served whole sets only the job's `served_at`, which means the
+backend read every byte into the response. On a local backend the runtime
+read an 11 MB archive within a second, whatever the client took, so a
+download the client abandons sets it too. The caps and the checks before
+each part therefore cover the backend's reads, not the downloads clients
+run. Because the backend cannot know that the client received the archive,
+an archive the route served does not count as an export for the deletion
+reminder. The route never writes `organizations.last_export_at`, so the
+reminder still goes out, and the browser export's `recordExport` still sets
+it as before. A later app stage records the download once the browser
+confirms it finished. Archives are format 4, with the organization's
+Deleted items under `deleted/`, and the export reads 100 tasks a page. No
+app calls the link or the route yet. The release adds
 optional fields to `org_exports` and `org_export_requests`, which code from
 before it does not accept, so from the first export job or link after the
 deploy, for as long as such a row stays (30 days after its job ends), never
@@ -2314,12 +2317,18 @@ parts in storage, one `org_export_parts` row per part. The archive is
 format 4: the live tables under `data/`, then the organization's retained
 Deleted items under `deleted/`, each item marked complete or partial. Any
 active admin downloads a ready archive from the `/exports/` route through a
-two-minute link that `orgExport.claimDownload` answers; the route checks the
-admin on every request and before each part, holds a lease on the job row
-while it streams, and records an archive it served whole in the job's
-`served_at` and in `organizations.last_export_at`, which the browser
-export's `recordExport` also writes, so the deletion reminder counts a
-downloaded archive. A ready archive whose file is gone fails as incomplete. A ready archive stays
+two-minute link that `orgExport.claimDownload` answers. The route checks the
+admin on every request, takes a lease on the job row, and records an
+archive it served whole in the job's `served_at`. On a local backend the
+runtime read the archive into the response as fast as storage gave it,
+whatever the client took, so the lease and the checks before each part and
+of each part's size cover the backend's read, not the client's transfer,
+and `served_at` means the backend read the whole archive, not that the
+client received it. A served archive does not count as an export for the
+deletion reminder, which still goes out. Only the browser export's
+`recordExport` writes `organizations.last_export_at`, and a later app stage
+records a server export's download once the browser confirms it finished.
+A ready archive whose file is gone fails as incomplete. A ready archive stays
 four hours, then its expiry, scheduled when it became ready, erases the
 parts; a newer archive of the same organization ends it as soon as the
 newer one is ready, so an organization holds at most one collecting job and
@@ -2332,9 +2341,8 @@ progress, and `organization export sweep` (every 15 minutes) expires ready
 archives whose timer was lost, restarts erase legs that stopped and deletes
 history older than 30 days. A branch preview registers neither, so there
 only the steps, the erase legs and the scheduled expiry run. The tables start
-empty and need no backfill. `organizations.last_export_at` keeps its
-meaning, the last export an admin downloaded, never one that was only
-prepared.
+empty, need no backfill, and `organizations.last_export_at` keeps its
+meaning.
 
 A rollback past the release that added the job deploys, because Convex
 leaves the rows of tables the schema does not list alone, but the earlier
