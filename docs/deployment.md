@@ -304,7 +304,17 @@ file, which must go on an upload ticket: its `POST` must go to
 `/attachment-uploads/` on the API origin and answer 200, the window must list
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
-backend from before the release after v0.1.135. Before the archive, it
+backend from before the release after v0.1.135. Then it makes 26 tasks of
+its own and deletes them over REST, picks its project in **Settings →
+Projects → Deleted items**, searches its run tag with kind **Tasks**,
+selects the first page of 25 and the 26th on the next, and restores them as
+one action of two calls after the window says to keep Qivo open, then checks
+over REST that all 26 are live. It deletes a sub-project of its own in the
+app, finds it among the deleted projects without a scope, and deletes it for
+good once **Delete now** counts no earlier items (`ui/deleted-items`). The
+cleanup deletes the 26 tasks again with its project. Against a backend from
+before v0.1.131 that step fails.
+Before the archive, it
 checks that the top bar's Inbox badge shows what the deployment's unread
 summary (`inbox.summary`) says, has the Standard agent mention Nora in a
 comment on the run's fixture task in Alpha over REST, which the badge must
@@ -797,8 +807,10 @@ step.
 From the release that first ships `deletedItems.page`, every task moved to
 Deleted items stores its search text, its assignee and copies of its item's
 deletion time, deleter, project and parent on its `deleted_tasks` row, and
-the page's search and assignee filter read them. No app calls the page yet.
-Code from before that release lists `deleted_tasks` without these fields, so
+the page's search and assignee filter read them. No app of that release
+calls the page; the app reads it from the release after v0.1.141, whose
+paragraph below names v0.1.131, which holds it, as the backend that app
+needs. Code from before that release lists `deleted_tasks` without these fields, so
 it does not accept a row that holds them, and once any row does, a backend
 from before the release fails to deploy, as the description copies below do
 for `issue_descriptions` (see Recovery and compatibility). A restore of a
@@ -808,7 +820,7 @@ accept either. That holds from
 the first delete after the deploy for as long as Deleted items keeps such a
 row, so from that release on never return the backend to a commit before it;
 roll forward instead. Returning the app alone to an earlier release is safe,
-because no app calls the page. Rows stored before the release keep none of
+because no app of that release calls the page. Rows stored before the release keep none of
 the fields and need no step. The page finds their tasks by key, and by title
 as far as the older `search_title` index reaches, and says so (`legacy`)
 until they leave Deleted items. Convex builds the page's new indexes of
@@ -957,11 +969,11 @@ Delete now deletes with a project item. `deletedItems.page` takes `someone`,
 the deletes of people no longer in the organization, and its `via` takes a
 credential kind, which matches every delete through that kind of
 credential, so an admin's `via: 'mcp_tokens'` now lists the deletes
-through personal tokens where it listed none. No app calls any of them yet,
-so that release sets no rollback floor and needs no step, and returning the
-backend to a commit before it stays safe until an app reads them. The
-release whose app first calls them makes this release the backend's floor
-for that app, and its own paragraph here says so. The same release has
+through personal tokens where it listed none. No app of that release calls
+any of them, so it sets no rollback floor and needs no step. The app reads
+them from the release after v0.1.141, whose paragraph below names this
+release (v0.1.131) as the backend that app needs, already held by the floor
+of the release after v0.1.140. The same release has
 Deleted items judge an organization admin by what the admin's role reads,
 which changes no answer until the admin access split; after it an admin
 keeps every item with its metadata and Delete now, and sees no task title,
@@ -1337,6 +1349,29 @@ dry runs, and the floors since v0.1.97 forbid returning a backend below
 PR 299. This release's flow also reads a new read-only dry run on staging
 and on production before it ships, which must report no rows that differ,
 are missing or are extra.
+
+From the release after v0.1.141, **Settings → Projects → Deleted items**
+reads `deletedItems.page`, which v0.1.122 (`3a2da2ba`) first shipped, and
+`deletedItems.roles`, `people` and `purgeSummary` with the page's `someone`
+and kind-only `via`, which v0.1.131 (`c718c4e5`) first shipped, instead of
+`deletedItems.list` and `matches`, and its **Projects** picker reads
+`projectNav.page`, `children` and `search`, which v0.1.126 (`1228de4c`)
+already holds. So this app needs a backend from v0.1.131 on. Against a
+backend before v0.1.131 the page says it couldn't load deleted items, as
+`deletedItems.roles` fails there, also in a tab that was open when the
+backend went back, until the backend rolls forward. The floor of the
+release after v0.1.140 above, v0.1.141 (`e79e1db9`), already holds
+v0.1.131, so this release sets no new floor. From it on, as from that one,
+never return the backend to a commit before v0.1.141; roll forward instead.
+Returning the app alone to an earlier release is safe against a later
+backend, because that app reads `deletedItems.list`, `matches` and `item`,
+which stay through this release. A later release may remove `list` and
+`matches`, and adds them to the Instant Rollback list then. The app now
+sends a restore of more than 25 items of one organization, or of items in
+more than two organizations, as several `deletedItems.restore` calls one
+after another, and sends a deferred item again once its project is back,
+each with the arguments earlier apps sent. The release changes no server
+function, so it has no server change and no release step.
 
 ## Node.js version
 
