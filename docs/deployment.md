@@ -1359,12 +1359,15 @@ and kind-only `via`, which v0.1.131 (`c718c4e5`) first shipped, instead of
 `deletedItems.list` and `matches`, and its **Projects** picker reads
 `projectNav.page`, `children` and `search`, which v0.1.126 (`1228de4c`)
 already holds. So this app needs a backend from v0.1.131 on. Against a
-backend before v0.1.131 the page says it couldn't load deleted items, as
-`deletedItems.roles` fails there, also in a tab that was open when the
-backend went back, until the backend rolls forward. The floor of the
-release after v0.1.140 above, v0.1.141 (`e79e1db9`), already holds
-v0.1.131, so this release sets no new floor. From it on, as from that one,
-never return the backend to a commit before v0.1.141; roll forward instead.
+backend before v0.1.131 the page says it couldn't load deleted items when it
+opens, as `deletedItems.roles` fails there, also in a tab that was open when
+the backend went back. A page already showing keeps the roles it read, while
+its people lists say they couldn't load people and **Delete now** says it
+couldn't count the items deleted earlier, until the backend rolls forward.
+The floor of the release after v0.1.140 above, v0.1.141 (`e79e1db9`),
+already holds v0.1.131, so this release sets no new floor. From it on, as
+from that one, never return the backend to a commit before v0.1.141; roll
+forward instead.
 Returning the app alone to an earlier release is safe against a later
 backend, because that app reads `deletedItems.list`, `matches` and `item`,
 which stay through this release. A later release may remove `list` and
