@@ -1497,6 +1497,62 @@ describe('access', () => {
     expect((await restList(fx, me, 'followers', task.id)).rows).toEqual([])
   })
 
+  it('makes no REST update or create whose answer refuses where a check stops', async () => {
+    const fx = await setup()
+    const { me, task, end } = await shared(fx)
+    const writer = { callerId: me.id, access: 'write' as const, keyName: 'related test' }
+    const update = () =>
+      fx.t.mutation(internal.machine.rest.updateIssue, {
+        ...writer,
+        ref: task.id,
+        body: JSON.stringify({ title: 'Renamed by a machine' }),
+      })
+    // a subtask of the linked task in PCB, so the answer asks about its
+    // parent's sub-project (a subtask of the task itself would ask about FW
+    // alone, which no team shares)
+    const create = () =>
+      fx.t.mutation(internal.machine.rest.createIssue, {
+        ...writer,
+        body: JSON.stringify({
+          project: 'TBED',
+          sub_project: 'PCB',
+          title: 'Created by a machine',
+          parent: end.id,
+        }),
+      })
+    const stored = () =>
+      fx.t.run(async (ctx) => ({
+        title: (
+          await ctx.db
+            .query('issues')
+            .withIndex('by_uuid', (q) => q.eq('id', task.id))
+            .unique()
+        )?.title,
+        under: (
+          await ctx.db
+            .query('issues')
+            .withIndex('by_parent_archived', (q) => q.eq('parent_id', end.id))
+            .collect()
+        ).map((row) => row.title),
+      }))
+    // the update's answer asks about PCB for the subtask and the link end,
+    // the create's for its parent, each past the bounds as above
+    Object.assign(OWN_READS, { projectShares: 0, rows: 0, teamReads: 0 })
+    for (const write of [update, create]) {
+      const e = await expectRefusal(write(), 'rule')
+      expect(e.data).toMatchObject({ reason: ACCESS_UNCHECKED })
+    }
+    expect(await stored()).toEqual({ title: task.title, under: [] })
+    // within the bounds both are made, which the check above would see
+    Object.assign(OWN_READS, structuredClone(DEFAULTS.own))
+    expect((await update()).title).toBe('Renamed by a machine')
+    expect((await create()).parent_id).toBe(end.id)
+    expect(await stored()).toEqual({
+      title: 'Renamed by a machine',
+      under: ['Created by a machine'],
+    })
+  })
+
   it('stops an archived walk before a question about a project its room no longer holds', async () => {
     // a request of 100 index ranges, of which the walk keeps 16 back
     const fx = await setup(newT({ transactionLimits: { databaseQueries: 100 } }))
