@@ -1597,9 +1597,13 @@ day's run, and one more read and write of it for each tick that resumed the
 run (`restarts`). A run row is about 500 bytes.
 `database_queries` is Convex's own count, not the index ranges the code
 opens; a local backend counted 7 before a transaction's first read.
-Each sample written (`written`) is one row of about 230 bytes, and the rows
-retained are the samples written in the last 400 days less those expired
-(`expired`). Divide by `orgs` for a figure per organization and day.
+Each sample written (`written`) is one row of about 230 bytes. The rows
+retained are the samples the runs of the last 400 days wrote, which is
+`written` summed over reports of at most 62 days each that cover those
+days, or every `written` less every `expired` in reports kept since the job
+began. Deleting an organization removes its samples without a counter, so
+after a deletion both figures exceed the rows left. Divide by `orgs` for a
+figure per organization and day.
 `revisions` counts the writes to the organizations' totals since their
 previous samples, one for each attach, removal, move, rename or purge that
 changed them, each writing up to three totals rows. It counts nothing for
