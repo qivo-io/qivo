@@ -98,6 +98,30 @@
 //                        orglabels=60 reaches the eight batches the page
 //                        gathers at most) and error (every batch fails);
 //                        several joined by commas. Open it with role=admin
+//   labelpicker          states the task label picker's batches
+//                        (labels:picker) and the window's labels read by id
+//                        (labels:byIds) answer whatever the labels say, for
+//                        screenshots of states a seeded backend cannot
+//                        reach: stopped (an open batch stops after five
+//                        labels), small (batches of five, so orglabels=60
+//                        reaches Load more), error (every batch fails),
+//                        unchecked (a first batch's can_create null, so
+//                        the picker says why it offers no new label),
+//                        byids-error (every read by id fails) and
+//                        byids-loading (a read by id never answers);
+//                        several joined by commas
+//   unheldlabels (0)     leaves the N highest-numbered labels out of the
+//                        workspace's catalog part while labels:picker and
+//                        labels:byIds still answer them, so the task
+//                        window names those of its task by id
+//   mentions             states the editor's @ mention suggestions
+//                        (pickers:mentions) answer whatever the people say,
+//                        for screenshots of states a seeded backend cannot
+//                        reach: stopped (an open batch stops after four
+//                        people), small (batches of three), error (every
+//                        read fails) and not-ready (names not keyed yet);
+//                        several joined by commas. people=1000 reaches
+//                        Load more and the popup's cap of 64
 //   teamsettings         a state Settings › Teams, a team's page and its Add
 //                        member picker answer whatever the workspace says
 //                        (teams:settingsPage, get, members and addable,
@@ -352,7 +376,13 @@
 // access or read budget. So are Settings › Labels' batches
 // (labels:settingsPage), through the stand-in the jsdom tests use
 // (src/store/labelPagesStandIn.setup.ts), which answers an admin only and
-// reads no read budget. So are Settings › Teams' batches and a team's page
+// reads no read budget. So are the task label picker's batches
+// (labels:picker) and the window's labels read by id (labels:byIds),
+// through the same stand-ins, for any seat, with can_create true for an
+// admin and a user and false for a Viewer, and the editor's @ mention
+// suggestions (pickers:mentions), through
+// src/store/mentionStandIn.setup.ts, over every person of the organization
+// with the popup's match. So are Settings › Teams' batches and a team's page
 // with its Add member picker (teams:settingsPage, get, members and
 // addable), through src/store/teamSettingsStandIn.setup.ts, which keeps the
 // server's audiences and counts by team_counts' rule; the team writes
@@ -423,7 +453,12 @@ import {
   inboxItemStandIn,
   inboxSummaryStandIn,
 } from '../../src/store/inboxStandIn.setup'
-import { labelSettingsStandIn } from '../../src/store/labelPagesStandIn.setup'
+import {
+  labelPickerStandIn,
+  labelSettingsStandIn,
+  labelsByIdsStandIn,
+} from '../../src/store/labelPagesStandIn.setup'
+import { mentionStandIn } from '../../src/store/mentionStandIn.setup'
 import { milestoneStandIn } from '../../src/store/milestoneStandIn.setup'
 import { overviewStandIn } from '../../src/store/overviewStandIn.setup'
 import { ownerLoadsStandIn } from '../../src/store/ownerLoadsStandIn.setup'
@@ -544,6 +579,33 @@ const forcedLabels = (() => {
     else if (state === 'small') force.batch = 5
     else if (state === 'error') force.fail = true
     else if (state === 'uncounted') force.uncounted = true
+  }
+  return force
+})()
+/* The task label picker's forced states (the `labelpicker` parameter), as
+   the stand-ins' `force` takes them, and the two the server handles itself:
+   a read by id that fails or never answers. */
+const labelPickerStates = new Set((parameters.get('labelpicker') ?? '').split(',').filter(Boolean))
+const forcedLabelPicker = (() => {
+  const force = {}
+  if (labelPickerStates.has('stopped')) force.stop = 5
+  if (labelPickerStates.has('small')) force.batch = 5
+  if (labelPickerStates.has('error')) force.fail = true
+  if (labelPickerStates.has('unchecked')) force.canCreate = null
+  return force
+})()
+/* The labels left out of the workspace's catalog part (`unheldlabels`),
+   named once the labels exist. */
+const unheldLabelCount = Math.max(0, option('unheldlabels', 0))
+/* The mention suggestions' forced states (the `mentions` parameter), as
+   the stand-in's `force` takes them. */
+const forcedMentions = (() => {
+  const force = {}
+  for (const state of (parameters.get('mentions') ?? '').split(',').filter(Boolean)) {
+    if (state === 'stopped') force.stop = 4
+    else if (state === 'small') force.batch = 3
+    else if (state === 'error') force.fail = true
+    else if (state === 'not-ready') force.notReady = true
   }
   return force
 })()
@@ -916,6 +978,11 @@ const labels = Array.from({ length: orgLabelCount }, (_, n) => ({
   color: '#557733',
   created_at: now,
 }))
+/* The highest-numbered labels, which the catalog part leaves out
+   (`unheldlabels`) while the label reads answer them. */
+const unheldLabels = new Set(
+  labels.slice(labels.length - Math.min(unheldLabelCount, labels.length)).map((l) => l.id),
+)
 /* What the planted weekly milestones are called, by turns. */
 const MILESTONE_NAMES = ['Design review', 'Prototype build', 'Field test', 'Supplier audit']
 const milestoneWeeks = option('milestoneweeks', 0)
@@ -1288,14 +1355,16 @@ const unheld = new Set(
    projectsettings=unheld, which the workspace's parts then leave out. */
 const settingsUnheld = new Set()
 /** The workspace as its parts and forMe send it: without the unheld tasks
-    and the rows hung on them, and without the projects a Settings page read
-    under projectsettings=unheld, with their grants. */
+    and the rows hung on them, without the projects a Settings page read
+    under projectsettings=unheld, with their grants, and without the
+    labels `unheldlabels` leaves out of the catalogue. */
 function heldWorkspace() {
-  if (unheld.size === 0 && settingsUnheld.size === 0) return snapshot
+  if (unheld.size === 0 && settingsUnheld.size === 0 && unheldLabels.size === 0) return snapshot
   const held = (row) => !unheld.has(row.issue_id)
   const shown = (row) => !settingsUnheld.has(row.project_id)
   return {
     ...snapshot,
+    labels: snapshot.labels.filter((label) => !unheldLabels.has(label.id)),
     projects: snapshot.projects.filter((p) => !settingsUnheld.has(p.id)),
     access: snapshot.access.filter(shown),
     teamAccess: snapshot.teamAccess.filter(shown),
@@ -1810,6 +1879,18 @@ const read = (name, args = {}) => {
           : force,
       })
     }
+    // the task label picker and the window's labels by id, over every label
+    // the server holds, the ones the catalog part leaves out included
+    case 'labels:picker':
+      return labelPickerStandIn(snapshot, args, { force: forcedLabelPicker })
+    case 'labels:byIds':
+      if (labelPickerStates.has('byids-loading')) return NO_ANSWER
+      return labelsByIdsStandIn(snapshot, args, {
+        force: { fail: labelPickerStates.has('byids-error') },
+      })
+    // the editor's @ mention suggestions
+    case 'pickers:mentions':
+      return mentionStandIn(snapshot, args, { force: forcedMentions })
     case 'overview:summary':
     case 'overview:risk':
     case 'overview:attention':

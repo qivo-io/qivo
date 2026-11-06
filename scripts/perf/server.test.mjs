@@ -724,6 +724,76 @@ describe('the benchmark server', () => {
     expect((await page('')).answer.error).toContain('only organization admins')
   }, 60_000)
 
+  it("answers the label picker, the window's labels by id and the mention suggestions, with the states the page asks for", async () => {
+    /** What `name` answers with `args` on a workspace with page parameters
+        `params`, and the snapshot. */
+    const read = async (params, name, args = {}) => {
+      const { posted, send } = await server(`tasks=100&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'read', name, args: { org_id: snap.orgs[0].id, ...args } })
+      const answer = posted.find((m) => m.to === 'read')
+      if (!answer) return { snap, answer: 'none' }
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    // the picker, for any seat, with can_create by role
+    const sixty = await read('orglabels=60', 'labels:picker')
+    expect(sixty.answer.rows).toHaveLength(25)
+    expect(sixty.answer).toMatchObject({ can_create: true, stopped: false, exact: null })
+    expect((await read('role=viewer', 'labels:picker')).answer.can_create).toBe(false)
+    expect((await read('', 'labels:picker', { search: 'label c' })).answer.exact).toMatchObject({
+      name: 'Label C',
+    })
+    const stopped = await read('orglabels=60&labelpicker=stopped', 'labels:picker')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(5)
+    expect(
+      (await read('orglabels=60&labelpicker=small', 'labels:picker')).answer.rows,
+    ).toHaveLength(5)
+    expect((await read('labelpicker=unchecked', 'labels:picker')).answer.can_create).toBeNull()
+    expect((await read('labelpicker=error', 'labels:picker')).answer.error).toContain('fails')
+    // the catalogue leaves the unheld labels out; the picker and byIds answer them
+    const unheld = await read('unheldlabels=3', 'labels:picker')
+    const names = unheld.snap.labels.map((l) => l.name)
+    expect(names).toHaveLength(9)
+    expect(names).not.toContain('Label L')
+    expect(unheld.answer.rows.map((row) => row.name)).toContain('Label L')
+    const far = unheld.answer.rows.filter((row) => !names.includes(row.name)).map((row) => row.id)
+    expect(far).toHaveLength(3)
+    expect(unheld.snap.issueLabels.some((row) => far.includes(row.label_id))).toBe(true)
+    const byIds = await read('unheldlabels=3', 'labels:byIds', { ids: far })
+    expect(byIds.answer.rows.map((row) => row.name).sort()).toEqual([
+      'Label J',
+      'Label K',
+      'Label L',
+    ])
+    expect((await read('labelpicker=byids-error', 'labels:byIds', { ids: far })).answer.error).toBe(
+      'the label lookup fails, as the stand-in was asked',
+    )
+    expect((await read('labelpicker=byids-loading', 'labels:byIds', { ids: far })).answer).toBe(
+      'none',
+    )
+    // the mention suggestions over every person, 8 at a time
+    const people = await read('people=1000', 'pickers:mentions')
+    expect(people.answer).toMatchObject({ state: 'ready', stopped: false })
+    expect(people.answer.rows).toHaveLength(8)
+    expect(Object.keys(people.answer.rows[0]).sort()).toEqual([
+      'color',
+      'email',
+      'id',
+      'initials',
+      'name',
+    ])
+    const zoe = await read('', 'pickers:mentions', { search: 'zoë' })
+    expect(zoe.answer.rows.every((row) => row.name.startsWith('Zoë'))).toBe(true)
+    expect((await read('mentions=not-ready', 'pickers:mentions')).answer).toEqual({
+      state: 'not_ready',
+    })
+    expect((await read('mentions=stopped', 'pickers:mentions')).answer.stopped).toBe(true)
+    expect((await read('mentions=small', 'pickers:mentions')).answer.rows).toHaveLength(3)
+    expect((await read('mentions=error', 'pickers:mentions')).answer.error).toContain('fail')
+  }, 60_000)
+
   it("answers Settings › Teams and a team's page from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */
