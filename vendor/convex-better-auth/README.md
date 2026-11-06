@@ -67,6 +67,10 @@ TypeScript rules like any other code.
   single-row lookup that no index narrows reads until it finds a match or
   hits Convex's read limits.
 - Types replace `any`, and the code follows the repository's formatting.
+  Comments say how Qivo uses the code where upstream's would mislead. The
+  cross-domain plugin's says that its trusted origin feeds only Better
+  Auth's own origin checks, because Qivo's `/api/auth/` CORS reads
+  `appOrigins()` (`convex/lib/deployment.ts`).
 
 ## What was left out
 
