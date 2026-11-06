@@ -13,7 +13,8 @@
  *                    moves the label usage counts (model/labelCounts.ts),
  *                    and for a new task by numberNewTask
  *   column defaults  including the organization-wide upload cap
- *   last admin       an org may never lose its last admin
+ *   last admin       an org may never lose its last admin, counted over its
+ *                    admins alone (activeAdmins)
  *   last team        an org may never lose its last team
  *   slug narration   organizations_slug_narrate (0108)
  *   week labels      src/lib/dates.ts:114-141 (fmtDate/weekNumberOf), for
@@ -600,22 +601,47 @@ export async function leaveAllTeams(ctx: MutationCtx, profile: Doc<'profiles'>):
   }
 }
 
+/** The active admins of organization `orgId` other than `except`, counted
+ * up to `most`. It walks profiles.by_org_role_name's admin range, which
+ * holds every admin of the organization, keyed or not, and reads it raw,
+ * so it needs no name key and no readiness check. It reads the
+ * organization's admins only, at most every admin there, and stops at
+ * `most`. assertNotLastAdmin and Settings › Users' lock
+ * (model/peopleSettings.ts) count with it, so the page and the writes
+ * follow one rule. */
+export async function activeAdmins(
+  ctx: QueryCtx,
+  orgId: string,
+  most: number,
+  except?: string,
+): Promise<number> {
+  const admins = ctx.db
+    .query('profiles')
+    .withIndex('by_org_role_name', (q) => q.eq('org_id', orgId).eq('org_role', 'admin'))
+  let count = 0
+  for await (const p of admins) {
+    if (!p.active || p.id === except) continue
+    count++
+    if (count >= most) break
+  }
+  return count
+}
+
 /* profiles_last_admin_update / _delete (0099:286-323): the last admin who can
  * actually sign in and fix things stays. The FIRE condition lives in the
- * caller — demote/deactivate when (old admin AND old active) and NOT
- * (new admin AND new active); remove when old admin AND old active — this
- * counts OTHER active admins of the subject's org and refuses when none
- * remain. Two verbs, two verbatim sentences: 'cannot demote the last admin'
- * (profiles.update) and 'cannot remove the last admin' (profiles.remove). */
+ * caller (demote or deactivate when old admin AND old active and NOT new
+ * admin AND new active; remove when old admin AND old active), and this
+ * counts OTHER active admins of the subject's organization over its admins
+ * alone (activeAdmins) and refuses when none remain. Two verbs, two
+ * verbatim sentences: 'cannot demote the last admin' (profiles.update and
+ * profiles.deactivate, through updateProfile, and the operator's door) and
+ * 'cannot remove the last admin' (profiles.remove). */
 export async function assertNotLastAdmin(
   ctx: QueryCtx,
   subject: Doc<'profiles'>,
   action: 'demote' | 'remove',
 ): Promise<void> {
-  const seats = ctx.db.query('profiles').withIndex('by_org', (q) => q.eq('org_id', subject.org_id))
-  for await (const p of seats) {
-    if (p.org_role === 'admin' && p.active && p.id !== subject.id) return
-  }
+  if ((await activeAdmins(ctx, subject.org_id, 1, subject.id)) > 0) return
   throw rule(`cannot ${action} the last admin`)
 }
 

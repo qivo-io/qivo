@@ -5,7 +5,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { TooltipProvider } from '@/components/ui/tooltip'
 
 /* The line under the project invite form: what it says about the invitation
-   email to the seat the form just created, as invites.deliveries changes. */
+   email to the seat the form just created, as invites.deliveries changes. It
+   reads that one seat's row, and stops while the tab is hidden. */
 
 type Row = {
   profile_id: string
@@ -49,6 +50,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   host.remove()
+  Reflect.deleteProperty(document, 'visibilityState')
 })
 
 const seat = 'seat-1'
@@ -74,6 +76,28 @@ const push = (rows: Row[] | null) => act(() => network.push(rows))
 const said = () => host.querySelector('[data-invite-outcome]')?.firstChild?.textContent ?? null
 
 describe('the outcome of an invitation from the project form', () => {
+  it('reads its own seat alone, and nothing while the tab is hidden', async () => {
+    const stop = vi.fn()
+    network.onUpdate.mockImplementation((_ref, _args, next, fail) => {
+      network.push = (rows) => (rows === null ? fail(new Error('refused')) : next(rows))
+      return stop
+    })
+    await mount()
+    expect(network.onUpdate.mock.calls.at(-1)?.[1]).toEqual({
+      org_id: 'org-1',
+      profile_ids: [seat],
+    })
+    const watched = network.onUpdate.mock.calls.length
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(network.onUpdate.mock.calls.length).toBe(watched)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' })
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    // shown again, it reads once more
+    expect(network.onUpdate.mock.calls.length).toBe(watched + 1)
+  })
+
   it('says nothing until the deliveries load, then follows the send', async () => {
     await mount()
     expect(said()).toBeNull()

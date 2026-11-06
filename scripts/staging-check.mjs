@@ -80,7 +80,10 @@
  * through Add member's search (teams.get, members and addable), checks the
  * count over REST and on both pages, renames the team in place, removes
  * the agent and deletes the team from the list (ui/settings-teams). It
- * makes a sub-project of
+ * searches Settings › Users for its Standard agent by name, which the deployment answers alone
+ * with its key's fingerprint from a one-shot key read, opens its keys, and
+ * checks that Organization › General's creators line names and counts what
+ * GET /v1/users implies (ui/settings-users). It makes a sub-project of
  * its own under its second project with a task of the Standard agent's,
  * removes the agent's grant there in the app, whose removal window lists
  * the task from the deployment's preview (accessRemovals.preview), and
@@ -1468,8 +1471,34 @@ async function deleteTokenInUi(name) {
 async function openUsers() {
   await app.goto(`${cfg.appOrigin}/app/~/settings/org-users`, { waitUntil: 'domcontentloaded' })
   await app.locator('[data-add-user]').waitFor({ timeout: 45_000 })
-  // the roster has loaded once Atlas, the fixture's agent, is listed
-  await app.locator('[data-agent-keyline]').first().waitFor()
+  // the page holds the deployment's first page of people (people.settingsPage)
+  await app.locator('[data-org-users][data-users-state="ok"]').waitFor({ timeout: 45_000 })
+}
+
+/** Searches Settings › Users for `text` and waits for the page the
+ *  deployment answers for it, whose every row names the text, or whose end
+ *  says nothing matches. The search goes to the server once typing rests. */
+async function searchUsers(text) {
+  await app.locator('[data-users-search]').fill(text)
+  expect(
+    await until(() =>
+      evaluate(
+        app,
+        (want) => {
+          const list = document.querySelector('[data-org-users]')
+          if (list?.getAttribute('data-users-state') !== 'ok') return false
+          if (document.querySelector('[data-users-end="none"]')) return true
+          const rows = [...document.querySelectorAll('[data-org-users] [data-users-page-row]')]
+          return (
+            rows.length > 0 &&
+            rows.every((row) => (row.textContent ?? '').toLowerCase().includes(want))
+          )
+        },
+        text.toLowerCase(),
+      ),
+    ),
+    `a search of Users for ${text} did not settle`,
+  )
 }
 
 /** Adds an agent with the given role on the Users page and returns its id
@@ -1492,31 +1521,38 @@ async function createAgentInUi(name, role) {
   expect(/^qva_[0-9a-f]{20,}$/.test(secret), 'the revealed key has the qva_ shape')
   await fresh.getByRole('button', { name: 'Done', exact: true }).click()
   await fresh.waitFor({ state: 'detached' })
-  const row = app.locator('[data-user-row]').filter({ hasText: name })
+  // the page keeps a person added on this visit at the top, Added, until a
+  // page holds them, so the agent shows whichever page is on screen
+  const row = app.locator('[data-user-row]').filter({ hasText: name }).first()
   await row.waitFor()
   const id = await row.getAttribute('data-user-row')
   expect(id, 'the agent row has an id')
   return { id, secret }
 }
 
-/** Opens an agent's key panel on the Users page. */
-async function openAgentKeys(agentId) {
+/** Opens agent `agent`'s key panel on the Users page, after a search for
+ *  its name, since the first page need not hold it. `agent` holds its id
+ *  and name. */
+async function openAgentKeys(agent) {
   await openUsers()
-  const panel = app.locator(`[data-agent-keys="${agentId}"]`)
+  await searchUsers(agent.name)
+  const panel = app.locator(`[data-agent-keys="${agent.id}"]`)
   if (!(await panel.count())) {
     await app
-      .locator(`[data-user-row="${agentId}"]`)
+      .locator(`[data-user-row="${agent.id}"]`)
       .getByRole('button', { name: "Manage this agent's keys", exact: true })
       .click()
   }
   await panel.waitFor()
+  // the panel reads the agent's keys once when it opens (tokens.agentKeys)
+  await app.locator(`[data-agent-keys="${agent.id}"][data-agent-keys-state="ok"]`).waitFor()
   return panel
 }
 
-async function createAgentKeyInUi(agentId, keyName) {
-  const panel = await openAgentKeys(agentId)
+async function createAgentKeyInUi(agent, keyName) {
+  const panel = await openAgentKeys(agent)
   await panel.getByPlaceholder('Key name, e.g. CI runner').fill(keyName)
-  await panel.locator(`[data-new-agent-key="${agentId}"]`).click()
+  await panel.locator(`[data-new-agent-key="${agent.id}"]`).click()
   const fresh = panel.locator('[data-fresh-key]')
   await fresh.waitFor()
   const secret = keep(((await fresh.locator('span[translate="no"]').textContent()) ?? '').trim())
@@ -1536,8 +1572,8 @@ const keyRow = (panel, keyName) =>
     .filter({ has: app.locator('button') })
     .last()
 
-async function revokeAgentKeyInUi(agentId, keyName) {
-  const row = keyRow(await openAgentKeys(agentId), keyName)
+async function revokeAgentKeyInUi(agent, keyName) {
+  const row = keyRow(await openAgentKeys(agent), keyName)
   await confirmTwice(
     row.getByRole('button', { name: 'Revoke this key', exact: true }),
     row.getByRole('button', { name: /^Confirm revocation/ }),
@@ -1545,8 +1581,8 @@ async function revokeAgentKeyInUi(agentId, keyName) {
   await row.getByText('revoked', { exact: true }).waitFor()
 }
 
-async function deleteAgentKeyInUi(agentId, keyName) {
-  const panel = await openAgentKeys(agentId)
+async function deleteAgentKeyInUi(agent, keyName) {
+  const panel = await openAgentKeys(agent)
   const row = keyRow(panel, keyName)
   await confirmTwice(
     row.getByRole('button', { name: 'Delete this revoked key', exact: true }),
@@ -1555,19 +1591,27 @@ async function deleteAgentKeyInUi(agentId, keyName) {
   await panel.getByText(keyName).waitFor({ state: 'detached' })
 }
 
-async function removeAgentInUi(agentId) {
+async function removeAgentInUi(agent) {
   await openUsers()
-  const row = app.locator(`[data-user-row="${agentId}"]`)
+  await searchUsers(agent.name)
+  const row = app.locator(`[data-user-row="${agent.id}"]`)
   await confirmTwice(
     row.getByRole('button', { name: /^Remove from the organization/ }),
     row.getByRole('button', { name: 'Click again to confirm removal', exact: true }),
   )
   await row.waitFor({ state: 'detached' })
   // The removal paints at once and saves in the background; a reload before
-  // it is saved would drop it, so wait, then prove it with a cold reload.
+  // it is saved would drop it, so wait, then prove it with a cold reload and
+  // a search the deployment answers with no one.
   await settled()
   await openUsers()
+  await searchUsers(agent.name)
   eq(await row.count(), 0, 'agent rows after a reload')
+  eq(
+    ((await app.locator('[data-users-end]').textContent()) ?? '').trim(),
+    SETTINGS_USERS_EXPECTED.none,
+    "the search's end",
+  )
 }
 
 /** Deletes one OAuth connection on Connected apps. */
@@ -1686,9 +1730,27 @@ async function sweep(tag, label) {
   const taggedAgents = async () =>
     (
       await evaluate(app, () =>
-        window.PLANNER.users.filter((u) => u.isAgent).map((u) => ({ id: u.id, name: u.name })),
+        window.PLANNER.users
+          .filter((u) => u.isAgent)
+          .map((u) => ({ id: u.id, name: u.name, org: u.org })),
       )
     ).filter((a) => matches(a.name))
+  /** The keys of `agents`, read once in each agent's organization
+   *  (tokens.agentKeys); a failed read is a failure, never no keys. */
+  const agentKeysOf = async (agents) => {
+    const byOrg = new Map()
+    for (const a of agents) byOrg.set(a.org, [...(byOrg.get(a.org) ?? []), a.id])
+    const keys = []
+    for (const [org, ids] of byOrg) {
+      const answer = await evaluate(app, ([o, list]) => window.PLANNER.agentKeys(o, list), [
+        org,
+        ids,
+      ])
+      expect(answer, 'the app could not list agent keys')
+      for (const agent of answer.agents) keys.push(...agent.keys)
+    }
+    return keys
+  }
 
   // 1. credentials, through the app alone
   await step('OAuth connections', async () => {
@@ -1718,7 +1780,7 @@ async function sweep(tag, label) {
     const agents = await taggedAgents()
     for (const a of agents) agentIds.add(a.id)
     if (!agents.length) return
-    const keys = await appList('agent keys', () => window.PLANNER.listAgentKeys())
+    const keys = await agentKeysOf(agents)
     for (const key of keys.filter((k) => agentIds.has(k.agentId))) {
       const agent = agents.find((a) => a.id === key.agentId)
       await step(`agent key ${key.name} of ${agent.name}`, async () => {
@@ -1896,9 +1958,7 @@ async function sweep(tag, label) {
       await appList('OAuth connections', () => window.PLANNER.listOAuthConnections())
     ).filter((c) => matches(c.clientName))
     const agents = await taggedAgents()
-    const keys = (await appList('agent keys', () => window.PLANNER.listAgentKeys())).filter((k) =>
-      agentIds.has(k.agentId),
-    )
+    const keys = (await agentKeysOf(agents)).filter((k) => agentIds.has(k.agentId))
     const left = [
       [tokens.length, 'personal token'],
       [connections.length, 'OAuth connection'],
@@ -3765,7 +3825,13 @@ async function nameCapChecks() {
     )
     eq(out.value, null, 'the app answer')
     expect(showed(out.seen, LIMITS.keyName.refusal), 'the app logged no key name refusal')
-    const keys = (await evaluate(app, () => window.PLANNER.listAgentKeys())) ?? []
+    const answer = await evaluate(
+      app,
+      (agent) => window.PLANNER.agentKeys(window.PLANNER.homeOrg, [agent]),
+      run.agents.viewer.id,
+    )
+    expect(answer, 'the app could not list the agent keys')
+    const keys = answer.agents.flatMap((a) => a.keys)
     expect(!keys.some((k) => k.name === over), 'the over-long key exists')
   })
 }
@@ -5041,6 +5107,124 @@ async function settingsTeamsCheck() {
       'GET /v1/teams/{id} still answers the team',
     )
     return `found ${team.name} by search with ${TEAMS_EXPECTED.none}, added ${std.name} through Add member to ${TEAMS_EXPECTED.one}, renamed it, removed the agent and deleted it from the list`
+  })
+}
+
+/** The step that checks Settings › Users (settingsUsersCheck). */
+export const SETTINGS_USERS_STEP = 'ui/settings-users'
+
+/** What Settings › Users and the creators line say (settingsUsersCheck),
+ *  the end of a search that matches nobody and the creators line's
+ *  sentence after the names, as the pages word them. */
+export const SETTINGS_USERS_EXPECTED = {
+  none: 'No people match.',
+  creators: ' can create projects.',
+}
+
+/** The creators line's names for `creators` in name order, as
+ *  src/lib/projectCreators.ts creatorPhrase words them. That is up to three
+ *  in full, else the first two and the others counted exactly up to 100,
+ *  with the agents among them, and past 100 "and more than 100 others". */
+export function creatorsLine(creators) {
+  const name = (c) => (c.kind === 'agent' ? `${c.name} (agent)` : c.name)
+  if (creators.length <= 3)
+    return creators
+      .map(name)
+      .map((n, i) => (i === 0 ? n : `${i === creators.length - 1 ? ' and ' : ', '}${n}`))
+      .join('')
+  const counted = creators.slice(2, 102)
+  const agents = counted.filter((c) => c.kind === 'agent').length
+  const word = (n) => `${n} agent${n === 1 ? '' : 's'}`
+  const tail =
+    creators.length > 102
+      ? agents === 0
+        ? ` and more than ${counted.length} others`
+        : ` and more than ${counted.length} others, including at least ${word(agents)},`
+      : agents === 0
+        ? ` and ${counted.length} more`
+        : agents === counted.length
+          ? ` and ${word(agents)}`
+          : ` and ${counted.length} more, including ${word(agents)},`
+  return `${name(creators[0])}, ${name(creators[1])}${tail}`
+}
+
+/** The ways the creators line may start under Selected users, given the
+ *  active admins in name order. The line names the admins first, and REST
+ *  does not say which standard users were chosen, so only the admins it
+ *  names are known, the first two, joined as creatorPhrase joins them
+ *  whatever follows. One admin starts "A can create", "A and " or "A, ";
+ *  two start "A and B can create" or "A, B and "; more start "A, B and ". */
+export function selectedCreatorsStarts(admins) {
+  const [first, second] = admins.map((a) => a.name)
+  if (first === undefined) return []
+  if (second === undefined)
+    return [`${first}${SETTINGS_USERS_EXPECTED.creators}`, `${first} and `, `${first}, `]
+  return [
+    `${first}, ${second} and `,
+    ...(admins.length === 2 ? [`${first} and ${second}${SETTINGS_USERS_EXPECTED.creators}`] : []),
+  ]
+}
+
+/** Settings › Users and Organization › General on the deployment's reads
+ *  (people.settingsPage, tokens.agentKeys and orgs.projectCreators). As
+ *  Nora the page reaches its ok state, and a search for the run's Standard
+ *  agent by its full name lists it alone, with the fingerprint of its
+ *  named key, its only active key once the run revoked its Default key,
+ *  from the deployment's one-shot key read; its key panel lists that key.
+ *  Then Organization › General's creators line names and counts what GET
+ *  /v1/users implies for the fixture's setting, the active admins and,
+ *  under Standard users, every active standard user, each in name order,
+ *  agents marked. REST does not carry the per-user right, so under
+ *  Selected users the step checks the admins the line names, the first
+ *  two (selectedCreatorsStarts), and says so. It runs after
+ *  ui/settings-labels, while the run's agents hold their keys, and needs a
+ *  backend from the release whose app reads Settings › Users from the
+ *  server; against an older one the page cannot load and the step fails
+ *  waiting for it. */
+async function settingsUsersCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  const named = run.creds.stdKey
+  await check(SETTINGS_USERS_STEP, async () => {
+    await openUsers()
+    await searchUsers(std.name)
+    const rows = app.locator('[data-org-users] [data-users-page-row]')
+    eq(await rows.count(), 1, 'rows for a search of the run’s Standard agent')
+    eq(await rows.first().getAttribute('data-user-row'), std.id, 'the row found')
+    const fingerprint = `${named.secret.slice(0, 7)}...${named.secret.slice(-5)}`
+    const line = app.locator(`[data-agent-keyline="${std.id}"]`)
+    expect(
+      await until(async () => ((await line.textContent()) ?? '').trim() === fingerprint),
+      `its key line reads ${short(((await line.textContent()) ?? '').trim())}, not ${fingerprint}`,
+    )
+    const panel = await openAgentKeys(std)
+    await panel.getByText(named.name, { exact: true }).waitFor()
+
+    const setting = await evaluate(app, () => window.PLANNER.org.projectCreators)
+    const users = await restRows(w, '/users', 'users')
+    const admins = users.filter((u) => u.org_role === 'admin' && u.active)
+    const standard = users.filter((u) => u.org_role === 'user' && u.active)
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/org-general`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const summary = app.locator('[data-project-creators-summary]')
+    expect(
+      await until(async () => (await summary.getAttribute('data-creators-state')) === 'ok', 45_000),
+      `the creators line reads ${short(((await summary.textContent()) ?? '').trim())}`,
+    )
+    const text = ((await summary.textContent()) ?? '').trim()
+    if (setting === 'selected') {
+      const starts = selectedCreatorsStarts(admins)
+      expect(
+        starts.some((start) => text.startsWith(start)),
+        `the line ${short(text)} does not start with the admins it names, ${short(starts.join(' or '))}`,
+      )
+      return `found ${std.name} alone with its key ${fingerprint}, and under Selected users checked the admins the creators line names, which is all REST can check`
+    }
+    const creators = setting === 'admins' ? admins : [...admins, ...standard]
+    const want = `${creatorsLine(creators)}${SETTINGS_USERS_EXPECTED.creators}`
+    expect(text.startsWith(want), `the line reads ${short(text)}, not ${short(want)}`)
+    return `found ${std.name} alone with its key ${fingerprint}, and the creators line names ${creators.length} creators as GET /v1/users implies`
   })
 }
 
@@ -7035,7 +7219,7 @@ async function setup() {
     createAgentInUi(`${tag} Standard agent`, 'user'),
   )
   const named = await must('setup/ui/standard-agent-named-key', () =>
-    createAgentKeyInUi(std.id, `${tag} Standard key`),
+    createAgentKeyInUi({ id: std.id, name: `${tag} Standard agent` }, `${tag} Standard key`),
   )
   const viewer = await must('setup/ui/viewer-agent', () =>
     createAgentInUi(`${tag} Viewer agent`, 'viewer'),
@@ -7298,7 +7482,7 @@ async function main() {
   await uploadChecks()
   // revoke one agent key mid-run: it stops, the agent's other key does not
   await check('standard-default-key/ui/revoke', () =>
-    revokeAgentKeyInUi(run.agents.std.id, 'Default key'),
+    revokeAgentKeyInUi(run.agents.std, 'Default key'),
   )
   await checkRevoked(
     c.stdDefaultKey,
@@ -7337,6 +7521,8 @@ async function main() {
   // Settings › Teams and a team's page on the server's reads, with a team
   // of its own
   await settingsTeamsCheck()
+  // Settings › Users with the run's Standard agent, and the creators line
+  await settingsUsersCheck()
   // the removal window and its Reassign picker on a sub-project of its own
   await removalWindowCheck()
   // a project's Settings page on the server's reads, on a sub-project of its own
@@ -7413,13 +7599,13 @@ async function main() {
     'this personal access token has been revoked or has expired',
     'unknown, expired or revoked MCP token',
   )
-  await check('standard-key/ui/revoke', () => revokeAgentKeyInUi(run.agents.std.id, c.stdKey.name))
+  await check('standard-key/ui/revoke', () => revokeAgentKeyInUi(run.agents.std, c.stdKey.name))
   await checkRevoked(
     c.stdKey,
     'this agent key has been revoked',
     'unknown, revoked or deactivated agent key',
   )
-  await check('viewer-key/ui/revoke', () => revokeAgentKeyInUi(run.agents.viewer.id, 'Default key'))
+  await check('viewer-key/ui/revoke', () => revokeAgentKeyInUi(run.agents.viewer, 'Default key'))
   await checkRevoked(
     c.viewerKey,
     'this agent key has been revoked',
@@ -7452,17 +7638,17 @@ async function main() {
     restOutcome(await rest(c.writeToken, 'GET', '/me'), 401, 'unknown personal access token'),
   )
   await check('standard-agent/ui/delete-keys', async () => {
-    await deleteAgentKeyInUi(run.agents.std.id, 'Default key')
-    await deleteAgentKeyInUi(run.agents.std.id, c.stdKey.name)
+    await deleteAgentKeyInUi(run.agents.std, 'Default key')
+    await deleteAgentKeyInUi(run.agents.std, c.stdKey.name)
   })
   await refused('standard-key/deleted/rest', 'revoked', async () =>
     restOutcome(await rest(c.stdKey, 'GET', '/me'), 401, 'unknown agent key'),
   )
   await check('viewer-agent/ui/delete-key', () =>
-    deleteAgentKeyInUi(run.agents.viewer.id, 'Default key'),
+    deleteAgentKeyInUi(run.agents.viewer, 'Default key'),
   )
-  await check('standard-agent/ui/remove', () => removeAgentInUi(run.agents.std.id))
-  await check('viewer-agent/ui/remove', () => removeAgentInUi(run.agents.viewer.id))
+  await check('standard-agent/ui/remove', () => removeAgentInUi(run.agents.std))
+  await check('viewer-agent/ui/remove', () => removeAgentInUi(run.agents.viewer))
   run.completed = true
 }
 

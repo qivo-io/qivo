@@ -1,4 +1,9 @@
-/* Roster identity, invitation address, role and weekly capacity controls. */
+/* Roster identity, invitation address, role and weekly capacity controls.
+   Each control reads only the fields of `user` it shows, so Settings ›
+   Users can draw a row from the server's answer while the store does not
+   hold the person. Writes go through P.updateUser, which needs the store's
+   row, so such a row passes `waiting`, and the control shows the answer's
+   values, writes nothing and says "Loading this person…" (WAITING). */
 import React, { useEffect as useEffectS, useState as useStateS } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '@/components/ui/button'
@@ -13,18 +18,56 @@ import { fmtTime } from '../../lib/dates'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { cleanName, limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
 import {
+  INVITE_UNCHECKED,
   type InviteDelivery,
   type InviteDeliveryRow,
   inviteLabel,
   useInviteDeliveries,
+  useInviteRows,
   useRenderAt,
 } from '../../lib/inviteDeliveries'
 import { projectRightBox } from '../../lib/projectCreators'
 import { EMAIL, PERSON_NAME, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { UserPatch, UserVM } from '../../store/planner'
+import type { FieldSave, UserPatch, UserVM } from '../../store/planner'
 import { P } from '../../store/planner'
 import { DraftConflictLine } from './controls'
+
+/** What a control says while its row waits for the store's profile. */
+export const WAITING = 'Loading this person…'
+
+/** Tells `onUnsaved` whether a field holds its row, as that changes, and
+    false when the field goes, so a list can keep the row on screen while a
+    search or a page move would hide it. A field holds its row while its
+    draft is unsaved and while a save it sent waits for the server. The
+    store paints a sent save at once, which reads as saved, so without the
+    wait a refusal would find no field to bring the typed text and its
+    conflict back in. Answers `send`, which makes a save through `write`
+    with `save` and counts it until the server answers it (FieldSave
+    onSettled), or at once when the store refused it before sending. */
+function useHeldRow(
+  id: string,
+  unsaved: boolean,
+  onUnsaved: ((id: string, unsaved: boolean) => void) | undefined,
+) {
+  // the saves sent and not answered yet
+  const [sending, setSending] = useStateS(0)
+  const held = unsaved || sending > 0
+  useEffectS(() => onUnsaved?.(id, held), [id, held])
+  useEffectS(() => () => onUnsaved?.(id, false), [id])
+  return (save: FieldSave, write: (save: FieldSave) => boolean): boolean => {
+    let open = true
+    const settle = () => {
+      if (!open) return
+      open = false
+      setSending((n) => n - 1)
+    }
+    setSending((n) => n + 1)
+    const sent = write({ ...save, onSettled: settle })
+    if (!sent) settle()
+    return sent
+  }
+}
 
 // Roster renames commit on blur and affect this organization only. Account
 // name changes use the explicit-save field and update the login's other seats.
@@ -32,10 +75,23 @@ import { DraftConflictLine } from './controls'
 // a refused save keeps it, and a name changed elsewhere while it is typed
 // shows under it, and nothing saves until Use saved or Keep mine. A name over
 // the cap stays typed and invalid, with the cap's sentence, until it is
-// shortened.
-export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
-  const canEdit = P.isAdmin()
+// shortened. `waiting` shows the name read-only while the store does not
+// hold the person; `onUnsaved` hears whether the field holds its row, with
+// a typed name unsaved or a rename the server has not answered (useHeldRow).
+export function UserName({
+  user,
+  isSelf,
+  waiting = false,
+  onUnsaved,
+}: {
+  user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'orgRole'>
+  isSelf: boolean
+  waiting?: boolean
+  onUnsaved?: (id: string, unsaved: boolean) => void
+}) {
+  const canEdit = P.isAdmin() && !waiting
   const draft = useSavedDraft(`${user.id}:name`, user.name, PERSON_NAME, 'name', !canEdit)
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   const v = draft.text
   // Measure the proportional text so adjacent identity chips stay close.
   const mirror = React.useRef<HTMLSpanElement>(null)
@@ -57,7 +113,7 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
     }
     // a conflict waits for Use saved or Keep mine; a paused rename keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    P.updateUser(user.id, { name: next }, draft.save(next).as('name'))
+    send(draft.save(next).as('name'), (save) => P.updateUser(user.id, { name: next }, save))
     window.showToast?.(`${(user.isAgent ? 'Agent renamed to “' : 'Renamed to “') + next}”`)
   }
   const chips = (
@@ -82,12 +138,16 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
     </>
   )
   if (!canEdit) {
-    return (
-      <div className="[padding-left:6px] [font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]">
+    const name = (
+      <div
+        {...(waiting ? { 'data-user-waiting': '' } : {})}
+        className="[padding-left:6px] [font-size:var(--fs-base)] [font-weight:600] [overflow:hidden] [text-overflow:ellipsis] [white-space:nowrap]"
+      >
         <span data-user-name={user.id}>{user.name}</span>
         {chips}
       </div>
     )
+    return waiting ? <HoverTooltip content={WAITING}>{name}</HoverTooltip> : name
   }
   return (
     <div className="min-w-0">
@@ -144,18 +204,33 @@ export function UserName({ user, isSelf }: { user: UserVM; isSelf: boolean }) {
 
 /** A pending seat's marker. It says "invited", or that the invitation email
     did not go out, with the reason on hover (lib/inviteDeliveries), and
-    offers SendAgain when it can go again. */
-export function InviteLabel({ user, className }: { user: UserVM; className?: string }) {
-  const row = useInviteDeliveries(user.org)?.get(user.id)
+    offers SendAgain when it can go again. It takes the seat's row from the
+    page's reads of its pending rows (InviteRows), and says "invited"
+    until the seat's read answers or outside such a page, and that it
+    couldn't check while that read failed (INVITE_UNCHECKED). `waiting`
+    turns SendAgain off with WAITING while the store does not hold the
+    seat. */
+export function InviteLabel({
+  user,
+  className,
+  waiting = false,
+}: {
+  user: Pick<UserVM, 'id' | 'org'>
+  className?: string
+  waiting?: boolean
+}) {
+  const reads = useInviteRows()
+  const row = reads?.rows.get(user.id)
+  const unchecked = reads?.failed.has(user.id) === true
   const state = row?.state
   useRenderAt(row?.free_at ? Date.parse(row.free_at) : 0)
-  const label = inviteLabel(state, row?.free_at)
+  const label = unchecked ? INVITE_UNCHECKED : inviteLabel(state, row?.free_at)
   return (
     <>
       <HoverTooltip content={label.detail}>
         <span
           data-invite-for={user.id}
-          data-invite-state={state ?? 'none'}
+          data-invite-state={unchecked ? 'unchecked' : (state ?? 'none')}
           className={cn(
             '[font-weight:700] [font-size:var(--fs-xs)]',
             label.failed ? '[color:var(--danger)]' : '[color:var(--warn)]',
@@ -165,7 +240,7 @@ export function InviteLabel({ user, className }: { user: UserVM; className?: str
           {label.text}
         </span>
       </HoverTooltip>
-      <SendAgain orgId={user.org} seat={user.id} row={row} />
+      <SendAgain orgId={user.org} seat={user.id} row={row} waiting={waiting} />
     </>
   )
 }
@@ -175,41 +250,50 @@ export function InviteLabel({ user, className }: { user: UserVM; className?: str
     until the hour frees a send it reads "Send after HH:MM" and is disabled,
     and unlocks by itself. Nothing for any other seat. The server lets only
     an org admin or whoever caused the send use it (invites.sendAgain), the
-    people who see the seat's row. */
+    people who see the seat's row. `waiting` disables it with WAITING, for
+    a row the store does not hold. */
 function SendAgain({
   orgId,
   seat,
   row,
+  waiting = false,
 }: {
   orgId: string
   seat: string
   row: InviteDeliveryRow | undefined
+  waiting?: boolean
 }) {
   const state = row?.state
-  // a failed send waits for the hour too: it counts against the same cap
-  const waitUntil = row?.free_at ? Date.parse(row.free_at) : 0
-  const now = useRenderAt(waitUntil)
+  // a failed send waits for the hour too, since it counts against the same cap
+  const freeAt = row?.free_at ? Date.parse(row.free_at) : 0
+  const now = useRenderAt(freeAt)
   const [sending, setSending] = useStateS(false)
   if (state !== 'held' && state !== 'unsent') return null
-  const waiting = waitUntil > now
+  const capped = freeAt > now
   return (
     <HoverTooltip
       content={
-        waiting ? `Available after ${fmtTime(new Date(waitUntil))}` : 'Email the invitation again'
+        waiting
+          ? WAITING
+          : capped
+            ? `Available after ${fmtTime(new Date(freeAt))}`
+            : 'Email the invitation again'
       }
     >
       <Button
         type="button"
         variant="unstyled"
         data-invite-again={seat}
-        disabled={waiting || sending}
+        {...(waiting ? { 'data-user-waiting': '' } : {})}
+        disabled={waiting || capped || sending}
         onClick={() => {
+          if (waiting) return
           setSending(true)
           void P.sendInvitationAgain(orgId, seat).finally(() => setSending(false))
         }}
         className="[margin-left:6px] [flex-shrink:0] [font-size:var(--fs-xs)] [font-weight:600] [color:var(--primary)] [background:none] [border:none] [padding:0] [cursor:pointer] disabled:[color:var(--text-3)] disabled:[cursor:not-allowed]"
       >
-        {waiting ? `Send after ${fmtTime(new Date(waitUntil))}` : 'Send invitation'}
+        {capped ? `Send after ${fmtTime(new Date(freeAt))}` : 'Send invitation'}
       </Button>
     </HoverTooltip>
   )
@@ -221,7 +305,8 @@ const NO_ROW_WAIT_MS = 2 * 60_000
     created went out, live, in a full sentence. Only the send to `email`,
     compared in its stored form, counts, so a correction made elsewhere is
     not reported as this one. When the seat stops being pending (claimed or
-    cancelled), the last result seen stays. Key it by seat. */
+    cancelled), the last result seen stays. It reads that one seat's row, and
+    stops while the tab is hidden. Key it by seat. */
 export function InviteOutcome({
   orgId,
   seat,
@@ -231,8 +316,8 @@ export function InviteOutcome({
   seat: string
   email: string
 }) {
-  const rows = useInviteDeliveries(orgId)
-  const row = rows?.get(seat)
+  const reads = useInviteDeliveries(orgId, [seat])
+  const row = reads.rows.get(seat)
   // the row holds the address as stored (asciiEmail), so Anna@Bücher.DE
   // matches anna@xn--bcher-kva.de
   const current = row?.email === asciiEmail(email) ? row.state : undefined
@@ -251,7 +336,7 @@ export function InviteOutcome({
   const state =
     current ??
     (last !== 'sending' ? last : undefined) ??
-    (rows && !row && !last && !waited ? 'sending' : undefined)
+    (reads.answered.has(seat) && !row && !last && !waited ? 'sending' : undefined)
   const freeAt = current === 'held' ? row?.free_at : undefined
   useRenderAt(freeAt ? Date.parse(freeAt) : 0)
   if (state === undefined) return null
@@ -281,10 +366,22 @@ export function InviteOutcome({
 // invalid one says why (P.updateUser). The typed address is a draft against
 // the one it began from (lib/savedDraft.ts): the server's refusal keeps it,
 // and an address changed elsewhere while it is typed shows under it, and
-// nothing saves until Use saved or Keep mine.
-export function UserEmail({ user }: { user: UserVM }) {
-  const canEdit = !DEMO_MODE && P.isAdmin() && user.pending
+// nothing saves until Use saved or Keep mine. `waiting` shows the address
+// read-only while the store does not hold the person; `onUnsaved` hears
+// whether the field holds its row, with a typed address unsaved or a change
+// the server has not answered (useHeldRow).
+export function UserEmail({
+  user,
+  waiting = false,
+  onUnsaved,
+}: {
+  user: Pick<UserVM, 'id' | 'name' | 'email' | 'pending' | 'org'>
+  waiting?: boolean
+  onUnsaved?: (id: string, unsaved: boolean) => void
+}) {
+  const canEdit = !DEMO_MODE && P.isAdmin() && user.pending && !waiting
   const draft = useSavedDraft(`${user.id}:email`, user.email, EMAIL, 'email', !canEdit)
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   // Addresses are stored as asciiEmail writes them, so an edit that only
   // changes case or writes the domain in Unicode changes nothing.
   const commit = () => {
@@ -292,20 +389,29 @@ export function UserEmail({ user }: { user: UserVM }) {
     if (next === '' || draft.isSaved(next)) return draft.showSaved()
     // a conflict waits for Use saved or Keep mine; a paused change keeps it
     if (draft.conflict || P.refusePausedEdit()) return
-    if (!P.updateUser(user.id, { email: next }, draft.save(next).as('email'))) draft.discard()
+    const save = draft.save(next).as('email')
+    if (!send(save, (sent) => P.updateUser(user.id, { email: next }, sent))) draft.discard()
   }
   if (!canEdit) {
-    return (
+    const line = (
       <div
         data-user-email={user.id}
+        {...(waiting ? { 'data-user-waiting': '' } : {})}
         className="[display:flex] [align-items:baseline] [min-width:0] [padding-left:6px] [font-size:var(--fs-xs)] [color:var(--text-2)] [white-space:nowrap]"
       >
         <span className="[min-width:0] [overflow:hidden] [text-overflow:ellipsis]">
           {DEMO_MODE ? 'Fictional teammate' : user.email || 'no email address'}
         </span>
-        {user.pending && <InviteLabel user={user} className="[margin-left:6px] [flex-shrink:0]" />}
+        {user.pending && (
+          <InviteLabel
+            user={user}
+            waiting={waiting}
+            className="[margin-left:6px] [flex-shrink:0]"
+          />
+        )}
       </div>
     )
+    return waiting ? <HoverTooltip content={WAITING}>{line}</HoverTooltip> : line
   }
   return (
     <div className="min-w-0">
@@ -350,23 +456,24 @@ const HOURS = wholeNumber<number | null>(DEFAULT_PLANNABLE_HOURS)
 // they began from (lib/savedDraft.ts): hours changed elsewhere meanwhile show
 // under the field, and nothing saves until Use saved or Keep mine. Team
 // leaders may edit this field, not other profile data. `user` needs only the
-// fields the field shows, so a team's member list can pass a member the
-// store does not hold, read-only. The save goes through P.updateUser, which
-// needs the store's row, so pass `canEdit` only while the store holds it.
-// `onUnsaved` hears whether the field holds unsaved hours or a save the
-// server has not answered yet, so a list can keep the row on screen while a
-// search would hide it. The store paints a sent save at once, which reads
-// as saved, so without the wait a refusal would find no field to bring the
-// typed hours and the conflict back in.
+// fields the field shows, so a list can pass a person the store does not
+// hold, read-only. The save goes through P.updateUser, which needs the
+// store's row, so pass `canEdit` only while the store holds it, and
+// `waiting` while a row waits for it, which says so. `onUnsaved` hears
+// whether the field holds its row, with unsaved hours or a save the server
+// has not answered (useHeldRow), so a list can keep the row on screen while
+// a search would hide it.
 export function PlannableHoursInput({
   user,
   canEdit,
   width = 48,
+  waiting = false,
   onUnsaved,
 }: {
   user: Pick<UserVM, 'id' | 'name' | 'isAgent' | 'plannableHours'>
   canEdit: boolean
   width?: number
+  waiting?: boolean
   onUnsaved?: (id: string, unsaved: boolean) => void
 }) {
   const draft = useSavedDraft(
@@ -376,12 +483,7 @@ export function PlannableHoursInput({
     'plannable hours',
     !canEdit || user.isAgent,
   )
-  const id = user.id
-  // the saves sent and not answered yet
-  const [waiting, setWaiting] = useStateS(0)
-  const held = draft.unsaved || waiting > 0
-  useEffectS(() => onUnsaved?.(id, held), [id, held])
-  useEffectS(() => () => onUnsaved?.(id, false), [id])
+  const send = useHeldRow(user.id, draft.unsaved, onUnsaved)
   // a number refused on blur stays typed and marked until it changes, or
   // its draft goes (Use saved, Discard)
   const [refused, setRefused] = useStateS(false)
@@ -408,26 +510,20 @@ export function PlannableHoursInput({
     }
     // a conflict waits for Use saved or Keep mine; a pause keeps the hours
     if (draft.conflict || P.refusePausedEdit()) return
-    // the save waits until the server answers it, after a refusal has
-    // brought the draft back, or until the store refused it before sending
-    let open = true
-    const settle = () => {
-      if (!open) return
-      open = false
-      setWaiting((n) => n - 1)
-    }
-    setWaiting((n) => n + 1)
-    const save = draft.save(h).as('plannable_hours')
-    if (!P.updateUser(user.id, { plannableHours: h }, { ...save, onSettled: settle })) settle()
+    send(draft.save(h).as('plannable_hours'), (save) =>
+      P.updateUser(user.id, { plannableHours: h }, save),
+    )
     window.showToast?.(`${user.name} plans ${h} h per week`)
   }
   return (
     <div className="flex max-w-[180px] shrink-0 flex-col items-end">
       <HoverTooltip
         content={
-          canEdit
-            ? 'Weekly time for project work, excluding meetings and other commitments. Shared across projects.'
-            : 'Only an organization admin or one of this person’s team leaders can change these hours.'
+          waiting
+            ? WAITING
+            : canEdit
+              ? 'Weekly time for project work, excluding meetings and other commitments. Shared across projects.'
+              : 'Only an organization admin or one of this person’s team leaders can change these hours.'
         }
       >
         <label
@@ -473,12 +569,21 @@ export function PlannableHoursInput({
    and an active org admin a ticked one that cannot be changed
    (projectRightBox). The phone's user page shows a single row without the
    header, so there the checkbox carries a visible label and the empty cell
-   is left out. */
-export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: boolean }) {
+   is left out. `waiting` turns the checkbox off with WAITING while the
+   store does not hold the person. */
+export function ProjectRightCell({
+  user,
+  labelled,
+  waiting = false,
+}: {
+  user: Pick<UserVM, 'id' | 'name' | 'active' | 'orgRole' | 'canCreateProjects'>
+  labelled: boolean
+  waiting?: boolean
+}) {
   const box = projectRightBox(user, P.org.projectCreators)
   if (labelled && box === null) return null
   const inputId = `can-create-projects-${user.id}`
-  const locked = box === 'locked'
+  const locked = box === 'locked' || waiting
   return (
     <div
       data-project-right-cell={user.id}
@@ -497,11 +602,12 @@ export function ProjectRightCell({ user, labelled }: { user: UserVM; labelled: b
             type="checkbox"
             data-can-create-projects={user.id}
             aria-label={`${user.name} can create projects`}
-            checked={locked || user.canCreateProjects}
+            checked={box === 'locked' || user.canCreateProjects}
             disabled={locked}
+            title={waiting ? WAITING : undefined}
             onChange={(e) => {
               const on = e.target.checked
-              if (P.refusePausedEdit()) return
+              if (waiting || P.refusePausedEdit()) return
               P.updateUser(user.id, { canCreateProjects: on })
               window.showToast?.(
                 on
@@ -540,14 +646,18 @@ export function ProjectRightHeader() {
 }
 
 // Role and active status share one selector; deactivation removes access.
+// `waiting` shows the role, unchangeable, while the store does not hold the
+// person.
 export function UserRoleSelect({
   user,
   isSelf,
   lastAdmin,
+  waiting = false,
 }: {
-  user: UserVM
+  user: Pick<UserVM, 'id' | 'name' | 'active' | 'orgRole' | 'isAgent'>
   isSelf: boolean
   lastAdmin: boolean
+  waiting?: boolean
 }) {
   const value = !user.active
     ? 'inactive'
@@ -559,21 +669,24 @@ export function UserRoleSelect({
   // Agents can be viewers, but admin access would bypass project grants and
   // is refused by the server.
   const canBeAdmin = !user.isAgent
-  const title = lastAdmin
-    ? 'Add another organization admin before changing this role.'
-    : isSelf
-      ? 'You cannot deactivate your own account.'
-      : user.isAgent
-        ? 'Agents cannot be organization admins.'
-        : undefined
+  const title = waiting
+    ? WAITING
+    : lastAdmin
+      ? 'Add another organization admin before changing this role.'
+      : isSelf
+        ? 'You cannot deactivate your own account.'
+        : user.isAgent
+          ? 'Agents cannot be organization admins.'
+          : undefined
   return (
     <NativeSelect
       data-user-role={user.id}
       aria-label={`Organization role for ${user.name}`}
       value={value}
-      disabled={lastAdmin}
+      disabled={lastAdmin || waiting}
       title={title}
       onChange={(e) => {
+        if (lastAdmin || waiting) return
         const v = e.target.value as UserPatch['orgRole'] | 'inactive'
         // The viewer guard refuses someone who leads a project or a team;
         // the toast names what to hand over first. Reactivation contributes
@@ -581,7 +694,7 @@ export function UserRoleSelect({
         if (v === 'inactive') P.updateUser(user.id, { active: false })
         else P.updateUser(user.id, { orgRole: v, active: true })
       }}
-      style={{ opacity: lastAdmin ? 0.55 : 1 }}
+      style={{ opacity: lastAdmin || waiting ? 0.55 : 1 }}
       className="h-control-sm w-[132px] shrink-0 bg-surface-1 text-sm font-sans"
     >
       {canBeAdmin && <option value="admin">Org admin</option>}

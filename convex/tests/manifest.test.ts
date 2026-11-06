@@ -418,7 +418,7 @@ internal/windowKeysBackfill:audit mutation internal {"type":"object","value":{"i
 internal/windowKeysBackfill:page mutation internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"}]},"optional":false},"dry_run":{"fieldType":{"type":"boolean"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
 internal/windowKeysBackfill:remaining query internal {"type":"object","value":{"table":{"fieldType":{"type":"union","value":[{"type":"literal","value":"issues"},{"type":"literal","value":"projects"}]},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true}}}
 internal/windowKeysBackfill:run action internal {"type":"object","value":{"dry_run":{"fieldType":{"type":"boolean"},"optional":false}}}
-invites:deliveries query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+invites:deliveries query public {"type":"object","value":{"profile_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 invites:reserve mutation internal {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":false},"actor":{"fieldType":{"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":true},"email":{"fieldType":{"type":"string"},"optional":false}}},"optional":false},"app":{"fieldType":{"type":"boolean"},"optional":false},"by":{"fieldType":{"type":"string"},"optional":true}}}
 invites:sendAgain mutation public {"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 invites:sendFromApp action internal {"type":"object","value":{"invites":{"fieldType":{"type":"array","value":{"type":"object","value":{"profile_id":{"fieldType":{"type":"string"},"optional":false},"email":{"fieldType":{"type":"string"},"optional":true},"unless_sent":{"fieldType":{"type":"boolean"},"optional":true},"by":{"fieldType":{"type":"string"},"optional":true},"row":{"fieldType":{"type":"id","tableName":"platform_audit_log"},"optional":true}}}},"optional":false},"resend":{"fieldType":{"type":"boolean"},"optional":true}}}
@@ -629,6 +629,7 @@ orgRemovals:state query public {"type":"object","value":{"org_id":{"fieldType":{
 orgRemovals:step mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgRemovals:sweep mutation internal {"type":"object","value":{"lane":{"fieldType":{"type":"union","value":[{"type":"literal","value":"removals"},{"type":"literal","value":"due"},{"type":"literal","value":"unset"}]},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true},"phase":{"fieldType":{"type":"string"},"optional":true}}}
 orgRemovals:verifyNoCheckout action internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+orgs:projectCreators query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgs:setSlug mutation public {"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"slug":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 orgs:update mutation public {"type":"object","value":{"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"date_format":{"fieldType":{"type":"union","value":[{"type":"literal","value":"YYYY-MM-DD"},{"type":"literal","value":"DD/MM/YYYY"},{"type":"literal","value":"MM/DD/YYYY"},{"type":"literal","value":"DD.MM.YYYY"},{"type":"literal","value":"D MMM YYYY"},{"type":"literal","value":"MMM D, YYYY"}]},"optional":true},"week_start":{"fieldType":{"type":"number"},"optional":true},"week_one_rule":{"fieldType":{"type":"union","value":[{"type":"literal","value":"jan1"},{"type":"literal","value":"first4day"},{"type":"literal","value":"firstfull"}]},"optional":true},"default_plannable_hours":{"fieldType":{"type":"number"},"optional":true},"max_attachment_mb":{"fieldType":{"type":"number"},"optional":true},"project_creators":{"fieldType":{"type":"union","value":[{"type":"literal","value":"admins"},{"type":"literal","value":"users"},{"type":"literal","value":"selected"}]},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"date_format":{"fieldType":{"type":"string"},"optional":true},"week_start":{"fieldType":{"type":"number"},"optional":true},"week_one_rule":{"fieldType":{"type":"string"},"optional":true},"default_plannable_hours":{"fieldType":{"type":"number"},"optional":true},"max_attachment_mb":{"fieldType":{"type":"union","value":[{"type":"number"},{"type":"null"}]},"optional":true},"project_creators":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":true},"slug":{"fieldType":{"type":"string"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 overview:attention query public {"type":"object","value":{"scope":{"fieldType":{"type":"union","value":[{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"project"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false},"project_id":{"fieldType":{"type":"string"},"optional":false}}},{"type":"object","value":{"kind":{"fieldType":{"type":"literal","value":"mine"},"optional":false}}}]},"optional":false},"day":{"fieldType":{"type":"string"},"optional":false},"week":{"fieldType":{"type":"string"},"optional":false},"week_starts":{"fieldType":{"type":"array","value":{"type":"number"}},"optional":false},"week_end":{"fieldType":{"type":"number"},"optional":false},"cursor":{"fieldType":{"type":"string"},"optional":true},"end":{"fieldType":{"type":"string"},"optional":true}}}
@@ -671,6 +672,9 @@ panoramaImages:summary query public {"type":"object","value":{}}
 panoramaUploads:addFile action public {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"location":{"fieldType":{"type":"string"},"optional":true},"creator":{"fieldType":{"type":"string"},"optional":false},"rights_confirmed":{"fieldType":{"type":"boolean"},"optional":false},"source_url":{"fieldType":{"type":"string"},"optional":true}}}
 panoramaUploads:retainFile mutation internal {"type":"object","value":{"storage_id":{"fieldType":{"type":"id","tableName":"_storage"},"optional":false},"title":{"fieldType":{"type":"string"},"optional":false},"location":{"fieldType":{"type":"string"},"optional":true},"creator":{"fieldType":{"type":"string"},"optional":false},"rights_confirmed":{"fieldType":{"type":"boolean"},"optional":false},"source_url":{"fieldType":{"type":"string"},"optional":true},"width":{"fieldType":{"type":"number"},"optional":false},"height":{"fieldType":{"type":"number"},"optional":false},"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
 panoramaUploads:uploadUrl mutation public {"type":"object","value":{}}
+people:byIds query public {"type":"object","value":{"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+people:get query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+people:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:canOwn query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"},{"type":"literal","value":"recipient"}]},"optional":false},"ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:syncRecipients query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 pickers:taskOwners query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"field":{"fieldType":{"type":"union","value":[{"type":"literal","value":"assignee"},{"type":"literal","value":"reviewer"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -743,6 +747,7 @@ teams:removeMember mutation public {"type":"object","value":{"team_id":{"fieldTy
 teams:setLeader mutation public {"type":"object","value":{"team_id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"is_leader":{"fieldType":{"type":"boolean"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:settingsPage query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"string"},"optional":true},"through":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 teams:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"patch":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":false},"expected":{"fieldType":{"type":"object","value":{"name":{"fieldType":{"type":"string"},"optional":true},"track_delay_default":{"fieldType":{"type":"boolean"},"optional":true}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+tokens:agentKeys query public {"type":"object","value":{"agent_ids":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:createAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"agent_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"key_prefix":{"fieldType":{"type":"string"},"optional":false},"key_hash":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:createMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"token_prefix":{"fieldType":{"type":"string"},"optional":false},"token_hash":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"expires_at":{"fieldType":{"type":"string"},"optional":true}}}
 tokens:deleteAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -1122,7 +1127,9 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     state: 'orgQuery',
     recordExport: 'authedMutation',
   },
-  orgs: { update: 'adminMutation', setSlug: 'adminMutation' },
+  // projectCreators answers Organization › General's creators line, for an
+  // org admin (checked in the handler).
+  orgs: { update: 'adminMutation', setSlug: 'adminMutation', projectCreators: 'orgQuery' },
   // The Overview's summary, delays, lists and health table: any signed-in
   // login reads a project scope with its seat in that organization, or My
   // view across its seats, under ordinary access, and a scope it does not
@@ -1166,6 +1173,10 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     mintCustomUrl: 'authedQuery',
   },
   prefs: { get: 'authedQuery', save: 'authedMutation' },
+  // Settings › Users' page and one person by id, for an org admin (checked
+  // in the handlers), and the person rows of up to 100 ids for any active
+  // seat, which the roster cache and the pickers will read.
+  people: { settingsPage: 'orgQuery', get: 'orgQuery', byIds: 'orgQuery' },
   // Deactivate and remove stay open to org admins during a billing pause.
   profiles: {
     create: 'adminMutation',
@@ -1292,8 +1303,12 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
     addable: 'orgQuery',
   },
   // Revoking and deleting an agent key stay open to org admins during a
-  // billing pause; creating one does not.
+  // billing pause; creating one does not. agentKeys reads the keys of up to
+  // 25 agents of one organization for an org admin (checked in the
+  // handler), for Settings › Users; listAgentKeys is deprecated for one
+  // release.
   tokens: {
+    agentKeys: 'orgQuery',
     listAgentKeys: 'authedQuery',
     createAgentKey: 'orgMutation',
     revokeAgentKey: 'accessRemovalMutation',
@@ -1317,7 +1332,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 247
+const PUBLIC_COUNT = 252
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

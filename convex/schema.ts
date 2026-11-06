@@ -2813,7 +2813,10 @@ export default defineSchema({
     .index('by_created_by', ['created_by']) // removeProfile's SET NULL
     // API access: the organization's keys, or one agent's, in name order
     .index('by_org_name', ['org_id', 'name_key', 'id'])
-    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
+    .index('by_profile_name', ['profile_id', 'name_key', 'id'])
+    // Settings › Users: one agent's newest keys, by created_at, the id
+    // breaking ties (tokens.ts agentKeys)
+    .index('by_profile_created', ['profile_id', 'created_at', 'id']),
 
   mcp_tokens: defineTable({
     id: v.string(),

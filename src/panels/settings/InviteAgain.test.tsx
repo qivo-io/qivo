@@ -29,10 +29,23 @@ vi.mock('../../lib/auth', () => ({
 // the component's module graph is large; load it once, outside the tests' time limit
 let InviteLabel: typeof import('./UserControls').InviteLabel
 let P: typeof import('../../store/planner').P
+let invites: typeof import('../../lib/inviteDeliveries')
 beforeAll(async () => {
   InviteLabel = (await import('./UserControls')).InviteLabel
   P = (await import('../../store/planner')).P
+  invites = await import('../../lib/inviteDeliveries')
 }, 60_000)
+
+/* A pending row as the Users page shows it. The page reads its pending
+   seats once, and InviteLabel takes the seat's row from it (InviteRows). */
+function Label({ user }: { user: UserVM }) {
+  const rows = invites.useInviteDeliveries(user.org, [user.id])
+  return (
+    <invites.InviteRows.Provider value={rows}>
+      <InviteLabel user={user} />
+    </invites.InviteRows.Provider>
+  )
+}
 
 let root: Root
 let host: HTMLDivElement
@@ -63,7 +76,7 @@ describe('a held invitation', () => {
     act(() =>
       root.render(
         <TooltipProvider>
-          <InviteLabel user={user} />
+          <Label user={user} />
         </TooltipProvider>,
       ),
     )
@@ -95,7 +108,7 @@ describe('a held invitation', () => {
     act(() =>
       root.render(
         <TooltipProvider>
-          <InviteLabel user={user} />
+          <Label user={user} />
         </TooltipProvider>,
       ),
     )
@@ -118,7 +131,7 @@ describe('a held invitation', () => {
     act(() =>
       root.render(
         <TooltipProvider>
-          <InviteLabel user={user} />
+          <Label user={user} />
         </TooltipProvider>,
       ),
     )

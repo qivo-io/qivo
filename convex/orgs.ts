@@ -5,14 +5,19 @@
  * NOTHING (the old client logged none of them and no SQL trigger did either).
  * A same-value slug write is a silent no-op: the 0108 probe proves an
  * unchanged address must not narrate, so the handler returns before writing.
- * Billing owns the subscription independently of organization settings. */
+ * Billing owns the subscription independently of organization settings.
+ *
+ * projectCreators answers Organization › General's line under "Who can
+ * create new projects?" from the server, for an organization admin, with
+ * two creators named and the rest counted exactly up to 100, under the
+ * saved setting (model/peopleSettings.ts projectCreatorsOf). */
 
 import { v } from 'convex/values'
 import { literals } from 'convex-helpers/validators'
 import type { Doc } from './_generated/dataModel'
 import { byId } from './lib/db'
 import { vProjectCreators } from './lib/enums'
-import { adminMutation, badRequest, notFound, require, rule } from './lib/functions'
+import { adminMutation, badRequest, notFound, orgQuery, require, rule } from './lib/functions'
 import { limitedWhole } from './lib/limitRules'
 import { LIMITS } from './lib/limits'
 import { assertWeekStartFits } from './model/milestones'
@@ -23,6 +28,7 @@ import {
   narrateSlugChange,
   vOrgExpected,
 } from './model/orgs'
+import { type ProjectCreatorsAnswer, projectCreatorsOf } from './model/peopleSettings'
 
 /* organizations_date_format_check (0020) / organizations_week_one_rule_check
  * (0039), member-for-member. */
@@ -35,6 +41,24 @@ const vDateFormat = literals(
   'MMM D, YYYY',
 )
 const vWeekOneRule = literals('jan1', 'first4day', 'firstfull')
+
+/* -------------------------------------------------------- projectCreators
+ * Organization › General's creators line, for organization admins only. */
+
+/** Who can create top-level projects in the organization under its saved
+ * setting, by projects.create's rule. With three or fewer, every one is in
+ * `creators`; with more, the first two, admins first and then standard
+ * users, each in name key order, `others` the rest counted up to 100,
+ * `more` whether one past those exists and `agents` the agents among the
+ * counted others. `setting` is the setting it counted under, so a line
+ * never names one setting's creators under another's sentence. It answers
+ * `unavailable` when the read budget ended its walk, never a short count
+ * (model/peopleSettings.ts projectCreatorsOf). Only an organization admin
+ * reads it. */
+export const projectCreators = orgQuery({
+  args: {},
+  handler: (ctx): Promise<ProjectCreatorsAnswer> => projectCreatorsOf(ctx, ctx.me),
+})
 
 /* ----------------------------------------------------------------- update
  * P.setOrg — organization settings folded into one patch (they had no

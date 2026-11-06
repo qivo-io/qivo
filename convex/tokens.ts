@@ -25,11 +25,19 @@
  *
  * last_used_at is written only by phase 8's machine auth; revoked keys stay
  * listed. A key row whose plaintext is gone is still a real row (its holder
- * can still revoke it by fingerprint); never "clean up" such rows. */
+ * can still revoke it by fingerprint); never "clean up" such rows.
+ *
+ * Settings › Users reads the keys of the agents it shows with agentKeys,
+ * once for the key lines and once for a panel that opens, and again after
+ * a key write and when the tab shows again, never as a subscription.
+ * Machine auth stamps last_used_at on every call, so a live read of key
+ * rows would run again on each API call of each agent on screen.
+ * listAgentKeys, which the app read before, stays for one release,
+ * deprecated. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
-import type { MutationCtx } from './_generated/server'
+import type { MutationCtx, QueryCtx } from './_generated/server'
 import { cleanTokenExpiry } from './lib/access'
 import { assertNewRowId, byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
@@ -42,10 +50,11 @@ import {
   forbidden,
   notFound,
   orgMutation,
+  orgQuery,
   rule,
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
-import { LIMITS } from './lib/limits'
+import { LIMITS, LIST_BATCH } from './lib/limits'
 import { named } from './lib/nameKey'
 import { logActivity } from './model/activity'
 
@@ -129,8 +138,80 @@ async function myAgentKey(
   return { key, agent }
 }
 
-/* P.listAgentKeys — one flat fetch for the whole page (grouped by agentId
- * client-side), across every org where the caller is an admin. */
+/** How many keys of one agent agentKeys answers, the newest first, up to
+ * `most`, with `more` when the agent holds another. Organization › API
+ * access lists every key. Tests lower it. */
+export const AGENT_KEYS = { most: 50 }
+
+/** One agent's keys as agentKeys answers them, in pubKey's shape, revoked
+ * ones included, newest first, with `more` when a key past AGENT_KEYS.most
+ * exists. */
+export type AgentKeysRow = { agent_id: string; keys: ReturnType<typeof pubKey>[]; more: boolean }
+
+/**
+ * The keys of the agents of the caller's organization among `agent_ids`,
+ * for Settings › Users' key lines and an agent's key panel, read once and
+ * never subscribed to. Refused in the demo, as the other key doors are, and
+ * for anyone but an organization admin before any read; then an empty list
+ * and more than LIST_BATCH (25) ids, counted raw, are refused as bad
+ * requests. Each distinct id that names an agent of the organization gets
+ * its AGENT_KEYS.most newest keys by created_at, read in that order
+ * (agent_keys by_profile_created, the id breaking ties), each without its
+ * hash, and `more` when the agent holds another. An id that names no agent
+ * of the organization (unknown, a person, or another organization's agent)
+ * is left out, a definite answer, as myAgentKey treats such a target
+ * alike. It reads one organization, where listAgentKeys read every
+ * organization the caller administers, at most 25 lookups and 25 ranges
+ * of 51 keys.
+ */
+export const agentKeys = orgQuery({
+  args: { agent_ids: v.array(v.string()) },
+  handler: (ctx, { agent_ids }): Promise<{ agents: AgentKeysRow[] }> =>
+    agentKeysOf(ctx, ctx.me, agent_ids),
+})
+
+/** agentKeys for `me`, an active seat, on the rules in its docstring. */
+export async function agentKeysOf(
+  ctx: QueryCtx,
+  me: Doc<'profiles'>,
+  agentIds: readonly string[],
+): Promise<{ agents: AgentKeysRow[] }> {
+  refuseDemoFeature()
+  if (me.org_role !== 'admin') throw forbidden('admin only')
+  if (agentIds.length === 0) throw badRequest('agent_ids must name at least one agent')
+  if (agentIds.length > LIST_BATCH)
+    throw badRequest(`agent_ids must name at most ${LIST_BATCH} agents`)
+  const agents: AgentKeysRow[] = []
+  for (const id of new Set(agentIds)) {
+    const agent = await byId(ctx, 'profiles', id)
+    if (agent === null || agent.org_id !== me.org_id || agent.kind !== 'agent') continue
+    // in created_at order before the bound, since rows ported from 0100
+    // may carry a created_at that differs from the order they were stored in
+    const rows = await ctx.db
+      .query('agent_keys')
+      .withIndex('by_profile_created', (q) => q.eq('profile_id', agent.id))
+      .order('desc')
+      .take(AGENT_KEYS.most + 1)
+    const keys = rows.map(pubKey)
+    agents.push({
+      agent_id: agent.id,
+      keys: keys.slice(0, AGENT_KEYS.most),
+      more: keys.length > AGENT_KEYS.most,
+    })
+  }
+  return { agents }
+}
+
+/**
+ * @deprecated The app reads tokens.agentKeys since the release after
+ * v0.1.146. This query stays, with its arguments and its answer, through
+ * that release, so tabs and desktop windows loaded before it still list
+ * keys on Settings › Users, and a later release removes it and adds it to
+ * the Instant Rollback list in docs/deployment.md.
+ *
+ * Before then P.listAgentKeys read it in one flat fetch for the whole
+ * page (grouped by agentId client-side), across every org where the caller
+ * is an admin. */
 export const listAgentKeys = authedQuery({
   args: {},
   handler: async (ctx) => {

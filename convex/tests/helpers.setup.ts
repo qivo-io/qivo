@@ -25,6 +25,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
 import authSchema from '../betterAuth/schema'
 import type { ReapCounts } from '../files'
+import { orgProjects, projectLevelsForOrg } from '../lib/access'
 import type { RestIssueJson } from '../lib/core'
 import { newWindowKey } from '../lib/db'
 import type { OrgRole } from '../lib/enums'
@@ -609,6 +610,19 @@ export async function withOrg(t: T) {
 }
 
 export type OrgFixture = Awaited<ReturnType<typeof withOrg>>
+
+/* How many live sub-projects of its organization `profile` reads, by the
+ * access model's own levels (lib/access.ts projectLevelsForOrg), grants on
+ * a parent included, for a case that holds one person at a figure of the
+ * design size. */
+export const readableLiveSubProjects = (t: T, profile: Doc<'profiles'>): Promise<number> =>
+  t.run(async (ctx) => {
+    const projects = await orgProjects(ctx, profile.org_id)
+    const { levelOf } = await projectLevelsForOrg(ctx, profile, projects)
+    return projects.filter(
+      (p) => p.parent_id !== undefined && p.archived_at === undefined && levelOf(p) !== null,
+    ).length
+  })
 
 /* A third sub-project of TBED that `profile` cannot see. Their grant on TBED
  * moves onto FW and PCB, which it reached before. A subtask stays in its

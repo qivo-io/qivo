@@ -252,8 +252,17 @@ adds the Standard agent on the team's page through **Add member**
 both pages that the team has **1 member**, renames it in place, removes the
 agent and deletes the team from the list (`ui/settings-teams`). Against a
 backend from before the release whose app reads the team pages from the
-server that step fails. It then makes a sub-project of its own under its
-second project, with
+server that step fails. It then searches **Settings → Users** for its
+Standard agent by its
+full name, which the deployment's page (`people.settingsPage`) lists alone
+with the fingerprint of its named key from a one-shot key read
+(`tokens.agentKeys`), opens its keys, and checks that **Organization →
+General**'s creators line (`orgs.projectCreators`) names and counts what
+`GET /v1/users` implies for the fixture's setting; under **Selected users**
+REST cannot tell who was chosen, so it checks the admins the line names
+(`ui/settings-users`). Against a backend from before the release whose app
+reads Users from the server that step fails, as the page cannot load. It
+then makes a sub-project of its own under its second project, with
 a User grant and a To Do task for the Standard agent, removes the agent's
 grant in that sub-project's settings, waits for the removal window to list
 the task from the deployment's preview (`accessRemovals.preview`), chooses
@@ -1263,6 +1272,30 @@ where the earlier reader took the higher level for an archived task or
 past 16 projects, as a member's task history already does. This sets no
 floor for the app, which calls none of them, needs no step and has no
 backfill.
+
+From the release after v0.1.146, **Settings → Organization → Users** lists
+its people, agents and guests from `people.settingsPage`, 25 a page with a
+search, reads one person for the phone's page from `people.get`, reads an
+agent's keys and the key lines from `tokens.agentKeys` once, never
+subscribed, and its invitation labels from `invites.deliveries` with
+`profile_ids`, and Organization › General's creators line reads
+`orgs.projectCreators`. The release also adds `people.byIds`, which no page
+reads yet, and the last-admin check reads only the organization's admins,
+with the same sentences. That release first ships these reads, so it is the
+backend's floor for its app, a new floor the floors above do not hold. An
+app from it, against a backend before it, says on Users, on a user's page
+and on the creators line that it could not load them, also in a tab that
+was open when the backend went back, until the backend rolls forward. From
+that release on, never return the backend to a commit before it; roll
+forward instead. Returning the app alone to an earlier release is safe,
+because that app reads the workspace's roster and `tokens.listAgentKeys`,
+which this release keeps, deprecated, for it, and `invites.deliveries`
+without `profile_ids` answers as before. A later release removes
+`tokens.listAgentKeys` and adds it to the Instant Rollback list above.
+The release adds the index `agent_keys.by_profile_created`, through which
+`tokens.agentKeys` reads an agent's newest keys by `created_at`, and which
+Convex builds at deploy with no backfill. There is no other schema change
+and no release step.
 
 ## Node.js version
 

@@ -2075,7 +2075,7 @@ try {
   )
 
   await pageA.goto(`${BASE}/app/~/settings/org-users`, { waitUntil: 'domcontentloaded' })
-  await pageA.waitForSelector('[data-agent-keyline]', { timeout: 30000 })
+  await pageA.waitForSelector('[data-org-users][data-users-state="ok"]', { timeout: 30000 })
   const newPersonName = pageA.getByRole('textbox', { name: 'New person name', exact: true })
   const newPersonEmail = pageA.locator('[data-add-email]')
   await newPersonName.fill(`Billing smoke ${STAMP}`)
@@ -2092,27 +2092,51 @@ try {
   )
   // Northstar has no permanent agent credential. Mint only this run's key;
   // its secret stays in the browser and cleanup revokes/deletes the row.
-  const keyCreated = await pageA.evaluate(async (name) => {
+  const atlasId = await pageA.evaluate(async (name) => {
     const atlas = window.PLANNER.users.find((u) => u.name === 'Atlas' && u.isAgent)
     if (!atlas) throw new Error('Northstar has no Atlas profile')
     const key = await window.PLANNER.createAgentKey(atlas.id, name)
-    return Boolean(key)
+    return key ? atlas.id : null
   }, AGENT_KEY_NAME)
-  if (!keyCreated) await fail('could not create the temporary Atlas key')
+  if (!atlasId) await fail('could not create the temporary Atlas key')
   await pageA.reload({ waitUntil: 'domcontentloaded' })
-  const agentKeyline = pageA.locator('[data-agent-keyline]').first()
+  await pageA.waitForSelector('[data-org-users][data-users-state="ok"]', { timeout: 30000 })
+  // Atlas's own line, which the page reads once (tokens.agentKeys); in name
+  // order another agent, such as one a staging run left, can come first,
+  // and a later page can hold Atlas, so search for it first
+  const agentKeyline = pageA.locator(`[data-agent-keyline="${atlasId}"]`)
+  if (!(await agentKeyline.count())) {
+    await pageA.locator('[data-users-search]').fill('Atlas')
+    await pageA.waitForFunction(
+      (id) =>
+        !!document.querySelector(`[data-agent-keyline="${id}"]`) &&
+        document.querySelector('[data-org-users]')?.getAttribute('data-users-state') === 'ok',
+      atlasId,
+      { timeout: 30000 },
+    )
+  }
   await agentKeyline.waitFor({ state: 'visible', timeout: 30000 })
   await pageA.waitForFunction(
-    () =>
-      /^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}(?:\s|$)/.test(
-        document.querySelector('[data-agent-keyline]')?.textContent?.trim() || '',
+    (id) =>
+      /^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}(?:\s|,|$)/.test(
+        document.querySelector(`[data-agent-keyline="${id}"]`)?.textContent?.trim() || '',
       ),
-    undefined,
+    atlasId,
     { timeout: 30000 },
   )
   const fingerprint = ((await agentKeyline.textContent()) || '').trim()
-  if (!/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}(?:\s|$)/.test(fingerprint)) {
+  if (!/^qva_[0-9a-f]{3}\.\.\.[0-9a-f]{5}(?:\s|,|$)/.test(fingerprint)) {
     await fail(`agent row has no first/last key fingerprint: "${fingerprint}"`)
+  }
+  // the alignment below compares people's rows with agents', so the first
+  // page shows again after a search
+  if (await pageA.locator('[data-users-search]').inputValue()) {
+    await pageA.locator('[data-users-search]').fill('')
+    await pageA.waitForFunction(
+      () => document.querySelectorAll('[data-org-users] [data-user-email]').length > 0,
+      undefined,
+      { timeout: 30000 },
+    )
   }
   const identityAlignment = await pageA.locator('[data-user-row]').evaluateAll((rows) =>
     rows.flatMap((row) => {

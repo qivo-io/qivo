@@ -14,8 +14,9 @@
  * (model/teams.ts), Billing's Who counts toward your bill and Who does not
  * (model/billingLists.ts accountNamesBatch), the REST and MCP lists of
  * people, labels, teams and a team's members
- * (lib/listCursor.ts namedListPage), and later the people list of Settings
- * and the other REST and MCP lists. A list is
+ * (lib/listCursor.ts namedListPage), Settings › Users
+ * (model/peopleSettings.ts), and later the other REST and MCP lists. A
+ * list is
  * one index, or a merge of several (mergeNamed), in the order of a name key
  * (a label's name_lower, a profile's, a team's or a project's name_key,
  * lib/nameKey.ts) and then of the fields the index orders equal keys by,
@@ -692,7 +693,8 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * (model/pickers.ts), the team settings lists and picker
  * (model/teams.ts), the project navigation lists
  * (model/projectNavReads.ts), the Settings project lists
- * (model/projectSettingsLists.ts), the REST and MCP lists in name order
+ * (model/projectSettingsLists.ts), Settings › Users
+ * (model/peopleSettings.ts), the REST and MCP lists in name order
  * (lib/listCursor.ts namedListPage), Billing's Storage by project
  * (model/billingStorage.ts) and its API calls by account and name lists
  * (model/billingLists.ts) answer through it. `o.order` is the direction

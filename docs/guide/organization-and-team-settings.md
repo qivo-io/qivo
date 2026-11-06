@@ -61,14 +61,18 @@ projects over. Until an organization admin does, the agent cannot be made a
 ([Agent users](./administration-guard-rails-and-the-demo.md#agent-users)).
 
 The line under the setting names who can create projects now. It lists up
-to three names, organization admins first. With more, it shows two names and
-a count, and says how many of the others are agents, such as **Nora Berg,
-Leo Martins and 3 more, including 1 agent, can create projects.** Pending
-invitations and **Standard user** agents count, and an agent's name says so,
-such as **Atlas (agent)**. Inactive users, viewers and guests do not. With
-**Org admins**, it adds **Project leads still create sub-projects.** With
-**Selected users**, it adds **Choose who in Users.** The **Users** link
-opens **Organization → Users**.
+to three names, organization admins first, then standard users, each in name
+order. With more, it shows two names and counts the others exactly up to
+100, saying how many of them are agents, such as **Nora Berg, Leo Martins and
+37 more, including 2 agents, can create projects.** Past 100 it says **and
+more than 100 others**, naming agents when it saw some. Pending invitations
+and **Standard user** agents count, and an agent's name says so, such as
+**Atlas (agent)**. Inactive users, viewers and guests do not. Right after
+you change the setting, the line says **Checking who can create projects…**
+until Qivo has counted under the new choice, and it says so when it cannot
+check or count. With **Org admins**, it adds **Project leads still create
+sub-projects.** With **Selected users**, it adds **Choose who in Users.** The
+**Users** link opens **Organization → Users**.
 
 ## Export data
 

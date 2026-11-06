@@ -8,17 +8,19 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { NativeSelect } from '@/components/ui/native-select'
+import { api } from '../../../convex/_generated/api'
 import { LIMITS, type Limit } from '../../../convex/lib/limits'
 import { LimitedInput } from '../../components/LimitedField'
 import { Seg } from '../../components/qivo'
 import { PageTitle, SettingsField, SettingsSection } from '../../components/settingsPage'
 import { DEMO_MODE } from '../../lib/demoMode'
 import { limitSentence, overLimit, wholeIn } from '../../lib/fieldLimits'
-import { creatorPhrase, projectCreatorsIn } from '../../lib/projectCreators'
+import { useLiveView } from '../../lib/liveView'
+import { creatorPhrase } from '../../lib/projectCreators'
 import { ADDRESS, type DraftSave, useSavedDraft, wholeNumber } from '../../lib/savedDraft'
 import { useUpdateBlocker } from '../../lib/updateSafety'
 import { DEFAULT_PLANNABLE_HOURS } from '../../lib/workload'
-import type { OrgPatch, OrgVM } from '../../store/planner'
+import type { OrgPatch, OrgVM, ProjectCreatorsAnswer } from '../../store/planner'
 import { P } from '../../store/planner'
 import { OrganizationDeletion } from '../OrganizationDeletion'
 import { OrganizationExport } from '../OrganizationExport'
@@ -205,30 +207,70 @@ const CREATOR_SETTINGS: Record<OrgVM['projectCreators'], { label: string; toast:
   selected: { label: 'Selected users', toast: 'Selected users can create projects' },
 }
 
+/* The creators line's states, for `data-creators-state`, which are
+   checking before an answer and while the answer counted under another
+   setting than the one on screen, failed, unavailable when the server
+   could not count, or ok. */
+type CreatorsState = 'checking' | 'failed' | 'unavailable' | 'ok'
+
 // Who may create top-level projects besides org admins. The line under the
 // control names who can right now, by the rule projects.create enforces, so
-// an admin never has to work out who a setting covers.
+// an admin never has to work out who a setting covers. The server counts
+// them (orgs.projectCreators), live while the page shows and paused while
+// the tab is hidden, and the line names nobody under a setting the answer
+// did not count, as after a change on screen the server has not saved yet.
 function ProjectCreatorsField({ setPage }: { setPage: (page: string) => void }) {
   const setting = P.org.projectCreators
   const question = 'Who can create new projects?'
-  const names = creatorPhrase(projectCreatorsIn(P.homeUsers(), setting))
+  const key = P.isAdmin() && P.homeOrg ? JSON.stringify({ org_id: P.homeOrg }) : null
+  const view = useLiveView<ProjectCreatorsAnswer>(api.orgs.projectCreators, key)
+  const answer = key !== null && view.key === key ? view.value : undefined
+  const failed = key !== null && view.key === key && 'error' in view
+  const state: CreatorsState = failed
+    ? 'failed'
+    : answer?.state === 'unavailable'
+      ? 'unavailable'
+      : answer?.state === 'ok' && answer.setting === setting
+        ? 'ok'
+        : 'checking'
+  const names = answer?.state === 'ok' && state === 'ok' ? creatorPhrase(answer) : []
   return (
     <SettingsField
       label={question}
       width={560}
       hint={
-        <span data-project-creators-summary>
-          {names.map((part, i) =>
-            part.name ? (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the phrase is re-derived each render and two people may share a name; position is a part's only identity
-              <span key={i} className="text-text-1">
-                {part.text}
-              </span>
-            ) : (
-              part.text
-            ),
-          )}{' '}
-          can create projects.
+        <span data-project-creators-summary data-creators-state={state}>
+          {state === 'checking' && 'Checking who can create projects…'}
+          {state === 'unavailable' && 'Qivo could not count who can create projects right now.'}
+          {state === 'failed' && (
+            <>
+              Couldn't check who can create projects.{' '}
+              <Button
+                type="button"
+                variant="unstyled"
+                data-project-creators-retry
+                onClick={view.retry}
+                className="align-baseline font-normal text-text-1 underline underline-offset-4"
+              >
+                Try again
+              </Button>
+            </>
+          )}
+          {state === 'ok' && (
+            <>
+              {names.map((part, i) =>
+                part.name ? (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: the phrase is re-derived each render and two people may share a name; position is a part's only identity
+                  <span key={i} className="text-text-1">
+                    {part.text}
+                  </span>
+                ) : (
+                  part.text
+                ),
+              )}{' '}
+              can create projects.
+            </>
+          )}
           {setting === 'admins' && ' Project leads still create sub-projects.'}
           {setting === 'selected' && (
             <>

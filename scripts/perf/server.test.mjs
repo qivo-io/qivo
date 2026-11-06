@@ -781,6 +781,81 @@ describe('the benchmark server', () => {
     })
   }, 60_000)
 
+  it("answers Settings › Users, the agents' keys and the creators line from the workspace, with the states the page asks for", async () => {
+    /** What `name` answers with `args` on a workspace with page parameters
+        `params`, and the workspace. */
+    const read = async (params, name, args = {}) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'read', name, args: { org_id: snap.orgs[0].id, ...args } })
+      const answer = posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const page = await read('role=admin&people=1000', 'people:settingsPage')
+    expect(page.snap.profiles).toHaveLength(1000)
+    expect(page.answer).toMatchObject({ state: 'ready', admins: 2, stopped: false })
+    expect(page.answer.rows).toHaveLength(25)
+    expect(page.answer.next).not.toBeNull()
+    const found = await read('role=admin&people=1000', 'people:settingsPage', {
+      search: 'planner1000@',
+    })
+    expect(found.answer.rows.map((r) => r.email)).toEqual(['planner1000@testbed.example'])
+    const person = page.answer.rows[3]
+    expect(
+      (await read('role=admin&people=1000', 'people:get', { id: person.id })).answer,
+    ).toMatchObject({ state: 'ok', person: { id: person.id } })
+    // the agents and their keys
+    const agents = await read('role=admin&agents=3', 'people:settingsPage', { search: 'agent' })
+    const ids = agents.answer.rows.map((r) => r.id)
+    expect(ids).toHaveLength(3)
+    const keys = await read('role=admin&agents=3', 'tokens:agentKeys', { agent_ids: ids })
+    expect(keys.answer.agents.map((a) => a.keys.length)).toEqual([3, 3, 3])
+    expect(keys.answer.agents[0].keys[0].name).toBe('Key 3')
+    const capped = await read('role=admin&agents=3&agentkeys=capped', 'tokens:agentKeys', {
+      agent_ids: ids,
+    })
+    expect(capped.answer.agents[0]).toMatchObject({ more: true })
+    expect(capped.answer.agents[0].keys).toHaveLength(2)
+    expect(
+      (await read('role=admin&agents=3&agentkeys=error', 'tokens:agentKeys', { agent_ids: ids }))
+        .answer.error,
+    ).toContain('fails')
+    // the creators line at 1,000 people
+    expect((await read('role=admin&people=1000', 'orgs:projectCreators')).answer).toMatchObject({
+      state: 'ok',
+      setting: 'users',
+      others: 100,
+      more: true,
+    })
+    expect((await read('role=admin&creators=unavailable', 'orgs:projectCreators')).answer).toEqual({
+      state: 'unavailable',
+    })
+    expect(
+      (await read('role=admin&creators=error', 'orgs:projectCreators')).answer.error,
+    ).toContain('fails')
+    // the forced states of the page
+    const stopped = await read('role=admin&people=1000&userspage=stopped', 'people:settingsPage')
+    expect(stopped.answer).toMatchObject({ stopped: true })
+    expect(stopped.answer.rows).toHaveLength(10)
+    expect(
+      (await read('role=admin&userspage=small', 'people:settingsPage')).answer.rows,
+    ).toHaveLength(5)
+    expect((await read('role=admin&userspage=not-ready', 'people:settingsPage')).answer).toEqual({
+      state: 'not_ready',
+    })
+    expect(
+      (await read('role=admin&userspage=last-admin', 'people:settingsPage')).answer.admins,
+    ).toBe(1)
+    expect(
+      (await read('role=admin&userspage=error', 'people:settingsPage')).answer.error,
+    ).toContain('fails')
+    // only an admin reads the page
+    expect((await read('', 'people:settingsPage')).answer.error).toContain(
+      'only organization admins',
+    )
+  }, 60_000)
+
   it('answers the milestone reads from the workspace, with the states the page asks for', async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */

@@ -38,11 +38,11 @@ import type {
 } from '../../../convex/model/projectSettingsLists'
 import { LimitedInput } from '../../components/LimitedField'
 import { navRowDiv } from '../../components/navRow'
+import { PageFold } from '../../components/pageFold'
+import { pagesState, useMoveFocus } from '../../components/pageMoves'
 import { Icon, MenuItem, Popover } from '../../components/qivo'
 import { FieldHint, PageTitle, SettingsSection } from '../../components/settingsPage'
 import { dayInSentence, deletedAtFull } from '../../lib/deletedTime'
-import { limitSentence } from '../../lib/fieldLimits'
-import { restoreFocus } from '../../lib/focusVisibility'
 import {
   focusAround,
   menuTrigger,
@@ -54,8 +54,6 @@ import {
   listEnd,
   listPassed,
   type PagedList,
-  type PagedPages,
-  type PageEnd,
   pageEnd,
   usePagedList,
   usePagedPages,
@@ -76,6 +74,14 @@ import {
 } from './projectListReads'
 
 const noteClass = 'text-sm text-text-2 px-0.5 py-1'
+
+/** What a Settings list's page says for an answer with no rows (PageFold
+    `held`): the server's sentence or `words`, with Retry unless the list is
+    not ready. */
+const heldLine = (
+  answer: SettingsListAnswer<unknown> | null,
+  words: { notReady: string; unavailable: string },
+) => ({ line: heldSentence(answer, words), retry: answer?.state !== 'not_ready' })
 
 /** The organizations a page lists from, the login's seats (P.orgs): the
     home organization first, then the others by name. */
@@ -226,190 +232,6 @@ function ListSearch({
       className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
     />
   )
-}
-
-/** A page list's state for its `data-*-state` and aria-busy: loading,
-    failed, refreshing after the tab showed again, or ok. */
-const pagesState = (page: Pick<PagedPages<unknown, unknown>, 'phase' | 'refreshing'>) =>
-  page.phase === 'first'
-    ? 'loading'
-    : page.phase === 'failed'
-      ? 'failed'
-      : page.refreshing
-        ? 'refreshing'
-        : 'ok'
-
-/** The sentences of one paged page (PageFold). */
-type PageWords = {
-  loading: string
-  notReady: string
-  failed: string
-  none: string
-  empty: string
-  nomore: string
-}
-
-/* The line that ends a page of Settings › Projects or Archived projects
-   (lib/pagedList.ts pageEnd), with Previous and Next. `hook` names its
-   data attributes. A move that runs keeps its button with static text and
-   no action, so keyboard focus stays on it; a move that failed keeps the
-   page, says so with Retry, and keeps the other move beside it. `focus`
-   runs the moves and Retry, so focus follows them (useMoveFocus). */
-function PageFold({
-  page,
-  end,
-  hook,
-  words,
-  tooLong,
-  focus,
-}: {
-  page: PagedPages<SettingsListAnswer<unknown>, unknown>
-  end: PageEnd
-  hook: string
-  words: PageWords
-  tooLong: boolean
-  focus: MoveFocus
-}) {
-  const running = page.moving
-  const button = (to: 'next' | 'previous') => (
-    <Button
-      key={to}
-      type="button"
-      variant="quiet"
-      size="sm"
-      {...{ [`data-${hook}-${to}`]: '' }}
-      className={running === to ? 'pointer-events-none italic' : 'text-text-1'}
-      aria-disabled={running !== null || undefined}
-      onClick={() => running === null && focus.move(to)}
-    >
-      {running === to ? 'Loading…' : to === 'next' ? 'Next' : 'Previous'}
-    </Button>
-  )
-  const retry = (
-    <Button
-      key="retry"
-      type="button"
-      variant="ghost"
-      className="h-control-sm text-sm"
-      data-page-retry=""
-      onClick={focus.retry}
-    >
-      {end === 'failed' && page.failedMove === null ? 'Try again' : 'Retry'}
-    </Button>
-  )
-  const moves = (failed: 'next' | 'previous' | null) => (
-    <>
-      {page.hasPrevious && failed !== 'previous' && button('previous')}
-      {page.hasNext && failed !== 'next' && button('next')}
-    </>
-  )
-  let line: React.ReactNode = null
-  let alert = false
-  let action: React.ReactNode = null
-  if (tooLong) line = limitSentence(LIMITS.search)
-  else if (page.failedMove !== null) {
-    alert = true
-    line = `Couldn't load the ${page.failedMove} page.`
-    action = retry
-  } else
-    switch (end) {
-      case 'loading':
-        line = words.loading
-        break
-      case 'held':
-        line = heldSentence(page.answer, { notReady: words.notReady, unavailable: words.failed })
-        action = page.answer?.state === 'not_ready' ? null : retry
-        break
-      case 'failed':
-        alert = true
-        line = words.failed
-        action = retry
-        break
-      case 'stuck':
-        line = 'Qivo could not check part of the list.'
-        action = retry
-        break
-      case 'more':
-        if (page.stopped)
-          line =
-            page.rows.length === 0
-              ? 'Qivo checked part of the list and found nothing there yet. Next continues.'
-              : 'Qivo checked part of the list. Next continues.'
-        break
-      case 'none':
-        line = words.none
-        break
-      case 'empty':
-        line = words.empty
-        break
-      case 'nomore':
-        line = words.nomore
-        break
-      case 'end':
-        break
-    }
-  const shownMoves = tooLong || end === 'loading' ? null : moves(page.failedMove)
-  if (line === null && action === null && !page.hasPrevious && !page.hasNext) return null
-  return (
-    <div
-      {...{ [`data-${hook}-end`]: tooLong ? 'too_long' : end }}
-      role={alert ? 'alert' : end === 'loading' ? 'status' : undefined}
-      className={cn(
-        'settings-page-fold flex flex-wrap items-center gap-2 pt-2 text-sm',
-        alert ? 'text-danger' : 'text-text-2',
-      )}
-    >
-      {line !== null && <span>{line}</span>}
-      {action}
-      {shownMoves}
-    </div>
-  )
-}
-
-/** A page's Previous and Next, and its Retry, through useMoveFocus. */
-type MoveFocus = { move: (to: 'next' | 'previous') => void; retry: () => void }
-
-/**
- * Focus for a page shown a page at a time: after a move that replaced the
- * page, `first()`, the first row's button, else `rest()`, the search box;
- * after one that failed, its Retry. Only while focus is on the page's
- * fold or nowhere, so focus that moved on stays. Answers the move to call
- * for Previous and Next, and the page's Retry, which for a failed move
- * counts as that move again, since Retry leaves as the move starts.
- */
-function useMoveFocus(
-  page: PagedPages<unknown, unknown>,
-  hook: string,
-  first: () => HTMLElement | null,
-  rest: () => HTMLElement | null,
-): MoveFocus {
-  const moved = React.useRef(false)
-  const at = `${page.starts.length}:${String(page.starts[page.starts.length - 1])}`
-  React.useLayoutEffect(() => {
-    if (!moved.current || page.moving !== null) return
-    moved.current = false
-    const active = document.activeElement
-    const free =
-      !active ||
-      active === document.body ||
-      !active.isConnected ||
-      !!active.closest(`[data-${hook}-end]`)
-    if (!free) return
-    if (page.failedMove !== null)
-      restoreFocus(document.querySelector<HTMLElement>(`[data-${hook}-end] [data-page-retry]`))
-    else restoreFocus(first() ?? rest())
-  }, [at, page.moving, page.failedMove])
-  return {
-    move: (to) => {
-      moved.current = true
-      if (to === 'next') page.next()
-      else page.previous()
-    },
-    retry: () => {
-      if (page.failedMove !== null) moved.current = true
-      page.retry()
-    },
-  }
 }
 
 /**
@@ -664,9 +486,14 @@ export function OrgProjectsPage({
               hook="settings-projects"
               tooLong={search.tooLong}
               focus={move}
+              held={(answer) =>
+                heldLine(answer, {
+                  notReady: "Projects can't be listed yet. Try again in a few minutes.",
+                  unavailable: "Couldn't load projects.",
+                })
+              }
               words={{
                 loading: 'Loading projects…',
-                notReady: "Projects can't be listed yet. Try again in a few minutes.",
                 failed: "Couldn't load projects.",
                 none: 'No projects match.',
                 empty: orgName
@@ -1350,9 +1177,14 @@ export function ArchivedProjectsPage() {
             hook="archived-projects"
             tooLong={search.tooLong}
             focus={move}
+            held={(answer) =>
+              heldLine(answer, {
+                notReady: "Archived projects can't be listed yet. Try again in a few minutes.",
+                unavailable: "Couldn't load archived projects.",
+              })
+            }
             words={{
               loading: 'Loading archived projects…',
-              notReady: "Archived projects can't be listed yet. Try again in a few minutes.",
               failed: "Couldn't load archived projects.",
               none: 'No archived projects match.',
               empty: orgName ? `No archived projects in ${orgName}.` : 'No archived projects.',

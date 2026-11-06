@@ -13,6 +13,7 @@ import {
 } from '../convex/machine/bodyFields'
 import { COMMENT_PAGE_MAX } from '../convex/model/comments'
 import { billingBytes, CALLS_COUNTING, STORAGE_COUNTING } from '../src/lib/billingDisplay'
+import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   AGENDA_QUERY,
   ASSIGNEE_LOAD_QUERY,
@@ -22,6 +23,7 @@ import {
   BILLING_ACCOUNTS_STEP,
   BILLING_STORAGE_EXPECTED,
   BILLING_STORAGE_STEP,
+  creatorsLine,
   deleteOutcome,
   evaluate,
   FIXTURE_STATUS,
@@ -64,7 +66,10 @@ import {
   resolveConfig,
   SETTINGS_PROJECTS_MARKS,
   SETTINGS_PROJECTS_STEP,
+  SETTINGS_USERS_EXPECTED,
+  SETTINGS_USERS_STEP,
   searchOf,
+  selectedCreatorsStarts,
   send,
   syncsWith,
   TAG_ANY,
@@ -297,6 +302,102 @@ describe('staging check REST contract', () => {
     expect(check).toContain(
       'if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)',
     )
+  })
+  it("checks Settings › Users and the creators line in the pages' own words", () => {
+    const users = readFileSync(
+      new URL('../src/panels/settings/UsersSettings.tsx', import.meta.url),
+      'utf8',
+    )
+    const general = readFileSync(
+      new URL('../src/panels/settings/OrganizationSettings.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(SETTINGS_USERS_STEP).toBe('ui/settings-users')
+    expect(SETTINGS_USERS_EXPECTED).toEqual({
+      none: 'No people match.',
+      creators: ' can create projects.',
+    })
+    expect(users).toContain(`none: '${SETTINGS_USERS_EXPECTED.none}'`)
+    for (const mark of ['data-users-search', 'data-users-state', 'data-users-page-row'])
+      expect(users).toContain(mark)
+    expect(general).toContain('data-creators-state')
+    expect(general).toMatch(/\{' '\}\s*can create projects\./)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    expect(check.indexOf('await settingsUsersCheck()')).toBeGreaterThan(
+      check.indexOf('await settingsLabelsCheck()'),
+    )
+    // the app's key list is read per organization, never the deprecated query
+    expect(check).not.toContain('listAgentKeys')
+  })
+  describe('the creators line', () => {
+    /* `n` creators named `word` and a number, every `agentEvery`th an
+       agent, as REST lists them. */
+    const people = (n, agentEvery = 0, word = 'Person') =>
+      Array.from({ length: n }, (_, i) => ({
+        id: `${word}${i}`,
+        name: `${word} ${i}`,
+        kind: agentEvery && i % agentEvery === agentEvery - 1 ? 'agent' : 'person',
+      }))
+    /* The page's phrase for the server's answer over `creators`. */
+    const page = (creators) => {
+      const counted = creators.slice(2, 102)
+      const answer =
+        creators.length <= 3
+          ? { creators, others: 0, more: false, agents: 0 }
+          : {
+              creators: creators.slice(0, 2),
+              others: counted.length,
+              more: creators.length > 102,
+              agents: counted.filter((c) => c.kind === 'agent').length,
+            }
+      return creatorPhrase({
+        ...answer,
+        creators: answer.creators.map((c) => ({
+          id: c.id,
+          name: c.name,
+          agent: c.kind === 'agent',
+        })),
+      })
+        .map((part) => part.text)
+        .join('')
+    }
+    it('words it as the page does, exact to 100 and past it', () => {
+      for (const [n, every] of [
+        [1, 0],
+        [3, 3],
+        [4, 0],
+        [39, 0],
+        [39, 10],
+        [102, 0],
+        [103, 0],
+        [400, 7],
+      ])
+        expect(creatorsLine(people(n, every)), `${n} creators`).toBe(page(people(n, every)))
+      expect(creatorsLine(people(39, 10))).toBe(
+        'Person 0, Person 1 and 37 more, including 3 agents,',
+      )
+      expect(creatorsLine(people(400))).toBe('Person 0, Person 1 and more than 100 others')
+    })
+    it('checks the admins it names under Selected users, whoever else was chosen', () => {
+      /* Whether the page's line over `creators` starts as the check
+         expects for `admins`. */
+      const holds = (admins, creators) => {
+        const line = `${page(creators)}${SETTINGS_USERS_EXPECTED.creators}`
+        return selectedCreatorsStarts(admins).some((start) => line.startsWith(start))
+      }
+      for (const a of [1, 2, 3, 5])
+        for (const c of [0, 1, 2, 3, 150]) {
+          const admins = people(a, 0, 'Admin')
+          const chosen = people(c, 3, 'Chosen')
+          expect(holds(admins, [...admins, ...chosen]), `${a} admins, ${c} chosen`).toBe(true)
+          // a line that names someone else first fails, and so do two
+          // admins the other way round
+          expect(holds(admins, [...people(1, 0, 'Other'), ...admins, ...chosen])).toBe(false)
+          if (a > 1)
+            expect(holds(admins, [admins[1], admins[0], ...admins.slice(2), ...chosen])).toBe(false)
+        }
+      expect(selectedCreatorsStarts([])).toEqual([])
+    })
   })
   it("opens task links in the window's own words, with the unknown number past every organization's", () => {
     const window = readFileSync(new URL('../src/panels/IssueDetail.tsx', import.meta.url), 'utf8')
