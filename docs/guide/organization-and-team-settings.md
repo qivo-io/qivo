@@ -209,7 +209,9 @@ A team's page shows its member count and lists 25 members at a time, with a
 search over the whole team and **Load more**. **Add member** lists 25 people
 at a time who can join the team, with a search and **Load more**. They are
 the organization's people, agents and Viewers who are not members yet,
-switched-off and invited people included, and never guests.
+switched-off and invited people included, and never guests. After 200
+members, or 500 people in **Add member**, the list asks you to search for the
+rest.
 
 Open **Settings → Organization → Teams → the team** to edit its name,
 membership, **Leader** checkboxes and planning hours. Organization admins and
