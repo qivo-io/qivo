@@ -305,13 +305,15 @@ file, which must go on an upload ticket: its `POST` must go to
 the file and its download must match the bytes, and the step deletes it again
 (`ui/attachment-upload`). That step and `uploads/confirm-retry` fail against a
 backend from before the release after v0.1.135. Then it makes 26 tasks of
-its own and deletes them over REST, picks its project in **Settings →
-Projects → Deleted items**, searches its run tag with kind **Tasks**,
-selects the first page of 25 and the 26th on the next, and restores them as
-one action of two calls after the window says to keep Qivo open, then checks
-over REST that all 26 are live. It deletes a sub-project of its own in the
-app, finds it among the deleted projects without a scope, and deletes it for
-good once **Delete now** counts no earlier items (`ui/deleted-items`). The
+its own and deletes them over REST, searches its run tag in **Settings →
+Projects → Deleted items** and waits until the page answers that nothing
+matches without projects, then picks its project and kind **Tasks**, opens
+the folded run with **Show all**, selects the first page of 25 and the 26th
+on the next, and restores them as one action of two calls after the window
+says to keep Qivo open, then checks over REST that all 26 are live. It
+deletes a sub-project of its own in the app, finds it among the deleted
+projects without a scope, and deletes it for good once **Delete now**
+counts no earlier items (`ui/deleted-items`). The
 cleanup deletes the 26 tasks again with its project. Against a backend from
 before v0.1.131 that step fails.
 Before the archive, it

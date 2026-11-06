@@ -125,15 +125,17 @@
  * one archived on its own, and restores it there, which must bring back the
  * project and the carried sub-project only, each checked over REST
  * (ui/settings-projects).
- * It makes 26 tasks of its own in Alpha and deletes them over REST, picks
- * its project in Settings › Projects › Deleted items, from the
- * deployment's page (deletedItems.page), searches its tag with kind Tasks,
- * selects the first page of 25 and the 26th on the next, restores them as
- * one action of two calls after the window says to keep Qivo open, and
- * checks the 26 tasks live over REST; then it makes a sub-project of its
- * own with two tasks, deletes it in the app, finds it among the deleted
- * projects without a scope, and deletes it for good from its row menu once
- * Delete now counts no earlier items (deletedItems.purgeSummary)
+ * It makes 26 tasks of its own in Alpha and deletes them over REST,
+ * searches its tag in Settings › Projects › Deleted items, from the
+ * deployment's page (deletedItems.page), and waits until the page answers
+ * that nothing matches without projects, then picks its project and kind
+ * Tasks, opens the folded run with Show all, selects the first page of 25
+ * and the 26th on the next, restores them as one action of two calls
+ * after the window says to keep Qivo open, and checks the 26 tasks live
+ * over REST; then it makes a sub-project of its own with two tasks,
+ * deletes it in the app, finds it among the deleted projects without a
+ * scope, and deletes it for good from its row menu once Delete now counts
+ * no earlier items (deletedItems.purgeSummary)
  * (ui/deleted-items).
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
