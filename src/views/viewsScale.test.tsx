@@ -327,7 +327,9 @@ describe('a delivery on the desktop Roadmap', () => {
     if (!renamed) throw new Error('missing the milestone')
     renamed.name = 'Release five renamed'
     await board.answer()
-    expect(flag('ms-top-05')?.textContent).toBe('Release five renamed')
+    // the answer reaches the store through the live double, which a
+    // loaded worker can take a moment to deliver
+    await vi.waitFor(() => expect(flag('ms-top-05')?.textContent).toBe('Release five renamed'))
     // its track's row draws the new name; no task row renders again
     expect(drawn).not.toHaveBeenCalled()
   })
