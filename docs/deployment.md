@@ -1087,6 +1087,30 @@ that app derives the Roadmap from the workspace's tasks, and
 `planning.assigneeLoad`, which this release no longer calls, stays for it.
 The release changes no server function and needs no step.
 
+From the release after v0.1.138, `projects.create` takes `sort_order` as
+optional and, when a create leaves it out, places the new project one past
+the largest place among its siblings, archived and hidden ones included.
+REST and MCP creates, which leave it out, take the same place, so a new
+project goes after every sibling also where deletes, restores or earlier app
+creates left gaps or ties in the places, where counting the siblings, as
+before, could put it among them. The New project and New sub-project dialogs
+of that release's app leave `sort_order` out, so that release is the
+backend's floor for its app. An app from it, against a backend before it,
+cannot create a project or a sub-project, also in a tab that was open when
+the backend went back, until the backend rolls forward. That backend refuses
+the create for the missing argument and stores nothing, so the app takes
+its painted row away and says it couldn't create it, and never stores a
+project in a wrong place. From that release on, never return the backend to
+a commit before it; roll forward instead. Returning the app alone to an
+earlier release is safe against a later backend, because that app sends
+`sort_order` and the backend still stores it as sent. In place of the
+workspace's roster, teams and projects, the dialogs read
+`projectSettings.get`, `candidates` and `leadCandidates`, which v0.1.102
+(PR #321, `584b3c07`) first shipped, and `projectSettings.projects` with
+`sub_project_parents`, which v0.1.129 (PR #364, `e0a2d0b7`) first shipped,
+and a sub-project's create goes to the organization its parent's check
+named. There is no schema change, no backfill and no release step.
+
 ## Node.js version
 
 `engines.node` in `package.json` names the Node.js range, `>=24.22.1 <25`.
