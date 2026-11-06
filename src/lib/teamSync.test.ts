@@ -693,6 +693,7 @@ describe('milestones', () => {
     expect(syncMilestones<M>(loading, loading)).toEqual({
       next: { kind: 'loading' },
       ahead: { rows: [], note: 'loading', refreshing: false },
+      nextNote: null,
     })
     for (const read of [
       { state: 'failed', kept: null },
@@ -708,6 +709,36 @@ describe('milestones', () => {
         kept: null,
       }).ahead,
     ).toEqual({ rows: [], note: 'refused', sentence: 'Choose fewer projects.', refreshing: false })
+  })
+
+  it("says the next read's own failure or refusal when the list answered", () => {
+    const failed = syncMilestones<M>({ state: 'failed', kept: null }, ok([{ id: 'a' }]))
+    expect(failed.next).toEqual({ kind: 'unknown' })
+    expect(failed.nextNote).toEqual({ note: 'failed' })
+    expect(failed.ahead.note).toBeNull()
+    const refused = syncMilestones<M>(
+      { state: 'refused', sentence: 'Choose fewer projects.', kept: null },
+      ok([]),
+    )
+    expect(refused.nextNote).toEqual({ note: 'refused', sentence: 'Choose fewer projects.' })
+    // a kept next milestone stays under its own failure
+    const kept = syncMilestones<M>(
+      { state: 'failed', kept: { rows: [{ id: 'a' }], next: null, stopped: null } },
+      ok([{ id: 'a' }]),
+    )
+    expect(kept.next).toEqual({ kind: 'milestone', milestone: { id: 'a' } })
+    expect(kept.nextNote).toEqual({ note: 'failed' })
+  })
+
+  it("must fail: says a failure once when both reads failed, and none for the list's alone", () => {
+    const failed: SyncMilestoneRead<M> = { state: 'failed', kept: null }
+    expect(syncMilestones<M>(failed, failed).nextNote).toBeNull()
+    expect(syncMilestones<M>(failed, failed).ahead.note).toBe('failed')
+    const refused: SyncMilestoneRead<M> = { state: 'refused', sentence: 'No.', kept: null }
+    expect(syncMilestones<M>(refused, refused).nextNote).toBeNull()
+    const ahead = syncMilestones<M>(ok([{ id: 'a' }]), failed)
+    expect(ahead.nextNote).toBeNull()
+    expect(ahead.ahead.note).toBe('failed')
   })
 
   it('keeps a shown answer under a failure, and marks a kept one refreshing', () => {

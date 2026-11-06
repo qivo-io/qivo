@@ -452,6 +452,22 @@ export function TeamOpening({
                 )}
               </div>
             )}
+            {/* the next milestone's read failed or was refused alone */}
+            {milestones.nextNote && (
+              <div
+                data-sync-next-milestone-note={milestones.nextNote.note}
+                className="flex flex-wrap items-center gap-x-2 text-sm text-text-3"
+              >
+                {milestones.nextNote.note === 'failed'
+                  ? "Couldn't load the next milestone."
+                  : milestones.nextNote.sentence}
+                {milestones.nextNote.note === 'failed' && (
+                  <Button type="button" variant="ghost" size="sm" onClick={milestones.retry}>
+                    Retry
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

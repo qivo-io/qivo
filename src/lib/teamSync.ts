@@ -637,19 +637,25 @@ export type SyncMilestoneList<M> = {
   refreshing: boolean
 }
 
+/** What the opening says of its next-milestone read where the list's own
+    note does not say it already: that the read failed, with Retry, or the
+    server's sentence for its refusal. */
+export type SyncNextNote = { note: 'failed' } | { note: 'refused'; sentence: string } | null
+
 /** Whether `answer` holds every milestone it was asked for. */
 const whole = (answer: SyncMilestoneAnswer<unknown>) =>
   answer.next === null && answer.stopped === null
 
 /** What the opening shows of its two milestone reads: `next`, the one-row
-    upcoming section, and `ahead`, the range of this week and next. A
+    upcoming section, and `ahead`, the range of this week and next, each
+    with its own failure or refusal (`nextNote` for the next one's). A
     failure or refusal after an answer keeps that answer. Neither says
     there are none unless the server answered whole, and nothing here
     sorts or cuts the server's rows. */
 export function syncMilestones<M>(
   next: SyncMilestoneRead<M>,
   ahead: SyncMilestoneRead<M>,
-): { next: SyncNextMilestone<M>; ahead: SyncMilestoneList<M> } {
+): { next: SyncNextMilestone<M>; ahead: SyncMilestoneList<M>; nextNote: SyncNextNote } {
   const answerOf = (read: SyncMilestoneRead<M>) =>
     read.state === 'ok'
       ? read.answer
@@ -666,20 +672,24 @@ export function syncMilestones<M>(
         : next.state === 'loading'
           ? { kind: 'loading' }
           : { kind: 'unknown' }
+  // the next read's failure or refusal, unless the list says the same
+  const nextNote: SyncNextNote =
+    next.state === 'failed' && ahead.state !== 'failed'
+      ? { note: 'failed' }
+      : next.state === 'refused' && !(ahead.state === 'refused' && ahead.sentence === next.sentence)
+        ? { note: 'refused', sentence: next.sentence }
+        : null
   const kept = answerOf(ahead)
   const rows = kept?.rows ?? []
   const refreshing = ahead.state === 'ok' && !ahead.current
-  if (ahead.state === 'failed')
-    return { next: nextShown, ahead: { rows, note: 'failed', refreshing } }
+  const list = (shown: SyncMilestoneList<M>) => ({ next: nextShown, ahead: shown, nextNote })
+  if (ahead.state === 'failed') return list({ rows, note: 'failed', refreshing })
   if (ahead.state === 'refused')
-    return {
-      next: nextShown,
-      ahead: { rows, note: 'refused', sentence: ahead.sentence, refreshing },
-    }
+    return list({ rows, note: 'refused', sentence: ahead.sentence, refreshing })
   if (ahead.state === 'loading' || ahead.state === 'too_many')
-    return { next: nextShown, ahead: { rows: [], note: ahead.state, refreshing } }
+    return list({ rows: [], note: ahead.state, refreshing })
   const note = !kept || !whole(kept) ? 'partial' : rows.length ? null : 'empty'
-  return { next: nextShown, ahead: { rows, note, refreshing } }
+  return list({ rows, note, refreshing })
 }
 
 /* ---- load --------------------------------------------------------------------------- */

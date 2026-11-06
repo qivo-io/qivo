@@ -282,6 +282,50 @@ describe('the next milestone and those of this week and next', () => {
   })
 })
 
+describe('one read failing alone', () => {
+  const nextNote = () => q('[data-sync-next-milestone-note]')
+  const retry = () =>
+    [...document.querySelectorAll('button')].find((b) => b.textContent === 'Retry')
+
+  it('says the next milestone failed, with Retry, when only its read fails', async () => {
+    fixture()
+    force = { section: 'error' }
+    loaded = await load()
+    await render(['plan', 'ship'])
+    expect(cell()?.getAttribute('data-sync-next-milestone')).toBe('unknown')
+    expect(listed()).toEqual(['Beta build', 'Zed review', 'Field test'])
+    expect(note()).toBeNull()
+    expect(nextNote()?.getAttribute('data-sync-next-milestone-note')).toBe('failed')
+    expect(nextNote()?.textContent).toContain("Couldn't load the next milestone.")
+    force = {}
+    await act(async () => retry()?.click())
+    await settle()
+    expect(cell()?.textContent).toContain('Beta build')
+    expect(nextNote()).toBeNull()
+    // a refusal of it alone says the server's sentence
+    force = { section: 'refused' }
+    await rerun()
+    expect(nextNote()?.getAttribute('data-sync-next-milestone-note')).toBe('refused')
+    expect(nextNote()?.textContent).toContain(MILESTONES_TOO_LARGE.slice(1))
+    expect(retry()).toBeUndefined()
+  })
+
+  it('says the list failed, with Retry, when only its read fails', async () => {
+    fixture()
+    force = { between: 'error' }
+    loaded = await load()
+    await render(['plan', 'ship'])
+    expect(cell()?.textContent).toContain('Beta build')
+    expect(note()?.getAttribute('data-sync-milestones-note')).toBe('failed')
+    expect(nextNote()).toBeNull()
+    force = {}
+    await act(async () => retry()?.click())
+    await settle()
+    expect(listed()).toEqual(['Beta build', 'Zed review', 'Field test'])
+    expect(note()).toBeNull()
+  })
+})
+
 describe('the projects figure', () => {
   it('asks once with 200 top-level projects and shows the answer', async () => {
     fixture()
