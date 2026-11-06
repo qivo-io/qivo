@@ -4,7 +4,7 @@
  * filters applied before the page is cut, and a sealed next_cursor that
  * continues after its last entry. The app reads it in place of
  * deletedItems.list and matches (model/deletedItemsList.ts) from the release
- * after v0.1.141, and it builds its rows with that module's rowOf, so it
+ * after v0.1.148, and it builds its rows with that module's rowOf, so it
  * shows nothing the list would not show the same caller.
  *
  * Scope. Without one the page reads every active seat of the login and
