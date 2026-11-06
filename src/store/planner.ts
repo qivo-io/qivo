@@ -13392,16 +13392,15 @@ export const PLANNER = {
      that hold one message. Each checks the pause before its paint, so a
      paused write paints nothing, and sends one write per organization, each
      with its own layer, so a seat that refuses takes back only its rows. */
-  /** Marks messages read and answers whether it sent the mark. `quiet`
-      refuses a paused mark without a toast, for the mark that opening a task
-      sends on its own. */
-  markMessagesRead: (ids: string[], { quiet = false } = {}): boolean => {
+  /** Marks messages read and answers whether it sent the mark, for the
+      Inbox's rows. */
+  markMessagesRead: (ids: string[]): boolean => {
     const at = new Date().toISOString()
     const hit = ids.filter((id) => {
       const r = rows.messages.get(id)
       return r && !r.read_at
     })
-    if (!hit.length || refusePausedWrite(api.messages.markRead, quiet)) return false
+    if (!hit.length || refusePausedWrite(api.messages.markRead)) return false
     // an item's messages share one org, but a bulk mark-all spans seats —
     // group per org BEFORE any paint prunes the hit rows
     messagesByOrg(hit).forEach((list, org) => {
@@ -13409,8 +13408,6 @@ export const PLANNER = {
         api.messages.markRead,
         { org_id: org, ids: list },
         { workspace: () => markLoadedMessagesRead(list, at) },
-        // the read that opening a task sends is not a change the person made
-        { about: { background: quiet } },
       )
     })
     return true

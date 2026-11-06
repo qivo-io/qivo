@@ -74,16 +74,35 @@ export function firstUnreadTs(
   return oldest
 }
 
-/** Where a visit's unread part of a task starts (firstUnreadTs), and
-    whether its unread messages tell of a change, which only the All filter
-    lists: a change message, or a mention in the description, which came
-    with an edit of it. Whether the person may see that change's row is the
-    server's to say, so this cannot promise All shows it. The task window
-    freezes both when the task opens, before the visit marks the messages
-    read. */
+/** Where a visit's unread part of a task starts, in ms, null with nothing
+    unread, and whether its unread messages tell of a change, which only
+    the All filter lists: a change message, or a mention in the
+    description, which came with an edit of it. Whether the person may see
+    that change's row is the server's to say, so this cannot promise All
+    shows it. The task window freezes both when the task opens, before the
+    visit marks the task read, from the task's inbox item
+    (itemUnreadStart), or from what the surface that opened it froze. The
+    Inbox freezes its row's from the loaded messages (unreadStart). */
 export type UnreadStart = { ts: number | null; change: boolean }
 
-/* The unread start of task `issueUuid` in `messages` (UnreadStart). */
+/** The unread start of an inbox item as convex/inbox.ts item answers it
+    (UnreadStart): its oldest unread message's created_at, which the
+    divider compares with the rows' times using `>=`, as a comment and its
+    notification share one created_at, and whether an unread message tells
+    of a change, a change or a mention in the description, as the server
+    judges it (`unread_change`). No item, or one with nothing unread, starts
+    nowhere. */
+export function itemUnreadStart(
+  item: { first_unread_at: string | null; unread_change: boolean } | null,
+): UnreadStart {
+  if (!item || item.first_unread_at === null) return { ts: null, change: false }
+  const ts = Date.parse(item.first_unread_at)
+  if (!Number.isFinite(ts)) return { ts: null, change: false }
+  return { ts, change: item.unread_change }
+}
+
+/* The unread start of task `issueUuid` in the loaded `messages`
+   (UnreadStart), which the Inbox freezes for the row it opens. */
 export function unreadStart(
   messages: readonly (UnreadSource & { kind: MessageKind; detail?: string | null })[],
   issueUuid: string | null,

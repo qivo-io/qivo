@@ -1201,7 +1201,7 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
           <IssueDetail
             issueId={paneId}
             holdThread
-            unread={undefined} // the pane already consumed this visit's New mark
+            unread={{ ts: null, change: false }} // the pane already showed this visit's New mark
             onPopOut={undefined} // this IS the pop-out
             onShowOnBoard={showOnBoard}
             onClose={() => closeOrAsk([popScope], () => setPoppedOut(false))}

@@ -77,6 +77,18 @@ describe('the pause while Qivo cannot save', () => {
     for (let i = 0; i < 8; i++) await Promise.resolve()
   }
   const sentNames = () => sent.map((request) => request.name)
+  /* The read that opening task-a sends on its own (P.readOnOpen), as
+     P.readItem sends it, quietly, up to message-a. */
+  const readOnOpen = () =>
+    store.P.readItem(
+      {
+        org: snapshot.orgs[0].id,
+        task: 'task-a',
+        through: Date.parse('2026-09-14T08:00:00.000Z'),
+        latestAt: '2026-09-14T08:00:00.000Z',
+      },
+      { quiet: true },
+    )
   const notes = () =>
     [...storage.entries()].filter(([key]) => key.startsWith('qivo.unconfirmed.v1:'))
 
@@ -192,7 +204,7 @@ describe('the pause while Qivo cannot save', () => {
     expect(await P.updateIssue(task.id, { status: 'progress' })).toBe(false)
     expect(await P.addComment('task-a', 'Soak run finished')).toBe(false)
     // the read that opening a task sends says nothing, a read the person asks for says why
-    expect(P.markMessagesRead(['message-a'], { quiet: true })).toBe(false)
+    expect(readOnOpen()).toBe(false)
     expect(showToast).toHaveBeenCalledTimes(1)
     vi.advanceTimersByTime(1000)
     expect(P.markMessagesRead(['message-a'])).toBe(false)
@@ -289,9 +301,9 @@ describe('the pause while Qivo cannot save', () => {
 
   it('leaves the read that opening a task sends out of the count and the note', async () => {
     await boot()
-    store.P.markMessagesRead(['message-a'], { quiet: true })
+    readOnOpen()
     await settle()
-    expect(sentNames()).toEqual(['messages:markRead'])
+    expect(sentNames()).toEqual(['messages:readItem'])
     expect(store.P.hasUnconfirmed()).toBe(false)
     expect(notes()).toEqual([])
   })

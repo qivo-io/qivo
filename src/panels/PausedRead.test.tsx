@@ -7,8 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
-/* The task window reads P.editsPaused(): opening a task marks its messages
-   read unless edits pause, and sends the mark once they no longer do. The
+/* The task window reads P.editsPaused(): opening a task marks its inbox
+   item read unless edits pause, and sends the read once they no longer do
+   and the item answered (messages.readItem). The
    end of snapshot trouble emits only the store's health, so the window
    follows it on its own. A lost sign-in pauses every write, inbox reads
    included. */
@@ -115,13 +116,15 @@ describe('the task window while snapshot trouble pauses edits', { timeout: 30_00
         </TooltipProvider>,
       ),
     )
-    expect(sent()).not.toContain('messages:markRead')
+    expect(sent()).not.toContain('messages:readItem')
     // a delivery with nothing new on screen ends the trouble
     await act(async () => {
       live?.deliver({ ...structuredClone(snap), delivered_at: '2026-09-15T08:00:00.000Z' })
       await new Promise((resolve) => setTimeout(resolve, 10))
     })
     expect(store.P.editsPaused()).toBe(false)
-    expect(sent()).toContain('messages:markRead')
+    // the item's own read, once its answer came back with the delivery
+    expect(sent()).toContain('messages:readItem')
+    expect(sent()).not.toContain('messages:markRead')
   })
 })

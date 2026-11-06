@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
-/* Opening a task reads its unread messages on its own (IssueDetail). While
-   edits pause the store refuses that read without a word, and the window
-   sends it once the pause ends. The pause here is the connection's
-   (lib/syncStatus), driven the way the Convex socket would drive it. */
+/* Opening a task reads its inbox item on its own (IssueDetail), once the
+   item's answer froze where the unread part starts, through
+   messages.readItem with the answer's `through`. While edits pause the
+   store refuses that read without a word, and the window sends it once the
+   pause ends. The pause here is the connection's (lib/syncStatus), driven
+   the way the Convex socket would drive it. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -89,7 +91,7 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
     network.query.mockResolvedValue(null)
     network.mutation.mockResolvedValue(null)
     const reads = () =>
-      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markRead')
+      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:readItem')
     const { syncStatus, OFFLINE_DELAY_MS } = await import('../lib/syncStatus')
     const store = await import('../store/planner')
     await store.initStore()
@@ -114,6 +116,16 @@ describe('the automatic read in the task window', { timeout: 20_000 }, () => {
     // no probe is set, so the server's answer counts as immediate
     await act(async () => syncStatus.setSocket(UP))
     expect(reads()).toHaveLength(1)
-    expect(reads()[0][1]).toEqual({ org_id: snap.orgs[0].id, ids: ['message-a'] })
+    // the item's own read, up to its newest message, which the double's
+    // inbox read stamps with its created_at
+    expect(reads()[0][1]).toEqual({
+      org_id: snap.orgs[0].id,
+      issue_id: 'task-a',
+      through: Date.parse('2026-09-14T09:00:00.000Z'),
+    })
+    // and no read by the loaded message's id
+    expect(
+      network.mutation.mock.calls.filter(([ref]) => getFunctionName(ref) === 'messages:markRead'),
+    ).toEqual([])
   })
 })

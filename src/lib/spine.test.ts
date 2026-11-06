@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
-import { firstUnreadTs, mergeSpine, spineWindow, unreadMark, unreadStart } from './spine'
+import {
+  firstUnreadTs,
+  itemUnreadStart,
+  mergeSpine,
+  spineWindow,
+  unreadMark,
+  unreadStart,
+} from './spine'
 
 const c = (id: string, ts: number) => ({ id, ts, body: id })
 const e = (id: string, ts: number) => ({ id, ts, verb: 'moved' })
@@ -190,5 +197,40 @@ describe('spineWindow', () => {
       start: Number.POSITIVE_INFINITY,
       load: { comments: true, events: false },
     })
+  })
+})
+
+describe('itemUnreadStart', () => {
+  const AT = '2026-09-14T08:05:00.000Z'
+
+  it('starts nowhere for no item and for an item with nothing unread', () => {
+    expect(itemUnreadStart(null)).toEqual({ ts: null, change: false })
+    expect(itemUnreadStart({ first_unread_at: null, unread_change: false })).toEqual({
+      ts: null,
+      change: false,
+    })
+    // the server answers no change for a read item, and none is taken
+    expect(itemUnreadStart({ first_unread_at: null, unread_change: true })).toEqual({
+      ts: null,
+      change: false,
+    })
+  })
+
+  it("starts at the oldest unread message's created_at, with the server's change", () => {
+    expect(itemUnreadStart({ first_unread_at: AT, unread_change: false })).toEqual({
+      ts: Date.parse(AT),
+      change: false,
+    })
+    expect(itemUnreadStart({ first_unread_at: AT, unread_change: true })).toEqual({
+      ts: Date.parse(AT),
+      change: true,
+    })
+  })
+
+  it('marks above a comment that shares its created_at, and the tail after every row', () => {
+    const { ts } = itemUnreadStart({ first_unread_at: AT, unread_change: false })
+    const rows = [{ ts: Date.parse(AT) - 1 }, { ts: Date.parse(AT) }, { ts: Date.parse(AT) + 1 }]
+    expect(unreadMark(rows, ts)).toEqual({ place: 'mark', index: 1 })
+    expect(unreadMark(rows.slice(0, 1), ts)).toEqual({ place: 'tail', index: -1 })
   })
 })
