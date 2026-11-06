@@ -1125,12 +1125,17 @@ describe('POST /v1/tasks', () => {
       url: `http://localhost:5199/app/testbed/tasks/qn-${out.num}`,
       group_remaining_hours: null,
       labels: [],
+      // each list's first page with its cursor, null at the end
+      subtasks_next_cursor: null,
       subtasks: [],
       has_more_subtasks: false,
+      links_next_cursor: null,
       links: [],
       // creating a task does not make the creator follow it
       following: false,
+      followers_next_cursor: null,
       followers: [],
+      attachments_next_cursor: null,
       attachments: [],
     })
     expect('project_name' in out).toBe(false)

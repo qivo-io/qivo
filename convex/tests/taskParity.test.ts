@@ -19,14 +19,15 @@
 import { describe, expect, it } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
+import { accessOf } from '../lib/access'
 import {
+  accessFlags,
   applyTaskUpdate,
   childIndexOf,
   issueOut,
-  taskDetail,
+  loadCatalogue,
   taskOut,
   taskRefOf,
-  taskRelations,
 } from '../lib/core'
 import { byId } from '../lib/db'
 import type { Refusal, RefusalCode } from '../lib/functions'
@@ -34,7 +35,6 @@ import { SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { liveIn } from '../lib/liveTasks'
 import { delayClock, taskForecaster } from '../lib/machineDelay'
 import { sha256hex } from '../machine/auth'
-import { taskAttachments } from '../model/attachments'
 import {
   ASSIGNEE_RULE,
   ASSIGNEE_SIGHT_RULE,
@@ -59,6 +59,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { cursorsShown, wholeDetails } from './taskRelated.setup'
 
 const KEY = 'drive'
 const VIA = 'via the REST API (drive)'
@@ -284,15 +285,19 @@ describe('the single-task read names only tasks the caller can read', () => {
     const kept = { is_group: true, remaining_hours: 6, remaining_set_at: NOW }
     expect(await restGet(fx, `QN-${shelved.num}`)).toMatchObject(kept)
     expect(await mcp(fx, internal.machine.mcp.getIssue, { ref: shelved.id })).toMatchObject(kept)
-    expect(Object.keys(viaMcp).slice(-9)).toEqual([
+    expect(Object.keys(viaMcp).slice(-13)).toEqual([
       'url',
       'group_remaining_hours',
       'labels',
+      'subtasks_next_cursor',
       'subtasks',
       'has_more_subtasks',
+      'links_next_cursor',
       'links',
       'following',
+      'followers_next_cursor',
       'followers',
+      'attachments_next_cursor',
       'attachments',
     ])
     // an admin reads the hidden subtask and link too, and counts its hours
@@ -343,8 +348,10 @@ describe('the single-task read names only tasks the caller can read', () => {
 
 describe('a single-task read walks only the subtasks that can count', () => {
   /* taskOut for `issue` read by `me`, its answer handed the organization's
-   * whole task index as the fallback read would (nothing pruned), and the
-   * transaction's read metrics. */
+   * whole task index and the caller's flags over the organization's
+   * catalogue (nothing pruned, every list read whole and its first page
+   * cut, taskRelated.setup.ts wholeDetails), and the transaction's read
+   * metrics. */
   const readBoth = (fx: Fx, issue: Doc<'issues'>, me: Doc<'profiles'>, surface: 'rest' | 'mcp') =>
     fx.t.run(async (ctx) => {
       const out =
@@ -359,25 +366,26 @@ describe('a single-task read walks only the subtasks that can count', () => {
           .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
           .collect(),
       )
-      const projects = await ctx.db
-        .query('projects')
-        .withIndex('by_org', (q) => q.eq('org_id', issue.org_id))
-        .collect()
-      const live = liveIn(new Map(projects.map((p) => [p.id, p])))
+      const cat = await loadCatalogue(ctx, me)
+      const flags = await accessFlags(ctx, me, cat, 'read')
+      const readable = (id: string) => flags.get(id)?.read === true
+      const projectOf = (id: string) => cat.byUuid.get(id)
+      const live = liveIn(cat.byUuid)
       const org = await byId(ctx, 'organizations', issue.org_id)
-      const forecast = taskForecaster(ctx, me, delayClock(org, TODAY))
+      const forecast = taskForecaster(ctx, me, delayClock(org, TODAY), accessOf(ctx, me))
+      const view = { me, project, children, live, forecast, readable, projectOf }
       const row =
         surface === 'rest'
-          ? await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
-          : await issueOut(ctx, issue, { surface, me, project, children, live, forecast })
-      const detail = await taskDetail(ctx, me, issue, await taskRelations(ctx, me, issue), {
-        project,
-        isGroup: row.is_group,
+          ? await issueOut(ctx, issue, { ...view, surface })
+          : await issueOut(ctx, issue, { ...view, surface })
+      const detail = await wholeDetails(ctx, me, issue, {
         children,
         live,
+        isGroup: row.is_group,
+        readable,
+        projectOf,
       })
-      const whole = { ...row, ...detail, attachments: await taskAttachments(ctx, me, issue) }
-      return { out, whole, metrics }
+      return { out: cursorsShown(out), whole: { ...row, ...detail }, metrics }
     })
 
   const scheduled = (start_week: string, end_week: string, remaining_hours: number) => ({
@@ -495,7 +503,10 @@ describe('a single-task read walks only the subtasks that can count', () => {
     // an archived root reads them all, as it counts them
     const archived = await readBoth(fx, shelved, fx.agent, 'rest')
     expect(archived.out).toEqual(archived.whole)
-    expect(archived.out.subtasks).toHaveLength(1500)
+    expect(archived.out.progress).toMatchObject({ total: 1500, partial: false })
+    // its subtask list is a first page, with a cursor for the rest
+    expect(archived.out.subtasks).toHaveLength(50)
+    expect(archived.out.has_more_subtasks).toBe(true)
   })
 
   it('keeps a mostly archived subtree off the organization-wide read', async () => {

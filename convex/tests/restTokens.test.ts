@@ -268,6 +268,9 @@ const REQUESTS: Record<
   }),
   'PATCH labels/:ref': (fx) => ({ path: `/v1/labels/${fx.label}`, body: { color: '#654321' } }),
   'GET tasks/:ref/attachments': (_, task) => ({ path: `/v1/tasks/${task}/attachments` }),
+  'GET tasks/:ref/subtasks': (_, task) => ({ path: `/v1/tasks/${task}/subtasks?limit=1` }),
+  'GET tasks/:ref/links': (_, task) => ({ path: `/v1/tasks/${task}/links` }),
+  'GET tasks/:ref/followers': (_, task) => ({ path: `/v1/tasks/${task}/followers` }),
   'POST tasks/:ref/attachments': (_, task) => ({
     path: `/v1/tasks/${task}/attachments`,
     body: { name: 'notes.txt', content_type: 'text/plain', size: 5 },

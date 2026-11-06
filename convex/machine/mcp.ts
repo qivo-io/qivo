@@ -156,7 +156,7 @@ import { memberPage, teamPage } from '../model/teams'
 import { authenticateSecret, goneWithDeletion, MCP_AUTH_401, mcpAuth401, sha256hex } from './auth'
 import { DISCUSSION_TOOLS } from './discussion'
 import { orgTeam, PROJECT_TOOLS } from './projects'
-import { RECORD_TOOLS } from './records'
+import { RECORD_TOOLS, TASK_RELATED_TOOL } from './records'
 import {
   conflictRetrying,
   type MachineEntry,
@@ -578,7 +578,7 @@ export const TOOLS: McpTool[] = [
       name: 'get_task',
       title: 'Get task',
       description:
-        "One task with its full description, labels, subtasks, links and attachments (with 10-minute download links), and for a group (`is_group: true`, whose stored status is dormant) `group_remaining_hours`. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them). It also has `progress` for a group, `delay` (the projected delay when its project tracks it; its `status` is `unavailable` when the owner's other open work is too large to read in one request) and `last_comment_at`.",
+        "One task with its full description, its labels, whether you follow it (`following`), and the first 50 of each of its subtasks, links, followers and attachments (with 10-minute download links), each list with its cursor before it (`subtasks_next_cursor`, `links_next_cursor`, `followers_next_cursor`, `attachments_next_cursor`), null when the list ends there; pass a cursor to list_task_related for the rest. For a group (`is_group: true`, whose stored status is dormant) it has `group_remaining_hours`, which, like `progress`, covers the whole subtree, not the first page. Includes reporter (`reporter_id`, `reporter_name`), assignee (`assignee_id`, `assignee_name`) and reviewer (`reviewer_id`, `reviewer_name`); while a task is in `review` with a reviewer set, it is the reviewer's to act on, and `owner_id` names whose work it is. `parent_id` is null when the parent is hidden from you (`has_hidden_parent: true`). `ref` is a task ID like QN-482 (bare 482 works too) or a uuid. Task IDs are org-wide, permanent, and survive moves. Resolves archived tasks too (archived_at is non-null on them). It also has `progress` for a group, `delay` (the projected delay when its project tracks it; its `status` is `unavailable` when the owner's other open work is too large to read in one request) and `last_comment_at`.",
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -598,6 +598,7 @@ export const TOOLS: McpTool[] = [
         ...(args as { ref: string }),
       }),
   },
+  TASK_RELATED_TOOL,
   {
     access: 'read',
     def: {
@@ -961,7 +962,7 @@ export const TOOLS: McpTool[] = [
       name: 'set_task_link',
       title: 'Link tasks',
       description:
-        'Link two tasks, or with `linked: false` remove the link. `kind` is as seen from `ref`: `blocks`, `blocked_by` or `relates`. Two tasks share at most one link. Needs sight of both tasks and Edit on either; get_task lists the links.',
+        'Link two tasks, or with `linked: false` remove the link. `kind` is as seen from `ref`: `blocks`, `blocked_by` or `relates`. Two tasks share at most one link. Needs sight of both tasks and Edit on either; get_task lists the first links, and list_task_related the rest.',
       inputSchema: {
         type: 'object',
         $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -1975,10 +1976,11 @@ export const listIssues = internalQuery({
   },
 })
 
-/* get_task answers the single-task shape, the list row plus labels,
- * subtasks, links, a group's remaining hours, followers and attachments
- * (lib/core.ts taskOut). `today` is the HTTP action's UTC day, which the
- * task's delay is judged by. */
+/* get_task answers the single-task shape, the list row plus labels, a
+ * group's remaining hours, whether the caller follows the task and the
+ * first page of its subtasks, links, followers and attachments, each with
+ * its cursor before it (lib/core.ts taskOut). `today` is the HTTP action's
+ * UTC day, which the task's delay is judged by. */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, today: v.string(), ref: v.string() },
   handler: async (ctx, { callerId, access, today, ref }) => {

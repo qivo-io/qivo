@@ -1078,11 +1078,14 @@ type Held = { teams: string[]; onRoot: string[]; seat: boolean }
  * Overview's reads (lib/overview.ts, which answer it the same way),
  * project settings (model/projectSettings.ts), the project navigation
  * reads (model/projectNavReads.ts, which answer it `unavailable` with
- * access_unchecked as well) and a member's task history
+ * access_unchecked as well), a member's task history
  * (lib/activityVisibility.ts, whose pages in the task window, REST and MCP
  * refuse a page whose check stopped, and whose receivedRows leaves such a
- * row out, so model/issues.ts taskWriters names nobody for it) apply this
- * one rule, each with its own answer for that refusal. */
+ * row out, so model/issues.ts taskWriters names nobody for it) and the REST
+ * and MCP single-task read with its related lists (lib/core.ts taskOut and
+ * relatedPage, which refuse the whole call where a check stopped, and whose
+ * delay answers it unavailable, lib/machineDelay.ts taskForecaster) apply
+ * this one rule, each with its own answer for that refusal. */
 export function accessOf(
   ctx: QueryCtx,
   me: Doc<'profiles'>,

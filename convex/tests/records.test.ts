@@ -384,14 +384,18 @@ describe('attachments in the single-task read', () => {
       access: 'read',
       ref: issue.id,
     })
-    expect(listed.map((a) => a.id)).toEqual([first.id, later.id])
+    // a page now, with its end
+    expect(listed.attachments.map((a) => a.id)).toEqual([first.id, later.id])
+    expect(listed.next_cursor).toBeNull()
   })
 
   it('serves the link through the gateway until the reader loses the project', async () => {
     const fx = await setup()
     const issue = await task(fx)
     await plantAttachment(fx, issue, { size_bytes: 12 })
-    const [att] = await fx.t.query(internal.machine.records.restListAttachments, {
+    const {
+      attachments: [att],
+    } = await fx.t.query(internal.machine.records.restListAttachments, {
       callerId: fx.agent.id,
       access: 'read',
       ref: issue.id,
@@ -484,14 +488,14 @@ describe('removing an attachment', () => {
         access: 'read',
         ref: issue.id,
       })
-    const url = new URL((await list())[0].url)
+    const url = new URL((await list()).attachments[0].url)
     const link = `${url.pathname}${url.search}`
     expect((await fetchPath(fx.t, link)).status).toBe(200)
     await mcpDelete(fx, fx.agent.id, issue.id, att.id)
     expect(await fileState(fx.t, att.storage_id)).toBe('held')
     // the gateway, REST and MCP read a file through its row, which is gone
     expect((await fetchPath(fx.t, link)).status).toBe(404)
-    expect(await list()).toEqual([])
+    expect(await list()).toEqual({ next_cursor: null, attachments: [] })
     const viaMcp = await fx.t.query(internal.machine.mcp.getIssue, {
       today: TODAY,
       callerId: fx.agent.id,

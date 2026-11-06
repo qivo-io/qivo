@@ -4,10 +4,14 @@
  * names one. The app's views follow the working-set rule instead
  * (lib/viewReads.ts), so the two keep their own reads.
  *
- * The active task list (lib/activeTaskPage.ts) reads through them, and the
- * single-task read can once t3/limits-machine-task-details rewrites it
- * (lib/core.ts taskOut). Project completion reads the stored counts
- * instead (lib/core.ts projectCompletion).
+ * The active task list (lib/activeTaskPage.ts) reads through them.
+ * subtreeReads answers from the catalogue's flags, which it reads nothing
+ * for, so the single-task read (lib/core.ts taskOut), which asks the
+ * caller's access project by project through lib/access.ts accessOf, keeps
+ * its own walk (lib/core.ts subtreeIndex) and uses readTally for its first
+ * pages, an archived task's subtask page among them (lib/core.ts
+ * subtasksByNumber). Project completion reads the stored counts instead
+ * (lib/core.ts projectCompletion).
  *
  * - readTally counts what a read makes against its own budget, every
  *   document at its size as Convex counts it (getDocumentSize), or at a

@@ -216,11 +216,17 @@ async function withAccess(
   callerId: string,
   access: CredentialAccess,
 ): Promise<Access> {
-  return await accessOf(ctx, await asMachineCaller(ctx, callerId, access), access)
+  return await catalogueAccess(ctx, await asMachineCaller(ctx, callerId, access), access)
 }
 
-/* withAccess for a caller already resolved. */
-async function accessOf(ctx: QueryCtx, me: Caller, access: CredentialAccess): Promise<Access> {
+/* withAccess for a caller already resolved. Named apart from lib/access.ts
+ * accessOf, which asks project by project and which the single-task read
+ * uses (lib/core.ts taskOut). */
+async function catalogueAccess(
+  ctx: QueryCtx,
+  me: Caller,
+  access: CredentialAccess,
+): Promise<Access> {
   const cat = await loadCatalogue(ctx, me)
   const flags = await accessFlags(ctx, me, cat, access)
   return {
@@ -684,9 +690,11 @@ export const listIssues = internalQuery({
 })
 
 /* GET /v1/tasks/{ref} — the ref grammar resolves archived issues too. The
- * single-task shape adds labels, subtasks, links, a group's remaining
- * hours, followers and attachments (lib/core.ts taskOut). `today` is the
- * HTTP action's UTC day, which the task's delay is judged by. */
+ * single-task shape adds labels, a group's remaining hours, whether the
+ * caller follows the task and the first page of its subtasks, links,
+ * followers and attachments, each with its cursor (lib/core.ts taskOut).
+ * `today` is the HTTP action's UTC day, which the task's delay is judged
+ * by. */
 export const getIssue = internalQuery({
   args: { callerId: v.string(), access: vCredentialAccess, today: v.string(), ref: v.string() },
   handler: async (ctx, a): Promise<RestTaskJson> => {
@@ -772,10 +780,11 @@ export const createIssue = internalMutation({
         parent_id: parent ?? undefined,
       },
     })
+    // the answer asks the caller's access project by project, as a read
+    // does, not from the flags the create's own checks read
     return await taskOut(ctx, issue, {
       surface: 'rest',
       me,
-      readable,
       project: target,
       today: now.slice(0, 10),
     })
@@ -832,7 +841,7 @@ export const updateIssue = internalMutation({
     // sub_project means "not provided", as on create
     let destination: Doc<'projects'> | undefined
     if ('project' in b || 'sub_project' in b) {
-      const { cat, readable, writable } = await accessOf(ctx, me, a.access)
+      const { cat, readable, writable } = await catalogueAccess(ctx, me, a.access)
       const unknown = () => badRequest('project must name a project by uuid, number or key')
       if (typeof b.project !== 'string') throw unknown()
       const sub =

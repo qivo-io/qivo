@@ -19,7 +19,7 @@
 /// <reference types="vite/client" />
 
 import fc from 'fast-check'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { isoToWeek, setWeekConfig, TODAY_ISO, tsToWeek, weekToISO } from '../../src/lib/dates'
 import { computeDelayMap, type DelayIssue } from '../../src/lib/delay'
 import {
@@ -37,6 +37,7 @@ import {
 import { internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import { accessOf, isOrgStaff } from '../lib/access'
+import { TASK_READ_RESERVE } from '../lib/core'
 import { byId } from '../lib/db'
 import { type DelayJson, UNAVAILABLE_DELAY, utcToday } from '../lib/machineDelay'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
@@ -746,7 +747,14 @@ describe('a verdict reads the owner’s other work only when it can change it', 
       status: 'ok',
       projected_end_week: W(0),
     })
-    // 100 linked tasks, which the read takes before the verdict
+    // 100 linked tasks, which the read takes before the verdict as the first
+    // page of its links, in the room the reserve after it leaves, here all
+    // of this request's
+    const reserve = structuredClone(TASK_READ_RESERVE)
+    onTestFinished(() => {
+      Object.assign(TASK_READ_RESERVE, reserve)
+    })
+    TASK_READ_RESERVE.documents = 0
     await fx.t.run(async (ctx) => {
       for (let i = 0; i < 100; i++) {
         const other = uuid()

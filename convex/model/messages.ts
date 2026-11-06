@@ -2,9 +2,10 @@
  * prune and unread cap, the snooze wake, mention extraction and the notify
  * fan-outs: postMessage, pruneReadMessages, wakeSnoozedItem, subscribeToIssue,
  * extractMentions, notifyIssueInsert, notifyIssueUpdate, notifyCommentInsert
- * and notifyCommentUpdate. Also one's own follows (followTask, unfollowTask,
- * followersOf) and inbox writes (mark read or unread, remove, snooze), which
- * the app and the machine surfaces share.
+ * and notifyCommentUpdate. Also one's own follows (followTask and
+ * unfollowTask) and inbox writes (mark read or unread, remove, snooze), which
+ * the app and the machine surfaces share. REST and MCP page a task's
+ * followers in lib/core.ts relatedPage.
  *
  * Change fragments are joined as sentences; user-written values inside
  * them are preserved verbatim. Inbox.tsx still rewrites 'an issue in another
@@ -869,26 +870,6 @@ export async function unfollowTask(
   if (row === null) return false
   await ctx.db.delete(row._id)
   return true
-}
-
-/**
- * The profiles following `issue`, ordered by name, as the app's follower
- * list shows them. Someone who has since lost sight of the task stays
- * listed, as in the app, but postMessage sends them nothing.
- */
-export async function followersOf(
-  ctx: QueryCtx,
-  issue: Pick<Doc<'issues'>, 'id' | 'org_id'>,
-): Promise<Doc<'profiles'>[]> {
-  const out: Doc<'profiles'>[] = []
-  const rows = ctx.db
-    .query('issue_subscriptions')
-    .withIndex('by_issue_task_archived', (q) => q.eq('issue_id', issue.id))
-  for await (const row of rows) {
-    const profile = await byId(ctx, 'profiles', row.profile_id)
-    if (profile !== null && profile.org_id === issue.org_id) out.push(profile)
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
 }
 
 /* ------------------------------------------------------------ inbox writes

@@ -26,7 +26,7 @@ import type { TransactionMetrics } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
 import { DOCUMENT_MAX_BYTES } from '../model/comments'
-import { type Access, accessOf, isOrgStaff, OWN_READS } from './access'
+import { type Access, isOrgStaff, OWN_READS } from './access'
 import { LEVEL_STEP_READS, type ReadCeiling, roomOf } from './archivedTasks'
 import type { Caller, GroupFacts } from './core'
 import { byId } from './db'
@@ -280,14 +280,19 @@ function loadVerdict(
  * planned end or a due date to be judged against, has remaining hours above
  * zero and an owner with a finite plannable week. The load is the owner's
  * own open tasks as `me` may see them (lib/ownerLoads.ts ownerLoadReader,
- * through one accessOf instance made on first need), within the reader's
- * bounds and the room the request has left (delayRoom). Where it does not
- * fit, or a check of `me`'s access a bound stopped, the verdict is
- * UNAVAILABLE_DELAY, also when the due date has passed, because the
- * projected finish rests on the load.
+ * through `access`, the single-task read's own accessOf instance, so the
+ * caller's own grants, memberships and team shares are read once a read),
+ * within the reader's bounds and the room the request has left (delayRoom).
+ * Where it does not fit, or a check of `me`'s access a bound stopped, the
+ * verdict is UNAVAILABLE_DELAY, also when the due date has passed, because
+ * the projected finish rests on the load.
  */
-export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Forecaster {
-  let access: Access | undefined
+export function taskForecaster(
+  ctx: QueryCtx,
+  me: Caller,
+  clock: DelayClock,
+  access: Access,
+): Forecaster {
   return async (issue, project, facts) => {
     if (!tracked(issue, project)) return null
     const owner = taskOwnerId(issue, facts !== null)
@@ -297,7 +302,6 @@ export function taskForecaster(ctx: QueryCtx, me: Caller, clock: DelayClock): Fo
     if (profile === null || !needsLoad(issue, facts, it, capacity)) {
       return delayJson(delayOf(it, [], clock.todayWeek), clock.grid)
     }
-    access ??= accessOf(ctx, me)
     const room = delayRoom(await ctx.meta.getTransactionMetrics())
     const load = await ownerLoadReader(ctx, { me, access, room }).read(profile.id)
     return loadVerdict(me, it, profile.id, load, clock)

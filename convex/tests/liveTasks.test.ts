@@ -13,7 +13,13 @@ import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { accessOf } from '../lib/access'
 import { ACTIVE_PAGE } from '../lib/activeTaskPage'
-import { ACCESS_POINT_CHECKS, COMPLETION_RESERVE, taskOut } from '../lib/core'
+import {
+  ACCESS_POINT_CHECKS,
+  COMPLETION_RESERVE,
+  machineShown,
+  projectReader,
+  taskOut,
+} from '../lib/core'
 import { byId } from '../lib/db'
 import { countsAsSubtask } from '../lib/liveTasks'
 import { callRoom, loadRowsOf, OWNER_LOADS, ownerLoadReader } from '../lib/ownerLoads'
@@ -522,7 +528,7 @@ describe("a project's completion", () => {
 })
 
 describe('checking access in a read without the list flags', () => {
-  it('answers a group spread over many projects the same, one project at a time or all at once', async () => {
+  it('answers the inbox’s tasks spread over many projects the same, one project at a time or all at once', async () => {
     const fx = await setup()
     const group = await task(fx, { title: 'Wide group' })
     const kids: string[] = []
@@ -541,14 +547,18 @@ describe('checking access in a read without the list flags', () => {
       })
       kids.push(kid.id)
     }
+    // the REST and MCP inbox's bulk change asks through projectReader
+    // (machine/discussion.ts), which answers past ACCESS_POINT_CHECKS
+    // projects for the whole organization at once
     const read = () =>
       fx.t.run(async (ctx) => {
         const before = (await ctx.meta.getTransactionMetrics()).databaseQueries.used
         const me = (await byId(ctx, 'profiles', fx.agent.id)) as Doc<'profiles'>
-        const issue = (await byId(ctx, 'issues', group.id)) as Doc<'issues'>
-        const out = await taskOut(ctx, issue, { surface: 'rest', me, today: TODAY })
+        const tasks = await Promise.all(kids.map((id) => byId(ctx, 'issues', id)))
+        const rows = tasks.filter((t): t is Doc<'issues'> => t !== null)
+        const shown = await machineShown(rows, me, projectReader(ctx, me))
         const ranges = (await ctx.meta.getTransactionMetrics()).databaseQueries.used - before
-        return { out, ranges }
+        return { shown: rows.filter((t) => shown(t.id)).map((t) => t.id), ranges }
       })
     const checks = ACCESS_POINT_CHECKS.checks
     try {
@@ -556,13 +566,21 @@ describe('checking access in a read without the list flags', () => {
       const oneByOne = await read()
       ACCESS_POINT_CHECKS.checks = checks
       const batched = await read()
-      expect(batched.out).toEqual(oneByOne.out)
-      expect(batched.out.progress).toEqual({ done: 5, total: 20, percent: 25, partial: true })
-      expect(batched.out.subtasks.map((t) => t.id).sort()).toEqual(kids.slice(0, 20).sort())
+      expect(batched.shown).toEqual(oneByOne.shown)
+      expect([...batched.shown].sort()).toEqual(kids.slice(0, 20).sort())
       expect(batched.ranges).toBeLessThan(oneByOne.ranges - 8)
     } finally {
       ACCESS_POINT_CHECKS.checks = checks
     }
+    // the single-task read asks about the projects its subtree names, one
+    // at a time through one accessOf instance, and answers the same
+    const out = await fx.t.run(async (ctx) => {
+      const me = (await byId(ctx, 'profiles', fx.agent.id)) as Doc<'profiles'>
+      const issue = (await byId(ctx, 'issues', group.id)) as Doc<'issues'>
+      return await taskOut(ctx, issue, { surface: 'rest', me, today: TODAY })
+    })
+    expect(out.progress).toEqual({ done: 5, total: 20, percent: 25, partial: true })
+    expect(out.subtasks.map((t) => t.id).sort()).toEqual(kids.slice(0, 20).sort())
   })
 })
 

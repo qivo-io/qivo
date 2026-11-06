@@ -1519,6 +1519,7 @@ describe('read-only credentials over HTTP', () => {
       list_project_users: { project: c.f.sub.key },
       get_project: { project: c.f.sub.key },
       get_task: { ref: MISSING_TASK },
+      list_task_related: { ref: MISSING_TASK, list: 'subtasks' },
       list_comments: { ref: MISSING_TASK },
       list_team_members: { team_id: c.f.team.id },
     }

@@ -68,23 +68,6 @@ const linkFields = (fromId: string): Fields<Doc<'issue_links'>> => ({
   },
 })
 
-/** Every stored link of one task, whichever end it is. */
-export async function linksOf(ctx: QueryCtx, taskId: string): Promise<Doc<'issue_links'>[]> {
-  const [asSource, asTarget] = await Promise.all([
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_source', (q) => q.eq('source_id', taskId))
-      .collect(),
-    ctx.db
-      .query('issue_links')
-      .withIndex('by_target', (q) => q.eq('target_id', taskId))
-      .collect(),
-  ])
-  const byId = new Map<string, Doc<'issue_links'>>()
-  for (const link of [...asSource, ...asTarget]) byId.set(link.id, link)
-  return [...byId.values()]
-}
-
 /** Whether task `taskId` is an end of LIMITS.links.max links already: at
  * most that many rows from each of its two ranges. A pair has one link, and a task
  * is never linked to itself, so no link is in both. */
