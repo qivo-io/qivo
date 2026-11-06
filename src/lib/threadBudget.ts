@@ -60,7 +60,7 @@ import { LIMITS } from '../../convex/lib/limits'
     Show earlier, 389 and 422 after a comment and 530 and 520 after Show
     newer, and the store held 150 rows after each. Tests lower it and
     restore it. */
-export const THREAD_KEEP = { rows: LIMITS.threadRows.max }
+export const THREAD_KEEP: { rows: number } = { rows: LIMITS.threadRows.max }
 
 /** How many rows one read of a released span answers: the server's page of
     comments (convex/model/comments.ts COMMENT_PAGE_MAX) and of history
