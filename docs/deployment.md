@@ -1031,7 +1031,7 @@ backend keeps every function it calls. The release changes no server
 function, so it has no server change and no release step. The New project
 and New sub-project dialogs still read the workspace.
 
-From the release after v0.1.136, the Milestones window opens a milestone
+From the release after v0.1.137, the Milestones window opens a milestone
 through `milestones.get`, and Team sync's opening reads its next milestone
 and the milestones of this week and next through `milestones.section` and
 `milestones.between`, which v0.1.97 (`92434062`) first shipped. The
