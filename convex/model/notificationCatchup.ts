@@ -1,9 +1,10 @@
 /* The catch-up read behind notifications.ts claimSummary, which says
- * whether eligible unread activity arrived after a checkpoint, decided from the stored
- * inbox items (schema.ts inbox_items) under the rule inbox.summary counts
- * by (model/inboxReads.ts inboxScope), never from a client's word or a
- * difference of counts. It answers a state, never an item, task or count,
- * and writes nothing. */
+ * whether eligible unread activity arrived after a checkpoint, decided
+ * from the stored inbox items (schema.ts inbox_items) under the rule
+ * inbox.summary counts by (model/inboxReads.ts inboxScope), never from a
+ * client's word or a difference of counts. It answers a state, and the
+ * keys of the eligible events it read in the last NOTIFY.lag_ms for
+ * claimSummary to record, never a task or a count, and writes nothing. */
 
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'

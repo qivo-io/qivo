@@ -777,7 +777,9 @@ export default defineSchema({
   // expiry cron, with the login and the demo.
   notification_deliveries: defineTable({
     auth_user_id: v.string(),
-    key: v.string(), // the feed's event key, a message id or `${issue_id}:${woke_at}`
+    // the feed's event key, a message id or `${issue_id}:${woke_at}` with the
+    // ISO woke_at
+    key: v.string(),
     session_id: v.optional(v.string()),
     expires_at: v.number(),
   })

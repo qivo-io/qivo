@@ -73,7 +73,10 @@
  *   only every 6 hours.
  * - Each event's time is the time the item sorts by, a message's
  *   created_at or a snooze return's woke_at, in epoch milliseconds. Its
- *   key is the message id or `${issue_id}:${woke_at}`.
+ *   key is the message id, or `${issue_id}:${woke_at}` with woke_at as
+ *   stored, the ISO string the app tags notifications with today, never
+ *   its epoch milliseconds (model/notificationCatchup.ts newestUnread
+ *   builds the same key).
  * - `through` is the newest event time of the feed answer the claim covers,
  *   or that answer's floor when it held none, never a clock. A claim with
  *   no events is a baseline. A freshly started target takes one with its
