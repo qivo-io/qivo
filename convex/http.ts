@@ -513,9 +513,10 @@ type Delivery = {
  * differs errors the body, which stops short of its Content-Length, so the
  * browser reports a failed download and no ZIP looks whole. Once the
  * reader took the end record's last slice, the next pull records the
- * delivery in the job's served_at (recordDelivery) and closes the body; a
- * failed record is logged and changes no byte. A reader that cancels stops
- * the reads, and the download records nothing and releases its lease.
+ * delivery in the job's served_at (recordDelivery), which also ends its
+ * lease, and closes the body; a failed record is logged, changes no byte
+ * and releases the lease. A body that errors and a reader that cancels
+ * stop the reads, record nothing and release the lease.
  *
  * The reader is the Convex runtime, not the client. On a local backend
  * (precompiled-2026-10-22, 6 November 2026) it pulled an 11 MB body as fast
@@ -599,9 +600,12 @@ function archiveStream(
         await runMutation(internal.orgExport.recordDelivery, {
           export_id: link.export_id,
           stream,
-        }).catch((error: unknown) =>
-          console.error('A served export was not recorded', { export_id: link.export_id, error }),
-        )
+        }).catch(async (error: unknown) => {
+          console.error('A served export was not recorded', { export_id: link.export_id, error })
+          // the record ends the lease, so without it the lease would hold
+          // for DELIVERY.streamMs
+          await release()
+        })
         controller.close()
       } catch (error) {
         pending = null

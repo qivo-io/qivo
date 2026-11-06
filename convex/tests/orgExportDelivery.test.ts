@@ -49,6 +49,25 @@ import {
   zipOf,
 } from './orgExport.setup'
 
+/* How many of the next records of a served archive fail
+ * (model/orgExports.ts noteDelivered, which recordDelivery runs), as a
+ * write that kept conflicting would. */
+const faults = vi.hoisted(() => ({ record: 0 }))
+
+vi.mock('../model/orgExports', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../model/orgExports')>()
+  return {
+    ...real,
+    noteDelivered: async (...a: Parameters<typeof real.noteDelivered>) => {
+      if (faults.record > 0) {
+        faults.record--
+        throw new Error('the record failed')
+      }
+      return await real.noteDelivered(...a)
+    },
+  }
+})
+
 const DEFAULT_LIMITS = { ...EXPORT_LIMITS }
 const DEFAULT_DELIVERY = { ...DELIVERY }
 
@@ -57,6 +76,7 @@ beforeEach(() => {
   vi.setSystemTime(START)
 })
 afterEach(() => {
+  faults.record = 0
   Object.assign(EXPORT_LIMITS, DEFAULT_LIMITS)
   Object.assign(DELIVERY, DEFAULT_DELIVERY)
   vi.unstubAllEnvs()
@@ -634,6 +654,24 @@ describe('what a download records', () => {
 
     const status = await as(t, f.admin).query(api.orgExport.status, { org_id: f.org.id })
     expect(status.latest).toMatchObject({ served_at: servedAt, auto_download_at: null })
+  })
+
+  it('ends the lease of an archive served whole whose record fails, and changes no byte', async () => {
+    const t = newT()
+    const { f, exportId } = await ready(t)
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    faults.record = 1
+    const res = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
+    expect((await jobOf(t, exportId))?.streams).toHaveLength(1)
+    const { bytes, error } = await drain(t, res)
+    expect(error).toBeNull()
+    expect(bytes.length).toBe(Number(res.headers.get('Content-Length')))
+    expect(logged).toHaveBeenCalledWith('A served export was not recorded', expect.anything())
+    logged.mockRestore()
+    const job = await jobOf(t, exportId)
+    expect(job?.served_at).toBeUndefined()
+    // the lease does not hold for DELIVERY.streamMs
+    expect(job?.streams).toBeUndefined()
   })
 
   it('records nothing for a body cancelled part way or one whose file is erased after it started', async () => {
