@@ -20,10 +20,11 @@ export default defineConfig({
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   plugins: [convexTestTableIds(), convexTestActionStorage()],
   test: {
-    /* Runs inside the test environment before the test file is imported —
-     * the only hook early enough for convex/auth.ts's module-scope SITE_URL
-     * requirement. See convex/tests/env.setup.ts. The editor teardown waits
-     * out Tiptap's deferred destroys before jsdom closes; see
+    /* Runs inside the test environment before the test file is imported,
+     * the only hook early enough to plant the deployment settings (SITE_URL
+     * and the others) before any module of convex/ loads. See
+     * convex/tests/env.setup.ts. The editor teardown waits out Tiptap's
+     * deferred destroys before jsdom closes; see
      * src/lib/editorTeardown.setup.ts. */
     setupFiles: ['convex/tests/env.setup.ts', 'src/lib/editorTeardown.setup.ts'],
     server: { deps: { inline: ['convex-test'] } },

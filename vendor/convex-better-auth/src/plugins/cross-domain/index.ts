@@ -1,7 +1,8 @@
 /* Copied from get-convex/better-auth src/plugins/cross-domain/index.ts at
  * 3f41cbcf (Apache-2.0, see ../../../LICENSE). Changed by Qivo only in
- * formatting and types, which also hold without strictNullChecks, as the
- * app's tsconfig reads this file; the behavior is upstream's. */
+ * formatting, comments and types. The types also hold without
+ * strictNullChecks, as the app's tsconfig reads this file, and the behavior
+ * is upstream's. */
 import type { BetterAuthPlugin } from 'better-auth'
 import { createAuthEndpoint, createAuthMiddleware } from 'better-auth/api'
 import { setSessionCookie } from 'better-auth/cookies'
@@ -31,8 +32,13 @@ export const crossDomain = ({ siteUrl }: { siteUrl: string }) => {
   return {
     id: 'cross-domain',
     version: VERSION,
-    // Upstream notes that this does not reach ctx.trustedOrigins. The CORS
-    // allowed origins read it through options.trustedOrigins.
+    // Upstream notes that this does not reach ctx.trustedOrigins, which
+    // Better Auth builds before plugins run. Better Auth 1.7 adds it to the
+    // origins each request trusts, which only Better Auth's own origin
+    // checks read, and auth.ts already trusts the same SITE_URL there
+    // through appOrigins. Qivo's /api/auth CORS (convex/lib/authRoutes.ts
+    // registerAuthRoutes) reads lib/deployment.ts appOrigins() and its
+    // explicit extra origins, never this option.
     init() {
       return {
         options: { trustedOrigins: [siteUrl] },

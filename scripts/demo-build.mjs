@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import { join } from 'node:path'
+import { recordSiteUrl } from './auth-probe.mjs'
 import { assertDemoTarget } from './demo-deploy.mjs'
 import { writeDeploymentReceipt } from './deployment-receipt.mjs'
 import {
@@ -54,7 +55,8 @@ export function finishDemoBuild(directory = 'dist') {
 /* The build command. `run` is execFileSync, `finish` is finishDemoBuild,
  * `receipt` writes dist/version.json, and `fetch` and `sleep` reach the
  * Management API; the tests pass their own to see which commands and
- * requests run. */
+ * requests run. With QIVO_SITE_URL_FILE set, it also records the
+ * deployment's site URL there (auth-probe.mjs recordSiteUrl). */
 export async function main(
   env,
   {
@@ -95,6 +97,8 @@ export async function main(
       'Configure APP_MODE=demo and SITE_URL=https://demo.qivo.io on the dedicated backend first.',
     )
   }
+  // for demo-deploy.mjs's probe of the sign-in route once convex has pushed
+  recordSiteUrl(env)
   run('npm', ['run', 'build'], { stdio: 'inherit' })
   finish()
   receipt(env)

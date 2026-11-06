@@ -1,12 +1,13 @@
-/* Deployment env for the hermetic suites, planted before ANY module of the
- * function surface is imported — vitest evaluates setupFiles ahead of the test
+/* Deployment env for the hermetic suites, planted before any module of the
+ * function surface is imported. vitest evaluates setupFiles ahead of the test
  * file, which is the only hook early enough.
  *
- * convex/auth.ts refuses an unset SITE_URL rather than asserting it non-null,
- * and http.ts builds its options at route-registration time, i.e. while the
- * module is still being imported. convex-test pulls the whole function surface
- * in through its glob, so that refusal reaches every convex suite — not only
- * the ones that touch auth.
+ * convex/auth.ts refuses an unset SITE_URL rather than asserting it non-null
+ * (lib/deployment.ts requireSiteUrl). http.ts no longer builds Better Auth's
+ * options when it loads, but every sign-in, session read and options build
+ * in a suite does, and so does the image gateway's CORS check of an Origin,
+ * so the values stay planted for every convex suite, not only the ones that
+ * name them.
  *
  * Fixture helpers require an explicit development environment. Individual
  * tests override it when exercising hosted environments and refusal paths.

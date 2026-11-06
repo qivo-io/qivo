@@ -309,7 +309,9 @@ export function qivoOAuthProvider(ctx: GenericCtx<DataModel>, siteUrl: string, s
  * methods, their signing algorithms, an introspection endpoint, which Qivo
  * does not serve (lib/authRoutes.ts), and DPoP algorithms, which Qivo does
  * not support (qivoOAuthProvider onRequest). Any other response passes
- * unchanged. */
+ * unchanged. Its two callers are qivoOAuthProvider's onRequest, for the
+ * metadata after the issuer's path (/api/auth/.well-known/...), and auth.ts
+ * authServerMetadata, for the root paths http.ts serves. */
 export async function servedServerMetadata(response: Response): Promise<Response> {
   if (!response.ok || !response.body) return response
   const metadata: Record<string, unknown> = JSON.parse(await response.text())

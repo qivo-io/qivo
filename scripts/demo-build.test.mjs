@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -138,6 +138,56 @@ describe('main — the public demo build sends no request', () => {
     )
     expect(fetch).not.toHaveBeenCalled()
     expect(global).not.toHaveBeenCalled()
+  })
+})
+
+describe("main — hands the deployment's site URL to demo-deploy.mjs's probe", () => {
+  const demo = {
+    QIVO_ENVIRONMENT: 'demo',
+    VITE_APP_MODE: 'demo',
+    DEMO_CONVEX_DEPLOYMENT: 'demo-fixture-123',
+    CONVEX_DEPLOY_KEY: 'prod:demo-fixture-123|test-only',
+    VITE_CONVEX_URL: 'https://demo-fixture-123.convex.cloud',
+    VITE_CONVEX_SITE_URL: 'https://demo-fixture-123.convex.site',
+  }
+  const values = { QIVO_ENVIRONMENT: 'demo', APP_MODE: 'demo', SITE_URL: 'https://demo.qivo.io' }
+  const run = () => vi.fn((_command, args) => (args[2] === 'get' ? `${values[args[3]]}\n` : ''))
+  const folders = []
+  afterEach(() => {
+    for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true })
+  })
+  const fileIn = () => {
+    const folder = mkdtempSync(join(tmpdir(), 'qivo-demo-build-'))
+    folders.push(folder)
+    return join(folder, 'site-url')
+  }
+
+  it('writes the site URL only when QIVO_SITE_URL_FILE names a file', async () => {
+    const file = fileIn()
+    await main(
+      { ...demo, QIVO_SITE_URL_FILE: file },
+      { run: run(), finish: vi.fn(), receipt: vi.fn() },
+    )
+    expect(readFileSync(file, 'utf8')).toBe('https://demo-fixture-123.convex.site\n')
+    const unset = fileIn()
+    await main(demo, { run: run(), finish: vi.fn(), receipt: vi.fn() })
+    expect(existsSync(unset)).toBe(false)
+  })
+
+  it('refuses a malformed VITE_CONVEX_SITE_URL before it builds', async () => {
+    for (const site of [undefined, 'http://demo-fixture-123.convex.site']) {
+      const file = fileIn()
+      const runner = run()
+      await expect(
+        main(
+          { ...demo, VITE_CONVEX_SITE_URL: site, QIVO_SITE_URL_FILE: file },
+          { run: runner, finish: vi.fn(), receipt: vi.fn() },
+        ),
+        String(site),
+      ).rejects.toThrow(/Convex site URL/)
+      expect(existsSync(file)).toBe(false)
+      expect(runner.mock.calls.some(([command]) => command === 'npm')).toBe(false)
+    }
   })
 })
 

@@ -2,7 +2,8 @@ import { runWithEndpointContext } from '@better-auth/core/context'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GenericCtx } from '../../vendor/convex-better-auth/src/client'
 import type { DataModel } from '../_generated/dataModel'
-import { appOrigins, createAuthOptions, tokenPayload } from '../auth'
+import { createAuthOptions, tokenPayload } from '../auth'
+import { appOrigins } from '../lib/deployment'
 
 /* The options object is built without touching ctx — every dereference lives
  * inside a callback — so reading a flag needs no context at all. */

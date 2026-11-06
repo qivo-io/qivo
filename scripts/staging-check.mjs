@@ -2,6 +2,17 @@
 /* End-to-end check of the REST API, the MCP server and OAuth consent on the
  * staging deployment, or on a disposable local backend (--local).
  *
+ * It first calls the deployment's sign-in, OAuth token and metadata routes
+ * as every build does after Convex pushes (scripts/auth-probe.mjs), which
+ * names a runtime that refuses the sign-in handlers' import of
+ * convex/auth.ts, and checks the CORS answers the app's sign-in relies on
+ * (auth/routes). That step sends no credential and creates no session,
+ * OAuth client or token. It runs before the sign-in at the API origin the
+ * deployment URL gives. When it fails there and setup/target then finds the
+ * app's MCP address on another host of the deployment, such as one with a
+ * region label, it runs once more on that host, and that run's result
+ * replaces the first one's.
+ *
  * One run signs in as Nora Berg, the Northstar fixture admin, in a real
  * browser. In the app it creates a personal token that can make changes, a
  * read-only one, a Standard agent with two keys and a Viewer agent with one.
@@ -190,6 +201,7 @@ import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { probeAuthRoutes } from './auth-probe.mjs'
 import { signInBrowser } from './browser-demo.mjs'
 import { inboxBadge } from './inboxBadge.mjs'
 import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from './limits.mjs'
@@ -466,7 +478,10 @@ export function redact(text, known = secrets) {
     )
 }
 
-const results = { pass: 0, fail: [], skip: [], retried: 0 }
+/** The run's tally: the number of steps that passed, the names of those
+ *  that failed or were skipped and the requests sent twice. The tests read
+ *  it. */
+export const results = { pass: 0, fail: [], skip: [], retried: 0 }
 
 function say(kind, id, message = '') {
   console.log(redact(`${kind.padEnd(5)}${id}${message ? `  ${message}` : ''}`))
@@ -1113,6 +1128,105 @@ function onApi(value) {
     url.origin === cfg.apiOrigin ||
     (cfg.target.target === 'staging' && isSiteOf(url, cfg.target.deployment))
   )
+}
+
+/** The headers a list header such as Access-Control-Allow-Headers names,
+ *  in lower case. */
+const listed = (headers, name) =>
+  (headers.get(name) ?? '')
+    .split(',')
+    .map((each) => each.trim().toLowerCase())
+    .filter(Boolean)
+
+/** What is wrong with the CORS answers the app's sign-in relies on, given
+ *  `preflight`, the answer to an OPTIONS of /api/auth/sign-in/email from
+ *  `appOrigin` that asks for POST with content-type and better-auth-cookie,
+ *  and `session`, the answer to a GET of /api/auth/get-session from it.
+ *  Empty when the app can sign in and read its session from that origin. */
+export function authCorsProblems(preflight, session, appOrigin) {
+  const problems = []
+  if (preflight.status !== 204)
+    problems.push(`the sign-in preflight answered ${preflight.status}, not 204`)
+  if (preflight.headers.get('Access-Control-Allow-Origin') !== appOrigin)
+    problems.push('the sign-in preflight does not echo the app origin')
+  if (preflight.headers.get('Access-Control-Allow-Credentials') !== 'true')
+    problems.push('the sign-in preflight does not allow credentials')
+  for (const header of ['content-type', 'better-auth-cookie'])
+    if (!listed(preflight.headers, 'Access-Control-Allow-Headers').includes(header))
+      problems.push(`the sign-in preflight does not allow ${header}`)
+  if (session.headers.get('Access-Control-Allow-Origin') !== appOrigin)
+    problems.push('the session read does not echo the app origin')
+  if (!listed(session.headers, 'Access-Control-Expose-Headers').includes('set-better-auth-cookie'))
+    problems.push('the session read does not expose Set-Better-Auth-Cookie')
+  return problems
+}
+
+/** Calls the sign-in, OAuth token and metadata routes of the deployment at
+ *  `api` as every build does after Convex pushes (auth-probe.mjs), which
+ *  fail with a 5xx when the runtime refuses the handlers' import of
+ *  convex/auth.ts, then checks the CORS answers the app at `appOrigin`
+ *  relies on to sign in (authCorsProblems). With `local`, `api` may be a
+ *  loopback http: origin. It sends no credential and creates no session, OAuth client or
+ *  token, so it may run before setup/target proves the API origin. Its
+ *  failure names `api`. */
+async function checkAuthRoutes(api, { appOrigin, local }) {
+  try {
+    // The probe's message names every route that failed and how, and quotes
+    // no body or header value, so it stays whole instead of being cut to the
+    // 200 characters describe() keeps of an unexpected error.
+    await probeAuthRoutes(api, {
+      local,
+      log: (line) => console.log(redact(line)),
+    }).catch((error) => fail(String(error?.message ?? error).split('\n')[0]))
+    const preflight = await request(
+      `${api}/api/auth/sign-in/email`,
+      {
+        method: 'OPTIONS',
+        headers: {
+          Origin: appOrigin,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'content-type,better-auth-cookie',
+        },
+      },
+      30_000,
+    )
+    const session = await request(
+      `${api}/api/auth/get-session`,
+      { headers: { Origin: appOrigin } },
+      30_000,
+    )
+    await session.text()
+    const problems = authCorsProblems(preflight, session, appOrigin)
+    expect(problems.length === 0, problems.join('; '))
+  } catch (error) {
+    fail(`at ${api}: ${describe(error)}`)
+  }
+  return `the sign-in, token and metadata routes and their CORS answer at ${api}`
+}
+
+/**
+ * Runs the auth/routes step (checkAuthRoutes at `api`) and returns the
+ * origin it called and whether it passed. The run calls it before the
+ * sign-in at the origin resolveConfig derived, which can lack the region
+ * label of the host the deployment answers on, and again after setup/target
+ * with the first call's result as `earlier`. The second call runs the step
+ * only when `earlier` failed at another origin than `api`, and its result
+ * then replaces the earlier one. A pass drops the earlier failure, with a
+ * NOTE, and a failure counts once. Otherwise it returns `earlier`.
+ */
+export async function authRoutesStep(api, { appOrigin, local = false, earlier } = {}) {
+  if (earlier && (earlier.passed || earlier.origin === api)) return earlier
+  const passed = await check('auth/routes', () => checkAuthRoutes(api, { appOrigin, local }))
+  if (earlier) {
+    results.fail.splice(results.fail.indexOf('auth/routes'), 1)
+    if (passed)
+      say(
+        'NOTE',
+        'auth/routes',
+        `its failure at ${earlier.origin} no longer counts, because setup/target found the API at ${api}, where the step passed`,
+      )
+  }
+  return { origin: api, passed }
 }
 
 /** Discovers the authorization server from MCP's 401 challenge and keeps
@@ -8069,11 +8183,20 @@ async function start() {
   const began = Date.now()
   let verified = false
   try {
+    const auth = { appOrigin: cfg.appOrigin, local: cfg.target.target === 'local' }
+    // A failure is recorded and the run goes on, so the sign-in then fails
+    // as it would for a person.
+    const authRun = cfg.cleanup ? undefined : await authRoutesStep(cfg.apiOrigin, auth)
     await openBrowser()
     await must('setup/ui/sign-in', () => signIn(cfg.nora))
     await must('setup/target', verifyTarget, (note) => note)
+    // setup/target may have moved the API origin to the host the app names,
+    // where a failed auth/routes runs once more
+    if (authRun) await authRoutesStep(cfg.apiOrigin, { ...auth, earlier: authRun })
     // Only now may a credential go to the API origin, the sweep's included.
-    // Nothing was created before this point.
+    // Nothing was created before this point. auth/routes sent no credential
+    // and created no session, OAuth client or token, so it could run before
+    // the origin was proved.
     verified = true
     // A local run killed while billing was paused left the organization
     // read-only, which would refuse this run's writes and its sweep.
