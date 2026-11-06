@@ -761,7 +761,7 @@ data.
 
 The app before v0.1.145 reads Billing's details through `billing.summary`
 and its usage through `billing.currentUsage`, and the app before v0.1.135
-its usage through `billing.usageReport`. The release after v0.1.147 removed
+its usage through `billing.usageReport`. The release after v0.1.150 removed
 all three, so after such a rollback Billing shows the error of the missing
 function in place of its details and says "Usage could not be refreshed".
 
@@ -1365,7 +1365,7 @@ went back, until the backend rolls forward. From that release on, never
 return the backend to a commit before it; roll forward instead. Returning
 the app alone to an earlier release was safe while the backend kept
 `billing.summary` and `billing.currentUsage`, which this release kept
-unchanged for tabs loaded before it; the release after v0.1.147 removed
+unchanged for tabs loaded before it; the release after v0.1.150 removed
 them, so they are on the Instant Rollback list above. The operator console's
 organization page reads `adminBilling.orgBilling`, which answers without
 the account names from this release, and no console reads them. This
@@ -1508,7 +1508,7 @@ while its domain keeps the earlier app.
 [The auth routes check](#the-auth-routes-check) says what a failure means
 and what to do. There is no schema change and no backfill.
 
-From the release after v0.1.147, the storage sample at the start of a paid
+From the release after v0.1.150, the storage sample at the start of a paid
 period reads the organization's stored-byte totals in one step
 (`billingSync:storageStep`), so it counts files in Deleted items as current
 storage does, instead of scanning the attachment rows of live tasks. While
@@ -1929,7 +1929,7 @@ after v0.1.134, Billing's current storage and its Storage by project list
 read the totals (`billing.currentUsage` and `billing.storageProjects`), and
 from the release after v0.1.144 its current storage reads them through
 `billing.usageFigures`.
-From the release after v0.1.147 the storage sample at the start of a paid
+From the release after v0.1.150 the storage sample at the start of a paid
 period reads them too, and a daily job records them; until then that sample
 and the legacy `billing.usageReport` scanned the attachment rows. A new
 organization starts counted at zero. An
