@@ -31,6 +31,7 @@ import {
   DELETED_ITEMS_EXPECTED,
   DELETED_ITEMS_MARKS,
   DELETED_ITEMS_STEP,
+  DESCRIPTION_IMAGES_STEP,
   deleteOutcome,
   directoryGroups,
   evaluate,
@@ -40,6 +41,7 @@ import {
   freePastMilestoneWeek,
   hasTag,
   historyRows,
+  IMAGE_SPACER,
   INBOX_BADGE_STEP,
   isSiteOf,
   LABEL_MENTION_NAMES,
@@ -700,6 +702,32 @@ describe('staging check REST contract', () => {
     expect(step).toContain(`await app.locator(\`[\${m.search}]\`).fill(run.tag)`)
     expect(step).toContain(`await app.locator(\`[\${m.namesSearch}="billable"]\`).fill(run.tag)`)
     expect(step).toContain(`eq(await app.locator(\`[\${m.accessPeriod}]\`).inputValue(), period`)
+  })
+
+  it("loads a description's images near view at phone size, after the upload step", () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    const check = read('./staging-check.mjs')
+    expect(DESCRIPTION_IMAGES_STEP).toBe('ui/description-images')
+    const at = check.indexOf('await descriptionImagesCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await attachmentUploadCheck()'))
+    expect(at).toBeLessThan(check.indexOf('await settingsProjectsCheck()'))
+    // both image views mark their wrapper with the attachment, around its img
+    expect(read('../src/components/markdown.tsx')).toContain("'data-att': attId")
+    expect(read('../src/components/descEditor.tsx')).toContain('data-att={attId || undefined}')
+    expect(read('../src/components/inlineImage.tsx')).toContain('className="mdimg"')
+    // about 600 characters of text between the images, so the last lies more
+    // than two phone screens below the first
+    expect(IMAGE_SPACER.length).toBeGreaterThan(500)
+    const step = check.slice(
+      check.indexOf('async function descriptionImagesCheck()'),
+      check.indexOf('export const TEAM_SYNC_STEP'),
+    )
+    expect(step).toContain('setViewportSize({ width: 390, height: 844 })')
+    expect(step).toContain("img.naturalWidth > 0 && img.src.startsWith('blob:')")
+    expect(step).toContain('the last image was asked for before it came near view')
+    expect(step).toContain('most <= 4')
+    expect(step).toContain(`restOk(w, 'DELETE', \`/tasks/\${task.key}\`)`)
+    expect(step).toContain(`\`\${run.tag} description images\``)
   })
 
   it("uploads through the task window's file input and finds the file by its row", () => {

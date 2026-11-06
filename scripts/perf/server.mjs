@@ -35,6 +35,17 @@
 //   subtasks (0.2)       share of tasks that are subtasks
 //   follows (0.1)        share of tasks the signed-in person follows
 //   people (50)          people in the organization
+//   pictures (0)         share of the people with an uploaded picture,
+//                        which files:mintUrls answers (people=1000&pictures=1
+//                        for the design size)
+//   images (0)           images in the first task's description, at most
+//                        100 (the per-task limit), each an inline
+//                        attachment of the task, one a paragraph with a
+//                        paragraph of text between, which files:mintUrls
+//                        answers
+//   bigimages (0)        how many of those images are 4,096 pixels square,
+//                        the largest the app uploads, rather than small
+//                        photos, for the bytes and decoded memory they hold
 //   hidden (4)           projects the signed-in person cannot see, as full
 //                        of tasks as the visible ones; they reach the
 //                        workspace only as anonymized load rows and the
@@ -471,6 +482,12 @@
 // ceiling of 1,000 tasks. The task window's read of a task resolves its ref
 // as the server does (convex/lib/taskWindow.ts taskByRef): a uuid in any
 // case, or a number bare or as QN-12 in the organization asked only.
+// So is files:mintUrls (mintFiles), with the server's caps of 100
+// attachments and 1,000 pictures a call: it answers https URLs on
+// perf.invalid for the files and pictures the workspace holds, each with
+// the picture's storage version as `v` as the gateway's are, which the
+// benchmark's page serves itself with the gateway's CORS answer
+// (scripts/perf/files.mjs routePerfFiles). A data: URL cannot carry `v`.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { creatorGrant } from '../../convex/lib/projectGrants'
@@ -548,6 +565,9 @@ const subtaskShare = option('subtasks', 0.2)
 const followShare = option('follows', 0.1)
 const grantCount = Math.max(0, option('grants', 0))
 const peopleCount = Math.max(2, option('people', 50), grantCount + 2)
+const pictureShare = Math.min(1, Math.max(0, option('pictures', 0)))
+const imageCount = Math.min(100, Math.max(0, Math.floor(option('images', 0))))
+const bigImageCount = Math.min(imageCount, Math.max(0, Math.floor(option('bigimages', 0))))
 const hiddenCount = option('hidden', 4)
 const programCount = Math.max(1, option('programs', 1))
 const subprojectCount = Math.max(1, option('subprojects', 10))
@@ -873,6 +893,10 @@ const profiles = Array.from({ length: peopleCount }, (_, n) => ({
   message_retention_days: 7,
   accepted_at: now,
   created_at: now,
+  // the `pictures` share, spread over the people as picked spreads them
+  ...(pictureShare > 0 && Math.floor((n + 1) * pictureShare) > Math.floor(n * pictureShare)
+    ? { avatar_storage_id: storageId(500_000 + n) }
+    : {}),
 }))
 const me = profiles[0]
 const teams = Array.from({ length: Math.ceil(peopleCount / 10) }, (_, n) => ({
@@ -1206,6 +1230,24 @@ const loadRow = (row) => {
     remaining_set_at: row.remaining_set_at ?? null,
   }
 }
+/* The `images` parameter's inline images of the first task, the first
+   `bigimages` of them 4,096 pixels square, and the description that shows
+   them, one a paragraph with text between. */
+const descriptionImages = Array.from({ length: imageCount }, (_, k) => ({
+  id: id('e', k),
+  issue_id: tasks[0]?.id,
+  name: k < bigImageCount ? `survey-${k + 1}.png` : `bench-photo-${k + 1}.webp`,
+  size_bytes: k < bigImageCount ? 6_000_000 : 120_000,
+  mime: k < bigImageCount ? 'image/png' : 'image/webp',
+  storage_id: storageId(600_000 + k),
+  inline: true,
+  uploaded_by: me.id,
+  created_at: now,
+}))
+if (imageCount && tasks[0])
+  tasks[0].description = descriptionImages
+    .map((image, k) => `${prose(240)}\n\n![Bench photo ${k + 1}](att:${image.id})`)
+    .join('\n\n')
 const wireRows = new Map(tasks.map((row) => [row.id, wireTask(row)]))
 const loadRows = new Map(allTasks.map((row) => [row.id, loadRow(row)]))
 // each label once a task, also where the stride of 5 meets a label again,
@@ -1235,22 +1277,24 @@ const links = tasks.flatMap((row, n) => {
     },
   ]
 })
-const attachments = tasks.flatMap((row, n) => {
-  if (!picked(n, attachmentShare, 2)) return []
-  return [
-    {
-      id: id('b', n),
-      issue_id: row.id,
-      name: `measurement-${n}.pdf`,
-      size_bytes: 20_000 + n,
-      mime: 'application/pdf',
-      storage_id: storageId(n),
-      inline: n % 3 === 0,
-      uploaded_by: row.assignee_id,
-      created_at: now,
-    },
-  ]
-})
+const attachments = descriptionImages.concat(
+  tasks.flatMap((row, n) => {
+    if (!picked(n, attachmentShare, 2)) return []
+    return [
+      {
+        id: id('b', n),
+        issue_id: row.id,
+        name: `measurement-${n}.pdf`,
+        size_bytes: 20_000 + n,
+        mime: 'application/pdf',
+        storage_id: storageId(n),
+        inline: n % 3 === 0,
+        uploaded_by: row.assignee_id,
+        created_at: now,
+      },
+    ]
+  }),
+)
 const issueSubs = tasks.flatMap((row, n) => {
   return picked(n, followShare, 3) ? [{ issue_id: row.id, profile_id: me.id, created_at: now }] : []
 })
@@ -1777,6 +1821,45 @@ const windowAnswered = new Set()
 /** What a read answers when it never answers (window=loading): nothing is
     sent for it. */
 const NO_ANSWER = Symbol('no answer')
+/** The most ids one files:mintUrls call names (convex/files.ts MINT_IDS). */
+const MINT_IDS = { attachments: 100, profiles: 1000 }
+/** files:mintUrls for `args`: a lease on perf.invalid for each file and
+    picture the workspace holds, the others left out as the server leaves
+    them out, refused whole past MINT_IDS as the server refuses it. A big
+    image's URL says so (`size=big`), for the page's own server. */
+function mintFiles(args) {
+  const attachmentIds = args.attachment_ids ?? []
+  const profileIds = args.profile_ids ?? []
+  const refuse = (message) =>
+    Object.assign(new Error(message), { data: { code: 'bad_request', message } })
+  if (attachmentIds.length > MINT_IDS.attachments)
+    throw refuse(`attachment_ids must name at most ${MINT_IDS.attachments} attachments`)
+  if (profileIds.length > MINT_IDS.profiles)
+    throw refuse(`profile_ids must name at most ${MINT_IDS.profiles} profiles`)
+  const exp = Math.floor(Date.now() / 1000) + 600
+  const files = new Map(snapshot.attachments.map((row) => [row.id, row]))
+  const people = new Map(snapshot.profiles.map((row) => [row.id, row]))
+  const attachments = {}
+  for (const fileId of attachmentIds) {
+    const row = files.get(fileId)
+    if (!row) continue
+    const big = row.mime === 'image/png' ? '&size=big' : ''
+    attachments[fileId] = {
+      url: `https://perf.invalid/files/${fileId}?e=${exp}&m=${me.id}&t=perf${big}`,
+      exp,
+    }
+  }
+  const avatars = {}
+  for (const profileId of profileIds) {
+    const row = people.get(profileId)
+    if (!row?.avatar_storage_id) continue
+    avatars[profileId] = {
+      url: `https://perf.invalid/avatars/${profileId}?e=${exp}&m=perf-account&t=perf&v=${row.avatar_storage_id}`,
+      exp,
+    }
+  }
+  return { attachments, avatars }
+}
 /** The data of a refusal a read threw (a ConvexError's), for the page to
     throw again as one, or nothing for any other failure. */
 const refusalOf = (error) =>
@@ -2049,6 +2132,8 @@ const read = (name, args = {}) => {
     }
     case 'appearance:get':
       return { mode: appearance, image_source: 'none', custom_image: null }
+    case 'files:mintUrls':
+      return mintFiles(args)
     case 'appearance:dailyImage':
       return null
     case 'billing:status':

@@ -222,6 +222,7 @@ import { signInBrowser } from './browser-demo.mjs'
 import { inboxBadge } from './inboxBadge.mjs'
 import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from './limits.mjs'
 import { fixtureDirectory, loadCredentials, resolveTarget } from './marketing-demo.mjs'
+import { pngOf } from './perf/files.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -5061,6 +5062,110 @@ async function attachmentUploadCheck() {
   })
 }
 
+/** The step that loads a description's images as they come near view
+ *  (descriptionImagesCheck). */
+export const DESCRIPTION_IMAGES_STEP = 'ui/description-images'
+
+/** What the text between the step's images says: about 600 characters, so
+ *  each image stands a few hundred pixels of text below the one before at
+ *  phone size, and the last lies more than two screens below the first. */
+export const IMAGE_SPACER =
+  'The bench rig ran the full thermal cycle overnight. Each probe logged its reading every ten seconds, and the enclosure held its seal through all twelve cycles. The fan curve kept the regulator under its limit, and the logs show no brown-out on any rail. The next run adds the humidity chamber and the second firmware build, so the results can be compared side by side before the review. Keep the cables routed behind the rack, as the photos show, and label each probe before the next run starts. Note any reading that drifts from nominal in the log, with the time and the rail it was on.'
+
+/** A task's description images load as they come near view, from the
+ *  deployment's gateway through fetch: over REST it makes a task in A with
+ *  six small PNG attachments and a description that shows them one a
+ *  paragraph with IMAGE_SPACER between (a description save shows the task's
+ *  own files, model/descriptionImages.ts settleDescriptionImages). In the
+ *  app at 390 by 844 it opens the task: the first image shows (naturalWidth
+ *  above 0) from bytes (a blob: src, which only a fetch the gateway answers
+ *  with the app's origin gives), the last has asked the gateway for nothing
+ *  yet, and once the window scrolls to the end all six show from blob:
+ *  srcs with at most four /files/ downloads in flight at once. It deletes
+ *  the task over REST. It runs after ui/attachment-upload. */
+async function descriptionImagesCheck() {
+  const w = run.creds.writeToken
+  const { A } = run.projects
+  await check(DESCRIPTION_IMAGES_STEP, async () => {
+    const task = await restOk(w, 'POST', '/tasks', {
+      project: A.id,
+      title: `${run.tag} description images`,
+      status: 'progress',
+    })
+    run.created.push(task)
+    const ids = []
+    for (let n = 0; n < 6; n++) {
+      const bytes = pngOf(320, 240, 0.05, n + 1)
+      const start = await restOk(w, 'POST', `/tasks/${task.key}/attachments`, {
+        name: `${run.tag} photo ${n + 1}.png`,
+        content_type: 'image/png',
+        size: bytes.length,
+      })
+      const storage_id = await putBytes(start.upload_url, bytes, 'image/png')
+      const att = await restOk(w, 'POST', `/tasks/${task.key}/attachments/${start.ticket}`, {
+        storage_id,
+      })
+      ids.push(att.id)
+    }
+    await restOk(w, 'PATCH', `/tasks/${task.key}`, {
+      description: ids
+        .map((id, n) => `${IMAGE_SPACER}\n\n![Photo ${n + 1}](att:${id})`)
+        .join('\n\n'),
+    })
+    // the gateway's downloads of these files, and the most at once
+    const asked = new Set()
+    let open = 0
+    let most = 0
+    const fileOf = (request) => {
+      const { pathname } = new URL(request.url())
+      return pathname.startsWith('/files/') ? pathname.slice('/files/'.length) : null
+    }
+    const started = (request) => {
+      const id = fileOf(request)
+      if (!id || !ids.includes(id)) return
+      asked.add(id)
+      most = Math.max(most, ++open)
+    }
+    const ended = (request) => {
+      const id = fileOf(request)
+      if (id && ids.includes(id)) open--
+    }
+    app.on('request', started)
+    app.on('requestfinished', ended)
+    app.on('requestfailed', ended)
+    await app.setViewportSize({ width: 390, height: 844 })
+    try {
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${task.key.toLowerCase()}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      const image = (id) => app.locator(`[role="dialog"] [data-att="${id}"] img`)
+      const shows = (id) =>
+        image(id).evaluate((img) => img.naturalWidth > 0 && img.src.startsWith('blob:'))
+      await image(ids[0]).waitFor({ timeout: 60_000 })
+      expect(
+        await until(() => shows(ids[0])),
+        'the first image does not show from bytes the app fetched',
+      )
+      const last = ids[ids.length - 1]
+      expect(!asked.has(last), 'the last image was asked for before it came near view')
+      await app.locator(`[role="dialog"] [data-att="${last}"]`).scrollIntoViewIfNeeded()
+      for (const id of ids) {
+        await image(id).waitFor({ timeout: 60_000 })
+        expect(await until(() => shows(id)), `image ${ids.indexOf(id) + 1} does not show`)
+      }
+      expect(most <= 4, `${most} images downloaded at once`)
+      eq(asked.size, 6, 'images downloaded')
+      eq((await restOk(w, 'DELETE', `/tasks/${task.key}`)).deleted, true, 'deleted')
+      return `the first image showed from a blob: URL before the last was asked for, and all six after the scroll, at most ${most} downloads at once`
+    } finally {
+      app.off('request', started)
+      app.off('requestfinished', ended)
+      app.off('requestfailed', ended)
+      await app.setViewportSize({ width: 1360, height: 900 })
+    }
+  })
+}
+
 /** The step that opens Team sync on the deployment's agenda
  *  (teamSyncCheck). */
 export const TEAM_SYNC_STEP = 'ui/team-sync'
@@ -8530,6 +8635,9 @@ async function main() {
   await billingAccountsCheck()
   // a file attached through the task window, on an upload ticket
   await attachmentUploadCheck()
+  // a description's images loaded near view through fetch, with a task of
+  // its own
+  await descriptionImagesCheck()
   // Settings › Projects and Archived projects on the server's lists, on a
   // project of its own
   await settingsProjectsCheck()
