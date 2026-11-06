@@ -48,7 +48,7 @@
  *   messages, none of the first 1,000 a change, answers `unread_change`
  *   true, since the rest may tell of one. `unread_change` says whether an
  *   unread message tells of a change, a change or a mention in the
- *   description, the app's rule (src/lib/spine.ts unreadStart). It reruns
+ *   description, the app's rule (src/lib/spine.ts UnreadStart). It reruns
  *   when any of those change.
  * - page (across the caller's seats): one page of at most 50 task groups,
  *   newest or oldest first by list time, with Unread only, Show snoozed,

@@ -288,14 +288,14 @@ const READ_PEEK = 8
 
 /* Whether `message` tells of a change the task window lists only under
  * All: a change, or a mention in the description, which comes with the
- * description's edit (src/lib/spine.ts unreadStart). */
+ * description's edit (src/lib/spine.ts UnreadStart). */
 const tellsChange = (message: Pick<Doc<'messages'>, 'kind' | 'detail'>): boolean =>
   message.kind === 'change' ||
   (message.kind === 'mention' && message.detail === MENTION_DETAILS.description)
 
 /**
  * Whether one of the item's unread messages tells of a change, by the app's
- * rule (src/lib/spine.ts unreadStart): a change, or a mention in the
+ * rule (src/lib/spine.ts UnreadStart): a change, or a mention in the
  * description. The item counts its changes and mentions read or not, so
  * the unread ones are those beyond the read ones, which the prune keeps to
  * at most one, so the answer reads the item's read messages, one normally,
