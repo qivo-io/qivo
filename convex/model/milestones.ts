@@ -51,6 +51,7 @@ import { limitedText } from '../lib/limitRules'
 import {
   LIMITS,
   MILESTONE_READ_PROJECTS,
+  MILESTONE_READ_ROWS,
   milestoneWeekTaken,
   WEEK_START_REFUSALS,
 } from '../lib/limits'
@@ -669,9 +670,10 @@ export async function removeMilestoneCore(
 /* ------------------------------------------------------------------ reads */
 
 /** The budget of one of the app's milestone reads (milestones.ts). A call
- * names at most `projects` projects. A section batch asks for at most
- * `rows` rows, while a range of days (between) has no row cap and ends only
- * at its last day or at the ceiling. The ceiling bounds readMilestones' own
+ * names at most `projects` projects. A section answer holds at most `rows`
+ * rows, from one batch of 25 to a section the app grew by Load more
+ * (lib/limits.ts MILESTONE_READ_ROWS), while a range of days (between) has
+ * no row cap and ends only at its last day or at the ceiling. The ceiling bounds readMilestones' own
  * reads, counted from its start. It stops once they have read `ranges`
  * index ranges, `documents` documents or `bytes` bytes, and never reads past
  * what the request has left. The check of the projects before it has its own
@@ -683,7 +685,7 @@ export async function removeMilestoneCore(
  * a row they read changes. Tests lower these. */
 export const MILESTONE_READ = {
   projects: MILESTONE_READ_PROJECTS,
-  rows: 25,
+  rows: MILESTONE_READ_ROWS,
   ranges: 2000,
   documents: 8000,
   bytes: 4 * 1024 * 1024,

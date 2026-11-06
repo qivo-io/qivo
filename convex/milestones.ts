@@ -4,11 +4,12 @@
  * batch or a range of days at a time instead of every milestone of every
  * project the workspace's projects part sends. The app holds them in its
  * store (src/store/planner.ts P.watchMilestones): the Milestones window
- * opened on a milestone reads it with `get`, and Team sync's opening reads
- * its next milestone with `section` and those of this week and next with
- * `between`. The Overview, the window's list and the Roadmap still read
- * the workspace's copy, and the projects part still sends every milestone.
- * The writes are in projects.ts.
+ * opened on a milestone reads it with `get`, the window lists a project's
+ * upcoming milestones and, once Past is expanded, its past ones with
+ * `section`, and Team sync's opening reads its next milestone with
+ * `section` and those of this week and next with `between`. The Overview
+ * and the Roadmap still read the workspace's copy, and the projects part
+ * still sends every milestone. The writes are in projects.ts.
  *
  * Each read names projects of any of the caller's organizations and judges
  * each with the caller's seat in its own organization. An unknown, foreign,
@@ -91,13 +92,15 @@ function afterArg(after: MilestonePosition): MilestonePosition {
  * `search`, at most LIMITS.search long, keeps the milestones whose name
  * holds every word of it, in any order, ignoring case and accents. `after`
  * is the `next` of an earlier batch of the same section, and `limit` from 1
- * to MILESTONE_READ.rows. `next` is null only once no milestone of the
- * section follows. `stopped` is null for a full batch, or the stored day the
- * read reached when its budget ran out first; the rows are then every match
- * up to it, possibly none, and `next` goes on from there. A first upcoming
- * batch also says, in `past`, whether one of the projects holds a past
- * milestone, so an empty upcoming list does not read as a project without
- * history.
+ * to MILESTONE_READ.rows (100). The app asks 25 at first and grows
+ * `limit` by 25 for each Load more, so one live read holds a section the
+ * person grew (src/lib/milestoneSection.ts). `next` is null only once no
+ * milestone of the section follows. `stopped` is null for a full batch, or
+ * the stored day the read reached when its budget ran out first; the rows
+ * are then every match up to it, possibly none, and `next` goes on from
+ * there. A first upcoming batch also says, in `past`, whether one of the
+ * projects holds a past milestone, so an empty upcoming list does not read
+ * as a project without history.
  */
 export const section = authedQuery({
   args: {
