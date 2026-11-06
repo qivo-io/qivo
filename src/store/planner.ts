@@ -512,18 +512,20 @@ let itemConnection = 0
    or stops. */
 let itemRerun = false
 /* How many answers of the open task's inbox item arrived, so the read on
-   open can tell an answer after its confirmation (P.readOnOpen). */
+   open can tell an answer that came after its read went out
+   (P.readOnOpen). */
 let itemAnswers = 0
 /* The window's last read on open (P.readOnOpen), with its task,
-   organization and `through`, how many item answers had arrived when the server
-   confirmed it (null until then, and for good after a refusal), and
+   organization and `through`, how many item answers had arrived when it
+   went out, whether the server confirmed it (never after a refusal), and
    whether it was the one more read the rule allows at the same `through`.
    Forgotten when the thread changes or stops. */
 let itemRead: {
   task: string
   org: string
   through: number
-  confirmed: number | null
+  sent: number
+  confirmed: boolean
   again: boolean
 } | null = null
 let commentsWatchEpoch = 0
@@ -2696,8 +2698,9 @@ function messagesByOrg(ids: string[]): Map<string, string[]> {
 }
 
 /* Sends messages.readItem for the item `target` names (P.readItem), and
-   runs `confirmed` once the server accepts it. Answers false when the
-   pause refuses it. */
+   runs `confirmed` once the server accepted it and its paint settled, so
+   `confirmed` may send another write. Answers false when the pause refuses
+   it. */
 function sendItemRead(
   target: { org: string; task: string; through: number; latestAt: string },
   quiet: boolean,
@@ -2716,6 +2719,7 @@ function sendItemRead(
       Date.parse(row.created_at) <= latest
     )
       ids.push(row.id)
+  let accepted = false
   void send(
     api.messages.readItem,
     { org_id: target.org, issue_id: target.task, through: target.through },
@@ -2723,7 +2727,16 @@ function sendItemRead(
     {
       // the read that opening a task sends is not a change the person made
       about: { background: quiet },
-      ...(confirmed ? { onOk: confirmed } : {}),
+      ...(confirmed
+        ? {
+            onOk: () => {
+              accepted = true
+            },
+            onSettled: () => {
+              if (accepted) confirmed()
+            },
+          }
+        : {}),
     },
   )
   return true
@@ -13456,12 +13469,16 @@ export const PLANNER = {
       while the seat's items are building, after a failure, for no item, a
       read item or a snoozed one, or for a task the store does not watch. It
       sends each `through` once a visit of the watched task, so the Inbox
-      pane and its pop-out send one read, and once more when an answer that
-      arrived after that read's confirmation still holds unread messages at
-      the same `through`, as for a message whose mutation started before the
-      read and committed after it. A paused read is refused quietly and
-      goes out once the pause ends, and a refusal by the server is not sent
-      again for its `through`. Answers whether it sent one. */
+      pane and its pop-out send one read, and once more when the server
+      confirmed that read and the item's answer, one that came after the
+      read went out, still holds unread messages at the same `through`, as
+      for a message whose mutation started before the read and committed
+      after it. It checks that at the confirmation too, since Convex brings
+      the answer that holds the read before the read's promise resolves, so
+      the answer that came with it may hold such a message, and no later
+      answer may come. A paused read is refused quietly and goes out once
+      the pause ends, and a refusal by the server is not sent again for its
+      `through`. Answers whether it sent one. */
   readOnOpen: (task: string): boolean => {
     const shown = PLANNER.inboxItem
     if (!shown || shown.task !== task || shown.state !== 'ok' || !shown.current) return false
@@ -13470,24 +13487,31 @@ export const PLANNER = {
     const last = itemRead?.task === task && itemRead.org === shown.org ? itemRead : null
     if (last && item.through < last.through) return false
     const again = last !== null && item.through === last.through
+    // the same `through` again only once, after the confirmation, for an
+    // answer that came after the read went out
     if (
       last &&
       item.through === last.through &&
-      (last.again || last.confirmed === null || itemAnswers <= last.confirmed)
+      (last.again || !last.confirmed || itemAnswers <= last.sent)
     )
       return false
     const read: NonNullable<typeof itemRead> = {
       task,
       org: shown.org,
       through: item.through,
-      confirmed: null,
+      sent: itemAnswers,
+      confirmed: false,
       again,
     }
     const sent = sendItemRead(
       { org: shown.org, task, through: item.through, latestAt: item.latest_at },
       true,
       () => {
-        if (itemRead === read) read.confirmed = itemAnswers
+        if (itemRead !== read) return
+        read.confirmed = true
+        // the answer that came with the confirmation may still hold a
+        // message committed after the read
+        PLANNER.readOnOpen(task)
       },
     )
     if (sent) itemRead = read

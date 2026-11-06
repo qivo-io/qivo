@@ -336,6 +336,31 @@ describe("the task window's read on open", { timeout: 20_000 }, () => {
     expect(itemReads()).toHaveLength(2)
   })
 
+  it('reads once more when the answer that came with the confirmation still holds unread at the same through', async () => {
+    await load([message('task-a', 5)])
+    await openTask()
+    expect(itemReads()).toHaveLength(1)
+    // the server read the item, and a message whose write started before
+    // the read committed after it, with an earlier time; the transition
+    // that brings that answer runs before the read's promise resolves, as
+    // Convex orders them (lib/convexOrdering.test.ts), and nothing comes
+    // after it
+    beyond = [{ ...message('task-a', 5), read_at: at(6) }, message('task-a', 4, { id: 'late' })]
+    await act(async () => publish())
+    await settle()
+    expect(P.inboxItem?.item).toMatchObject({ unread_count: 1, through: Date.parse(at(5)) })
+    // not yet, as the server has not confirmed the read
+    expect(itemReads()).toHaveLength(1)
+    await act(async () => writes[0].answer())
+    await settle()
+    expect(itemReads()).toHaveLength(2)
+    expect(itemReads()[1]).toEqual(itemReads()[0])
+    // and only once more
+    await act(async () => writes[1].answer())
+    await settle()
+    expect(itemReads()).toHaveLength(2)
+  })
+
   it('sends nothing for a snoozed item', async () => {
     const until = new Date(Date.now() + 86_400_000).toISOString()
     await load([message('task-a', 5, { snoozed_until: until })])
