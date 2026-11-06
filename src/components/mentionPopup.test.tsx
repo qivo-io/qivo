@@ -14,7 +14,8 @@ import { docToAst, type PMNode } from './descDoc'
    configuration the description and comment editors use
    (descEditor.tsx), its read answered by the mention stand-in. Typing
    "@an" and Enter inserts the mention the server's notify triggers parse,
-   with the caret after it, and Escape leaves the draft as typed. */
+   with the caret after it, Escape leaves the draft as typed, and a second
+   "@" reads again on the editor's one renderer. */
 
 const store = vi.hoisted(() => ({ reads: [] as Promise<unknown>[] }))
 const ANNA = '0b6c3d1e-7a54-4f8e-9a2b-5c1d2e3f4a5b'
@@ -126,5 +127,22 @@ describe('the mention popup in an editor', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(popup()).toBeNull()
     expect(stored()).toBe('Ask @er')
+  })
+
+  it('reads again for a second "@" with the words the first popup ended on', async () => {
+    editor.chain().focus('end').insertContent(' @an').run()
+    await vi.advanceTimersByTimeAsync(MENTION_DELAY_MS)
+    await vi.advanceTimersByTimeAsync(0)
+    key('Escape')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(popup()).toBeNull()
+    // the editor opens its next popup on the same renderer
+    editor.chain().focus('end').insertContent(' @an').run()
+    expect(popup()?.querySelector('[data-mention-stale]')).toBeNull()
+    await vi.advanceTimersByTimeAsync(MENTION_DELAY_MS)
+    expect(store.reads).toHaveLength(2)
+    await vi.advanceTimersByTimeAsync(0)
+    key('Enter')
+    expect(stored()).toBe(`Ask @an @[Anna Fält](user:${ANNA}) `)
   })
 })

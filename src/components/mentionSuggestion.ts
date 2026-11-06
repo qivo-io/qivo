@@ -37,7 +37,11 @@
      nobody too (convex/lib/search.ts searchWords), so it says so without
      a read.
    - Leaving stops the reads and the timer, so a late answer changes
-     nothing; nothing is kept between popups.
+     nothing, and nothing is kept between popups. TipTap calls `render`
+     once for each editor and opens every popup of it on that one
+     renderer (@tiptap/suggestion suggestion.ts), so each popup starts
+     from `reset`. The next "@" reads again, also for the words the last
+     popup ended on, and asks again for a text that matched nobody.
 
    Plain DOM, no React: the popup is a transient list rebuilt on each
    change, which keeps this out of the editor's render cycle entirely. */
@@ -181,6 +185,24 @@ export const mentionSuggestion: Omit<
       list.more()
     }
 
+    /** Forgets everything a popup typed, read and was asked, so the next
+        popup of this editor starts as the first did. */
+    function reset() {
+      if (timer !== null) clearTimeout(timer)
+      timer = null
+      list.stop()
+      words = ''
+      typedKey = null
+      tooLong = false
+      openKey = null
+      openWords = ''
+      none.clear()
+      lastRows = []
+      selected = 0
+      enterFor = null
+      moreFrom = null
+    }
+
     /** After the list changed: keeps its rows for the next text, remembers
         a text that matched nobody, moves the highlight past a Load more and
         acts on an Enter kept for this text. */
@@ -214,6 +236,8 @@ export const mentionSuggestion: Omit<
       openKey = typedKey
       openWords = words
       selected = 0
+      // a Load more of the text before has no place in this list
+      moreFrom = null
       list.open(openKey)
     }
 
@@ -348,7 +372,7 @@ export const mentionSuggestion: Omit<
         const dom = props.editor?.view.dom as HTMLElement | undefined
         org = dom?.getAttribute('data-qivo-org') || P.homeOrg
         command = props.command
-        selected = 0
+        reset()
         update(props.query)
         unmount = props.mount(el)
       },
@@ -388,11 +412,7 @@ export const mentionSuggestion: Omit<
         return false
       },
       onExit: () => {
-        if (timer !== null) clearTimeout(timer)
-        timer = null
-        list.stop()
-        openKey = null
-        enterFor = null
+        reset()
         unmount?.()
         unmount = null
         el = null

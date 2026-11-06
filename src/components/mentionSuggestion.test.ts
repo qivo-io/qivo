@@ -102,7 +102,9 @@ const fail = async (read = store.reads.at(-1)) => {
 }
 const rest = (ms = MENTION_DELAY_MS) => vi.advanceTimersByTimeAsync(ms)
 
-/* A popup as TipTap drives it in an editor of organization `org`. */
+/* A popup as TipTap drives it in an editor of organization `org`. TipTap
+   calls `render` once for each editor, so `start` after `exit` opens the
+   editor's next popup on the same renderer. */
 function popup(org: string | null = 'org-task') {
   let el: HTMLElement | null = null
   const command = vi.fn()
@@ -357,6 +359,57 @@ describe('the mention popup', () => {
     p.type('qqa')
     await rest()
     expect(store.reads).toHaveLength(reads + 2)
+  })
+
+  it('highlights the first row of a new text, not the place a Load more of the text before began', async () => {
+    const p = popup()
+    p.start()
+    await rest()
+    await answer(undefined, { stop: 3 })
+    expect(ids(p)).toEqual(['anna', 'erik', 'me'])
+    press(p.el()?.querySelector('[data-mention-more]'))
+    // the text changes while that Load more reads
+    p.type('person')
+    await rest()
+    await answer()
+    expect(ids(p)).toHaveLength(8)
+    expect(active(p)).toBe(ids(p)[0])
+  })
+
+  it('starts the next popup of one editor afresh, reading again for the words the last one ended on', async () => {
+    const p = popup()
+    p.start()
+    await rest()
+    await answer()
+    p.key('ArrowDown')
+    p.key('Enter')
+    expect(p.command).toHaveBeenLastCalledWith({ id: 'erik', label: 'Erik Holm' })
+    p.exit()
+    // "@" again in the same editor, with the same (empty) words
+    p.start()
+    expect(stale(p)).toBe(0)
+    expect([state(p), lines(p)]).toEqual(['loading', ['Searching…']])
+    await rest()
+    expect(store.reads.map((r) => r.search)).toEqual(['', ''])
+    await answer()
+    expect(active(p)).toBe('anna')
+    expect(p.key('Enter')).toBe(true)
+    expect(p.command).toHaveBeenLastCalledWith({ id: 'anna', label: 'Anna Fält' })
+  })
+
+  it('asks again in the next popup of one editor for a text that matched nobody in the last one', async () => {
+    const p = popup()
+    p.start('zz')
+    await rest()
+    await answer()
+    expect(lines(p)).toEqual(['No matching members'])
+    p.exit()
+    p.start('zzq')
+    expect(lines(p)).toEqual(['Searching…'])
+    await rest()
+    expect(store.reads.map((r) => r.search)).toEqual(['zz', 'zzq'])
+    await answer()
+    expect(lines(p)).toEqual(['No matching members'])
   })
 
   it('stops at PICKER_CAPS.mentions and asks for more typing', async () => {
