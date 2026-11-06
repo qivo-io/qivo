@@ -4996,6 +4996,25 @@ function demoReservation(url: string): string | null {
   }
 }
 
+/* The upload ticket in upload URL `url`, an /attachment-uploads/ URL
+   (convex/lib/fileTokens.ts attachmentUploadUrl), else null. A ticket's id
+   is a lowercase UUID, the form of a new row's id. The app's attach takes
+   it as the attachment's id, as a REST or MCP confirm does, so a confirm
+   sent again, which finds an attachment by the id of the ticket it names
+   (convex/model/attachments.ts completeUpload), finds only the one that
+   ticket made. */
+function uploadTicket(url: string): string | null {
+  try {
+    const match =
+      /^\/attachment-uploads\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(
+        new URL(url).pathname,
+      )
+    return match ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
 /* Cancels the private demo's reservation in upload URL `url`
    (files.cancelDemoUpload), for an upload whose POST got no answer, and
    does nothing for any other URL. It does not wait for the answer, since a
@@ -11062,8 +11081,10 @@ export const PLANNER = {
       files.uploadUrl gets the file's size and name, after compression, since
       the compressed file is what is sent. Outside the private demo it answers
       an upload ticket's URL on the API origin, which stores one file of that
-      size, and only this person's attach of that file to this task takes it;
-      in the demo it reserves that size in the demo's shared storage. A
+      size, and only this person's attach of that file to this task takes it,
+      with the ticket's id as the attachment's (uploadTicket); in the demo it
+      reserves that size in the demo's shared storage, and the attachment's
+      id is a new one. A
       refusal from the URL's receiver is toasted in its own words, and a
       POST that ended without the receiver's answer with
       UPLOAD_NOT_FINISHED, which then cancels a demo reservation that would
@@ -11122,7 +11143,6 @@ export const PLANNER = {
         toast(attachmentTooLarge(file.name, limit))
         return null
       }
-      const attId = crypto.randomUUID()
       const inline = !!opts?.inline
       const about: WriteAbout = { task: uuid, ...(target.answer ? { answer: true } : {}) }
       try {
@@ -11132,6 +11152,7 @@ export const PLANNER = {
           'none',
           { about },
         )
+        const attId = uploadTicket(url) ?? crypto.randomUUID()
         const posted = await postUpload(url, file)
         if (!('storageId' in posted)) {
           const why = 'refused' in posted ? asSentence(posted.refused) : UPLOAD_NOT_FINISHED

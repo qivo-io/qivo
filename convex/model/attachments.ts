@@ -596,8 +596,10 @@ async function completeUpload(
  * with UPLOAD_NOT_STARTED, also one a REST or MCP ticket of another person
  * stored. A REST or MCP ticket of the caller attaches, since a ticket
  * belongs to its person on every surface. The same attach sent again after
- * it committed, with the same id, answers the attachment it made. Reads the
- * ticket by its file (attachment_uploads.by_storage).
+ * it committed, with the same id, answers the attachment it made. The app
+ * sends its ticket's id as `row.id`, and an older app an id of its own,
+ * which attaches the same way. Reads the ticket by its file
+ * (attachment_uploads.by_storage).
  */
 export async function attachUploadedFile(
   ctx: MutationCtx,
@@ -629,6 +631,11 @@ export async function attachUploadedFile(
  * of one ticket sent at once, since the second conflicts on the ticket,
  * runs again and finds it spent. Any other ticket, such as another of the
  * caller's spent ones, is UPLOAD_TICKET_MISSING whatever file it names.
+ * The app's attach also takes its ticket's id as the attachment's
+ * (src/store/planner.ts uploadTicket), so a confirm naming an attachment
+ * the app made names the ticket that attachment spent, and answers it. An
+ * attachment an older app made has an id of its own, and a confirm naming
+ * that id with its file answers it too, though no ticket had that id.
  */
 export async function confirmAttachmentUpload(
   ctx: MutationCtx,

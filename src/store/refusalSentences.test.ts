@@ -36,8 +36,9 @@ describe('refusal sentences in restore and upload toasts', () => {
   let P: Planner
   let snap: Snapshot
   let showToast: ReturnType<typeof vi.fn>
-  // how the server answers each mutation by name; unlisted ones resolve null
-  let answers: Record<string, () => Promise<unknown>>
+  // how the server answers each mutation by name, from its arguments;
+  // unlisted ones resolve null
+  let answers: Record<string, (args: Record<string, unknown>) => Promise<unknown>>
 
   beforeEach(async () => {
     vi.resetModules()
@@ -69,9 +70,9 @@ describe('refusal sentences in restore and upload toasts', () => {
       next(structuredClone(snap))
       return () => {}
     })
-    network.mutation.mockImplementation((ref) => {
+    network.mutation.mockImplementation((ref, args) => {
       const answer = answers[getFunctionName(ref)]
-      return answer ? answer() : Promise.resolve(null)
+      return answer ? answer(args) : Promise.resolve(null)
     })
     const store = await import('./planner')
     P = store.P
@@ -199,6 +200,38 @@ describe('refusal sentences in restore and upload toasts', () => {
     expect(post).toHaveBeenCalledOnce()
     expect(post.mock.calls[0][1]?.body).toBe(small)
     expect(sentWith('files:attach')).toMatchObject({ name: 'shot.webp', mime: 'image/webp' })
+  })
+
+  it("attaches a file under its upload ticket's id, and under an id of its own in the demo", async () => {
+    const ticket = '0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({ storageId: 'stored-1' })),
+    )
+    answers['files:attach'] = (args) =>
+      Promise.resolve({
+        attachment: {
+          id: args.id,
+          issue_id: 'task-1',
+          name: 'notes.txt',
+          mime: 'text/plain',
+          size_bytes: 11,
+          storage_id: 'stored-1',
+          inline: false,
+          created_at: NOW,
+        },
+      })
+    answers['files:uploadUrl'] = () =>
+      Promise.resolve(`https://api.example.test/attachment-uploads/${ticket}?e=1&m=me&t=token`)
+    expect(await P.addAttachment('task-1', file())).toBe(ticket)
+    expect(sentWith('files:attach')).toMatchObject({ id: ticket, storage_id: 'stored-1' })
+    // a demo reservation is no ticket
+    answers['files:uploadUrl'] = () =>
+      Promise.resolve(`https://demo.example.test/demo-uploads/${ticket}?e=1&m=login&t=token`)
+    const own = await P.addAttachment('task-1', file())
+    expect(own).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+    expect(own).not.toBe(ticket)
+    expect(sentWith('files:attach')).toMatchObject({ id: own })
   })
 
   it('says the upload did not finish when its POST ends without the receiver’s answer', async () => {

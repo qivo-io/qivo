@@ -227,7 +227,9 @@ export const cancelDemoUpload = authedMutation({
  * ledger's ticket instead (assertDemoFileOwnership). */
 export const attach = orgMutation({
   args: {
-    id: v.string(), // client-generated attachment uuid
+    // the attachment's uuid, which the app takes from its upload ticket's
+    // URL outside the demo and makes itself in the demo
+    id: v.string(),
     issue_id: v.string(),
     storage_id: v.id('_storage'),
     name: v.string(),

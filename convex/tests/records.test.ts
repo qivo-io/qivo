@@ -1218,12 +1218,18 @@ describe('the REST upload', () => {
     const a = await attached(2)
     const b = await attached(3)
     const missing = { status: 404, text: JSON.stringify({ error: UPLOAD_TICKET_MISSING }) }
-    // A's ticket with B's file, both the caller's own uploads to this task
-    expect(await rest(fx, 'POST', `${tasks}/${a.ticket}`, { storage_id: b.storage_id })).toEqual(
+    // a ticket that never existed, with the file of the caller's attachment
+    // whose id names no ticket, as an older app's attach made, and with a
+    // file the caller attached
+    const own = await plantAttachment(fx, issue, { uploaded_by: fx.agent.id })
+    expect(await rest(fx, 'POST', `${tasks}/${uuid()}`, { storage_id: own.storage_id })).toEqual(
       missing,
     )
-    // a ticket that never existed, with a file the caller attached
     expect(await rest(fx, 'POST', `${tasks}/${uuid()}`, { storage_id: a.storage_id })).toEqual(
+      missing,
+    )
+    // A's ticket with B's file, both the caller's own uploads to this task
+    expect(await rest(fx, 'POST', `${tasks}/${a.ticket}`, { storage_id: b.storage_id })).toEqual(
       missing,
     )
     // a ticket the hourly cleanup deleted after it expired
@@ -1244,7 +1250,9 @@ describe('the REST upload', () => {
     const again = await rest(fx, 'POST', `${tasks}/${a.ticket}`, { storage_id: a.storage_id })
     expect(again.status).toBe(201)
     expect((JSON.parse(again.text) as { id: string }).id).toBe(a.id)
-    expect((await attachmentRows(fx.t)).map((row) => row.id).sort()).toEqual([a.id, b.id].sort())
+    expect((await attachmentRows(fx.t)).map((row) => row.id).sort()).toEqual(
+      [a.id, b.id, own.id].sort(),
+    )
   })
 
   it('answers 404 again for a ticket the oversize refusal spent', async () => {

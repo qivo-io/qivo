@@ -959,7 +959,9 @@ export const recipes: Recipe[] = [
     pause: 'P',
     act: (P) => P.addAttachment('QN-1', file('notes.txt', 'text/plain')),
     answers: {
-      'files:uploadUrl': () => 'https://files.test/upload',
+      // an upload ticket's address, whose id the attachment takes
+      'files:uploadUrl': () =>
+        'https://files.test/attachment-uploads/0b7d6f4e-1c2a-4d3b-9e8f-7a6b5c4d3e2f?e=1&m=me&t=t',
       'files:attach': (args) => ({ attachment: attachmentOf(args) }),
     },
     truth: (snap, args) => snap.attachments.push(attachmentOf(args)),
