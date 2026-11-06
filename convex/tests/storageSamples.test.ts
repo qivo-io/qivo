@@ -32,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, internal } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx } from '../_generated/server'
+import { attach as attachFn, removeAttachment as removeFn } from '../files'
 import { deleteOrgDeep } from '../model/cascade'
 import { wipeWorkStep } from '../model/orgDeletion'
 import { DAY_MS } from '../model/orgRetention'
@@ -648,6 +649,67 @@ describe('costReport', () => {
     [TODAY, 'tomorrow', /UTC date/],
   ])('refuses %s to %s', async (from, to, message) => {
     await expectRefusal(report(newT(), from, to), 'bad_request', message)
+  })
+})
+
+describe('what the totals add to the writes they count', () => {
+  /* An attach in the app and the removal of that file for good, each in a
+   * transaction of its own as f.user, with what the transaction read and
+   * wrote, for an organization counted or not. */
+  async function attachAndRemove(counted: boolean) {
+    vi.stubEnv('BETTER_AUTH_SECRET', 'test-files-secret')
+    const t = newT()
+    const f = await withOrg(t)
+    if (counted) await t.run((ctx) => startOrgTotals(ctx, f.org.id))
+    const task = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
+    const storage_id = await t.run((ctx) => ctx.storage.store(new Blob([new Uint8Array(100)])))
+    await plantTicket(t, { profile: f.user, issue: task, storageId: storage_id })
+    const call = (fn: unknown, args: Record<string, unknown>) =>
+      as(t, f.user).mutation(async (ctx): Promise<Measured> => {
+        await (
+          fn as { _handler: (ctx: MutationCtx, args: Record<string, unknown>) => Promise<unknown> }
+        )._handler(ctx, { org_id: f.org.id, ...args })
+        const m = await ctx.meta.getTransactionMetrics()
+        return {
+          ranges: m.databaseQueries.used,
+          documents: m.documentsRead.used,
+          bytes: m.bytesRead.used,
+          written: m.documentsWritten.used,
+        }
+      })
+    const id = uuid()
+    const attached = await call(attachFn, {
+      id,
+      issue_id: task.id,
+      storage_id,
+      name: 'spec.pdf',
+      inline: false,
+    })
+    const revision = (await t.run((ctx) => orgTotalsRow(ctx, f.org.id)))?.revision
+    const removed = await call(removeFn, { id })
+    const after = await t.run((ctx) => orgTotalsRow(ctx, f.org.id))
+    return { attached, removed, revision, after }
+  }
+
+  it('writes three totals rows and one revision for each attach and removal, and nothing without totals', async () => {
+    const counted = await attachAndRemove(true)
+    const not = await attachAndRemove(false)
+    console.log(
+      'totals on an attach and a removal',
+      JSON.stringify({
+        counted: [counted.attached, counted.removed],
+        not: [not.attached, not.removed],
+      }),
+    )
+    // one revision a call, the reading's `revisions`
+    expect(counted.revision).toBe(1)
+    expect(counted.after).toMatchObject({ bytes: 0, files: 0, revision: 2 })
+    expect(not.after).toBeNull()
+    // the task's, the project's and the organization's rows
+    expect(counted.attached.written - not.attached.written).toBe(3)
+    expect(counted.removed.written - not.removed.written).toBe(3)
+    for (const call of ['attached', 'removed'] as const)
+      expect(counted[call].documents).toBeGreaterThan(not[call].documents)
   })
 })
 
