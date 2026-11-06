@@ -96,9 +96,9 @@
  * as it is, with no calls in a later bucket. One removed through Users,
  * for checking how Billing names a Removed user, stays removed, since its
  * usage or its pending removal keeps its id taken, and the run logs its
- * name. N goes up to 100 (MOST_API_ACCOUNTS),
- * and a larger N is refused before anything is seeded. It runs after
- * --credentials and before the tasks.
+ * name. N goes up to 100 (MOST_API_ACCOUNTS), and a larger N is refused
+ * before anything is seeded. It runs after --credentials and before the
+ * tasks.
  *
  * `--labels N` adds up to N labels to Northstar, for checking Settings >
  * Labels past its first batch of 25 (LIST_BATCH). Each is made by Nora through

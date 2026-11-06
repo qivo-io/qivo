@@ -111,14 +111,15 @@
  * alone with their calls (billing.apiAccounts); the Standard agent's View
  * credentials must open API access on that agent and Billing's period,
  * and Who counts toward your bill, searched for the run tag, must list
- * both agents (billing.accountList) (ui/billing-accounts). It makes a project of its own with two
- * sub-projects, finds it by its run tag in Settings › Projects from the
- * deployment's list (projectSettings.projects) and opens its sub-projects
- * (subProjects), archives one sub-project alone and then the project over
- * REST, finds the project in Archived projects (archived), shows its
- * sub-projects (archivedSubProjects), one carried and one archived on its
- * own, and restores it there, which must bring back the project and the
- * carried sub-project only, each checked over REST (ui/settings-projects).
+ * both agents (billing.accountList) (ui/billing-accounts). It makes a
+ * project of its own with two sub-projects, finds it by its run tag in
+ * Settings › Projects from the deployment's list (projectSettings.projects)
+ * and opens its sub-projects (subProjects), archives one sub-project alone
+ * and then the project over REST, finds the project in Archived projects
+ * (archived), shows its sub-projects (archivedSubProjects), one carried and
+ * one archived on its own, and restores it there, which must bring back the
+ * project and the carried sub-project only, each checked over REST
+ * (ui/settings-projects).
  * It makes a milestone with its run tag over REST on its project, and
  * another in a week before the run's own, presses the first one's row on
  * the project's Overview, which opens the Milestones window on the
