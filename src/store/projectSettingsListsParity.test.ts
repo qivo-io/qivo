@@ -23,8 +23,10 @@
  * workspace: the same rows in the same order, Archived projects by archive
  * time where the server ties equal times by fields the workspace does not
  * carry. Two cases hold the stand-in to the real queries at the design
- * size, 200 live top-level projects for Settings › Projects and 300
- * archived ones for Archived projects.
+ * size, 200 live top-level projects for Settings › Projects and the New
+ * sub-project dialog's parents and 300 archived ones for Archived
+ * projects, and one at everyday values the parents of a user who leads 3
+ * projects.
  *
  * Today the store's admin rule (planner.ts levelOnProject) gives an
  * organization admin every project and Lead on each, which is what
@@ -57,7 +59,7 @@ import {
 } from '../../convex/tests/helpers.setup'
 import { keyOrg } from '../../convex/tests/nameKeys.setup'
 import { northstarId, plantNorthstar } from '../../convex/tests/northstar.setup'
-import { names, plantMetas, ready } from '../../convex/tests/projectNavFixtures.setup'
+import { names, plantGrants, plantMetas, ready } from '../../convex/tests/projectNavFixtures.setup'
 import { withReach } from '../../convex/tests/projectReach.setup'
 import {
   expectedArchived,
@@ -336,10 +338,11 @@ async function compareStandIn(
 }
 
 describe('the stand-in at the design size', () => {
-  it('lists an admin’s 200 live top-level projects as the real query does, eight batches', async () => {
+  it('lists an admin’s 200 live top-level projects as the real query does, eight batches, and offers each as a parent', async () => {
     const t = newT()
     const f = await withOrg(t)
-    // withOrg's two top-level projects, and 198 more
+    // withOrg's two top-level projects, and 198 more, none with sub-projects
+    // past withOrg's own, so the 500 live sub-projects stay everyday
     await plantMetas(t, f.org.id, names('Live project ', 198))
     await ready(t, f)
     const ws = await workspaceOf(as(t, f.admin))
@@ -349,6 +352,44 @@ describe('the stand-in at the design size', () => {
     )
     expect(real).toHaveLength(200)
     expect(await standInRows(ws, 'projectSettings:projects', { org_id: f.org.id })).toEqual(real)
+    // the New sub-project dialog's parents: every one, by management
+    const parents = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, f.admin, { sub_project_parents: true, after })),
+    )
+    expect(parents).toHaveLength(200)
+    expect(
+      await standInRows(ws, 'projectSettings:projects', {
+        org_id: f.org.id,
+        sub_project_parents: true,
+      }),
+    ).toEqual(parents)
+  })
+
+  it('offers a user who leads 3 of the organization’s projects those 3 as parents, as the real query does', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const lead = await plantSeat(t, {
+      org_id: f.org.id,
+      org_role: 'user',
+      auth_user_id: `auth_${uuid()}`,
+    })
+    const led = await plantMetas(t, f.org.id, names('Led project ', 3), { lead_id: lead.id })
+    // projects the seat sees by a grant but does not lead
+    const seen = await plantMetas(t, f.org.id, names('Seen project ', 3))
+    await plantGrants(t, lead, seen)
+    await ready(t, f)
+    const ws = await workspaceOf(as(t, lead))
+    if (ws === null) throw new Error('no workspace')
+    const parents = await rowsOf((after) =>
+      t.run((ctx) => settingsProjectsOf(ctx, lead, { sub_project_parents: true, after })),
+    )
+    expect(parents.map((r) => r.id).sort()).toEqual(led.map((p) => p.id).sort())
+    expect(
+      await standInRows(ws, 'projectSettings:projects', {
+        org_id: f.org.id,
+        sub_project_parents: true,
+      }),
+    ).toEqual(parents)
   })
 
   it('lists an admin’s 300 archived top-level projects as the real query does, twelve batches', async () => {
