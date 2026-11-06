@@ -6,15 +6,17 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LIMITS } from '../../convex/lib/limits'
 import type { LiveTransition } from './liveQueries'
-import type { BatchAt, BatchSource, ListBatch, PagedList } from './pagedList'
+import type { BatchAt, BatchSource, ListBatch, PagedList, PagedPages } from './pagedList'
 
 /* The shared paged list (lib/pagedList.ts) over a transport double and a
    small name-ordered server: the `once` source's reads on demand, and the
    `live` source's batches, kept live with ends pinned on Load more, split
    when a pinned batch stops short, holding one moment's answers, stopped
    while the tab is hidden and on leaving, and started again for a refused
-   position. Its two helpers, useSettledSearch and listEnd, have cases of
-   their own. */
+   position. The page mode (usePagedPages) shows one live page that Next
+   and Previous replace, and useMoreOnScroll loads more as a marker comes
+   into view. The helpers useSettledSearch, listEnd and pageEnd have cases
+   of their own. */
 
 type Row = { id: string; name: string }
 type Args = { list?: string; after?: string; through?: string }
@@ -107,7 +109,15 @@ const transport = vi.hoisted(() => {
 })
 vi.mock('./convex', () => ({ live: transport.live }))
 
-const { listEnd, usePagedList, useSettledSearch } = await import('./pagedList')
+const {
+  listEnd,
+  PAGE_LIMITS,
+  pageEnd,
+  useMoreOnScroll,
+  usePagedList,
+  usePagedPages,
+  useSettledSearch,
+} = await import('./pagedList')
 
 let container: HTMLDivElement
 let root: Root
@@ -717,6 +727,341 @@ describe('a list kept live a batch at a time', () => {
     expect(names()).toHaveLength(40)
     expect(now().full).toBe(true)
     expect(listEnd(now(), false)).toBe('full')
+  })
+})
+
+/* ----------------------------------------------------------------- pages */
+
+describe('a list shown a page at a time', () => {
+  const pages: PagedPages<ListBatch<Row>, Row>[] = []
+  const page = () => pages[pages.length - 1] as PagedPages<ListBatch<Row>, Row>
+  const shown = () => page().rows.map((row) => row.name)
+  function Pages({
+    listKey,
+    starts,
+  }: {
+    listKey: string | null
+    starts?: readonly (string | null)[]
+  }) {
+    pages.push(
+      usePagedPages({
+        key: listKey,
+        query: anyApi.labels.settingsPage,
+        args: (after) => argsOf(listKey ?? '', { after, through: null }),
+        batch: (a: ListBatch<Row> & { ready?: false }) => ('ready' in a ? null : a),
+        starts,
+      }),
+    )
+    return null
+  }
+  const show = (props: Parameters<typeof Pages>[0]) =>
+    act(async () => root.render(<Pages {...props} />))
+  const cursor = (name: string) => JSON.stringify([name, `a-${Number(name.slice(1))}`])
+
+  beforeEach(() => {
+    pages.length = 0
+  })
+
+  it('replaces the page on Next and Previous, keeping the shown page until the new one answered', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    expect(page().phase).toBe('first')
+    expect(pageEnd(page(), false)).toBe('loading')
+    await publish()
+    expect(shown()).toHaveLength(25)
+    expect(shown()[0]).toBe('a00')
+    expect(page().hasNext).toBe(true)
+    expect(page().hasPrevious).toBe(false)
+    await act(async () => page().next())
+    expect(page().phase).toBe('moving')
+    expect(page().moving).toBe('next')
+    expect(open()).toEqual([{ list: 'k' }, { list: 'k', after: cursor('a24') }])
+    // the page on screen stays until the next one answers
+    expect(shown()[0]).toBe('a00')
+    await publish()
+    // one page on screen, never the two together
+    expect(shown()).toHaveLength(25)
+    expect(shown()[0]).toBe('a25')
+    expect(open()).toEqual([{ list: 'k', after: cursor('a24') }])
+    expect(page().hasPrevious).toBe(true)
+    await act(async () => page().next())
+    await publish()
+    expect(shown()).toEqual(Array.from({ length: 10 }, (_, i) => `a${50 + i}`))
+    expect(page().hasNext).toBe(false)
+    expect(pageEnd(page(), false)).toBe('end')
+    await act(async () => page().previous())
+    await publish()
+    expect(shown()[0]).toBe('a25')
+    await act(async () => page().previous())
+    await publish()
+    expect(shown()[0]).toBe('a00')
+    expect(page().hasPrevious).toBe(false)
+    expect(page().starts).toEqual([null])
+  })
+
+  it('moves a row added before the page’s end to the next page, losing none between pages, and fills a row that left', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    server.labels.set('new', 'a00 new')
+    await publish()
+    expect(shown()).toHaveLength(25)
+    expect(shown().slice(0, 2)).toEqual(['a00', 'a00 new'])
+    expect(shown().at(-1)).toBe('a23')
+    await act(async () => page().next())
+    await publish()
+    // Next starts at the page's live end, so a24 opens the next page
+    expect(shown()[0]).toBe('a24')
+    // a row that leaves is filled from the next ones
+    server.labels.delete('a-30')
+    await publish()
+    expect(shown()).toHaveLength(25)
+    expect(shown()).not.toContain('a30')
+    expect(shown().at(-1)).toBe('a49')
+  })
+
+  it('offers Next beside a stopped page, and Retry for one stopped at its start', async () => {
+    plant('a', 60)
+    server.stop = (args) => (args.after ? 0 : 10)
+    await show({ listKey: 'k' })
+    await publish()
+    expect(shown()).toHaveLength(10)
+    expect(page().stopped).toBe(true)
+    expect(page().hasNext).toBe(true)
+    expect(pageEnd(page(), false)).toBe('more')
+    await act(async () => page().next())
+    await publish()
+    // the read checked nothing past its start, so Next would read it again
+    expect(shown()).toEqual([])
+    expect(page().stuck).toBe(true)
+    expect(page().hasNext).toBe(false)
+    expect(pageEnd(page(), false)).toBe('stuck')
+    server.stop = null
+    await act(async () => page().retry())
+    await publish()
+    expect(shown()[0]).toBe('a10')
+    expect(page().stuck).toBe(false)
+  })
+
+  it('keeps the page on screen when a move fails, and Retry tries the move again', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    server.fail = (args) => (args.after ? new Error('offline') : null)
+    await act(async () => page().next())
+    await publish()
+    expect(page().failedMove).toBe('next')
+    expect(page().phase).toBe('ready')
+    expect(shown()[0]).toBe('a00')
+    expect(open()).toEqual([{ list: 'k' }])
+    server.fail = null
+    await act(async () => page().retry())
+    expect(page().moving).toBe('next')
+    await publish()
+    expect(page().failedMove).toBe(null)
+    expect(shown()[0]).toBe('a25')
+  })
+
+  it('goes back to the first page once for a refused start, then fails, and Retry starts again', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    const refusal = new ConvexError({ code: 'bad_request', message: 'not a cursor' })
+    server.fail = (args) => (args.after ? refusal : null)
+    await publish()
+    expect(open()).toEqual([{ list: 'k' }])
+    expect(page().starts).toEqual([null])
+    await publish(true)
+    expect(shown()[0]).toBe('a00')
+    await act(async () => page().next())
+    await publish()
+    expect(page().phase).toBe('failed')
+    expect(pageEnd(page(), false)).toBe('failed')
+    expect(open()).toEqual([])
+    server.fail = null
+    await act(async () => page().retry())
+    await publish()
+    expect(shown()[0]).toBe('a00')
+    expect(page().phase).toBe('ready')
+  })
+
+  it('keeps at most PAGE_LIMITS.starts page starts, so Previous stops at the oldest held', async () => {
+    const was = PAGE_LIMITS.starts
+    PAGE_LIMITS.starts = 2
+    try {
+      plant('a', 100)
+      await show({ listKey: 'k' })
+      await publish()
+      for (let i = 0; i < 3; i++) {
+        await act(async () => page().next())
+        await publish()
+      }
+      expect(shown()[0]).toBe('a75')
+      expect(page().starts).toHaveLength(2)
+      await act(async () => page().previous())
+      await publish()
+      expect(shown()[0]).toBe('a50')
+      expect(page().hasPrevious).toBe(false)
+    } finally {
+      PAGE_LIMITS.starts = was
+    }
+  })
+
+  it('starts a new key at the first page, or at the starts a page remembered for it', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    await act(async () => page().next())
+    await publish()
+    const remembered = page().starts
+    await show({ listKey: 'j' })
+    expect(open()).toEqual([{ list: 'j' }])
+    expect(page().rows).toEqual([])
+    expect(page().phase).toBe('first')
+    await show({ listKey: 'k2', starts: remembered })
+    expect(open()).toEqual([{ list: 'k2', after: cursor('a24') }])
+    await publish()
+    expect(shown()[0]).toBe('a25')
+    expect(page().hasPrevious).toBe(true)
+  })
+
+  it('holds an answer with no rows on any page, and stops while hidden, refreshing on return', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    await setVisibility('hidden')
+    expect(open()).toEqual([])
+    expect(shown()).toHaveLength(25)
+    await setVisibility('visible')
+    expect(open()).toEqual([{ list: 'k' }])
+    expect(page().refreshing).toBe(true)
+    await publish(true)
+    expect(page().refreshing).toBe(false)
+    server.notReady = (args) => !!args.after
+    await act(async () => page().next())
+    await publish()
+    expect(page().phase).toBe('held')
+    expect(pageEnd(page(), false)).toBe('held')
+    expect(shown()).toEqual([])
+  })
+
+  it('leaves no read when the page goes', async () => {
+    plant('a', 60)
+    await show({ listKey: 'k' })
+    await publish()
+    await act(async () => page().next())
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    expect(open()).toEqual([])
+    expect(transport.handlers.size).toBe(0)
+  })
+})
+
+describe('the line that ends a page', () => {
+  const base = {
+    phase: 'ready' as const,
+    hasNext: false,
+    hasPrevious: false,
+    stuck: false,
+    rows: [{ id: 'a' }],
+  }
+  it.each([
+    ['loading', { phase: 'first' as const }, false],
+    ['held', { phase: 'held' as const, rows: [] }, false],
+    ['failed', { phase: 'failed' as const, hasNext: true }, false],
+    ['stuck', { stuck: true, rows: [] }, true],
+    ['more', { hasNext: true, rows: [] }, true],
+    ['more', { phase: 'moving' as const, hasNext: true }, false],
+    ['none', { rows: [] }, true],
+    ['empty', { rows: [] }, false],
+    ['nomore', { rows: [], hasPrevious: true }, true],
+    ['nomore', { rows: [], hasPrevious: true }, false],
+    ['end', {}, false],
+    ['end', { hasPrevious: true }, true],
+  ])('answers %s for %j', (want, patch, searching) => {
+    expect(pageEnd({ ...base, ...patch }, searching)).toBe(want)
+  })
+})
+
+describe('a list that loads more as its end scrolls into view', () => {
+  /* The observers made, each with its callback and the element it watches. */
+  const observers: { fire: (inView: boolean) => void; disconnected: boolean }[] = []
+  beforeEach(() => {
+    observers.length = 0
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        entry: { fire: (inView: boolean) => void; disconnected: boolean }
+        constructor(receive: (entries: { isIntersecting: boolean }[]) => void) {
+          this.entry = {
+            fire: (inView) => receive([{ isIntersecting: inView }]),
+            disconnected: false,
+          }
+          observers.push(this.entry)
+        }
+        observe() {}
+        disconnect() {
+          this.entry.disconnected = true
+        }
+      },
+    )
+  })
+  function Scrolled({ listKey }: { listKey: string }) {
+    const list = usePagedList({
+      key: listKey,
+      source: LIVE(listKey),
+      batch: (a: ListBatch<Row>) => a,
+      id: (row) => row.id,
+      most: 100,
+    })
+    views.push(list)
+    const marker = useMoreOnScroll(
+      list.more,
+      listEnd(list, false) === 'more' && list.phase !== 'more',
+    )
+    return <div ref={marker} />
+  }
+  const fire = (inView: boolean) =>
+    act(async () => {
+      for (const o of observers) if (!o.disconnected) o.fire(inView)
+    })
+
+  it('reads the next batch once the marker is in view and the list may read, and not before', async () => {
+    plant('a', 120)
+    await act(async () => root.render(<Scrolled listKey="k" />))
+    // before the first batch the list may not read more
+    await fire(true)
+    expect(open()).toEqual([{ list: 'k' }])
+    await fire(false)
+    await publish()
+    expect(names()).toHaveLength(25)
+    // out of view, nothing reads
+    expect(open()).toEqual([{ list: 'k' }])
+    await fire(true)
+    expect(open()).toHaveLength(3)
+    expect(now().phase).toBe('more')
+    // once the batch lands with the marker still in view, the next one reads
+    await publish()
+    expect(names()).toHaveLength(50)
+    expect(now().phase).toBe('more')
+    await publish()
+    await publish()
+    await publish()
+    // at the cap of 100 rows, it asks for a search and reads nothing more
+    expect(names()).toHaveLength(100)
+    expect(listEnd(now(), false)).toBe('full')
+    await fire(true)
+    expect(now().batches).toHaveLength(4)
+  })
+
+  it('stops observing when the list goes', async () => {
+    plant('a', 30)
+    await act(async () => root.render(<Scrolled listKey="k" />))
+    await act(async () => root.unmount())
+    root = createRoot(container)
+    expect(observers.every((o) => o.disconnected)).toBe(true)
   })
 })
 
