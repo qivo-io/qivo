@@ -227,19 +227,6 @@ describe('pooled API usage', () => {
       next: null,
       stopped: false,
     })
-    // the deprecated billing.currentUsage still sums the rows and answers
-    // every account, for tabs loaded before the paged list; the release
-    // that removes it removes this pin
-    const deprecated = await as(t, f.admin).query(api.billing.currentUsage, { org_id: f.org.id })
-    expect(deprecated.calls).toBe(7)
-    const byProfile = (a: { profile_id: string }, b: { profile_id: string }) =>
-      a.profile_id.localeCompare(b.profile_id)
-    expect([...deprecated.users].sort(byProfile)).toEqual(
-      [
-        { profile_id: f.agent.id, name: f.agent.name, calls: 4 },
-        { profile_id: f.user.id, name: f.user.name, calls: 3 },
-      ].sort(byProfile),
-    )
   })
 
   it('a paid period consumes blocks waived by complimentary access and charges only later blocks', async () => {

@@ -298,6 +298,10 @@ const APP_SHARED = [
   'billing_webhooks',
   'billing_notices',
   'machine_rate_limits',
+  // The daily storage samples do nothing on the demo deployment
+  // (storageSamples.ts tick).
+  'storage_daily_samples',
+  'storage_sample_runs',
   // The demo runs no OAuth provider, so it records no ended session
   // (lib/sessionEnd.ts endSessionAccess).
   'oauth_ended_sessions',

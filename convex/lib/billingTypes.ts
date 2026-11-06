@@ -98,20 +98,6 @@ export type BillingDetails = {
   sync_error: string | null
 }
 
-/** @deprecated The answer of the deprecated billing.summary, kept one
- * release for tabs loaded before billing.details shipped. billing.details
- * answers the same without the two name lists, which billing.accountList
- * reads 25 at a time; the release that removes billing.summary removes
- * this type. */
-export type BillingSummary = BillingDetails & {
-  billable_accounts: { profile_id: string; name: string; reason: 'member' | 'guest_without_home' }[]
-  non_billable_accounts: {
-    profile_id: string
-    name: string
-    reason: 'inactive' | 'guest_with_home'
-  }[]
-}
-
 /* The usage bucket Billing shows and what it has recorded, without its
  * calls. `period_kind` says which bucket it is: `paid` is the live
  * provider period, `pending` the interval after it while a renewal is
@@ -142,45 +128,23 @@ export type BillingPeriodHead = {
  * stored-byte totals (model/storageTotals.ts), files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, which the page shows as being counted too.
- * `sampled_storage_bytes` is what a paid period's sample measured at its
- * start, which the period's storage charge uses and which leaves files in
- * Deleted items out, or null for any other bucket and for a period whose
- * sample has not finished. It holds no account; billing.apiAccounts lists
- * the bucket's accounts 25 at a time. */
+ * `sampled_storage_bytes` is what a paid period's sample measured, which
+ * the period's storage charge uses. It is the totals when the sample read
+ * them, files in Deleted items included, or null for any other bucket and
+ * for a period whose sample has not finished. `sampled_storage_at` is when
+ * the sample read them, normally within a second of the period's start. A
+ * sample that waited, as while the totals were counted again, or that was
+ * started again later measures storage when it runs, files stored during
+ * the wait included. It is null without a sample and for one an earlier
+ * release finished, which scanned the attachment rows of live tasks stored
+ * before the period began and left the files in Deleted items out. The
+ * answer holds no account; billing.apiAccounts lists the bucket's accounts
+ * 25 at a time. */
 export type BillingUsageFigures = BillingPeriodHead & {
   calls: number | null
   storage_bytes: number | null
   sampled_storage_bytes: number | null
-}
-
-/** @deprecated The head of the deprecated billing.currentUsage and of the
- * legacy billing.usageReport: the bucket's calls summed from its usage
- * rows, and every account with calls in `users`. billing.usageFigures
- * answers the calls from the aggregates and billing.apiAccounts the
- * accounts 25 at a time; the release that removes those reads removes
- * this type. */
-export type BillingUsageHead = BillingPeriodHead & {
-  calls: number
-  users: { profile_id: string; name: string; calls: number }[]
-}
-
-/** @deprecated The answer of the deprecated billing.currentUsage, kept one
- * release for tabs loaded before billing.usageFigures shipped, whose
- * answer (BillingUsageFigures) holds the same storage figures: current
- * storage, or null while the totals are not complete, and the paid
- * period's sample. */
-export type BillingUsage = BillingUsageHead & {
-  storage_bytes: number | null
-  sampled_storage_bytes: number | null
-}
-
-/* The answer of the legacy billing.usageReport, which tabs loaded before
- * billing.currentUsage shipped still read. Its storage comes from a scan
- * of the attachment rows of live tasks, files in Deleted items left out,
- * with the whole project breakdown, largest first. */
-export type BillingUsageReport = BillingUsageHead & {
-  storage_bytes: number
-  projects: { project_id: string; name: string; storage_bytes: number }[]
+  sampled_storage_at: string | null
 }
 
 /* One project of Billing's Storage by project list

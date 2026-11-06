@@ -1,5 +1,4 @@
 import { v } from 'convex/values'
-import { internal } from './_generated/api'
 import { internalQuery } from './_generated/server'
 import {
   assertOrgAvailable,
@@ -12,24 +11,13 @@ import type {
   AccountNames,
   ApiAccounts,
   BillingDetails,
-  BillingUsage,
   BillingUsageFigures,
-  BillingUsageReport,
   StorageProjects,
 } from './lib/billingTypes'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { forbidden, orgAction, orgQuery, require } from './lib/functions'
-import {
-  billingDetailsOf,
-  billingSummary,
-  billingUsageHead,
-  currentUsageOf,
-  type StoragePage,
-  type StorageProject,
-  storagePage,
-  usageFiguresOf,
-} from './model/billing'
+import { forbidden, orgQuery, require } from './lib/functions'
+import { billingDetailsOf, usageFiguresOf } from './model/billing'
 import { accountNamesBatch, apiAccountsBatch } from './model/billingLists'
 import { storageProjectsBatch } from './model/billingStorage'
 import { checkoutDeadline } from './model/orgRetention'
@@ -65,26 +53,6 @@ export const details = orgQuery({
 })
 
 /**
- * @deprecated The app reads billing.details and billing.accountList since
- * the release after v0.1.144. This query stays, with its reads and its
- * answer, through that release, so tabs and desktop windows loaded before
- * it still load Billing, and a later release removes it and adds it to the
- * Instant Rollback list in docs/deployment.md.
- *
- * Billing's details with the name of every billable and non-billable
- * account (model/billing.ts billingSummary), which walks the roster twice.
- * Admin only, refused in the demo and while the deletion runs.
- */
-export const summary = orgQuery({
-  args: {},
-  handler: async (ctx) => {
-    refuseDemoFeature()
-    require(ctx.me.org_role === 'admin', forbidden('admin only'))
-    return await billingSummary(ctx, ctx.me.org_id)
-  },
-})
-
-/**
  * Billing's usage figures for an organization admin (model/billing.ts
  * usageFiguresOf): the bucket API calls are recorded in now, its calls,
  * the allowances and the charges recorded, current storage and the
@@ -100,10 +68,13 @@ export const summary = orgQuery({
  * storage is the organization's stored-byte totals, files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, never 0. The sample is what the current paid period's
- * storage charge uses, which leaves files in Deleted items out, and null
- * for any other bucket or while the sample has not finished. Billing's API
- * calls by account reads billing.apiAccounts for the period_key this
- * answers.
+ * storage charge uses, the same totals as the period's sample read them,
+ * normally when the period started, files in Deleted items included, with
+ * when it read them (`sampled_storage_at`, null for a sample an earlier
+ * release finished, which scanned the attachment rows and left those files
+ * out). Both are null for any other bucket or while the sample has not
+ * finished. Billing's API calls by account reads billing.apiAccounts for
+ * the period_key this answers.
  *
  * It picks the bucket by the clock when it runs (usagePeriod). Convex can
  * answer a read from its cache of an identical earlier one while nothing
@@ -128,35 +99,6 @@ export const usageFigures = orgQuery({
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await usageFiguresOf(ctx, ctx.me.org_id)
-  },
-})
-
-/**
- * @deprecated The app reads billing.usageFigures and billing.apiAccounts
- * since the release after v0.1.144. This query stays, with its answer,
- * through that release, so tabs and desktop windows loaded before it
- * still load Billing, and a later release removes it and adds it to the
- * Instant Rollback list in docs/deployment.md.
- *
- * Billing's usage as the app read it from v0.1.135: the period's API calls
- * summed from every usage row of the bucket, with each account's total in
- * `users` and the allowances (model/billing.ts billingUsageHead), current
- * storage and the period's storage sample (currentUsageOf). Admin only,
- * refused in the demo and while the deletion runs. It picks the bucket by
- * the clock, as billing.usageFigures does. It reads the head's rows, the
- * roster only when the subscription has no billed seats (usageAllowance),
- * one profile per account with usage, and two single reads, the totals row
- * and the period row. At 1,000 people with 15 accounts of usage over 30
- * usage rows and no subscription it read 1,047 documents, 22 index ranges
- * and about 384 KB in convex/tests/billingStorage.test.ts ("reads at the
- * design size"), without the caller's seat check.
- */
-export const currentUsage = orgQuery({
-  args: {},
-  handler: async (ctx): Promise<BillingUsage> => {
-    refuseDemoFeature()
-    require(ctx.me.org_role === 'admin', forbidden('admin only'))
-    return await currentUsageOf(ctx, ctx.me.org_id)
   },
 })
 
@@ -257,80 +199,6 @@ export const storageProjects = orgQuery({
     refuseDemoFeature()
     require(ctx.me.org_role === 'admin', forbidden('admin only'))
     return await storageProjectsBatch(ctx, ctx.me.org_id, a)
-  },
-})
-
-/** The legacy usage report's figures other than storage. */
-export const usageHead = internalQuery({
-  args: { org_id: v.string() },
-  handler: async (ctx, { org_id }) => await billingUsageHead(ctx, org_id),
-})
-
-/** One page of the organization's stored bytes as the legacy usage report
- * counts them now. */
-export const storageNowPage = internalQuery({
-  args: {
-    org_id: v.string(),
-    cursor: v.union(v.string(), v.null()),
-    size: v.optional(v.number()),
-  },
-  handler: async (ctx, { org_id, cursor, size }): Promise<StoragePage> =>
-    await storagePage(ctx, org_id, { cursor, size, before: Number.MAX_SAFE_INTEGER }),
-})
-
-/**
- * @deprecated The app stopped reading this report in the release after
- * v0.1.134, which reads billing.currentUsage and billing.storageProjects
- * instead; from the release after v0.1.144 it reads billing.usageFigures in
- * place of currentUsage. This report stays, with its scan and its answer,
- * through the release after v0.1.134, so tabs and desktop windows loaded
- * before it still load Billing, and a later release removes it with
- * usageHead, storageNowPage and the scan and adds it to the Instant
- * Rollback list in docs/deployment.md.
- *
- * The usage report that Billing read before then (model/billing.ts
- * billingUsageHead). Its storage is counted page by page, as a period's
- * storage sample counts it (storagePage), so no transaction reads all the
- * organization's attachment rows, and it leaves files in Deleted items
- * out. Each page is its own snapshot, so a file stored or removed while the
- * report runs may count or not. It is fetched on demand.
- */
-export const usageReport = orgAction({
-  args: {},
-  handler: async (ctx): Promise<BillingUsageReport> => {
-    const org_id = ctx.orgId
-    const head = await ctx.runQuery(internal.billing.usageHead, { org_id })
-    const projects = new Map<string, StorageProject>()
-    let bytes = 0
-    let cursor: string | null = null
-    let size: number | undefined
-    for (;;) {
-      const page: StoragePage = await ctx.runQuery(internal.billing.storageNowPage, {
-        org_id,
-        cursor,
-        size,
-      })
-      if ('split' in page) {
-        size = page.split
-        continue
-      }
-      bytes += page.bytes
-      for (const counted of page.projects) {
-        const total = projects.get(counted.project_id)
-        if (total === undefined) projects.set(counted.project_id, { ...counted })
-        else total.storage_bytes += counted.storage_bytes
-      }
-      if (page.next === null) break
-      cursor = page.next
-      size = undefined
-    }
-    return {
-      ...head,
-      storage_bytes: bytes,
-      projects: [...projects.values()]
-        .filter((p) => p.storage_bytes > 0)
-        .sort((a, b) => b.storage_bytes - a.storage_bytes),
-    }
   },
 })
 

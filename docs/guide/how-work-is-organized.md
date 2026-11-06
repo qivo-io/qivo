@@ -331,8 +331,8 @@ or remove goes the same way, and so do the files of a deleted organization.
 The demo erases files at once.
 
 Files in Deleted items count toward the organization's storage until they
-are deleted for good. A paid period's storage charge still uses the storage
-measured at the period's start, which leaves them out
+are deleted for good. That includes the storage measured at the start of a
+paid period, which its storage charge uses
 ([Billing and free access](./administration-guard-rails-and-the-demo.md#billing-and-free-access)).
 The organization export leaves Deleted items out
 ([Export data](./organization-and-team-settings.md#export-data)).

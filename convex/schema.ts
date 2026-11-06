@@ -415,9 +415,8 @@ const issueSubscriptionsTable = defineTable({
 
 // A task holds at most LIMITS.attachments.max rows (lib/limits.ts) without a
 // dropped_at, and at most DROPPED_IMAGES_MAX with one (model/descriptionImages.ts).
-// A row names no project. The billing sample reads it through its task
-// (model/billing.ts storagePage), and the stored-byte totals through its
-// task's storage_task_totals row, so a move writes no attachment row.
+// A row names no project. The stored-byte totals read it through its task's
+// storage_task_totals row, so a move writes no attachment row.
 const issueAttachmentsTable = defineTable({
   org_id: v.string(),
   id: v.string(),
@@ -441,9 +440,8 @@ const issueAttachmentsTable = defineTable({
   // the app's windows: the unmarked rows of a range of window keys
   .index('by_org_task_archived_key', ['org_id', 'task_archived', 'task_key'])
   // An organization's rows in the order they were stored. Archiving a task
-  // moves its rows within by_org_task_archived_issue but not here, so the
-  // billing storage sample pages through this one (model/billing.ts
-  // storagePage) and leaves out the rows stored after the period began.
+  // moves its rows within by_org_task_archived_issue but not here, so Qivo
+  // Admin's monthly usage pages through this one (model/usage.ts filesPage).
   .index('by_org', ['org_id'])
   .index('by_uuid', ['id'])
   .index('by_issue', ['issue_id'])
@@ -826,13 +824,23 @@ export default defineSchema({
     seats: v.number(),
     // Local membership evidence, never profiles from another tenant.
     profile_ids: v.array(v.string()),
-    // The storage sampled at period start and the blocks over the allowance
-    // it charges. Both are absent while the sample runs (billingSync.ts
-    // storageStep), and set once it finishes.
+    // The storage the period's sample measured, normally at its start, and
+    // the blocks over the allowance it charges. Both are absent until the
+    // sample finishes, and stay absent while it waits for the
+    // organization's stored-byte totals or after it stopped (billingSync.ts
+    // storageStep). The sample reads the totals, files in Deleted items
+    // included; one an earlier release finished scanned the attachment rows
+    // of live tasks and left those files out.
     storage_bytes: v.optional(v.number()),
     storage_blocks: v.optional(v.number()),
-    // The running sample's id, which its steps check before each page, and
-    // when its last step ran. Both are cleared when it finishes.
+    // When the sample read the totals, set with storage_bytes. That is
+    // normally within a second of the renewal, and later for a sample that
+    // waited for the totals or was started again, which measures storage
+    // when it runs. Absent on a sample an earlier release finished, which
+    // counted the attachment rows stored before the period's row.
+    storage_sampled_at: v.optional(v.string()),
+    // The running sample's id, which its step checks before it reads, and
+    // when the sample last started. Both are cleared when it finishes.
     storage_run: v.optional(v.string()),
     storage_run_at: v.optional(v.string()),
     // How many times the sample started, cleared when it finishes, and when
@@ -2010,6 +2018,85 @@ export default defineSchema({
   })
     // one task's row, and the teardowns' drain by organization
     .index('by_org_issue', ['org_id', 'issue_id', 'num']),
+
+  /* Daily storage samples (storageSamples.ts): one reading a UTC day of an
+   * organization's stored-byte totals, as its storage_org_totals row held
+   * them when the day's run read it, files in Deleted items included. A
+   * row is an actual reading only, never an estimate. An organization
+   * whose totals are not complete, whose deletion has begun or that a run
+   * never reached has no row for the day. At most one row per organization
+   * and day. Nothing bills from them yet. They go after
+   * SAMPLE_RETENTION_DAYS (model/storageSamples.ts) and with their
+   * organization (model/orgDeletion.ts billingRows, model/cascade.ts
+   * deleteOrgDeep). The demo deployment never writes one. */
+  storage_daily_samples: defineTable({
+    org_id: v.string(),
+    // the UTC date (YYYY-MM-DD) of the run that took it, kept by every step
+    // of that run, also past midnight
+    day: v.string(),
+    bytes: v.number(),
+    files: v.number(),
+    // the totals row's revision when read; a recount replaces that row with
+    // one created later, which counts again from 0
+    revision: v.number(),
+    at: v.number(), // when the step read the totals, epoch milliseconds
+    run: v.string(), // the run that took it
+  })
+    // one organization's days, its sample of a day, and the drain by
+    // organization
+    .index('by_org_day', ['org_id', 'day'])
+    // expiry, oldest days first
+    .index('by_day', ['day']),
+
+  /* One UTC day's run of the daily storage samples (storageSamples.ts):
+   * its progress, which a resumed run goes on from, and what it cost, for
+   * the reading that decides whether daily storage billing is worth its
+   * Convex cost (storageSamples.costReport). It names an organization only
+   * in `cursor`, while its run is under way and, for a run that never
+   * finished, until the row expires. Deleted after SAMPLE_RETENTION_DAYS. */
+  storage_sample_runs: defineTable({
+    day: v.string(), // YYYY-MM-DD, UTC
+    // The run under way or done: its id, which its steps carry and a
+    // resumed run replaces, and the last organization id its steps finished,
+    // null before the first and once the run finished.
+    run: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    started_at: v.number(), // epoch milliseconds, as the times below
+    step_at: v.number(), // when the run started, resumed or last took a step
+    finished_at: v.optional(v.number()),
+    // Each step adds to them. `steps` and `restarts` count the run's step
+    // and resume calls, `orgs` the organizations its steps read, `written`
+    // and `present` the samples they wrote and found already written,
+    // `uncounted`, `deleting` and `failed` the organizations they skipped
+    // without a sample: totals not complete, deletion begun, or a read that
+    // failed. `revisions` adds each sampled organization's totals revision
+    // less that of its sample of the latest day, the writes to its totals
+    // since then, and nothing for a first sample, for a totals row a recount
+    // replaced since or for a sample a late run takes after a later day's,
+    // so each write counts once. The expiry steps the run's last step
+    // started add `expired` and `expiry_steps`. The other five are what
+    // Convex's transaction metrics measured of the steps and the expiry
+    // steps, the read and write of the run row's own update included. The
+    // ticks that start and resume the run are not in them.
+    counts: v.object({
+      steps: v.number(),
+      restarts: v.number(),
+      orgs: v.number(),
+      written: v.number(),
+      present: v.number(),
+      uncounted: v.number(),
+      deleting: v.number(),
+      failed: v.number(),
+      revisions: v.number(),
+      expired: v.number(),
+      expiry_steps: v.number(),
+      documents_read: v.number(),
+      documents_written: v.number(),
+      bytes_read: v.number(),
+      bytes_written: v.number(),
+      database_queries: v.number(),
+    }),
+  }).index('by_day', ['day']),
 
   milestones: milestonesTable,
 

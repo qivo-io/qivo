@@ -181,15 +181,10 @@ backgroundPreviews:source query internal {"type":"object","value":{"kind":{"fiel
 billing:accountList query public {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"billable"},{"type":"literal","value":"non_billable"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:adminContext query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:apiAccounts query public {"type":"object","value":{"period":{"fieldType":{"type":"string"},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:currentUsage query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:details query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:status query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:storageNowPage query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false},"size":{"fieldType":{"type":"number"},"optional":true}}}
 billing:storageProjects query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:summary query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billing:usageFigures query public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:usageHead query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
-billing:usageReport action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:cancelSubscription action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:checkout action public {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 billingActions:clearEndedCheckout mutation internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"checkout_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -727,6 +722,10 @@ snapshot:commentsBefore query public {"type":"object","value":{"issue_id":{"fiel
 snapshot:historyBefore query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"before":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadComments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 snapshot:threadHistory query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:costReport query internal {"type":"object","value":{"from":{"fieldType":{"type":"string"},"optional":false},"to":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:expire mutation internal {"type":"object","value":{"day":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:step mutation internal {"type":"object","value":{"day":{"fieldType":{"type":"string"},"optional":false},"run":{"fieldType":{"type":"string"},"optional":false}}}
+storageSamples:tick mutation internal {"type":"object","value":{}}
 taskWindow:attachments query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:links query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 taskWindow:relationCandidates query public {"type":"object","value":{"issue_id":{"fieldType":{"type":"string"},"optional":false},"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"parent"},{"type":"literal","value":"subtask"},{"type":"literal","value":"link"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -855,21 +854,15 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Billing details/usage require an org admin; status reveals only the
   // caller's org entitlement. details, usageFigures, apiAccounts,
   // accountList and storageProjects check the admin and refuse the demo in
-  // their handlers, as apiAccess.people does; summary and currentUsage,
-  // kept one release for tabs loaded before details and usageFigures, do
-  // the same, and the legacy usageReport, kept for tabs loaded before
-  // currentUsage, re-checks admin identity in orgAction. Checkout and
-  // portal re-check admin identity in orgAction and remain available
-  // during billing recovery/read-only access.
+  // their handlers, as apiAccess.people does. Checkout and portal re-check
+  // admin identity in orgAction and remain available during billing
+  // recovery/read-only access.
   billing: {
     details: 'orgQuery',
     usageFigures: 'orgQuery',
     apiAccounts: 'orgQuery',
     accountList: 'orgQuery',
-    summary: 'orgQuery',
-    currentUsage: 'orgQuery',
     storageProjects: 'orgQuery',
-    usageReport: 'orgAction',
     status: 'orgQuery',
   },
   // API access pages every member's credentials, their period figures and
@@ -1332,7 +1325,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 252
+const PUBLIC_COUNT = 249
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

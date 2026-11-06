@@ -16,7 +16,6 @@ import { byId, strayRows } from '../lib/db'
 import { LIMITS, MIB, PARENT_IS_SUBTASK, SUBTASK_WITH_SUBTASKS } from '../lib/limits'
 import { nameKey } from '../lib/nameKey'
 import type { EventOwner } from '../lib/taskEvents'
-import { storageUsage } from '../model/billing'
 import { deleteOrgDeep } from '../model/cascade'
 import {
   CALL,
@@ -54,6 +53,7 @@ import {
   uuid,
   withOrg,
 } from './helpers.setup'
+import { liveAttachmentUsage } from './liveAttachments.setup'
 import { assertNoDanglingRefs } from './refs.setup'
 import {
   assertNoOrphanHistory,
@@ -3960,17 +3960,17 @@ describe('restore calls', () => {
   })
 })
 
-describe('the storage files bill', () => {
-  /** The bytes storageUsage bills the organization for, by project id. */
-  const billed = async (t: T, orgId: string) => {
-    const usage = await t.run((ctx) => storageUsage(ctx, orgId))
+describe('where live attachment rows land', () => {
+  /** The bytes of the organization's live attachment rows, by project id. */
+  const live = async (t: T, orgId: string) => {
+    const usage = await t.run((ctx) => liveAttachmentUsage(ctx, orgId))
     return {
       bytes: usage.bytes,
       projects: Object.fromEntries(usage.projects.map((p) => [p.project_id, p.storage_bytes])),
     }
   }
   /** The size of each live attachment row of `taskId`, smallest first. A
-   * row names no project; storageUsage bills it under its task's. */
+   * row names no project; liveAttachmentUsage counts it under its task's. */
   const filesOf = (t: T, taskId: string) =>
     t.run(async (ctx) =>
       (
@@ -3983,7 +3983,7 @@ describe('the storage files bill', () => {
         .sort((a, b) => a - b),
     )
 
-  it("bills a task's files again under its project once it comes back", async () => {
+  it("puts a task's attachment rows back under its project once it comes back", async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -3992,19 +3992,19 @@ describe('the storage files bill', () => {
     const other = await plantIssue(t, { org_id, project_id: f.sub2.id })
     await attach(t, other, 5)
     const before = { bytes: 46, projects: { [f.sub.id]: 41, [f.sub2.id]: 5 } }
-    expect(await billed(t, org_id)).toEqual(before)
+    expect(await live(t, org_id)).toEqual(before)
 
     await deleteTask(t, f, task.id)
     expect(await filesOf(t, task.id)).toEqual([])
-    expect(await billed(t, org_id)).toEqual({ bytes: 5, projects: { [f.sub2.id]: 5 } })
+    expect(await live(t, org_id)).toEqual({ bytes: 5, projects: { [f.sub2.id]: 5 } })
 
     await restore(t, f.user, [(await itemFor(t, task.id)).id])
     expect(await filesOf(t, task.id)).toEqual([11, 13, 17])
-    expect(await billed(t, org_id)).toEqual(before)
+    expect(await live(t, org_id)).toEqual(before)
     await assertNoDanglingRefs(t, 'after the files of a task came back')
   })
 
-  it("bills a project's files nowhere until its reveal, then under each task's project", async () => {
+  it("counts a project's attachment rows nowhere until its reveal, then under each task's project", async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -4016,7 +4016,7 @@ describe('the storage files bill', () => {
     const elsewhere = await plantIssue(t, { org_id, project_id: f.hidden.id })
     await attach(t, elsewhere, 5)
     const before = { bytes: 26, projects: { [f.sub.id]: 11, [f.sub2.id]: 10, [f.hidden.id]: 5 } }
-    expect(await billed(t, org_id)).toEqual(before)
+    expect(await live(t, org_id)).toEqual(before)
     const away = { bytes: 5, projects: { [f.hidden.id]: 5 } }
 
     // the files stop counting with the delete, before the steps move them
@@ -4025,11 +4025,11 @@ describe('the storage files bill', () => {
     const item = await itemFor(t, f.meta.id)
     expect(item.state).toBe('moving')
     expect((await filesOf(t, inSub2.id)).length).toBeGreaterThan(0)
-    expect(await billed(t, org_id)).toEqual(away)
+    expect(await live(t, org_id)).toEqual(away)
     Object.assign(TRASH_BUDGET, DEFAULT_BUDGET)
     await runSteps(t)
     expect((await itemFor(t, f.meta.id)).state).toBe('ready')
-    expect(await billed(t, org_id)).toEqual(away)
+    expect(await live(t, org_id)).toEqual(away)
 
     // written back while the projects are absent, they still count nowhere
     Object.assign(TRASH_BUDGET, { rows: 1, ranges: 40 })
@@ -4038,16 +4038,16 @@ describe('the storage files bill', () => {
     await stepThrough(t, item.id, async () => {
       if ((await liveProject(t, f.meta.id)) !== null) return
       if ((await filesOf(t, inSub2.id)).length > 0) sawFilesBack = true
-      expect(await billed(t, org_id)).toEqual(away)
+      expect(await live(t, org_id)).toEqual(away)
     })
     expect(sawFilesBack).toBe(true)
     expect(await filesOf(t, inSub.id)).toEqual([11])
     expect(await filesOf(t, inSub2.id)).toEqual([3, 7])
-    expect(await billed(t, org_id)).toEqual(before)
+    expect(await live(t, org_id)).toEqual(before)
     await assertNoDanglingRefs(t, 'after the files of a project came back')
   })
 
-  it('bills the files of a subtask a split hands over after the fill under its project', async () => {
+  it('counts the attachment rows of a subtask a split hands over after the fill under its project', async () => {
     const t = newT()
     const f = await withOrg(t)
     const org_id = f.org.id
@@ -4076,7 +4076,7 @@ describe('the storage files bill', () => {
     await stepThrough(t, projectItem.id)
     expect((await liveTask(t, sub.id))?.parent_id).toBe(root.id)
     expect(await filesOf(t, sub.id)).toEqual([7])
-    expect((await billed(t, org_id)).projects[f.sub2.id]).toBe(7)
+    expect((await live(t, org_id)).projects[f.sub2.id]).toBe(7)
     await assertNoDanglingRefs(t, 'after a split subtask and its file came back')
   })
 })

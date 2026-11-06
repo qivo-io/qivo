@@ -3,9 +3,12 @@
  * tables and in Deleted items, into its stored-byte totals (schema.ts
  * storage_org_totals, storage_project_totals and storage_task_totals, kept
  * by model/storageTotals.ts). Billing's current storage and Storage by
- * project read the totals (billing.currentUsage and billing.storageProjects),
- * and only once an organization is counted (storageTotalsOf), so an
- * organization that is not counted yet reads as not counted, never as empty.
+ * project (billing.usageFigures and billing.storageProjects), a paid
+ * period's storage sample (billingSync.ts storageStep) and the daily
+ * storage samples (storageSamples.ts) read the totals, and only once an
+ * organization is counted (storageTotalsOf), so an organization that is not
+ * counted yet reads as not counted, never as empty, its period's sample
+ * waits and the daily run skips it.
  * Organizations created since this release are counted from their start
  * (model/orgs.ts insertOrgRows).
  *
@@ -33,8 +36,8 @@
  * the project its own totals row names, or else in the project of its id
  * that existed when it was deleted (projectFor), never in one that took the
  * id after a purge. An attachment row whose task is in neither issues nor
- * deleted_tasks counts nowhere, as in the billing sample today. The dry run
- * lists such rows, and nothing here deletes them.
+ * deleted_tasks counts nowhere. The dry run lists such rows, and nothing
+ * here deletes them.
  *
  * Read the dry run first. It writes nothing and reports, for every
  * organization, the totals it would count, and for one counted already
@@ -77,8 +80,17 @@
  * run began, and goes on with its own. Its first step deletes the
  * organization's row, so writers leave the totals alone, the next steps
  * delete its project and task rows, and the count then starts from zero.
- * Until it ends, the organization reads as not counted. An organization
- * whose deletion has begun is listed as skipped and left to its deletion.
+ * Until it ends, the organization reads as not counted. Billing shows its
+ * storage as being counted, the daily storage samples skip it
+ * (storageSamples.ts), and a paid period's storage sample that starts
+ * meanwhile waits and records nothing (billingSync.ts storageStep). Such a
+ * sample starts again 15 minutes after its start, stops after
+ * STORAGE_ATTEMPTS starts with a billing.storage_sample_failed audit row,
+ * which names its period, and starts again 6 hours later. Once the count
+ * has ended, start such a sample at once:
+ *   "$H" TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
+ * An organization whose deletion has begun is listed as skipped and left to
+ * its deletion.
  * A call that wrote adds one platform_audit_log row (action
  * 'storage_totals_backfill', actor 'system') with its totals, also when it
  * met an error. Running it again is safe. It writes no activity, sends no

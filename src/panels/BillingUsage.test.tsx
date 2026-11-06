@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import type { BillingDetails, BillingUsageFigures } from '../../convex/lib/billingTypes'
 import type { ApiAccessEntry } from '../lib/apiAccess'
+import { billingDate } from '../lib/billingDisplay'
 import { BillingUsage } from './BillingUsage'
 
 /* Billing's usage figures: API calls from the bucket's aggregates, or being
@@ -27,6 +28,7 @@ const USAGE: BillingUsageFigures = {
   included_calls: null,
   storage_bytes: 0,
   sampled_storage_bytes: null,
+  sampled_storage_at: null,
   included_storage_bytes: null,
   api_overage_cents: 0,
   storage_overage_cents: 0,
@@ -123,9 +125,24 @@ describe('current storage', () => {
   })
 
   it("shows a paid period's sample on its own line, and none for a month, an unconfirmed renewal or a trial", async () => {
-    await render({ ...PAID, storage_bytes: 9_000_000, sampled_storage_bytes: 1_200_000_000 })
+    await render({
+      ...PAID,
+      storage_bytes: 9_000_000,
+      sampled_storage_bytes: 1_200_000_000,
+      sampled_storage_at: '2026-10-01T00:00:01.000Z',
+    })
     expect(text('[data-billing-storage-sample]')).toBe(
-      '1.20 GB measured at the start of this period, without files in Deleted items.',
+      '1.20 GB measured at the start of this period.',
+    )
+    expect(text('[data-billing-storage-sample]')).not.toContain('without files in Deleted items')
+    // a sample that waited past the period's first day names its date
+    await render({
+      ...PAID,
+      sampled_storage_bytes: 1_200_000_000,
+      sampled_storage_at: '2026-10-03T12:00:00.000Z',
+    })
+    expect(text('[data-billing-storage-sample]')).toBe(
+      `1.20 GB measured on ${billingDate('2026-10-03T12:00:00.000Z')}.`,
     )
     await render({ ...PAID, sampled_storage_bytes: null })
     expect(text('[data-billing-storage-sample]')).toBe('Not measured yet for this period.')

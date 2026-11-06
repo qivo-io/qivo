@@ -759,6 +759,12 @@ new demo visitor sees "Your demo is still being prepared" and must press
 **Retry** once for each call after the first, 7 times with the current demo
 data.
 
+The app before v0.1.145 reads Billing's details through `billing.summary`
+and its usage through `billing.currentUsage`, and the app before v0.1.135
+its usage through `billing.usageReport`. The release after v0.1.150 removed
+all three, so after such a rollback Billing shows the error of the missing
+function in place of its details and says "Usage could not be refreshed".
+
 The app before v0.1.18 reads an activity list that the snapshot no longer
 sends, so it cannot load at all. Never return the app or the demo to a
 deployment of a commit older than v0.1.18 (`8a1b37c`).
@@ -1139,11 +1145,13 @@ a backend before it, says on Billing that usage could not be refreshed,
 also in a tab that was open when the backend went back, until the backend
 rolls forward. From that release on, never return the backend to a commit
 before it; roll forward instead. Returning the app alone to an earlier
-release is safe while the backend keeps `billing.usageReport`, which this
-release keeps with its scan for tabs loaded before it, and the release that
-removes it adds it to the Instant Rollback list above. The period's storage
-sample still scans the attachment rows. There is no schema change, no
-backfill and no release step.
+release was safe while the backend kept `billing.usageReport`, which this
+release kept with its scan for tabs loaded before it; the release after
+v0.1.150 removed it, so it is on the Instant Rollback list above. The
+period's storage sample scanned the attachment rows until the release after
+v0.1.150, which reads the stored-byte totals and adds a daily job that
+records them (below). There is no schema change, no backfill and no release
+step.
 
 From the release after v0.1.135, an app upload of an attachment or
 description image outside the private demo goes through an upload ticket,
@@ -1355,10 +1363,10 @@ app from that release, against a backend before it, shows Billing's load
 error instead of the page, also in a tab that was open when the backend
 went back, until the backend rolls forward. From that release on, never
 return the backend to a commit before it; roll forward instead. Returning
-the app alone to an earlier release is safe while the backend keeps
-`billing.summary` and `billing.currentUsage`, which this release keeps
-unchanged for tabs loaded before it, and the release that removes them
-adds them to the Instant Rollback list above. The operator console's
+the app alone to an earlier release was safe while the backend kept
+`billing.summary` and `billing.currentUsage`, which this release kept
+unchanged for tabs loaded before it; the release after v0.1.150 removed
+them, so they are on the Instant Rollback list above. The operator console's
 organization page reads `adminBilling.orgBilling`, which answers without
 the account names from this release, and no console reads them. This
 release becomes the backend's newest floor. There is no schema change, no
@@ -1499,6 +1507,115 @@ production comes after the push, so that backend may run the new functions
 while its domain keeps the earlier app.
 [The auth routes check](#the-auth-routes-check) says what a failure means
 and what to do. There is no schema change and no backfill.
+
+From the release after v0.1.150, the storage sample at the start of a paid
+period reads the organization's stored-byte totals in one step
+(`billingSync:storageStep`), so it counts files in Deleted items as current
+storage does, instead of scanning the attachment rows of live tasks. While
+the organization's totals are not complete, as during a recount, the sample
+waits and records nothing, never 0. A reconciliation starts it again once
+15 minutes have passed since its start, stops it after 5 starts with a
+`billing.storage_sample_failed` audit row, and starts it again 6 hours later
+while its charge can still land, so such a period records no storage rather
+than 0. Once a recount (`internal/storageTotalsBackfill` with `"recount":
+true`) has ended, an operator can start a waiting or stopped sample at once
+with `billingSync:restartStorage` and the period the audit row names, as
+that function's docstring shows. Each sample records when it read the
+totals in the new optional field `billing_periods.storage_sampled_at`. One
+that waited or was started again measures them when it runs, files stored
+meanwhile included, and Billing says it was "measured on" its date when
+that was a day or more after the period's start, and "measured at the start
+of this period" otherwise. Taking a late sample from the daily sample
+nearest the period's start is later work. Billing is off on every hosted
+deployment, so none should hold a paid period whose sample this release
+could change, and every period that records storage starts after it.
+Before publishing it, check that billing is still off on production or
+that `billing_periods` holds no row without `storage_bytes`, since the
+release would finish such a period's sample from the totals.
+
+The release adds the hourly cron `storage-daily-samples`, at minute 20,
+which records each counted organization's totals once a UTC day, 100
+organizations a step, in `storage_daily_samples`, with each day's progress
+and database work in `storage_sample_runs`. It skips an organization whose
+totals are not complete or whose deletion has begun, writes at most one
+sample per organization and day, keeps both tables 400 days and bills
+nothing; daily storage billing stays off. A run that stalls resumes at the
+first hourly call 15 minutes after its last step, so its remaining samples
+come at most about 75 minutes late within its UTC day. A run still
+unfinished when its day ends is not resumed, and its remaining
+organizations have no sample that day. The demo deployment records none. A
+recount makes the job skip the organization until it ends.
+
+The release removes `billing.usageReport`, with its internal
+`billing.usageHead` and `billing.storageNowPage`, and `billing.summary` and
+`billing.currentUsage`, which v0.1.145 kept for tabs loaded before it, and
+adds them to the Instant Rollback list above. An app from before v0.1.145,
+also a tab that was open when this release deploys, shows Billing's error
+in place of its details and usage until it reloads. An app from v0.1.135 up
+to this release says a paid period's sample was measured at the start of the
+period "without files in Deleted items", which a sample from this release
+does not leave out and may have measured later; no paid period exists yet,
+so nobody sees it. This release's app reads `sampled_storage_at`, which
+`billing.usageFigures` answers from this release on, and an answer without
+it reads as a sample measured at the start, so the app works against any
+backend from the floor above.
+
+The release adds two tables and the optional field
+`billing_periods.storage_sampled_at`. While no period row holds that field,
+Convex deploys a commit before it, keeps the new tables' rows and drops
+their indexes, which the deploy forward builds again; a disposable local
+backend showed both on 2026-11-06. That earlier code lists `billing_periods`
+without the field, so it does not accept a row that holds it, and once a
+finished sample has written one, a backend from before the release fails to
+deploy. It would also sample a new paid period by the scan again, which
+leaves out files in Deleted items, record no daily sample and leave the
+samples of an organization it deletes behind. This release is therefore the
+backend's newest floor. From it on, never return the backend to a commit
+before it; roll forward instead. There is no backfill, since the totals keep
+no history. Samples start with the first run after the deploy, and the days
+the job does not run have none.
+
+The owner decides on daily storage billing from what the job costs on
+staging, a hosted read that needs the owner's approval:
+
+```sh
+"${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
+  staging npx convex run storageSamples:costReport '{"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}'
+```
+
+It answers each day's run between the two UTC days, at most 62 days apart,
+and the sums of their counters, and names no organization. For one day,
+the calls are the 24 hourly ticks (`ticks` over `days_in_range`), the
+steps (`counts.steps`, the organizations divided by 100, rounded down, plus
+one) and the expiry steps (`counts.expiry_steps`, at least one). The reads
+and writes of the steps and expiry steps are `documents_read`,
+`documents_written`, `bytes_read`, `bytes_written` and `database_queries`,
+as Convex measured them, the update of the run row that ends each one
+included. The ticks are not in them. Add one indexed read of at most one
+run row for each tick, one write of the run row for the tick that starts the
+day's run, and one more read and write of it for each tick that resumed the
+run (`restarts`). A run row is about 500 bytes.
+`database_queries` is Convex's own count, not the index ranges the code
+opens; a local backend counted 7 before a transaction's first read.
+Each sample written (`written`) is one row of about 230 bytes. The rows
+retained are the samples the runs of the last 400 days wrote, which is
+`written` summed over reports of at most 62 days each that cover those
+days, or every `written` less every `expired` in reports kept since the job
+began. Deleting an organization removes its samples without a counter, so
+after a deletion both figures exceed the rows left. Divide by `orgs` for a
+figure per organization and day. `revisions` counts the raises of the
+organizations' totals revisions since their previous samples. An attach or
+a removal of one file raises it once and writes three totals rows, the
+task's, the project's and the organization's. A purge raises it once for
+each file it deletes, with the same three writes, and a rename once, with
+two. A move raises it once whatever it moves, and writes one row for each
+task it moves with files, one for each project they leave, one for the
+project they enter and the organization's, so `revisions` alone does not
+bound the writes to the totals. It counts nothing for an organization's
+first sample, for one recounted since its previous sample, or for a sample
+a late run takes after the organization's sample of a later day, so each
+raise counts once. A dry run of the storage totals backfill in the same
+window gives the cost of a reconciliation.
 
 ## Node.js version
 
@@ -1812,9 +1929,10 @@ after v0.1.134, Billing's current storage and its Storage by project list
 read the totals (`billing.currentUsage` and `billing.storageProjects`), and
 from the release after v0.1.144 its current storage reads them through
 `billing.usageFigures`.
-The storage sample at the start of a paid period and the legacy
-`billing.usageReport` still scan the attachment rows. A new organization
-starts counted at zero. An
+From the release after v0.1.150 the storage sample at the start of a paid
+period reads them too, and a daily job records them; until then that sample
+and the legacy `billing.usageReport` scanned the attachment rows. A new
+organization starts counted at zero. An
 organization created before the release that added them has no totals
 until the one-time `internal/storageTotalsBackfill` counts it, and a reader
 must treat it as not counted until then. Run the backfill on every hosted

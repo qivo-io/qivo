@@ -693,11 +693,16 @@ const webhookRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   )
 
 /** Any task or project storage totals left, though the earlier phases take
- * them out with the files (model/storageTotals.ts), then usage with its
- * account rows and month totals, billing events, periods, notices and the
- * subscription row, then the monthly usage rows and counts of Qivo Admin's
- * Usage page. The organization's own totals row goes with its other
- * bookkeeping in the last phase. */
+ * them out with the files (model/storageTotals.ts), and the daily storage
+ * samples, then usage with its account rows and month totals, billing
+ * events, periods, notices and the subscription row, then the monthly usage
+ * rows and counts of Qivo Admin's Usage page. The organization's own totals
+ * row goes with its other bookkeeping in the last phase. A day's run writes
+ * no sample once the deletion has begun, which the profiles phase marks
+ * before this one, so none lands after the drain. The run rows name no
+ * organization once their run finished; a run that never finished keeps
+ * the last organization id its steps reached in `cursor` until the row
+ * expires. They go by expiry only. */
 const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
   inOrder([
     () =>
@@ -713,6 +718,12 @@ const billingRows = (ctx: MutationCtx, orgId: string, budget: RemovalBudget) =>
         ctx.db
           .query('storage_project_totals')
           .withIndex('by_org_bytes', (q) => q.eq('org_id', orgId)),
+      ),
+    () =>
+      drain(
+        ctx,
+        budget,
+        ctx.db.query('storage_daily_samples').withIndex('by_org_day', (q) => q.eq('org_id', orgId)),
       ),
     ...(['billing_usage', 'billing_usage_totals', 'billing_events'] as const).map(
       (table) => () =>

@@ -267,9 +267,10 @@ export async function plantCredential(
   })
 }
 
-/** An attachment of `size` bytes on `task`, with its bytes stored, as
- * attachFileCore writes it. The row names no project: the storage totals
- * read it through its task (model/billing.ts). */
+/** An attachment row of `size` bytes on `task`, with its bytes stored, in
+ * the shape attachFileCore writes. The row names no project, and the
+ * stored-byte totals do not count it, since only attachFileCore's own
+ * transaction counts a file (model/storageTotals.ts countFile). */
 export async function attach(
   t: T,
   task: Doc<'issues'>,

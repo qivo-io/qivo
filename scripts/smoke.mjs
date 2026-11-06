@@ -1980,7 +1980,7 @@ try {
   })
   await pageA.locator('[data-billing-subscription]').waitFor({ timeout: 30000 })
   // the counters from the live details, and each name list's first batch
-  // as the page reads it (billing.accountList), never the deprecated summary
+  // as the page reads it (billing.accountList)
   const billing = await pageA.evaluate(async () => {
     const { api } = await import('/convex/_generated/api.js')
     const { convex } = await import('/src/lib/convex.ts')

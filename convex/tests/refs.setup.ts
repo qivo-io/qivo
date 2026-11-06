@@ -53,6 +53,7 @@ export const REF_EDGES: readonly RefEdge[] = [
   { table: 'storage_org_totals', field: 'org_id', target: 'organizations' },
   { table: 'storage_project_totals', field: 'org_id', target: 'organizations' },
   { table: 'storage_task_totals', field: 'org_id', target: 'organizations' },
+  { table: 'storage_daily_samples', field: 'org_id', target: 'organizations' },
   { table: 'teams', field: 'org_id', target: 'organizations' },
   { table: 'team_members', field: 'team_id', target: 'teams' },
   { table: 'team_members', field: 'profile_id', target: 'profiles' },

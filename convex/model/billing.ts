@@ -12,11 +12,7 @@ import type {
   BillingDetails,
   BillingPeriodHead,
   BillingPlan,
-  BillingSummary,
-  BillingUsage,
   BillingUsageFigures,
-  BillingUsageHead,
-  BillingUsageReport,
 } from '../lib/billingTypes'
 import { byId } from '../lib/db'
 import { badRequest, notFound, require, rule } from '../lib/functions'
@@ -24,7 +20,6 @@ import { limitedText } from '../lib/limitRules'
 import { grouped, LIMITS, PLAN_CURRENCIES, PLAN_CURRENCY } from '../lib/limits'
 import { polarConfigured } from '../lib/polar'
 import { allowanceSeats, includedApiCalls, periodCalls, usagePeriod } from './billingUsage'
-import { estimateDocumentBytes } from './demoMetrics'
 import {
   CHECKOUT_DAYS,
   checkoutDeadline,
@@ -232,201 +227,6 @@ export async function billingDetailsOf(ctx: QueryCtx, orgId: string): Promise<Bi
   return await detailsWith(ctx, orgId, await rosterCounts(ctx, orgId))
 }
 
-/** @deprecated The answer of the deprecated billing.summary, kept one
- * release for tabs loaded before billing.details shipped: Billing's
- * details (billingDetailsOf) with the name of every billable account in
- * profile id order and of every non-billable one in name order. It walks
- * the roster twice, once in getBillableUsers and once by by_org. The
- * release that removes billing.summary removes it. */
-export async function billingSummary(ctx: QueryCtx, orgId: string): Promise<BillingSummary> {
-  const count = await getBillableUsers(ctx, orgId)
-  const profiles = await ctx.db
-    .query('profiles')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const billableIds = new Set(count.users.map((user) => user.profile_id))
-  const excluded: BillingSummary['non_billable_accounts'] = []
-  for (const profile of profiles) {
-    // Inactive guests belong to the inactive count, even if a home membership
-    // would also exempt them. The counters and lists therefore partition the roster.
-    if (!profile.active)
-      excluded.push({ profile_id: profile.id, name: profile.name, reason: 'inactive' })
-    else if (profile.org_role === 'guest' && !billableIds.has(profile.id))
-      excluded.push({ profile_id: profile.id, name: profile.name, reason: 'guest_with_home' })
-  }
-  excluded.sort((a, b) => a.name.localeCompare(b.name) || a.profile_id.localeCompare(b.profile_id))
-  const details = await detailsWith(ctx, orgId, {
-    billable: count.total,
-    active: profiles.filter((p) => p.active).length,
-    inactive: excluded.filter((account) => account.reason === 'inactive').length,
-    ownBilling: excluded.filter((account) => account.reason === 'guest_with_home').length,
-  })
-  return {
-    ...details,
-    billable_accounts: count.users.map(({ profile_id, name, reason }) => ({
-      profile_id,
-      name,
-      reason,
-    })),
-    non_billable_accounts: excluded,
-  }
-}
-
-/**
- * The attachment bytes an organization stores, in total and per project,
- * largest first. Counts every attachment and description image of its
- * tasks, archived ones included, whose project still exists, so a task left
- * under a removed project is not counted. Reads the organization's
- * attachment rows in one index range and counts each row in its task's
- * project, reading each task once.
- *
- * It leaves files in Deleted items out, as the period-start storage sample
- * does, while Billing's current storage (billing.currentUsage, from the
- * stored-byte totals) counts them until they are deleted for good. A task
- * item's rows leave issue_attachments with its move, in the delete's
- * transaction or in the steps just after it, and count nowhere once their
- * task has left issues. A project item's project rows leave projects
- * first, so the rows of its tasks still moving count nowhere. A restore
- * writes the rows back before it reveals the task, and they count from
- * then on where its project is live.
- *
- * It reads every attachment row of the organization in one transaction, so
- * no function serves it. The storage samples and the legacy usage report
- * (billing.usageReport) count the same bytes page by page (storagePage),
- * and the tests check those pages against it.
- */
-export async function storageUsage(ctx: QueryCtx, orgId: string) {
-  const projects = await ctx.db
-    .query('projects')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .collect()
-  const totals = new Map(
-    projects.map((p) => [p.id, { project_id: p.id, name: p.name, storage_bytes: 0 }]),
-  )
-  const tasks = new Map<string, Doc<'issues'> | null>()
-  let bytes = 0
-  const files = ctx.db
-    .query('issue_attachments')
-    .withIndex('by_org_task_archived_issue', (q) => q.eq('org_id', orgId))
-  for await (const file of files) {
-    let task = tasks.get(file.issue_id)
-    if (task === undefined) {
-      task = await byId(ctx, 'issues', file.issue_id)
-      tasks.set(file.issue_id, task)
-    }
-    const project = task === null ? undefined : totals.get(task.project_id)
-    if (project === undefined) continue
-    project.storage_bytes += file.size_bytes
-    bytes += file.size_bytes
-  }
-  return {
-    bytes,
-    projects: [...totals.values()]
-      .filter((p) => p.storage_bytes > 0)
-      .sort((a, b) => b.storage_bytes - a.storage_bytes),
-  }
-}
-
-/** Sizes of one step of a period's storage sample (storagePage). A step
- * reads at most `rows` attachment rows and `bytes` of their range, one task
- * for each task it meets and one project for each project it meets. When
- * the tasks it read pass `taskBytes`, it stops and the step after it reads
- * the same page again, only as far as the rows before the one that passed.
- * Tests lower them. */
-export const STORAGE_PAGE = {
-  rows: 1000,
-  bytes: 4 * 1024 * 1024,
-  taskBytes: 4 * 1024 * 1024,
-}
-
-/** One project's counted bytes, as the legacy usage report lists it. */
-export type StorageProject = BillingUsageReport['projects'][number]
-
-/** A storage sample's page, or the smaller size to read the same page at. */
-export type StoragePage =
-  | { bytes: number; projects: StorageProject[]; next: string | null }
-  | { split: number }
-
-/* Counts bytes in the projects of `orgId` that still exist, reading each
- * project once. */
-function projectCounter(ctx: QueryCtx, orgId: string) {
-  const live = new Map<string, StorageProject | null>()
-  let bytes = 0
-  return {
-    async add(projectId: string, size: number) {
-      let project = live.get(projectId)
-      if (project === undefined) {
-        const row = await byId(ctx, 'projects', projectId)
-        project =
-          row?.org_id === orgId ? { project_id: row.id, name: row.name, storage_bytes: 0 } : null
-        live.set(projectId, project)
-      }
-      if (project === null) return
-      project.storage_bytes += size
-      bytes += size
-    },
-    counted: () => ({
-      bytes,
-      projects: [...live.values()].filter((p): p is StorageProject => p !== null),
-    }),
-  }
-}
-
-/**
- * One page of the bytes storageUsage counts for organization `orgId`, for a
- * sample taken over many transactions or the legacy usage report
- * (billing.usageReport), which tabs loaded before billing.currentUsage
- * shipped still read. It
- * counts the same rows: each row counts in its task's project, which must
- * still exist in the organization. The page also gives the bytes of each
- * project it counted.
- *
- * Pages follow the order rows were stored, so archiving a task or restoring
- * an archived one during the sample moves none of them. Rows stored after
- * `before` (a _creationTime, the period row's) are left out. Those include
- * the rows a restore from Deleted items writes back, which would otherwise
- * be counted a second time if their earlier copies were counted before the
- * task was deleted. Each page is its own snapshot, so a file removed while
- * the sample runs may count or not.
- *
- * Returns the bytes the page counts and the cursor of the next one, or
- * `split` with a smaller size when the tasks it read pass
- * STORAGE_PAGE.taskBytes. A page of one row always completes. `size`
- * defaults to STORAGE_PAGE.rows.
- */
-export async function storagePage(
-  ctx: QueryCtx,
-  orgId: string,
-  { cursor, size, before }: { cursor: string | null; size?: number; before: number },
-): Promise<StoragePage> {
-  const counter = projectCounter(ctx, orgId)
-  const page = await ctx.db
-    .query('issue_attachments')
-    .withIndex('by_org', (q) => q.eq('org_id', orgId))
-    .paginate({
-      cursor,
-      numItems: Math.max(1, size ?? STORAGE_PAGE.rows),
-      maximumBytesRead: STORAGE_PAGE.bytes,
-    })
-  const tasks = new Map<string, Doc<'issues'> | null>()
-  let taskBytes = 0
-  for (const [i, file] of page.page.entries()) {
-    if (file._creationTime > before) continue
-    let task = tasks.get(file.issue_id)
-    if (task === undefined) {
-      task = await byId(ctx, 'issues', file.issue_id)
-      tasks.set(file.issue_id, task)
-      if (task !== null) taskBytes += estimateDocumentBytes(task)
-      // the rows before this one fit, and a page of one always completes
-      if (taskBytes > STORAGE_PAGE.taskBytes && page.page.length > 1)
-        return { split: Math.max(1, i) }
-    }
-    if (task === null) continue
-    await counter.add(task.project_id, file.size_bytes)
-  }
-  return { ...counter.counted(), next: page.isDone ? null : page.continueCursor }
-}
-
 /** The plan usage allowances follow (the subscription's, else the default
  * plan before enrollment, else none), the seats they are sized by and the API
  * calls they include. The Billing and API access pages both use it, so their
@@ -507,70 +307,37 @@ export async function periodHead(
   }
 }
 
-/** @deprecated The head of the deprecated billing.currentUsage and of the
- * legacy billing.usageReport: periodHead with the bucket's calls summed
- * from every one of its usage rows and every account with calls in
- * `users`, read with one profile each, named "Removed user" when it is
- * gone or of another organization. billing.usageFigures answers the calls
- * from the bucket's aggregates and billing.apiAccounts the accounts 25 at
- * a time; the release that removes the deprecated reads removes it.
- * `subscription` is the organization's subscription when the caller has
- * read it already, else it reads it. */
-export async function billingUsageHead(
-  ctx: QueryCtx,
-  orgId: string,
-  subscription?: Doc<'billing_subscriptions'> | null,
-): Promise<BillingUsageHead> {
-  const sub = subscription === undefined ? await subscriptionFor(ctx, orgId) : subscription
-  const head = await periodHead(ctx, orgId, sub)
-  const rows = await ctx.db
-    .query('billing_usage')
-    .withIndex('by_org_period', (q) => q.eq('org_id', orgId).eq('period_start', head.period_key))
-    .collect()
-  const users = new Map<string, BillingUsageHead['users'][number]>()
-  for (const row of rows) {
-    let user = users.get(row.profile_id)
-    if (!user) {
-      const profile = await byId(ctx, 'profiles', row.profile_id)
-      user = {
-        profile_id: row.profile_id,
-        name: profile?.org_id === orgId ? profile.name : 'Removed user',
-        calls: 0,
-      }
-      users.set(row.profile_id, user)
-    }
-    user.calls += row.calls
-  }
-  return {
-    ...head,
-    calls: rows.reduce((total, row) => total + row.calls, 0),
-    users: [...users.values()].sort((a, b) => b.calls - a.calls),
-  }
-}
-
-/** What the sample at the start of the paid period `head` shows measured
- * for organization `orgId`, whose subscription is `sub`: the bytes of its
- * billing_periods row (billingSync.ts storageStep), found by the provider
- * subscription id and the period's start, which the period's storage
- * charge uses. Null for a calendar month or a pending interval, a
- * subscription without a provider id, a period without a row or of
- * another organization, and a sample that is running or stopped. One read
- * at most. */
+/** The storage sample of the paid period `head` for organization `orgId`,
+ * whose subscription is `sub`, as its billing_periods row holds it
+ * (billingSync.ts storageStep), found by the provider subscription id and
+ * the period's start. It answers the bytes the period's storage charge
+ * uses, the organization's stored-byte totals when the sample read them,
+ * files in Deleted items included, and when it read them. Both are null
+ * for a calendar month or a pending interval, a subscription without a
+ * provider id, a period without a row or of another organization, and a
+ * sample that is running or stopped. The time is null too for a sample an
+ * earlier release finished, which measured the period's start. One read at
+ * most. */
 async function sampledStorage(
   ctx: QueryCtx,
   orgId: string,
   sub: Doc<'billing_subscriptions'> | null,
   head: Pick<BillingPeriodHead, 'period_kind' | 'period_key'>,
-): Promise<number | null> {
+): Promise<Pick<BillingUsageFigures, 'sampled_storage_bytes' | 'sampled_storage_at'>> {
+  const none = { sampled_storage_bytes: null, sampled_storage_at: null }
   const subscriptionId = sub?.polar_subscription_id
-  if (head.period_kind !== 'paid' || !subscriptionId) return null
+  if (head.period_kind !== 'paid' || !subscriptionId) return none
   const period = await ctx.db
     .query('billing_periods')
     .withIndex('by_subscription_period', (q) =>
       q.eq('subscription_id', subscriptionId).eq('period_start', head.period_key),
     )
     .unique()
-  return period?.org_id === orgId ? (period.storage_bytes ?? null) : null
+  if (period?.org_id !== orgId || period.storage_bytes === undefined) return none
+  return {
+    sampled_storage_bytes: period.storage_bytes,
+    sampled_storage_at: period.storage_sampled_at ?? null,
+  }
 }
 
 /** Billing's usage figures for organization `orgId`
@@ -580,9 +347,11 @@ async function sampledStorage(
  * in their place, current storage from the stored-byte totals, files in
  * Deleted items included until they are deleted for good, or null while
  * they are not complete, and the bytes the current paid period's sample
- * measured (sampledStorage). It reads at most one usage row (the ranked
- * check), the month's shards or the bucket's totals row, two single reads,
- * and no account, profile beyond the allowance's or attachment row. */
+ * measured from the same totals, normally at the period's start, with when
+ * it measured them (sampledStorage).
+ * It reads at most one usage row (the ranked check), the month's shards or
+ * the bucket's totals row, two single reads, and no account, profile
+ * beyond the allowance's or attachment row. */
 export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<BillingUsageFigures> {
   const sub = await subscriptionFor(ctx, orgId)
   const head = await periodHead(ctx, orgId, sub)
@@ -591,24 +360,7 @@ export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<Bill
     ...head,
     calls: await periodCalls(ctx, orgId, head.period_key),
     storage_bytes: totals?.bytes ?? null,
-    sampled_storage_bytes: await sampledStorage(ctx, orgId, sub, head),
-  }
-}
-
-/** @deprecated Billing's usage for organization `orgId` as the deprecated
- * billing.currentUsage answers it, kept one release for tabs loaded before
- * billing.usageFigures shipped: the deprecated head (billingUsageHead),
- * current storage and the paid period's sample as usageFiguresOf answers
- * them. It reads every usage row of the bucket and one profile per
- * account, and no attachment row. */
-export async function currentUsageOf(ctx: QueryCtx, orgId: string): Promise<BillingUsage> {
-  const sub = await subscriptionFor(ctx, orgId)
-  const head = await billingUsageHead(ctx, orgId, sub)
-  const totals = await storageTotalsOf(ctx, orgId)
-  return {
-    ...head,
-    storage_bytes: totals?.bytes ?? null,
-    sampled_storage_bytes: await sampledStorage(ctx, orgId, sub, head),
+    ...(await sampledStorage(ctx, orgId, sub, head)),
   }
 }
 
