@@ -1088,6 +1088,78 @@ describe('the benchmark server', () => {
     expect(small.answer.rows).toHaveLength(5)
   }, 60_000)
 
+  it('creates projects as the server stores them, with a sub-project of the hidden program left out of the workspace', async () => {
+    const at = await server('tasks=20&latency=0&mbps=100000&role=admin&hidden=4')
+    const snap = async (tag) => {
+      await at.send({ type: 'query', id: tag, name: 'snapshot:forMe', args: {} })
+      return JSON.parse(at.posted.find((m) => m.to === tag).text)
+    }
+    const before = await snap('before')
+    const org = before.orgs[0].id
+    const create = async (tag, args) => {
+      await at.send({
+        type: 'mutation',
+        id: tag,
+        name: 'projects:create',
+        args: { org_id: org, ...args },
+      })
+      await vi.waitFor(() =>
+        expect(at.posted.some((m) => m.id === tag && m.type === 'answer')).toBe(true),
+      )
+      return at.posted.find((m) => m.id === tag && m.type === 'answer').value
+    }
+    const program = before.projects.find((p) => p.type === 'meta')
+    // a sub-project of a held program, placed after its siblings, led by me
+    const made = await create('sub', {
+      id: 'made-sub',
+      type: 'project',
+      parent_id: program.id,
+      key: 'MADE',
+      name: 'Made',
+    })
+    expect(made).toMatchObject({ id: 'made-sub', key: 'MADE' })
+    const after = await snap('after')
+    const row = after.projects.find((p) => p.id === 'made-sub')
+    const siblings = before.projects.filter((p) => p.parent_id === program.id)
+    expect(row).toMatchObject({
+      parent_id: program.id,
+      lead_id: before.profiles[0].id,
+      sort_order: Math.max(...siblings.map((p) => p.sort_order)) + 1,
+    })
+    expect(after.orgs[0].next_project_num).toBe(before.orgs[0].next_project_num + 1)
+    // under the hidden program, which the workspace leaves out, it stays out
+    // and Settings' lists and its page still answer it
+    const lists = async (tag) => {
+      await at.send({
+        type: 'query',
+        id: tag,
+        name: 'projectSettings:projects',
+        args: { org_id: org, sub_project_parents: true },
+      })
+      return JSON.parse(at.posted.find((m) => m.to === tag).text)
+    }
+    const hiddenRow = (await lists('parents')).rows.find((r) => r.name === 'Hidden program')
+    await create('unseen', {
+      id: 'unseen-sub',
+      type: 'project',
+      parent_id: hiddenRow.id,
+      key: 'UNSN',
+      name: 'Unseen',
+      lead_id: before.profiles[1].id,
+    })
+    expect((await snap('later')).projects.some((p) => p.id === 'unseen-sub')).toBe(false)
+    await at.send({
+      type: 'query',
+      id: 'page',
+      name: 'projectSettings:get',
+      args: { id: 'unseen-sub' },
+    })
+    expect(JSON.parse(at.posted.find((m) => m.to === 'page').text)).toMatchObject({
+      state: 'ok',
+      project: { name: 'Unseen', lead_id: before.profiles[1].id },
+    })
+  })
+
   it('answers a scenario that fails with its failure', async () => {
     const { posted, send } = await server('tasks=20&latency=0&mbps=100000')
     // no comment thread is open

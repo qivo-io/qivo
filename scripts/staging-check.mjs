@@ -91,7 +91,15 @@
  * (projectSettings.get, users, teams and candidates), sets the team's
  * level to Viewer, adds Nora, an admin who is not its lead, through the
  * Add team or user picker's search, and sets its Review time, each checked
- * over REST (ui/project-settings). It makes a sub-project of its own under
+ * over REST (ui/project-settings). In the New project dialog, from the
+ * deployment's pickers (projectSettings.leadCandidates and candidates
+ * without a project), it makes a project of its own led by the Standard
+ * agent, shared with its team as Viewer and with Nora as User, and in New
+ * sub-project from that project's sidebar menu, after its parent check
+ * (projectSettings.get), a sub-project it picks the parent of from the
+ * deployment's sub_project_parents list, led by the Standard agent and
+ * without a starter task, each checked over REST (ui/project-dialogs). It
+ * makes a sub-project of its own under
  * its project with one task, uploads a file there over REST and opens
  * Billing, whose current storage must show a figure rather than Being
  * counted (billing.currentUsage) and whose Storage by project, searched for
@@ -4883,6 +4891,134 @@ async function projectSettingsCheck() {
   })
 }
 
+/** The step that checks the New project and New sub-project dialogs
+ *  (projectDialogsCheck). */
+export const PROJECT_DIALOGS_STEP = 'ui/project-dialogs'
+
+/** What the New project dialog's pickers save (projectDialogsCheck): the
+ *  team's share and Nora's grant. The Standard agent leads both projects. */
+export const PROJECT_DIALOGS_EXPECTED = { team: 'viewer', nora: 'user' }
+
+/** The New project and New sub-project dialogs on the deployment's reads
+ *  (projectSettings.leadCandidates, candidates without a project, get and
+ *  projects with sub_project_parents) and its create, which the app sends
+ *  without a sort_order. In the app as Nora it opens New project from the
+ *  sidebar's header, names it `<tag> Dialogs`, picks the Standard agent as
+ *  lead through the Lead popover's search, and in Project access checks the
+ *  run's team, found by search, as Viewer and Nora, an organization admin
+ *  the server offers since she is not the lead, as User, then presses
+ *  Create project. Over REST the project's lead must be the agent, the
+ *  team's share Viewer and Nora's grant User. Then it opens New
+ *  sub-project from that project's sidebar menu, waits for the parent
+ *  check, names it `<tag> Dialogs sub`, picks the project again from the
+ *  Project popover's search of the run's tag, picks the agent as lead,
+ *  clears Create a starter task and presses Create sub-project. Over REST
+ *  the sub-project's parent must be the project and its lead the agent.
+ *  The project goes in the cleanup with its sub-project, and the sweep
+ *  finds both by their tag. It needs the run's team, and a backend from the
+ *  release after v0.1.138 on, which takes a create without a sort_order. */
+async function projectDialogsCheck() {
+  const w = run.creds.writeToken
+  const std = run.agents.std
+  const team = run.team
+  await check(PROJECT_DIALOGS_STEP, async () => {
+    expect(team, 'the run has no team to share the project with')
+    const name = `${run.tag} Dialogs`
+    const subName = `${run.tag} Dialogs sub`
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}`, { waitUntil: 'domcontentloaded' })
+    await app.locator('aside button[aria-label="New project"]').click({ timeout: 60_000 })
+    const dialog = app.getByRole('dialog', { name: 'New project', exact: true })
+    await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(name)
+    // the lead, from the server's people
+    await dialog.locator('[data-project-lead-picker]').click()
+    await app.locator('[data-lead-picker-search]').fill(std.name)
+    await app.locator(`[data-lead-choice="${std.id}"]`).click({ timeout: 30_000 })
+    // Project access, from the server's teams and people
+    await dialog.locator('[data-new-project-access]').click()
+    const search = app.locator('[data-project-access-search]')
+    await search.fill(team.name)
+    await app.locator(`[data-project-access-team-option="${team.id}"]`).click({ timeout: 30_000 })
+    await app
+      .locator(`[data-project-team-role="${team.id}"]`)
+      .selectOption(PROJECT_DIALOGS_EXPECTED.team)
+    await search.fill(run.nora.name)
+    await app
+      .locator(`[data-project-access-user-option="${run.nora.id}"]`)
+      .click({ timeout: 30_000 })
+    await app
+      .locator(`[data-project-role="${run.nora.id}"]`)
+      .selectOption(PROJECT_DIALOGS_EXPECTED.nora)
+    // Escape clears the search, then closes the popover alone
+    await search.press('Escape')
+    await search.press('Escape')
+    await app.locator('[data-new-project-access-popup]').waitFor({ state: 'detached' })
+    await dialog.getByRole('button', { name: 'Create project', exact: true }).click()
+    await dialog.waitFor({ state: 'detached', timeout: 30_000 })
+    let project = null
+    expect(
+      await until(async () => {
+        project = (await readList(w, '/projects')).find((p) => p.name === name) ?? null
+        return project !== null
+      }, 30_000),
+      `${name} was not created`,
+    )
+    run.projects.D = project
+    const made = await restOk(w, 'GET', `/projects/${project.id}`)
+    eq(made.lead_id, std.id, "the project's lead")
+    eq(
+      made.grants.teams.find((g) => g.id === team.id)?.level,
+      PROJECT_DIALOGS_EXPECTED.team,
+      "the team's share",
+    )
+    eq(
+      made.grants.users.find((g) => g.id === run.nora.id)?.level,
+      PROJECT_DIALOGS_EXPECTED.nora,
+      "Nora's grant",
+    )
+    // New sub-project from the project's sidebar menu
+    const row = app.locator(`aside [data-project-row="${project.id}"]`)
+    await row.waitFor({ timeout: 30_000 })
+    await row.hover()
+    await row.getByRole('button', { name: 'Project actions', exact: true }).click()
+    await app.getByRole('button', { name: 'New sub-project…', exact: true }).click()
+    const sub = app.getByRole('dialog', { name: 'New sub-project', exact: true })
+    const parent = sub.locator(`[data-new-subproject-parent="${project.id}"]`)
+    // the parent check
+    await parent.waitFor({ timeout: 30_000 })
+    await sub.getByRole('textbox', { name: 'Name', exact: true }).fill(subName)
+    // the parent again, from the server's sub_project_parents list
+    await parent.click()
+    await app.locator('[data-new-subproject-parent-search]').fill(run.tag)
+    await app
+      .locator(`[data-new-subproject-parent-choice="${project.id}"]`)
+      .click({ timeout: 30_000 })
+    await parent.waitFor({ timeout: 30_000 })
+    await sub.locator('[data-project-lead-picker]').click()
+    await app.locator('[data-lead-picker-search]').fill(std.name)
+    await app.locator(`[data-lead-choice="${std.id}"]`).click({ timeout: 30_000 })
+    await sub.locator('#subproject-starter').uncheck()
+    const create = sub.getByRole('button', { name: 'Create sub-project', exact: true })
+    expect(
+      await until(async () => await create.isEnabled(), 30_000),
+      'Create sub-project stays off',
+    )
+    await create.click()
+    await sub.waitFor({ state: 'detached', timeout: 30_000 })
+    let child = null
+    expect(
+      await until(async () => {
+        child = (await readList(w, '/projects')).find((p) => p.name === subName) ?? null
+        return child !== null
+      }, 30_000),
+      `${subName} was not created`,
+    )
+    const madeSub = await restOk(w, 'GET', `/projects/${child.id}`)
+    eq(madeSub.parent_id, project.id, "the sub-project's parent")
+    eq(madeSub.lead_id, std.id, "the sub-project's lead")
+    return `created ${name} led by ${std.name}, shared with ${team.name} as Viewer and ${run.nora.name} as User, and ${subName} under it led by ${std.name}, each from the server's pickers`
+  })
+}
+
 /** The step that checks Billing's storage figures (billingStorageCheck). */
 export const BILLING_STORAGE_STEP = 'ui/billing-storage'
 
@@ -6710,6 +6846,9 @@ async function main() {
   await removalWindowCheck()
   // a project's Settings page on the server's reads, on a sub-project of its own
   await projectSettingsCheck()
+  // the New project and New sub-project dialogs on the server's pickers, on
+  // a project of its own
+  await projectDialogsCheck()
   // Billing's current storage and Storage by project, with a file of its own
   await billingStorageCheck()
   // a file attached through the task window, on an upload ticket
@@ -6730,6 +6869,7 @@ async function main() {
     if (run.projects.N) await deleteProjectInApp(c.writeToken, run.projects.N)
     if (run.projects.R) await deleteProjectInApp(c.writeToken, run.projects.R)
     if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)
+    if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)
     for (const t of run.created)
       eq(
         (await rest(c.writeToken, 'GET', `/tasks/${t.id}`)).status,
