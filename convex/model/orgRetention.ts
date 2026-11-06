@@ -13,9 +13,11 @@
  *
  * Admins are emailed when the period starts, unless one of them downloaded
  * an export within EXPORT_FRESH_DAYS before the service ended
- * (organizations.last_export_at): the browser export once its download
- * starts, or a prepared archive the /exports/ route served whole. An archive
- * that was only prepared does not count. */
+ * (organizations.last_export_at), which today means the browser export once
+ * its download starts. An export job's archive does not count, whether only
+ * prepared or served by the /exports/ route, because the backend cannot know
+ * that the client received it; a later app stage records that download once
+ * the browser confirms it finished. */
 
 import { makeFunctionReference, type WithoutSystemFields } from 'convex/server'
 import type { Doc } from '../_generated/dataModel'

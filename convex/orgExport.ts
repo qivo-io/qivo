@@ -59,18 +59,21 @@
  * an admin who asked for the job gets one automatic attempt, recorded on
  * their request row however many tabs ask. The /exports/ route (http.ts)
  * checks the link and then, on every request, the admin's authority, the
- * job and the organization (deliveryOf), again before every part
- * (canDeliver), holds a lease while it streams (leaseDelivery, at most
- * DELIVERY.streams a job), and streams the stored parts as one ZIP without
- * the function holding the archive. Only an archive the route read whole
- * into its response is recorded (recordDelivery): the job's first
- * served_at and the organization's last_export_at, which the deletion
- * reminder reads, so an archive that was only prepared (completed_at)
- * never counts as a backup. The runtime reads that response as fast as
- * storage allows, so a download the client abandons is recorded too
- * (http.ts archiveStream). A ready
- * archive whose file is gone fails as incomplete (failDelivery). Neither
- * the claim nor the route touches the four hours.
+ * job and the organization (deliveryOf), takes a lease (leaseDelivery, at
+ * most DELIVERY.streams a job) and streams the stored parts as one ZIP
+ * without the function holding the archive. On a local backend the
+ * runtime read that body as fast as storage allowed, whatever the client
+ * took (http.ts archiveStream), so the lease and the checks before every
+ * part (canDeliver) and of every part's size cover the backend's read of
+ * the archive, not the client's transfer. An archive the backend read
+ * whole sets only the job's first served_at (recordDelivery), so a
+ * download the client abandons can still set it. The route never writes
+ * the organization's last_export_at, which the deletion reminder reads, so
+ * neither a prepared archive (completed_at) nor a served one counts as a
+ * backup until a later app stage records the download once the browser
+ * confirms it finished. A ready archive whose file is gone fails as
+ * incomplete (failDelivery). Neither the claim nor the route touches the
+ * four hours.
  *
  * Convex drops what a failed mutation scheduled and does not retry actions.
  * `recover` (every minute) restarts a collecting job whose step stopped,
@@ -322,8 +325,8 @@ export type ExportSummary = {
   requested_by: string | null // the first requester's name
   cancelled_by: string | null // the canceller's name
   requested: boolean // whether the caller asked for this job
-  // when the route first served the archive whole: downloaded, never proof
-  // of a saved file
+  // when the backend first read the archive whole into a download's
+  // response, never proof that the client received or saved it
   served_at: string | null
   // when the caller's own automatic download was claimed, while `requested`
   auto_download_at: string | null
@@ -648,12 +651,14 @@ export const releaseDelivery = internalMutation({
   },
 })
 
-/** Records that the route handed its reader the last byte of export
- * `export_id`'s archive (model/orgExports.ts noteDelivered: the
- * organization's last_export_at and the job's first served_at) and ends
- * download `stream`'s lease. It needs no authority, since the route
- * checked the admin before every part it sent, and writes no request row,
- * so an admin who did not ask downloads as one who did. */
+/** Records that the route handed its reader, the runtime, the last byte of
+ * export `export_id`'s archive in the job's first served_at
+ * (model/orgExports.ts noteDelivered) and ends download `stream`'s lease.
+ * It leaves organizations.last_export_at alone, since the backend cannot
+ * know that the client received the archive, so a served archive does not
+ * count as an export for the deletion reminder. It needs no authority,
+ * since the route checked the admin before every part it read, and writes
+ * no request row, so an admin who did not ask downloads as one who did. */
 export const recordDelivery = internalMutation({
   args: { export_id: v.string(), stream: v.string() },
   handler: async (ctx, { export_id, stream }): Promise<null> => {

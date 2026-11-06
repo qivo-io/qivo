@@ -24,9 +24,11 @@
  * Admins act through `request` (delete the organization, ending any paid
  * subscription at once without a refund), `keep` (stop a deletion they asked
  * for) and `recordExport`, which the browser export calls once its download
- * starts. The organization export job's /exports/ route records an archive
- * it served whole too (orgExport.ts recordDelivery), so the deletion
- * reminder counts a downloaded backup, never one that was only prepared.
+ * starts. An organization export job's archive does not count, neither one
+ * that was only prepared nor one its /exports/ route served (orgExport.ts
+ * recordDelivery), because the backend cannot know that the client
+ * received it, so the deletion reminder still goes out. A later app stage
+ * records that download once the browser confirms it finished.
  * Cancelling in Billing (billingActions.cancelSubscription) only stops
  * renewal, so its period starts when Polar ends the subscription. */
 
@@ -617,10 +619,11 @@ export const state = orgQuery({
 })
 
 /** Records that an admin's browser export started its download, in
- * organizations.last_export_at, which an archive the /exports/ route served
- * whole also sets (model/orgExports.ts noteDelivered). The browser export
- * calls it until the export panel moves to the job. Allowed while the
- * organization is read-only, because that is when exports matter most. */
+ * organizations.last_export_at. It is that field's only writer, since the
+ * /exports/ route records an archive it served on the job alone
+ * (model/orgExports.ts noteDelivered). The browser export calls it until
+ * the export panel moves to the job. Allowed while the organization is
+ * read-only, because that is when exports matter most. */
 export const recordExport = authedMutation({
   args: { org_id: v.string() },
   handler: async (ctx, { org_id }): Promise<null> => {

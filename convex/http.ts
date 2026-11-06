@@ -513,9 +513,9 @@ type Delivery = {
  * differs errors the body, which stops short of its Content-Length, so the
  * browser reports a failed download and no ZIP looks whole. Once the
  * reader took the end record's last slice, the next pull records the
- * delivery (recordDelivery) and closes the body; a failed record is
- * logged and changes no byte. A reader that cancels stops the reads, and
- * the download records nothing and releases its lease.
+ * delivery in the job's served_at (recordDelivery) and closes the body; a
+ * failed record is logged and changes no byte. A reader that cancels stops
+ * the reads, and the download records nothing and releases its lease.
  *
  * The reader is the Convex runtime, not the client. On a local backend
  * (precompiled-2026-10-22, 6 November 2026) it pulled an 11 MB body as fast
@@ -523,10 +523,11 @@ type Delivery = {
  * after 18 KB was recorded within a second of its start, its lease ended
  * then, and a file erased three seconds into a download no longer stopped
  * it. So the record says that the backend read the whole archive into the
- * response, not that the client received it, and the per-part checks and
- * the lease cover that read, not the client's transfer. Convex documents
- * at most 30 minutes for an action; whether a slow client's transfer
- * counts toward it was not measured.
+ * response, not that the client received it, and it leaves
+ * organizations.last_export_at, which the deletion reminder reads, alone.
+ * The per-part checks and the lease cover that read too, not the client's
+ * transfer. Convex documents at most 30 minutes for an action; whether a
+ * slow client's transfer counts toward it was not measured.
  */
 function archiveStream(
   ctx: ActionCtx,

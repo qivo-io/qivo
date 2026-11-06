@@ -1,8 +1,8 @@
 /* The organization export's delivery: the link orgExport.claimDownload
  * answers an admin, the /exports/ route that streams a ready archive as one
  * ZIP (http.ts), its checks on every request and before every part, its
- * leases, and the records of an archive served whole (orgExport.ts
- * recordDelivery, model/orgExports.ts noteDelivered).
+ * leases, and the record of an archive served whole, the job's served_at
+ * alone (orgExport.ts recordDelivery, model/orgExports.ts noteDelivered).
  *
  * Each case prepares a small archive with the real job on fake timers and
  * reads the route through convex-test's fetch. The body is a stream that
@@ -585,30 +585,34 @@ describe('the /exports/ route', () => {
 })
 
 describe('what a download records', () => {
-  it('records an archive served whole, once its last byte is taken, for any admin, and no request row', async () => {
+  it("records an archive served whole in the job's served_at once its last byte is taken, for any admin, leaving the last export alone and writing no request row", async () => {
     const t = newT()
     const { f, exportId } = await ready(t)
     await t.run((ctx) => ctx.db.patch(f.user._id, { org_role: 'admin' }))
     const user = { ...f.user, org_role: 'admin' as const }
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // a download that has not been read to its end records nothing
     const res = await get(t, pathOf(await claim(t, user, f.org.id, exportId)))
     expect(res.status).toBe(200)
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
     vi.advanceTimersByTime(5000)
     const servedAt = NOW_ISO()
     expect((await drain(t, res)).error).toBeNull()
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBe(servedAt)
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
+    // the backend cannot know that the client received the archive, so the
+    // organization's last export stays unset
+    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     // an admin who did not ask downloads without a request row
     expect((await requestsOf(t, exportId)).map((row) => row.profile_id)).toEqual([f.admin.id])
-    // a second download keeps the first served_at and moves the last export
+    // the browser export still records its own download, and a second
+    // served download keeps both the first served_at and that last export
+    vi.advanceTimersByTime(60_000)
+    await as(t, f.admin).mutation(api.orgRemovals.recordExport, { org_id: f.org.id })
+    const browserAt = NOW_ISO()
     vi.advanceTimersByTime(60_000)
     const again = await get(t, pathOf(await claim(t, f.admin, f.org.id, exportId)))
     expect((await drain(t, again)).error).toBeNull()
     expect(await jobOf(t, exportId)).toMatchObject({ served_at: servedAt })
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBe(NOW_ISO())
+    expect((await orgRow(t, f.org.id))?.last_export_at).toBe(browserAt)
     // the leases are gone
     expect((await jobOf(t, exportId))?.streams).toBeUndefined()
 
@@ -629,7 +633,6 @@ describe('what a download records', () => {
       await reader.cancel()
       return null
     })
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     expect(await jobOf(t, exportId)).toMatchObject({ state: 'ready' })
     expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
     // the cancel let go of its lease
@@ -642,7 +645,6 @@ describe('what a download records', () => {
     const { bytes, error } = await drain(t, erased)
     expect(error).not.toBeNull()
     expect(bytes.length).toBeLessThan(Number(erased.headers.get('Content-Length')))
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
     expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
     // a ready archive that lost a file is damaged, so its job fails
     expect(await jobOf(t, exportId)).toMatchObject({
@@ -675,7 +677,7 @@ describe('what a download records', () => {
     // at most the README's bytes went out after the demotion
     const [readme] = await partsOf(t, exportId)
     expect(read).toBeLessThanOrEqual(readme.stored_bytes)
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
+    expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
   })
 
   it("errors a part whose file is not its stored size, though the row's figures agree", async () => {
@@ -702,7 +704,7 @@ describe('what a download records', () => {
     const { bytes, error } = await drain(t, res)
     expect(error).not.toBeNull()
     expect(bytes.length).toBeLessThan(Number(res.headers.get('Content-Length')))
-    expect((await orgRow(t, f.org.id))?.last_export_at).toBeUndefined()
+    expect((await jobOf(t, exportId))?.served_at).toBeUndefined()
   })
 
   it('holds at most DELIVERY.streams downloads of an archive at once, answering 429 past them, until one ends or its lease runs out', async () => {
@@ -759,7 +761,7 @@ describe('what a download records', () => {
     await drain(t, next)
   })
 
-  it("counts only a served archive in a deletion's reminder, never one only prepared", async () => {
+  it("sends a deletion's reminder after a served archive as after one only prepared", async () => {
     const prepared = newT()
     const a = await ready(prepared)
     const remove = (t: T, f: OrgFixture) =>
@@ -767,14 +769,18 @@ describe('what a download records', () => {
         scheduleRemoval(ctx, { orgId: f.org.id, reason: 'requested', endedAt: NOW_ISO() }),
       )
     await remove(prepared, a.f)
-    expect((await deletionNotices(prepared)).length).toBeGreaterThan(0)
+    const notices = (await deletionNotices(prepared)).length
+    expect(notices).toBeGreaterThan(0)
 
+    // a served archive says the backend read it whole, not that the client
+    // received it, so it does not hold the reminder back
     const served = newT()
     const b = await ready(served)
     const res = await get(served, pathOf(await claim(served, b.f.admin, b.f.org.id, b.exportId)))
     expect((await drain(served, res)).error).toBeNull()
+    expect((await jobOf(served, b.exportId))?.served_at).toBe(NOW_ISO())
     await remove(served, b.f)
-    expect(await deletionNotices(served)).toEqual([])
+    expect(await deletionNotices(served)).toHaveLength(notices)
   })
 
   it("answers each admin's own automatic attempt in status, never another's", async () => {

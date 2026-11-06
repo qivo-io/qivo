@@ -1108,11 +1108,13 @@ export default defineSchema({
         renewal_date: v.union(v.string(), v.null()),
       }),
     ),
-    // The last export an admin downloaded: the browser export when its
-    // download starts (orgRemovals.ts recordExport), or a prepared archive
-    // the /exports/ route served whole (model/orgExports.ts noteDelivered),
-    // never one that was only prepared. Qivo cannot see the file reach
-    // disk, so this only decides whether to remind admins.
+    // The last export an admin downloaded, set by the browser export when
+    // its download starts (orgRemovals.ts recordExport). An export job's
+    // archive does not set it, whether only prepared or served by the
+    // /exports/ route, since the backend cannot know that the client
+    // received it; a later app stage records it once the browser confirms
+    // the download. Qivo cannot see the file reach disk, so this only
+    // decides whether to remind admins.
     last_export_at: v.optional(v.string()),
   })
     .index('by_uuid', ['id'])
@@ -1225,11 +1227,13 @@ export default defineSchema({
   // Any active admin downloads a ready archive through a two-minute link
   // (orgExport.ts claimDownload, the /exports/ route in http.ts). An ended
   // job and its request rows stay 30 days as export history.
-  // organizations.last_export_at stays the lasting record of exports
-  // downloaded; completed_at says when an archive was prepared and
-  // served_at when the route first served it whole. Code from before the
-  // release of served_at, streams and the step's Deleted items state does
-  // not accept a row that holds one (docs/deployment.md).
+  // completed_at says when an archive was prepared and served_at when the
+  // backend first read it whole into a download's response. Neither
+  // preparing nor serving an archive sets organizations.last_export_at, the
+  // record of exports an admin downloaded, which the deletion reminder
+  // reads. Code from before the release of served_at, streams and the
+  // step's Deleted items state does not accept a row that holds one
+  // (docs/deployment.md).
   org_exports: defineTable({
     id: v.string(), // a server uuid
     org_id: v.string(),

@@ -284,18 +284,16 @@ export const readyJobs = (ctx: QueryCtx, orgId: string) =>
 export const jobsOf = (ctx: QueryCtx, orgId: string) =>
   ctx.db.query('org_exports').withIndex('by_org_started', (q) => q.eq('org_id', orgId))
 
-/** Records that the route served job `job`'s archive whole, every byte
- * read into the response (http.ts archiveStream says what that measures):
- * the organization's last export, while it is there and its deletion has
- * not begun, so a deletion reminder counts a downloaded archive
- * (model/orgRetention.ts), and the job's first `served_at`. The finish
- * writes neither, so an archive that was only prepared never counts. */
+/** Sets job `job`'s `served_at` the first time the route serves its
+ * archive whole, every byte read into the response by the backend, which
+ * does not wait for the client (http.ts archiveStream). It leaves
+ * organizations.last_export_at alone, because the backend cannot know that
+ * the client received the archive, so a served archive never stops the
+ * deletion reminder (model/orgRetention.ts); a later app stage records the
+ * download once the browser confirms it finished. */
 export async function noteDelivered(ctx: MutationCtx, job: Doc<'org_exports'>): Promise<void> {
-  const now = new Date().toISOString()
-  const org = await byId(ctx, 'organizations', job.org_id)
-  if (org !== null && !(await deletionBegun(ctx, job.org_id)))
-    await ctx.db.patch(org._id, { last_export_at: now })
-  if (job.served_at === undefined) await ctx.db.patch(job._id, { served_at: now })
+  if (job.served_at === undefined)
+    await ctx.db.patch(job._id, { served_at: new Date().toISOString() })
 }
 
 /** The leases of job `job`'s downloads that have not run out at `now`
