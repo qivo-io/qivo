@@ -77,8 +77,9 @@
  *
  * What a client does with the answers:
  * - It beats every `every_ms`, again at once when its capability or the
- *   mode changes, and again whenever a claim answers `not_registered`. It
- *   sends `active: true` on the first input after a quiet minute, never the
+ *   mode changes or when a tab takes over beating for its browser profile,
+ *   and again whenever a claim answers `not_registered`. It sends
+ *   `active: true` on the first input after a quiet minute, never the
  *   input itself.
  * - It watches settings, so a mode change reaches a session that beats
  *   only every 6 hours.
@@ -108,7 +109,10 @@
  *   arrived in between; its records refuse what it announced. A login
  *   without a checkpoint and a switch to 'recent' name no session, so no
  *   claim answers it until a claim or a summary has moved the checkpoint.
- * - It sends end when the last tab of its browser profile closes. */
+ * - It sends end when the last tab of its browser profile closes. A tab
+ *   that took over beating sends it only after its first beat. End changes
+ *   nothing unless that tab beat last, and a missed end leaves the session
+ *   the target for up to `live_ms`. */
 
 import { makeFunctionReference } from 'convex/server'
 import { v } from 'convex/values'
