@@ -92,7 +92,8 @@ export function WalkRail({
     server accepts the write, so a refused value (whose refusal the store
     shows) leaves the row unreviewed. `readOnly`, Team sync's stale
     meeting, keeps what was typed in the box and writes nothing, also on a
-    blur, so the hours stay typed until the box writes again. */
+    blur, so the hours stay typed until the box writes again, and holds the
+    unsaved lease as paused edits do, so a move away still asks first. */
 export function RemainingInput({
   it,
   title,
@@ -111,9 +112,9 @@ export function RemainingInput({
   // takes the ELEMENT, not its value: the parse verdict (validity.badInput)
   // only exists on the element, and without it unparseable text arrives as ""
   // and reads as a deliberate clear
-  // the hours typed and not yet saved
+  // the hours typed and not yet saved, kept past a blur that sends nothing
   const unsaved = useFieldUnsaved(
-    P.editsPaused,
+    () => readOnly || P.editsPaused(),
     `${it.uuid}:${it.remaining ?? ''}`,
     'remaining hours',
   )

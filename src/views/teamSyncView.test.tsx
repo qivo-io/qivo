@@ -884,6 +884,36 @@ describe('a meeting that stops fitting', () => {
   )
 
   it(
+    'keeps the leave guard on hours typed into a box the meeting froze, through a blur that sends nothing',
+    async () => {
+      const { board, P } = await open(people({}), (snap) => ({
+        scope: `project:${meta(snap)}`,
+        step: me(snap),
+      }))
+      const { hasUnsaved } = await import('../lib/leaveGuard')
+      const handle = P.syncTask('t1')?.id ?? ''
+      const box = () => card(handle)?.querySelector<HTMLInputElement>('[data-sync-input]')
+      expect(hasUnsaved()).toBe(false)
+      await typeInto(box(), '9')
+      expect(hasUnsaved()).toBe(true)
+      board.server.sync.force = { state: 'over_ceiling' }
+      await board.answer()
+      await settle()
+      expect(state()).toBe('stale')
+      expect(box()?.readOnly).toBe(true)
+      const from = network.mutation.mock.calls.length
+      await act(async () => box()?.blur())
+      await settle()
+      // the blur sent nothing, so the typed hours keep their lease and a
+      // scope change, a close or a reload still asks first
+      expect(sentRemaining(9, from)).toBe(false)
+      expect(box()?.value).toBe('9')
+      expect(hasUnsaved()).toBe(true)
+    },
+    BOARD_TEST_TIMEOUT,
+  )
+
+  it(
     'keeps the stale meeting and the hours typed in it through Try again, busy until its answer, and the next ok answer makes the box write again',
     async () => {
       const { board, P } = await open(people({}), (snap) => ({
