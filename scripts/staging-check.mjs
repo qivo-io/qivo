@@ -2,6 +2,12 @@
 /* End-to-end check of the REST API, the MCP server and OAuth consent on the
  * staging deployment, or on a disposable local backend (--local).
  *
+ * It first calls the deployment's sign-in, OAuth token and metadata routes
+ * as every build does after Convex pushes (scripts/auth-probe.mjs), which
+ * names a runtime that refuses the sign-in handlers' import of
+ * convex/auth.ts, and checks the CORS answers the app's sign-in relies on
+ * (auth/routes). That step sends no credential and creates nothing.
+ *
  * One run signs in as Nora Berg, the Northstar fixture admin, in a real
  * browser. In the app it creates a personal token that can make changes, a
  * read-only one, a Standard agent with two keys and a Viewer agent with one.
@@ -190,6 +196,7 @@ import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { probeAuthRoutes } from './auth-probe.mjs'
 import { signInBrowser } from './browser-demo.mjs'
 import { inboxBadge } from './inboxBadge.mjs'
 import { DEFAULT_PAGE_SIZE, LIMITS, MIB } from './limits.mjs'
@@ -1113,6 +1120,78 @@ function onApi(value) {
     url.origin === cfg.apiOrigin ||
     (cfg.target.target === 'staging' && isSiteOf(url, cfg.target.deployment))
   )
+}
+
+/** The headers a list header such as Access-Control-Allow-Headers names,
+ *  in lower case. */
+const listed = (headers, name) =>
+  (headers.get(name) ?? '')
+    .split(',')
+    .map((each) => each.trim().toLowerCase())
+    .filter(Boolean)
+
+/** What is wrong with the CORS answers the app's sign-in relies on, given
+ *  `preflight`, the answer to an OPTIONS of /api/auth/sign-in/email from
+ *  `appOrigin` that asks for POST with content-type and better-auth-cookie,
+ *  and `session`, the answer to a GET of /api/auth/get-session from it.
+ *  Empty when the app can sign in and read its session from that origin. */
+export function authCorsProblems(preflight, session, appOrigin) {
+  const problems = []
+  if (preflight.status !== 204)
+    problems.push(`the sign-in preflight answered ${preflight.status}, not 204`)
+  if (preflight.headers.get('Access-Control-Allow-Origin') !== appOrigin)
+    problems.push('the sign-in preflight does not echo the app origin')
+  if (preflight.headers.get('Access-Control-Allow-Credentials') !== 'true')
+    problems.push('the sign-in preflight does not allow credentials')
+  for (const header of ['content-type', 'better-auth-cookie'])
+    if (!listed(preflight.headers, 'Access-Control-Allow-Headers').includes(header))
+      problems.push(`the sign-in preflight does not allow ${header}`)
+  if (session.headers.get('Access-Control-Allow-Origin') !== appOrigin)
+    problems.push('the session read does not echo the app origin')
+  if (!listed(session.headers, 'Access-Control-Expose-Headers').includes('set-better-auth-cookie'))
+    problems.push('the session read does not expose Set-Better-Auth-Cookie')
+  return problems
+}
+
+/** auth/routes: calls the deployment's sign-in, OAuth token and metadata
+ *  routes as every build does after Convex pushes (auth-probe.mjs), which
+ *  fail with a 5xx when the runtime refuses the handlers' import of
+ *  convex/auth.ts, then checks the CORS answers the app's sign-in relies on
+ *  (authCorsProblems). It sends no credential and creates nothing, so it may
+ *  run before setup/target proves the API origin. Its failure names the
+ *  origin it called, which before setup/target may lack the region label
+ *  the app shows. */
+async function checkAuthRoutes() {
+  const api = cfg.apiOrigin
+  try {
+    await probeAuthRoutes(api, {
+      local: cfg.target.target === 'local',
+      log: (line) => console.log(redact(line)),
+    })
+    const preflight = await request(
+      `${api}/api/auth/sign-in/email`,
+      {
+        method: 'OPTIONS',
+        headers: {
+          Origin: cfg.appOrigin,
+          'Access-Control-Request-Method': 'POST',
+          'Access-Control-Request-Headers': 'content-type,better-auth-cookie',
+        },
+      },
+      30_000,
+    )
+    const session = await request(
+      `${api}/api/auth/get-session`,
+      { headers: { Origin: cfg.appOrigin } },
+      30_000,
+    )
+    await session.text()
+    const problems = authCorsProblems(preflight, session, cfg.appOrigin)
+    expect(problems.length === 0, problems.join('; '))
+  } catch (error) {
+    fail(`at ${api}: ${describe(error)}`)
+  }
+  return `the sign-in, token and metadata routes and their CORS answer at ${api}`
 }
 
 /** Discovers the authorization server from MCP's 401 challenge and keeps
@@ -8069,11 +8148,15 @@ async function start() {
   const began = Date.now()
   let verified = false
   try {
+    // A failure is recorded and the run goes on, so the sign-in then fails
+    // as it would for a person.
+    if (!cfg.cleanup) await check('auth/routes', checkAuthRoutes)
     await openBrowser()
     await must('setup/ui/sign-in', () => signIn(cfg.nora))
     await must('setup/target', verifyTarget, (note) => note)
     // Only now may a credential go to the API origin, the sweep's included.
-    // Nothing was created before this point.
+    // Nothing was created before this point: auth/routes sent no credential
+    // and created nothing, so it could run before the origin was proved.
     verified = true
     // A local run killed while billing was paused left the organization
     // read-only, which would refuse this run's writes and its sweep.
