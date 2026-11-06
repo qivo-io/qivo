@@ -96,6 +96,7 @@ import {
   THREAD_PAGE,
   TOAST_HOST,
   taskPages,
+  threadFitsBudget,
   UPLOAD_STEP,
   WAITS,
   WORKLOAD_PAGE,
@@ -1401,6 +1402,16 @@ describe('thread pages', () => {
     expect(() => historyRows([all.slice(-500)], 500)).toThrow(/^pages before the empty one:/)
     const swapped = [...all.slice(0, 10), all[20], ...all.slice(10, 20), ...all.slice(21)]
     expect(() => historyRows(pages(swapped), 511)).toThrow(/^pages overlap or skip/)
+  })
+})
+
+describe("the task window's budget in the thread step", () => {
+  it('checks Show newer activity only when the thread passes the budget', () => {
+    // the staging task: 60 comments and about 510 changes
+    expect(threadFitsBudget(60, 511, 150)).toBe(false)
+    expect(threadFitsBudget(60, 511, 1000)).toBe(true)
+    expect(threadFitsBudget(60, 90, 150)).toBe(true)
+    expect(threadFitsBudget(60, 91, 150)).toBe(false)
   })
 })
 
