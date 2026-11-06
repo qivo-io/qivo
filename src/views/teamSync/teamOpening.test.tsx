@@ -285,11 +285,11 @@ describe('the next milestone and those of this week and next', () => {
 describe('the projects figure', () => {
   it('asks once with 200 top-level projects and shows the answer', async () => {
     fixture()
-    // 200 top-level projects of the home organization, 100 of them with
-    // two sub-projects, which the scope never names: milestones sit on
-    // top-level projects
-    const ids: string[] = []
-    for (let n = 0; n < 200; n++) {
+    // the home organization's 200 top-level projects, Ship, Plan and 198
+    // more, 100 of those with two sub-projects, which the scope never
+    // names: milestones sit on top-level projects
+    const ids = ['plan', 'ship']
+    for (let n = 0; n < 198; n++) {
       const id = `p${String(n).padStart(3, '0')}`
       ids.push(id)
       snap.projects.push(top(id, `Project ${n}`, 10 + n))
@@ -301,10 +301,12 @@ describe('the projects figure', () => {
             parent_id: id,
           })
     }
+    expect(snap.projects.filter((p) => p.type === 'meta')).toHaveLength(200)
+    // on the last project planted, first in this week's order by name
     snap.milestones.push({
       id: 'deep',
-      project_id: 'p199',
-      name: 'Last project review',
+      project_id: 'p197',
+      name: 'Audit of the last project',
       week: mondayIn(0),
       created_at: AT,
     })
@@ -312,7 +314,13 @@ describe('the projects figure', () => {
     await render(ids)
     expect(subs.filter((s) => s.name === 'milestones:section')).toHaveLength(1)
     expect((live('milestones:section')[0].args.projects as string[]).length).toBe(200)
-    expect(cell()?.textContent).toContain('Last project review')
+    expect(cell()?.textContent).toContain('Audit of the last project')
+    expect(listed()).toEqual([
+      'Audit of the last project',
+      'Beta build',
+      'Zed review',
+      'Field test',
+    ])
   })
 
   it('must fail: asks nothing past the cap and says so, never a next milestone', async () => {
