@@ -144,8 +144,9 @@ export const sweep = internalMutation({
       await ctx.db.delete(ticket._id)
     }
     // a background the demo's storage left without a preview gets one once
-    // there is room, one a run
-    await retrySkippedPreview(ctx, now)
+    // there is room, one a run, so only the cron's own call retries and the
+    // legs it chains for the file check below do not
+    if (after === undefined) await retrySkippedPreview(ctx, now)
     // Storage writes and metadata commits cross an action boundary. A crash
     // there leaves no id in the ledger (model/demoUploads.ts checkStoredFiles).
     const { checked, full } = await checkStoredFiles(ctx, progress)

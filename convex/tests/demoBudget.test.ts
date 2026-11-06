@@ -97,6 +97,35 @@ async function setup() {
   return { t, fx, issue, receipt, authId: user._id, admin, caller: as(t, admin) }
 }
 
+/* Another demo login, the admin of the fixture's other organization. */
+async function otherLogin(d: Demo) {
+  const user = (await d.t.mutation(components.betterAuth.adapter.create, {
+    input: {
+      model: 'user',
+      data: {
+        name: 'Omar',
+        email: `${uuid()}@demo.invalid`,
+        emailVerified: false,
+        isAnonymous: true,
+        createdAt: NOW,
+        updatedAt: NOW,
+      },
+    },
+  })) as { _id: string }
+  await d.t.run(async (ctx) => {
+    await ctx.db.patch(d.fx.otherAdmin._id, { auth_user_id: user._id })
+    await ctx.db.insert('demo_sessions', {
+      id: uuid(),
+      auth_user_id: user._id,
+      org_id: d.fx.otherOrg.id,
+      created_at: NOW,
+      expires_at: NOW + 86_400_000,
+      status: 'ready',
+    })
+  })
+  return as(d.t, { ...d.fx.otherAdmin, auth_user_id: user._id })
+}
+
 /* A JPEG header of 1920 × 1080 padded to `size` bytes, which the image
  * checks accept as a background. */
 function jpegOf(size: number) {
@@ -540,34 +569,6 @@ describe('a demo file in use', () => {
 })
 
 describe('a demo upload whose POST got no answer', () => {
-  /* Another demo login, the admin of the fixture's other organization. */
-  async function otherLogin(d: Demo) {
-    const user = (await d.t.mutation(components.betterAuth.adapter.create, {
-      input: {
-        model: 'user',
-        data: {
-          name: 'Omar',
-          email: `${uuid()}@demo.invalid`,
-          emailVerified: false,
-          isAnonymous: true,
-          createdAt: NOW,
-          updatedAt: NOW,
-        },
-      },
-    })) as { _id: string }
-    await d.t.run(async (ctx) => {
-      await ctx.db.patch(d.fx.otherAdmin._id, { auth_user_id: user._id })
-      await ctx.db.insert('demo_sessions', {
-        id: uuid(),
-        auth_user_id: user._id,
-        org_id: d.fx.otherOrg.id,
-        created_at: NOW,
-        expires_at: NOW + 86_400_000,
-        status: 'ready',
-      })
-    })
-    return as(d.t, { ...d.fx.otherAdmin, auth_user_id: user._id })
-  }
   const idOf = (url: string) => new URL(url).pathname.slice('/demo-uploads/'.length)
 
   it('frees its reserved bytes when its own login cancels it, and keeps one the receiver stored', async () => {
@@ -604,16 +605,33 @@ describe('a demo upload whose POST got no answer', () => {
 })
 
 describe("a demo background's preview", () => {
-  /* Uploads a background of `bytes` and answers the preview job's arguments. */
-  async function background(d: Demo, bytes: number) {
-    const ticket = await d.caller.mutation(api.appearance.createUpload, {
+  /* Uploads a background of `bytes` as `caller` and answers the preview
+   * job's arguments. */
+  async function background(d: Demo, bytes: number, caller = d.caller) {
+    const ticket = await caller.mutation(api.appearance.createUpload, {
       name: 'Lake.jpg',
       size: bytes,
     })
     expect((await post(d.t, ticket.upload_url, jpegOf(bytes), 'image/jpeg')).status).toBe(200)
-    const [image] = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').collect())
-    return { kind: 'custom' as const, id: image.id, storage_id: image.storage_id }
+    const image = await d.t.run((ctx) => ctx.db.query('custom_backgrounds').order('desc').first())
+    return { kind: 'custom' as const, id: image!.id, storage_id: image!.storage_id }
   }
+  /* Uploads a background of 3 MiB as `caller`, whose profile `profile_id`
+   * then reserves a 2 MiB picture, so the demo is full and the preview is
+   * skipped. The picture's reservation expires 10 minutes later. */
+  async function skippedBackground(d: Demo, caller = d.caller, profile_id = d.admin.id) {
+    const job = await background(d, 3 * MiB, caller)
+    await caller.mutation(api.files.avatarUploadUrl, { profile_id, size: 2 * MiB })
+    expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)).toBeNull()
+    return job
+  }
+  /* The preview jobs waiting to run, in the order they were scheduled. */
+  const generates = (d: Demo) =>
+    d.t.run(async (ctx) =>
+      (await ctx.db.system.query('_scheduled_functions').collect()).filter(
+        (f) => f.name.includes('backgroundPreviewProcessor') && f.state.kind === 'pending',
+      ),
+    )
   const skipped = async (d: Demo) =>
     (await d.caller.query(api.appearance.get, {})).custom_image?.preview_skipped
   const webp = (t: T) =>
@@ -713,26 +731,20 @@ describe("a demo background's preview", () => {
     await reserve(d, 2 * MiB)
     expect(await d.t.mutation(internal.backgroundPreviews.beginDemoWork, job)).toBeNull()
     expect(await skipped(d)).toBe(true)
-    const generates = () =>
-      d.t.run(async (ctx) =>
-        (await ctx.db.system.query('_scheduled_functions').collect()).filter(
-          (f) => f.name.includes('backgroundPreviewProcessor') && f.state.kind === 'pending',
-        ),
-      )
     const mark = () =>
       d.t.run(async (ctx) => (await ctx.db.query('custom_backgrounds').first())?.preview_skipped)
     // the upload's own job, which the suite's fake timers keep waiting
-    const before = (await generates()).length
+    const before = (await generates(d)).length
     // while the demo is full the sweep schedules nothing and counts the
     // background as skipped now, so others are checked first next time
     vi.setSystemTime(Date.now() + 60_000)
     await d.t.mutation(internal.demoUploads.sweep, {})
-    expect(await generates()).toHaveLength(before)
+    expect(await generates(d)).toHaveLength(before)
     expect(await mark()).toBe(Date.now())
     // the reservation expires, so the next sweep frees it and schedules one
     vi.setSystemTime(Date.now() + 10 * 60_000)
     await d.t.mutation(internal.demoUploads.sweep, {})
-    const after = await generates()
+    const after = await generates(d)
     expect(after).toHaveLength(before + 1)
     expect(after.at(-1)?.args[0]).toEqual(job)
     expect(await skipped(d)).toBe(false)
@@ -750,7 +762,31 @@ describe("a demo background's preview", () => {
     })
     // and a sweep with nothing skipped schedules nothing more
     await d.t.mutation(internal.demoUploads.sweep, {})
-    expect(await generates()).toHaveLength(before + 1)
+    expect(await generates(d)).toHaveLength(before + 1)
+  })
+
+  it('schedules one waiting preview a run, the one skipped longest ago, and none from a leg the run chains', async () => {
+    const d = await setup()
+    const first = await skippedBackground(d)
+    vi.setSystemTime(Date.now() + 1000)
+    const second = await skippedBackground(d, await otherLogin(d), d.fx.otherAdmin.id)
+    // both picture reservations expire, so both demos have 2 MiB free
+    vi.setSystemTime(Date.now() + 11 * 60_000)
+    const before = (await generates(d)).length
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    let jobs = await generates(d)
+    expect(jobs).toHaveLength(before + 1)
+    expect(jobs.at(-1)?.args[0]).toEqual(first)
+    // a leg the run's file check chains passes `after`, and schedules none
+    const progress = await d.t.run((ctx) => ctx.db.query('demo_upload_sweeps').first())
+    await d.t.mutation(internal.demoUploads.sweep, { after: progress!.checked_through })
+    expect(await generates(d)).toHaveLength(before + 1)
+    // the next run schedules the other
+    vi.setSystemTime(Date.now() + 60_000)
+    await d.t.mutation(internal.demoUploads.sweep, {})
+    jobs = await generates(d)
+    expect(jobs).toHaveLength(before + 2)
+    expect(jobs.at(-1)?.args[0]).toEqual(second)
   })
 })
 

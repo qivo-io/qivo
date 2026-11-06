@@ -238,14 +238,15 @@ export const PREVIEW_RETRY = { checks: 4 }
  * Schedules the preview of one demo background that the demo's storage left
  * without one (schema.ts custom_backgrounds.preview_skipped), once its demo
  * has DEMO_PREVIEW_BYTES free, so the preview's own reservation gets all it
- * may use. The minute sweep (demoUploads.ts sweep) calls it at `now`. It
- * checks the PREVIEW_RETRY.checks backgrounds skipped longest ago. One whose
- * demo still lacks room counts as skipped at `now`, so the next sweep checks
- * others first and none waits behind a demo that stays full. One that is no
- * longer its login's background, or whose demo ended, loses its mark. So
- * does the one scheduled, and the preview's run marks it again if the room
- * is gone by then (backgroundPreviews.ts beginDemoWork). Answers whether it
- * scheduled one. Reads, for each background it checks, what
+ * may use. The minute sweep's cron call (demoUploads.ts sweep) calls it at
+ * `now`, and the legs that call chains do not, so a run schedules one at
+ * most. It checks the PREVIEW_RETRY.checks backgrounds skipped longest ago.
+ * One whose demo still lacks room counts as skipped at `now`, so the next
+ * run checks others first and none waits behind a demo that stays full. One
+ * that is no longer its login's background, or whose demo ended, loses its
+ * mark. So does the one scheduled, and the preview's run marks it again if
+ * the room is gone by then (backgroundPreviews.ts beginDemoWork). Answers
+ * whether it scheduled one. Reads, for each background it checks, what
  * reserveDemoPreview reads and the login's appearance row.
  */
 export async function retrySkippedPreview(ctx: MutationCtx, now: number): Promise<boolean> {
