@@ -21,6 +21,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { QueryCtx } from '../_generated/server'
+import { deliveries } from '../invites'
 import { newWindowKey } from '../lib/db'
 import { LIST_BATCH } from '../lib/limits'
 import { NAMED_READ, namedCursor } from '../lib/namedPages'
@@ -39,6 +40,7 @@ import {
   settingsPeopleOf,
   settingsPersonOf,
 } from '../model/peopleSettings'
+import { deactivate, remove, update } from '../profiles'
 import { AGENT_KEYS, agentKeysOf } from '../tokens'
 import {
   as,
@@ -128,8 +130,8 @@ const plantMany = (
     Array.from({ length: count }, (_, i) => ({ name: personName(from + i), ...over })),
   )
 
-/* Rows in the page's order: name key in Convex's byte order, the id to
- * break ties. */
+/* Rows in the page's order, by name key in Convex's byte order with the
+ * id to break ties. */
 const byKey = <R extends { id: string; name: string }>(rows: readonly R[]): R[] =>
   [...rows].sort((a, b) => compareValues([nameKey(a.name), a.id], [nameKey(b.name), b.id]))
 
@@ -208,6 +210,35 @@ async function measured<R>(
       },
     }
   })
+}
+
+/* Public function `fn` run as `who`, its wrapper included, as a query or
+ * a mutation, with what its transaction read, by Convex's counts. A
+ * mutation's writes commit. */
+async function measuredCall(
+  t: T,
+  who: Doc<'profiles'>,
+  kind: 'query' | 'mutation',
+  fn: unknown,
+  args: Record<string, unknown>,
+): Promise<{ out: unknown; read: Read }> {
+  const { _handler } = fn as {
+    _handler: (ctx: QueryCtx, args: Record<string, unknown>) => Promise<unknown>
+  }
+  const run = async (ctx: QueryCtx) => {
+    const before = await ctx.meta.getTransactionMetrics()
+    const out = await _handler(ctx, args)
+    const after = await ctx.meta.getTransactionMetrics()
+    return {
+      out,
+      read: {
+        ranges: after.databaseQueries.used - before.databaseQueries.used,
+        documents: after.documentsRead.used - before.documentsRead.used,
+        bytes: after.bytesRead.used - before.bytesRead.used,
+      },
+    }
+  }
+  return kind === 'query' ? await as(t, who).query(run) : await as(t, who).mutation(run)
 }
 
 /* What a refused call read before its refusal. */
@@ -306,7 +337,7 @@ describe('settingsPage', () => {
     const at = { key: `0${nameKey(fx.user.name)}`, tie: [fx.user.id] }
     await refused(await namedCursor(PEOPLE_LIST, [fx.otherOrg.id, ''], at))
     await refused(await namedCursor('projectSettings.candidates', [fx.org.id, '', '', ''], at))
-    // a position the list never hands out: no mark, or a tie of two fields
+    // a position the list never hands out, with no mark or a tie of two fields
     await refused(await namedCursor(PEOPLE_LIST, [fx.org.id, ''], { ...at, key: 'user' }))
     await refused(await namedCursor(PEOPLE_LIST, [fx.org.id, ''], { ...at, tie: ['a', 'b'] }))
     // the same position, sealed right, opens
@@ -744,8 +775,8 @@ describe('projectCreators', () => {
       { name: 'Gus Guest', org_role: 'guest' },
     ])
     const answer = await read.creators(fx.t, fx.admin)
-    // admins (Ada Admin, admin), then users: Bot Standard, Ivy Invited,
-    // Relay, user
+    // admins (Ada Admin, admin), then the users Bot Standard, Ivy Invited,
+    // Relay and user
     expect(answer).toEqual({
       state: 'ok',
       setting: 'users',
@@ -772,7 +803,7 @@ describe('projectCreators', () => {
 /* ----------------------------------------------- 6. the last-admin rule */
 
 describe('the last-admin rule over the admins alone', () => {
-  it('refuses demoting, deactivating and removing the last active admin, with the same sentences', async () => {
+  it('refuses demoting and deactivating the last active admin, with the same sentence', async () => {
     const fx = await setup()
     const [second] = await plantPeople(fx.t, fx.org.id, [
       { name: 'Second Admin', org_role: 'admin' },
@@ -837,7 +868,7 @@ function logged(name: string, read: Read, rows: number) {
   expect(read.bytes).toBeLessThan(NAMED_READ.bytes + 64 * 1024)
 }
 
-/* The people figure: withOrg's 5 and 995 more, 1,000 people at the
+/* The people figure, withOrg's 5 and 995 more, 1,000 people at the
  * design size, with everyday guests (withOrg's and two more) and agents
  * (Relay and three more), everything else at everyday values. */
 async function plantRoster(fx: Fx) {
@@ -992,33 +1023,79 @@ describe('at the design size', () => {
     expect(guest?.more).toBe(true)
   }, 60_000)
 
+  it("reports the invitation emails of a page's 25 pending seats among 1,000 people", async () => {
+    const fx = await setup(newT({ transactionLimits: true }))
+    await plantMany(fx.t, fx.org.id, 970)
+    const pending = await plantPeople(
+      fx.t,
+      fx.org.id,
+      Array.from({ length: LIST_BATCH }, (_, i) => ({
+        name: `Invited ${String(i).padStart(2, '0')} Example`,
+        email: `invited${i}@example.com`,
+        auth_user_id: undefined,
+      })),
+    )
+    expect(await profilesOf(fx.t, fx.org.id)).toHaveLength(1000)
+    // one send each, which failed, so the row reads when the hourly cap
+    // lets it go again
+    const sentAt = new Date(Date.now() - 60_000).toISOString()
+    await fx.t.run(async (ctx) => {
+      for (const seat of pending)
+        await ctx.db.insert('platform_audit_log', {
+          ts: sentAt,
+          actor_email: 'system',
+          action: 'invite_email',
+          channel: 'app',
+          target_org_id: fx.org.id,
+          target_profile_id: seat.id,
+          detail: { email: seat.email, sent: false, settled: true, resend: false, by: fx.admin.id },
+        })
+    })
+    const page = await measuredCall(fx.t, fx.admin, 'query', deliveries, {
+      org_id: fx.org.id,
+      profile_ids: pending.map((p) => p.id),
+    })
+    const rows = page.out as { profile_id: string; state: string; free_at?: string | null }[]
+    logged('invites.deliveries, 25 pending seats among 1,000', page.read, rows.length)
+    expect(rows).toHaveLength(LIST_BATCH)
+    expect(rows.every((r) => r.state === 'unsent' && r.free_at === null)).toBe(true)
+    // each seat's lookup and newest send, and the hour's sends once for the
+    // page, never once a row
+    expect(page.read.documents).toBeLessThan(4 * LIST_BATCH)
+  }, 60_000)
+
   it('checks the last admin over the two admins alone among 1,000 people, for update, deactivate and remove', async () => {
     const fx = await setup(newT({ transactionLimits: true }))
-    await plantRoster(fx)
-    const [second] = await plantPeople(fx.t, fx.org.id, [
-      { name: 'Second Admin', org_role: 'admin' },
-    ])
+    const people = await plantRoster(fx)
+    // one of the 1,000 is the second admin, so the organization stays at
+    // the design size
+    const second = await fx.t.run(async (ctx) => {
+      await ctx.db.patch(people[0]._id, { org_role: 'admin' })
+      return (await ctx.db.get(people[0]._id)) as Doc<'profiles'>
+    })
+    expect(await profilesOf(fx.t, fx.org.id)).toHaveLength(1000)
     const check = await measured(fx.t, (ctx) => assertNotLastAdmin(ctx, second, 'demote'))
     logged('assertNotLastAdmin, one of two admins among 1,000', check.read, 0)
     expect(check.read.ranges).toBe(1)
     expect(check.read.documents).toBeLessThanOrEqual(2)
-    await as(fx.t, fx.admin).mutation(api.profiles.update, {
-      org_id: fx.org.id,
-      id: second.id,
-      patch: { org_role: 'user' },
-    })
+    const write = (fn: unknown, args: Record<string, unknown>) =>
+      measuredCall(fx.t, fx.admin, 'mutation', fn, { org_id: fx.org.id, ...args })
+    const demoted = await write(update, { id: second.id, patch: { org_role: 'user' } })
+    logged('profiles.update demoting one of two admins among 1,000', demoted.read, 1)
     await as(fx.t, fx.admin).mutation(api.profiles.update, {
       org_id: fx.org.id,
       id: second.id,
       patch: { org_role: 'admin' },
     })
-    await as(fx.t, fx.admin).mutation(api.profiles.deactivate, { org_id: fx.org.id, id: second.id })
+    const off = await write(deactivate, { id: second.id })
+    logged('profiles.deactivate of one of two admins among 1,000', off.read, 1)
     await as(fx.t, fx.admin).mutation(api.profiles.update, {
       org_id: fx.org.id,
       id: second.id,
       patch: { active: true },
     })
-    await as(fx.t, fx.admin).mutation(api.profiles.remove, { org_id: fx.org.id, id: second.id })
+    const removed = await write(remove, { id: second.id })
+    logged('profiles.remove of one of two admins among 1,000', removed.read, 1)
     await expectRefusal(
       as(fx.t, fx.admin).mutation(api.profiles.update, {
         org_id: fx.org.id,
