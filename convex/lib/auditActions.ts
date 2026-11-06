@@ -8,7 +8,8 @@
 export const AUDIT_ACTION_LABELS = {
   'billing.subscription': 'Updated billing subscription',
   'billing.usage_delivery_stopped': 'Stopped usage delivery at billing boundary',
-  'billing.storage_sample_failed': 'Stopped a storage sample that kept failing',
+  'billing.storage_sample_failed':
+    'Stopped a storage sample that kept failing or waiting for storage totals',
   'billing.storage_sample_restarted': 'Started a stopped storage sample again',
   'billing.webhook_failed': 'Stopped processing a Polar subscription event',
   'billing.create_plan': 'Created billing plan',

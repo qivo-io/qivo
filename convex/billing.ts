@@ -100,8 +100,9 @@ export const summary = orgQuery({
  * storage is the organization's stored-byte totals, files in Deleted items
  * included until they are deleted for good, or null while the totals are
  * not complete, never 0. The sample is what the current paid period's
- * storage charge uses, which leaves files in Deleted items out, and null
- * for any other bucket or while the sample has not finished. Billing's API
+ * storage charge uses, the same totals as the period's sample read them
+ * when the period started, files in Deleted items included, and null for
+ * any other bucket or while the sample has not finished. Billing's API
  * calls by account reads billing.apiAccounts for the period_key this
  * answers.
  *

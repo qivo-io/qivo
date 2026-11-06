@@ -26,9 +26,10 @@ import {
   validatePolarProduct,
 } from './lib/polar'
 import { audit } from './model/admin'
-import { GB, isoNow, nextReminder, storagePage } from './model/billing'
+import { GB, isoNow, nextReminder } from './model/billing'
 import { DAY_MS, retentionDue, syncOrgRemoval } from './model/orgRetention'
 import { newUuid } from './model/orgs'
+import { storageTotalsOf } from './model/storageTotals'
 
 type SyncWork = {
   token: string
@@ -86,15 +87,18 @@ const remindAdminsRef = makeFunctionReference<
 >('billingSync:remindAdmins')
 const pumpRef = makeFunctionReference<'action', Record<string, never>, null>('billingSync:pump')
 
+/* A step reads only `period` and `run`. The other fields are what the
+ * paged attachment scan of earlier releases carried: its phase, cursor,
+ * page size and running total. A step such a release queued before the
+ * deploy therefore passes this validator and takes the sample from the
+ * totals, and startStorageSample still sends `bytes: 0`, so a step this
+ * release queued that an earlier backend runs after a rollback passes that
+ * backend's validator as a scan's first page. */
 const storageStepArgs = {
   period: v.id('billing_periods'),
   run: v.string(),
-  // The phase a step queued by an earlier release still carries. 'own' was
-  // this paging; the other two read rows without org_id, of which none are
-  // left, so such a step only finishes the sample (storageStep).
   phase: v.optional(v.union(v.literal('own'), v.literal('unscoped'), v.literal('tasks'))),
   cursor: v.optional(v.string()),
-  // the page size after a step split its page, else STORAGE_PAGE.rows
   size: v.optional(v.number()),
   bytes: v.number(),
 }
@@ -103,15 +107,18 @@ const storageStepRef = makeFunctionReference<'mutation', StorageStep, null>(
   'billingSync:storageStep',
 )
 
-/** How long a storage sample may go without a step before apply starts it
- * again. A step runs in well under a second, so only a sample whose step
- * failed waits this long. */
+/** How long a storage sample may go without finishing before apply starts
+ * it again. Its one step runs in well under a second, so only a sample
+ * whose step failed, or that waits while its organization's stored-byte
+ * totals are counted (storageStep), waits this long. */
 export const STORAGE_STALL_MS = 15 * 60_000
 
 /** How many times a period's storage sample starts before apply stops
- * it. A sample that stalls this often has a step that keeps failing, so
- * apply stops it, logs an error and writes a billing.storage_sample_failed
- * audit row instead of starting it again at once. */
+ * it. A sample that stalls this often has a step that keeps failing, or an
+ * organization whose totals stay not complete, as while an operator's
+ * recount runs, so apply stops it, logs an error and writes a
+ * billing.storage_sample_failed audit row instead of starting it again at
+ * once. */
 export const STORAGE_ATTEMPTS = 5
 
 /** How long a stopped storage sample waits before apply starts it again on
@@ -443,7 +450,7 @@ const receiptOf = (ctx: QueryCtx, event_id: string) =>
  * organization's id. Stale or out-of-order states are ignored. It opens the
  * paid period's record when a new period starts and starts the period's
  * storage sample (storageStep), or starts a sample again that has gone
- * STORAGE_STALL_MS without a step, up to STORAGE_ATTEMPTS starts, and a
+ * STORAGE_STALL_MS without finishing, up to STORAGE_ATTEMPTS starts, and a
  * stopped one again STORAGE_RETRY_MS after it stopped. Then it starts or
  * stops the read-only period before deletion (model/orgRetention.ts). */
 async function applySubscription(ctx: MutationCtx, remote: PolarSubscription): Promise<string> {
@@ -588,13 +595,15 @@ async function startStorageSample(
 }
 
 /* Starts a stalled sample again, or stops it once it has started
- * STORAGE_ATTEMPTS times. A stopped sample records no storage until apply
- * starts it again after STORAGE_RETRY_MS (retryStoppedSample), so a period
- * whose sample never finishes charges none. Each stop logs an error, and the
- * period's first stop also writes an audit row, so a step that keeps failing
- * through the retries does not fill the audit log. They tell an operator,
- * who can start it again at once with restartStorage once the cause is
- * fixed. */
+ * STORAGE_ATTEMPTS times. A sample stalls when its step failed or while it
+ * waits for its organization's stored-byte totals, which a recount leaves
+ * not complete until it ends. A stopped sample records no storage until
+ * apply starts it again after STORAGE_RETRY_MS (retryStoppedSample), so a
+ * period whose sample never finishes charges none, and never 0. Each stop
+ * logs an error, and the period's first stop also writes an audit row, so
+ * a step that keeps failing through the retries does not fill the audit
+ * log. They tell an operator, who can start it again at once with
+ * restartStorage once the cause is fixed or the count has ended. */
 async function restartStorageSample(
   ctx: MutationCtx,
   period: Doc<'billing_periods'>,
@@ -645,7 +654,9 @@ async function retryStoppedSample(ctx: MutationCtx, period: Doc<'billing_periods
  * (billing.storage_sample_failed, whose detail names the period) or while it
  * runs, with its starts counted from one, and writes a
  * billing.storage_sample_restarted audit row. An operator runs it once the
- * failing step is fixed:
+ * failing step is fixed, or once a recount of the organization's stored-byte
+ * totals (internal/storageTotalsBackfill) has ended, rather than wait for
+ * apply's next retry:
  *   "${QIVO_INTERNAL_DIR:-$HOME/projects/qivo-internal}/scripts/with-deployment" \
  *     TARGET npx convex run billingSync:restartStorage '{"period":"…"}'
  * A period whose sample finished is left alone. The storage charge a
@@ -677,43 +688,55 @@ export const restartStorage = internalMutation({
   },
 })
 
-/** One step of a period's storage sample. The renewal (apply) records the
- * period at once and starts the sample, so the renewal never reads the
- * organization's attachment rows. Each step counts one page of them
- * (model/billing.ts storagePage) and schedules the next step with the
- * running total. It counts the rows stored before the
- * renewal recorded the period, so a file stored later, or a restore's rows
- * written back, waits for the next period. The last step records the bytes and the
- * blocks over the plan's allowance for the period's seats. When there are
- * blocks and the period starts after any complimentary grant, it also adds
- * the storage charge, which is collected with the period's metered usage on
- * its closing invoice and never recurs. A step whose period is gone, or
- * whose run was started again, does nothing. */
+/** A period's storage sample, taken in one step. The renewal (apply)
+ * records the period at once and schedules this step, so the renewal's
+ * transaction never reads the totals, which every attach writes. The step
+ * reads the organization's stored-byte totals when it runs
+ * (model/storageTotals.ts storageTotalsOf), normally within a second of
+ * the renewal: every task file it stores, files in Deleted items included
+ * until they are deleted for good, the figure Billing shows as current
+ * storage. A file stored after that waits for the next period. It records
+ * the bytes and the blocks over the plan's allowance for the period's
+ * seats. When there are blocks and the period starts after any
+ * complimentary grant, it also adds the storage charge, which is collected
+ * with the period's metered usage on its closing invoice and never recurs.
+ *
+ * While the totals are not complete, as while an operator's recount runs,
+ * the step logs a warning and writes nothing, never 0, so the sample waits:
+ * apply starts it again STORAGE_STALL_MS after its start, stops it after
+ * STORAGE_ATTEMPTS starts and retries it STORAGE_RETRY_MS later, and a
+ * sample started again measures the totals when it runs. A step whose
+ * period is gone, or whose run was started again, does nothing
+ * (takeStorageSample). */
 export const storageStep = internalMutation({
   args: storageStepArgs,
-  handler: async (ctx, a): Promise<null> => {
-    const period = await ctx.db.get(a.period)
-    if (period === null || period.storage_run !== a.run) return null
-    if (a.phase === 'unscoped' || a.phase === 'tasks') {
-      return await finishStorageSample(ctx, period, a.bytes)
-    }
-    const page = await storagePage(ctx, period.org_id, {
-      cursor: a.cursor ?? null,
-      size: a.size,
-      before: period._creationTime,
-    })
-    let next: StorageStep | undefined
-    if ('split' in page) next = { ...a, size: page.split }
-    else {
-      const bytes = a.bytes + page.bytes
-      if (page.next !== null) next = { ...a, cursor: page.next, size: undefined, bytes }
-      else return await finishStorageSample(ctx, period, bytes)
-    }
-    await ctx.db.patch(period._id, { storage_run_at: isoNow() })
-    await ctx.scheduler.runAfter(0, storageStepRef, next)
-    return null
-  },
+  handler: async (ctx, a): Promise<null> => await takeStorageSample(ctx, a.period, a.run),
 })
+
+/** The work of storageStep for period `periodId` and its sample's run
+ * `run`. It reads the same documents whatever the organization stores: the
+ * period, the totals row, the plan, the subscription, the charge's id when
+ * blocks are due, and the period again for the next reconciliation
+ * (dropStallCheck). Under the allowance that was 5 documents, 4 index
+ * ranges and about 2.7 KB, for an organization with 1,500 project totals
+ * rows as for one with one file, in convex/tests/billing.test.ts ("reads
+ * the same documents"). */
+export async function takeStorageSample(
+  ctx: MutationCtx,
+  periodId: Id<'billing_periods'>,
+  run: string,
+): Promise<null> {
+  const period = await ctx.db.get(periodId)
+  if (period === null || period.storage_run !== run) return null
+  const totals = await storageTotalsOf(ctx, period.org_id)
+  if (totals === null) {
+    console.warn(
+      `billing: storage sample of period ${period._id} waits; its organization's storage totals are being counted`,
+    )
+    return null
+  }
+  return await finishStorageSample(ctx, period, totals.bytes)
+}
 
 /* After a storage sample finishes, computes the organization's next
  * reconciliation again (nextSyncDue), now without the sample's stall check.

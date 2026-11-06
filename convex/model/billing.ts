@@ -550,9 +550,10 @@ export async function billingUsageHead(
 
 /** What the sample at the start of the paid period `head` shows measured
  * for organization `orgId`, whose subscription is `sub`: the bytes of its
- * billing_periods row (billingSync.ts storageStep), found by the provider
- * subscription id and the period's start, which the period's storage
- * charge uses. Null for a calendar month or a pending interval, a
+ * billing_periods row (billingSync.ts storageStep), the organization's
+ * stored-byte totals when the sample read them, files in Deleted items
+ * included, found by the provider subscription id and the period's start,
+ * which the period's storage charge uses. Null for a calendar month or a pending interval, a
  * subscription without a provider id, a period without a row or of
  * another organization, and a sample that is running or stopped. One read
  * at most. */
@@ -580,7 +581,7 @@ async function sampledStorage(
  * in their place, current storage from the stored-byte totals, files in
  * Deleted items included until they are deleted for good, or null while
  * they are not complete, and the bytes the current paid period's sample
- * measured (sampledStorage). It reads at most one usage row (the ranked
+ * measured from the same totals at the period's start (sampledStorage). It reads at most one usage row (the ranked
  * check), the month's shards or the bucket's totals row, two single reads,
  * and no account, profile beyond the allowance's or attachment row. */
 export async function usageFiguresOf(ctx: QueryCtx, orgId: string): Promise<BillingUsageFigures> {
