@@ -2614,7 +2614,9 @@ function UnusedReason({
    answer alone fixes the window's project and says whether the person may
    change the milestone. The window reads Upcoming beside it for the
    project the opener named (init.project), and uses that read only once
-   the answer names the same project, else it asks the answer's project.
+   the answer names the same project, else it asks the answer's project,
+   and an answer that names no project, or a failure or refusal before the
+   first answer, drops it.
    Until the answer and, where the store holds the project, Upcoming's
    first answer are in, nothing but "Loading this milestone…" shows: no
    sections, no add row, no editor. Then the milestone shows as its editor
@@ -2806,9 +2808,15 @@ function MilestoneModal({
   // The sections. `from` is the first day of the current week in the app's
   // grid, read on each render: a new week re-anchors the grid, which moves
   // the boundary and starts both sections again. Before the answer named
-  // the project, Upcoming reads the project the opener named.
+  // the project, Upcoming reads the project the opener named, while the
+  // milestone's read loads or its answer names a project. An answer that
+  // names none (gone or unreadable), or a failure or refusal with no
+  // answer kept, drops that read, since the window shows no section then.
   const from = weekToISO(P.TODAY_WEEK)
-  const hinted = init.id && projectId === null ? (P.metaOf(init.project)?.id ?? null) : null
+  const hinted =
+    init.id && projectId === null && (!read || read.state === 'loading' || !!answer?.project)
+      ? (P.metaOf(init.project)?.id ?? null)
+      : null
   const upcomingOn = project?.id ?? hinted
   const upcoming = useMilestoneSection(
     MILESTONE_SECTIONS.upcoming,

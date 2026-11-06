@@ -813,6 +813,25 @@ describe('opened on a milestone', { timeout: 30_000 }, () => {
     expect(q('[data-modal-shell]')?.textContent).not.toContain('Plan')
   })
 
+  it.each([
+    ['unavailable', 'unavailable'],
+    ['error', 'failed'],
+    ['refused', 'refused'],
+  ] as const)(
+    "drops the opener's Upcoming read once the milestone's read answers %s with no project",
+    async (forced, state) => {
+      fixture({ up: 2 })
+      force = { get: forced }
+      await start()
+      await open({ id: 'u1', project: 'plan' })
+      expect(q('[data-milestone-open]')?.getAttribute('data-milestone-open')).toBe(state)
+      expect(sectionOf('upcoming')).toBeNull()
+      // must fail: a read of a project the window never shows, kept live
+      // until the person closes the window
+      expect(live(sectionSubs('upcoming'))).toHaveLength(0)
+    },
+  )
+
   it("asks the answer's project once the opener named another", async () => {
     fixture({
       up: 1,
