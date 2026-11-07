@@ -244,6 +244,27 @@ describe('the rows a view brings', () => {
   })
 })
 
+describe('a handle two models share', () => {
+  it("names the person's new task on its way, so its card never acts on another task", async () => {
+    const { createViewRows } = await import('./viewRows')
+    const views = createViewRows(isoToWeek)
+    const org = snapshot.orgs[0].id
+    // another person's task numbered 4 in the answer, and the person's new
+    // task still showing its preview number 4
+    views.take(SLOT, [row('theirs', 4)])
+    views.beginPaint()
+    views.insert(SLOT, row('mine', 4, { title: 'New bench check' }))
+    const ctx = { handleNow: (_uuid: string, _org: string, num: number) => `QN-${num}` }
+    views.reshape(() => false, { ...ctx, wins: (uuid) => uuid === 'mine' })
+    expect(views.byHandle('QN-4')?.uuid).toBe('mine')
+    expect(views.model(SLOT, 'theirs')?.key).toBe('QN-4')
+    // without one on its way, the first row the view holds names it
+    views.reshape(() => false, ctx)
+    expect(views.byHandle('QN-4')?.uuid).toBe('theirs')
+    expect(views.numbered(org)).toEqual(new Map([[4, 'theirs']]))
+  })
+})
+
 describe('a model shaped from a row', () => {
   it('is shaped again when its own handle or the week grid moves, and kept otherwise', async () => {
     const { createViewRows } = await import('./viewRows')

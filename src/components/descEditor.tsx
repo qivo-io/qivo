@@ -275,12 +275,14 @@ export type DraftKeep = {
     it after a refusal. `label` is the primary button ("Comment" for the
     composer, "Save" for edit-in-place); `reset` clears the doc after a saved
     commit (composer); `onClose` lets edit-in-place close on Esc/Discard and
-    after a saved commit. */
+    after a saved commit. `task` is the uuid of the task the comment goes
+    to, where the editor names none (`issueKey` null), as the composer. */
 export type CommentMode = {
   onCommit: (text: string, keep: DraftKeep) => Promise<boolean>
   onClose?: () => void
   label: string
   reset?: boolean
+  task?: string
 }
 
 type DescEditorProps = {
@@ -770,13 +772,17 @@ const DescEditorInner = forwardRef<DescEditorHandle, DescEditorProps>(function D
       setHeadMenu(false)
       ed.setEditable(false, false)
       rebaseRef.current = false
+      // the task it goes to, whose create the server may still refuse
+      const task = cm.task ?? taskUuid
       void cm.onCommit(text, draftKeep(ed, rawRef.current)).then((saved) => {
         sendingRef.current = false
         setSending(false)
         if (closedRef.current || ed.isDestroyed) {
           // closed while it was sent: the unmount held back its discard
-          // toast in case the save went through
-          if (!saved) toast('Unsaved comment discarded')
+          // toast in case the save went through. A comment on a new task
+          // whose create the server refused went with the task, which the
+          // create's refusal said already (P.refusedCreate).
+          if (!saved && !(task && P.refusedCreate(task))) toast('Unsaved comment discarded')
           return
         }
         ed.setEditable(true, false)

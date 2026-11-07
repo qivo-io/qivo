@@ -82,6 +82,10 @@ export type TaskDetailVM = {
   /** whether the task is Done: for a group, every leaf of a whole list,
       at least one, since P.isDone walks the workspace's tasks */
   done: boolean
+  /** whether the window shows the person's own new task from what its
+      create sent (creatingAnswer), before its own read answered: the
+      controls that read the server about the task wait until then */
+  saving: boolean
 }
 
 /** What shapeTaskDetail reads besides the answer. */
@@ -90,6 +94,8 @@ export type DetailInputs = {
   org: string
   answer: TaskOk | ArchivedAnswer | { state: 'unavailable' } | null
   failure: 'none' | 'failed' | 'retrying'
+  /** whether `answer` is a creating answer (creatingAnswer) */
+  saving?: boolean
   /** the window's links and files of the same task, while its sections
       read them */
   links: LinksOk | null
@@ -324,6 +330,7 @@ export function shapeTaskDetail(inputs: DetailInputs): TaskDetailVM {
     textless: false,
     archivedAt: null,
     num: null,
+    saving: !!inputs.saving && answer?.state === 'ok',
   }
   if (answer?.state === 'ok') return { ...base, answered: 'ok', ...okView(answer, inputs) }
   if (answer?.state === 'archived')
@@ -337,5 +344,49 @@ export function shapeTaskDetail(inputs: DetailInputs): TaskDetailVM {
     datesKnown: true,
     partial: false,
     done: false,
+  }
+}
+
+/** What a creating answer is built from: the new task's row as the store
+    sends it, by the server's rules, with what the create's answer gave
+    once it answered (store/planner.ts PendingCreate), the person's level
+    on its project, their profile in its organization, and the short rows
+    of its parent, for a subtask, and of its one subtask, for a new parent
+    (P.createParent). */
+export type CreatingInputs = {
+  row: Row<'issues'>
+  level: AccessLevel
+  me: string | undefined
+  parent: ShortRow | null
+  child: ShortRow | null
+}
+
+/** The task window's answer of the person's own new task before the server
+    took its create (store/planner.ts PendingCreate), shaped as the server
+    will answer it (convex/lib/taskWindow.ts readWindowTask): the row with
+    its text and no hidden parent or subtasks, the person's level, no
+    labels, the parent's short row for a subtask, and a whole subtask list,
+    empty or the one subtask of a new parent. The person follows the task
+    where the server makes them (convex/model/messages.ts
+    notifyIssueInsert): as its assignee, or as the reviewer of a task born
+    In Review. A mention of themselves in the description, which the
+    server also follows, shows with the window's own first answer. */
+export function creatingAnswer(inputs: CreatingInputs): TaskOk {
+  const { row, me } = inputs
+  const reviewer = row.status === 'review' && row.reviewer_id !== undefined
+  const follows = !!me && (row.assignee_id === me || (reviewer && row.reviewer_id === me))
+  return {
+    state: 'ok',
+    task: {
+      ...row,
+      has_subtasks: inputs.child !== null,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    },
+    level: inputs.level,
+    labels: [],
+    follow: follows && me ? { issue_id: row.id, profile_id: me, created_at: row.created_at } : null,
+    parent: inputs.parent,
+    subtasks: { rows: inputs.child ? [inputs.child] : [], complete: true },
   }
 }

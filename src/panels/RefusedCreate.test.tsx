@@ -6,12 +6,16 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest'
 import { TooltipProvider } from '../components/ui/tooltip'
+import { type BoardArgs, boardStandIn } from '../store/boardStandIn.setup'
 import { answerOverview } from '../store/overviewStandIn.setup'
-import { plannerFixture } from '../store/plannerFixture.setup'
+import { plannerFixture, type Snapshot } from '../store/plannerFixture.setup'
 
 /* A new task's window when the server refuses the create, on the real
    store, the real editors and App's own create and refusal wiring: the task
-   is made through the project's New task button and the dialog. */
+   is made through the project's New task button and the dialog, in a store
+   that never asked for every task, as the app boots, so the window shows
+   it from its creating answer and App names it by its key, never by the
+   reference it opened it by. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
@@ -29,7 +33,12 @@ vi.mock('../lib/auth', () => ({
 let container: HTMLDivElement
 let root: Root
 let refuse: (error: unknown) => void
+/* Refuses the comment the window posted, which went out behind the create. */
+let refuseComment: (error: unknown) => void
 let toast: MockInstance
+/* Answers each open Board read again from the server's tasks with `more`
+   added, as after a write the server stored. */
+let answerBoards: (more: Snapshot['issues']) => void
 
 beforeEach(() => {
   Range.prototype.getClientRects = () => document.createElement('div').getClientRects()
@@ -60,6 +69,8 @@ afterEach(async () => {
   container.remove()
   document.body.innerHTML = ''
   history.replaceState(null, '', '/')
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -86,11 +97,12 @@ const editorOf = (label: string) =>
     `the ${label} editor`,
   )
 
-/** Renders App on the fixture, creates a task from the project's New task
-    button and answers its key once the task's window shows. The server
-    leaves the create unanswered until `refused`. */
-async function openNewTask() {
+/** Renders App on the fixture, at `path` when given, creates a task from
+    the project's New task button and answers its key once the task's
+    window shows. The server leaves the create unanswered until `refused`. */
+async function openNewTask(path?: string) {
   vi.resetModules()
+  if (path) history.replaceState(null, '', path)
   const snap = plannerFixture()
   // App opens on a project the person leads, which offers New task
   const base = snap.projects[0]
@@ -98,10 +110,21 @@ async function openNewTask() {
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
     { ...base, id: 'work', key: 'WORK', num: 2, name: 'Work', parent_id: 'plan' },
   ]
+  const boards = new Set<{ args: BoardArgs; next: (value: unknown) => void }>()
+  answerBoards = (more) => {
+    for (const read of boards)
+      read.next(boardStandIn({ ...snap, issues: [...snap.issues, ...more] }, read.args))
+  }
   network.onUpdate.mockImplementation((ref, args, next, fail) => {
     const name = getFunctionName(ref)
     if (name === 'workspace:whole') next(structuredClone(snap))
     else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+    else if (name === 'tasks:board') {
+      const read = { args: args as BoardArgs, next }
+      boards.add(read)
+      next(boardStandIn(snap, read.args))
+      return () => boards.delete(read)
+    }
     // the Overview's empty note, with New task, waits for its answer
     else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
     return () => {}
@@ -113,8 +136,15 @@ async function openNewTask() {
       return new Promise((_resolve, reject) => {
         refuse = reject
       })
-    return name.startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null)
+    return name.startsWith('comments:')
+      ? new Promise((_resolve, reject) => {
+          refuseComment = reject
+        })
+      : Promise.resolve(null)
   })
+  // the app's boot, without every task
+  const { TASKS } = await import('../store/liveParts')
+  TASKS.atBoot = false
   const store = await import('../store/planner')
   await store.initStore()
   // App's views load their code only while the socket counts as connected
@@ -146,11 +176,17 @@ async function openNewTask() {
     set?.call(title, 'Run the soak test')
     title.dispatchEvent(new Event('input', { bubbles: true }))
   })
+  // the key the new task takes, which the dialog's create previews
+  const key = store.P.nextIssueKey('work')
   const create = [...document.querySelectorAll('button')].find((b) => b.textContent === 'Create')
   await act(async () => create?.click())
-  const task = store.P.issues.find((it) => it.title === 'Run the soak test')
-  if (!task) throw new Error('the task was not created')
-  return task.key
+  await waitFor(
+    () => document.querySelector('[data-task-title]')?.textContent?.includes('Run the soak test'),
+    'the new task in its window',
+  )
+  // the window names it by its key, though App opened it by a reference
+  expect(document.querySelector('[data-issue-key]')?.textContent).toBe(key)
+  return key
 }
 
 /** Refuses the create and lets the window close. */
@@ -177,11 +213,72 @@ describe('a new task the server refuses', { timeout: 30_000 }, () => {
     ])
   })
 
+  it('says nothing more for a comment posted before the refusal, whose write the server refuses after it', async () => {
+    const key = await openNewTask()
+    const composer = await editorOf('Leave a comment')
+    await act(async () => composer.commands.insertContent('Drift is under 2%'))
+    const post = [...document.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === 'Comment',
+    )
+    await act(async () => post?.click())
+    await refused()
+    // the comment went out behind the create, so the server refuses it
+    // after the create, for a task that never existed
+    await act(async () => {
+      refuseComment(new ConvexError({ code: 'not_found', message: 'issue not found' }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="textbox"]')).toBeNull()
+    expect(toasts()).toEqual([
+      `Created ${key}`,
+      "You don't have permission for that. Change reverted.",
+    ])
+  })
+
   it('says only the refusal when nothing was typed', async () => {
     const key = await openNewTask()
     await editorOf('Leave a comment')
     await refused()
     expect(document.querySelector('[role="textbox"]')).toBeNull()
+    expect(toasts()).toEqual([
+      `Created ${key}`,
+      "You don't have permission for that. Change reverted.",
+    ])
+  })
+
+  it('closes its window when the refusal names the number its task moved to before App took the move', async () => {
+    const key = await openNewTask('/app/testbed/board/p/2')
+    await editorOf('Leave a comment')
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    // another create took the preview number first. The Board's answer
+    // brings that task, which moves the new task's reference past it, and
+    // the refusal arrives before App renders the move
+    const { P } = await import('../store/planner')
+    const org = P.orgs[0]?.id ?? ''
+    const at = '2026-09-14T09:00:00.000Z'
+    await act(async () => {
+      answerBoards([
+        {
+          id: crypto.randomUUID(),
+          org_id: org,
+          project_id: 'work',
+          num: Number(key.slice(key.indexOf('-') + 1)),
+          title: 'Check the soak rig',
+          description: '',
+          status: 'todo',
+          priority: 'medium',
+          paused: false,
+          status_at: at,
+          created_at: at,
+          updated_at: at,
+          has_hidden_subtasks: false,
+          has_hidden_parent: false,
+        },
+      ])
+      refuse(new ConvexError({ code: 'forbidden', message: 'no write access to this project' }))
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
     expect(toasts()).toEqual([
       `Created ${key}`,
       "You don't have permission for that. Change reverted.",

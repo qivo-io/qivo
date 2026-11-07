@@ -162,16 +162,21 @@ if (!process.argv.includes('--serve'))
 // number of App renders in it. Tasks load on demand: `startup` is the
 // startup without task windows, and the phases before `taskLoad` (BEFORE_ASK)
 // run before any task is held, the Roadmap's navigation and drag among them,
-// since the Roadmap reads its tasks from the server (tasks.roadmap); taskLoad
+// since the Roadmap reads its tasks from the server (tasks.roadmap), and the
+// person's own create, timed from its send to its confirmation; taskLoad
 // times the ask for every task (P.askTasks) to every task held, and every
 // phase after it reads or edits held tasks. A build from before the Roadmap
 // read the server asks for every task as the Roadmap mounts, so its
-// navigation holds that load and its taskLoad finds every task held
+// navigation holds that load and its taskLoad finds every task held. A build
+// from before a create stopped asking (t3/limits-create-answer) asks for
+// every task as it creates, so its `create` holds the start of the task load
+// and its taskLoad only the rest
 const PHASES = [
   'searchOpen',
   'search',
   'navigation',
   'drag',
+  'create',
   'taskLoad',
   'comments',
   'remote',
@@ -215,7 +220,7 @@ const PHASES = [
 ]
 /* The phases that run before the ask for every task (taskLoad), on a
    workspace that holds no task; the report names them (report.beforeAsk). */
-const BEFORE_ASK = ['startup', 'searchOpen', 'search', 'navigation', 'drag']
+const BEFORE_ASK = ['startup', 'searchOpen', 'search', 'navigation', 'drag', 'create']
 // the medians --baseline prints side by side
 const COMPARED = [
   ...[
@@ -225,6 +230,7 @@ const COMPARED = [
     'refusalWithTen',
     'markAllRead',
     'drag',
+    'create',
     'remoteCreate',
     'remoteProjectRename',
     'inboxMessage',
@@ -245,8 +251,10 @@ const COMPARED = [
     'phoneBoard',
     'overviewAfterBoardRemote',
   ].map((phase) => `${phase}WireBytes`),
-  // the startup without task windows, and the ask for every task after it
+  // the startup without task windows, the person's own create, and the ask
+  // for every task after it
   'startup',
+  'create',
   'taskLoad',
   // opening the Board from the click until every card is in
   'boardOpenToCompleteMs',
@@ -801,6 +809,38 @@ async function runSample(origin, tasks, metrics, query = '', searchRows = Math.m
     }),
   )
   assert.notEqual(await page.evaluate((id) => window.PLANNER.anyTask(id).start, taskId), initial)
+  // The person's own create into the first sub-project, on a workspace that
+  // holds no task, from its send (P.addIssue) to its confirmation
+  // (P.hasUnconfirmed). The stand-in stores and answers it (issues:create),
+  // and deletes it again, untimed, so the phases after it find the tasks
+  // they found before. A build that creates without an ask (P.createOnItsWay)
+  // still holds no task after it; an older one asks for every task here.
+  phase('create')
+  metrics.create.push(
+    await timed(async () => {
+      const made = await page.evaluate(() => {
+        const sub = window.PLANNER.projects.find((p) => p.type === 'project')
+        return window.PLANNER.addIssue({
+          project: sub.id,
+          title: 'Check the spare sensors on the north bench before the cold week',
+          status: 'todo',
+          priority: 'medium',
+        })
+      })
+      assert.ok(made, 'The create must go out')
+      await page.waitForFunction(() => !window.PLANNER.hasUnconfirmed(), null, {
+        timeout: timeout * 10,
+      })
+    }),
+  )
+  if (await page.evaluate(() => typeof window.PLANNER.createOnItsWay === 'function'))
+    assert.equal(
+      await page.evaluate(() => window.PLANNER.tasksHeld()),
+      false,
+      'A create must not load every task',
+    )
+  await page.evaluate(() => window.__perf.deliverDelete())
+  await settle()
   // From the ask for every task (P.askTasks) to every task held, before the
   // first phase that needs them. A build from before tasks loaded on demand
   // has no ask and loads every task as it boots, so the phase waits for that

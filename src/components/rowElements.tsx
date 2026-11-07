@@ -263,6 +263,15 @@ export function projectName({
 
 /* ---- The owner portrait (AssigneeAvatar) ------------------------------ */
 
+/** Why a control of the person's own new task that reads the server about
+    the task waits until the server stored it and the window's own read
+    answered (store/taskDetail.ts TaskDetailVM saving): the owner, Parent,
+    Subtasks, Linked tasks and Subscribers pickers, a new parent's Remove
+    subtask, Plan on roadmap (Show on roadmap for a new parent), Move to
+    sub-project… and Archive or delete… of its window, and the owner list
+    of its card until the server took the create (P.createOnItsWay). */
+export const WAITS_FOR_SAVE = 'Available once this task is saved'
+
 /** The attributes a closed Radix popover gives its trigger, which a static
     trigger carries in their place. */
 export const POPOVER_CLOSED = {
@@ -331,8 +340,15 @@ export function staticOwnerPortrait(statics: StaticControls, issue: IssueVM, com
   const canWrite = P.canWrite(issue.project)
   const face = portraitFace(compact, avatar(statics, issue[shown], 28))
   if (!canWrite) return face
-  const { title, ...trigger } = ownerTrigger(issue, shown, canWrite, (event) =>
-    statics.activate(event.currentTarget.parentElement),
+  // the person's own new task, which the server has not stored yet, has no
+  // owners to read until it has (P.createOnItsWay): its portrait is off
+  const waits = P.createOnItsWay(issue.uuid)
+  const { title, ...trigger } = ownerTrigger(
+    issue,
+    shown,
+    !waits,
+    (event) => statics.activate(event.currentTarget.parentElement),
+    WAITS_FOR_SAVE,
   )
   return (
     <span {...OWNER_WRAP}>

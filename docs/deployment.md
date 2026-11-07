@@ -359,7 +359,22 @@ of which may subscribe the workspace's task windows (`workspace:tasks`).
 The Roadmap must reach its ok state and show that task's row, having
 subscribed its own read (`tasks:roadmap`) and never the planning panel's
 old read (`planning:assigneeLoad`) (`ui/tasks-on-demand`). It reads only,
-and an app from before the Roadmap read the server fails it. Next it makes a label
+and an app from before the Roadmap read the server fails it. Next it makes a
+sub-project of its own with its run tag under the run project, with one task, over REST,
+records the frames the page sends and receives on its sync socket from a
+fresh load of that sub-project's Board, presses **New task in To Do**,
+creates a task with its run tag through the dialog and renames it in its
+window at once. No frame may subscribe the workspace's task windows, and
+no read of the new task (`taskWindow:task`, `snapshot:threadComments` or
+`inbox:item`) may be sent before the answer to the create's `issues:create`
+mutation arrives. The step knows the task by the uuid its create sent and
+its key by the number that answer stored, since another create in the
+organization meanwhile can move the key the window showed first. The window
+and the card must show that key, the window must show the new title, and
+the task, read over REST by its uuid, must hold the title under that key
+(`ui/create-answer`). The run's sweep removes the task and
+the sub-project, and an app from before a create stopped loading every task
+fails it. Next it makes a label
 with its run tag over REST, puts it on one of its fixture tasks, opens
 **Settings → Labels** on the deployment's batches (`labels.settingsPage`),
 finds the label by search with **1 active task**, renames it in place and
@@ -1958,6 +1973,16 @@ went back, until the backend rolls forward. The workspace inbox part stays
 for the desktop alerts. The list shows only what the `inbox_items` rows
 hold. The release changes no server function, has no schema change, no
 backfill and no release step.
+
+From the release after v0.1.158, a create of a task no longer loads every
+task. The release changes no server function, so it sets no new rollback
+floor and needs no release step. The app relies on `issues.create`
+answering the stored row, which it has since v0.1.6 (`ce4cf109e`), and on
+`issues.createParent` answering the new parent's number (`parent_num`),
+which it has since v0.1.26 (`1dfbf802b`), and the floors above already
+hold far newer backends. The staging check's `ui/create-answer` step
+checks the create on the deployment. There is no schema change and no
+backfill.
 
 ## Node.js version
 

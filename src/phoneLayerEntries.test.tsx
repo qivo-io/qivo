@@ -243,9 +243,36 @@ async function boot(address: string, phone: boolean, second = false) {
       }))
     return { rows, next_cursor: null, coverage: { complete: true } }
   })
-  network.mutation.mockImplementation((ref) =>
-    getFunctionName(ref).startsWith('comments:') ? new Promise(() => {}) : Promise.resolve(null),
-  )
+  network.mutation.mockImplementation((ref, args) => {
+    const name = getFunctionName(ref)
+    if (name.startsWith('comments:')) return new Promise(() => {})
+    if (name !== 'issues:create') return Promise.resolve(null)
+    // the server stores a create and delivers it before it answers with the
+    // stored row, as Convex does: a window the server took the create of
+    // reads the task (store/planner.ts tookCreate)
+    const org = server.orgs[0]
+    const row: Snapshot['issues'][number] = {
+      id: args.id,
+      org_id: org.id,
+      project_id: args.project_id,
+      num: (org.next_issue_num ?? 0) + 1,
+      title: args.title,
+      description: args.description ?? '',
+      status: args.status ?? 'backlog',
+      priority: args.priority ?? 'low',
+      paused: false,
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    }
+    const next = structuredClone(server)
+    next.orgs[0].next_issue_num = row.num
+    next.issues.push(row)
+    publish(next)
+    const { description: _text, has_hidden_subtasks: _h, has_hidden_parent: _p, ...stored } = row
+    return Promise.resolve(stored)
+  })
   history.pushState(null, '', '/before')
   history.pushState(null, '', address)
   const pageHistory = await import('./lib/pageHistory')

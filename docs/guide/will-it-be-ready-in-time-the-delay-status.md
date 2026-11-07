@@ -60,18 +60,14 @@ due date.
   tooltip also explains projected misses. Qivo reads the owner's other work
   from the server for the Board's cards, so their delay shows without
   loading every task; where that work cannot be read, the card says
-  **Delay unknown**. Once every task has loaded for something that needs
-  them, as a new task does, the cards of the tasks you have loaded
-  take their delay from your browser, and a task you created while they
-  loaded shows its delay once loading finishes.
+  **Delay unknown**. A task you create shows on the Board at once, and its
+  card takes its delay from the server like any other.
 - **Task window** shows **Currently delayed** or **Delayed** beside Due.
   Hover for the projected finish week. A missed or projected-to-miss deadline
-  outlines Due in red. While tasks still load, or for a task that has not
-  loaded yet, Qivo reads the owner's other work from the server, as for the
-  Board card of a task that has not loaded, and the window shows the same
-  verdict as such a card. The card of a task that has loaded waits until
-  loading finishes, so meanwhile its window can show a verdict the card
-  does not show yet. The window shows nothing while that work is on its
+  outlines Due in red. Qivo reads the owner's other work from the server,
+  as for the task's Board card, and the window shows the same verdict as
+  its card, also for a task you just created. The window shows nothing
+  while that work is on its
   way, and says **Delay unknown** only where it cannot be read. A passed
   due date shows **Delayed**. A task with subtasks takes its delay from its
   subtasks' dates, not from anyone's other work, so it says **Delay

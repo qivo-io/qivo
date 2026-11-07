@@ -1,6 +1,12 @@
 import { useEffect } from 'react'
 import { Avatar, Icon, Popover } from '@/components/qivo'
-import { OWNER_WRAP, ownerTrigger, PORTRAIT_CLASS, portraitFace } from '@/components/rowElements'
+import {
+  OWNER_WRAP,
+  ownerTrigger,
+  PORTRAIT_CLASS,
+  portraitFace,
+  WAITS_FOR_SAVE,
+} from '@/components/rowElements'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -132,14 +138,20 @@ export function AssigneeAvatar({
   backLayer?: boolean
   /** why the control is off although the person may edit the task, such
       as Team sync's stale meeting. Given it, the picker does not open, and
-      a list already open closes and writes nothing (OwnerPickList `off`) */
+      a list already open closes and writes nothing (OwnerPickList `off`).
+      The person's own new task the server has not stored yet is off the
+      same way, with WAITS_FOR_SAVE */
   offTitle?: string
 }) {
   const shown = field ?? issue.ownerField
   const who = issue[shown]
-  const canWrite = P.canWrite(issue.project) && !offTitle
+  // the person's own new task, which the server has not stored yet, has no
+  // owners to read until it has (P.createOnItsWay)
+  const off = offTitle ?? (P.createOnItsWay(issue.uuid) ? WAITS_FOR_SAVE : undefined)
+  const editor = P.canWrite(issue.project)
+  const canWrite = editor && !off
   const portrait = portraitFace(compact, <Avatar id={who} size={28} />)
-  if (variant === 'portrait' && !canWrite) return portrait
+  if (variant === 'portrait' && !editor) return portrait
 
   const face =
     variant === 'portrait' ? (
@@ -180,7 +192,7 @@ export function AssigneeAvatar({
             variant={variant === 'label' ? 'default' : 'unstyled'}
             size={variant === 'label' ? 'sm' : undefined}
             data-field-trigger={variant === 'portrait' ? undefined : ''}
-            {...ownerTrigger(issue, shown, canWrite, toggle, offTitle)}
+            {...ownerTrigger(issue, shown, canWrite, toggle, off)}
             className={faceClass}
           >
             {face}
@@ -188,13 +200,7 @@ export function AssigneeAvatar({
         )}
       >
         {(close) => (
-          <OwnerPickList
-            issue={issue}
-            field={field}
-            onClose={close}
-            onPick={onPick}
-            off={offTitle}
-          />
+          <OwnerPickList issue={issue} field={field} onClose={close} onPick={onPick} off={off} />
         )}
       </Popover>
     </span>

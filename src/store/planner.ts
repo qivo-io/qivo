@@ -153,7 +153,7 @@ import { reloadPage } from '../lib/pageHistory'
 import { matchesAllWords, taskSearchText } from '../lib/search'
 import { type OfflineWindow, type SavePause, syncStatus } from '../lib/syncStatus'
 import { attachmentBlock, labelBlock, linkBlock } from '../lib/taskCaps'
-import { type RefParts, refParts, taskRef } from '../lib/taskReference'
+import { isTaskRef, type RefParts, refParts, taskRef } from '../lib/taskReference'
 import { byCreation, byNumber, linkViews, type SectionState, shownIds } from '../lib/taskSections'
 import { type SyncVerdict, syncMeetingOf, weekHoursOf } from '../lib/teamSync'
 import {
@@ -210,7 +210,13 @@ import { createOwnerLoadCache, type OwnerLoad, type OwnerNeed } from './ownerLoa
 import { createPreferences } from './preferences'
 import { createWorkspaceRows, RowMap, rowCopies } from './rowMap'
 import { keep, keepItems, sameData } from './stable'
-import { answerFamily, shapeShortTask, shapeTaskDetail, type TaskDetailVM } from './taskDetail'
+import {
+  answerFamily,
+  creatingAnswer,
+  shapeShortTask,
+  shapeTaskDetail,
+  type TaskDetailVM,
+} from './taskDetail'
 import { createTaskIndex, type TaskChanges, type TaskSources } from './taskIndex'
 
 export type { UIPrefs } from './preferences'
@@ -1549,23 +1555,239 @@ function orgOfTask(uuid: string): string | undefined {
    Archive or delete wait only for its own answer (P.familyOf). */
 const tookCreates = new Map<string, string>()
 
-/* Notes that the server took the create of task `uuid` in organization
-   `org` (tookCreates), from P.addIssue, P.createParent or P.createLinked,
-   and has a window watching it read its thread and lists at once. */
-function tookCreate(uuid: string, org: string) {
-  tookCreates.set(uuid, org)
-  if (watchedComments === uuid) repaint({ thread: true, sections: true })
+/** What a create of the person's own keeps while it is on its way
+    (P.addIssue, P.createParent, P.createLinked), by the new task's uuid:
+    its organization, its row as the create sends it, by the server's
+    rules, numbered with the preview until the create answers, moved past
+    a number another task took meanwhile (renumberPending), the create's
+    answer once it came (`created`), the person's
+    level on its project, the short rows of its parent (a subtask) and of
+    its one subtask (a new parent), and whether the server took it. A
+    window on the task the workspace does not hold shows it from the
+    creating answer built from it (creatingAnswerOf) and reads nothing
+    about it from the server until the server took it, since the task
+    does not exist there before. The entry goes when the server refuses
+    the create (refusedCreates), and once the server took it, at once when
+    no window shows the creating answer, else with that window's first own
+    answer, which a failed read is not (receiveSection), or when another
+    task is watched. */
+type PendingCreate = {
+  org: string
+  row: Row<'issues'>
+  created: Created
+  level: ShortRow['level']
+  parent: ShortRow | null
+  child: ShortRow | null
+  taken: boolean
+  /** the creating answer last built, kept while `created` holds the same
+      row and number: issues.createParent answers a number alone */
+  answer: { from: Created['row']; num: Created['num']; answer: TaskOk } | null
 }
 
-/* Whether the watched task is one whose create is on its way: the rows
-   show it, the last snapshot delivery does not hold it and the server has
-   not taken its create yet (tookCreates), or the store knows no
-   organization for it. Such a task gets an empty, complete thread, history
-   and lists until a delivery holds it or the server takes the create
+/** A create's answer, captured for its paints (store/layers.ts rule 2):
+    the server's number, and the row it stored where its answer is the
+    row (issues.create, issues.createLinked), merged over the row the
+    create sent, since an answer may name fewer fields. */
+type Created = { num: number | null; row: Partial<Row<'issues'>> | null }
+
+const pendingCreates = new Map<string, PendingCreate>()
+
+/* The creates of the person's own the server refused, by uuid. A window
+   on one shows it as gone without asking the server (watchedGone), and the
+   writes sent behind it say nothing more than the create's own refusal
+   did (refusedBehind). Cleared with the store. */
+const refusedCreates = new Set<string>()
+
+/* The creating answers the section answers held, so the store tells one
+   from an answer the server sent (creatingShown). */
+const creatingAnswers = new WeakSet<object>()
+
+/* The references of the person's new tasks that moved since the store last
+   told P.watchHandles' listeners, by uuid, from the one a caller holds to
+   the one it opens by now (movePendingRef, tellPendingMoves). */
+const pendingMoves = new Map<string, { from: string; to: string }>()
+
+/** Records that the reference of the person's new task `uuid` moved from
+    `from` to `to`, joined to a move not told yet, so a caller holding the
+    first follows to the last. */
+function movePendingRef(uuid: string, from: string, to: string) {
+  if (from === to) return
+  const was = pendingMoves.get(uuid)
+  pendingMoves.set(uuid, { from: was?.from ?? from, to })
+}
+
+/** Tells P.watchHandles' listeners the moves of the person's new tasks'
+    references not told yet (movePendingRef), once the screen shows them. */
+function tellPendingMoves() {
+  if (pendingMoves.size === 0) return
+  const moved = new Map([...pendingMoves.values()].map(({ from, to }) => [from, to]))
+  pendingMoves.clear()
+  moveHandles(moved)
+}
+
+/** Moves the number of each create of the person's own on its way past a
+    number another task holds, as another person's create that a view's
+    answer brings before this create answers. The new number is the next
+    one that no task the views' answers or the workspace hold in its
+    organization has, nor a create of the person's own sent before it,
+    and is past the organization's counter as the server last sent it, as
+    newTaskPaint numbers a new task in a store that asked. The creates go in the order
+    sent, as the server numbers them. The number is the sent row's
+    (`row.num`), which the create's paints, its creating answer and the
+    reference a caller holds all read, so no two of the views' models
+    share a handle (store/viewRows.ts) and a card opened or dropped acts on
+    its own task; a caller holding the reference follows it
+    (movePendingRef). A create the server answered keeps the server's
+    number, and one the server took or the workspace holds stays as it
+    is. One that a view's answer already holds takes the number that
+    answer gives it, the server's, before any other number is looked
+    for, as when another create took the preview and both reach the views
+    in one answer before this create answers. Runs as a view takes an
+    answer and as a create is sent, before the views repaint. */
+function renumberPending() {
+  const numbered = new Map<string, Map<number, string>>()
+  const sent = new Set<string>()
+  let moved = false
+  for (const [uuid, pending] of pendingCreates) {
+    const { row, created } = pending
+    const org = row.org_id
+    const held = (num: number) => {
+      if (sent.has(`${org}:${num}`)) return true
+      let views = numbered.get(org)
+      if (!views) {
+        views = viewRows.numbered(org)
+        numbered.set(org, views)
+      }
+      const other = views.get(num) ?? keyByOrg.get(org)?.get(`${ISSUE_PREFIX}-${num}`)
+      return other !== undefined && other !== uuid
+    }
+    if (created.num === null && !pending.taken && !holdsIn(uuid, org)) {
+      const answered = viewRows.numberOf(uuid)
+      let num = answered ?? row.num
+      if (answered === undefined && held(row.num)) {
+        const counter = base.map('orgs').get(org)?.next_issue_num || 0
+        num = Math.max(row.num + 1, counter + 1)
+        while (held(num)) num++
+      }
+      if (num !== row.num) {
+        movePendingRef(uuid, taskRef({ org, num: row.num, uuid }), taskRef({ org, num, uuid }))
+        row.num = num
+        // a window on it shows the new number from its creating answer
+        pending.answer = null
+        moved = true
+      }
+    }
+    sent.add(`${org}:${created.num ?? row.num}`)
+  }
+  // the organization's counter, the views' rows, the creating answer and
+  // a parent's Subtasks list in the window show the new number
+  if (moved) {
+    owe('workspace')
+    owe('view')
+    owe('sections')
+  }
+}
+
+/** The row of pending create `pending` as the window shows it: the row it
+    sent with what the create's answer gave over it (answeredRow), and the
+    server's number once it answered. */
+const pendingRow = (pending: PendingCreate): Row<'issues'> =>
+  answeredRow(pending.row, pending.created)
+
+/** New task `row` as the create sent it, with the stored row the create
+    answered over it, `created`, and the server's number once it answered.
+    The task's identity, its text, which the answer leaves out, and its
+    parent, which the answer names only where the person sees it, stay
+    the sent row's. */
+function answeredRow(row: Row<'issues'>, created: Created): Row<'issues'> {
+  return {
+    ...row,
+    ...created.row,
+    id: row.id,
+    org_id: row.org_id,
+    num: created.num ?? row.num,
+    description: row.description,
+    parent_id: row.parent_id,
+  }
+}
+
+/** The creating answer of task `uuid` (store/taskDetail.ts creatingAnswer),
+    while it is a create of the person's own the server has not taken or
+    whose window has not read it yet, and the workspace does not hold it;
+    else null. The same object while the create's answer is the same, its
+    row and its number, so the window's painted answer is built again only
+    when it changes. */
+function creatingAnswerOf(uuid: string): TaskOk | null {
+  const pending = pendingCreates.get(uuid)
+  if (!pending || holdsIn(uuid, pending.org)) return null
+  const { row, num } = pending.created
+  if (pending.answer?.from === row && pending.answer.num === num) return pending.answer.answer
+  const answer = anchor(
+    creatingAnswer({
+      row: pendingRow(pending),
+      level: pending.level,
+      me: profileIn(pending.org) || undefined,
+      parent: pending.parent,
+      child: pending.child,
+    }),
+  )
+  creatingAnswers.add(answer)
+  pending.answer = { from: row, num, answer }
+  return answer
+}
+
+/** Whether the watched task's own answer in the sections is a creating
+    answer (creatingAnswerOf), not one the server sent. */
+function creatingShown(): boolean {
+  const t = watchedComments
+  const answer = t && sectionAnswers.issue === t ? sectionAnswers.task : null
+  return !!answer && answer !== CREATING && creatingAnswers.has(answer)
+}
+
+/** Whether task `uuid` is a create of the person's own the server has not
+    taken yet, which the workspace does not hold: its card's owner list
+    waits, since the server cannot read a task it does not hold yet. */
+function createOnItsWay(uuid: string): boolean {
+  const pending = pendingCreates.get(uuid)
+  return !!pending && !pending.taken && !holdsIn(uuid, pending.org)
+}
+
+/* Notes that the server took the create of task `uuid` in organization
+   `org` (tookCreates), from P.addIssue, P.createParent or P.createLinked,
+   and has a window watching it read its thread and lists once the write's
+   answer has painted (owe), since the create's own paints changed with its
+   answer (keep). A window that shows the task from its creating answer
+   shows the answer's number and stamps until its own read answers; with
+   none, the pending create goes. */
+function tookCreate(uuid: string, org: string) {
+  tookCreates.set(uuid, org)
+  const pending = pendingCreates.get(uuid)
+  if (pending) pending.taken = true
+  const shows = watchedComments === uuid && creatingShown()
+  if (pending && !shows) pendingCreates.delete(uuid)
+  if (shows) {
+    const answer = creatingAnswerOf(uuid)
+    if (answer) sectionAnswers = { ...sectionAnswers, task: answer }
+  }
+  if (watchedComments === uuid) {
+    owe('thread')
+    owe('sections')
+  }
+}
+
+/* Whether the watched task is one whose create is on its way: a create of
+   the person's own the server has not taken yet (pendingCreates), or one
+   the rows show, the last snapshot delivery does not hold and the server
+   has not taken yet (tookCreates), or the store knows no organization for
+   it. Such a task gets an empty, complete thread, history and lists until
+   a delivery holds it or the server takes the create
    (subscribeWaitingThread). */
 function watchedCreating(): boolean {
   const t = watchedComments
-  return !!t && !serverTask(t) && !tookCreates.has(t) && (rows.issues.has(t) || !watchedOrg)
+  if (!t) return false
+  const pending = pendingCreates.get(t)
+  if (pending && !pending.taken) return true
+  return !serverTask(t) && !tookCreates.has(t) && (rows.issues.has(t) || !watchedOrg)
 }
 
 /* Subscribes to the watched thread once the snapshot holds its task or the
@@ -1586,7 +1808,9 @@ function subscribeWaitingThread() {
   const took = tookCreates.get(t)
   if (row) subscribeThread(t, row.org_id)
   else if (took) subscribeThread(t, took)
-  else if (watchedOrg && !watchedRow()) subscribeThread(t, watchedOrg)
+  // a create of the person's own on its way reads nothing before the
+  // server took it
+  else if (watchedOrg && !watchedRow() && !pendingCreates.has(t)) subscribeThread(t, watchedOrg)
 }
 
 /* Subscribes to the watched thread `issueUuid` in organization `orgId`, as
@@ -1940,6 +2164,7 @@ function syncThread() {
 function watchedGone(): boolean {
   const t = watchedComments
   if (!t || watchedRow()) return false
+  if (refusedCreates.has(t)) return true
   const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
   return answer !== null && answer !== CREATING && answer.state === 'unavailable'
 }
@@ -1953,7 +2178,12 @@ function watchedGone(): boolean {
    keeps the answers until the new subscriptions deliver. A task whose
    create is on its way gets complete, empty lists (CREATING) until a
    delivery holds it or the server took its create (tookCreates), also when
-   a window shows its sections again. It runs
+   a window shows its sections again. The person's own new task the
+   workspace does not hold shows from its creating answer
+   (creatingAnswerOf) until the server took its create, which then stays
+   the task side's anchor until the side's first delivery, and a create
+   the server refused shows as unavailable, with no side subscribed
+   (refusedCreates). It runs
    as the sections build (rebuildSections), after the thread (syncThread),
    so whether the workspace holds the task is the rows' word in the same
    repaint. Answers whether an answer changed. */
@@ -1962,7 +2192,7 @@ function syncSections(): boolean {
   syncRefRead()
   const t = watchedComments
   const wanted = sidesWanted()
-  const org = t && !watchedCreating() ? watchedOrgOf() : undefined
+  const org = t && !watchedCreating() && !refusedCreates.has(t) ? watchedOrgOf() : undefined
   const watched = t && org ? { task: t, org } : null
   let changed = false
   for (const side of SECTION_SIDES) {
@@ -1994,7 +2224,29 @@ function syncSections(): boolean {
   }
   // every answer dropped when the sections hid, so they show again empty
   const unanswered = SECTION_SIDES.every((side) => sectionAnswers[side] === null)
-  if (
+  const creating = t && wanted.task && !watched ? creatingAnswerOf(t) : null
+  if (t && creating) {
+    // the person's own new task, from what its create sent, with complete,
+    // empty lists while a window shows them
+    const was = sectionAnswers.issue === t ? sectionAnswers : null
+    const links = wanted.links ? (was?.links ?? CREATING) : null
+    const attachments = wanted.attachments ? (was?.attachments ?? CREATING) : null
+    if (was?.task !== creating || was.links !== links || was.attachments !== attachments) {
+      if (!was) resetSections(t)
+      // no delivery of the task's own read holds a write on it yet
+      if (was?.task !== creating) detailFresh = false
+      sectionAnswers = { issue: t, task: creating, links, attachments }
+      changed = true
+    }
+  } else if (t && refusedCreates.has(t) && !watchedRow()) {
+    // a create the server refused: the task never existed, and no read
+    // asks for it
+    const answer = sectionAnswers.issue === t ? sectionAnswers.task : null
+    if (answer === null || answer === CREATING || answer.state !== 'unavailable') {
+      sectionAnswers = { issue: t, task: { state: 'unavailable' }, links: null, attachments: null }
+      changed = true
+    }
+  } else if (
     t &&
     wanted.links &&
     !watched &&
@@ -2090,12 +2342,24 @@ function receiveSection(side: SectionSide, news: SideNews): boolean {
   } else if ('error' in news) {
     console.error(`[qivo] ${side} subscription of the task window failed:`, news.error)
     sectionFailure[side] = 'failed'
-    // a failure holds no write, and the answer before it stays
+    // a failure holds no write, and the answer before it stays, a
+    // creating answer too: the window goes on showing the person's new
+    // task with what they type in it, its saves wait until a read
+    // answers (P.refuseStaleEdit) and its controls that read the server
+    // go on waiting (TaskDetailVM saving), while the writes sent behind
+    // the create go on as sent
     if (side === 'task') detailFresh = false
   } else {
     sectionFailure[side] = 'none'
     sectionAnswers = { ...sectionAnswers, [side]: anchor(news.value) }
     if (side === 'task') taskDelivered(watched.task)
+  }
+  // the window's own read answered the person's new task: its creating
+  // answer is gone, and with it the pending create, which a failed read
+  // keeps
+  if (side === 'task' && !creatingShown()) {
+    const pending = pendingCreates.get(watched.task)
+    if (pending?.taken) pendingCreates.delete(watched.task)
   }
   if (side === 'task') refFromTaskSide(watched, news)
   // Move and Archive or delete of a task the workspace holds read its
@@ -2891,9 +3155,10 @@ function workspaceSections(
 /* The watched task's sections now, or null while no window shows them.
    A section without an answer yet lists what a workspace that holds every
    task holds (workspaceSections), and says it loads otherwise, since a
-   task the person created while tasks load has lists that only its
-   answers bring. A held task of another organization with the watched
-   task's id is another task, so its lists never stand in (watchedRow). */
+   task the workspace holds before it holds every task, the person's new
+   task in a store that asked, has lists that only its answers bring. A
+   held task of another organization with the watched task's id is another
+   task, so its lists never stand in (watchedRow). */
 function sectionsNow(): TaskSectionsVM | null {
   const t = watchedComments
   if (!t || sectionOwners.size === 0) return null
@@ -2961,6 +3226,7 @@ function taskDetailNow(): TaskDetailVM | null {
     task: t,
     org,
     answer: byRef ? byRef.answer : answer === CREATING ? null : (answer ?? null),
+    saving: !byRef && creatingShown(),
     failure: byRef && sideFailure === 'none' ? refFailure : sideFailure,
     links: links && links !== CREATING && links.state === 'ok' ? links : null,
     attachments: files && files !== CREATING && files.state === 'ok' ? files : null,
@@ -2968,6 +3234,40 @@ function taskDetailNow(): TaskDetailVM | null {
     labelName: (id) => rows.labels.get(id)?.name,
     related: (row) => relatedTask(row.id, row),
   })
+}
+
+/* The task detail of each creating answer that no window watched yet
+   (creatingDetailOf), by that answer. */
+const creatingDetails = new WeakMap<TaskOk, TaskDetailVM>()
+
+/** The person's own new task `uuid` as a window shows it before it watches
+    the task (P.taskDetail), from its creating answer (creatingAnswerOf)
+    shaped as taskDetailNow shapes it once watched, saving, and the same
+    object while that answer holds. The window's first render comes before
+    its effect watches the task (P.watchComments), so it shows the task
+    rather than a loading line. Null for a task that is no create of the person's
+    own on its way, or that the server refused. */
+function creatingDetailOf(uuid: string): TaskDetailVM | null {
+  if (refusedCreates.has(uuid)) return null
+  const answer = creatingAnswerOf(uuid)
+  if (!answer) return null
+  let detail = creatingDetails.get(answer)
+  if (!detail) {
+    detail = shapeTaskDetail({
+      task: uuid,
+      org: answer.task.org_id,
+      answer,
+      saving: true,
+      failure: 'none',
+      links: null,
+      attachments: null,
+      handleNow: PLANNER.handleNow,
+      labelName: (id) => rows.labels.get(id)?.name,
+      related: (row) => relatedTask(row.id, row),
+    })
+    creatingDetails.set(answer, detail)
+  }
+  return detail
 }
 
 /* Builds P.sections and P.detail again from the section answers and the
@@ -3758,7 +4058,9 @@ const anchor = <T>(value: T): T => (STRICT_LAYERS ? deepFreeze(structuredClone(v
 
 /** Rebuilds the rows of `parts` from their anchors and every live layer
     (paintRows), and shows them. A workspace repaint also tells new tasks'
-    callers their final handle and ends trouble a recovering delivery held. */
+    callers their final handle and ends trouble a recovering delivery held,
+    and every repaint tells the callers of the person's new tasks on their
+    way the reference a moved number gave them (renumberPending). */
 function repaint(parts: {
   workspace?: boolean
   thread?: boolean
@@ -3835,6 +4137,8 @@ function repaint(parts: {
     familyNews = false
     emit('comments')
   }
+  // a new task's reference follows the number the screen shows now
+  tellPendingMoves()
 }
 
 /* The parts asked to repaint while together() runs its step, whether
@@ -4011,14 +4315,22 @@ type ViewQuery = {
   keepsOnError?: boolean
   /** the rows of a value whose cards a view draws, by uuid, where it
       draws fewer than it brings: only their owners register with the
-      owner-load cache for delays (reshapeViews). Without it every row's
+      owner-load cache for delays (reshapeViews), and the person's new
+      tasks inserted into its rows (takesNew). Without it every row's
       owner does. */
   judged?: (value: unknown) => ReadonlySet<string> | null
+  /** whether the person's own new tasks go into the read's rows until
+      their create answers, or until a read behind a reconnect delivers
+      again (newTaskParts, newTaskViewPaint), as for a view whose join shows
+      the person's own changed tasks where its answer does not
+      (P.ownOnScreen): the Board's and the Roadmap's */
+  takesNew?: true
 }
 
 /** The Board's read: an ok answer brings its rows and its parents. */
 const BOARD_QUERY: ViewQuery = {
   ref: api.tasks.board,
+  takesNew: true,
   rows: (value) => {
     const answer = value as BoardAnswer
     return answer.state === 'ok' ? [...answer.rows, ...answer.parents] : null
@@ -4048,6 +4360,7 @@ const listQuery = (ref: FunctionReference<'query'>): ViewQuery => ({
     their owners register for delays. */
 const ROADMAP_QUERY: ViewQuery = {
   ref: api.tasks.roadmap,
+  takesNew: true,
   rows: (value) => {
     const answer = value as RoadmapAnswer
     return answer.state === 'ok' ? [...answer.rows, ...answer.parents, ...answer.subtasks] : null
@@ -4190,6 +4503,10 @@ let latestConnection = 0
 let viewReadsChanged = false
 /* The tasks each `view` paint changes (viewPaint). */
 const viewPaintTasks = new WeakMap<Paint, ReadonlySet<string>>()
+/* The views each `view` paint changes, where it changes only some views'
+   rows, as a new task's insert (newTaskViewPaint): only those views' reads
+   hold it (viewPartHeld). */
+const viewPaintSlots = new WeakMap<Paint, ReadonlySet<ViewSlot>>()
 
 /** A layer's `view` part, `paint`, which changes the views' rows of tasks
     `uuids` (store/layers.ts View), so a delivery of a read whose rows hold
@@ -4222,10 +4539,13 @@ const readHolds = (read: ViewRead, seen: number) =>
     the live read decides. A read whose rows hold none of the tasks, or
     that brings no rows, such as the Overview's summary, holds nothing
     either way. A part no read holds rows for paints nothing, so nothing is
-    left to hold. */
+    left to hold. A part that paints only some views (viewPaintSlots) is
+    held by those views' reads alone. */
 function viewPartHeld(paint: Paint, seen: number): boolean {
   const tasks = viewPaintTasks.get(paint)
+  const only = viewPaintSlots.get(paint)
   for (const [slot, read] of viewReads) {
+    if (only && !only.has(slot)) continue
     const rows = viewRows.rowsOf(slot)
     if (!rows || !read.query.rows) continue
     const copies = tasks ? [...tasks].filter((uuid) => rows.has(uuid)) : null
@@ -4302,6 +4622,8 @@ function takeViewResult(slot: ViewSlot, read: ViewRead, key: string, token: stri
     } else if (take && rows !== KEEP_ROWS) {
       if (rows) viewRows.take(slot, rows)
       else viewRows.release(slot)
+      // another person's task may hold a new task's preview number now
+      if (rows) renumberPending()
       read.fitted = rows ? { key, value: next.value, until: null } : null
       read.judged = rows ? (read.query.judged?.(next.value) ?? null) : null
       read.delivered = ++viewDeliveries
@@ -5152,8 +5474,9 @@ let windowLoadSyncing = false
     window's own key (WINDOW_LOADS, one owner, one card) while a window
     shows the task's details, the task's project shows delays, the
     workspace cannot judge the task (a task the window shows from its own
-    read, or a held one, such as the person's new task, before every task
-    is held) and its verdict reads the
+    read, the person's new task from its creating answer among them, or a
+    held one, such as the person's new task in a store that asked, before
+    every task is held) and its verdict reads the
     owner's load (issueNeedsLoad), and releases it otherwise. The desktop
     Inbox pane shows no details and registers nothing. A guest's or
     Viewer's calls are counted per view key, so the window's one owner
@@ -5227,8 +5550,9 @@ function reshapeViews(): boolean {
       const needs = new Map<string, { org: string; owner: string; cards: number }>()
       for (const row of rows.values()) {
         if (uuidToKey.has(row.id)) continue
-        // a row the view draws no card for needs no verdict
-        if (read.judged && !read.judged.has(row.id)) continue
+        // a row the view draws no card for needs no verdict; the person's
+        // new task, which its answer does not hold yet, draws one
+        if (read.judged && !read.judged.has(row.id) && viewRows.answered(slot, row.id)) continue
         // a card whose verdict reads its owner's load registers the owner,
         // where its project shows delays
         const owner = taskOwnerId(row, row.has_subtasks)
@@ -5263,8 +5587,16 @@ function reshapeViews(): boolean {
     viewDelayCtx.filed = undefined
     const changed = viewRows.reshape((uuid) => uuidToKey.has(uuid), {
       handleNow: PLANNER.handleNow,
-      extra: (uuid) => JSON.stringify(delays.get(uuid) ?? null),
+      // a card of a create on its way renders again once the server took
+      // it, as its owner list waits until then (P.createOnItsWay)
+      extra: (uuid) =>
+        JSON.stringify(delays.get(uuid) ?? null) + (createOnItsWay(uuid) ? ' creating' : ''),
       grid: PLANNER.gridEpoch,
+      // a handle two models share names the person's new task on its way
+      wins: (uuid) => {
+        const pending = pendingCreates.get(uuid)
+        return !!pending && !holdsIn(uuid, pending.org)
+      },
     })
     if (changed) boardLookup = null
     return changed
@@ -5378,7 +5710,7 @@ type WriteAbout = {
       window's Subtasks or Linked tasks that the workspace does not hold,
       or a task only a view's answer holds (updateViewTask), so the guard
       against task writes before every task is asked lets it through
-      (guardTaskWrite); a create needs the ask all the same */
+      (guardTaskWrite) */
   answer?: true
 }
 
@@ -5475,14 +5807,12 @@ const TASK_WRITES = new Set([
   getFunctionName(api.roadmap.change),
   getFunctionName(api.roadmap.undo),
 ])
-/* The creates, which paint a new task into the workspace's rows: only a
-   store that asked for every task keeps it on screen, since a delivery
-   without tasks drops the saved workspace layers. */
-const TASK_CREATES = new Set([
-  getFunctionName(api.issues.create),
-  getFunctionName(api.issues.createParent),
-  getFunctionName(api.issues.createLinked),
-])
+/* A create of a task of its own (P.addIssue) needs no task the workspace
+   holds: in a store that never asked for every task it paints the views'
+   rows and the new task's window, never the workspace's task rows
+   (newTaskParts). P.createParent and P.createLinked write on an existing
+   task too, so they take the rule of every other task write. */
+const CREATE = getFunctionName(api.issues.create)
 /* A restore paints nothing in the workspace and needs no task. */
 const RESTORE = getFunctionName(api.issues.unarchive)
 
@@ -5494,21 +5824,21 @@ const ROADMAP_CHANGE = getFunctionName(api.roadmap.change)
 
 /** Test builds only (STRICT_LAYERS): a task write that goes out before the
     store asked for every task is a fault, unless a server answer names
-    its task (WriteAbout.answer) or it is a restore. A create needs the ask
-    whatever its mark. So a write from a held task's path, which only a
-    store that holds every task can take, never goes out while tasks are
-    not asked. The Roadmap's undo passes by its name, and a Roadmap change
-    with no task operation, such as a milestone's, passes too. */
+    its task (WriteAbout.answer) or it is a restore. So a write from a held
+    task's path, which only a store that holds every task can take, never
+    goes out while tasks are not asked. A create of a task of its own
+    passes by its name (CREATE), and so does the Roadmap's undo, and a
+    Roadmap change with no task operation, such as a milestone's, passes
+    too. */
 function guardTaskWrite(name: string, about: WriteAbout | undefined, args?: unknown) {
   if (asked) return
-  const create = TASK_CREATES.has(name)
-  if (!create && !name.startsWith('issues:') && !TASK_WRITES.has(name)) return
-  if (!create && (about?.answer || name === RESTORE || name === ROADMAP_UNDO)) return
+  if (!name.startsWith('issues:') && !TASK_WRITES.has(name)) return
+  if (about?.answer || name === CREATE || name === RESTORE || name === ROADMAP_UNDO) return
   const operations = (args as { operations?: { kind: string }[] } | undefined)?.operations
   if (name === ROADMAP_CHANGE && !(operations ?? []).some((op) => op.kind === 'task')) return
   reportFault(
     new Error(
-      `${name} went out before the store asked for every task: ${create ? 'a create asks first (P.askTasks)' : 'mark a write whose task comes from a server answer (WriteAbout.answer)'}`,
+      `${name} went out before the store asked for every task: mark a write whose task comes from a server answer (WriteAbout.answer)`,
     ),
   )
 }
@@ -5609,7 +5939,12 @@ function start<M extends FunctionReference<'mutation'>, T>(
       if (epoch === storeEpoch) {
         console.error('[qivo] write failed:', error)
         const painted = paints(layer.view)
-        const onError = o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted))
+        // a write sent behind a create the server refused says nothing
+        // more than the create's own refusal (refusedBehind)
+        const quiet = refusedBehind(o.about, args)
+        const onError = quiet
+          ? undefined
+          : (o.onError ?? (awaited ? undefined : (e) => toastWriteError(e, painted)))
         if (error instanceof ConvexError && errData(error).reason === FIELD_CHANGED) {
           // the paint goes first, so a kept draft rebases on the text the
           // server keeps and the notice says whether the draft stayed
@@ -5985,8 +6320,8 @@ export const __layerProbe = STRICT_LAYERS
       /** Paints task rows `issues` into the workspace's rows with no write
           and no ask, the state of a store that holds some tasks before it
           holds every task, which the app never reaches while not asked,
-          since a create asks first. The layer stays until the store
-          resets. */
+          since a create paints no task row of the workspace there
+          (newTaskParts). The layer stays until the store resets. */
       plantTasks(issues: readonly Row<'issues'>[]) {
         const paints = issues.map((row) => newTaskPaint(row, { num: null }))
         const layer = layers.open('probe', {
@@ -9359,8 +9694,10 @@ const VIEW_WRITES = new Set([
     (recordRoadmapChange), and goes out as an ordinary write where no visit
     records it. A group's dates come from its subtasks, so a date patch for
     one drops, as the held path drops it. Resolves false for any other
-    field. A write on the task a window shows from a current answer goes
-    through updateAnswerTask instead (P.updateIssue). */
+    field. A handle two view rows share names the person's new task on its
+    way (store/viewRows.ts byHandle), never another person's task. A write
+    on the task a window shows from a current answer goes through
+    updateAnswerTask instead (P.updateIssue). */
 function updateViewTask(id: string, patch: IssuePatch): Promise<boolean> {
   const it = viewRows.byHandle(id)
   const row = it && viewRows.peek(it.uuid)
@@ -9571,8 +9908,11 @@ const uploadTarget = (issueKey: string, org?: string) =>
 /* Says why task `id` takes no file now, for an upload of file `name`.
    Either the window shows it from an answer that is not current
    (P.refuseStaleEdit), or neither the workspace nor the window shows it
-   any more, as for a file still queued when the window moved on. */
+   any more, as for a file still queued when the window moved on. A file
+   of a create the server refused says nothing, since the create's own
+   refusal said what happened (refusedCreates). */
 function refuseUpload(id: string, name: string) {
+  if (refusedCreates.has(id)) return
   if (PLANNER.refuseStaleEdit(id)) return
   toast(
     `Couldn't upload "${name}". The upload stopped because the window no longer shows its task.`,
@@ -9834,7 +10174,14 @@ type AnswerTask = { uuid: string; org: string; answer: TaskOk; model: IssueVM }
     sending. The answer must be the task side's own, so a window that shows
     the task from the read of its reference (refRead, which taskDetailNow
     serves until the task side answers) edits nothing until the task side
-    answered. It is the answer the window
+    answered. The creating answer of the person's own new task
+    (creatingAnswerOf) serves too, before the task side runs. A write from
+    it goes out at once, behind the create on the same connection, and the
+    server runs it after the create: "When mutations are called from the
+    React or Rust clients, they are executed one at a time in a single,
+    ordered queue" (Convex's documentation, Mutations), the order an upload
+    after a just-sent create relies on (P.addAttachment) and the field check
+    states (convex/model/expected.ts). It is the answer the window
     draws, not a newer delivery the window has yet to draw, so the write
     never sends another member's change as what the person saw. The
     workspace may hold another organization's task of the same id
@@ -9847,7 +10194,8 @@ function answerTaskOf(id: string, org?: string): AnswerTask | null {
   const t = watchedComments
   const detail = PLANNER.detail
   if (!t || !detail || detail.task !== t || watchedRow()) return null
-  if (detail.state !== 'ok' || !detail.view || sectionsWatched.task?.task !== t) return null
+  if (detail.state !== 'ok' || !detail.view) return null
+  if (sectionsWatched.task?.task !== t && !creatingShown()) return null
   if (org !== undefined && org !== detail.org) return null
   const byUuid = id === t && (org !== undefined || !rows.issues.has(t))
   if (!byUuid && id !== detail.view.id) return null
@@ -10287,8 +10635,9 @@ function paintDescriptionImages(uuid: string, before: string, after: string, at:
   }
 }
 
-/* The paint of new task `row`: inserted unless the server's row is there,
-   its dependents included, with the number the server answered
+/* The paint of new task `row` in the workspace's rows, in a store that
+   asked for every task (newTaskParts): inserted unless the server's row is
+   there, its dependents included, with the number the server answered
    (`created.num`) or else the next one free in its organization's counter,
    which it raises. A task created under a parent clears the parent's own
    hours, as the server does. */
@@ -10301,6 +10650,236 @@ function newTaskPaint(row: Row<'issues'>, created: { num: number | null }): Pain
     rows.issues.set(row.id, { ...row, num })
     clearParentHours(row.parent_id, row.created_at, row.org_id)
   }
+}
+
+/* The paint of new task `row`'s number in the workspace's rows, in a store
+   that never asked for every task, whose rows hold no task: its
+   organization's counter, raised to the number the server answered or
+   the preview (store/layers.ts rule 3), so the next create's preview is
+   the number after it. */
+function newTaskCounterPaint(row: Row<'issues'>, created: Created): Paint {
+  return () => {
+    const org = rows.orgs.get(row.org_id)
+    if (!org) return
+    org.next_issue_num = Math.max(org.next_issue_num || 0, created.num ?? row.num)
+  }
+}
+
+/** The views a new task goes into: those whose read runs now and takes
+    the person's new tasks (ViewQuery takesNew), the Board's and the
+    Roadmap's, captured when the create is sent (store/layers.ts rule 2).
+    A view whose read stopped, as a kept page behind another, takes none:
+    its rows hear no change until it reads again. */
+function newTaskSlots(): ViewSlot[] {
+  const out: ViewSlot[] = []
+  for (const [slot, read] of viewReads)
+    if (read.query.takesNew && read.live !== null && viewRows.holds(slot)) out.push(slot)
+  return out
+}
+
+/** The views of `slots` whose read runs but whose newest result is not a
+    current one, as after a reconnect until its result arrives again. A
+    create's acceptance shows nothing of what such a read holds, so a new
+    task's insert stays there until its next delivery (viewPartHeld). Every
+    other read that runs has delivered what the create changed before the
+    create answered (lib/convexOrdering.test.ts), so its answer decides
+    whether the new task shows, and a stopped one reads afresh when it
+    shows again. */
+function slotsBehind(slots: readonly ViewSlot[]): ViewSlot[] {
+  return slots.filter((slot) => {
+    const read = viewReads.get(slot)
+    if (!read || read.live === null) return false
+    return !(read.current && read.connection === latestConnection && !read.behind)
+  })
+}
+
+/** New task `row`, numbered `num`, as a view's answer sends it (ViewRow):
+    no text, no hidden parent or subtasks, and a group without the facts
+    only a read of its subtasks gives when `group`. */
+function newViewRow(row: Row<'issues'>, num: number, group: boolean): ViewRow {
+  const { description: _text, ...fields } = row
+  return {
+    ...fields,
+    num,
+    has_subtasks: group,
+    has_hidden_subtasks: false,
+    has_hidden_parent: false,
+  }
+}
+
+/** The `view` part of the create of new task `row` (P.addIssue,
+    P.createParent, P.createLinked) in the views `slots` (newTaskSlots):
+    its row goes into each view's rows that do not hold it yet
+    (viewRows.insert), with the number the server answered (`created`) or
+    else the preview, never the counter's next one, and with the stored
+    row once the create answered with it. Where it went in, the other end
+    of the create in the same view changes too, so the view files them
+    together: a new subtask's parent becomes a group without its own hours
+    or review hand-off (clearParentHours), and the subtask of a new parent
+    (`child`) names it as its parent. A view whose rows hold the task
+    already, as its answer that holds the create, changes nothing
+    (store/layers.ts rule 4). A new parent (`group`) has no dates until a
+    read brings its facts. */
+function newTaskViewPaint(
+  slots: readonly ViewSlot[],
+  row: Row<'issues'>,
+  created: Created,
+  ends: { group?: boolean; child?: string } = {},
+): Paint {
+  const tasks = [
+    row.id,
+    ...(row.parent_id ? [row.parent_id] : []),
+    ...(ends.child ? [ends.child] : []),
+  ]
+  const paint = viewPaint(tasks, () => {
+    const next = newViewRow(answeredRow(row, created), created.num ?? row.num, !!ends.group)
+    for (const slot of slots) {
+      if (!viewRows.insert(slot, next)) continue
+      // each end is of the new task's organization, so a view's task of
+      // another organization with its id is another task, which stays
+      // (viewCopiesIn)
+      const parent = row.parent_id ? viewRows.editIn(slot, row.parent_id) : undefined
+      if (parent?.org_id === row.org_id) {
+        parent.has_subtasks = true
+        if (parent.remaining_hours != null || parent.review_at != null) {
+          parent.remaining_hours = undefined
+          parent.remaining_set_at = undefined
+          parent.review_at = undefined
+          parent.updated_at = row.created_at
+        }
+      }
+      const child = ends.child ? viewRows.editIn(slot, ends.child) : undefined
+      if (child?.org_id === row.org_id && child.parent_id !== row.id) {
+        child.parent_id = row.id
+        child.has_hidden_parent = false
+        child.updated_at = row.created_at
+      }
+    }
+  })
+  viewPaintSlots.set(paint, new Set(slots))
+  return paint
+}
+
+/** The parts of the create of new task `row` beside its window's: the
+    views' rows (newTaskViewPaint) and the workspace's, which in a store
+    that asked for every task (`asked`, captured at send) take the task as
+    every held task's, so a delivery with every task keeps it on screen
+    (`held`, the create's own workspace paint), and in one that never
+    asked only the organization's counter, since no delivery would keep a
+    task there. Answers the view to send, and the one an answer keeps:
+    the views' rows end at the answer in every view whose read is current
+    then, and stay only where a read is behind (slotsBehind). */
+function newTaskParts(
+  row: Row<'issues'>,
+  created: Created,
+  asked: boolean,
+  held: Paint,
+  ends: { group?: boolean; child?: string } = {},
+) {
+  const slots = newTaskSlots()
+  const workspace = asked ? held : newTaskCounterPaint(row, created)
+  const at = (live: readonly ViewSlot[]): View =>
+    live.length ? { workspace, view: newTaskViewPaint(live, row, created, ends) } : { workspace }
+  return { sent: at(slots), kept: () => at(slotsBehind(slots)) }
+}
+
+/** Records the create of new task `row` of the person's own as on its way
+    (PendingCreate), and answers what its write does on the server's
+    answer: `take` keeps the answer (`created`), and `refused` keeps the
+    refusal, so a window on the task shows it as gone and the writes sent
+    behind it say no more (refusedCreates). */
+function pendingCreate(
+  row: Row<'issues'>,
+  created: Created,
+  level: ShortRow['level'],
+  ends: { parent?: ShortRow | null; child?: ShortRow | null } = {},
+) {
+  const uuid = row.id
+  pendingCreates.set(uuid, {
+    org: row.org_id,
+    row,
+    created,
+    level,
+    parent: ends.parent ?? null,
+    child: ends.child ?? null,
+    taken: false,
+    answer: null,
+  })
+  // a number a view's answer or an earlier create of the person's own
+  // holds already moves before the first paint; no caller holds its
+  // preview yet
+  renumberPending()
+  pendingMoves.delete(uuid)
+  return {
+    take(answer: { num: number; row?: Partial<Row<'issues'>> }) {
+      created.num = answer.num
+      // merged over what was sent: an answer may name fewer fields
+      if (answer.row) created.row = { ...answer.row }
+    },
+    refused() {
+      pendingCreates.delete(uuid)
+      refusedCreates.add(uuid)
+      // a window on it shows it as gone once the refusal's paint goes
+      if (watchedComments === uuid) owe('sections')
+    },
+  }
+}
+
+/** Short row `row` of a task, as the window's answer lists the parent of a
+    new subtask (convex/lib/taskWindow.ts ShortRow), with the person's
+    `level` on its project: a group, without the hours and review hand-off
+    a task loses when it gains a subtask (clearParentHours), as of `at`. */
+function newParentShort(
+  row: Row<'issues'> | TaskOk['task'],
+  level: ShortRow['level'],
+  at: string,
+): ShortRow {
+  const {
+    description: _text,
+    parent_id: _parent,
+    has_hidden_parent: _hiddenParent,
+    has_hidden_subtasks: _hidden,
+    has_subtasks: _group,
+    ...fields
+  } = row as TaskOk['task']
+  const short: ShortRow = { ...fields, has_subtasks: true, level }
+  if (short.remaining_hours != null || short.review_at != null) {
+    short.remaining_hours = undefined
+    short.remaining_set_at = undefined
+    short.review_at = undefined
+    short.updated_at = at
+  }
+  return short
+}
+
+/** Short row `row` of a task the window shows from its answer, with the
+    person's `level` on its project, as the window's answer of its new
+    parent (P.createParent) lists it once the server attached it, at
+    `at`. */
+function newChildShort(row: TaskOk['task'], level: ShortRow['level'], at: string): ShortRow {
+  const {
+    description: _text,
+    parent_id: _parent,
+    has_hidden_parent: _hiddenParent,
+    has_hidden_subtasks: _hidden,
+    has_subtasks: group,
+    ...fields
+  } = row
+  return { ...fields, has_subtasks: !!group, level, updated_at: at }
+}
+
+/** Whether a write about task `about.task`, or the task its arguments name
+    (`issue_id`, else `id`), went out behind a create the server refused
+    (refusedCreates). It reached the server after the create, as Convex
+    runs one client's mutations in the order sent, and was refused for a
+    task that never existed, which the create's own refusal said already. */
+function refusedBehind(about: WriteAbout | undefined, args: unknown): boolean {
+  if (refusedCreates.size === 0) return false
+  const a = (args ?? {}) as { id?: unknown; issue_id?: unknown }
+  const task =
+    about?.task ??
+    (typeof a.issue_id === 'string' ? a.issue_id : typeof a.id === 'string' ? a.id : undefined)
+  return task !== undefined && refusedCreates.has(task)
 }
 
 /* The person's answer the keep-open notice waits for
@@ -12169,7 +12748,9 @@ export const PLANNER = {
      two states that carry pressure: yellow behind, red late. Neither judges
      a task the workspace holds until it holds every task, since the load of
      the owners' tasks still to come is missing: before an ask it holds
-     none, and during the load only the person's new tasks. */
+     none, and during the load only the person's new tasks. The person's
+     new task in a store that never asked is a view's row, judged from the
+     owner-load cache like any. */
   delayOf: (x: IssueVM | string): DelayInfo | null => {
     const it = typeof x === 'string' ? PLANNER.anyTask(x) : x
     // a task only a view holds is judged from the owner-load cache, which
@@ -12181,9 +12762,10 @@ export const PLANNER = {
     return (tasksAll && it && delayMap.get(it.uuid)) || null
   },
   /** The task window's delay verdict for `it` where the workspace cannot
-      judge it: for a task the window shows from its own read, and for a
-      held one, such as the person's new task, until the workspace holds
-      every task. It reads the owner's load from the owner-load cache
+      judge it: for a task the window shows from its own read, the
+      person's new task from its creating answer among them, and for a held
+      one, such as the person's new task in a store that asked, until the
+      workspace holds every task. It reads the owner's load from the owner-load cache
       (store/ownerLoadCache.ts), which the store asks for while a window
       shows the task's details (syncWindowLoad), by the Board's rules
       (store/viewDelay.ts judgeDelay), so a window over a Board card shows
@@ -12298,16 +12880,25 @@ export const PLANNER = {
   /** The task handle or uuid `id` names as the window shows it: the
       workspace's view, else the window's view from its own answer while
       the workspace does not hold the task in its organization
-      (P.taskDetail), or undefined. While the workspace holds another
-      organization's task of the same id, the window's handle names the
-      window's task and the uuid alone names neither (answerTaskOf). */
+      (P.taskDetail), the person's own new task on its way among them
+      before a window watches it, or undefined. While the workspace holds
+      another organization's task of the same id, the window's handle names
+      the window's task and the uuid alone names neither (answerTaskOf). A
+      window's editors are built for the task this names
+      (components/descEditor.tsx), so naming the new task from the window's
+      first render builds them once. */
   taskShown: (id: string): IssueVM | undefined => {
     const held = PLANNER.issueById[id]
     if (held) return held
     const detail = PLANNER.detail
     const view = detail?.answered === 'ok' ? detail.view : null
-    if (!view || holdsIn(view.uuid, view.org)) return undefined
-    return view.id === id || (view.uuid === id && !rows.issues.has(id)) ? view : undefined
+    const names = (it: IssueVM) => it.id === id || (it.uuid === id && !rows.issues.has(id))
+    if (view && !holdsIn(view.uuid, view.org) && names(view)) return view
+    for (const uuid of pendingCreates.keys()) {
+      const creating = PLANNER.taskDetail(uuid)?.view
+      if (creating && detail?.task !== uuid && names(creating)) return creating
+    }
+    return undefined
   },
   /** The watched task the workspace does not hold, as a window names it,
       when handle `id` is the one it opens by now (P.handleNow): its uuid,
@@ -12337,10 +12928,19 @@ export const PLANNER = {
   /** Whether a save to task `id` waits because the window shows the task
       from its own answer, which is not current now: its read failed or
       runs again (P.editsFromAnswer is false), so Qivo cannot tell whether
-      someone changed the task meanwhile. */
+      someone changed the task meanwhile. Only the watched task waits so.
+      P.taskShown also names the person's new task while no window
+      watches it, as before its window watches it or once that window
+      closed, and a save then is one whose window is gone (refuseUpload). */
   answerSaveWaits: (id: string): boolean => {
     const shown = PLANNER.taskShown(id)
-    return !!shown && !holdsIn(shown.uuid, shown.org) && answerTaskOf(id) === null
+    return (
+      !!shown &&
+      !holdsIn(shown.uuid, shown.org) &&
+      watchedComments === shown.uuid &&
+      watchedOrgOf() === shown.org &&
+      answerTaskOf(id) === null
+    )
   },
   /** Refuses a save to task `id` while it waits (P.answerSaveWaits), with
       a toast that says why, so the editor keeps its draft, as
@@ -12357,13 +12957,18 @@ export const PLANNER = {
       the workspace holds before it holds every task, such as the person's
       new task. Null while neither knows them, a list that is not whole or
       holds a subtask stored before the rule of one level, so both windows
-      say they cannot read every subtask, or wait for every task. */
+      say they cannot read every subtask, or wait for every task. Null
+      too while the window shows the person's new task from its creating
+      answer (P.taskDetail saving), whose lists the server has not read. */
   familyOf: (it: IssueVM): TaskFamily | null => {
     const held = holdsIn(it.uuid, it.org)
     if (held && tasksAll) return { root: it, byId: PLANNER.issueById, done: PLANNER.isDone(it) }
-    // the watched task's answer, of its own organization's task
+    // the watched task's answer, of its own organization's task; a
+    // creating answer's lists are a new task's, which the server has not
+    // stored yet, so Move and Archive or delete wait for its own read
     const watched = watchedComments === it.uuid && watchedOrgOf() === it.org
-    const answer = watched && sectionFailure.task === 'none' ? paintedAnswer() : null
+    const answer =
+      watched && sectionFailure.task === 'none' && !creatingShown() ? paintedAnswer() : null
     return answer ? answerFamilyOf(it, answer) : null
   },
   /** The tasks, by uuid, whose text a view's row does not send, their
@@ -12890,7 +13495,9 @@ export const PLANNER = {
   /** What opening task handle `id` passes on (lib/taskReference.ts): the
       handle when the workspace holds the task, else a reference with the
       organization, number and uuid of the view row that brings it, as a
-      Board card's, a phone row's or an Overview row's, else `id`. */
+      Board card's, a phone row's or an Overview row's, the person's new
+      task on its way where two rows share the handle
+      (store/viewRows.ts byHandle), else `id`. */
   openTarget: (id: string): string => {
     if (PLANNER.issueById[id]) return id
     const it = viewRows.byHandle(id)
@@ -12905,6 +13512,63 @@ export const PLANNER = {
       (heldHandle). */
   openTask: (uuid: string, org: string, num: number | null): string =>
     heldHandle(uuid, org) ?? taskRef({ org, num, uuid }),
+  /** The key a person reads for what `open` opens (QN-n): the workspace's
+      key of a handle, or the number a reference names, else `open`, as App
+      names the person's new task in its toasts. */
+  keyOfOpen: (open: string): string => {
+    const held = PLANNER.issueById[open]
+    if (held) return held.key
+    const named = refParts(open)
+    return named?.num !== undefined ? `${ISSUE_PREFIX}-${named.num}` : open
+  },
+  /** Whether task `uuid` is a create of the person's own the server has not
+      taken yet, shown from the views' rows since the workspace does not
+      hold it: its card's owner list waits (WAITS_FOR_SAVE), as the server
+      has no task to read for it yet. */
+  createOnItsWay: (uuid: string): boolean => createOnItsWay(uuid),
+  /** Whether the server refused the create of the person's own new task
+      `uuid` (refusedCreates), so the writes sent behind it, a comment
+      among them, say nothing more than the create's own refusal did. */
+  refusedCreate: (uuid: string): boolean => refusedCreates.has(uuid),
+  /** The search text of task `uuid` while it is a create of the person's
+      own on its way that the workspace does not hold, as the screen shows
+      it with the writes sent behind the create. The fields come from its
+      row in the views, and its description and labels, which a view's row
+      does not send, from the window's painted answer while a window shows
+      it from its creating answer, else as the create sent them. Null for
+      any other task, and where a change of its description or labels
+      went out behind the create that no window shows, or a label has no
+      name the store knows, so the views count the card as unsure. The
+      views check such a card against the whole text filter (views/board
+      useBoardView.ts), as the server will once it holds the task, and a
+      refused write's paint going takes its text back with it. */
+  createText: (uuid: string): string | null => {
+    const pending = pendingCreates.get(uuid)
+    if (!pending || holdsIn(uuid, pending.org)) return null
+    const shown =
+      watchedComments === uuid && creatingShown() && drawnAnswer?.task.id === uuid
+        ? drawnAnswer
+        : null
+    if (!shown && PLANNER.ownUnsentEdits().has(uuid)) return null
+    const sent = pendingRow(pending)
+    const row = viewRows.peek(uuid) ?? sent
+    const labelNames: string[] = []
+    for (const { label_id } of shown?.labels ?? []) {
+      const name = rows.labels.get(label_id)?.name
+      if (name === undefined) return null
+      labelNames.push(name)
+    }
+    return taskSearchText({
+      key: `${ISSUE_PREFIX}-${row.num}`,
+      title: row.title,
+      description: shown ? shown.task.description : sent.description,
+      status: row.status,
+      group: pending.child !== null,
+      priority: row.priority,
+      assigneeName: row.assignee_id ? PLANNER.user(row.assignee_id)?.name : undefined,
+      labelNames,
+    })
+  },
   /** The handle task `uuid`, number `num` of organization `orgId` opens by
       now: the store's when it holds the task in that organization, else
       the home organization's key or another organization's uuid
@@ -13088,20 +13752,30 @@ export const PLANNER = {
     return o ? `${ISSUE_PREFIX}-${(o.next_issue_num || 0) + 1}` : ''
   },
 
-  /** Returns the new issue's HANDLE (exact unless someone creates
-      concurrently), so callers can reference it right away. The org-wide
-      counter (0050) means ANY concurrent create can invalidate the preview:
-      the paint takes the next free number as other people's creates arrive,
-      and the server's answer fixes it. A caller that keeps the handle
-      follows it with P.watchHandles. `onRefused` hears the handle shown just
-      before the refusal takes the task away, so an open preview can close
-      first. A `parent` names a task the workspace holds, or the task the
-      window shows from a current answer, whose Subtasks list shows the new
-      task at once and whose write is marked as from the answer; any other
+  /** Creates a task from the New task dialog, a window's subtask create or
+      a new sub-project's starter task, and answers what opening it passes
+      on (P.openTask): its handle where the workspace holds it, which only
+      a store that asked for every task does, else a reference that names
+      its organization, preview number and uuid. Nothing asks for every
+      task. The preview number is exact unless someone else creates first
+      (0050's organization-wide counter). Once a view's answer brings
+      another task with that number, the new task moves to the next free
+      one (renumberPending), and the server's answer fixes it. A held
+      handle moves with the rows, and the reference moves with the number
+      (P.watchHandles), so a caller that keeps either follows it. The new
+      task shows at once in the Board's
+      and the Roadmap's rows (newTaskParts) and in a window opened on it,
+      from its creating answer (creatingAnswerOf), until the server took
+      the create and the views' and the window's own reads answer.
+      `onRefused` hears the handle or reference shown just before the
+      refusal takes the task away, so an open window can close first. A
+      `parent` names a task the workspace holds, or the task the window
+      shows from a current answer, whose Subtasks list shows the new task
+      at once and whose write is marked as from the answer; any other
       parent is refused, never created as a top-level task. Returns null
       for an invalid target or a refused parent (callers take their
       no-create path). */
-  addIssue: (it: NewIssueInput, onRefused?: (key: string) => void) => {
+  addIssue: (it: NewIssueInput, onRefused?: (open: string) => void) => {
     const proj = rows.projects.get(it.project)
     // Numbering, org and reporter all follow the TARGET project's organization
     // (0081): creating in a foreign project is attributed to my guest profile
@@ -13132,7 +13806,8 @@ export const PLANNER = {
       num: previewNum,
       org_id: orgRow.id,
       title: cleanTitle(it.title),
-      description: it.description || '',
+      // trimmed as the server stores it (cleanDescription)
+      description: trimMarkdown(it.description || ''),
       status: it.status || 'backlog',
       priority: it.priority || 'low',
       assignee_id: it.assignee || undefined,
@@ -13162,34 +13837,42 @@ export const PLANNER = {
       created_at: now,
       updated_at: now,
     }
-    const created = { num: null as number | null }
-    const paint = newTaskPaint(row, created)
-    const preview = handleFor(uuid, row.org_id, `${ISSUE_PREFIX}-${previewNum}`)
+    const created: Created = { num: null, row: null }
     // the person's level on the new task's project: the window's answer's
     // for a subtask in the project of the task it shows, else the workspace's
     const level =
       (shownParent?.answer.task.project_id === it.project ? shownParent.answer.level : null) ??
       levelOf(PLANNER.levelOn(it.project)) ??
       'viewer'
+    // the parent as the new task's window lists it: the window's answer of
+    // it, else the workspace's row while it holds the parent in the new
+    // task's organization
+    const parentRow = parentId
+      ? (shownParent?.answer.task ??
+        (holdsIn(parentId, orgRow.id) ? rows.issues.get(parentId) : undefined))
+      : undefined
+    const parentLevel =
+      shownParent?.answer.level ??
+      (parentRow ? levelOf(PLANNER.levelOn(parentRow.project_id)) : null) ??
+      'viewer'
+    const pending = pendingCreate(row, created, level, {
+      parent: parentRow ? newParentShort(parentRow, parentLevel, now) : null,
+    })
+    const parts = newTaskParts(row, created, asked, newTaskPaint(row, created))
     // the window's Subtasks list of the parent shows the new task at once
-    const view: View = parentId
+    const detail: View['detail'] = parentId
       ? {
-          workspace: paint,
-          detail: {
-            task: parentId,
-            paint: () =>
-              subtaskListPaint(
-                parentId,
-                newShortRow(row, created.num ?? row.num, false, level),
-                uuid,
-                now,
-              ),
-          },
+          task: parentId,
+          paint: () =>
+            subtaskListPaint(
+              parentId,
+              newShortRow(row, created.num ?? row.num, false, level),
+              uuid,
+              now,
+            ),
         }
-      : { workspace: paint }
-    // the new task paints into the workspace's rows, which only a load of
-    // every task keeps on screen: no delivery without tasks may settle it
-    askTasks('create')
+      : undefined
+    const withDetail = (view: View): View => (detail ? { ...view, detail } : view)
     void send(
       api.issues.create,
       {
@@ -13210,25 +13893,38 @@ export const PLANNER = {
         remaining_hours: hasRemaining ? Number(it.remaining) : null,
         paused: row.paused,
       },
-      view,
+      withDetail(parts.sent),
       {
-        // the server's number, painted while no delivery holds the task yet
+        // the server's number and stored row, painted while no delivery
+        // holds the task yet
         keep: (result) => {
-          created.num = result.num
-          return view
+          if (result) pending.take({ num: result.num, row: result })
+          return withDetail(parts.kept())
         },
-        // its window reads its thread and lists from now on, also before a
-        // delivery holds it
-        onOk: () => tookCreate(uuid, row.org_id),
+        onOk: () => {
+          // its window reads its thread and lists from now on, also before
+          // a delivery holds it
+          tookCreate(uuid, row.org_id)
+          // the reference a caller keeps names the number shown while the
+          // create waited (renumberPending), and moves to the server's
+          const from = PLANNER.openTask(uuid, row.org_id, row.num)
+          const next = PLANNER.openTask(uuid, row.org_id, created.num ?? row.num)
+          if (isTaskRef(next) && isTaskRef(from)) movePendingRef(uuid, from, next)
+          tellPendingMoves()
+        },
         ...(shownParent ? { about: { task: uuid, answer: true as const } } : {}),
         onError: (error) => {
+          pending.refused()
           toastWriteError(error)
-          // the handle on screen, which a delivery may have moved
-          onRefused?.(uuidToKey.get(uuid) ?? preview)
+          // the handle on screen, which a delivery may have moved, or the
+          // reference to the number shown
+          onRefused?.(PLANNER.openTask(uuid, row.org_id, row.num))
         },
       },
     )
-    return preview
+    // the handle once the workspace holds the task, else the reference to
+    // the number it shows, the preview unless another task holds that
+    return PLANNER.openTask(uuid, row.org_id, row.num)
   },
 
   /* Paints the change at once and sends it. Resolves true when the server
@@ -13429,13 +14125,17 @@ export const PLANNER = {
       transaction (api.issues.createParent). The view holds no archived
       subtasks, which also keep a task from getting a parent
       (convex/lib/limits.ts), so a refusal shows its sentence and takes
-      the new task away again. The new task paints at once, with
-      createIssueCore's defaults, and the window's Parent row shows it. A
-      task the workspace does not hold creates from the window's current
-      answer of it (answerTaskOf), with that answer's parent pair as the
-      expected values, marked as from the answer; the workspace's row of
-      the task paints once the workspace holds it. Resolves whether the
-      server accepted it, false when refused here or there. */
+      the new task away again. Nothing asks for every task. The new task
+      paints at once, with createIssueCore's defaults, in the Board's and
+      the Roadmap's rows with the task under it (newTaskParts), the
+      window's Parent row shows it, and a window opened on it shows it from
+      its creating answer until the server took it. A task the workspace
+      does not hold creates from the window's current answer of it
+      (answerTaskOf), with that answer's parent pair as the expected
+      values, marked as from the answer. In a store that asked for every
+      task the workspace's rows take the new parent and the held task's
+      new parent too. Resolves whether the server accepted it, false when
+      refused here or there. */
   createParent: (id: string, title: string): Promise<boolean> => {
     if (refuseOver(LIMITS.title, title) || refusePausedEdit()) return Promise.resolve(false)
     const held = PLANNER.issueById[id]
@@ -13466,32 +14166,36 @@ export const PLANNER = {
       created_at: at,
       updated_at: at,
     }
-    const created = { num: null as number | null }
+    const created: Created = { num: null, row: null }
     const paintParent = newTaskPaint(parent, created)
     const child: IssueWirePatch = { parent_id: parentId }
-    const view: View = {
-      workspace: () => {
-        // a task the window shows from its answer gets its new parent at
-        // once, and its own row once the workspace holds it in its
-        // organization
-        if (!shown && !holdsIn(it.uuid, it.org)) return
-        paintParent()
-        if (!holdsIn(it.uuid, it.org)) return
-        if (rows.issues.get(it.uuid)?.parent_id === parentId) return
-        patchIssueRow(it.uuid, child, at)
-        rows.hiddenParentTasks.delete(it.uuid)
-      },
-      // the window's Parent row
-      detail: {
-        task: it.uuid,
-        paint: () => {
-          const answer = detailRows.task
-          if (!answer || answer.task.id !== it.uuid) return
-          answer.task.parent_id = parentId
-          answer.task.has_hidden_parent = false
-          answer.task.updated_at = at
-          answer.parent = newShortRow(parent, created.num ?? parent.num, true, level)
-        },
+    // the held path: the new parent and the held task's new parent, in a
+    // store that asked for every task
+    const heldPaint: Paint = () => {
+      // a task the window shows from its answer gets its new parent at
+      // once, and its own row once the workspace holds it in its
+      // organization
+      if (!shown && !holdsIn(it.uuid, it.org)) return
+      paintParent()
+      if (!holdsIn(it.uuid, it.org)) return
+      if (rows.issues.get(it.uuid)?.parent_id === parentId) return
+      patchIssueRow(it.uuid, child, at)
+      rows.hiddenParentTasks.delete(it.uuid)
+    }
+    const pending = pendingCreate(parent, created, level, {
+      child: shown ? newChildShort(shown.answer.task, shown.answer.level, at) : null,
+    })
+    const parts = newTaskParts(parent, created, asked, heldPaint, { group: true, child: it.uuid })
+    // the window's Parent row
+    const detail: View['detail'] = {
+      task: it.uuid,
+      paint: () => {
+        const answer = detailRows.task
+        if (!answer || answer.task.id !== it.uuid) return
+        answer.task.parent_id = parentId
+        answer.task.has_hidden_parent = false
+        answer.task.updated_at = at
+        answer.parent = newShortRow(parent, created.num ?? parent.num, true, level)
       },
     }
     const row = holdsIn(it.uuid, it.org) ? rows.issues.get(it.uuid) : undefined
@@ -13503,21 +14207,23 @@ export const PLANNER = {
             hiddenParent: shown.answer.task.has_hidden_parent,
           }
         : undefined
-    // the new parent paints into the workspace's rows (addIssue)
-    askTasks('create')
     return send(
       api.issues.createParent,
       { org_id: it.org, id: it.uuid, parent_id: parentId, title: title.trim() },
-      view,
+      { ...parts.sent, detail },
       {
         // the server's number for the parent, painted while no delivery holds it
         keep: (answer) => {
-          created.num = answer.parent_num
-          return view
+          if (answer) pending.take({ num: answer.parent_num })
+          return { ...parts.kept(), detail }
         },
         // the new parent's window reads its thread and lists from now on,
         // also before a delivery holds it (addIssue)
         onOk: () => tookCreate(parentId, it.org),
+        onError: (error) => {
+          pending.refused()
+          toastWriteError(error)
+        },
         ...(over ? { over } : {}),
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
@@ -13528,12 +14234,16 @@ export const PLANNER = {
       task `id`'s sub-project, linked to it with `type` as seen from task
       `id`, in one server write (api.issues.createLinked), so a refused link
       leaves no new task behind. The view's own link cap check toasts first;
-      the server also counts links to tasks this view does not hold. A task
-      the workspace does not hold creates from the window's current answer
-      of it (answerTaskOf), marked as from the answer: the new task paints
-      at once, the link only where the workspace holds both tasks, and the
-      window's Linked tasks show it with the links answer's next delivery.
-      Resolves whether the server accepted it. */
+      the server also counts links to tasks this view does not hold.
+      Nothing asks for every task. The new task paints at once in the
+      Board's and the Roadmap's rows (newTaskParts) and in a window opened
+      on it, from its creating answer, until the server took it. A task the
+      workspace does not hold creates from the window's current answer of
+      it (answerTaskOf), marked as from the answer, and the window's Linked
+      tasks show the new task with the links answer's next delivery. In a
+      store that asked for every task the workspace's rows take the new
+      task, and the link where they hold both tasks. Resolves whether the
+      server accepted it. */
   createLinked: (id: string, type: string, title: string): Promise<boolean> => {
     if (refuseOver(LIMITS.title, title) || refusePausedEdit()) return Promise.resolve(false)
     const held = PLANNER.issueById[id]
@@ -13550,6 +14260,7 @@ export const PLANNER = {
       return Promise.resolve(false)
     }
     const kind = type === 'blocks' || type === 'blocked_by' ? type : 'relates'
+    const level = shown?.answer.level ?? levelOf(PLANNER.levelOn(it.project)) ?? 'viewer'
     const taskId = crypto.randomUUID()
     const at = new Date().toISOString()
     const me = profileIn(it.org) || undefined
@@ -13569,7 +14280,7 @@ export const PLANNER = {
       created_at: at,
       updated_at: at,
     }
-    const created = { num: null as number | null }
+    const created: Created = { num: null, row: null }
     const paintTask = newTaskPaint(task, created)
     // the stored form, as addLink and the server's storedLink canonicalize it
     const [source, target] =
@@ -13584,29 +14295,33 @@ export const PLANNER = {
       pair_key: source < target ? `${source}:${target}` : `${target}:${source}`,
       created_at: at,
     }
-    const view: View = {
-      workspace: () => {
-        if (!shown && !holdsIn(it.uuid, it.org)) return
-        paintTask()
-        if (!holdsIn(it.uuid, it.org) || !holdsIn(taskId, it.org) || rows.links.has(link.id)) return
-        rows.links.set(link.id, { ...link })
-      },
+    // the held path, in a store that asked for every task
+    const heldPaint: Paint = () => {
+      if (!shown && !holdsIn(it.uuid, it.org)) return
+      paintTask()
+      if (!holdsIn(it.uuid, it.org) || !holdsIn(taskId, it.org) || rows.links.has(link.id)) return
+      rows.links.set(link.id, { ...link })
     }
-    // the new task paints into the workspace's rows (addIssue)
-    askTasks('create')
+    const pending = pendingCreate(task, created, level)
+    const parts = newTaskParts(task, created, asked, heldPaint)
     return send(
       api.issues.createLinked,
       { org_id: it.org, id: it.uuid, new_id: taskId, link_id: link.id, title: task.title, kind },
-      view,
+      parts.sent,
       {
-        // the server's number for the new task, painted while no delivery holds it
+        // the server's number and stored row for the new task, painted
+        // while no delivery holds it
         keep: (answer) => {
-          created.num = answer.num
-          return view
+          if (answer) pending.take({ num: answer.num, row: answer })
+          return parts.kept()
         },
         // the new task's window reads its thread and lists from now on,
         // also before a delivery holds it (addIssue)
         onOk: () => tookCreate(taskId, it.org),
+        onError: (error) => {
+          pending.refused()
+          toastWriteError(error)
+        },
         ...(shown ? { about: { task: it.uuid, answer: true as const } } : {}),
       },
     )
@@ -14387,13 +15102,16 @@ export const PLANNER = {
       has already been accepted or refused server-side. A task the window
       shows from its own answer takes files the same way, with its
       organization, project and cap from that answer (answerUploadTarget),
-      and none while that answer is not current (P.refuseStaleEdit). The
-      upload follows the task `issueKey` names when it starts, by its uuid
-      and organization, whatever that handle names later. With `opts.org`
-      it is that organization's task, as two organizations can hold one
-      task id, so the window's task shown from its answer takes a file by
-      its uuid while the workspace holds another organization's task of
-      that id. */
+      and none while that answer is not current (P.refuseStaleEdit). So
+      does the person's new task the window shows from its creating
+      answer, and a file of it resolves null without a toast once the
+      server refused the create, whose own toast said why
+      (refusedCreates). The upload follows the task `issueKey` names when
+      it starts, by its uuid and organization, whatever that handle names
+      later. With `opts.org` it is that organization's task, as two
+      organizations can hold one task id, so the window's task shown from
+      its answer takes a file by its uuid while the workspace holds another
+      organization's task of that id. */
   addAttachment: withUpdateBlock(
     async (
       issueKey: string,
@@ -14496,6 +15214,9 @@ export const PLANNER = {
         return attId
       } catch (e) {
         console.error('[qivo] upload failed:', e)
+        // a file sent behind a create the server refused was refused for a
+        // task that never existed, which the create's own refusal said
+        if (refusedCreates.has(uuid)) return null
         const msg = errData(e).message || ''
         toast(`Couldn't upload "${file.name}"${msg ? `. ${asSentence(msg)}` : ''}`)
         return null
@@ -14584,6 +15305,10 @@ export const PLANNER = {
     }
     ++commentsWatchEpoch
     if (watchedHeld?.uuid !== issueUuid || (orgId && watchedHeld.org !== orgId)) watchedHeld = null
+    // a create the server took shows from its creating answer only in the
+    // window that watched it then
+    for (const [uuid, pending] of pendingCreates)
+      if (pending.taken && uuid !== issueUuid) pendingCreates.delete(uuid)
     watchedComments = issueUuid
     const row = issueUuid ? serverTask(issueUuid) : undefined
     watchedOrg = orgId ?? row?.org_id ?? null
@@ -14618,6 +15343,9 @@ export const PLANNER = {
     // delivery holds the task or the server took its create
     // (subscribeWaitingThread).
     const creating = watchedCreating()
+    // a create the server refused never existed: its window shows it as
+    // gone (watchedGone) and reads nothing
+    const refused = !!issueUuid && refusedCreates.has(issueUuid) && row?.org_id !== watchedOrg
     if (issueUuid && creating) {
       PLANNER.commentsLoaded = true
       threadStart = true
@@ -14627,7 +15355,7 @@ export const PLANNER = {
     // (syncSections), then the emptied thread and lists show, in the
     // organization the window named
     const org = watchedOrg
-    if (issueUuid && org && !creating) subscribeThread(issueUuid, org)
+    if (issueUuid && org && !creating && !refused) subscribeThread(issueUuid, org)
     repaint({ thread: true, sections: true })
   },
 
@@ -14687,10 +15415,18 @@ export const PLANNER = {
       its organization is known, and with `org`, when that organization is
       `org`, as two organizations can hold one task id; else null. Its read
       is the task side of the sections, which runs while a window shows the
-      sections or the workspace does not hold the watched task. */
+      sections or the workspace does not hold the watched task. The
+      person's own new task on its way that no window watches yet shows
+      from its creating answer (creatingDetailOf), of organization `org`
+      when named, so a window App opens on it shows it on its first
+      render. */
   taskDetail: (uuid: string | null | undefined, org?: string): TaskDetailVM | null => {
+    if (!uuid) return null
     const detail = PLANNER.detail
-    return uuid && detail?.task === uuid && (!org || detail.org === org) ? detail : null
+    if (detail?.task === uuid) return !org || detail.org === org ? detail : null
+    if (watchedComments === uuid) return null
+    const creating = creatingDetailOf(uuid)
+    return creating && (!org || creating.org === org) ? creating : null
   },
 
   /** Retry for the window's read of the task it shows from its answer
@@ -17785,10 +18521,10 @@ let tasksAll = false
    shows (tasksAll). */
 let tasksNext = false
 
-/** What asked for every task (P.askTasks): a create, which needs every
-    one of them, and the scripts and the benchmark. The Inbox's search
+/** What asked for every task (P.askTasks): the scripts and the
+    benchmark. A create asks for none (P.addIssue), and the Inbox's search
     asks the server instead (inbox.page). */
-export type AskReason = 'create' | 'script' | 'benchmark'
+export type AskReason = 'script' | 'benchmark'
 
 /** Why a task load stopped while the rest of the workspace stays live:
     the sentence the readers that wait for every task show beside Try
@@ -18131,9 +18867,8 @@ function retrySnapshot() {
     window (store/liveParts.ts askTasks), and the readers that need every
     task wait until they are held. Without a running registry, between
     stopParts and the next startParts, the next one starts with them. A
-    create asks before its send, so no delivery that holds no task can
-    come between its paint and the load's end. In tests it records
-    `reason`. */
+    create asks for none: it paints the views' rows and its window
+    (P.addIssue). In tests it records `reason`. */
 function askTasks(reason: AskReason) {
   if (STRICT_LAYERS) askReasons.push(reason)
   if (asked) return
@@ -18282,6 +19017,8 @@ export function disposeDemoStore() {
   inboxCurrent = false
   lastMessageTasks = new Set()
   tookCreates.clear()
+  pendingCreates.clear()
+  refusedCreates.clear()
   hasSnapshot = false
   stillLoading = null
   loadEnds = false

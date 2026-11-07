@@ -15,8 +15,19 @@ import { Avatar, Icon, MenuItem } from './qivo'
     and uuid from `issue`, the workspace's model or the window's from its
     own read, so they work for a task the workspace does not hold. With
     `disabled`, its hint, the eye only shows whether the person follows the
-    task, as while the window's read of such a task failed or runs again. */
-export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled?: string }) {
+    task, as while the window's read of such a task failed or runs again.
+    With `rosterWaits`, its hint, the eye follows and unfollows the task at
+    once and its roster does not open, as for the person's own new task
+    before the server stored it, which has no roster to read yet. */
+export function IssueSubscribers({
+  issue,
+  disabled,
+  rosterWaits,
+}: {
+  issue: IssueVM
+  disabled?: string
+  rosterWaits?: string
+}) {
   const [open, setOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
@@ -83,6 +94,25 @@ export function IssueSubscribers({ issue, disabled }: { issue: IssueVM; disabled
         : undefined,
     )
   }
+
+  if (rosterWaits && !disabled)
+    return (
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        data-task-subscribe={issue.subscribed ? 'on' : 'off'}
+        aria-label={
+          issue.subscribed ? 'Unsubscribe from task updates' : 'Subscribe to task updates'
+        }
+        aria-pressed={!!issue.subscribed}
+        className="w-control-sm h-control-sm"
+        title={`${issue.subscribed ? 'Subscribed' : 'Not subscribed'} · Task subscribers: ${rosterWaits}`}
+        onClick={() => P.setIssueSubscribed(issue.id, !issue.subscribed)}
+      >
+        <Icon name={issue.subscribed ? 'eye' : 'eyeOff'} size={16} />
+      </Button>
+    )
 
   if (disabled)
     return (

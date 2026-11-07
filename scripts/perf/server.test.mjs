@@ -1736,6 +1736,105 @@ describe('the benchmark server', () => {
     })
   })
 
+  it("creates the person's own task as the server stores it, answers the stored row, and shows it on the Board and in its window", async () => {
+    // a uuid, as the app's creates name their tasks
+    const MADE = '0f6e2c7a-1111-4222-8333-444455556666'
+    const at = await server('tasks=40&latency=0&mbps=100000')
+    const snap = async (tag) => {
+      await at.send({ type: 'query', id: tag, name: 'snapshot:forMe', args: {} })
+      return JSON.parse(at.posted.find((m) => m.to === tag).text)
+    }
+    const before = await snap('before')
+    const org = before.orgs[0].id
+    const me = before.profiles[0].id
+    const program = before.projects.find((p) => p.type === 'meta')
+    const sub = before.projects.find((p) => p.parent_id === program.id)
+    const create = async (tag, args) => {
+      await at.send({
+        type: 'mutation',
+        id: tag,
+        name: 'issues:create',
+        args: { org_id: org, ...args },
+      })
+      await vi.waitFor(() =>
+        expect(at.posted.some((m) => m.id === tag && m.type === 'answer')).toBe(true),
+      )
+      return at.posted.find((m) => m.id === tag && m.type === 'answer')
+    }
+    const made = await create('made', {
+      id: MADE,
+      project_id: sub.id,
+      title: '  Order the spare sensors  ',
+      description: 'For the north bench.  ',
+      status: 'todo',
+      priority: 'high',
+      assignee_id: me,
+      reviewer_id: null,
+      parent_id: null,
+      start_week: null,
+      end_week: null,
+      due_date: null,
+      remaining_hours: null,
+      paused: false,
+    })
+    // the stored row, numbered next, without its text
+    expect(made.value).toMatchObject({
+      id: MADE,
+      org_id: org,
+      project_id: sub.id,
+      num: before.orgs[0].next_issue_num + 1,
+      title: 'Order the spare sensors',
+      status: 'todo',
+      priority: 'high',
+      assignee_id: me,
+      reporter_id: me,
+      created_by: me,
+    })
+    expect(made.value).not.toHaveProperty('description')
+    expect(made.value).not.toHaveProperty('reviewer_id')
+    const after = await snap('after')
+    expect(after.orgs[0].next_issue_num).toBe(before.orgs[0].next_issue_num + 1)
+    // the Board's answer and the window's read hold it
+    await at.send({
+      type: 'query',
+      id: 'board',
+      name: 'tasks:board',
+      args: {
+        scope: { kind: 'project', org_id: org, project_id: program.id },
+        filters: {
+          mine: false,
+          owners: [],
+          priority: null,
+          stale_before: null,
+          focus: false,
+          search: '',
+        },
+      },
+    })
+    const board = JSON.parse(at.posted.find((m) => m.to === 'board').text)
+    expect(board.rows.some((row) => row.id === MADE)).toBe(true)
+    await at.send({
+      type: 'query',
+      id: 'window',
+      name: 'taskWindow:task',
+      args: { org_id: org, ref: MADE },
+    })
+    expect(JSON.parse(at.posted.find((m) => m.to === 'window').text)).toMatchObject({
+      state: 'ok',
+      task: { id: MADE, description: 'For the north bench.' },
+    })
+    // a top-level project and one the person does not see are refused with
+    // the server's sentences, and nothing is stored
+    const meta = await create('meta', { id: 'in-meta', project_id: program.id, title: 'No' })
+    expect(meta.error).toEqual({
+      code: 'rule',
+      message: 'tasks can only be created in sub-projects, not meta-projects',
+    })
+    const unseen = await create('unseen', { id: 'unseen', project_id: 'not-mine', title: 'No' })
+    expect(unseen.error).toEqual({ code: 'forbidden', message: 'no write access to this project' })
+    expect((await snap('last')).orgs[0].next_issue_num).toBe(before.orgs[0].next_issue_num + 1)
+  })
+
   it("gives a standard creator who names another lead the server's User grant, unless they declined it", async () => {
     const at = await server('tasks=20&latency=0&mbps=100000')
     const snap = async (tag) => {

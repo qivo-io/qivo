@@ -549,14 +549,13 @@ export async function runDemoSmoke(env = process.env) {
     const title = `Private demo smoke ${randomUUID().slice(0, 8)}`
     await dialog.getByRole('textbox', { name: 'Title', exact: true }).fill(title)
     await dialog.getByRole('button', { name: 'Create', exact: true }).click()
-    await pageA.waitForFunction(
-      (title) => window.PLANNER.issues.some((task) => task.title === title),
-      title,
-    )
-    const task = await pageA.evaluate((title) => {
-      const task = window.PLANNER.issues.find((item) => item.title === title)
-      return { id: task.id, uuid: task.uuid, key: task.key }
-    }, title)
+    // a create loads no task: its window shows it from what the create sent,
+    // then from its own read (P.detail)
+    await pageA.waitForFunction((title) => window.PLANNER.detail?.view?.title === title, title)
+    const task = await pageA.evaluate(() => {
+      const detail = window.PLANNER.detail
+      return { id: detail.view.id, uuid: detail.task, key: detail.view.key }
+    })
     assert.ok(task.uuid && task.key, 'Created task must provide its own UUID and QN reference')
     await dialog.waitFor({ state: 'detached' })
     await pageA.locator('[data-issue-key]').first().waitFor()
@@ -578,8 +577,9 @@ export async function runDemoSmoke(env = process.env) {
     })
     await pageA.locator(`button[data-attachment-open="${filename}"]`).waitFor({ timeout: 30_000 })
     const file = await pageA.evaluate(async (uuid) => {
-      const task = window.PLANNER.issues.find((item) => item.uuid === uuid)
-      const attachment = task.attachments[0]
+      // the window's attachments answer, as the workspace holds no task
+      const sections = window.PLANNER.sections
+      const attachment = sections?.task === uuid ? sections.attachments.rows[0] : undefined
       const url = await window.PLANNER.attachmentUrl(attachment.id)
       const response = await fetch(url)
       return { url, status: response.status, text: await response.text() }

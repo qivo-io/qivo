@@ -5149,6 +5149,220 @@ async function tasksOnDemandCheck() {
   })
 }
 
+/** The step that creates a task through the Board and changes it in its
+ *  window before its create answers (createAnswerCheck). */
+export const CREATE_ANSWER_STEP = 'ui/create-answer'
+
+/** The create the Board's New task dialog sends (convex/issues.ts create). */
+export const CREATE_MUTATION = 'issues:create'
+
+/** The reads a task window makes of a task the server holds: its own read,
+ *  its thread and its Inbox item, which the window of a new task makes only
+ *  once the server took its create (src/store/planner.ts tookCreate). */
+export const NEW_TASK_READS = ['taskWindow:task', 'snapshot:threadComments', 'inbox:item']
+
+/** The request id of frame `text`, a message the page sent on its sync
+ *  socket, when it runs the mutation `udfPath`; else null. */
+export function mutationRequest(text, udfPath) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return null
+  }
+  return message?.type === 'Mutation' && message.udfPath === udfPath
+    ? (message.requestId ?? null)
+    : null
+}
+
+/** The first argument object of mutation frame `text`, or null. */
+export function mutationArgs(text) {
+  try {
+    const message = JSON.parse(text)
+    return message?.type === 'Mutation' && Array.isArray(message.args)
+      ? (message.args[0] ?? null)
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Whether frame `text`, a message the page received on its sync socket,
+ *  answers the mutation of request `requestId` (a MutationResponse). */
+export function answersMutation(text, requestId) {
+  try {
+    const message = JSON.parse(text)
+    return message?.type === 'MutationResponse' && message.requestId === requestId
+  } catch {
+    return false
+  }
+}
+
+/** The task number a create's answer frame `text` names, the number the
+ *  server stored the task with (convex/issues.ts create answers the stored
+ *  row), or null for a refusal or a frame that names none. */
+export function answeredNum(text) {
+  try {
+    const message = JSON.parse(text)
+    const num = message?.type === 'MutationResponse' && message.success ? message.result?.num : null
+    return Number.isInteger(num) ? num : null
+  } catch {
+    return null
+  }
+}
+
+/** Whether frame `text` the page sent subscribes query `udfPath` with
+ *  arguments that name task `uuid`. */
+export function addsQueryFor(text, udfPath, uuid) {
+  let message
+  try {
+    message = JSON.parse(text)
+  } catch {
+    return false
+  }
+  return (
+    message?.type === 'ModifyQuerySet' &&
+    Array.isArray(message.modifications) &&
+    message.modifications.some(
+      (m) => m?.type === 'Add' && m.udfPath === udfPath && JSON.stringify(m.args).includes(uuid),
+    )
+  )
+}
+
+/** The order rule of a create on the socket, over the frames of one page in
+ *  the order they passed, each `{ out, text }` (`out` for a frame the page
+ *  sent): the new task's uuid from the create's request, whether a frame
+ *  answers it and the number that answer stored the task with (`num`), and
+ *  the frames sent before that answer that subscribe a read of the new task
+ *  (NEW_TASK_READS) or the task windows (TASK_WINDOWS_QUERY), which a
+ *  correct app never sends. Null when no create went out. */
+export function createOrder(frames) {
+  const at = frames.findIndex((f) => f.out && mutationRequest(f.text, CREATE_MUTATION) !== null)
+  if (at < 0) return null
+  const request = mutationRequest(frames[at].text, CREATE_MUTATION)
+  const uuid = String(mutationArgs(frames[at].text)?.id ?? '')
+  const answered = frames.findIndex((f, n) => n > at && !f.out && answersMutation(f.text, request))
+  const before = frames.slice(0, answered < 0 ? frames.length : answered)
+  return {
+    uuid,
+    answered: answered >= 0,
+    num: answered >= 0 ? answeredNum(frames[answered].text) : null,
+    early: before
+      .filter((f) => f.out && NEW_TASK_READS.some((query) => addsQueryFor(f.text, query, uuid)))
+      .map((f) => f.text),
+    taskWindows: frames.filter((f) => f.out && addsQuery(f.text, TASK_WINDOWS_QUERY)).length,
+  }
+}
+
+/** Creates a task through the Board, over the deployment's socket, in a
+ *  sub-project of its own under the run project, so no later step meets
+ *  an active task it did not make, with one task over REST so its Board
+ *  shows its columns: from a fresh load of that sub-project's Board it
+ *  presses New task in To Do, types the run's tagged title, presses
+ *  Create, and once the window shows it renames the task in the window at
+ *  once. On the frames of that load it checks that nothing subscribed the
+ *  task windows (TASK_WINDOWS_QUERY) and that no read of the new task
+ *  (NEW_TASK_READS) was subscribed before the create's answer arrived
+ *  (createOrder). It knows the task by the uuid its create sent and its key
+ *  by the number that answer stored, since another create in the
+ *  organization meanwhile can move the key the window showed first. It then
+ *  checks that the window and the card show that key, that the window
+ *  shows the new title and, over REST by the uuid, that the task holds the
+ *  title under that key. The run's sweep removes the task and the
+ *  sub-project by their tag. It runs before the run archives M. */
+async function createAnswerCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  await check(CREATE_ANSWER_STEP, async () => {
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Create answer`,
+      parent: M.id,
+    })
+    expect(Number.isInteger(sub.num), 'the sub-project has no number')
+    // one task over REST, so its Board shows its columns, whose + it presses
+    run.created.push(
+      await restOk(w, 'POST', '/tasks', {
+        project: sub.id,
+        title: `${run.tag} create answer column`,
+        status: 'todo',
+      }),
+    )
+    // the frames the fresh load passes on its sync socket, in order
+    let frames = []
+    const record = (ws) => {
+      ws.on('framesent', (frame) => frames.push({ out: true, text: String(frame.payload) }))
+      ws.on('framereceived', (frame) => frames.push({ out: false, text: String(frame.payload) }))
+    }
+    app.on('websocket', record)
+    try {
+      frames = []
+      await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${sub.num}`, {
+        waitUntil: 'domcontentloaded',
+      })
+      await app
+        .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+        .waitFor({ timeout: 60_000 })
+      await app.getByRole('button', { name: 'New task in To Do', exact: true }).first().click()
+      const field = app.locator('input[aria-label="Title"]')
+      await field.waitFor({ timeout: 30_000 })
+      const title = `${run.tag} create answer`
+      await field.fill(title)
+      await app.getByRole('button', { name: 'Create', exact: true }).click()
+      const shown = app.locator('[role="dialog"] [data-task-title]')
+      await shown.waitFor({ timeout: 30_000 })
+      expect(
+        await until(async () => ((await shown.textContent()) ?? '').trim() === title),
+        'the window does not show the new task',
+      )
+      // renamed in the window at once, before or after the create answered
+      const renamed = `${run.tag} create answer renamed`
+      await shown.click()
+      const editor = app.locator('[role="dialog"] textarea[aria-label="Task title"]')
+      await editor.fill(renamed)
+      await editor.press('Enter')
+      const order = await (async () => {
+        let found = null
+        await until(async () => {
+          found = createOrder(frames)
+          return !!found?.answered
+        })
+        return found
+      })()
+      expect(order, 'no create went out on the socket')
+      expect(order.answered, "the create's answer did not arrive")
+      eq(order.taskWindows, 0, 'the create subscribed task windows')
+      eq(order.early.length, 0, 'a read of the new task went out before its create answered')
+      expect(order.num !== null, "the create's answer names no number")
+      // the key the server stored it under, which the window and the card
+      // show once the create answered
+      const key = `QN-${order.num}`
+      const windowKey = app.locator('[role="dialog"] [data-issue-key]').first()
+      expect(
+        await until(async () => ((await windowKey.textContent()) ?? '').trim() === key),
+        `the window does not name ${key}`,
+      )
+      await app
+        .locator(`[data-workspace-view] [data-card="${key}"]`)
+        .first()
+        .waitFor({ timeout: 30_000 })
+      expect(
+        await until(async () => ((await shown.textContent()) ?? '').trim() === renamed),
+        'the window does not show the new title',
+      )
+      expect(
+        await until(async () => {
+          const task = await restOk(w, 'GET', `/tasks/${order.uuid}`)
+          return task.title === renamed && task.key === key
+        }),
+        `${key} does not hold the new title`,
+      )
+      return `created ${key} through the Board in ${sub.name} and renamed it in its window at once, with no read of it before its create answered and no task window`
+    } finally {
+      app.off('websocket', record)
+    }
+  })
+}
+
 /** The step that uploads a file through a task window
  *  (attachmentUploadCheck). */
 export const UPLOAD_STEP = 'ui/attachment-upload'
@@ -9487,6 +9701,9 @@ async function main() {
   // the Board and a task address without task windows, then the Roadmap
   // with them, while the project is active
   await tasksOnDemandCheck()
+  // a task created through the Board and changed in its window at once, in
+  // a sub-project of its own, while the project is active
+  await createAnswerCheck()
   // Settings › Labels with a label of its own on a fixture task
   await settingsLabelsCheck()
   // Settings › Teams and a team's page on the server's reads, with a team
