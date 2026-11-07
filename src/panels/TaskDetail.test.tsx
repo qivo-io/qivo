@@ -2017,3 +2017,192 @@ describe('the task window in a session that never asked for every task', {
     expect(P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
+
+describe('the task window’s Assignee and Reviewer', { timeout: 30_000 }, () => {
+  /** every pickers: read, oldest first */
+  let asked: { name: string; args: Record<string, unknown> }[]
+  /* Answers the people pickers through their stand-in, and the other
+     one-shot reads with nothing. */
+  async function pickersAnswer() {
+    asked = []
+    const { isOwnerPickerRead, ownerPickersStandIn } = await import(
+      '../store/ownerPickersStandIn.setup'
+    )
+    network.query.mockImplementation(async (ref, args) => {
+      const name = getFunctionName(ref)
+      if (!isOwnerPickerRead(name)) return null
+      asked.push({ name, args })
+      return structuredClone(ownerPickersStandIn(snap, name, args))
+    })
+  }
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await act(async () => await new Promise((r) => setTimeout(r, 0)))
+  }
+  /* Opens the window on `handle` and waits the frame in which it takes
+     focus, as a person does before a press. */
+  const openSettled = async (handle: string) => {
+    await openWindow(handle)
+    await act(async () => await new Promise((r) => setTimeout(r, 50)))
+  }
+  const fieldName = (label: string) =>
+    field(label)?.querySelector('[data-owner-name]')?.textContent ?? null
+  const byIds = () => subs.filter((s) => s.name === 'people:byIds' && !s.closed)
+  /* Gina is a person of the organization the workspace does not hold. */
+  const GINA = {
+    id: 'gina',
+    name: 'Gina Ghost',
+    org_role: 'user',
+    kind: 'person',
+    active: true,
+    pending: false,
+    color: '#335577',
+    initials: 'GG',
+  }
+
+  it('opens the shared owner list in a popover, keeping the field’s hooks, and writes a pick', async () => {
+    await load(false, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      if (fam) fam.assignee_id = 'leo'
+    })
+    await pickersAnswer()
+    await openSettled(P.handleOf(FAM) ?? '')
+    expect(field('Assignee')?.disabled).toBe(false)
+    expect(fieldName('Assignee')).toBe('Leo Park')
+    expect(fieldName('Reviewer')).toBe('No reviewer')
+    // nothing is read before a list opens, and no name by id
+    expect(asked).toEqual([])
+    expect(byIds()).toEqual([])
+    await click(field('Assignee'))
+    await settle()
+    expect(document.querySelector('[data-owner-list="assignee"]')).not.toBeNull()
+    expect(asked.find((a) => a.name === 'pickers:taskOwners')?.args).toEqual({
+      org_id: snap.orgs[0].id,
+      issue_id: FAM,
+      field: 'assignee',
+    })
+    expect(document.querySelector('[data-owner-holder]')?.textContent).toContain('Leo Park')
+    await click(document.querySelector('[data-owner-choice="mira"]'))
+    expect(sentArgs('issues:update').at(-1)).toMatchObject({
+      id: FAM,
+      patch: { assignee_id: 'mira' },
+    })
+  })
+
+  it('shows a reader without Edit the holder’s name, read-only, with nothing read', async () => {
+    await load(false, (next) => {
+      next.issues.push(
+        task('01000000-0000-4000-8000-000000000031', 31, {
+          project_id: 'manuals',
+          assignee_id: 'leo',
+          status: 'progress',
+        }),
+      )
+    })
+    await pickersAnswer()
+    await openWindow(P.handleOf('01000000-0000-4000-8000-000000000031') ?? '')
+    expect(field('Assignee')?.disabled).toBe(true)
+    expect(await hintOf(field('Assignee'))).toBe(READ_ONLY)
+    expect(fieldName('Assignee')).toBe('Leo Park')
+    await click(field('Assignee'))
+    await settle()
+    expect(asked).toEqual([])
+    expect(byIds()).toEqual([])
+  })
+
+  it('names a holder the workspace does not hold by id, loading until the answer', async () => {
+    await load(false, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      if (fam) fam.assignee_id = 'gina'
+    })
+    await pickersAnswer()
+    await openSettled(P.handleOf(FAM) ?? '')
+    expect(fieldName('Assignee')).toBe('Loading…')
+    expect(byIds().map((s) => s.args)).toEqual([{ org_id: snap.orgs[0].id, ids: ['gina'] }])
+    await act(async () => byIds()[0].deliver({ rows: [GINA] }))
+    expect(fieldName('Assignee')).toBe('Gina Ghost')
+  })
+
+  it('says Unassigned for a holder only on an answer that leaves them out, and a failed name as failed', async () => {
+    await load(false, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      if (fam) fam.assignee_id = 'gone-person'
+    })
+    await pickersAnswer()
+    await openSettled(P.handleOf(FAM) ?? '')
+    expect(fieldName('Assignee')).toBe('Loading…')
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => byIds()[0].fail(new Error('Server Error')))
+    expect(fieldName('Assignee')).toBe("Couldn't load this person")
+    // the list still opens
+    await click(field('Assignee'))
+    await settle()
+    expect(document.querySelector('[data-owner-list="assignee"]')).not.toBeNull()
+    await act(async () =>
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+    )
+    // a fresh window's answer that leaves the id out
+    await load(false, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      if (fam) fam.assignee_id = 'gone-person'
+    })
+    await openSettled(P.handleOf(FAM) ?? '')
+    await act(async () => byIds()[0].deliver({ rows: [] }))
+    expect(fieldName('Assignee')).toBe('Unassigned')
+  })
+
+  it('names the Inbox pane’s owner the same way', async () => {
+    await load(false, (next) => {
+      const fam = next.issues.find((t) => t.id === FAM)
+      if (fam) fam.assignee_id = 'gina'
+    })
+    const { IssueDetail } = await import('./IssueDetail')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <IssueDetail issueId={P.handleOf(FAM) ?? ''} onClose={onClose} onOpen={onOpen} embedded />
+        </TooltipProvider>,
+      ),
+    )
+    const owner = () => document.querySelector('[data-task-assignee-name]')?.textContent
+    expect(owner()).toBe('Loading…')
+    await act(async () => byIds()[0].deliver({ rows: [GINA] }))
+    expect(owner()).toBe('Gina Ghost')
+  })
+
+  it('writes a pick on a task shown from its answer through that answer', async () => {
+    await load()
+    await pickersAnswer()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    expect(dialog()?.dataset.taskSource).toBe('answer')
+    await click(field('Assignee'))
+    await settle()
+    await click(document.querySelector('[data-owner-choice="leo"]'))
+    expect(sentArgs('issues:update').at(-1)).toMatchObject({
+      org_id: snap.orgs[0].id,
+      id: FAR,
+      patch: { assignee_id: 'leo' },
+    })
+    expect(sentArgs('issues:update').at(-1)).toHaveProperty('expected')
+  })
+
+  it('closes an open list as the field turns off, and its rows then write nothing', async () => {
+    await load()
+    await pickersAnswer()
+    await openWindow(await noteTask(far()))
+    await answer('taskWindow:task', okAnswer(far()))
+    await answer('snapshot:threadComments', { comments: [], earlier: false })
+    await click(field('Assignee'))
+    await settle()
+    const leo = document.querySelector<HTMLElement>('[data-owner-choice="leo"]')
+    expect(leo).not.toBeNull()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await act(async () => one('taskWindow:task').fail(new Error('Server Error')))
+    await settle()
+    expect(field('Assignee')?.disabled).toBe(true)
+    expect(document.querySelector('[data-owner-list]')).toBeNull()
+    const sent = sentArgs('issues:update').length
+    await click(leo)
+    expect(sentArgs('issues:update')).toHaveLength(sent)
+  })
+})
