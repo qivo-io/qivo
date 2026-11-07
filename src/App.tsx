@@ -1571,7 +1571,9 @@ function App() {
 
   // Task breadcrumb clicks and the Inbox's Open task in board switch to the
   // Board scoped to the project or sub-project, with the task's window open
-  // over the Board and its card revealed behind it. `keepOpen` false closes
+  // over the Board and its card revealed behind it, by the handle the views
+  // name it by, also for a task the workspace does not hold, which the
+  // Inbox opens by a reference (P.handleOfOpen). `keepOpen` false closes
   // the window and reveals the card at once (the crumb on a phone, whose
   // window covers the list).
   const showOnBoard = (projectId: string, issueKey?: string, keepOpen = true) => {
@@ -1595,7 +1597,7 @@ function App() {
         setInboxOpen(false)
         setSync(null)
         setOpenIssue(target)
-        if (revealed) reveal(revealed, !keepOpen)
+        if (revealed) reveal(P.handleOfOpen(revealed), !keepOpen)
       },
     )
   }

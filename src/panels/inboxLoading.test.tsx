@@ -53,6 +53,8 @@ let root: Root
 let windowReads: { args: Record<string, unknown>; next: (value: unknown) => void }[]
 /* The reads of a task's comments, which a test answers. */
 let threadReads: ((value: unknown) => void)[]
+/* What the Inbox's Open task in board asked App to open. */
+const boardOpens: { project: string; open: string }[] = []
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -172,6 +174,9 @@ async function loadingInbox(
       which follows its task's handle as it moves (P.watchHandles). */
   function Host() {
     usePlannerVersion()
+    useEffect(() => {
+      boardOpens.length = 0
+    }, [])
     const [openIssue, setOpenIssue] = useState<string | null>(
       address ? address(snap.orgs[0].id) : null,
     )
@@ -184,7 +189,7 @@ async function loadingInbox(
     }, [])
     return (
       <Inbox
-        showOnBoard={vi.fn()}
+        showOnBoard={(project: string, open: string) => boardOpens.push({ project, open })}
         onExit={onExit}
         openTask={(handle: string | null) => {
           opened.push(handle)
@@ -307,8 +312,32 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     expect(paneWindow()?.dataset.taskSource).toBe('workspace')
   })
 
-  it('offers Open task in board only once the workspace holds the task', async () => {
+  it('offers Open task in board for a task the workspace does not hold, in the row menu and the pane', async () => {
+    // the row menu places itself with a ResizeObserver, which jsdom lacks
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
     const { snap } = await loadingInbox()
+    const org = snap.orgs[0].id
+    const row = container.querySelector<HTMLElement>('[data-message="fd000000-b"]')
+    if (!row) throw new Error('missing the row')
+    // the row's menu opens its project's Board on the task, by its reference
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    const board = document.querySelector<HTMLElement>('[data-msg-menu-board]')
+    expect(board?.textContent).toBe('Open task in board')
+    await act(async () => board?.click())
+    const { refParts } = await import('../lib/taskReference')
+    expect(boardOpens).toHaveLength(1)
+    expect(boardOpens[0].project).toBe(snap.projects[0].id)
+    expect(refParts(boardOpens[0].open)).toEqual({ org, num: 2, uuid: 'fd000000-b' })
+    // the pane's Task actions offer it for the task it shows from its answer
     const open = container.querySelector<HTMLButtonElement>(
       '[data-message="fd000000-b"] .inbox-message-open',
     )
@@ -317,15 +346,9 @@ describe('an Inbox item whose task is still to arrive', { timeout: 20_000 }, () 
     await vi.waitFor(() => expect(paneWindow()?.dataset.taskSource).toBe('answer'))
     const shown = await paneActions()
     expect(shown('Copy link')).toBeDefined()
-    expect(shown('Open task in board')).toBeUndefined()
-    // the trigger closes the menu again
-    await act(async () =>
-      paneWindow()?.querySelector<HTMLElement>('[aria-label="Task actions"]')?.click(),
-    )
-    await arrive()
-    expect(paneWindow()?.dataset.taskSource).toBe('workspace')
-    const held = await paneActions()
-    expect(held('Open task in board')).toBeDefined()
+    await act(async () => shown('Open task in board')?.click())
+    expect(boardOpens).toHaveLength(2)
+    expect(boardOpens[1].project).toBe(snap.projects[0].id)
   })
 
   it("saves a field, takes no image past the server's cap and moves a task it shows from its answer", async () => {

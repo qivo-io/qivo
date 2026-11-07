@@ -3529,10 +3529,11 @@ function IssueDetail({
                         <>
                           {/* the inbox pane is the one host that isn't the board,
                             so only there does the menu offer the way over to it:
-                            the same jump as the row's right-click entry, for a
-                            task the workspace holds only, since the Board may
-                            hold no card of another one to reveal */}
-                          {embedded && onShowOnBoard && !archived && !!held && (
+                            the same jump as the row's right-click entry, for
+                            any task it shows, held or from its answer, whose
+                            project the store holds, which the Board needs; App
+                            reveals the card the Board's answer names it by */}
+                          {embedded && onShowOnBoard && !archived && !!P.project(it.project) && (
                             <MenuItem
                               data-task-open-board
                               onClick={() => {
