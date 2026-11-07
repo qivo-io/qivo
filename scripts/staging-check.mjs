@@ -5663,14 +5663,17 @@ export const MENTION_GONE = 'can no longer be mentioned on this task'
  *  its owner list, which finds and picks Nora, also checked over REST. On
  *  the card, now on Nora's line, the Mention window searches "Leo", picks
  *  him from the deployment's recipients and takes a note. The sub-project's
- *  lead then goes back to Nora over REST, and so does the User grant a
- *  handover leaves the outgoing lead, and GET /projects/{ref}/users must
- *  stop listing Leo, so he can no longer see the task. Send must then
- *  show that Leo can no longer be mentioned, keep the note and post
- *  nothing (GET /tasks/{ref}/comments unchanged), and Cancel closes the
- *  window. It assigns only the run's own agent and Nora, who does the
- *  picking, and posts no comment, so nobody is notified; a project's lead
- *  sends no Inbox message. The cleanup, which deletes M, removes the
+ *  lead then goes back to Nora over REST, the User grant a handover leaves
+ *  the outgoing lead is removed, and GET /projects/{ref}/users must stop
+ *  listing Leo, so he can no longer see the task. Send must then show
+ *  that Leo can no longer be mentioned, keep the note and post nothing
+ *  (GET /tasks/{ref}/comments unchanged), and Cancel closes the window.
+ *  It assigns only the run's own agent and Nora, who does the picking, and
+ *  posts no comment. It notifies only the run's own Standard agent, which
+ *  follows the task once it is assigned and gets the task's later changes,
+ *  such as its handover to Nora, in its Inbox. No fixture person is
+ *  notified, since a lead change and a removed grant send no Inbox
+ *  message. The cleanup, which deletes M, removes the
  *  sub-project and the task. It needs a backend from v0.1.147 on, which
  *  answers the pickers and people.byIds. */
 async function ownerPickersCheck() {
@@ -5763,8 +5766,8 @@ async function ownerPickersCheck() {
     eq(await person.getAttribute('aria-pressed'), 'true', 'Leo is not chosen')
     const note = `${run.tag} never sent`
     await mention.locator('textarea[aria-label="Note"]').fill(note)
-    // Leo loses sight of the task before Send: the lead goes back to Nora,
-    // and then the User grant a handover leaves the outgoing lead
+    // Leo loses sight of the task before Send. The lead goes back to Nora,
+    // and then the User grant a handover leaves the outgoing lead goes
     await restOk(w, 'PATCH', `/projects/${sub.id}`, { lead_id: nora.id })
     await restOk(w, 'DELETE', `/projects/${sub.id}/access/users/${leo.id}`)
     // the people who can read the sub-project, one array with no paging
