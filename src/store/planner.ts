@@ -8487,9 +8487,10 @@ function rebuild(now = new Date(), full = false) {
   // Mark all as read and Remove all read follow the unread summary, whose
   // rule reads the seats this repaint may have changed
   deriveInboxFlags()
-  // the snapshot delivers at most 500 messages, so the Inbox says when older
-  // ones exist that it does not list, snoozed ones included, and whether
-  // Mark all as read and Remove all read reach them (they skip snoozed rows)
+  // the inbox part delivers at most 500 messages, so these say when older
+  // ones exist that it did not send, snoozed ones included, and whether
+  // Mark all as read and Remove all read reach them (they skip snoozed
+  // rows); no view reads them, as the Inbox lists inbox.page
   P.inboxCutReach = {
     markAllRead: unexaminedUnread,
     removeRead: hiddenReadMessages > 0 || unexaminedRead,
