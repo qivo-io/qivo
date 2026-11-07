@@ -211,7 +211,7 @@ describe('the favorites check and repair', () => {
     )
   })
 
-  it('keeps the earliest row of a seat on a project and the row of a project in Deleted items', async () => {
+  it('keeps the earliest row of a seat on a project and the rows of a project in Deleted items', async () => {
     const t = newT()
     const f = await withOrg(t)
     await withReach(t)
@@ -220,11 +220,19 @@ describe('the favorites check and repair', () => {
     const older = await plant(t, f.user, f.meta, { created_at: OLD })
     const kept = await plant(t, f.user, f.meta)
     const extra = await plant(t, f.user, f.meta)
+    // two rows of one seat on a project in Deleted items both stay, for the
+    // restore to show and the purge to delete, as the duplicate rule judges
+    // only rows a reader may show
+    await as(t, f.user).mutation(api.projects.deleteDeep, { org_id: f.org.id, id: f.hidden.id })
+    await runSteps(t)
+    const trashed = [await plant(t, f.user, f.hidden), await plant(t, f.user, f.hidden)]
     const dry = await runRepair(t, true)
-    expect(dry.counts).toEqual(counts({ profile_newer: 1, ok: 1, duplicate: 1 }))
+    expect(dry.counts).toEqual(
+      counts({ profile_newer: 1, ok: 1, duplicate: 1, in_deleted_items: 2 }),
+    )
     expect(dry.examples.duplicate).toEqual([extra._id])
     await runRepair(t, false)
-    expect(await all(t)).toEqual([kept])
+    expect(await all(t)).toEqual([kept, ...trashed])
     expect(older._id).not.toBe(kept._id)
   })
 
