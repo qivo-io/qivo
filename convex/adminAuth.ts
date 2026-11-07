@@ -363,12 +363,16 @@ export const insertBreakGlass = internalMutation({
  * the same transaction, and its sessions, OAuth access and refresh tokens
  * and roadmap undo receipts in bounded steps (purgeLoginTokens). The app side
  * also loses the login's appearance settings and custom backgrounds, which
- * only that login could use. Verification rows are keyed by identifier, not
+ * only that login could use, and its notification setting, session rows and
+ * delivery records (notifications.ts forgetLogin), whose session rows go
+ * there because the session purge here runs no session delete trigger.
+ * Verification rows are keyed by identifier, not
  * userId, and expire on their own, as removeUser leaves them too. An OAuth
  * client registered while the login was signed in keeps its row, because
  * other logins may hold grants through the same client. */
 async function removeAuthUserRows(ctx: MutationCtx, userId: string): Promise<void> {
   await ctx.runMutation(internal.appearance.clearForDeletedLogin, { auth_user_id: userId })
+  await ctx.runMutation(internal.notifications.forgetLogin, { auth_user_id: userId })
   await forgetSignIns(ctx, userId)
   for (const model of ['oauthConsent', 'account'] as const) {
     let cursor: string | null = null

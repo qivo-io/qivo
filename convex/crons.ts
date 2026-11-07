@@ -175,6 +175,12 @@ crons.interval(
   makeFunctionReference<'mutation', Record<string, never>, null>('webhooks:sweep'),
 )
 
+// Deletes the notification delivery records that expired and the session
+// rows not beaten for 8 days, which their session's delete normally took
+// already. Each step schedules the next while it found a full page; a quiet
+// run reads nothing (notifications.ts expire).
+crons.interval('notification record expiry', { minutes: 10 }, internal.notifications.expire, {})
+
 // Deletes platform_audit_log rows older than 90 days, after the nightly jobs
 // have written theirs. The empty arguments start a run; each step schedules
 // the next, and the last writes an expire_audit_log row when it deleted any

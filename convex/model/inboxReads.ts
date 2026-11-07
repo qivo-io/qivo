@@ -102,15 +102,21 @@ export function inboxScope(ctx: QueryCtx, me: Doc<'profiles'>) {
   }
 }
 
-/* The summary's budget. A step goes on while the transaction has room
- * (SUMMARY), asked before every SUMMARY.batch steps. Once a check finds no
- * room, no later step goes on. */
-function stepBudget(ctx: QueryCtx): () => Promise<boolean> {
+/** A read's step budget, SUMMARY's by default. A step goes on while the
+ * transaction has used no more than `bounds.room` of any of Convex's
+ * limits, asked before every `bounds.batch` steps (lib/db.ts
+ * usedMoreThan). Once a check finds no room, no later step goes on. The
+ * summary and the catch-up (model/notificationCatchup.ts CATCH_UP) use it,
+ * each with its own bounds, read at every check, so a test can lower them. */
+export function stepBudget(
+  ctx: QueryCtx,
+  bounds: { batch: number; room: number } = SUMMARY,
+): () => Promise<boolean> {
   let steps = 0
   let spent = false
   return async () => {
     if (spent) return false
-    if (steps % SUMMARY.batch === 0 && (await usedMoreThan(ctx, SUMMARY.room))) {
+    if (steps % bounds.batch === 0 && (await usedMoreThan(ctx, bounds.room))) {
       spent = true
       return false
     }

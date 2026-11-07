@@ -577,6 +577,14 @@ milestones:get query public {"type":"object","value":{"id":{"fieldType":{"type":
 milestones:section query public {"type":"object","value":{"projects":{"fieldType":{"type":"array","value":{"type":"string"}},"optional":false},"from":{"fieldType":{"type":"string"},"optional":false},"side":{"fieldType":{"type":"union","value":[{"type":"literal","value":"upcoming"},{"type":"literal","value":"past"}]},"optional":false},"search":{"fieldType":{"type":"string"},"optional":true},"after":{"fieldType":{"type":"object","value":{"week":{"fieldType":{"type":"string"},"optional":false},"key":{"fieldType":{"type":"string"},"optional":false},"id":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"limit":{"fieldType":{"type":"number"},"optional":false}}}
 nameCopies:recover mutation internal {"type":"object","value":{}}
 nameCopies:step mutation internal {"type":"object","value":{"source":{"fieldType":{"type":"union","value":[{"type":"literal","value":"profiles"},{"type":"literal","value":"teams"}]},"optional":false},"source_id":{"fieldType":{"type":"string"},"optional":false}}}
+notifications:beat mutation public {"type":"object","value":{"instance":{"fieldType":{"type":"string"},"optional":false},"can_notify":{"fieldType":{"type":"boolean"},"optional":false},"active":{"fieldType":{"type":"boolean"},"optional":false}}}
+notifications:claimAlerts mutation public {"type":"object","value":{"events":{"fieldType":{"type":"array","value":{"type":"object","value":{"key":{"fieldType":{"type":"string"},"optional":false},"at":{"fieldType":{"type":"number"},"optional":false}}}},"optional":false},"through":{"fieldType":{"type":"number"},"optional":true}}}
+notifications:claimSummary mutation public {"type":"object","value":{}}
+notifications:end mutation public {"type":"object","value":{"instance":{"fieldType":{"type":"string"},"optional":false}}}
+notifications:expire mutation internal {"type":"object","value":{}}
+notifications:forgetLogin mutation internal {"type":"object","value":{"auth_user_id":{"fieldType":{"type":"string"},"optional":false}}}
+notifications:setDelivery mutation public {"type":"object","value":{"delivery":{"fieldType":{"type":"union","value":[{"type":"literal","value":"recent"},{"type":"literal","value":"all"}]},"optional":false}}}
+notifications:settings query public {"type":"object","value":{}}
 oauthAccess:lookupAccess query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:refusedForDeletion query internal {"type":"object","value":{"tokenHash":{"fieldType":{"type":"string"},"optional":false},"resource":{"fieldType":{"type":"string"},"optional":false}}}
 oauthAccess:touch mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -839,9 +847,10 @@ describe('the function-surface manifest', () => {
  * `accessRemovalMutation`/`seatQuery` consume a wrapper-injected org_id
  * wire arg (`seatQuery` answers without a seat instead of refusing);
  * `accessRemovalMutation` lets an org admin past the billing gate for writes
- * that only take access away. `authed*` gate on a login only; `platform*`
- * gate on a platform_admins row. `query` marks the ONE deliberate bare
- * registration (see the wrapper rule below). */
+ * that only take access away. `authed*` gate on a login only; `session*`
+ * on a login whose session in the token is live, reading no seat;
+ * `platform*` gate on a platform_admins row. `query` marks the ONE
+ * deliberate bare registration (see the wrapper rule below). */
 type Wrapper =
   | 'orgAction'
   | 'orgQuery'
@@ -850,6 +859,8 @@ type Wrapper =
   | 'accessRemovalMutation'
   | 'authedQuery'
   | 'authedMutation'
+  | 'sessionQuery'
+  | 'sessionMutation'
   | 'seatQuery'
   | 'platformQuery'
   | 'platformMutation'
@@ -1032,6 +1043,18 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // null unless the caller is shown the task, and a page of the login's own
   // task groups across its seats, each about a task the caller is shown.
   inbox: { summary: 'authedQuery', item: 'orgQuery', page: 'authedQuery' },
+  // The Notification delivery setting and the caller's own session: no
+  // argument names a login, a seat or a session; every row is the one of the
+  // live session in the caller's token. claimSummary reads only the
+  // caller's seats under inbox.summary's rule and answers one state.
+  notifications: {
+    settings: 'sessionQuery',
+    setDelivery: 'sessionMutation',
+    beat: 'sessionMutation',
+    end: 'sessionMutation',
+    claimAlerts: 'sessionMutation',
+    claimSummary: 'sessionMutation',
+  },
   // Whether the invitation emails behind pending seats went out: an org admin
   // sees every pending seat, anyone else only the sends they caused.
   invites: { deliveries: 'orgQuery', sendAgain: 'orgMutation' },
@@ -1344,7 +1367,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 251
+const PUBLIC_COUNT = 257
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')
@@ -1468,6 +1491,8 @@ describe('the wrapper rule', () => {
     accessRemovalMutation: 'mutation',
     authedQuery: 'query',
     authedMutation: 'mutation',
+    sessionQuery: 'query',
+    sessionMutation: 'mutation',
     seatQuery: 'query',
     platformQuery: 'query',
     platformMutation: 'mutation',

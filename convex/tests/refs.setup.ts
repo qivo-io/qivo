@@ -207,6 +207,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   // A Better Auth session id, kept after the session row is deleted
   // (lib/sessionEnd.ts endSessionAccess).
   'oauth_ended_sessions.session_id',
+  // The Better Auth session a notification row belongs to, deleted with it
+  // (lib/sessionEnd.ts), and the session a delivery record was granted to,
+  // which expires after the session may be gone (notifications.ts).
+  'notification_sessions.session_id',
+  'notification_deliveries.session_id',
   // Demo receipts/ledgers outlive planning parents while bounded cleanup runs.
   'demo_sessions.auth_user_id',
   'demo_sessions.org_id',
@@ -280,6 +285,11 @@ export const EXCLUDED_REFS: ReadonlySet<string> = new Set([
   'account_appearance.auth_user_id',
   'custom_backgrounds.auth_user_id',
   'background_uploads.auth_user_id',
+  // The Notification delivery setting, its sessions and its records belong
+  // to a login across all organization seats (notifications.ts).
+  'account_notifications.auth_user_id',
+  'notification_sessions.auth_user_id',
+  'notification_deliveries.auth_user_id',
   // Convex _storage ids — byte-liveness asserted separately, not row refs
   'profiles.avatar_storage_id',
   'issue_attachments.storage_id',

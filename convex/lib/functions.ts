@@ -14,6 +14,7 @@ import { components } from '../_generated/api'
 import type { Doc } from '../_generated/dataModel'
 import type { MutationCtx, QueryCtx } from '../_generated/server'
 import { action, mutation, query } from '../_generated/server'
+import { requireLiveAuthUser } from './authUser'
 import { assertOrgWritable, deletionBegun, ORG_DELETING, removedWithOrg } from './billingAccess'
 import {
   assertDemoPayload,
@@ -86,15 +87,16 @@ export function require(cond: unknown, err: ConvexError<Refusal>): asserts cond 
   if (!cond) throw err
 }
 
-/** The signed-in login's active profiles, keyed by org_id. An organization
+/** Login `authUserId`'s active profiles, keyed by org_id. An organization
  * whose deletion has begun is left out and listed in `deleting`, an
  * inactive profile's too, so reads across organizations, such as the
- * snapshot, stop showing it while its profiles are deleted. MutationCtx
- * satisfies this too (writer db/storage extend the readers). */
-async function loadMemberships(ctx: QueryCtx) {
-  const identity = await ctx.auth.getUserIdentity()
-  if (identity === null) throw forbidden('not signed in')
-  const authUserId = identity.subject
+ * snapshot, stop showing it while its profiles are deleted. On the demo it
+ * requires the login's active demo and holds only the demo's organization.
+ * Every wrapper that reads seats reads them here, and so does a session
+ * function that needs them (notifications.ts claimSummary), so both see
+ * the same seats. MutationCtx satisfies this too (writer db/storage extend
+ * the readers). */
+export async function loginMemberships(ctx: QueryCtx, authUserId: string) {
   const demo = isDemoDeployment() ? await requireActiveDemo(ctx, authUserId) : null
   const mine = await ctx.db
     .query('profiles')
@@ -107,7 +109,15 @@ async function loadMemberships(ctx: QueryCtx) {
     if (await deletionBegun(ctx, profile.org_id)) deleting.add(profile.org_id)
     else if (profile.active) myProfiles.set(profile.org_id, profile)
   }
-  return { authUserId, myProfiles, deleting }
+  return { myProfiles, deleting }
+}
+
+/** The signed-in login and its seats (loginMemberships). */
+async function loadMemberships(ctx: QueryCtx) {
+  const identity = await ctx.auth.getUserIdentity()
+  if (identity === null) throw forbidden('not signed in')
+  const authUserId = identity.subject
+  return { authUserId, ...(await loginMemberships(ctx, authUserId)) }
 }
 
 /** The signed-in login and its active profiles outside a deletion. */
@@ -188,6 +198,43 @@ export const authedMutation = withDemoPayloadLimit(
   customMutation(mutation, {
     args: {},
     input: async (ctx) => ({ ctx: await loadAuthedWriter(ctx), args: {} }),
+  }),
+)
+
+/* The caller's login and the Better Auth session its token names, for the
+ * session wrappers below. A token without a session is refused as no
+ * sign-in, a session that ended, expired or is another login's as
+ * Better Auth's 'Unauthenticated' (lib/authUser.ts requireLiveAuthUser), and
+ * on the demo a demo that is not active and ready. It reads the session and
+ * the login in one nested call, and the demo receipt on the demo. */
+async function loadSession(ctx: QueryCtx) {
+  const identity = await ctx.auth.getUserIdentity()
+  if (identity === null || typeof identity.sessionId !== 'string') throw forbidden('not signed in')
+  await requireLiveAuthUser(ctx)
+  if (isDemoDeployment()) await requireActiveDemo(ctx, identity.subject)
+  return { authUserId: identity.subject, sessionId: identity.sessionId }
+}
+
+/** Signed in with a live session. Adds ctx.authUserId and ctx.sessionId,
+ * the Better Auth session in the caller's token, and nothing else. It reads
+ * no profile. For the functions a signed-in browser profile or desktop app
+ * calls about itself every minute or so (notifications.ts), so each call
+ * reads one session, not every seat of the login. A handler that needs the
+ * seats reads them with loginMemberships. */
+export const sessionQuery = customQuery(query, {
+  args: {},
+  input: async (ctx) => ({ ctx: await loadSession(ctx), args: {} }),
+})
+
+/** sessionQuery for writes. It counts no demo write and leaves ctx.db as it
+ * is, so its writes spend none of the demo's write and record limits: they
+ * touch only the caller's own bounded rows. A handler that writes a choice
+ * the person makes counts it itself (lib/demo.ts consumeDemoWrite). The
+ * demo's payload limit still applies. */
+export const sessionMutation = withDemoPayloadLimit(
+  customMutation(mutation, {
+    args: {},
+    input: async (ctx) => ({ ctx: await loadSession(ctx), args: {} }),
   }),
 )
 

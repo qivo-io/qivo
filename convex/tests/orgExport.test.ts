@@ -61,6 +61,11 @@ const EXCLUDED_TABLES = [
   'account_appearance',
   'custom_backgrounds',
   'background_uploads',
+  // A login's notification setting, its signed-in sessions and the records
+  // of the alerts granted, across organizations, never an organization's.
+  'account_notifications',
+  'notification_sessions',
+  'notification_deliveries',
   // An expiring REST upload in progress belongs to one credential's caller.
   'attachment_uploads',
   // Deleted files no row names, waiting to be erased; nothing in them is

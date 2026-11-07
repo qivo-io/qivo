@@ -566,6 +566,13 @@ async function strayCounts(ctx: MutationCtx, orgId: string, budget: Budget): Pro
   return true
 }
 
+/* The demo login's own rows: its backgrounds and their files, upload
+ * tickets, appearance, roadmap undo receipts, notification setting,
+ * sessions and delivery records, and its OAuth connections. The
+ * notification session rows go here, not with their Better Auth sessions,
+ * since the sessions phase deletes those without the session delete
+ * trigger. requireActiveDemo refuses every call of a deleting demo, so
+ * none of these rows comes back before the finish phase. */
 async function accountRows(ctx: MutationCtx, authId: string, budget: Budget): Promise<boolean> {
   if (
     !(await drain(
@@ -610,6 +617,13 @@ async function accountRows(ctx: MutationCtx, authId: string, budget: Budget): Pr
     ))
   )
     return false
+  const notifications = notificationRows(ctx, authId)
+  if (
+    !(await drain(ctx, budget, (n) => notifications.account().take(n))) ||
+    !(await drain(ctx, budget, (n) => notifications.sessions().take(n))) ||
+    !(await drain(ctx, budget, (n) => notifications.records().take(n)))
+  )
+    return false
   return await connections(ctx, budget, () =>
     ctx.db
       .query('oauth_connections')
@@ -617,6 +631,23 @@ async function accountRows(ctx: MutationCtx, authId: string, budget: Budget): Pr
       .first(),
   )
 }
+
+/* The ranges of login `authId`'s notification rows, the setting, the
+ * sessions and the delivery records (schema.ts account_notifications). */
+const notificationRows = (ctx: MutationCtx, authId: string) => ({
+  account: () =>
+    ctx.db
+      .query('account_notifications')
+      .withIndex('by_auth_user', (q) => q.eq('auth_user_id', authId)),
+  sessions: () =>
+    ctx.db
+      .query('notification_sessions')
+      .withIndex('by_login_notify_active', (q) => q.eq('auth_user_id', authId)),
+  records: () =>
+    ctx.db
+      .query('notification_deliveries')
+      .withIndex('by_login_key', (q) => q.eq('auth_user_id', authId)),
+})
 
 const AUTH_MODELS = [
   'session',
@@ -774,6 +805,12 @@ export const purge = internalMutation({
           .query('profiles')
           .withIndex('by_auth', (q) => q.eq('auth_user_id', receipt.auth_user_id))
           .first()) === null, rule('Demo login still owns a profile'))
+        const notifications = notificationRows(ctx, receipt.auth_user_id)
+        require((await notifications.account().first()) === null &&
+          (await notifications.sessions().first()) === null &&
+          (await notifications.records().first()) === null, rule(
+          'Demo cleanup left notification rows',
+        ))
         if (orgId) {
           for (const table of [
             'issues',

@@ -164,10 +164,32 @@ function machineCalls() {
   return { reached, excused, unread }
 }
 
+/* Every module lib/sessionEnd.ts, the session delete trigger's work, loads
+ * at run time. A module added here costs every deleted session its load.
+ * lib/oauth.ts brings lib/functions.ts and with it lib/authUser.ts, the
+ * session wrappers' check, which loads nothing else. */
+const SESSION_END_MODULES = [
+  '../_generated/api',
+  '../_generated/server',
+  '../lib/authUser.ts',
+  '../lib/billingAccess.ts',
+  '../lib/demo.ts',
+  '../lib/demoRefusals.ts',
+  '../lib/deployment.ts',
+  '../lib/functions.ts',
+  '../lib/limits.ts',
+  '../lib/oauth.ts',
+  '../lib/sessionEnd.ts',
+  '../lib/signIns.ts',
+  '../lib/usage.ts',
+  '../model/notificationSessionEnd.ts',
+]
+
 describe('the auth triggers, the demo start, the boot claim and the machine calls', () => {
   it.each([
     ['../authTriggers.ts', '../lib/sessionEnd.ts'],
     ['../demo.ts', '../lib/authUser.ts'],
+    ['../notifications.ts', '../lib/authUser.ts'],
     ['../identity.ts', '../lib/authUser.ts'],
     ['../betterAuth/sessions.ts', '../betterAuth/_generated/server'],
     ['../oauthAccess.ts', '../lib/access.ts'],
@@ -178,6 +200,14 @@ describe('the auth triggers, the demo start, the boot claim and the machine call
     expect(found.modules.has(uses)).toBe(true)
     expect(found.modules.has('../auth.ts')).toBe(false)
     expect(betterAuthIn(found)).toEqual([])
+  })
+
+  /* A ban runs the session delete trigger up to 200 times in one
+   * transaction, each call loading lib/sessionEnd.ts's modules again, so
+   * what it deletes for a session lives in modules that load nothing more
+   * (model/notificationSessionEnd.ts imports only types). */
+  it('keep the session delete trigger to the modules it loads now', () => {
+    expect([...loaded('../lib/sessionEnd.ts').modules].sort()).toEqual(SESSION_END_MODULES)
   })
 
   it('reach every module the REST and MCP routes run, nested call after nested call', () => {

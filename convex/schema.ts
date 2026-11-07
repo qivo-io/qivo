@@ -717,6 +717,85 @@ export default defineSchema({
     .index('by_auth_user', ['auth_user_id'])
     .index('by_expiry', ['expires_at']),
 
+  // The Notification delivery setting follows a login across its devices and
+  // organization seats, as appearance does, with the login's catch-up
+  // checkpoint (notifications.ts). One row a login; no row reads as
+  // 'recent' with no checkpoint. Times are server epoch milliseconds, and
+  // they are stored times, not commit order (model/notificationCatchup.ts
+  // reads back NOTIFY.lag_ms). Deleted with the login (notifications.ts
+  // forgetLogin) and the demo (internal/demoCleanup.ts accountRows). A login
+  // deleted outside Better Auth's API and the console, such as by a raw
+  // component delete, keeps its row, which nothing reads again.
+  account_notifications: defineTable({
+    auth_user_id: v.string(),
+    delivery: v.union(v.literal('recent'), v.literal('all')),
+    // the last change of `delivery`; no live alert for an event at or before
+    // NOTIFY.lag_ms before it
+    changed_at: v.optional(v.number()),
+    // the checkpoint in 'recent', every eligible event before it alerted,
+    // summarized or taken as a baseline
+    covered_at: v.optional(v.number()),
+    // the Better Auth session whose claim or summary last moved covered_at in
+    // 'recent', or the target at a switch to 'recent', the only session whose
+    // claim needs no summary first (notifications.ts claimAlerts); absent
+    // after a switch with no target, and once a beat recorded a handoff, the
+    // named session turning can_notify off or another becoming the target by
+    // a report or as it entered, so every claim summarizes first, also after
+    // the new target stopped notifying or signed out (notifications.ts beat)
+    covered_by: v.optional(v.string()),
+    // the last summary in 'recent'; no live alert for an event at or before
+    // NOTIFY.lag_ms before it, or one it recorded
+    summarized_at: v.optional(v.number()),
+    // the last baseline in 'recent'; no summary counts an event at or before it
+    baseline_at: v.optional(v.number()),
+    // covered_at when the login last chose 'all', the floor of every
+    // session's own checkpoint there
+    all_from: v.optional(v.number()),
+    // the claim rate window in 'recent', records added since claim_window_at
+    claim_window_at: v.optional(v.number()),
+    claim_window_count: v.optional(v.number()),
+  }).index('by_auth_user', ['auth_user_id']),
+
+  // One row a Better Auth session that beat, so one a signed-in browser
+  // profile or desktop app (notifications.ts beat). Deleted with its session
+  // in the session delete trigger's transaction (lib/sessionEnd.ts), with its
+  // login and the demo, and by the expiry cron once not beaten for
+  // NOTIFY.session_keep_ms (model/notificationSessions.ts).
+  notification_sessions: defineTable({
+    auth_user_id: v.string(),
+    session_id: v.string(), // the Better Auth session in the caller's token
+    instance: v.string(), // the tab that beat last, so another tab's late end changes nothing
+    can_notify: v.boolean(),
+    beat_at: v.number(), // moved back past liveness by an end
+    active_at: v.optional(v.number()), // the last reported interaction; absent sorts last
+    // in 'all', the session's own checkpoint, summary floor, baseline and
+    // claim rate window, as account_notifications holds them in 'recent'
+    covered_at: v.optional(v.number()),
+    summarized_at: v.optional(v.number()),
+    baseline_at: v.optional(v.number()),
+    claim_window_at: v.optional(v.number()),
+    claim_window_count: v.optional(v.number()),
+  })
+    .index('by_session', ['session_id'])
+    // the delivery target, the most recently active session that can notify
+    .index('by_login_notify_active', ['auth_user_id', 'can_notify', 'active_at'])
+    .index('by_beat', ['beat_at']),
+
+  // One record a notification event granted or summarized, kept NOTIFY.keep_ms,
+  // so no session alerts it twice. session_id absent is the account-wide
+  // record of 'recent'; present, an 'all' session's own. Deleted by the
+  // expiry cron, with the login and the demo.
+  notification_deliveries: defineTable({
+    auth_user_id: v.string(),
+    // the feed's event key, a message id or `${issue_id}:${woke_at}` with the
+    // ISO woke_at
+    key: v.string(),
+    session_id: v.optional(v.string()),
+    expires_at: v.number(),
+  })
+    .index('by_login_key', ['auth_user_id', 'key', 'session_id'])
+    .index('by_expiry', ['expires_at']),
+
   // Operator-only ownership receipt for the repeatable Northstar marketing
   // dataset. Never included in client snapshots; names/slugs alone do not
   // authorize adopting accounts or resetting an organization.
