@@ -2130,13 +2130,16 @@ describe('board-scale-seed --thread', () => {
       ['label-00', true],
       ['label-00', false],
     ])
-    // a free slot, or the seed's own label among the full set, keeps it
+    // a free slot keeps it
     expect(plan(full.slice(1))).toEqual([
       [THREAD_LABEL, true],
       [THREAD_LABEL, false],
       [THREAD_LABEL, true],
     ])
-    expect(plan([...full.slice(1), THREAD_LABEL])).toEqual([
+    // so does the seed's own label among the full set; a-label-NN sorts
+    // before THREAD_LABEL, so only the carried check keeps it
+    const early = full.slice(1).map((id) => `a-${id}`)
+    expect(plan([...early, THREAD_LABEL])).toEqual([
       [THREAD_LABEL, false],
       [THREAD_LABEL, true],
       [THREAD_LABEL, false],
