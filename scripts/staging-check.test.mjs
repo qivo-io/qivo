@@ -123,6 +123,9 @@ import {
   SETTINGS_USERS_STEP,
   SIDEBAR_PROJECTS_MARKS,
   SIDEBAR_PROJECTS_STEP,
+  STARTUP_LOST_NOTE,
+  STARTUP_SELECTION_MARKS,
+  STARTUP_SELECTION_STEP,
   searchOf,
   selectedCreatorsStarts,
   send,
@@ -670,6 +673,50 @@ describe('staging check REST contract', () => {
     expect(step).toContain('atProject(path(), Z.num)')
     expect(step).toContain(`[\${m.child}="\${Z.id}"][data-on]`)
     expect(step).toContain('getComputedStyle(el).scrollbarWidth')
+  })
+  it('checks startup selection on its own marks and note, after the tree and before the deleted items and the archive', () => {
+    const chooser = readFileSync(
+      new URL('../src/components/ProjectChooser.tsx', import.meta.url),
+      'utf8',
+    )
+    const picker = readFileSync(
+      new URL('../src/components/ProjectPicker.tsx', import.meta.url),
+      'utf8',
+    )
+    expect(STARTUP_SELECTION_STEP).toBe('ui/startup-selection')
+    for (const mark of Object.values(STARTUP_SELECTION_MARKS))
+      expect(chooser + picker).toContain(mark)
+    const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8')
+    expect(app).toContain(`'${STARTUP_LOST_NOTE}'`)
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const at = check.indexOf('await startupSelectionCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await sidebarProjectsCheck()'))
+    expect(at).toBeLessThan(check.indexOf('await deletedItemsCheck()'))
+    expect(at).toBeLessThan(check.indexOf('await archiveChecks()'))
+    // its own project goes in the cleanup
+    expect(check).toContain(
+      'if (run.projects.S) await deleteProjectInApp(c.writeToken, run.projects.S)',
+    )
+    const step = check.slice(
+      check.indexOf('async function startupSelectionCheck()'),
+      check.indexOf('/** The step that chooses projects through the shared project picker'),
+    )
+    // S1 by its address and remembered, then the bare address read from the
+    // server's copy once the browser's is gone, with no chooser but its check
+    const address = step.indexOf(`/board/p/\${S1.num}`)
+    const cleared = step.indexOf("key.startsWith('planner.ui.v1:')")
+    const bare = step.indexOf(`\`\${cfg.appOrigin}/app/\${ORG_SLUG}\``)
+    expect(address).toBeGreaterThan(-1)
+    expect(address).toBeLessThan(step.indexOf("app.locator('aside [data-mine-nav]').click()"))
+    expect(cleared).toBeGreaterThan(step.indexOf("app.locator('aside [data-all-nav]').click()"))
+    expect(bare).toBeGreaterThan(cleared)
+    expect(step).toContain("states.every((state) => state === 'checking')")
+    // archived over REST, then the lost chooser, a search and M
+    const archived = step.indexOf(`\`/projects/\${S.id}\`, { archived: true }`)
+    expect(archived).toBeGreaterThan(bare)
+    expect(step.indexOf(`[\${m.state}="lost"]`)).toBeGreaterThan(archived)
+    expect(step).toContain('.fill(run.tag)')
+    expect(step).toContain('await opens(M)')
   })
   it('reads the directory’s groups, and refuses a page that breaks favorites first', () => {
     const fav = { group: 'favorites' }

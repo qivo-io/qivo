@@ -538,6 +538,22 @@ export async function runDemoSmoke(env = process.env) {
     )
     await pageB.screenshot({ path: `${shots}/demo-smoke-phone.png` })
 
+    // a new demo person remembers no project, so the demo opens on the
+    // project chooser, which lists Northstar's projects and opens none
+    await pageA
+      .locator('[data-project-chooser][data-project-chooser-state="choose"]')
+      .waitFor({ timeout: 30_000 })
+    await pageA
+      .locator('[data-project-chooser] [data-project-pick]')
+      .filter({ hasText: 'Luma Sensor' })
+      .first()
+      .waitFor({ timeout: 30_000 })
+    assert.equal(
+      await pageA.locator('[data-workspace-view]').count(),
+      0,
+      'The private demo must open no project by itself',
+    )
+    mark('The private demo opens on the project chooser with Northstar’s projects')
     await pageA.locator('aside').getByText('Luma Sensor', { exact: true }).click()
     // the top bar carries no New task button (deviation #233): a status
     // column's + opens the same dialog

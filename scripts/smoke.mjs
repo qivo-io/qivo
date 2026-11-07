@@ -1,7 +1,10 @@
 /* Thin durable browser smoke against the dev server + Convex backend.
    Usage: node scripts/smoke.mjs [baseURL]     (default http://localhost:5199)
    Assumes `npm run dev` (convex dev + vite 5199) is already up — does NOT
-   start vite. Two contexts: A (Nora, Northstar admin) signs in, creates an
+   start vite. Two contexts: A (Nora, Northstar admin) signs in, opens a
+   project by its address and the bare address, which must open it again
+   after one projectNav.resolve with no project chooser but its checking
+   line, creates an
    issue through the real New-task dialog, uploads an attachment through the
    Attachments drawer, and proves the minted /files/ URL serves the exact
    bytes; B (Leo, project lead) watches the issue arrive and leave WITHOUT
@@ -612,6 +615,64 @@ try {
   await signInDemo(pageA, demo, 'nora')
   await pageA.waitForSelector('text=Northstar Labs', { timeout: 10000 })
   log('A: Nora signed in — Northstar Labs board renders')
+
+  // ---- 1b. startup: the project Nora opens by its address is remembered,
+  // and the bare address opens it again after one check with the server
+  // (projectNav.resolve), showing no project chooser but its checking line
+  {
+    const target = await pageA.evaluate(() => {
+      const project = window.PLANNER.visibleProjects()[0]
+      return project ? { id: project.id, name: project.name, num: project.num } : null
+    })
+    if (!target) await fail('Northstar has no visible project for the startup check')
+    await pageA.goto(`${BASE}/app/${demo.orgSlug}/board/p/${target.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await pageA.waitForFunction(
+      (id) => window.PLANNER?.loadUI?.().lastProject?.project_id === id,
+      target.id,
+      { timeout: 30000 },
+    )
+    const resolves = []
+    const watch = (ws) =>
+      ws.on('framesent', ({ payload }) => {
+        let message
+        try {
+          message = JSON.parse(String(payload))
+        } catch {
+          return
+        }
+        if (message.type !== 'ModifyQuerySet') return
+        for (const change of message.modifications)
+          if (change.type === 'Add' && change.udfPath === 'projectNav:resolve')
+            resolves.push(change.args)
+      })
+    pageA.on('websocket', watch)
+    await pageA.goto(`${BASE}/app/${demo.orgSlug}`, { waitUntil: 'domcontentloaded' })
+    const states = new Set()
+    const end = Date.now() + 30000
+    for (;;) {
+      const now = await pageA.evaluate(() => ({
+        chooser: document
+          .querySelector('[data-project-chooser]')
+          ?.getAttribute('data-project-chooser-state'),
+        heading: document.querySelector('[data-scope-crumb] h1')?.textContent?.trim(),
+        path: location.pathname,
+      }))
+      if (now.chooser) states.add(now.chooser)
+      if (now.heading === target.name && now.path.endsWith(`/p/${target.num}`)) break
+      if (Date.now() > end) await fail(`The bare address did not open ${target.name}`)
+      await pageA.waitForTimeout(50)
+    }
+    pageA.off('websocket', watch)
+    if (resolves.length !== 1)
+      await fail(`The bare address asked projectNav.resolve ${resolves.length} times`)
+    if ([...states].some((state) => state !== 'checking'))
+      await fail(`The bare address showed the chooser as ${[...states].join(', ')}`)
+    log(`A: the bare address opened the remembered ${target.name} after one projectNav.resolve`)
+    await pageA.goto(`${BASE}/app/~/board/all`, { waitUntil: 'domcontentloaded' })
+    await pageA.locator('[data-filter-focus]').waitFor({ timeout: 30000 })
+  }
 
   // A failed on-demand view keeps the running workspace and safe reload controls.
   const recoveryPage = await ctxA.newPage()

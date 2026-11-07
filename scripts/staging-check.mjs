@@ -178,6 +178,14 @@
  * server's answer moves into the tree's favorites with its mark, opens
  * Zulu from the tree, checks that the tree shows no scrollbar, and unstars
  * the project again (ui/sidebar-projects).
+ * It makes a project of its own with a sub-project, opens the sub-project
+ * by its address, which the app remembers, opens My view and All projects,
+ * clears the browser's copy of the preferences and opens the bare address,
+ * which must open the sub-project after the deployment's check
+ * (projectNav.resolve) with no project chooser meanwhile; then it archives
+ * the project, opens the bare address again, which must show the chooser
+ * saying the project is no longer available, and opens the run's main
+ * project from it (ui/startup-selection).
  * It makes 26 tasks of its own in Alpha and deletes them over REST,
  * searches its tag in Settings › Projects › Deleted items, from the
  * deployment's page (deletedItems.page), and waits until the page answers
@@ -8591,6 +8599,119 @@ async function archivedTasksPageCheck(target) {
   })
 }
 
+/** The step that checks startup selection (startupSelectionCheck). */
+export const STARTUP_SELECTION_STEP = 'ui/startup-selection'
+
+/** The marks the step waits for on the project chooser
+ *  (src/components/ProjectChooser.tsx) and the shared picker's panel in it
+ *  (src/components/ProjectPicker.tsx). */
+export const STARTUP_SELECTION_MARKS = {
+  chooser: 'data-project-chooser',
+  state: 'data-project-chooser-state',
+  note: 'data-project-chooser-note',
+  search: 'data-project-picker-search',
+  pick: 'data-project-pick',
+}
+
+/** What the chooser says when the project the person opened last is no
+ *  longer available to them. */
+export const STARTUP_LOST_NOTE = 'The project you opened last is no longer available to you.'
+
+/** Startup selection on the deployment's projectNav.resolve and the shared
+ *  picker's reads (projectNav.page and search). Over REST the run makes
+ *  `<tag> Startup` with a sub-project `<tag> Startup sub` (S and S1), so
+ *  Nora leads them. In the app as Nora it opens S1's Board by its address,
+ *  waits for its answer and until the app remembers S1
+ *  (PLANNER.loadUI().lastProject), which it sends to the server at once.
+ *  It opens My view and All projects in the same page, which must leave
+ *  that as it is, clears the browser's copy of the preferences, so the
+ *  next page reads the server's, and opens the bare address, which must
+ *  show S1's view and address with no project chooser meanwhile but its
+ *  checking state. Over REST it archives S, opens the bare address again,
+ *  waits for the chooser's lost state and its note, searches the run's tag
+ *  in the chooser and presses M, which must open M's view and address. It
+ *  writes only the run's own projects and Nora's preferences, which name M
+ *  at its end; S goes in the cleanup, and the tag sweep finds it archived.
+ *  It reads none of Nora's favorites and must run before the run archives
+ *  M. It needs a backend from v0.1.126 on. */
+async function startupSelectionCheck() {
+  const w = run.creds.writeToken
+  const m = STARTUP_SELECTION_MARKS
+  await check(STARTUP_SELECTION_STEP, async () => {
+    const { M } = run.projects
+    const S = await restOk(w, 'POST', '/projects', { name: `${run.tag} Startup` })
+    run.projects.S = S
+    const S1 = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} Startup sub`,
+      parent: S.id,
+    })
+    expect(Number.isInteger(S1.num), 'the run sub-project has no number')
+    const path = () => new URL(app.url()).pathname
+    const remembered = () =>
+      evaluate(app, () => window.PLANNER.loadUI().lastProject?.project_id ?? null)
+    const heading = app.locator('[data-scope-crumb] h1')
+    const chooser = app.locator(`[${m.chooser}]`)
+    /** Waits until project `p`'s view shows, by its name and its address,
+     *  answering every chooser state seen meanwhile. */
+    const opens = async (p) => {
+      const seen = new Set()
+      const shown = await until(async () => {
+        if (await chooser.count()) seen.add(await chooser.getAttribute(m.state))
+        return atProject(path(), p.num) && (await heading.textContent())?.trim() === p.name
+      }, 60_000)
+      expect(shown, `${p.name}'s view did not open, at ${path()}`)
+      return [...seen]
+    }
+    // 1. S1's Board by its address, remembered at once
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/board/p/${S1.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    await app
+      .locator('[data-workspace-view] [data-board-root][data-board-state="ok"]')
+      .waitFor({ timeout: 60_000 })
+    expect(
+      await until(async () => (await remembered()) === S1.id, 30_000),
+      'the app does not remember S1',
+    )
+    // 2. My view and All projects leave it as it is
+    await app.locator('aside [data-mine-nav]').click()
+    expect(await until(async () => path().endsWith('/mine'), 30_000), 'My view did not open')
+    await app.locator('aside [data-all-nav]').click()
+    expect(await until(async () => path().endsWith('/projects'), 30_000), 'the directory')
+    eq(await remembered(), S1.id, 'the remembered project after My view and All projects')
+    // the next page reads the server's copy, not the browser's
+    await evaluate(app, () => {
+      for (const key of Object.keys(localStorage))
+        if (key.startsWith('planner.ui.v1:')) localStorage.removeItem(key)
+    })
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}`, { waitUntil: 'domcontentloaded' })
+    const states = await opens(S1)
+    expect(
+      states.every((state) => state === 'checking'),
+      `the bare address showed the chooser as ${states.join(', ')} before S1`,
+    )
+    // 3. S archived, the bare address shows the chooser with its note
+    await restOk(w, 'PATCH', `/projects/${S.id}`, { archived: true })
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}`, { waitUntil: 'domcontentloaded' })
+    await app.locator(`[${m.chooser}][${m.state}="lost"]`).waitFor({ timeout: 60_000 })
+    eq(
+      (await app.locator(`[${m.chooser}] [${m.note}]`).textContent())?.trim(),
+      STARTUP_LOST_NOTE,
+      "the chooser's note",
+    )
+    await app.locator(`[${m.chooser}] [${m.search}]`).fill(run.tag)
+    const pick = app.locator(`[${m.chooser}] [${m.pick}="${M.id}"]`)
+    await pick.waitFor({ timeout: 60_000 })
+    await pick.click()
+    await opens(M)
+    expect(
+      await until(async () => (await remembered()) === M.id, 30_000),
+      'the app does not remember M after the pick',
+    )
+    return `opened ${S1.name} by its address, again from the bare address after one check with the server's copy, and the chooser with its note once ${S.name} was archived, where ${M.name} opened`
+  })
+}
+
 /** The step that chooses projects through the shared project picker
  *  (projectPickerCheck). */
 export const PICKER_STEP = 'ui/project-picker'
@@ -10209,6 +10330,10 @@ async function main() {
   // the sidebar's project tree on the server's navigation reads, a star
   // and the scope's sub-projects, on its project while it is active
   await sidebarProjectsCheck()
+  // startup selection: the remembered sub-project opened from the bare
+  // address after the server's check, and the project chooser once its
+  // project is archived, with a project and a sub-project of its own
+  await startupSelectionCheck()
   // Deleted items on the server's page, with tasks and a sub-project of its
   // own, restored past 25 in steps and deleted for good
   await deletedItemsCheck()
@@ -10242,6 +10367,7 @@ async function main() {
     if (run.projects.R) await deleteProjectInApp(c.writeToken, run.projects.R)
     if (run.projects.L) await deleteProjectInApp(c.writeToken, run.projects.L)
     if (run.projects.D) await deleteProjectInApp(c.writeToken, run.projects.D)
+    if (run.projects.S) await deleteProjectInApp(c.writeToken, run.projects.S)
     for (const t of run.created)
       eq(
         (await rest(c.writeToken, 'GET', `/tasks/${t.id}`)).status,

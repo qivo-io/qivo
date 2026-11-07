@@ -1493,6 +1493,57 @@ describe('the benchmark server', () => {
     )
   }, 60_000)
 
+  it('remembers the first program as the project opened last, or none or a lost one as startup asks', async () => {
+    /** What prefs:get and then resolve of its project answer with `params`. */
+    const startup = async (params) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      await send({ type: 'query', id: 'prefs', name: 'prefs:get', args: {} })
+      const prefs = JSON.parse(posted.find((m) => m.to === 'prefs').text)
+      const asked = prefs?.prefs.lastProject?.project_id
+      if (asked === undefined) return { snap, prefs, resolve: null }
+      await send({
+        type: 'query',
+        id: 'r',
+        name: 'projectNav:resolve',
+        args: { project_id: asked },
+      })
+      const answer = posted.find((m) => m.to === 'r')
+      return {
+        snap,
+        prefs,
+        resolve: answer.error ? { error: answer.error } : JSON.parse(answer.text),
+      }
+    }
+    const first = await startup('')
+    const program = first.snap.projects.find((p) => p.name === 'Testbed program')
+    expect(first.prefs.prefs).toEqual({
+      lastProject: { org_id: program.org_id, project_id: program.id },
+    })
+    expect(first.resolve).toMatchObject({ state: 'ok', project: { id: program.id } })
+    // nothing remembered, and no removed scope answered for older builds
+    expect((await startup('startup=none')).prefs).toBeNull()
+    const lost = await startup('startup=lost')
+    expect(lost.prefs.prefs.lastProject.project_id).not.toBe(program.id)
+    expect(lost.resolve).toEqual({ state: 'unavailable' })
+    // the check that could not finish, and the one that fails
+    expect((await startup('projectnav=unchecked')).resolve).toMatchObject({
+      state: 'unavailable',
+      reason: 'access_unchecked',
+    })
+    expect((await startup('projectnav=error')).resolve.error).toContain('fails')
+    // Team sync's scope beside it, under the key the app reads only
+    const sync = await startup('syncscope=program')
+    expect(sync.prefs.prefs).toEqual({
+      lastProject: { org_id: program.org_id, project_id: program.id },
+      teamSyncScope: `project:${program.id}`,
+    })
+    expect((await startup('startup=none&syncscope=program')).prefs.prefs).toEqual({
+      teamSyncScope: `project:${program.id}`,
+    })
+  }, 60_000)
+
   it('stars and unstars a project of the All projects directory and sends the page again', async () => {
     const { posted, send } = await server(
       'tasks=20&programs=4&subprojects=3&latency=0&mbps=100000&projectnav=favorites',

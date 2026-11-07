@@ -70,7 +70,9 @@
 //                        has_hidden_subtasks and has_hidden_parent flags
 //   programs (1)         visible top-level projects, the visible tasks
 //                        spread over all their sub-projects, so the first,
-//                        which the app opens, holds 1/programs of them
+//                        which the app opens as the project the person
+//                        opened last (prefs:get, startup), holds
+//                        1/programs of them
 //   subprojects (10)     sub-projects of each visible top-level project
 //   board                a state tasks:board answers whatever the tasks say
 //                        (over_ceiling, over_budget, unavailable or
@@ -112,6 +114,17 @@
 //                        or an unstar (projectNav:setFavorite) changes the
 //                        starred set by the server's rule and sends the
 //                        reads again
+//   startup              what the person opened last, which prefs:get
+//                        answers as UIPrefs.lastProject: by default the
+//                        first program, which the app opens once
+//                        projectNav.resolve says it may; none (nothing, so
+//                        the app opens on the project chooser) or lost (a
+//                        project no one has, which resolve answers
+//                        unavailable, so the chooser says the project is
+//                        no longer available). With projectnav=unchecked or
+//                        error the check shows its sentence with Retry, and
+//                        startup=none&projectnav=empty the chooser's empty
+//                        state
 //   roadmap              a state the Roadmap's reads (tasks:roadmap and
 //                        tasks:roadmapDependencies) answer whatever the
 //                        tasks say, for screenshots of states a seeded
@@ -428,10 +441,9 @@
 //                        joined by commas. Open a Viewer's page with
 //                        role=viewer too
 //   syncscope=program    the first program saved as the signed-in
-//                        person's Team sync scope (prefs:get), under the
-//                        key this app reads and the one apps before the
-//                        agenda view read, for the benchmark's Team sync
-//                        phase
+//                        person's Team sync scope (prefs:get,
+//                        UIPrefs.teamSyncScope), for the benchmark's Team
+//                        sync phase
 //   grants (0)           User grants on the first program for that many
 //                        more people, with more people in the
 //                        organization when it needs them, so the Users
@@ -662,6 +674,8 @@ const INBOX_BATCH = 160
    finished test, never into a later one's messages. */
 const port = self
 const parameters = new URLSearchParams(port.name)
+/* The project startup=lost remembers, which no workspace holds. */
+const LOST_PROJECT = '0badc0de-0000-4000-8000-000000000000'
 const option = (name, fallback) => {
   const value = parameters.get(name)
   return value === null ? fallback : Number(value)
@@ -2383,13 +2397,24 @@ const read = (name, args = {}) => {
       snapshot.delivered_at = new Date().toISOString()
       return wireSnapshot()
     case 'prefs:get': {
-      // syncscope=program: the first program saved as Team sync's scope
-      if (parameters.get('syncscope') !== 'program') return null
+      // the first program as the project the person opened last, which
+      // the app opens once projectNav.resolve says it may; startup=none
+      // remembers nothing and startup=lost a project no one has
       const program = snapshot.projects.find((p) => p.type === 'meta')
-      const scope = program ? `project:${program.id}` : ''
+      const startup = parameters.get('startup')
+      const prefs = {}
+      if (program && startup !== 'none')
+        prefs.lastProject = {
+          org_id: program.org_id,
+          project_id: startup === 'lost' ? LOST_PROJECT : program.id,
+        }
+      // syncscope=program: the first program saved as Team sync's scope
+      if (program && parameters.get('syncscope') === 'program')
+        prefs.teamSyncScope = `project:${program.id}`
+      if (!Object.keys(prefs).length) return null
       return {
         profile_id: snapshot.myProfileIds[0],
-        prefs: { syncScope: scope, teamSyncScope: scope },
+        prefs,
         updated_at: new Date().toISOString(),
       }
     }
