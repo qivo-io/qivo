@@ -1,6 +1,6 @@
 Your organization contains projects, each with sub-projects where tasks live.
-Select a project in the sidebar, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)); **All projects** lists every project you can
-access, your favorites first ([All projects](./finding-your-way-around.md#all-projects)). Each project and My view has three views:
+Select a project in the sidebar, or **My view** for your own tasks ([My view](./finding-your-way-around.md#my-view)); **All projects** lists the projects you
+take part in through your own access, your favorites first ([All projects](./finding-your-way-around.md#all-projects)). Each project and My view has three views:
 
 - **Overview** summarizes progress, risks and milestones.
 - **Board** groups tasks by status.
