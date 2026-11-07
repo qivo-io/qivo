@@ -1288,6 +1288,50 @@ describe('the benchmark server', () => {
     expect(new Set(snap.milestones.map((m) => m.id)).size).toBe(8)
   }, 60_000)
 
+  it('sends no milestone in its projects part, while the milestone reads answer the planted ones', async () => {
+    const { posted, send } = await server(
+      'tasks=20&latency=0&mbps=100000&programs=3&milestoneweeks=3&milestoneprograms=2',
+    )
+    /** What query `name` answers with `args`. */
+    const read = async (name, args) => {
+      const id = `q${posted.length}`
+      await send({ type: 'query', id, name, args })
+      return JSON.parse(posted.find((m) => m.to === id).text)
+    }
+    // the whole the server holds keeps the planted milestones
+    const snap = await read('snapshot:forMe', {})
+    expect(snap.milestones).toHaveLength(12)
+    const root = await read('workspace:root', {})
+    const org = root.orgs[0]
+    const parts = []
+    for (const w of idWindows(startWindows(org).projects))
+      parts.push(await read('workspace:projects', { org_id: org.id, ...w }))
+    expect(parts.flatMap((part) => part.projects).length).toBe(snap.projects.length)
+    for (const part of parts) {
+      expect(part.state).toBe('ok')
+      expect(part).not.toHaveProperty('milestones')
+      expect(part.more ?? {}).not.toHaveProperty('milestones')
+    }
+    // the milestone reads answer them, upcoming and past
+    const hosts = [...new Set(snap.milestones.map((m) => m.project_id))]
+    const from = snap.milestones[0].week
+    const upcoming = await read('milestones:section', {
+      projects: hosts,
+      from,
+      side: 'upcoming',
+      limit: 25,
+    })
+    const past = await read('milestones:section', {
+      projects: hosts,
+      from,
+      side: 'past',
+      limit: 25,
+    })
+    expect([...upcoming.rows, ...past.rows].map((m) => m.id).sort()).toEqual(
+      snap.milestones.map((m) => m.id).sort(),
+    )
+  }, 60_000)
+
   it("plants weekly milestones and forces the Milestones window's section states", async () => {
     /** What milestones:section answers with `args` on a workspace with page
         parameters `params`, and the workspace. */
