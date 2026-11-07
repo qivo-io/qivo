@@ -793,6 +793,22 @@ describe('the token list read from the server', () => {
     expect(shownNames()).toHaveLength(30)
   })
 
+  it('keeps New token while a search reads its first batch and after the search failed', async () => {
+    tokens = many(26)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await render()
+    const newToken = () => document.querySelector('[data-mcp-new-token]')
+    expect(newToken()).not.toBeNull()
+    holding = true
+    await search('oldest')
+    expect(end()).toBe('loading')
+    expect(newToken()).not.toBeNull()
+    force = { fail: true }
+    await release()
+    expect(end()).toBe('failed')
+    expect(newToken()).not.toBeNull()
+  })
+
   it("moves focus from a first batch's Retry once the batch lands, or to the new Retry when it fails again", async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     /** Opens the page on a failed first batch, presses its Retry with focus

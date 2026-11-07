@@ -119,8 +119,9 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
   }, [lastAnswer, list.answers.length, now])
   /* The token whose Delete or Revoke was confirmed last, with where focus
      goes once its row has left: the next row's button, the previous row's,
-     or New token. A revoked token keeps its row and its button keeps focus
-     through the list's refresh, unless it sat past the first batch. */
+     the Retry of a refresh that failed and took every row, or New token. A
+     revoked token keeps its row and its button keeps focus through the
+     list's refresh, unless it sat past the first batch. */
   const [acted, setActed] = useState<{ id: string; focus: () => HTMLElement | null }>()
   useFocusWhenGone(
     !!acted && list.rows.some((t) => t.id === acted.id),
@@ -164,7 +165,14 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
     list.retry()
   }
   const refresh = () => void list.refresh()
-  const loaded = list.answers.length > 0 || list.refreshing
+  // New token shows once the list has answered in this visit, and stays
+  // while a search reads its first batch and after a search or a refresh
+  // failed; it waits only while the first batch is on its way or failed.
+  const [answered, setAnswered] = useState(false)
+  const loaded = answered || list.answers.length > 0
+  useEffect(() => {
+    if (loaded) setAnswered(true)
+  }, [loaded])
   // the list or its end line shows, so New token keeps its space below them
   const shows = list.rows.length > 0 || !['end', 'partial', 'held'].includes(end)
 
@@ -227,7 +235,7 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
                         'data-mcp-token',
                         t.id,
                         (row) => row.querySelector<HTMLElement>('button'),
-                        newTokenButton,
+                        () => retryButton() ?? newTokenButton(),
                       ),
                     })
                     action()
