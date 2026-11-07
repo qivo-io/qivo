@@ -90,8 +90,8 @@ export type ScopeMilestones = {
       answers, and where its whole answer is empty with no past milestone,
       the note is the whole page. While Upcoming loads again for the same
       base, after Retry, Show from the start or a new week, the last
-      answer's or failure's decision holds, so the section and the control
-      that has focus stay. */
+      answer's or failure's decision holds, so the section stays and keeps
+      the focus that Retry or Show from the start leaves in it. */
   stands: boolean
   next: NextMilestone
   /** the row Upcoming shows the next milestone on, for its emphasis */
