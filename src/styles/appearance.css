@@ -196,6 +196,17 @@ html[data-appearance] .planner-navigation {
 html[data-appearance] .planner-navigation > :not(.planner-project-list) {
   flex-shrink: 0;
 }
+/* The sidebar's project tree scrolls without a visible scrollbar, in every
+   theme, as the limits plan's "Allow scrolling without visible scrollbars"
+   asks. It keeps overflow-y: auto, so the wheel, a trackpad, touch and the
+   keyboard still scroll it, and a focused row scrolls into its view
+   (components/SidebarProjects.tsx). Nothing else loses its scrollbar. */
+.planner-project-list {
+  scrollbar-width: none;
+}
+.planner-project-list::-webkit-scrollbar {
+  display: none;
+}
 html[data-appearance] :is(.planner-topbar, .roadmap-view, [data-roadmap-toolbar], .settings-shell) {
   background: transparent;
 }
@@ -359,7 +370,9 @@ html[data-appearance] .overview-section :is([data-ov-table], [data-ovrow], [data
   bottom: 0;
   width: 2px;
 }
-.planner-subproject:last-child::before {
+/* The line ends on the last sub-project row among its siblings, also
+   where a batch's note follows it (SidebarProjects.tsx, ProjectLists.tsx). */
+.planner-subproject:not(:has(~ .planner-subproject))::before {
   bottom: auto;
   height: 16px;
 }
