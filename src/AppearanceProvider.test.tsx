@@ -114,6 +114,8 @@ type Download = {
   answer: (ok?: boolean) => void
 }
 let downloads: Download[] = []
+// blob URLs whose bytes no longer decode, as a damaged cached copy's
+const corrupt = new Set<string>()
 let page: 'visible' | 'hidden' = 'visible'
 let container: HTMLDivElement
 let root: Root
@@ -169,6 +171,7 @@ const turn = async (state: 'visible' | 'hidden') => {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   downloads = []
+  corrupt.clear()
   weekly.subscriptions = []
   demo.on = false
   demo.polls = 0
@@ -204,7 +207,7 @@ beforeEach(() => {
       decoding = ''
       // an image named broken never decodes, as a failed original
       decode = async () => {
-        if (this.src.includes('broken')) throw new Error('Broken image')
+        if (this.src.includes('broken') || corrupt.has(this.src)) throw new Error('Broken image')
       }
     },
   )
@@ -281,6 +284,27 @@ describe('the Canvas background and its preview', () => {
     await render(true)
     expect(shown()).toMatchObject({ status: 'ready', url: first })
     expect(fetched('preview').length).toBe(1)
+  })
+
+  it('replaces a cached preview whose bytes no longer decode with the derivative read again', async () => {
+    await render(true)
+    await act(async () => store.deliver(preferences('daily')))
+    await deliverWeek(daily('week-1', 'https://storage.test/week-1/preview.webp'))
+    await settle()
+    fetched('preview')[0]?.answer()
+    await settle()
+    const first = shown().url as string
+    expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
+    // the cached bytes stop decoding; Settings opens again
+    corrupt.add(first)
+    await render(false)
+    await render(true)
+    expect(shown().status).toBe('loading')
+    expect(fetched('preview')).toHaveLength(2)
+    fetched('preview')[1]?.answer()
+    await settle()
+    expect(shown()).toMatchObject({ status: 'ready', key: 'daily:week-1' })
+    expect(shown().url).not.toBe(first)
   })
 
   it('shows the canvas’s own image for a weekly image without a derivative, and unavailable while the canvas has none', async () => {

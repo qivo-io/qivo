@@ -223,6 +223,9 @@ export function createBackgroundImageCache(
   }
   const same = (a: BackgroundSelection | null, b: BackgroundSelection | null) =>
     a?.key === b?.key && a?.previewVersion === b?.previewVersion
+  /* The identity resolve shares one request of `quality` under. */
+  const identityOf = (selection: BackgroundSelection, quality: 'preview' | 'full') =>
+    `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`
   const restore = async (quality: 'preview' | 'full') => {
     const version = generation
     await loaded
@@ -323,8 +326,27 @@ export function createBackgroundImageCache(
         save(version)
       })
     },
+    /** The selection's cached preview, once its bytes decode (`validate`).
+        Bytes that no longer decode leave the cache, so a retry or the next
+        read fetches the derivative again instead of showing them. */
     async restorePreview() {
-      return restore('preview')
+      const version = generation
+      const restored = await restore('preview')
+      const blob = record?.preview
+      if (!restored || !blob || urls.get(blob) !== restored.url) return restored
+      try {
+        await validate(restored.url)
+        return restored
+      } catch {
+        if (disposed || generation !== version || record?.preview !== blob) return null
+        delete record.preview
+        revokeUrl(restored.url)
+        urls.delete(blob)
+        // a settled read of these bytes would answer them again
+        pending.delete(identityOf(record.selection, 'preview'))
+        save(version)
+        return null
+      }
     },
     /** Restore the original bytes before current appearance metadata arrives. */
     async restoreFull() {
@@ -344,7 +366,7 @@ export function createBackgroundImageCache(
     ): Promise<string> {
       if (disposed || !same(selected ?? null, selection)) throw new BackgroundChanged()
       if (signal?.aborted) throw new DOMException('Background request left', 'AbortError')
-      const identity = `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`
+      const identity = identityOf(selection, quality)
       // A settled request answers again until the selection changes; one
       // every caller left is stopped, so a new caller starts afresh.
       if (!pending.has(identity) || pending.get(identity)?.stopped)
@@ -387,9 +409,7 @@ export function createBackgroundImageCache(
         urls.delete(blob)
       }
       delete record[quality]
-      pending.delete(
-        `${selection.key}:${quality}:${quality === 'preview' ? selection.previewVersion : ''}`,
-      )
+      pending.delete(identityOf(selection, quality))
       save(generation)
     },
     dispose() {

@@ -117,8 +117,9 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
  *
  * It also serves Settings › Appearance's preview of the selected background
  * (lib/appearanceContext.ts usePreview), read only while Settings asks: the
- * shared cache's copy of the derivative, else the derivative fetched into
- * it with a signal that detaches Settings alone when it closes, or for a
+ * shared cache's copy of the derivative once its bytes decode, else the
+ * derivative fetched into it with a signal that detaches Settings alone
+ * when it closes, or for a
  * weekly image without a derivative the image the canvas shows. It never
  * fetches an original for a preview. While the page is hidden the weekly
  * image's read (the demo's public feed poll in the demo) and the custom
