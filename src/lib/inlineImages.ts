@@ -15,9 +15,12 @@
    Access. A cached image shows again only after the store's row gate
    passes for it, and after a mint names it again once its lease is within
    INLINE_IMAGES.skew of its end; that mint downloads nothing. A mint that
-   omits it, or a gateway refusal right after a fresh mint, marks it gone
-   and drops its bytes. The store drops an entry wherever it forgets the
-   file, and clear() drops them all with the store. */
+   omits it, or a gateway refusal (401, 403 or 404) right after a fresh
+   mint, marks it gone and drops its bytes. A network failure is no
+   refusal: the image tries again later. The store drops an entry wherever
+   it forgets the file, and clear() drops them all with the store. One the
+   row gate marked gone while a view showed it asks again once the gate
+   passes (retain). */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { MIB } from '../../convex/lib/limits'
@@ -145,6 +148,9 @@ type Entry = {
   retry: unknown
   /** the time left to a download whose views all went far (`leave`) */
   leaving: unknown
+  /** gone because the store's row gate failed, so a later rebuild whose
+      gate passes asks again */
+  gated: boolean
   shown: InlineImage
   listeners: Set<() => void>
 }
@@ -255,6 +261,7 @@ export function createInlineImages(
         controller: null,
         retry: null,
         leaving: null,
+        gated: false,
         shown: WAITING,
         listeners: new Set(),
       }
@@ -519,7 +526,11 @@ export function createInlineImages(
      mint and a download. `gate` asks the store's row gate first. */
   function want(entry: Entry, gate: boolean) {
     if (entry.phase === 'gone') return
-    if (gate && !deps.held(entry.id)) return gone(entry)
+    if (gate && !deps.held(entry.id)) {
+      gone(entry)
+      entry.gated = true
+      return
+    }
     if (paused || entry.minting) return
     if (entry.phase === 'queued' || entry.phase === 'loading') return
     if (entry.phase === 'ready' && entry.url) {
@@ -543,6 +554,7 @@ export function createInlineImages(
     forgetBytes(entry)
     entry.exp = 0
     entry.refusedOnce = false
+    entry.gated = false
     entry.phase = 'idle'
     publish(entry)
     if (entry.pins > 0) want(entry, true)
@@ -663,12 +675,19 @@ export function createInlineImages(
       tidy(entry)
     },
     /** The view's <img> of attachment `id` loaded, with its size, or failed
-        (null). A plain-URL fallback frees its slot then; a failed image
-        takes one fresh mint, then shows as gone. */
+        (null). A plain-URL fallback frees its slot then. A failed fallback
+        follows a fetch that threw, a network failure and no refusal, so it
+        shows "Loading image…" and tries again later; a failed image of
+        held bytes takes one fresh mint, then shows as gone. */
     loaded(id: string, size: Size | null) {
       const entry = entries.get(id)
       if (entry?.phase !== 'ready') return
       if (entry.fallbackSlot) entry.slot?.()
+      if (size === null && !entry.owned) {
+        entry.url = null
+        entry.phase = 'idle'
+        return retryLater(entry)
+      }
       if (size === null) return refused(entry)
       // the plain-URL fallback loaded, which ends a refusal's fresh mint
       entry.refusedOnce = false
@@ -703,18 +722,19 @@ export function createInlineImages(
     drop,
     /** Drops the bytes of every image out of reach whose attachment fails
         the store's row gate `held`, as after a part delivery without it,
-        and asks again for near images a clear or a pause left waiting. */
+        and asks again for near images a clear or a pause left waiting, and
+        for near ones the gate marked gone whose rows came back. */
     retain(held: (id: string) => boolean) {
       for (const [id, entry] of unpinned) if (!held(id) && entry.pins === 0) drop(id)
-      for (const entry of entries.values())
-        if (
-          entry.pins > 0 &&
-          entry.phase === 'idle' &&
-          !entry.minting &&
-          entry.retry === null &&
-          held(entry.id)
-        )
-          want(entry, false)
+      for (const entry of entries.values()) {
+        if (entry.pins === 0 || !held(entry.id)) continue
+        if (entry.phase === 'gone' && entry.gated) {
+          entry.phase = 'idle'
+          entry.gated = false
+          entry.refusedOnce = false
+        }
+        if (entry.phase === 'idle' && !entry.minting && entry.retry === null) want(entry, false)
+      }
     },
     /** While hidden no new mint or download starts; the ones on their way
         finish. On return the near images ask again. */
@@ -774,6 +794,7 @@ export function createInlineImages(
         entry.exp = 0
         entry.box = null
         entry.refusedOnce = false
+        entry.gated = false
         publish(entry)
         tidy(entry)
       }

@@ -355,20 +355,49 @@ describe('the inline image loader', () => {
     expect(v.shown().state).toBe('ready')
   })
 
-  it('takes a fresh mint again when a plain-URL fallback fails after one loaded since the last refusal', async () => {
+  it('tries a plain-URL fallback that fails again later, a network failure and no refusal, and never marks it gone', async () => {
     const h = harness()
     h.fetcher.mockRejectedValue(new TypeError('Failed to fetch'))
     const v = h.view('a')
     v.near()
     await settle()
     expect(v.shown()).toMatchObject({ state: 'ready', url: 'https://files.test/files/a' })
-    h.loader.loaded('a', null)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      h.loader.loaded('a', null)
+      expect(v.shown()).toMatchObject({ state: 'waiting', url: null })
+      await vi.advanceTimersByTimeAsync(INLINE_IMAGES.retry)
+      expect(h.fetcher).toHaveBeenCalledTimes(attempt + 1)
+      expect(v.shown()).toMatchObject({ state: 'ready', url: 'https://files.test/files/a' })
+    }
+    // no fresh mint: nothing refused the lease
+    expect(h.mint.mock.calls.every(([, fresh]) => !fresh)).toBe(true)
+  })
+
+  it('asks again for a near image the row gate marked gone once its rows come back', async () => {
+    const h = harness()
+    const v = h.view('a')
+    v.near()
     await settle()
-    h.loader.loaded('a', { width: 10, height: 10 })
-    h.loader.loaded('a', null)
+    // the task leaves the workspace while its window shows the image
+    h.held.delete('a')
+    h.loader.drop('a')
+    expect(v.shown().state).toBe('gone')
+    h.loader.retain((id) => h.held.has(id))
+    expect(v.shown().state).toBe('gone')
+    // and comes back with a later delivery
+    h.held.add('a')
+    h.loader.retain((id) => h.held.has(id))
     await settle()
-    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, true])
-    expect(v.shown().state).toBe('ready')
+    expect(v.shown()).toMatchObject({ state: 'ready' })
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    // one the server refused stays gone on a rebuild
+    h.mint.mockResolvedValueOnce({ state: 'missing' })
+    h.loader.drop('a')
+    await settle()
+    expect(v.shown().state).toBe('gone')
+    h.loader.retain((id) => h.held.has(id))
+    await settle()
+    expect(v.shown().state).toBe('gone')
   })
 
   it('keeps "Loading image…" and tries again after a failed mint', async () => {
