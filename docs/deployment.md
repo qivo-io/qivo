@@ -422,8 +422,9 @@ lists and searches the run's own accounts (`billing.apiAccounts` and
 v0.1.144 that step fails. It then opens **MCP access** and searches
 **Connected apps** and **Personal access tokens** for its run tag, where
 the deployment's batches (`connectedApps.list` and `tokens.personalTokens`)
-list the run's two connections and two tokens alone, newest first, and a
-token search that matches nothing says so (`ui/mcp-access-lists`). A list
+list the run's two connections and two tokens newest first, alone when the
+list shows its search, and a token search that matches nothing says so
+(`ui/mcp-access-lists`). A list
 shows its search only once it holds more than 25 rows, so on a deployment
 with fewer the step reads the run's rows from the list's first batch and
 asks the store's read for the search with no match. Against a backend from
