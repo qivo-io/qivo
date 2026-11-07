@@ -1,8 +1,19 @@
 import { describe, expect, it } from 'vitest'
+import { isLabelColor } from '../../convex/model/labels'
 import { LABEL_COLORS, labelColorFor } from './labelColors'
 
-/* A new label's color from its id (labelColorFor): the same for an id, a
+/* The palette holds only colors the server stores, each once, and a new
+   label's color comes from its id (labelColorFor): the same for an id, a
    palette color always, and spread over the whole palette. */
+
+describe('LABEL_COLORS', () => {
+  it('holds only distinct colors the server stores', () => {
+    expect(LABEL_COLORS.filter(({ color }) => !isLabelColor(color))).toEqual([])
+    expect(new Set(LABEL_COLORS.map(({ color }) => color.toLowerCase())).size).toBe(
+      LABEL_COLORS.length,
+    )
+  })
+})
 
 describe('labelColorFor', () => {
   const palette = LABEL_COLORS.map((c) => c.color)
