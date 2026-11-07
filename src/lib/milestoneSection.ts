@@ -1,22 +1,29 @@
 /* One section of a list of milestones that the server answers
    (convex/milestones.ts section): the Milestones window's Upcoming and
-   Past (panels/Modals.tsx), and later the Overview's. This module is the
-   pure part, the plan of a section's asks and what the section shows; the
-   hook that registers the asks with the store and renders on its news is
+   Past (panels/Modals.tsx), and the Overview's and the phone Roadmap
+   agenda's (views/useScopeMilestones.ts). This module is the pure part,
+   the plan of a section's asks and what the section shows; the hook that
+   registers the asks with the store and renders on its news is
    views/useMilestoneSection.ts.
 
-   A section is one live read whose limit grows. It asks MILESTONE_SECTION
-   .batch rows at first, and each Load more asks the same read with
-   `batch` more rows under a slot of its own, while the slot that shows
-   stays live; once the larger read answers it shows that one and the old
-   slot goes. At MILESTONE_SECTION.rows rows a Load more moves the read on
-   instead: it starts after the shown answer's row `batch`, so the first
-   batch leaves and one more comes, and the section says which milestones
-   are not shown, with Show from the start. A read that stopped at its
-   budget (`stopped`) is a fail-safe path past the design size: its Load
-   more continues from the answer's `next` with one batch, which also
+   A section is one live read whose limit grows. Its sizes (SectionSizes)
+   are an argument of the plan, read when it plans: the window's
+   MILESTONE_SECTION, 25 rows a batch, and the Overview's and the agenda's
+   OVERVIEW_MILESTONES, 10 for Upcoming and 25 for Past, each up to the
+   server's cap of 100. It asks `batch` rows at first, and each Load more
+   asks the same read with `batch` more rows under a slot of its own,
+   while the slot that shows stays live; once the larger read answers it
+   shows that one and the old slot goes. At `rows` rows a Load more moves
+   the read on instead: it starts after the shown answer's row `batch`, so
+   the first batch leaves and one more comes, and the section says which
+   milestones are not shown, with Show from the start. A read that stopped
+   at its budget (`stopped`) is a fail-safe path past the design size: its
+   Load more continues from the answer's `next` with one batch, which also
    leaves the rows before it, under the same note. A new search, week or
-   set of projects starts again at the first batch.
+   base starts again at the first batch under a slot of its own, and the
+   slot that showed goes at once, so no rows of another search show. A base
+   names top-level projects, or My view (`mine`), whose projects the
+   server finds.
 
    Each answer counts only for the arguments it was asked with
    (store/planner.ts P.milestoneRead), and the rows are the store's, with
@@ -31,20 +38,35 @@
 import { MILESTONE_READ_ROWS } from '../../convex/lib/limits'
 import { type MilestoneAsk, type MilestonePosition, positionOf } from '../store/milestoneRows'
 
-/** A section's first batch and its row cap. Tests lower these and restore
-    them. The cap is the server's (convex/lib/limits.ts MILESTONE_READ_ROWS). */
-export const MILESTONE_SECTION = { batch: 25, rows: MILESTONE_READ_ROWS }
+/** A section's first batch, which each Load more adds, and its row cap,
+    past which a Load more moves the read on. */
+export type SectionSizes = { batch: number; rows: number }
+
+/** The Milestones window's sections' sizes. Tests and the perf page lower
+    these and restore them. The cap is the server's (convex/lib/limits.ts
+    MILESTONE_READ_ROWS). */
+export const MILESTONE_SECTION: SectionSizes = { batch: 25, rows: MILESTONE_READ_ROWS }
+
+/** The sizes of the Overview's and the phone agenda's sections: 10
+    upcoming milestones at first and 10 more for each Load more, and a
+    Past of 25 at a time, the owner's batches of 24 October 2026 (the
+    window's decision leaves the Overview's 10 as they are), each up to the
+    server's cap. Tests and the perf page lower these and restore them. */
+export const OVERVIEW_MILESTONES: { upcoming: SectionSizes; past: SectionSizes } = {
+  upcoming: { batch: 10, rows: MILESTONE_READ_ROWS },
+  past: { batch: 25, rows: MILESTONE_READ_ROWS },
+}
 
 /** A section's ask, as the store registers it (store/milestoneRows.ts). */
 export type SectionAsk = Extract<MilestoneAsk, { kind: 'section' }>
 
-/** What a section reads: the top-level projects, the first day of the
-    current week in the app's grid, and the side. */
+/** What a section reads: the top-level projects, or My view's (`mine`),
+    which the server finds from the person's own tasks, the first day of
+    the current week in the app's grid, and the side. */
 export type SectionBase = {
-  projects: readonly string[]
   from: string
   side: 'upcoming' | 'past'
-}
+} & ({ projects: readonly string[]; mine?: undefined } | { mine: true; projects?: undefined })
 
 /** One answer of a section as the store holds it (store/planner.ts
     MilestoneAnswer): the rows, each one's stored name and day, `next`,
@@ -85,11 +107,17 @@ export type SectionPlan = {
   past?: boolean
 }
 
-/** The key of `base`, its projects once each and sorted, or null for none. */
+/** The projects a section ask of `base` names: its projects once each and
+    sorted, or none for My view. */
+const namedOf = (base: SectionBase): string[] =>
+  base.mine ? [] : [...new Set(base.projects)].sort()
+
+/** The key of `base`, its projects once each and sorted, and `mine` for
+    My view, so My view's base and an empty named one never share a plan;
+    or null for none. */
 export function sectionKey(base: SectionBase | null): string | null {
   if (base === null) return null
-  const projects = [...new Set(base.projects)].sort()
-  return JSON.stringify([projects, base.from, base.side])
+  return JSON.stringify([namedOf(base), base.from, base.side, ...(base.mine ? [true] : [])])
 }
 
 /** The store's slot of a section's ask number `n` under `prefix`. */
@@ -99,7 +127,8 @@ export const sectionSlot = (prefix: string, n: number) => `${prefix}:${n}`
 export function sectionAsk(base: SectionBase, search: string, slot: SlotPlan): SectionAsk {
   return {
     kind: 'section',
-    projects: [...new Set(base.projects)].sort(),
+    projects: namedOf(base),
+    ...(base.mine ? { mine: true as const } : {}),
     from: base.from,
     side: base.side,
     ...(search ? { search } : {}),
@@ -108,13 +137,20 @@ export function sectionAsk(base: SectionBase, search: string, slot: SlotPlan): S
   }
 }
 
-/** A plan that asks the first batch of the section `base` (its key) with
-    `search` under number `n`, keeping `past` when the base is the same. */
-export function startPlan(base: string, search: string, n: number, past?: boolean): SectionPlan {
+/** A plan that asks the first batch of `sizes` of the section `base` (its
+    key) with `search` under number `n`, keeping `past` when the base is
+    the same. */
+export function startPlan(
+  base: string,
+  search: string,
+  n: number,
+  sizes: SectionSizes,
+  past?: boolean,
+): SectionPlan {
   return {
     base,
     search,
-    shown: { n, limit: MILESTONE_SECTION.batch, attempt: 0 },
+    shown: { n, limit: sizes.batch, attempt: 0 },
     pending: null,
     ...(past === undefined ? {} : { past }),
   }
@@ -122,17 +158,18 @@ export function startPlan(base: string, search: string, n: number, past?: boolea
 
 /** The plan after Load more over `answer`, the shown slot's answer, with
     the next ask under number `n`, or `plan` itself when nothing follows or
-    a Load more is on its way. Below the cap it grows the limit by a batch;
-    at the cap it moves on after the answer's row `batch` with the same
-    limit; after a read that stopped it continues from `next` with one
-    batch (the fail-safe path). */
+    a Load more is on its way. Below the cap of `sizes` it grows the limit
+    by a batch; at the cap it moves on after the answer's row `batch` with
+    the same limit; after a read that stopped it continues from `next`
+    with one batch (the fail-safe path). */
 export function morePlan<R extends { id: string }>(
   plan: SectionPlan,
   answer: SectionAnswer<R>,
   n: number,
+  sizes: SectionSizes,
 ): SectionPlan {
   if (plan.pending !== null || answer.next === null) return plan
-  const { batch, rows } = MILESTONE_SECTION
+  const { batch, rows } = sizes
   const { shown } = plan
   let next: SlotPlan
   if (answer.stopped !== null) next = { n, after: answer.next, limit: batch, attempt: 0 }
@@ -154,10 +191,10 @@ export function morePlan<R extends { id: string }>(
   return { ...plan, pending: next }
 }
 
-/** The plan after Show from the start: the first batch afresh, under
-    number `n`. */
-export function fromStartPlan(plan: SectionPlan, n: number): SectionPlan {
-  return startPlan(plan.base, plan.search, n, plan.past)
+/** The plan after Show from the start: the first batch of `sizes`
+    afresh, under number `n`. */
+export function fromStartPlan(plan: SectionPlan, n: number, sizes: SectionSizes): SectionPlan {
+  return startPlan(plan.base, plan.search, n, sizes, plan.past)
 }
 
 /** The plan after Retry: a new attempt for each slot whose read failed or
@@ -182,7 +219,7 @@ export function swapPlan(plan: SectionPlan): SectionPlan {
     for more projects than one read names. */
 export type SectionNote =
   | { kind: 'failed'; more: boolean }
-  | { kind: 'refused'; more: boolean; sentence: string }
+  | { kind: 'refused'; more: boolean; sentence: string; reason: string }
   | { kind: 'too_many' }
 
 /** What a section shows (sectionView):
@@ -262,7 +299,7 @@ export function sectionView<R extends { id: string }>(
     read.state === 'failed'
       ? { kind: 'failed', more }
       : read.state === 'refused'
-        ? { kind: 'refused', more, sentence: read.sentence }
+        ? { kind: 'refused', more, sentence: read.sentence, reason: read.reason }
         : null
   // the shown read's own failure first, else a Load more's
   const note =
