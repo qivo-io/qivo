@@ -903,17 +903,16 @@ The project navigation reads `projectNav.page`, `projectNav.children` and
 `projectNav.resolve` first shipped in v0.1.118 (`13f4bcba`), which set no
 rollback floor and needed no step. The shared project picker is the first
 app that calls them, and its paragraph below says which floor that app
-needs. From the release after v0.1.150 the All projects directory calls
-`projectNav.page`, `children` and `search`, the last of which v0.1.126
-(`1228de4c`) first shipped, and that release's paragraph below says the
-same. The reads use only the reach rows and name keys every deployment
-holds since v0.1.97 and the favorites rows below. `projectNav.page` and
-`projectNav.children` answer `not_ready` for an organization without both
-of its `org_ready` stamps, and `projectNav.resolve` answers without them.
-The reads skip the favorites a rollback past the favorites release leaves,
-by the reader rule the favorites paragraph below describes, so such a row
-never shows and keeps its project, where the seat sees it, in the list of
-the rest.
+needs. From the release after v0.1.150, whose paragraph below says the
+same, the All projects directory calls `projectNav.page`, `children` and
+`search`; v0.1.126 (`1228de4c`) first shipped `search`. The reads use only
+the reach rows and name keys every deployment holds since v0.1.97 and the
+favorites rows below. `projectNav.page` and `projectNav.children` answer
+`not_ready` for an organization without both of its `org_ready` stamps,
+and `projectNav.resolve` answers without them. The reads skip the
+favorites a rollback past the favorites release leaves, by the reader rule
+the favorites paragraph below describes, so such a row never shows and
+keeps its project, where the seat sees it, in the list of the rest.
 
 The Roadmap's server reads, `tasks.roadmap` and
 `tasks.roadmapDependencies`, first ship in the release after v0.1.119
