@@ -1757,11 +1757,13 @@ function Roadmap({
   // header only where the roadmap actually has them
   const hasSubHeads = rows.some((r) => r.kind === 'sub')
   /* Every track hides itself when a filter empties it, so a zero-match filter
-     leaves the rail bare — say so, the same words and the same one action the
-     board's note carries. It stays INSIDE the timeline rather than replacing
-     it with a full-screen empty state: the window controls, the week grid and
-     the milestone flags are still the answer to "what am I looking at", and a
-     filter is a thing you undo, not a state you are in. */
+     leaves the rail bare. Say so, with the same words and the same one
+     action the board's note carries. It stays INSIDE the timeline rather
+     than replacing it with a full-screen empty state. The window controls
+     and the week grid are still the answer to "what am I looking at", and a
+     filter is a thing you undo, not a state you are in. In a project or
+     sub-project the header's milestone flags stay too. My view's flags sit
+     on the tracks' rows, so they go with the tracks the filter prunes. */
   // only a current answer says nothing matches, never one on its way
   const noMatches = clearable && tracks.length === 0 && view.current
 
