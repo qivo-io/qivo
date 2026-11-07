@@ -903,7 +903,7 @@ The project navigation reads `projectNav.page`, `projectNav.children` and
 `projectNav.resolve` first shipped in v0.1.118 (`13f4bcba`), which set no
 rollback floor and needed no step. The shared project picker is the first
 app that calls them, and its paragraph below says which floor that app
-needs. From the release after v0.1.150, whose paragraph below says the
+needs. From the release after v0.1.155, whose paragraph below says the
 same, the All projects directory calls `projectNav.page`, `children` and
 `search`; v0.1.126 (`1228de4c`) first shipped `search`. The reads use only
 the reach rows and name keys every deployment holds since v0.1.97 and the
@@ -2449,7 +2449,7 @@ the route.
 
 Each seat's favorite top-level projects are rows in `project_favorites`,
 which the app writes only through `projectNav:setFavorite`, the call of the
-All projects directory's star from the release after v0.1.150; the
+All projects directory's star from the release after v0.1.155; the
 Northstar seed inserts its people's stars from dataset version 10
 (`model/projectFavorites.ts` `insertSeededFavorite`), and
 `internal/favoritesRepair` deletes and patches what a rollback left. The
