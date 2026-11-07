@@ -261,6 +261,27 @@ describe('the writes from the task window’s own answer', () => {
     'createParent',
     'createLinked',
     'addIssue',
+    // a create of the person's own, which paints the views' rows and its
+    // window from what it sends, never the workspace's task lists
+    // (t3/limits-create-answer)
+    'pendingCreate',
+    'pendingRow',
+    'answeredRow',
+    'creatingAnswerOf',
+    'creatingShown',
+    'createOnItsWay',
+    'tookCreate',
+    'newTaskParts',
+    'newTaskSlots',
+    'slotsBehind',
+    'newViewRow',
+    'newTaskViewPaint',
+    'newTaskCounterPaint',
+    'newParentShort',
+    'newChildShort',
+    'refusedBehind',
+    'keyOfOpen',
+    'createText',
   ]
   const bodies = new Map<string, string>()
   walk(program, (node, ancestors) => {

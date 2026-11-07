@@ -6,9 +6,11 @@ import { plannerFixture, type Snapshot } from '../plannerFixture.setup'
    every task (store/planner.ts guardTaskWrite, in start): a write that needs
    a task the workspace holds cannot go out while tasks are not asked, since
    none is held then. A write whose task comes from a server answer carries
-   that mark (WriteAbout.answer) and passes, and so does a restore. A create
-   needs the ask whatever its mark, since only the ask keeps its paint on
-   screen through a delivery that holds no task. */
+   that mark (WriteAbout.answer) and passes, and so does a restore. A
+   create of a task of its own passes by its name: it paints the views'
+   rows and its window, never a task row of the workspace, so it needs no
+   ask. A new parent or linked task writes on an existing task too, and
+   takes the rule of every task write. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../../lib/convex', async () => {
@@ -45,7 +47,8 @@ const HELD_WRITES = [
 /* What a Roadmap change of a task operation sends. */
 const TASK_CHANGE = { operations: [{ kind: 'task', id: 'task-1', patch: {} }] }
 const argsOf = (name: string) => (name === 'roadmap:change' ? TASK_CHANGE : undefined)
-const CREATES = ['issues:create', 'issues:createParent', 'issues:createLinked']
+/* The creates that write on an existing task besides making a new one. */
+const RELATION_CREATES = ['issues:createParent', 'issues:createLinked']
 
 describe('the guard against task writes before the ask', () => {
   let store: typeof import('../planner')
@@ -130,13 +133,14 @@ describe('the guard against task writes before the ask', () => {
       expect(probe.guardWrite(name), name).toEqual([])
   })
 
-  it('faults a create sent before the ask, whatever its mark, and passes every write after it', () => {
-    for (const name of CREATES) {
+  it('passes a create of its own by its name, faults a held new parent or linked task, and passes every write after the ask', () => {
+    expect(probe.guardWrite('issues:create')).toEqual([])
+    for (const name of RELATION_CREATES) {
       expect(probe.guardWrite(name), name).toHaveLength(1)
-      expect(probe.guardWrite(name, { task: 'task-1', answer: true }), name).toHaveLength(1)
+      expect(probe.guardWrite(name, { task: 'task-1', answer: true }), name).toEqual([])
     }
     store.P.askTasks('script')
-    for (const name of [...CREATES, ...HELD_WRITES])
+    for (const name of ['issues:create', ...RELATION_CREATES, ...HELD_WRITES])
       expect(probe.guardWrite(name, undefined, argsOf(name)), name).toEqual([])
   })
 
@@ -153,12 +157,15 @@ describe('the guard against task writes before the ask', () => {
     expect(faults.some((f) => f.includes('issues:archive went out before'))).toBe(true)
   })
 
-  it('lets a create through, since it asks before its send', async () => {
+  it('lets a create through without an ask, and paints no task row of the workspace', async () => {
     const key = store.P.addIssue({ project: snapshot.projects[0].id, title: 'A new task' })
     expect(key).not.toBeNull()
     await tick()
     expect(probe.faults()).toEqual([])
-    expect(probe.asks()).toContain('create')
+    expect(probe.asks()).toEqual([])
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+    const { refParts } = await import('../../lib/taskReference')
+    expect(store.P.handleOf(refParts(key)?.uuid ?? '')).toBeNull()
     expect(
       network.mutation.mock.calls.some(([ref]) => getFunctionName(ref) === 'issues:create'),
     ).toBe(true)

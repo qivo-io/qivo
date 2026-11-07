@@ -148,7 +148,7 @@ describe('tasks on demand', () => {
     expect(store.P.stillLoading()).toBeNull()
     expect(held('01000000-a')).toBe(true)
     // a second ask subscribes nothing more
-    store.P.askTasks('create')
+    store.P.askTasks('script')
     expect(taskWatches(watch)).toBe(1)
   })
 
@@ -224,9 +224,11 @@ describe('tasks on demand', () => {
     deliver(structuredClone(snapshot))
     await tick()
     expect(store.P.project(project.id)?.name).toBe('Mine')
-    // a create goes ahead, and asks nothing more
+    // a create goes ahead, and asks nothing
+    store.__layerProbe?.asks()
     const created = store.P.addIssue({ project: project.id, title: 'New during the failure' })
     expect(created).not.toBeNull()
+    expect(store.__layerProbe?.asks()).toEqual([])
     expect(
       network.mutation.mock.calls.some(([ref]) => getFunctionName(ref) === 'issues:create'),
     ).toBe(true)
@@ -321,7 +323,7 @@ describe('tasks on demand', () => {
       return () => {}
     })
     await expect(store.initStore()).rejects.toThrow('boom')
-    store.P.askTasks('create')
+    store.P.askTasks('script')
     // a load on its way, not the not-asked state
     expect(store.P.taskLoad()).toEqual({ state: 'arriving' })
     double.live?.holdWindow('')
@@ -380,10 +382,13 @@ describe('tasks on demand', () => {
     expect(of('0a000000-due')).not.toBe(before)
   })
 
-  it('keeps a new task’s card from a verdict until every task is held', async () => {
+  it('keeps a held new task’s card from a verdict until every task is held, in a store that asked', async () => {
     snapshot.projects[0].track_delay = true
     await boot()
     double.live?.holdWindow('')
+    // a store that asked for every task, as the scripts' do, holds the new
+    // task in the workspace while the load is on its way
+    store.P.askTasks('script')
     // a new task of the person's, past its due date, its create on its way
     network.mutation.mockImplementation(() => new Promise(() => {}))
     const key = store.P.addIssue({

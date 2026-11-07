@@ -35,7 +35,9 @@ export type Paint = () => void
 /** What one write shows. `workspace` paints the snapshot's rows; `thread`
     paints the comment thread of task `task`, and runs only while that task's
     thread is watched; `view` paints the task rows the open views' answers
-    bring (store/viewRows.ts), every copy of a task it changes; `detail`
+    bring (store/viewRows.ts), every copy of a task it changes, and a
+    create's puts its new task into the Board's and the Roadmap's rows
+    (store/viewRows.ts insert, rule 4); `detail`
     paints the task window's own answer of task `task` (convex/taskWindow.ts
     task), and runs only while that task is watched and its answer held;
     `milestones` paints the milestones the store's milestone reads hold

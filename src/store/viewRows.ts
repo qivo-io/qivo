@@ -23,7 +23,12 @@
      P.issueById. A task the workspace holds shows as the workspace's view
      model; the store asks this module only for the others (`unheld`), which
      until something asks for every task (store/planner.ts P.askTasks) are
-     all of a view's tasks but the person's own new ones.
+     all of a view's tasks.
+   - The person's own new task goes into the rows of the views whose join
+     shows the person's own changed tasks, the Board's and the Roadmap's
+     (insert), from what its create sends, until those views' answers hold
+     it (store/planner.ts newTaskViewPaint). An insert is the one paint
+     that adds a row no answer brought.
    - A model keeps its object while its row, its own and its parent's
      handles, its delay and the week grid hold the same data, so an answer
      that arrives again renders no card again (views/kanbanCards.tsx
@@ -236,6 +241,34 @@ export function createViewRows(
       }
       return out
     },
+    /** Puts a copy of `row` into view `slot`'s rows on screen, where that
+        view holds rows and none of task `row.id` (store/layers.ts rule 4),
+        so the person's new task shows there, and answers the copy, which a
+        later paint of the same repaint changes (edit). Answers null where
+        it put nothing. */
+    insert(slot: ViewSlot, row: ViewRow): ViewRow | null {
+      const rows = painted.get(slot)
+      if (!rows || rows.has(row.id)) return null
+      const copy: ViewRow = structuredClone(row)
+      copies.add(copy)
+      rows.set(row.id, copy)
+      return copy
+    },
+    /** The copy of task `uuid` in view `slot` a paint may change, as edit
+        makes it, or undefined where that view holds no row of it. */
+    editIn(slot: ViewSlot, uuid: string): ViewRow | undefined {
+      const rows = painted.get(slot)
+      const row = rows?.get(uuid)
+      if (!rows || !row) return undefined
+      if (copies.has(row)) return row
+      const copy: ViewRow = structuredClone(row)
+      copies.add(copy)
+      rows.set(uuid, copy)
+      return copy
+    },
+    /** Whether view `slot`'s last answer brought task `uuid`, so its row
+        there is no insert. */
+    answered: (slot: ViewSlot, uuid: string): boolean => !!anchors.get(slot)?.has(uuid),
     /** The row of task `uuid` as a view shows it, or undefined. */
     peek,
     /** View `slot`'s rows on screen, by uuid, or null when it holds none. */

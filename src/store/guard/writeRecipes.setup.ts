@@ -342,6 +342,29 @@ const created = (snap: Snapshot, id: string, num: number, over: Partial<Row<'iss
   })
 }
 
+/* What issues.create and issues.createLinked answer for new task `id`,
+   number `num`: the row the server stored, as `created` adds it, without
+   its text (convex/issues.ts pubFor). */
+const stored = (id: string, num: number, over: Partial<Row<'issues'>>) => {
+  const snap = fixture()
+  created(snap, id, num, over)
+  const {
+    description: _text,
+    has_hidden_subtasks: _h,
+    has_hidden_parent: _p,
+    ...row
+  } = snap.issues.at(-1) as Snapshot['issues'][number]
+  return row
+}
+
+/* What issues.createParent answers: the task `row` under its new parent
+   `parent`, stamped by the server, without its text, and the new parent's
+   number `num`. */
+const underNew = (row: Row<'issues'>, parent: string, num: number) => {
+  const { description: _text, ...rest } = row
+  return { ...rest, parent_id: parent, updated_at: SERVER, parent_num: num }
+}
+
 const file = (name: string, type: string) => new File(['bytes'], name, { type })
 
 /** Task task-v (QN-90) of sub-project Work as the Board's answer sends it,
@@ -460,7 +483,9 @@ export const recipes: Recipe[] = [
     what: 'a new task',
     pause: 'P',
     act: (P) => P.addIssue({ project: 'work', title: 'New task' }),
-    answers: { 'issues:create': () => ({ num: 4 }) },
+    answers: {
+      'issues:create': (args) => stored(str(args.id), 4, { title: 'New task', description: '' }),
+    },
     truth: (snap, args) => created(snap, str(args.id), 4, { title: 'New task' }),
   },
   {
@@ -810,7 +835,10 @@ export const recipes: Recipe[] = [
           : windowAnswer(),
     },
     act: (P) => P.createParent('QN-80', 'New parent'),
-    answers: { 'issues:createParent': () => ({ parent_num: 4 }) },
+    // the task with its new parent, and the parent's number
+    answers: {
+      'issues:createParent': (args) => underNew(task(WINDOW_TASK, 80), str(args.parent_id), 4),
+    },
     truth: (snap, args) => created(snap, str(args.parent_id), 4, { title: 'New parent' }),
   },
   {
@@ -820,7 +848,9 @@ export const recipes: Recipe[] = [
     pause: 'P',
     detail: { answer: () => windowAnswer() },
     act: (P) => P.createLinked('QN-80', 'relates', 'New linked task'),
-    answers: { 'issues:createLinked': () => ({ num: 4 }) },
+    answers: {
+      'issues:createLinked': (args) => stored(str(args.new_id), 4, { title: 'New linked task' }),
+    },
     truth: (snap, args) => created(snap, str(args.new_id), 4, { title: 'New linked task' }),
   },
   {
@@ -843,7 +873,10 @@ export const recipes: Recipe[] = [
           : windowAnswer(),
     },
     act: (P) => P.addIssue({ project: 'work', title: 'New subtask', parent: 'QN-80' }),
-    answers: { 'issues:create': () => ({ num: 4 }) },
+    answers: {
+      'issues:create': (args) =>
+        stored(str(args.id), 4, { title: 'New subtask', parent_id: WINDOW_TASK }),
+    },
     truth: (snap, args) =>
       created(snap, str(args.id), 4, { title: 'New subtask', parent_id: WINDOW_TASK }),
   },
@@ -853,7 +886,9 @@ export const recipes: Recipe[] = [
     what: 'a new parent task',
     pause: 'P',
     act: (P) => P.createParent('QN-3', 'New parent'),
-    answers: { 'issues:createParent': () => ({ parent_num: 4 }) },
+    answers: {
+      'issues:createParent': (args) => underNew(task('task-c', 3), str(args.parent_id), 4),
+    },
     truth: (snap, args) => {
       created(snap, str(args.parent_id), 4, { title: 'New parent' })
       Object.assign(issue(snap, 'task-c'), { parent_id: str(args.parent_id), updated_at: SERVER })
@@ -866,7 +901,9 @@ export const recipes: Recipe[] = [
     what: 'a new linked task',
     pause: 'P',
     act: (P) => P.createLinked('QN-1', 'blocks', 'New linked task'),
-    answers: { 'issues:createLinked': () => ({ num: 4 }) },
+    answers: {
+      'issues:createLinked': (args) => stored(str(args.new_id), 4, { title: 'New linked task' }),
+    },
     truth: (snap, args) => {
       created(snap, str(args.new_id), 4, { title: 'New linked task' })
       snap.links.push({
