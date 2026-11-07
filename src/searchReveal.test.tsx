@@ -16,8 +16,8 @@ import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixt
    the workspace holds no task: App reveals the handle the Board names a
    referenced task by (P.handleOfOpen). And an Inbox row of another
    organization's task with the id of a task the workspace holds, which
-   the Inbox pane shows, reads on open and comments on in that
-   organization, never as the held task. */
+   the Inbox pane shows with that organization's New mark, reads on open
+   and comments on in that organization, never as the held task. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('./lib/convex', async () => {
@@ -421,10 +421,12 @@ describe("an Inbox row of another organization's task with a held task's id", {
     snap.issues.push(task(snap.orgs[0].id, snap.projects[0].id, 2, 'Run the soak test'))
     const guestTask = task(GUEST, guestProject.id, 7, 'Calibrate the guest rig')
     Object.assign(snap, { unheld: { issues: [guestTask] } })
-    for (const [org, recipient] of [
-      [snap.orgs[0].id, me.id],
-      [GUEST, 'me-guest'],
-    ])
+    // the home organization's message is read and the guest
+    // organization's unread, with a comment on its thread after it
+    for (const [org, recipient, read] of [
+      [snap.orgs[0].id, me.id, true],
+      [GUEST, 'me-guest', false],
+    ] as const)
       snap.messages.push({
         id: `message-${org}`,
         org_id: org,
@@ -434,12 +436,21 @@ describe("an Inbox row of another organization's task with a held task's id", {
         kind: 'comment',
         detail: 'New comment',
         created_at: AT,
+        ...(read ? { read_at: AT } : {}),
       })
+    const guestComment = {
+      id: 'fe000000-0000-4000-8000-000000000001',
+      issue_id: SOAK,
+      author: 'me-guest',
+      body: 'The rig drifts',
+      created_at: '2026-09-14T08:05:00.000Z',
+    }
     network.onUpdate.mockImplementation((ref, args, next) => {
       const name = getFunctionName(ref)
       const a = args as { org_id?: string; ref?: string }
       if (name === 'workspace:whole') next(structuredClone(snap))
-      else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'snapshot:threadComments')
+        next({ comments: a.org_id === GUEST ? [guestComment] : [], earlier: false })
       else if (name === 'taskWindow:task') {
         // the window's own read, of the task of the organization it names
         const row = [...snap.issues, guestTask].find(
@@ -489,21 +500,31 @@ describe("an Inbox row of another organization's task with a held task's id", {
       network.mutation.mock.calls
         .filter(([ref]) => getFunctionName(ref) === 'messages:readItem')
         .map(([, args]) => args as { org_id: string; issue_id: string })
-    // the held task's row opens it, and reads its item
+    const divider = () => document.querySelector('.inbox-detail-frame [data-unread-divider]')
+    // the held task's row opens it, whose item is read, so it shows no New
+    // mark and sends no read
     const homeRow = await rowOpen(home)
     await act(async () => homeRow.click())
     await waitFor(() => title() === 'Run the soak test', "the held task's title")
-    await waitFor(() => reads().length === 1, 'the first read on open')
+    await waitFor(
+      () =>
+        store.P.inboxItem?.org === home &&
+        store.P.inboxItem.state === 'ok' &&
+        store.P.inboxItem.current,
+      "the held task's item",
+    )
+    expect(divider()).toBeNull()
     // the guest organization's row of the same id shows that task instead
     const guestRow = await rowOpen(GUEST)
     await act(async () => guestRow.click())
     await waitFor(() => title() === 'Calibrate the guest rig', "the guest task's title")
+    // with that organization's New mark, frozen from its own item, not the
+    // held task's read one
+    await waitFor(divider, "the guest task's New mark")
+    expect(divider()?.getAttribute('data-unread-divider')).toBe('mark')
     // and its read on open reads that organization's item
-    await waitFor(() => reads().length === 2, 'the second read on open')
-    expect(reads()).toEqual([
-      expect.objectContaining({ org_id: home, issue_id: SOAK }),
-      expect.objectContaining({ org_id: GUEST, issue_id: SOAK }),
-    ])
+    await waitFor(() => reads().length === 1, 'the read on open')
+    expect(reads()).toEqual([expect.objectContaining({ org_id: GUEST, issue_id: SOAK })])
     expect(location.pathname).not.toMatch(/qn-2$/)
     expect(title()).toBe('Calibrate the guest rig')
     // a comment typed there goes to that organization's task too

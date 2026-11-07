@@ -2000,13 +2000,17 @@ function IssueDetail({
   // Where this visit's unread part starts, frozen once a visit. Opening
   // marks the task read (below), so an unfrozen mark would vanish while you
   // were looking at it. Assigned DURING render, before any effect runs.
-  // That ordering is the whole trick. Keyed on the uuid, not issueId: on a
-  // cold deep link P.issueById[issueId] is still undefined on the first
-  // render, and a null key would freeze "nothing unread" forever. It comes
-  // from the task's inbox item, which the store reads beside the thread
-  // (P.inboxItem), so it is exact also for messages the workspace never
-  // loaded, and stays pending until that read's first ok, current answer,
-  // while no mark shows and no read goes out. It stays pending through a
+  // That ordering is the whole trick. Keyed on the organization and the
+  // uuid, not issueId: on a cold deep link P.issueById[issueId] is still
+  // undefined on the first render, and a null key would freeze "nothing
+  // unread" forever. It comes from the task's inbox item, which the store
+  // reads beside the thread (P.inboxItem), so it is exact also for messages
+  // the workspace never loaded, and stays pending until that read's first
+  // ok, current answer, while no mark shows and no read goes out. Only the
+  // item of the window's own organization counts, since the store moves
+  // P.inboxItem only in the effect that watches the thread, and another
+  // organization's task of the same id is another task, whose item would
+  // freeze a start this one never had. It stays pending through a
   // seat whose items are building and through a failure, which the store
   // runs once more, so a read that recovers still draws the divider.
   // …unless the surface that opened us passed one (`unread`, the Inbox's
@@ -2019,11 +2023,15 @@ function IssueDetail({
     key: undefined,
     unread: { ts: null, change: false },
   })
-  const shownItem = watchUuid && P.inboxItem?.task === watchUuid ? P.inboxItem : null
-  if (frozen.current.key !== watchUuid || frozen.current.unread === null) {
+  const freezeKey = watchUuid ? `${watchOrg}:${watchUuid}` : watchUuid
+  const shownItem =
+    watchUuid && P.inboxItem?.task === watchUuid && P.inboxItem.org === watchOrg
+      ? P.inboxItem
+      : null
+  if (frozen.current.key !== freezeKey || frozen.current.unread === null) {
     const answered = shownItem?.state === 'ok' && shownItem.current ? shownItem : null
     frozen.current = {
-      key: watchUuid,
+      key: freezeKey,
       unread:
         unreadIn !== undefined
           ? unreadIn
