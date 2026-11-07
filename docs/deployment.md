@@ -1815,15 +1815,17 @@ sample at its start, and is recorded once. Its days are the UTC dates from
 its start's date to the day before its end's date. The run of its last day
 records it when that day has the organization's sample, normally about a
 day or more before the end. When that day has none, the next day's run
-records it from its own sample once the last day has no run, its run has
-finished or its run has taken no step for 15 minutes. The record stops such
-a stalled run in the same transaction, so the run writes no sample of that
-day afterwards. At the latest the first hourly call within two hours of the
-end records it. A day still without a sample then takes the next reading
-after it, the next period's first day included, or else the most recent one
-before it, an earlier period's included. Every later run and call tries a
-period that is still open, for up to 3 days after its end, then stops with
-an error log and a `billing.storage_finalize_stopped` audit row, and
+records it from its own sample. Until two hours before the end a period is
+recorded only once the run of each of its days without a sample has no
+row, has finished or has taken no step for 15 minutes, so none can still
+write that day's sample. The record stops such a stalled run in the same
+transaction, so the run writes no sample of its day afterwards. At the
+latest the first hourly call within two hours of the end records it. A day
+still without a sample then takes the next reading after it, the next
+period's first day included, or else the most recent one before it, an
+earlier period's included. Every later run and call tries a period that is
+still open, for up to 3 days after its end, then stops with an error log
+and a `billing.storage_finalize_stopped` audit row, and
 `billingSync:finalizeStorage` with the period and `"operator":true` records
 it by the same rules and writes a `billing.storage_finalize_requested`
 audit row, as that function's docstring shows. The average, rounded up to a
@@ -1854,11 +1856,12 @@ period on never return the backend to a commit before this release; roll
 forward instead. Until then the floors above stand, and the release sets
 none. For the owner's cost reading, each daily period costs one
 `billingSync:finalizeStorage` call when it is recorded, reading its period
-row, its days' samples (at most 31) and a few documents more, 37 documents
-and 8 index ranges for 31 days at 1,000 people in
-`convex/tests/billing.test.ts`, and writing the period and its charge,
-plus the last day's run row when the record fences a stalled run, one more
-call each time a day's run finds it waiting for its last day, and one
+row, its days' samples (at most 31), until two hours before the end the
+run row of each day without a sample in an index range of its own, and a
+few documents more, 37 documents and 8 index ranges for 31 days with the
+last one missing at 1,000 people in `convex/tests/billing.test.ts`, and
+writing the period and its charge, plus the run row of each stalled run the
+record fences, one more call each time a day's run finds it waiting, and one
 `billingSync:finalizeDue` call for each 25 periods a run or call lists. A
 period stopped after 3 days costs one write of its row and one audit row.
 `billing.usageFigures` reads at most 31 more documents for an admin of an

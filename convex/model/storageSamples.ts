@@ -35,8 +35,9 @@ export const SAMPLE_PAGE = { orgs: 100 }
  * within the run's UTC day. A tick never resumes an earlier day's run, so a
  * run that stalls with its last step after 23:05 UTC stays unfinished, and
  * its remaining organizations have no sample that day. A daily period's
- * finalize counts its last day's run as stalled this long after its last
- * step too, and then fences it (billingSync.ts dayClosed). */
+ * finalize counts the run of each of its days without a sample as stalled
+ * this long after its last step too, and then fences it (billingSync.ts
+ * daysClosed). */
 export const SAMPLE_STALLED_MS = 15 * 60_000
 
 /** How many samples, and how many run rows, one expiry step deletes at

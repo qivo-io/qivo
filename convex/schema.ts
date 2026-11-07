@@ -2224,9 +2224,9 @@ export default defineSchema({
     day: v.string(), // YYYY-MM-DD, UTC
     // The run under way or done: its id, which its steps carry and a
     // resumed run replaces, as does a daily period's finalize that fences a
-    // stalled earlier day's run (billingSync.ts dayClosed), and the last
-    // organization id its steps finished, null before the first and once
-    // the run finished.
+    // stalled run of a day without a sample (billingSync.ts daysClosed),
+    // and the last organization id its steps finished, null before the
+    // first and once the run finished.
     run: v.string(),
     cursor: v.union(v.string(), v.null()),
     started_at: v.number(), // epoch milliseconds, as the times below

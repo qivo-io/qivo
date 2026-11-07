@@ -3331,6 +3331,92 @@ describe('storage charged on the daily average', () => {
       expect(await storageEvents(t)).toMatchObject([{ units: 3 }])
     })
 
+    it("waits while the run of an earlier day without a sample can still write, then records that day from a later day's sample and fences every stalled run", async () => {
+      SAMPLE_PAGE.orgs = 1
+      const { t, f } = await fixture()
+      // an organization each run samples before any of withOrg's
+      await payingOrg(t, 10, undefined, '00000000-0000-4000-8000-000000000000')
+      await storeBytes(t, f, 6 * GB)
+      // a period of four days, 27 to 30 September, ending at noon
+      const start = '2026-09-27T12:00:00.000Z'
+      await tickAt(t, '2026-09-27')
+      vi.setSystemTime(Date.parse(start))
+      const open = await record(t, f.org.id, start, E)
+      /* Starts the run of `day` at `time` and takes its first step, which
+       * samples the other organization only and leaves its next step
+       * queued. The queued calls run only at the end of the case. */
+      async function firstStepOnly(day: string, time: string) {
+        vi.setSystemTime(at(day, time))
+        await t.mutation(internal.storageSamples.tick, {})
+        const run = (await t.run((ctx) => runOf(ctx, day)))?.run ?? ''
+        await t.mutation(internal.storageSamples.step, { day, run })
+        const row = await t.run((ctx) => runOf(ctx, day))
+        if (row === null) throw new Error(`no run of ${day}`)
+        expect(row).not.toHaveProperty('finished_at')
+        return row
+      }
+      // the run of 28 September stalls at its first step, and the one of 29
+      // September starts late, at 23:58
+      const run28 = await firstStepOnly('2026-09-28', '00:20')
+      const run29 = await firstStepOnly('2026-09-29', '23:58')
+      // after midnight the last day's run samples f.org at 8 GB and
+      // finishes, and then 4 GB more are stored, which the queued steps
+      // would read
+      vi.setSystemTime(at('2026-09-30', '00:05'))
+      await storeBytes(t, f, 2 * GB)
+      await t.mutation(internal.storageSamples.tick, {})
+      const lastRun = () => t.run((ctx) => runOf(ctx, '2026-09-30'))
+      const run30 = (await lastRun())?.run ?? ''
+      while ((await lastRun())?.finished_at === undefined)
+        await t.mutation(internal.storageSamples.step, { day: '2026-09-30', run: run30 })
+      await storeBytes(t, f, 4 * GB)
+      const runsOf = () =>
+        t.run(async (ctx) => [await runOf(ctx, '2026-09-28'), await runOf(ctx, '2026-09-29')])
+      // 1 ms short of SAMPLE_STALLED_MS after the step of 29 September its
+      // run may still write, so the finalize waits, and it writes nothing,
+      // not even a fence of the run of 28 September, stalled long before
+      const stalledAt = run29.step_at + SAMPLE_STALLED_MS
+      vi.setSystemTime(stalledAt - 1)
+      expect(await t.mutation(finalizeRef, { period: open._id })).toBe('waiting')
+      expect(await periodAt(t, start)).toEqual(open)
+      expect(await runsOf()).toEqual([run28, run29])
+      // at SAMPLE_STALLED_MS it records both days from the last day's
+      // sample, and replaces both runs' ids in the same transaction
+      vi.setSystemTime(stalledAt)
+      expect(await t.mutation(finalizeRef, { period: open._id })).toBe('recorded')
+      const period = await periodAt(t, start)
+      expect(period?.storage_days).toEqual([
+        { day: '2026-09-27', bytes: 6 * GB },
+        { day: '2026-09-28', bytes: 8 * GB, from: '2026-09-30' },
+        { day: '2026-09-29', bytes: 8 * GB, from: '2026-09-30' },
+        { day: '2026-09-30', bytes: 8 * GB },
+      ])
+      // (6 + 8 + 8 + 8) / 4 GB, and 3 blocks over 5 GB
+      expect(period).toMatchObject({ storage_bytes: 7_500_000_000, storage_blocks: 3 })
+      const fenced = await runsOf()
+      expect(fenced).toEqual([
+        { ...run28, run: expect.any(String) },
+        { ...run29, run: expect.any(String) },
+      ])
+      expect(fenced.map((row) => row?.run)).not.toContain(run28.run)
+      expect(fenced.map((row) => row?.run)).not.toContain(run29.run)
+      // the old runs' queued steps, and every other call queued, then write
+      // no sample of f.org for either day, so the record stays its days'
+      // average
+      await sample(t)
+      const late = await t.run((ctx) =>
+        ctx.db
+          .query('storage_daily_samples')
+          .withIndex('by_org_day', (q) =>
+            q.eq('org_id', f.org.id).gte('day', '2026-09-28').lte('day', '2026-09-29'),
+          )
+          .collect(),
+      )
+      expect(late).toEqual([])
+      expect(await periodAt(t, start)).toEqual(period)
+      expect(await storageEvents(t)).toMatchObject([{ units: 3 }])
+    })
+
     it("records a period whose last day has no run at all from the next day's sample, before its deadline", async () => {
       const { t, f } = await fixture()
       await storeBytes(t, f, 6 * GB)
