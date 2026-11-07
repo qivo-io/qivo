@@ -10,8 +10,8 @@ import { answerOverview } from './store/overviewStandIn.setup'
 import { plannerFixture, type Snapshot, underProgram } from './store/plannerFixture.setup'
 
 /* A task picked in Search while the Board shows, and a task an Inbox row
-   opens with Open task in board, on App and the real store in a session
-   that never asked for every task. The task window opens over the Board,
+   or the Inbox pane's Task actions open with Open task in board, on App
+   and the real store in a session that never asked for every task. The task window opens over the Board,
    and the Board rings the task's card, which only its answer brings, as
    the workspace holds no task: App reveals the handle the Board names a
    referenced task by (P.handleOfOpen). And an Inbox row of another
@@ -264,6 +264,118 @@ describe("an Inbox row's Open task in board", { timeout: 30_000 }, () => {
       'the ring',
     )
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+    expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
+  })
+})
+
+describe("the Inbox pane's Open task in board", { timeout: 30_000 }, () => {
+  it("rings the Board's card of a task the pane shows from its answer, by its reference", async () => {
+    vi.resetModules()
+    history.replaceState(null, '', '/app/~/inbox')
+    const snap: Snapshot = underProgram(plannerFixture())
+    snap.orgs[0].next_issue_num = 2
+    const project = snap.projects[0]
+    snap.issues.push({
+      id: SOAK,
+      org_id: snap.orgs[0].id,
+      project_id: project.id,
+      num: 2,
+      title: 'Run the soak test',
+      description: '',
+      status: 'progress',
+      priority: 'medium',
+      paused: false,
+      created_at: AT,
+      updated_at: AT,
+      has_hidden_subtasks: false,
+      has_hidden_parent: false,
+    })
+    snap.messages.push({
+      id: 'message-soak',
+      org_id: snap.orgs[0].id,
+      recipient_id: snap.profiles[0].id,
+      issue_id: SOAK,
+      issue_title: 'Run the soak test',
+      kind: 'comment',
+      detail: 'New comment',
+      created_at: AT,
+    })
+    network.onUpdate.mockImplementation((ref, args, next, fail) => {
+      const name = getFunctionName(ref)
+      const a = args as { org_id?: string; ref?: string }
+      if (name === 'workspace:whole') next(structuredClone(snap))
+      else if (name === 'snapshot:threadComments') next({ comments: [], earlier: false })
+      else if (name === 'tasks:board') next(boardStandIn(snap, args as BoardArgs))
+      else if (name.startsWith('overview:')) answerOverview(snap, name, args, next, fail)
+      else if (name === 'taskWindow:task') {
+        // the window's own read, of the task the workspace does not hold
+        const row = snap.issues.find((it) => it.org_id === a.org_id && it.id === a.ref)
+        if (row)
+          next({
+            state: 'ok',
+            task: { ...row, has_subtasks: false },
+            level: 'lead',
+            labels: [],
+            follow: null,
+            parent: null,
+            subtasks: { rows: [], complete: true },
+          })
+      }
+      return () => {}
+    })
+    network.query.mockResolvedValue(null)
+    network.mutation.mockResolvedValue(null)
+    const { TASKS } = await import('./store/liveParts')
+    TASKS.atBoot = false
+    const store = await import('./store/planner')
+    await store.initStore()
+    const { syncStatus } = await import('./lib/syncStatus')
+    syncStatus.setSocket({ connected: true, everConnected: true })
+    const { default: App } = await import('./App')
+    await act(async () =>
+      root.render(
+        <TooltipProvider>
+          <App />
+        </TooltipProvider>,
+      ),
+    )
+    const open = await waitFor(
+      () => document.querySelector<HTMLElement>(`[data-message="${SOAK}"] .inbox-message-open`),
+      "the Inbox's row",
+    )
+    expect(store.P.handleOf(SOAK)).toBeNull()
+    await act(async () => open.click())
+    // the pane shows the task from its own read
+    await waitFor(
+      () => document.querySelector('[data-task-title]')?.textContent === 'Run the soak test',
+      "the pane's task",
+    )
+    const actions = await waitFor(
+      () => document.querySelector<HTMLElement>('[aria-label="Task actions"]'),
+      'Task actions',
+    )
+    await act(async () => actions.click())
+    const board = await waitFor(
+      () => document.querySelector<HTMLElement>('[data-task-open-board]'),
+      'Open task in board',
+    )
+    await act(async () => board.click())
+    // the Board of the task's project, its window over it and its card ringed
+    const card = () => document.querySelector<HTMLElement>('[data-card="QN-2"]')
+    await waitFor(
+      () => card()?.closest('.board-card')?.hasAttribute('data-board-revealed'),
+      'the ring',
+    )
+    await waitFor(
+      () => document.querySelector('[role="dialog"] [data-task-title]')?.textContent,
+      "the window's task",
+    )
+    expect(document.querySelector('[role="dialog"] [data-task-title]')?.textContent).toBe(
+      'Run the soak test',
+    )
+    // the window opened the task by the same reference as the row menu
+    const { refParts } = await import('./lib/taskReference')
+    expect(refParts(store.P.reference?.ref)).toEqual({ org: snap.orgs[0].id, num: 2, uuid: SOAK })
     expect(store.P.taskLoad()).toEqual({ state: 'not_asked' })
   })
 })
