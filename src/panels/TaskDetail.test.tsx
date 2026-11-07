@@ -340,10 +340,11 @@ const answer = (name: string, value: unknown) => act(async () => one(name).deliv
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"], [role="region"]')
 const note = () => document.querySelector<HTMLElement>('[data-task-gone] [role="status"]')
 /* The field labelled `label`. Assignee and Reviewer name their holder
-   too, so they are found by their field. */
+   too, so they are found by their field, among the field selects, as an
+   owner portrait carries data-owner-field too. */
 const field = (label: string) =>
   document.querySelector<HTMLButtonElement>(
-    `[data-fieldselect][aria-label="${label}"], [data-owner-field="${label.toLowerCase()}"]`,
+    `[data-fieldselect][aria-label="${label}"], [data-fieldselect][data-owner-field="${label.toLowerCase()}"]`,
   )
 const buttonNamed = (name: string, scope: ParentNode = document) =>
   [...scope.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === name)

@@ -2382,8 +2382,10 @@ try {
   const picker = (name) => taskWindow.getByRole('combobox', { name, exact: true })
   // Assignee and Reviewer open the shared owner list in a popover, which
   // reads its people from the server and searches them there. Their names
-  // hold the holder too, so they are found by their field.
-  const ownerField = (name) => taskWindow.locator(`[data-owner-field="${name.toLowerCase()}"]`)
+  // hold the holder too, so they are found by their field, among the field
+  // selects, as an owner portrait carries data-owner-field too.
+  const ownerField = (name) =>
+    taskWindow.locator(`[data-fieldselect][data-owner-field="${name.toLowerCase()}"]`)
   const pickOwner = async (name, label) => {
     await ownerField(name).click()
     const list = pageA.locator(`[data-owner-list="${name.toLowerCase()}"]`)
@@ -2415,7 +2417,9 @@ try {
   const reviewerFollowsAssignee = await pageA.evaluate(() => {
     const field = (name) =>
       document
-        .querySelector(`[data-task-scrim] [data-owner-field="${name.toLowerCase()}"]`)
+        .querySelector(
+          `[data-task-scrim] [data-fieldselect][data-owner-field="${name.toLowerCase()}"]`,
+        )
         ?.closest('.task-field')
     const assignee = field('Assignee')
     return !!assignee && assignee.nextElementSibling === field('Reviewer')
