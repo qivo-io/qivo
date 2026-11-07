@@ -56,7 +56,8 @@ async function start(snap: Snapshot) {
   return store.P
 }
 
-/** `profile`'s workspace with every project of their organization added. */
+/** `profile`'s workspace with every project of their organization added, and
+    no milestone beside it, as the store tests' whole carries them. */
 async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
   const ws = await workspaceOf(as(t, profile))
   if (ws === null) throw new Error(`no workspace for ${profile.name}`)
@@ -67,7 +68,7 @@ async function worldOf(t: T, profile: Doc<'profiles'>): Promise<Snapshot> {
       .withIndex('by_org', (q) => q.eq('org_id', profile.org_id))
       .collect(),
   )
-  return { ...ws, projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))] }
+  return { ...ws, milestones: [], projects: [...ws.projects, ...rest.filter((p) => !held.has(p.id))] }
 }
 
 describe('the store’s management rule', () => {
