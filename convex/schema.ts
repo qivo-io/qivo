@@ -1704,8 +1704,9 @@ export default defineSchema({
     // whether it is live (archived_at absent)
     name_key: v.string(),
     live: v.boolean(),
-    // when the seat starred it, or a star last reset it, and never before
-    // the seat's own created_at (model/projectFavorites.ts)
+    // when the seat starred it, or a star last reset it; this release's
+    // writers never stamp it before the seat's own created_at
+    // (model/projectFavorites.ts)
     created_at: v.string(),
   })
     // a seat's favorites in name order, live or archived, the project id
