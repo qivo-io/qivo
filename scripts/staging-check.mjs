@@ -6571,12 +6571,14 @@ async function projectDirectoryCheck() {
         }, 60_000),
         "M's sub-projects do not list Alpha and Zulu",
       )
+      let pressed = false
       const opened = await until(async () => {
         if (!new URL(app.url()).pathname.endsWith('/projects')) return true
         const note = (await app.locator(`[${m.status}]`).textContent()) ?? ''
         // a project the workspace has not delivered yet: the directory says
-        // so and moves nothing
-        if (note.includes(NOT_LOADED_YET) || note === '') await child(Z).click()
+        // so and moves nothing, so the step presses again
+        if (!pressed || note.includes(NOT_LOADED_YET)) await child(Z).click()
+        pressed = true
         return !new URL(app.url()).pathname.endsWith('/projects')
       }, 60_000)
       expect(opened, "Zulu's page did not open from the directory")
