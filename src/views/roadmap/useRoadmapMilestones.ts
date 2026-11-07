@@ -10,7 +10,7 @@
    answers, which show again as refreshing on return, as the Roadmap's own
    reads do (useRoadmapView.ts). App releases them once the page is no
    longer kept (P.releaseRoadmap). The fixed slots bound what a scope
-   switch leaves behind: a new Roadmap takes them over. */
+   switch leaves behind, as a new Roadmap takes them over. */
 
 import { useEffect, useRef, useState } from 'react'
 import { useViewVisibility } from '../../lib/viewVisibility'
@@ -85,7 +85,7 @@ export function useRoadmapMilestones(
   let next = nextPlan(plan, ask, !!answerOf(plan ? readOf(plan.shown) : null))
   let shownRead = next ? readOf(next.shown) : null
   const pendingRead = next?.pending ? readOf(next.pending) : null
-  // the new window's read answered: it shows from now on
+  // the new window's read answered, so it shows from now on
   if (next && pendingRead?.state === 'ok') {
     next = swapPlan(next)
     shownRead = pendingRead

@@ -8,8 +8,8 @@
    planning panel read people's loads from the owner-load cache. Its
    milestone flags come from the server's range read for the weeks on
    screen (roadmap/useRoadmapMilestones.ts), never from the workspace's
-   milestones: in a project or sub-project in the header, in My view each
-   on its own project's track row. */
+   milestones. In a project or sub-project they sit in the header, and in
+   My view each sits on its own project's track row. */
 import type React from 'react'
 import {
   memo,
@@ -89,8 +89,8 @@ const MIN_WEEK_W = 24
 // header above the task grid. The flag band under the week numbers is two
 // rows of flags tall, and taller when milestones need more rows
 // (roadmap/flagLanes.ts), up to what the panel leaves after its smallest
-// share of task rows and Team. My view has no flag band: its flags sit on
-// their projects' track rows.
+// share of task rows and Team. My view has no flag band, as its flags sit
+// on their projects' track rows.
 const HEAD_PAD_T = 6 // breathing room above the week numbers
 const WEEK_BAND_H = 33 // calendar week number over the week's first workday
 
@@ -828,8 +828,8 @@ function Roadmap({
 
   /* ---------- milestone flags, from the server's range read ----------
      The flags of the weeks on screen come from milestones.between over the
-     projects markerProjects names (roadmap/roadmapMilestones.ts): a project
-     or sub-project's top-level project, or in My view the top-level
+     projects markerProjects names (roadmap/roadmapMilestones.ts), a
+     project or sub-project's top-level project, or in My view the top-level
      projects of the scope's tracks before the toolbar's filters prune them,
      so a filter never asks again. While My view's answer reloads for the
      same scope, as after a Priority change, the projects it named last
@@ -1644,7 +1644,7 @@ function Roadmap({
   /* Why a scope has nothing to schedule. In a project or sub-project, and
      in My view, the timeline stays behind the note, as it does behind
      "Nothing matches your filters", with its week header and window
-     controls, and in a project with its header's flags of the window: the
+     controls, and in a project with its header's flags of the window. The
      empty state says why there are no rows, not that the scope plans
      nothing. My view has no flags then, as they sit on the rows. All
      projects, which asks to choose a project, and a person with no
@@ -1959,9 +1959,10 @@ function Roadmap({
      row. */
   const milestonesOf = (track: string): readonly MilestoneVM[] =>
     wide ? (trackMilestones.get(track) ?? []) : projMilestones
-  /* What a row's guides read, by track, so a drag or a rename of one
-     project's milestone renders that track's rows and no other's: the
-     grid, today, the window, the week width, the resource week, and each
+  /* What a row's guides read, by track, so a drag of one project's
+     milestone renders that track's rows and no other's (a rename changes
+     only the track row's flags key, trackFlagsKeyOf). It holds the grid,
+     today, the window, the week width, the resource week, and each
      milestone's id and the week it is drawn in. */
   const guidesKeys = new Map<string, string>()
   const guidesKeyOf = (track: string) => {
@@ -2031,8 +2032,8 @@ function Roadmap({
 
   /* My view's flags on track `track`'s row, in the rows of flags its
      height holds (roadmap/flagLanes.ts layoutTrackFlags), at its bottom and
-     not scrolling. A flag rides with its row: a pinned heading keeps it in
-     sight, a folded track keeps it. A drag stays in its row. */
+     not scrolling. A flag rides with its row, so a pinned heading keeps it
+     in sight and a folded track keeps it. A drag stays in its row. */
   const trackFlagsKeyOf = (track: string) =>
     JSON.stringify([
       P.gridEpoch,

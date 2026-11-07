@@ -12,8 +12,8 @@
      the top-level projects that hold a sub-project its Roadmap's answer
      names, before the toolbar's filters prune them, so typing a filter
      never asks again, and the last answer's projects hold while the
-     Roadmap's answer reloads for the same scope. All projects names none:
-     it asks to choose a project.
+     Roadmap's answer reloads for the same scope. All projects names none,
+     as it asks to choose a project.
    - A read lives under one of two fixed slots. A new window or a new set
      of projects asks under the other slot while the shown answer stays
      live, and its flags show for the weeks both windows cover. Once the
@@ -21,7 +21,7 @@
      at most two answers and never shows an answer for another window.
    - A read that is not whole (a wait, a failure, a refusal, more projects
      than one read names, an answer that stopped at its budget) never
-     draws as whole: its state says so, and the line beside the toolbar
+     draws as whole. Its state says so, and the line beside the toolbar
      says what is missing (markerLine). A shorter window narrows a range
      read, unlike the Roadmap's tasks, so a read that stopped offers it.
 
@@ -101,7 +101,7 @@ export function markerProjects(
 }
 
 /** The range read of `projects` for the weeks `w0` to `w1` of the app's
-    week grid: from the first day of week `w0` to the first day after week
+    week grid, from the first day of week `w0` to the first day after week
     `w1`, so the range is exactly the weeks on screen. */
 export function markerAsk(projects: readonly string[], w0: number, w1: number): MarkerAsk {
   return {
@@ -139,13 +139,13 @@ export function nextPlan(
   return { ...plan, pending: { n, ask, key, attempt: 0 } }
 }
 
-/** The plan once the pending read answered: its slot shows, and the one
+/** The plan once the pending read answered. Its slot shows, and the one
     it replaced goes. */
 export function swapPlan(plan: MarkerPlan): MarkerPlan {
   return plan.pending === null ? plan : { shown: plan.pending, pending: null }
 }
 
-/** The plan after Retry: a new attempt for each slot `retry` names. */
+/** The plan after Retry, with a new attempt for each slot `retry` names. */
 export function retryPlan(plan: MarkerPlan, retry: { shown: boolean; pending: boolean }) {
   const again = (slot: MarkerSlot): MarkerSlot => ({ ...slot, attempt: slot.attempt + 1 })
   return {
@@ -154,7 +154,7 @@ export function retryPlan(plan: MarkerPlan, retry: { shown: boolean; pending: bo
   }
 }
 
-/** The answer a read shows: its current or kept answer, also beside a
+/** The answer a read shows, its current or kept answer, also beside a
     failure or refusal, or null. */
 export function answerOf<R extends Marker>(read: MarkerRead<R> | null): MarkerAnswer<R> | null {
   if (!read) return null
@@ -294,7 +294,8 @@ export function markerLine(
       return "Couldn't load milestones."
     case 'refused':
       if (!view.refusal) return null
-      // a read too large for one request: a project names one project
+      // a project's read names one project, so only My view's read too
+      // large for one request offers opening one
       return mine && view.refusal.reason === 'milestone_read_too_large'
         ? `${view.refusal.sentence} ${openOne}`
         : view.refusal.sentence
