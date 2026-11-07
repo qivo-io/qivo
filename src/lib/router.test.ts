@@ -235,7 +235,9 @@ describe('parsePath — the org segment', () => {
   it('a slug this login cannot resolve resolves NOTHING, rather than falling home', () => {
     // the same number exists at home, so a home-first fallback would silently
     // open MY project 1 when handed a link to someone else's
-    expect(parsePath('/app/globex/board/p/1')).toEqual({ view: 'kanban' })
+    // it names a project no read can ask about (Route.unheld null), which
+    // App answers with the project chooser and a note
+    expect(parsePath('/app/globex/board/p/1')).toEqual({ view: 'kanban', unheld: null })
     expect(parsePath('/app/globex/tasks/qn-5')).toEqual({})
     // …and the view/settings shell the link named still applies
     expect(parsePath('/app/globex/roadmap/p/1')!.view).toBe('roadmap')
@@ -270,8 +272,34 @@ describe('parsePath — scopes and pages', () => {
   })
 
   it('a sentinel never collides with a project reference', () => {
-    expect(parsePath('/app/home/board/p/all')).toEqual({ view: 'kanban' })
-    expect(parsePath('/app/home/board/p/mine')).toEqual({ view: 'kanban' })
+    expect(parsePath('/app/home/board/p/all')).toEqual({ view: 'kanban', unheld: null })
+    expect(parsePath('/app/home/board/p/mine')).toEqual({ view: 'kanban', unheld: null })
+  })
+
+  it('names a project the workspace does not hold as App asks the server about it', () => {
+    // by its number in the organization the address pins, `~` reading home
+    expect(parsePath('/app/home/board/p/9')).toEqual({
+      view: 'kanban',
+      unheld: { org_id: HOME, num: 9 },
+    })
+    expect(parsePath('/app/acme/roadmap/p/7')).toEqual({
+      view: 'roadmap',
+      unheld: { org_id: ACME, num: 7 },
+    })
+    expect(parsePath('/app/~/p/9')).toEqual({ unheld: { org_id: HOME, num: 9 } })
+    // by its uuid alone, lowercase
+    expect(parsePath(`/app/home/board/p/${FAR.toUpperCase()}`)).toEqual({
+      view: 'kanban',
+      unheld: FAR,
+    })
+    // a number no project has, and an unpinned one with no home to read it in
+    expect(parsePath('/app/home/board/p/0')).toEqual({ view: 'kanban', unheld: null })
+    store.homeOrg = ''
+    expect(parsePath('/app/~/board/p/9')).toEqual({ view: 'kanban', unheld: null })
+    store.homeOrg = HOME
+    // a held project is the scope, with no unheld; Team sync keeps its own form
+    expect(parsePath('/app/home/board/p/7')).toEqual({ view: 'kanban', scope: 'p-home-7' })
+    expect(parsePath('/app/home/sync/p/9')).toEqual({ sync: { scope: 'unresolved:9' } })
   })
 
   it('reads the full-screen pages', () => {
@@ -867,7 +895,7 @@ describe('parseHash — shared route grammar', () => {
   })
 
   it('an unresolvable org prefix still resolves nothing', () => {
-    expect(parseHash('#/o/globex/board/p/1')).toEqual({ view: 'kanban' })
+    expect(parseHash('#/o/globex/board/p/1')).toEqual({ view: 'kanban', unheld: null })
   })
 })
 

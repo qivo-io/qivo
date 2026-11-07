@@ -1,17 +1,24 @@
 import type { RoadmapWin } from '../lib/dates'
 
-/** Known fields in the server's opaque per-profile preference object. */
+/** Known fields in the server's opaque per-profile preference object. An
+    object an earlier app saved may still hold `scope`, its saved scope,
+    All projects and My view included, or `syncScope`, Team sync's old
+    scope; nothing reads either. */
 export type UIPrefs = Partial<{
-  scope: string
   view: string
   focus: boolean
   metaViz: string
   roadmapWin: RoadmapWin
   roadmapWinDefault: RoadmapWin
-  /** the Team sync scope apps before the agenda's release saved, fallbacks
-      to All projects included; read by none since, as it cannot tell a
-      choice from a fallback */
-  syncScope: string
+  /** the last specific project or sub-project the person was in, which
+      startup opens once projectNav.resolve says they may (App.tsx). Only
+      App's save effect writes it, for a project scope the workspace holds
+      while the Overview, the Board or the Roadmap shows it, so My view,
+      All projects, the directory, the Inbox, Team sync, Settings and a
+      scope a task's address chose never do, and a loss never clears it.
+      `org_id` is the project's organization, which startup does not
+      read, as resolve takes the id alone. */
+  lastProject: { org_id: string; project_id: string }
   /** the Team sync scope the person last picked; only a pick writes it */
   teamSyncScope: string
 }>

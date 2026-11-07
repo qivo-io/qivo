@@ -220,6 +220,8 @@ describe('opened from an Overview row', { timeout: 30_000 }, () => {
     await start()
     const { syncStatus } = await import('../lib/syncStatus')
     syncStatus.setSocket({ connected: true, everConnected: true })
+    // Plan's Overview by its address, as startup opens no project unchecked
+    history.replaceState(null, '', '/app/testbed/overview/p/1')
     const { default: App } = await import('../App')
     await act(async () =>
       root.render(

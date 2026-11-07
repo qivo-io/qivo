@@ -176,6 +176,11 @@ async function boot(
   snap.projects = [
     { ...base, id: 'plan', type: 'meta', key: 'PLAN', name: 'Plan', lead_id: snap.profiles[0].id },
   ]
+  // a desktop case that names no page opens Plan by its address, so it
+  // does not depend on startup's check of a remembered project
+  // (startupSelection.test.tsx); a phone at the bare address opens the Inbox
+  if (location.pathname === '/' && !matchMedia('(max-width: 760px)').matches)
+    history.replaceState(null, '', '/app/testbed/overview/p/1')
   prepare(snap)
   /* The workspace is delivered once, and again only as a milestone's
      delete changes it (projects.removeMilestone, or roadmap.change during
@@ -247,7 +252,9 @@ async function boot(
   network.mutation.mockImplementation((ref, args) => {
     const name = getFunctionName(ref)
     sent.push({ name, args })
-    if (name !== 'identity:claimMySeats') wrote = true
+    // the person's preferences, such as the project App remembers, paint
+    // nothing and hold no write a delivery would take
+    if (name !== 'identity:claimMySeats' && name !== 'prefs:save') wrote = true
     // a delete from the window, or from it during a Roadmap visit
     const operations = (args.operations ?? []) as { kind: string; id: string }[]
     const removed =
@@ -462,16 +469,15 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     const id = String(create?.args.id)
     const { P } = await import('./store/planner')
     expect(P.project(id)).toBeUndefined()
-    const scopes = vi.spyOn(P, 'saveUI')
+    const saves = vi.spyOn(P, 'saveUINow')
     await save()
     expect(document.body.textContent).toContain('Sub-project “Docs” created')
     expect(P.project(id)).toBeUndefined()
     // App stays in Settings › Projects, never moves into the sub-project,
-    // and creates no task
+    // so it never remembers it, and creates no task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
-    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
-      false,
-    )
+    expect(saves.mock.calls.some(([patch]) => patch.lastProject?.project_id === id)).toBe(false)
+    expect(P.loadUI().lastProject?.project_id).not.toBe(id)
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
   })
 
@@ -570,7 +576,7 @@ describe('New sub-project', { timeout: 30_000 }, () => {
     expect(create?.args).toMatchObject({ parent_id: 'ops', lead_id: 'leo', name: 'Docs' })
     const id = String(create?.args.id)
     const { P } = await import('./store/planner')
-    const scopes = vi.spyOn(P, 'saveUI')
+    const saves = vi.spyOn(P, 'saveUINow')
     await save()
     // App asked the server whether the creator sees Docs, which the
     // workspace holds
@@ -582,12 +588,11 @@ describe('New sub-project', { timeout: 30_000 }, () => {
       ),
     ).toBe(true)
     expect(P.project(id)).toBeDefined()
-    // it stays in Settings › Projects, never moves into Docs and makes no
-    // starter task
+    // it stays in Settings › Projects, never moves into Docs, so it never
+    // remembers it, and makes no starter task
     expect(document.querySelector('[data-settings-projects]')).not.toBeNull()
-    expect(scopes.mock.calls.some(([patch]) => (patch as { scope?: string }).scope === id)).toBe(
-      false,
-    )
+    expect(saves.mock.calls.some(([patch]) => patch.lastProject?.project_id === id)).toBe(false)
+    expect(P.loadUI().lastProject?.project_id).not.toBe(id)
     expect(sent.some((w) => w.name.startsWith('issues:'))).toBe(false)
   }
 

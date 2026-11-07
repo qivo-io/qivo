@@ -72,6 +72,7 @@ html[data-appearance]
     [data-roadmap-panel],
     [data-split-strip],
     [data-inbox-list],
+    .project-chooser,
     .planner-mobile-navigation
   ) {
   background: var(--workspace-panel);

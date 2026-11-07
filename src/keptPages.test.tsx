@@ -625,8 +625,9 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
     ).not.toBeNull()
   })
 
-  it('keeps a saved All projects scope under an Inbox task address, at boot, on Back or Forward and for a task still to load', async () => {
+  it('keeps the remembered project under task addresses, at boot, on Back or Forward and for a task still to load', async () => {
     let key = ''
+    let other = { org_id: '', project_id: 'other' }
     // 12,800 task numbers make 64 task windows; the last, from fc000000,
     // holds QN-5 back
     const org = await boot((snap) => {
@@ -636,20 +637,24 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
         taskRow(snap, '01000000-early', 'todo', 4),
         taskRow(snap, 'fd000000-late', 'todo', 5),
       )
-      // a Board on All projects, saved before the page loaded
+      // another project the person was in last, saved before the page loaded
+      snap.projects.push({ ...snap.projects[1], id: 'other', key: 'OTH', num: 98, name: 'Other' })
+      other = { org_id: snap.orgs[0].id, project_id: 'other' }
       key = `planner.ui.v1:${snap.myProfileIds[0]}`
-      localStorage.setItem(key, JSON.stringify({ scope: 'all', view: 'kanban' }))
+      localStorage.setItem(key, JSON.stringify({ lastProject: other, view: 'kanban' }))
       history.replaceState(null, '', '/app/testbed/inbox/tasks/qn-4')
     }, 'fc000000')
     try {
       const { P } = await import('./store/planner')
+      // the scope beneath the Inbox is not remembered
       await shownPage('inbox')
-      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      expect(P.loadUI().lastProject).toEqual(other)
+      // nor All projects
       await go(`/app/${org}/board/all`)
       await shownPage('kanban')
       await go(`/app/${org}/inbox/tasks/qn-4`)
       await shownPage('inbox')
-      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      expect(P.loadUI().lastProject).toEqual(other)
       // a task still to load, which the app opens once it arrived
       await go(`/app/${org}/inbox/tasks/qn-5`)
       await act(async () => {
@@ -658,7 +663,11 @@ describe('the main pages kept while the person uses the app', { timeout: 30_000 
       })
       await waitFor(() => P.stillLoading() === null, 'every task')
       await waitFor(() => location.pathname.endsWith('/inbox/tasks/qn-5'), 'the task that arrived')
-      expect(P.loadUI()).toMatchObject({ scope: 'all', view: 'kanban' })
+      expect(P.loadUI().lastProject).toEqual(other)
+      // nor the sub-project of the Board Back opens for a task's address
+      await go(`/app/${org}/board/tasks/qn-4`)
+      await shownPage('kanban')
+      expect(P.loadUI().lastProject).toEqual(other)
     } finally {
       localStorage.removeItem(key)
     }

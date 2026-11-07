@@ -68,7 +68,9 @@ function SettingsScreen({
       window, not Settings, and Archived tasks reads its page again once it
       closes */
   taskOpen?: boolean
-  onProjectGone?: (parent: string | null) => void
+  /** told the id of a project the person archived or deleted here, with
+      its parent, null for a top-level project */
+  onProjectGone?: (id: string, parent: string | null) => void
 }) {
   const narrow = useMobile()
   const admin = P.isAdmin()

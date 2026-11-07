@@ -51,12 +51,35 @@ describe('preference persistence lifecycle', () => {
   })
 
   it('merges the server copy over a private warm cache and removes the old shared cache', async () => {
-    storage.set('planner.ui.v1', JSON.stringify({ scope: 'someone-else' }))
-    storage.set('planner.ui.v1:person-a', JSON.stringify({ scope: 'local', view: 'kanban' }))
-    read.mockResolvedValue(saved({ scope: 'server' }))
+    const local = { org_id: 'org-a', project_id: 'local' }
+    const server = { org_id: 'org-b', project_id: 'server' }
+    const shared = { org_id: 'org-c', project_id: 'someone-else' }
+    storage.set('planner.ui.v1', JSON.stringify({ lastProject: shared }))
+    storage.set('planner.ui.v1:person-a', JSON.stringify({ lastProject: local, view: 'kanban' }))
+    read.mockResolvedValue(saved({ lastProject: server }))
     preferences.adopt(await preferences.beginBoot())
-    expect(preferences.load()).toEqual({ scope: 'server', view: 'kanban' })
+    expect(preferences.load()).toEqual({ lastProject: server, view: 'kanban' })
     expect(storage.has('planner.ui.v1')).toBe(false)
+  })
+
+  it('round-trips the remembered project through the server and the warm cache', async () => {
+    const lastProject = { org_id: 'org-a', project_id: 'project-1' }
+    preferences.adopt(await preferences.beginBoot())
+    preferences.saveNow({ lastProject })
+    // sent at once, with what was there before
+    expect(write).toHaveBeenCalledExactlyOnceWith('person-a', { lastProject })
+    expect(JSON.parse(storage.get('planner.ui.v1:person-a') ?? '{}')).toEqual({ lastProject })
+    // a later field keeps it, and a new boot reads it from the server copy
+    preferences.saveNow({ view: 'roadmap' })
+    expect(write).toHaveBeenLastCalledWith('person-a', { lastProject, view: 'roadmap' })
+    storage.clear()
+    read.mockResolvedValue(saved({ lastProject, view: 'roadmap' }))
+    preferences.adopt(await preferences.beginBoot())
+    expect(preferences.load().lastProject).toEqual(lastProject)
+    // another person's boot reads none of it
+    profileId = 'person-b'
+    expect(preferences.load().lastProject).toBeUndefined()
+    await settle()
   })
 
   it('coalesces pans and keeps reload blocked until the write settles', async () => {
@@ -67,14 +90,14 @@ describe('preference persistence lifecycle', () => {
           finish = resolve
         }),
     )
-    preferences.save({ scope: 'one' })
+    preferences.save({ view: 'overview' })
     vi.advanceTimersByTime(400)
-    preferences.save({ scope: 'two' })
+    preferences.save({ view: 'roadmap' })
     expect(blockers.size).toBe(1)
     vi.advanceTimersByTime(599)
     expect(write).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
-    expect(write).toHaveBeenCalledExactlyOnceWith('person-a', { scope: 'two' })
+    expect(write).toHaveBeenCalledExactlyOnceWith('person-a', { view: 'roadmap' })
     expect(blockers.size).toBe(1)
     finish()
     await settle()
@@ -108,8 +131,8 @@ describe('preference persistence lifecycle', () => {
           finish.push(resolve)
         }),
     )
-    preferences.saveNow({ scope: 'one' })
-    preferences.save({ scope: 'two' })
+    preferences.saveNow({ view: 'overview' })
+    preferences.save({ view: 'roadmap' })
     expect(blockers.size).toBe(2)
     finish[0]()
     await settle()
@@ -121,7 +144,9 @@ describe('preference persistence lifecycle', () => {
   })
 
   it('never copies another profile preferences into a new account', async () => {
-    read.mockResolvedValue(saved({ scope: 'private-project' }))
+    read.mockResolvedValue(
+      saved({ lastProject: { org_id: 'org-a', project_id: 'private-project' } }),
+    )
     preferences.adopt(await preferences.beginBoot())
     preferences.save({ view: 'roadmap' })
     profileId = 'person-b'

@@ -11907,9 +11907,10 @@ export const PLANNER = {
      across organizations since 0081: home-org projects first, then each
      foreign org's granted ones, each in sort order. The sidebar's tree no
      longer reads it, as it lists the server's navigation reads
-     (components/SidebarProjects.tsx); the boot's first project and the
-     access guard (App.tsx), Settings' fallback after a project goes, Team
-     sync's scope menu and notes and the smoke drive's phone check do. */
+     (components/SidebarProjects.tsx), nor does App, which opens a project
+     only once the server checked it (App.tsx startup). Its readers are
+     scopeInfo's wide scopes, Team sync's scope menu and notes and the
+     smoke drive's phone check. */
   visibleProjects: (uid?: string) =>
     PLANNER.projects
       .filter((p) => p.type === 'meta' && PLANNER.canSee(p.id, uid))
