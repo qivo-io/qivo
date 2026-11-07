@@ -9316,14 +9316,19 @@ function readablePreview(answer: RemovalPreview, checked: boolean): RemovalPrevi
   }
 }
 
-/* Whether the caller can carry out both choices of the removal window, so
-   it asks: reassign every lost task, and keep the people as Viewers unless
-   Keep as Viewer is no choice for this removal (a removed Viewer grant).
-   Otherwise the removal goes at once with a notice (design-spec row 330).
-   The `permitted` fields answer the caller's authority whatever size or
+/* Whether the removal window asks. It asks when Keep as Viewer is offered
+   and the caller may keep the people, as an organization admin who manages
+   a project without Edit on its tasks may; the window then shows Reassign
+   disabled with the preview's refusal sentence where the caller may not
+   reassign. Where Keep as Viewer is no choice (a removed Viewer grant), it
+   asks when the caller may reassign every lost task. Otherwise the removal
+   goes at once with a notice (design-spec row 330). The rule is one-sided:
+   a caller who may reassign but not keep, such as a team leader with Edit
+   who cannot manage the project's users, still gets the notice. The
+   `permitted` fields answer the caller's authority whatever size or
    read-only sentence the `refusal` fields name first. */
 const settlesRemoval = (answer: RemovalAnswer): boolean =>
-  answer.reassign.permitted && (answer.keep.permitted || !answer.keep.offered)
+  answer.keep.offered ? answer.keep.permitted : answer.reassign.permitted
 
 /** What the press or the removal window says when a removal could not be
     checked on the server: the read failed, or the backend is older than the
@@ -12440,16 +12445,17 @@ export const PLANNER = {
 
   /** Starts removing `change` from a Settings page. It asks the server's
       preview (P.previewRemoval) and answers it when the removal window
-      should ask: someone loses sight of open tasks and the caller can carry
-      out both choices. Otherwise it answers null, having done what the
-      preview calls for:
+      should ask: someone loses sight of open tasks and the caller may keep
+      them as Viewers where that is offered, or may reassign the tasks where
+      it is not (settlesRemoval). Otherwise it answers null, having done
+      what the preview calls for:
       - a failed or unreadable preview, or one from an older backend: says
         so (REMOVAL_UNCHECKED) and removes nothing;
       - nothing left to remove (`unavailable`, or `pending` false): says the
         access is already gone and changes nothing;
       - `refused` or `too_large`: the server's sentence, and removes nothing;
       - no task taken out of sight: the plain removal;
-      - a caller who cannot carry out both choices, or an organization admin
+      - a caller the window cannot offer a choice, or an organization admin
         while the organization is read-only (`leave_only`): the removal at
         once, leaving the tasks, with a notice once the server accepts it
         (P.removeLeavingTasks).

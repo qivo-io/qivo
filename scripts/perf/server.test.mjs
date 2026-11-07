@@ -1584,6 +1584,14 @@ describe('the benchmark server', () => {
     expect(capped.answer.keep.allowed || capped.answer.reassign.allowed).toBe(false)
     const unsettled = await ask('removal=unsettled', 'accessRemovals:preview', leaving)
     expect(unsettled.answer.reassign.permitted).toBe(false)
+    // Keep as Viewer alone, Reassign refused for want of Edit
+    const keepOnly = await ask('removal=keep-only', 'accessRemovals:preview', leaving)
+    expect(keepOnly.answer.keep).toMatchObject({ offered: true, allowed: true, permitted: true })
+    expect(keepOnly.answer.reassign).toEqual({
+      allowed: false,
+      refusal: 'no write access to this project',
+      permitted: false,
+    })
     expect((await ask('removal=too_large', 'accessRemovals:preview', leaving)).answer.state).toBe(
       'too_large',
     )

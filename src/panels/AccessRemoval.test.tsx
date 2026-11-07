@@ -433,6 +433,27 @@ describe('the removal window from the server preview', () => {
     expect(shellButton('Reassign and remove')?.disabled).toBe(true)
     expect(shellButton('Cancel')?.disabled).toBe(false)
   })
+
+  it('offers Keep as Viewer alone to a caller who may not reassign, with the refusal and the hidden count', async () => {
+    // an organization admin who manages Work without Edit on its tasks
+    await open(
+      answer({
+        hidden: 1,
+        reassign: { allowed: false, refusal: 'no write access to this project', permitted: false },
+      }),
+    )
+    const keep = find('[data-access-removal-keep]')
+    expect(find<HTMLInputElement>('input', keep).checked).toBe(true)
+    expect(find<HTMLInputElement>('input', keep).disabled).toBe(false)
+    const reassign = find('[data-access-removal-reassign]')
+    expect(reassign.textContent).toContain('No write access to this project.')
+    expect(find<HTMLInputElement>('input', reassign).disabled).toBe(true)
+    expect(pickerButton().disabled).toBe(true)
+    expect(find('[data-access-removal-hidden]').textContent).toBe(
+      "1 task in projects you can't see",
+    )
+    expect(shellButton('Change to Viewer')?.disabled).toBe(false)
+  })
 })
 
 describe('saving the removal window', () => {
