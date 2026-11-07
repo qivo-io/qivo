@@ -170,7 +170,9 @@ export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
 export const INBOX_LIST = 'inbox.page'
 
 /** The refusal of an `after` or `through` that is not a `next` of this
- * list. */
+ * list. The app's stand-in of the page (src/store/inboxStandIn.setup.ts
+ * NOT_INBOX_CURSOR) refuses with a copy, which
+ * src/store/inboxParity.test.ts holds to this one. */
 export const NOT_INBOX_CURSOR =
   'after and through must be cursors from an earlier Inbox page with the same order, filters and search; start again from the first page'
 

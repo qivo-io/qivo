@@ -1,10 +1,15 @@
 /* The inbox reads' stand-in (store/inboxStandIn.setup.ts) against the real
- * queries (convex/inbox.ts summary and item, model/inboxReads.ts) on
- * convex-test, as the other parity suites hold their stand-ins to the
- * server. For every Northstar person with a login it compares the summary
- * and the item of every task they hold a message about, and for planted
- * cases a snoozed group, a read group, a mention in the description alone
- * and a comment mention alone. `through` is the newest message's
+ * queries (convex/inbox.ts summary, item and page, model/inboxReads.ts and
+ * model/inboxPage.ts) on convex-test, as the other parity suites hold their
+ * stand-ins to the server. For every Northstar person with a login it
+ * compares the summary, the item of every task they hold a message about,
+ * and the Inbox page in each order and filter, and for planted cases a
+ * snoozed group, a read group, a mention in the description alone and a
+ * comment mention alone, and an everyday Inbox of 60 groups over 3
+ * projects, which holds a second page, with a search by a task ID and by a
+ * sub-project's name. A page's cursors differ by design, so the comparison
+ * asks only whether one follows, and each side reads its second page at its
+ * own `next`. `through` is the newest message's
  * _creationTime on the server, which the workspace's rows do not carry, so
  * the stand-in takes the created_at's ms and the comparison only asks for
  * a number. One difference is named. A message about a task the seat can
@@ -21,6 +26,7 @@ import { api } from '../../convex/_generated/api'
 import type { Doc } from '../../convex/_generated/dataModel'
 import { MENTION_DETAILS } from '../../convex/lib/messageDetails'
 import type { Workspace } from '../../convex/lib/workspaceJoin'
+import { NOT_INBOX_CURSOR as SERVER_NOT_INBOX_CURSOR } from '../../convex/model/inboxPage'
 import {
   as,
   newT,
@@ -36,7 +42,11 @@ import { plantNorthstar } from '../../convex/tests/northstar.setup'
 import {
   INBOX_NO_ANSWER,
   inboxItemStandIn,
+  inboxPageStandIn,
   inboxSummaryStandIn,
+  NOT_INBOX_CURSOR,
+  type PageAnswer,
+  type PageArgs,
   type SummaryAnswer,
 } from './inboxStandIn.setup'
 
@@ -231,5 +241,133 @@ describe("the inbox reads' stand-in", () => {
     expect(got.summary.stand).toMatchObject({
       seats: [{ org_id: f.org.id, ready: true, can_mark_all_read: false, can_remove_read: false }],
     })
+  })
+})
+
+/* ------------------------------------------------------------- the page */
+
+/** What a page answer says, its rows with `through` as its type and its
+    `next` as whether one follows, since the cursors differ by design. */
+function pageShape(answer: unknown) {
+  if (answer === INBOX_NO_ANSWER || !answer || typeof answer !== 'object') return answer
+  const { rows, next, ...rest } = answer as PageAnswer
+  return {
+    ...rest,
+    next: next !== null,
+    rows: rows.map((row) => ({ ...row, through: typeof row.through })),
+  }
+}
+
+/** The order and filter sets every page comparison runs: each order with
+    no filter, Unread only, Show snoozed and two kind filters. */
+const PAGE_ASKS: PageArgs[] = (['newest', 'oldest'] as const).flatMap((order) => [
+  { order, unread_only: false, include_snoozed: false, kinds: [] },
+  { order, unread_only: true, include_snoozed: false, kinds: [] },
+  { order, unread_only: false, include_snoozed: true, kinds: [] },
+  { order, unread_only: false, include_snoozed: false, kinds: ['mention'] },
+  { order, unread_only: false, include_snoozed: true, kinds: ['comment', 'change'] },
+])
+
+/** The server's first two pages for `who` with `args` and the stand-in's,
+    each second page read at its own side's `next`. */
+async function pagesOf(t: T, who: Doc<'profiles'>, args: PageArgs) {
+  const ws = await workspace(t, who)
+  const caller = as(t, who)
+  const ask = { ...args, kinds: [...args.kinds] }
+  const server = [await caller.query(api.inbox.page, ask)]
+  const stand = [inboxPageStandIn(ws, ask) as PageAnswer]
+  const serverNext = server[0].next
+  const standNext = stand[0].next
+  if (serverNext !== null)
+    server.push(await caller.query(api.inbox.page, { ...ask, after: serverNext }))
+  if (standNext !== null)
+    stand.push(inboxPageStandIn(ws, { ...ask, after: standNext }) as PageAnswer)
+  return { server: server.map(pageShape), stand: stand.map(pageShape) }
+}
+
+describe("the Inbox page's stand-in", () => {
+  it('answers every Northstar person in each order and filter as the server does', async () => {
+    const t = newT()
+    const { profiles } = await plantNorthstar(t)
+    let rows = 0
+    for (const person of profiles.filter((p) => p.auth_user_id !== undefined))
+      for (const args of PAGE_ASKS) {
+        const got = await pagesOf(t, person, args)
+        expect(got.stand, `${person.name} ${JSON.stringify(args)}`).toEqual(got.server)
+        rows += (got.server[0] as { rows: unknown[] }).rows.length
+      }
+    // the seed leaves groups, so the comparison compares rows
+    expect(rows).toBeGreaterThan(0)
+  })
+
+  it('answers an everyday Inbox of 60 groups over 3 projects on its first and second page, and finds a row by its task ID and by its project', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const guest = as(t, f.guest)
+    const places = [f.sub, f.sub2, f.meta]
+    const tasks: Doc<'issues'>[] = []
+    for (let n = 0; n < 60; n++) {
+      const task = await plantIssue(t, {
+        org_id: f.org.id,
+        project_id: places[n % 3].id,
+        title: `Calibrate sensor ${n}`,
+      })
+      tasks.push(task)
+      const kind = n % 5 === 0 ? 'mention' : n % 5 === 1 ? 'comment' : 'change'
+      const body =
+        kind === 'mention'
+          ? MENTION_DETAILS.comment
+          : kind === 'comment'
+            ? 'New comment'
+            : `Status ${n}`
+      const row = await post(t, f, { to: f.guest, task, minute: n, kind, body })
+      if (!row) throw new Error('no message')
+      // every seventh group read, every eleventh snoozed
+      if (n % 7 === 3)
+        await guest.mutation(api.messages.markRead, { org_id: f.org.id, ids: [row.id] })
+      if (n % 11 === 4)
+        await guest.mutation(api.messages.snooze, {
+          org_id: f.org.id,
+          ids: [row.id],
+          until: new Date(Date.now() + 86_400_000).toISOString(),
+        })
+    }
+    for (const args of PAGE_ASKS) {
+      const got = await pagesOf(t, f.guest, args)
+      expect(got.stand, JSON.stringify(args)).toEqual(got.server)
+    }
+    // the browse holds a full first page and a second
+    const browse = await pagesOf(t, f.guest, PAGE_ASKS[0])
+    expect(browse.server).toHaveLength(2)
+    expect((browse.server[0] as { rows: unknown[] }).rows).toHaveLength(50)
+    // a search by a task ID, and by a sub-project's name
+    for (const search of [`QN-${tasks[41].num}`, f.sub2.name]) {
+      const got = await pagesOf(t, f.guest, { ...PAGE_ASKS[0], search })
+      expect(got.stand, search).toEqual(got.server)
+      expect((got.server[0] as { rows: unknown[] }).rows.length, search).toBeGreaterThan(0)
+    }
+  })
+
+  it('refuses a cursor of another list with the server’s sentence', async () => {
+    const t = newT()
+    const f = await withOrg(t)
+    const ws = await workspace(t, f.guest)
+    expect(NOT_INBOX_CURSOR).toBe(SERVER_NOT_INBOX_CURSOR)
+    const ask = PAGE_ASKS[0]
+    const refusal = (run: () => unknown) => {
+      try {
+        run()
+      } catch (error) {
+        return (error as { data?: unknown }).data
+      }
+      return null
+    }
+    expect(refusal(() => inboxPageStandIn(ws, { ...ask, after: 'not a cursor' }))).toEqual({
+      code: 'bad_request',
+      message: NOT_INBOX_CURSOR,
+    })
+    await expect(
+      as(t, f.guest).query(api.inbox.page, { ...ask, kinds: [], after: 'not a cursor' }),
+    ).rejects.toThrow(SERVER_NOT_INBOX_CURSOR)
   })
 })

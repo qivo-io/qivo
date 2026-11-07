@@ -6,7 +6,9 @@ import {
   type ForcedInbox,
   INBOX_NO_ANSWER,
   inboxItemStandIn,
+  inboxPageStandIn,
   inboxSummaryStandIn,
+  type PageArgs,
 } from '../inboxStandIn.setup'
 
 /* The live transport (lib/liveQueries.ts) for store tests, over a Convex
@@ -31,13 +33,16 @@ import {
    starts no store generation.
 
    The two inbox reads every store watches beside the parts, the unread
-   summary and the open task's item (convex/inbox.ts summary and item), are
-   answered from the published whole too, through their stand-in
-   (store/inboxStandIn.setup.ts), on the parts' path, so each publish
-   answers them again and a failed whole or a reconnect reaches them, and
-   no store test mocks them unless it forces a state (forceInbox). That is
-   new beside the other stand-ins, which tests wire through the client's
-   onUpdate one by one; these two run in every store.
+   summary and the open task's item (convex/inbox.ts summary and item), and
+   the Inbox list's page (convex/inbox.ts page), which the Inbox watches as
+   a view's read (lib/pagedList.ts usePagedPages), are answered from the
+   published whole too, through their stand-in (store/inboxStandIn.setup.ts),
+   on the parts' path, so each publish answers them again and a failed
+   whole or a reconnect reaches them, and no test mocks them unless it
+   forces a state (forceInbox). A page watch counts among the generation's
+   parts, so the whole stays subscribed while an Inbox shows. That is new
+   beside the other stand-ins, which tests wire through the client's
+   onUpdate one by one; these run in every store.
 
    Each store test file mocks lib/convex with `{ convex: network, live:
    liveOver(network) }`. */
@@ -57,11 +62,15 @@ type Client = {
 
 /* The workspace a test publishes, which may name messagesCut false, and
    may hold messages the server keeps beyond the inbox part's cut
-   (`beyondCut`, LIMITS.inboxShown), which the inbox reads count and the
-   parts leave out, as for an Inbox past 500 messages. */
+   (`beyondCut`, the part's INBOX_LIMIT across the seats), which the inbox
+   reads count and list and the parts leave out, as for an Inbox past 500
+   messages, and tasks and projects the server holds that the parts do not
+   send (`unheld`), which the page names its rows by, such as another
+   organization's task of the same id as one the workspace holds. */
 type Whole = Omit<Workspace, 'messagesCut'> & {
   messagesCut?: boolean
   beyondCut?: Workspace['messages']
+  unheld?: Partial<Pick<Workspace, 'issues' | 'projects'>>
 }
 
 /** What a test publishes for a login whose seats a running organization
@@ -92,7 +101,10 @@ const PARTS: Record<string, string> = {
 }
 
 /* The inbox reads answered from the whole, beside the parts. */
-const INBOX_READS = new Set(['inbox:summary', 'inbox:item'])
+const INBOX_READS = new Set(['inbox:summary', 'inbox:item', 'inbox:page'])
+
+/** The inbox reads a test may force alone (forceInbox). */
+export type InboxRead = 'inbox:summary' | 'inbox:item' | 'inbox:page'
 
 /** What the inbox read `name` with `args` answers while the server holds
     `whole`, or INBOX_NO_ANSWER for none; throws a failure or a refusal. A
@@ -113,11 +125,18 @@ function inboxAnswerOf(
           readMessageCount: 0,
           unreadTruncated: false,
           readTruncated: false,
+          issues: [],
+          projects: [],
         }
       : whole
-  const held =
-    'beyondCut' in w && w.beyondCut ? { ...w, messages: [...w.messages, ...w.beyondCut] } : w
+  const held = {
+    ...w,
+    messages: 'beyondCut' in w && w.beyondCut ? [...w.messages, ...w.beyondCut] : w.messages,
+    issues: [...w.issues, ...(('unheld' in w && w.unheld?.issues) || [])],
+    projects: [...w.projects, ...(('unheld' in w && w.unheld?.projects) || [])],
+  }
   if (name === 'inbox:summary') return inboxSummaryStandIn(held, force)
+  if (name === 'inbox:page') return inboxPageStandIn(held, args as PageArgs, force)
   return inboxItemStandIn(
     held,
     { org_id: String(args.org_id), issue_id: String(args.issue_id) },
@@ -165,7 +184,7 @@ export function liveOver(client: Client): LiveQueries & {
   holdWindow(from: string | null): void
   failWindow(from: string | null, error?: unknown, later?: boolean): void
   reconnect(only?: readonly string[]): void
-  forceInbox(force: ForcedInbox | null, only?: 'inbox:summary' | 'inbox:item'): void
+  forceInbox(force: ForcedInbox | null, only?: InboxRead): void
 } {
   const handlers = new Set<(transition: LiveTransition) => void>()
   // the handlers of views' own reads, which start no generation
@@ -447,10 +466,12 @@ export function liveOver(client: Client): LiveQueries & {
       if (later) return
       fire(refresh())
     },
-    /** Makes the inbox reads, or the one `only` names, answer `force`
-        whatever the whole says (store/inboxStandIn.setup.ts), from now on
-        and at once for the ones watched, and with null as the whole says
-        again. */
+    /** Makes the inbox reads, the Inbox's page among them, or the one
+        `only` names, answer `force` whatever the whole says
+        (store/inboxStandIn.setup.ts), from now on and at once for the ones
+        watched, and with null as the whole says again. A state one read
+        does not know, such as the page's `stopped` for the summary, leaves
+        that read as the whole says. */
     forceInbox(force, only) {
       inboxForce = force === null ? null : { force, ...(only ? { only } : {}) }
       fire(refresh())
