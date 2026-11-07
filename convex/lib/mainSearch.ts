@@ -117,7 +117,7 @@ import {
  * ranges (518 started), 1,022 documents and 0.51 MiB in 42 to 61 ms quiet
  * and at most 118 ms busy, once 642 ms in a further busy session. The same
  * organization with 27 places, searched project by project and complete,
- * read 292 ranges (190 started), 243 documents and 0.13 MiB in 25 to 44 ms
+ * read 292 ranges (190 started), 243 documents and 0.12 MiB in 25 to 44 ms
  * quiet and at most 74 ms busy.
  *
  * A seat searched whole also asks its organization's project names, at

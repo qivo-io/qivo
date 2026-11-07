@@ -351,11 +351,12 @@ export async function archivedTasksAfter(
  * call with its sign-in, it reads 824 ranges, 951 documents and 0.29 MiB in
  * 35 to 54 ms of JavaScript quiet and at most 107 ms busy, and costs the
  * same as a standard user's with those grants. REST's archived list takes
- * one project. Over a top-level project whose 3 sub-projects hold 70
- * archived tasks each it answers 200 rows in 620 ranges, 1,108 documents
- * and 0.45 MiB (45 to 77 ms quiet, at most 161 ms busy), and over one of
- * those sub-projects 70 rows in 226, 715 and 0.26, for the admin and the
- * standard user alike. */
+ * one project. Run as its internal query, without the HTTP route's token
+ * check, over a top-level project whose 3 sub-projects hold 70 archived
+ * tasks each it answers 200 rows in 620 ranges, 1,108 documents and
+ * 0.45 MiB (45 to 77 ms quiet, at most 161 ms busy), and over one of those
+ * sub-projects 70 rows in 226, 715 and 0.26, for the admin and the standard
+ * user alike. */
 export const ARCHIVE_PAGE = {
   tasks: 1000,
   ranges: 1500,

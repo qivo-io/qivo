@@ -221,11 +221,12 @@ export { type Figure, type Missing, WEEK_STARTS } from './viewLoads'
  * 205, 212 and 0.14 for the summary, in 20 to 51 ms quiet and at most 78 ms
  * busy, and 1,521, 2,647 and 1.76 for the health table, sorted by Name or
  * by Delayed alike, in 91 to 182 ms quiet, with one of the standard user's
- * calls at 555 ms, and 164 to 316 ms busy. That passes the 1,247, 1,492 and
- * 1.0 above because the project's 10 owners also own the 1,890 open tasks
- * of the organization's everyday projects. The Board's largest My view
- * (lib/board.ts BOARD, 1,000 subtasks under 1,000 parents over 21
- * sub-projects shared with 3 teams) read 300, 395 and 0.20 for the summary
+ * calls at 555 ms, and 164 to 316 ms busy. Both health tables pass the 422,
+ * 282 and 0.15 and the 1,247, 1,492 and 1.0 above because the same 10
+ * people own every open task of the organization, its 1,890 everyday ones
+ * included, the shape of the on-demand cases above. The Board's largest My
+ * view (lib/board.ts BOARD, 1,000 subtasks under 1,000 parents over 21
+ * sub-projects shared with 3 teams) read 300, 395 and 0.19 for the summary
  * and 1,103, 1,228 and 0.72 for the health table, in at most 208 ms quiet
  * and 216 ms busy.
  *

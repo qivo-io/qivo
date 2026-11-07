@@ -218,23 +218,26 @@ async function treeOf(
  * accessOf's accessible, from the same reads, which asks nothing more of a
  * top-level project than its level did.
  *
- * A timing on 7 November 2026 on a local backend (8 vCPU, one call at a
- * time), in one quiet session and one beside 8 busy loops, with the
- * organization's reach rows complete, gave these figures for the whole call
- * with its sign-in. On a top-level project of 30 live and 40 archived
- * sub-projects that an organization admin reaches in none, the gate reads
- * 13 ranges, 27 documents and 0.01 MiB in 9 to 17 ms of JavaScript in both
- * sessions and answers ok by management with level null. A standard user
- * with the same rows reads 12 and 26 and gets unavailable, and the
- * project's lead reads 5 and 3. On an everyday project the admin's read
- * costs the same as the standard user's, 9 ranges and 6 documents each
- * (level user). projects.create of a sub-project under the first project
- * reads 18 ranges, 83 documents and 0.03 MiB for the admin, who manages the
- * parent and reads no level, and 17 and 84 for the lead. The standard user,
- * who neither manages nor sees the parent, is refused after projectLevel's
- * walk, which reads 149 ranges and 73 documents. Every call stayed at or
- * under 60 ms of JavaScript in the busy session, except one of the lead's
- * creates at 178 ms.
+ * A timing of projectSettings.get and projects.create on 7 November 2026 on
+ * a local backend (8 vCPU, one call at a time), in one quiet session and
+ * one beside 8 busy loops, with the organization's reach rows complete,
+ * gave these figures for the whole call with its sign-in. On a top-level
+ * project of 30 live and 40 archived sub-projects that an organization
+ * admin reaches in none, projectSettings.get reads 13 ranges, 27 documents
+ * and 0.01 MiB in 9 to 17 ms of JavaScript in both sessions and answers ok
+ * by management with level null. A standard user with the same rows reads
+ * 12 and 26 and gets unavailable, and the project's lead reads 5 and 3. The
+ * gate reads the same for the admin and the standard user, and the admin's
+ * one more range and document is the lead's profile that an ok answer
+ * reads. On an everyday project the admin's read costs the same as the
+ * standard user's, 9 ranges and 6 documents each (level user).
+ * projects.create of a sub-project under the first project reads 18 ranges,
+ * 83 documents and 0.03 MiB for the admin, who manages the parent and reads
+ * no level, and 17 and 84 for the lead. The standard user, who neither
+ * manages nor sees the parent, is refused after projectLevel's walk, in a
+ * call of 149 ranges and 73 documents. Every call stayed at or under 60 ms
+ * of JavaScript in the busy session, except one of the lead's creates at
+ * 178 ms.
  */
 export async function settingsGate(
   ctx: QueryCtx,

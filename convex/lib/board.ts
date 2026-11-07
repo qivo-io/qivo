@@ -113,10 +113,11 @@ export { LABEL_ASSIGNMENT_BYTES } from './viewFilters'
  * and 0.65 in 39 to 65 ms quiet and at most 129 ms busy. The largest My
  * view above (1,000 subtasks under 1,000 parents, 21 sub-projects shared
  * with 3 teams) read 3,087, 3,110 and 1.84 in 118 to 165 ms quiet, once
- * 870 ms in a further quiet session that had storage stalls. Beside 8 busy
- * loops its JavaScript passed 0.5 s for both callers in that session or a
- * further one, and Convex stopped two of the admin's calls at the 1 s it
- * gives a query's own code. A third busy session kept it under 0.44 s.
+ * 870 ms in a further quiet session that had storage stalls. In the busy
+ * session above and a further busy one its JavaScript passed 0.5 s, the
+ * admin's in both and the standard user's in the second, and Convex stopped
+ * two of the admin's calls at the 1 s it gives a query's own code. A third
+ * busy session kept it under 0.44 s.
  *
  * Each task the filters keep costs about one range, its group check, and a
  * group one more for its subtasks. The subtasks of a shown group that the
