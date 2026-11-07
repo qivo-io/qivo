@@ -190,17 +190,17 @@ that project if you can still open it, after a quick check with the server,
 and shows nothing of it before that check. Otherwise Qivo asks you to choose
 a project from a list of your projects, your favorites first, and when you
 can no longer open the project you opened last, it says that the project
-is no longer available to you. It never opens
-another project, **My view** or all projects by itself. Opening **My
+is no longer available to you. It never opens another project, **My view**
+or all projects by itself. If you switch views or go elsewhere before the
+check answers, Qivo does not open the project you opened last. Opening **My
 view**, **All projects** or Team sync does not change the project Qivo
 remembers, and neither does reading a task in the Inbox or opening one by
 its link. A jump from Team sync or the Inbox to a project's Board or
 Roadmap, such as **Open task in board**, remembers that project, as opening
-it yourself does. If you switch views or go elsewhere before the check
-answers, Qivo does not open that project afterwards. If Qivo could not
-finish the check, it says so with **Retry**, which checks again. The top
-bar stays meanwhile, so the Inbox and the view you will open are one click
-away. On a phone, Qivo opens the Inbox.
+it yourself does. If Qivo could not finish the check, it says so with
+**Retry**, which checks again. The top bar stays meanwhile, so the Inbox
+and the view you will open are one click away. On a phone, Qivo opens the
+Inbox.
 
 ## Pages stay as you left them
 
@@ -357,11 +357,12 @@ opens Archived tasks.
 
 Task links accept any case, a bare number or a full key. Project URLs use a
 stable number that survives renaming. A project link opens once the server
-confirms that you can open the project; a project link you cannot open shows
-the project list and says that the project is not available to you. All projects is `…/projects`, and My
-view has its own paths, such as `…/board/mine`; `…/board/all` shows the
-views over all projects. Opening a task adds
-`/tasks/qn-482`, so a reload preserves both task and scope.
+confirms that you can open the project. If you switch views or go elsewhere
+before that, Qivo does not open it. A project link you cannot open shows the
+project list and says that the project is not available to you. All
+projects is `…/projects`, and My view has its own paths, such as
+`…/board/mine`; `…/board/all` shows the views over all projects. Opening a
+task adds `/tasks/qn-482`, so a reload preserves both task and scope.
 
 Copying a task link uses its short permanent address. Opening that link
 shows the task at once, read from the server, also before every task has
