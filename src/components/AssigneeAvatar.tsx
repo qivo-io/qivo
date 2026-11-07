@@ -41,18 +41,12 @@ const NONE = '\u0000none'
     the one the task window shows from its own answer. */
 const liveTask = (id: string) => P.anyTask(id) ?? P.taskShown(id)
 
-/** The face of person `id` beside their name: the store's portrait, or a
-    plain square while the store does not hold them, which never reads as
-    Unassigned. */
-function OwnerFace({ id, size }: { id: string; size: 20 | 28 }) {
-  if (P.user(id)) return <Avatar id={id} size={size} />
-  return (
-    <span
-      aria-hidden="true"
-      style={{ width: size, height: size }}
-      className="shrink-0 rounded-[5px] bg-surface-3"
-    />
-  )
+/** The 28 px face of person `id` beside their name: the store's portrait,
+    or a plain square while the store does not hold them, which never reads
+    as Unassigned. */
+function OwnerFace({ id }: { id: string }) {
+  if (P.user(id)) return <Avatar id={id} size={28} />
+  return <span aria-hidden="true" className="size-7 shrink-0 rounded-[5px] bg-surface-3" />
 }
 
 /** The people behind every owner control, as a list the server answers:
@@ -285,7 +279,7 @@ export function OwnerPickList({
             // the chosen person reads like a chosen dropdown row (deviation #326)
             className={cn(rowClass, 'font-semibold')}
           >
-            <OwnerFace id={holder} size={28} />
+            <OwnerFace id={holder} />
             <span className="min-w-0 flex-1">
               <span className="block truncate">
                 {holderLabel ??
@@ -312,7 +306,7 @@ export function OwnerPickList({
             onSelect={() => pick(person)}
             className={rowClass}
           >
-            <OwnerFace id={person.id} size={28} />
+            <OwnerFace id={person.id} />
             <span className="min-w-0 flex-1 truncate">{person.name}</span>
           </CommandItem>
         ))}
@@ -387,7 +381,7 @@ export function OwnerField({
         >
           <span className="flex min-w-0 items-center gap-2">
             {holder && name?.state !== 'gone' ? (
-              <OwnerFace id={holder} size={28} />
+              <OwnerFace id={holder} />
             ) : (
               <Avatar id={null} size={28} />
             )}
