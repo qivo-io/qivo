@@ -74,7 +74,9 @@ type Dependencies = {
       browser's re-encode does not read), and rejects when the re-encode
       could not run this time. */
   shrink: (blob: Blob) => Promise<Blob>
-  /** a picture the source started by itself, when room freed, now shows */
+  /** a picture the source started by itself, when room freed, now shows,
+      or one whose lease ran out while it waited for a slot needs a mint
+      now; either way the store rebuilds */
   changed: () => void
 }
 
@@ -285,10 +287,13 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
       if (queued) await queued
       slot = true
       if (!current(key, ticket) || ticket.pending !== pending) return false
-      // a lease that ran out while it waited for a slot is minted again,
-      // not taken to the gateway for a refusal
+      // a lease that ran out while it waited for a slot, as through a
+      // hidden page, is minted again now, not taken to the gateway for a
+      // refusal and not left for the next sweep
       if (queued && lease.exp * 1000 <= deps.now()) {
         ticket.refreshFailed = true
+        ticket.retryAt = 0
+        deps.changed()
         return false
       }
       // the load's time starts with its download, not in the queue

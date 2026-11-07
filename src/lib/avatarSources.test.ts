@@ -618,6 +618,31 @@ describe('profile picture bounds', () => {
     expect(f.cache.url(KEY)).toBeNull()
   })
 
+  it('asks for a mint at once for a picture whose lease ran out while it waited for a slot through a hidden page', async () => {
+    const changed = vi.fn()
+    const f = fixture({ changed })
+    const held = Array.from({ length: 6 }, () => deferred<Response>())
+    let next = 0
+    f.fetcher.mockImplementation(async () => {
+      const answer = held[next++]
+      return answer ? answer.promise : new Response(face(KIB))
+    })
+    const all = keys(8)
+    f.cache.sync(all)
+    const loading = all.map((key) => f.cache.prepare(key, LEASE))
+    expect(f.fetcher).toHaveBeenCalledTimes(6)
+    f.cache.pause(true)
+    for (const h of held) h.resolve(new Response(face(KIB)))
+    await Promise.all(loading.slice(0, 6))
+    // back after an hour, past the waiting pictures' lease
+    f.time(3_600_000)
+    f.cache.pause(false)
+    expect(await Promise.all(loading.slice(6))).toEqual([false, false])
+    expect(f.fetcher).toHaveBeenCalledTimes(6)
+    expect(changed).toHaveBeenCalled()
+    expect(all.slice(6).map((key) => f.cache.needsRefresh(key))).toEqual([true, true])
+  })
+
   it('releases a held picture whose renewal keeps failing after the return, not later', async () => {
     const f = fixture()
     await f.cache.prepare(KEY, LEASE)
