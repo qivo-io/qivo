@@ -504,8 +504,13 @@ describe('a list read once a batch', () => {
       const d = await twoBatches()
       await act(async () => now().more())
       const loadMore = d.asked[2]
+      let firstLanded = false
       await act(async () => {
-        void now().refresh()
+        void now()
+          .refresh()
+          .then(() => {
+            firstLanded = true
+          })
       })
       // the Load more's answer is dropped
       await act(async () =>
@@ -514,11 +519,14 @@ describe('a list read once a batch', () => {
       expect(names()).toHaveLength(50)
       expect(names()).not.toContain('zz')
       expect(now().phase).toBe('ready')
-      // a second refresh reads again, still showing the same rows
+      // a second refresh reads again, still showing the same rows, and the
+      // first, dropped, settles before any reply
       const first = d.asked[3]
+      expect(firstLanded).toBe(false)
       await act(async () => {
         void now().refresh()
       })
+      expect(firstLanded).toBe(true)
       expect(d.asked).toHaveLength(5)
       await act(async () =>
         first?.answer({ rows: [{ id: 'y', name: 'old' }], next: null, stopped: false }),
@@ -626,6 +634,28 @@ describe('a list read once a batch', () => {
       expect(d.asked).toHaveLength(asked)
       list.open('k')
       expect(d.asked).toHaveLength(asked + 1)
+
+      // a list stopped after its first batch failed reads nothing on Retry
+      // until it opens again
+      const failed = deferred()
+      const stopped = onceList<ListBatch<Row>, Row>(
+        () => ({
+          key: null,
+          source: failed.source,
+          batch: (a) => a,
+          id: (row) => row.id,
+          most: 200,
+        }),
+        () => {},
+      )
+      stopped.open('k')
+      await failed.reply(null)
+      expect(stopped.view().phase).toBe('failed')
+      stopped.stop()
+      stopped.retry()
+      expect(failed.asked).toHaveLength(1)
+      stopped.open('k')
+      expect(failed.asked).toHaveLength(2)
 
       // a page that leaves drops its refresh, and a late answer renders nothing
       const page = deferred()
