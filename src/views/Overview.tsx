@@ -732,14 +732,18 @@ function OvList({
     placeholder while it loads, a dash with "None scheduled" where Upcoming
     is whole and empty, and a dash with "Unavailable" where its read failed,
     was refused, names too many projects or stopped before a row, which the
-    Milestones section says why. */
+    Milestones section says why. A name or "None scheduled" from an answer
+    kept from before is marked refreshing, as the page's other figures
+    are. */
 function OvNextMilestone({ next }: { next: NextMilestone }) {
   const shown: Shown<unknown> =
     next.state === 'loading'
       ? { state: 'loading' }
       : next.state === 'unavailable'
         ? { state: 'unavailable', reason: 'scope' }
-        : { state: next.state === 'none' ? 'ok' : next.state, value: null }
+        : next.state === 'none'
+          ? { state: next.refreshing ? 'refreshing' : 'ok', value: null }
+          : { state: next.state, value: null }
   const row = 'row' in next ? next.row : null
   return (
     <OvStat

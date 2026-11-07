@@ -48,13 +48,14 @@ export function scopeMilestoneBase(
 
 /** The next milestone as the Overview's cell shows it: on its way, given
     (kept from before and refreshing, or current), none scheduled where
-    Upcoming is whole and empty, or unavailable where the read failed, was
-    refused, names too many projects or stopped before a row, which the
-    section below says why. */
+    Upcoming is whole and empty (`refreshing` where that answer is kept
+    from before), or unavailable where the read failed, was refused, names
+    too many projects or stopped before a row, which the section below
+    says why. */
 export type NextMilestone =
   | { state: 'loading' }
   | { state: 'ok' | 'refreshing'; row: MilestoneVM }
-  | { state: 'none' }
+  | { state: 'none'; refreshing: boolean }
   | { state: 'unavailable' }
 
 /** The slots of a page's milestone sections (store/planner.ts
@@ -99,15 +100,16 @@ export type ScopeMilestones = {
 
 /** The next milestone from Upcoming's view while it has not moved on. A
     Load more that failed or was refused leaves the answer shown, whose
-    first row is still the next milestone; a failure, refusal or too-many of
-    the read shown makes it unavailable. */
+    first row is still the next milestone, refreshing where that answer is
+    kept from before; a failure, refusal or too-many of the read shown
+    makes it unavailable. */
 function nextFromUpcoming(view: SectionView<MilestoneVM>): NextMilestone {
   if (view.state === 'loading') return { state: 'loading' }
   const { note } = view
   if (note && (note.kind === 'too_many' || !note.more)) return { state: 'unavailable' }
   const row = view.rows[0]
-  if (row) return { state: view.state === 'refreshing' ? 'refreshing' : 'ok', row }
-  return view.whole ? { state: 'none' } : { state: 'unavailable' }
+  if (row) return { state: view.current ? 'ok' : 'refreshing', row }
+  return view.whole ? { state: 'none', refreshing: !view.current } : { state: 'unavailable' }
 }
 
 /**
@@ -186,7 +188,7 @@ export function useScopeMilestones(
           : row
             ? { state: read.current ? 'ok' : 'refreshing', row }
             : read.answer.next === null && read.answer.stopped === null
-              ? { state: 'none' }
+              ? { state: 'none', refreshing: !read.current }
               : { state: 'unavailable' }
   }
   const nextId = !view.dropped && 'row' in next ? next.row.id : null

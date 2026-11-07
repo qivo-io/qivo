@@ -10,11 +10,12 @@ import { BOARD_TEST_TIMEOUT, loadBoard, taskRow } from './boardFixture.setup'
    views/overview/OverviewMilestones.tsx): Upcoming 10 at a time with Load
    more and the move on at a lowered cap, a collapsed Past that reads
    nothing until it opens, 25 at a time with its search on the server, the
-   Next milestone cell in each state, My view's `mine` read, All projects
-   reading none, the note pages, the section staying under a note while
-   Retry and Show from the start read again, another person's rename, move
-   and delete arriving while the page shows, a hidden tab, a kept page, a
-   scope switch, P.releaseOverview and a new week. The reads answer through the milestone
+   Next milestone cell in each state, a kept answer's included, My view's
+   `mine` read, All projects reading none, the note pages, the section
+   staying under a note while Retry and Show from the start read again,
+   another person's rename, move and delete arriving while the page shows,
+   a hidden tab, a kept page, a scope switch, P.releaseOverview and a new
+   week. The reads answer through the milestone
    stand-in over the fixture's workspace (store/milestoneStandIn.setup.ts).
    Every case asks for no task. */
 
@@ -373,6 +374,40 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
     expect(cell()?.dataset.ovFigureState).toBe('ok')
     expect(cell()?.textContent).toContain('Step 1')
     expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
+    board.server.milestones.force = {}
+  })
+
+  it('marks a kept None scheduled refreshing until the fresh answer comes', async () => {
+    const { board } = await overview(plan({ up: 0 }))
+    expect(cell()?.textContent).toContain('None scheduled')
+    expect(cell()?.dataset.ovFigureState).toBe('ok')
+    await setVisibility('hidden')
+    board.server.milestones.hold = true
+    await setVisibility('visible')
+    expect(stateOf('upcoming')).toBe('refreshing')
+    // must fail for a cell that shows a kept None scheduled as settled
+    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
+    expect(cell()?.textContent).toContain('None scheduled')
+    board.server.milestones.hold = false
+    await board.answer()
+    expect(cell()?.dataset.ovFigureState).toBe('ok')
+  })
+
+  it('keeps the next milestone refreshing while a Load more over a kept answer fails', async () => {
+    const { board } = await overview(plan({ up: 12 }))
+    await setVisibility('hidden')
+    // the shown read gets no fresh answer, and the Load more's read fails
+    board.server.milestones.force = { upcoming: 'loading', more: 'error' }
+    await setVisibility('visible')
+    expect(stateOf('upcoming')).toBe('refreshing')
+    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
+    await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+    expect(noteOf('upcoming').some((n) => n.startsWith('more-failed'))).toBe(true)
+    expect(stateOf('upcoming')).toBe('failed')
+    // must fail for a cell that takes the section's failed state for a
+    // current answer
+    expect(cell()?.dataset.ovFigureState).toBe('refreshing')
+    expect(cell()?.textContent).toContain('Step 1')
     board.server.milestones.force = {}
   })
 

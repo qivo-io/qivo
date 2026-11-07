@@ -222,6 +222,7 @@ export function useMilestoneSection(
   const loading: SectionView<MilestoneVM> = {
     state: 'loading',
     rows: [],
+    current: false,
     answered: false,
     next: null,
     stopped: null,

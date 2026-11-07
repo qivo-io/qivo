@@ -228,6 +228,8 @@ export type SectionNote =
       `failed` or `refused` when the latest read failed or was refused,
       rows kept, and `too_many`;
     - `rows` in the server's order, painted, each id once;
+    - `current`, whether the answer shown is current rather than kept from
+      before while its read runs again, also beside a failed Load more;
     - `next` and `stopped` of the answer shown;
     - `past`, whether the projects hold a past milestone, from the answer
       shown, else true if a first upcoming answer said so, else unknown,
@@ -242,6 +244,7 @@ export type SectionNote =
 export type SectionView<R> = {
   state: 'loading' | 'ok' | 'refreshing' | 'failed' | 'refused' | 'too_many'
   rows: readonly R[]
+  current: boolean
   answered: boolean
   next: MilestonePosition | null
   stopped: string | null
@@ -288,6 +291,7 @@ export function sectionView<R extends { id: string }>(
   const whole = !!answer && answer.next === null && answer.stopped === null && !dropped
   const base = {
     rows,
+    current: shown.state === 'ok' && shown.current,
     answered: !!answer,
     next: answer?.next ?? null,
     stopped: answer?.stopped ?? null,
