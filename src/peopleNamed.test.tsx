@@ -376,7 +376,15 @@ describe('people the workspace does not hold, on each page', () => {
     async () => {
       const { board, names } = await load(
         (snap) => {
+          // Gina leads the project, so the signed-in admin works on it
+          // through a User grant, as admin status gives no access to
+          // project work
           snap.projects[0].lead_id = GINA
+          snap.access.push({
+            project_id: snap.projects[0].id,
+            profile_id: snap.profiles[0].id,
+            level: 'user',
+          })
           snap.issues.push({
             ...taskRow(snap, 'late', 'progress', 1),
             assignee_id: HAL,
