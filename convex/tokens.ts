@@ -30,15 +30,20 @@
  * Settings › Users reads the keys of the agents it shows with agentKeys,
  * once for the key lines and once for a panel that opens, and again after
  * a key write and when the tab shows again, never as a subscription.
- * Machine auth stamps last_used_at on every call, so a live read of key
- * rows would run again on each API call of each agent on screen.
- * listAgentKeys, which the app read before, stays for one release,
- * deprecated. */
+ * MCP access lists the caller's own tokens with personalTokens, 25 a batch,
+ * newest first, with a search and Load more, each batch read once on
+ * opening and again from the first batch after a create, revoke or delete,
+ * never as a subscription either, and lists the login's connected apps the
+ * same way (connectedApps.ts). Machine auth stamps last_used_at on every
+ * call, so a live read of key or token rows would run again on each API
+ * call of each credential on screen. listAgentKeys and listMcpTokens,
+ * which the app read before, stay for one release, deprecated. */
 
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import type { MutationCtx, QueryCtx } from './_generated/server'
 import { cleanTokenExpiry } from './lib/access'
+import type { ReadCeiling } from './lib/archivedTasks'
 import { assertNewRowId, byId, insertUnique } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
 import { vCredentialAccess } from './lib/enums'
@@ -55,7 +60,19 @@ import {
 } from './lib/functions'
 import { limitedText } from './lib/limitRules'
 import { LIMITS, LIST_BATCH } from './lib/limits'
-import { named } from './lib/nameKey'
+import {
+  indexAfter,
+  type ListBatch,
+  listBatch,
+  mergeNamed,
+  NAMED_READ,
+  type NamedAt,
+  type NamedIndex,
+  namedCeiling,
+  openNamedCursor,
+} from './lib/namedPages'
+import { named, nameKey } from './lib/nameKey'
+import { allWordsMatcher } from './lib/search'
 import { logActivity } from './model/activity'
 
 type MeCtx = MutationCtx & { me: Doc<'profiles'> }
@@ -328,8 +345,157 @@ export const deleteAgentKey = accessRemovalMutation({
 
 /* ------------------------------------------------------------- mcp tokens
  * The owner's own management (0030): rows whose profile_id is one of the
- * caller's own seats; nothing here narrates. Admins list and revoke other
- * members' tokens through apiAccess.ts instead. */
+ * caller's own seats; nothing here narrates. MCP access lists them a batch
+ * at a time (personalTokens). Admins list and revoke other members' tokens
+ * through apiAccess.ts instead. */
+
+/** What one batch of personal tokens may read past what the call read
+ * before it, NAMED_READ's share of 2,000 index ranges, 8,000 documents and
+ * 4 MiB. A token row holds two uuids, a name of at most 80 characters, its
+ * prefix, its hash and a few ISO times, under 1 KB, and the walk reads
+ * nothing else, so a search that matches only a person's oldest token
+ * reads each of the person's tokens once in at most two index ranges a
+ * seat. Measured in convex/tests/personalCredentialLists.test.ts ("reads
+ * everyday batches"), the reader alone, a first batch over one seat with
+ * 26 tokens read 26 documents, 1 index range and about 11 KB, and a search
+ * that matched none of them read the same.
+ * Past the share the batch answers `stopped` and Load more goes on. Tests
+ * lower it. */
+export const PERSONAL_TOKENS: { reads: ReadCeiling } = { reads: { ...NAMED_READ } }
+
+/** The list's name, which seals its cursors (lib/namedPages.ts namedCursor). */
+export const PERSONAL_TOKENS_LIST = 'tokens.personalTokens'
+
+/** The refusal of a cursor that is not one of this list for the same login
+ * and search. */
+export const NOT_TOKENS_CURSOR =
+  'cursor must come from an earlier answer of your personal tokens, with the same search; start the list again'
+
+/** One personal token as MCP access lists it, without its hash, its
+ * organization, its name key or its seat. */
+export type PersonalTokenRow = ReturnType<typeof pubToken>
+
+/** One batch of the caller's personal tokens (personalTokens). */
+export type PersonalTokenBatch = ListBatch<PersonalTokenRow>
+
+/** The tie of a personal token position, the token's id, which
+ * by_profile_created orders equal created_at times by. Token ids are
+ * unique (createMcpToken), so the two name one row across the caller's
+ * seats. */
+type TokenTie = readonly [id: string]
+
+/* A personal token position's tie, or null for any other shape. */
+function tokenTieOf(at: NamedAt): TokenTie | null {
+  const [id] = at.tie
+  return at.tie.length === 1 && typeof id === 'string' ? [id] : null
+}
+
+/** The tokens of seat `profileId`, newest created_at first (mcp_tokens
+ * by_profile_created read descending), equal times in descending id
+ * order. After a position it reads the rest of its time before its id,
+ * then every earlier time. */
+function tokenIndex(ctx: QueryCtx, profileId: string): NamedIndex<Doc<'mcp_tokens'>, TokenTie> {
+  const rows = () => ctx.db.query('mcp_tokens')
+  return {
+    all: () =>
+      rows()
+        .withIndex('by_profile_created', (q) => q.eq('profile_id', profileId))
+        .order('desc'),
+    after: ({ key, tie: [id] }) => [
+      () =>
+        rows()
+          .withIndex('by_profile_created', (q) =>
+            q.eq('profile_id', profileId).eq('created_at', key).lt('id', id),
+          )
+          .order('desc'),
+      () =>
+        rows()
+          .withIndex('by_profile_created', (q) =>
+            q.eq('profile_id', profileId).lt('created_at', key),
+          )
+          .order('desc'),
+    ],
+    at: (t) => ({ key: t.created_at, tie: [t.id] }),
+  }
+}
+
+/**
+ * One batch of the caller's own personal tokens for MCP access, at most
+ * LIST_BATCH (25) tokens of the login's active seats outside an
+ * organization's deletion, as listMcpTokens lists them, newest created_at
+ * first across the seats, equal times in descending id order, each in
+ * pubToken's shape without its hash, revoked, expired and admin-revoked
+ * tokens included. `search` keeps the tokens whose name or shown prefix
+ * holds every whitespace-separated fragment of it, ignoring case and
+ * accents, over the whole list, and `cursor` is an earlier batch's `next`
+ * for the same search. Open to any signed-in login; refused in the demo, as
+ * every credential door is, and a search past LIMITS.search and a cursor of
+ * another list, login or search are refused too, each before any token is
+ * read. A login without an active seat gets an empty end.
+ *
+ * Nothing freezes a snapshot. A token made between batches shows once the
+ * list starts again, and one deleted leaves no gap. A batch reads at most
+ * PERSONAL_TOKENS.reads and answers `stopped` where that ended it, with a
+ * `next` that goes on. It reads no other table. The app reads each batch
+ * once (convex.query) and never subscribes to it, because machine auth
+ * stamps last_used_at on every call made with a token.
+ */
+export const personalTokens = authedQuery({
+  args: { search: v.optional(v.string()), cursor: v.optional(v.string()) },
+  handler: (ctx, a): Promise<PersonalTokenBatch> =>
+    personalTokensOf(ctx, ctx.authUserId, ctx.myProfiles, a),
+})
+
+/** personalTokens for login `authUserId` with active seats `myProfiles`,
+ * on the rules in its docstring. It refuses the demo, then the search,
+ * then the cursor, before the walk reads a token. */
+export async function personalTokensOf(
+  ctx: QueryCtx,
+  authUserId: string,
+  myProfiles: Map<string, Doc<'profiles'>>,
+  a: { search?: string; cursor?: string },
+): Promise<PersonalTokenBatch> {
+  refuseDemoFeature()
+  const search = limitedText(LIMITS.search, a.search ?? '')
+  const scope = [authUserId, nameKey(search)]
+  let after: NamedAt<TokenTie> | null = null
+  if (a.cursor !== undefined) {
+    const at = await openNamedCursor(a.cursor, PERSONAL_TOKENS_LIST, scope)
+    const tie = at === null ? null : tokenTieOf(at)
+    if (at === null || tie === null) throw badRequest(NOT_TOKENS_CURSOR)
+    after = { key: at.key, tie }
+  }
+  const seats = [...myProfiles.values()].sort((x, y) => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0))
+  const matches = allWordsMatcher(nameKey(search))
+  return await listBatch(
+    ctx,
+    { list: PERSONAL_TOKENS_LIST, scope, after, through: null },
+    {
+      stream: (reads) =>
+        mergeNamed(
+          seats.map((seat) => indexAfter(tokenIndex(ctx, seat.id), after, 'desc')(reads)),
+          { order: 'desc' },
+        ),
+      keep: async (t: Doc<'mcp_tokens'>) =>
+        search === '' || matches(`${nameKey(t.name)}\n${nameKey(t.token_prefix)}`)
+          ? pubToken(t)
+          : null,
+      limit: LIST_BATCH,
+      ceiling: await namedCeiling(ctx, PERSONAL_TOKENS.reads),
+      order: 'desc',
+    },
+  )
+}
+
+/**
+ * @deprecated The app reads tokens.personalTokens since the release after
+ * v0.1.158. This query stays, with its arguments and its answer, through
+ * that release, so tabs and desktop windows loaded before it still list
+ * tokens on MCP access, and a later release removes it and adds it to the
+ * Instant Rollback list in docs/deployment.md.
+ *
+ * Before then P.listMcpTokens read every token of every active seat of the
+ * caller in one fetch, sorted newest first by created_at. */
 export const listMcpTokens = authedQuery({
   args: {},
   handler: async (ctx) => {

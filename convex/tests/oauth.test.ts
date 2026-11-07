@@ -133,6 +133,14 @@ async function fixture(role: 'user' | 'viewer' = 'user') {
 }
 type Fx = Awaited<ReturnType<typeof fixture>>
 
+/** The connected apps MCP access lists for `caller`, its first batch
+ * (connectedApps.list), which holds every connection these cases make. */
+async function connectedApps(caller: Pick<Fx['as'], 'query'>) {
+  const batch = await caller.query(api.connectedApps.list, {})
+  expect(batch.next).toBeNull()
+  return batch.rows
+}
+
 async function register(f: Fx, scope = WRITE, clientName = 'Hermetic MCP client') {
   const response = await http(
     f.t,
@@ -732,7 +740,7 @@ describe('OAuth provider and MCP integration', () => {
     const scopes = await initialScopes(f.t)
     const c = await connect(f, scopes, await register(f, scopes))
     expect(c.scope.split(' ').sort()).toEqual(scopes.split(' ').sort())
-    const connections = await f.as.query(api.oauthConnections.list, {})
+    const connections = await connectedApps(f.as)
     expect(connections).toHaveLength(1)
     for (const model of ['oauthAccessToken', 'oauthRefreshToken'] as const) {
       const stored = await f.t.query(components.betterAuth.adapter.findOne, {
@@ -1073,7 +1081,7 @@ describe('OAuth consent and resource binding', () => {
       for (const resource of resources) request.query.append('resource', resource)
       await authorizationRefusal(await authorize(request), ['invalid_target', 'invalid_request'])
     }
-    expect(await f.as.query(api.oauthConnections.list, {})).toEqual([])
+    expect(await connectedApps(f.as)).toEqual([])
   })
 
   it('rejects substituted and duplicated resources during code exchange', async () => {
@@ -1369,7 +1377,7 @@ describe('OAuth consent and resource binding', () => {
     ])
     const denied = await consent(request, oauthQuery, false)
     await authorizationRefusal(denied, ['access_denied'])
-    expect(await f.as.query(api.oauthConnections.list, {})).toEqual([])
+    expect(await connectedApps(f.as)).toEqual([])
   })
 
   it('refuses bad code verifiers, client substitutions, redirect substitutions and consumed codes', async () => {
@@ -1424,7 +1432,7 @@ describe('OAuth consent and resource binding', () => {
     const firstTokens = await tokens(
       await exchange(first, new URL(firstResult.url as string).searchParams.get('code')!),
     )
-    const connections = await f.as.query(api.oauthConnections.list, {})
+    const connections = await connectedApps(f.as)
     expect(connections).toHaveLength(2)
     expect(new Set(connections.map((connection) => connection.id)).size).toBe(2)
     expect(
@@ -1455,7 +1463,7 @@ describe('OAuth client names and request bodies', () => {
     expect((await consent(request, oauthQuery)).status).toBe(200)
     // approving without that read stores the connection at consent instead
     await connect(f, WRITE, clientId)
-    const connections = await f.as.query(api.oauthConnections.list, {})
+    const connections = await connectedApps(f.as)
     expect(connections.map((connection) => connection.clientName)).toEqual([cut, cut])
   })
 
@@ -1587,7 +1595,7 @@ describe('OAuth organization selection', () => {
     expect(displayed.orgId).toBe(original.orgId)
     const approved = await json(await consent(request, oauthQuery))
     await tokens(await exchange(request, new URL(approved.url as string).searchParams.get('code')!))
-    const connections = await f.as.query(api.oauthConnections.list, {})
+    const connections = await connectedApps(f.as)
     expect(connections).toHaveLength(1)
     expect(connections[0].orgId).toBe(f.org.id)
     expect(connections[0].profileId).toBe(f.profile.id)
@@ -2038,18 +2046,16 @@ describe('OAuth revocation, replay and live account checks', () => {
     const f = await fixture()
     const first = await connect(f)
     const second = await connect(f)
-    const rows = await f.as.query(api.oauthConnections.list, {})
+    const rows = await connectedApps(f.as)
     expect(rows).toHaveLength(2)
     expect(JSON.stringify(rows)).not.toContain(first.access_token)
     expect(JSON.stringify(rows)).not.toContain(first.refresh_token)
     const row = rows.find((connection) => connection.clientId === first.request.clientId)!
     const stranger = f.t.withIdentity({ subject: f.otherAdmin.auth_user_id! })
-    expect(await stranger.query(api.oauthConnections.list, {})).toEqual([])
+    expect(await connectedApps(stranger)).toEqual([])
     await expectRefusal(stranger.mutation(api.oauthConnections.revoke, { id: row.id }), 'not_found')
     expect(await f.as.mutation(api.oauthConnections.revoke, { id: row.id })).toBe(true)
-    expect(await f.as.query(api.oauthConnections.list, {})).toEqual(
-      rows.filter((connection) => connection.id !== row.id),
-    )
+    expect(await connectedApps(f.as)).toEqual(rows.filter((connection) => connection.id !== row.id))
     // Retrying deletion is safe; it must not restore a hidden connection.
     expect(await f.as.mutation(api.oauthConnections.revoke, { id: row.id })).toBe(true)
     await deniedAccess(f, first.access_token)
@@ -2058,7 +2064,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     ])
     expect(await toolData(await mcp(f, second.access_token, 'list_projects'))).toBeInstanceOf(Array)
     const replacement = await connect(f, WRITE, first.request.clientId)
-    const after = await f.as.query(api.oauthConnections.list, {})
+    const after = await connectedApps(f.as)
     expect(after).toHaveLength(2)
     expect(after.some((connection) => connection.id === row.id)).toBe(false)
     const reconnected = after.find(
@@ -2078,7 +2084,7 @@ describe('OAuth revocation, replay and live account checks', () => {
   it('can delete previously disconnected connections without restoring credentials', async () => {
     const f = await fixture()
     const c = await connect(f)
-    const row = (await f.as.query(api.oauthConnections.list, {}))[0]
+    const row = (await connectedApps(f.as))[0]
     await f.t.run(async (ctx) => {
       const grant = await ctx.db
         .query('oauth_connections')
@@ -2089,9 +2095,9 @@ describe('OAuth revocation, replay and live account checks', () => {
         revocation_reason: 'disconnected',
       })
     })
-    expect(await f.as.query(api.oauthConnections.list, {})).toHaveLength(1)
+    expect(await connectedApps(f.as)).toHaveLength(1)
     expect(await f.as.mutation(api.oauthConnections.revoke, { id: row.id })).toBe(true)
-    expect(await f.as.query(api.oauthConnections.list, {})).toEqual([])
+    expect(await connectedApps(f.as)).toEqual([])
     await deniedAccess(f, c.access_token)
     await oauthRefusal(await refresh(f, c.request.clientId, c.refresh_token), ['invalid_grant'])
   })
@@ -2102,7 +2108,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     const oauthQuery = await consentPage(request)
     const approval = await json(await consent(request, oauthQuery))
     const code = new URL(approval.url as string).searchParams.get('code')!
-    const row = (await f.as.query(api.oauthConnections.list, {}))[0]
+    const row = (await connectedApps(f.as))[0]
     await f.as.mutation(api.oauthConnections.revoke, { id: row.id })
     await expectRefusal(
       f.as.mutation(api.oauthConnections.getContext, { oauth_query: oauthQuery }),
@@ -2111,7 +2117,7 @@ describe('OAuth revocation, replay and live account checks', () => {
     )
     await oauthRefusal(await consent(request, oauthQuery), ['invalid_grant'])
     await oauthRefusal(await exchange(request, code), ['invalid_grant'])
-    expect(await f.as.query(api.oauthConnections.list, {})).toEqual([])
+    expect(await connectedApps(f.as)).toEqual([])
   })
 
   it('invalidates the complete grant after refresh-token replay, including rotated access tokens', async () => {
@@ -2494,7 +2500,7 @@ describe('OAuth smoke cleanup', () => {
     } finally {
       process.env.SITE_URL = APP
     }
-    expect(await f.as.query(api.oauthConnections.list, {})).toHaveLength(2)
+    expect(await connectedApps(f.as)).toHaveLength(2)
     expect(await toolData(await mcp(f, own.access_token, 'list_projects'))).toBeInstanceOf(Array)
   })
 
@@ -2510,7 +2516,7 @@ describe('OAuth smoke cleanup', () => {
         client_name: name,
       }),
     ).toBe(true)
-    const connections = await f.as.query(api.oauthConnections.list, {})
+    const connections = await connectedApps(f.as)
     expect(connections).toHaveLength(1)
     expect(connections[0].clientId).toBe(other.request.clientId)
     for (const model of [

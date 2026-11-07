@@ -1196,6 +1196,9 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
     key_hash: HEX64,
     ...over,
   })
+  /** The caller's own personal tokens, the first batch MCP access reads. */
+  const myTokens = async (t: T, who: Doc<'profiles'>) =>
+    (await as(t, who).query(api.tokens.personalTokens, {})).rows
 
   it('createAgentKey narrates against the AGENT with curly quotes', async () => {
     const t = newT()
@@ -1310,13 +1313,13 @@ describe('tokens — agent keys are the admin’s, MCP tokens are yours', () => 
       }),
       'not_found',
     )
-    expect(await as(t, f.user).query(api.tokens.listMcpTokens, {})).toHaveLength(1)
-    expect(await as(t, f.admin).query(api.tokens.listMcpTokens, {})).toEqual([])
+    expect(await myTokens(t, f.user)).toHaveLength(1)
+    expect(await myTokens(t, f.admin)).toEqual([])
     await expectRefusal(as(t, f.admin).mutation(api.tokens.revokeMcpToken, { id }), 'not_found')
     expect(await as(t, f.user).mutation(api.tokens.revokeMcpToken, { id })).toBe(true)
-    expect((await as(t, f.user).query(api.tokens.listMcpTokens, {}))[0].revokedAt).not.toBeNull()
+    expect((await myTokens(t, f.user))[0].revokedAt).not.toBeNull()
     expect(await as(t, f.user).mutation(api.tokens.deleteMcpToken, { id })).toBe(true)
-    expect(await as(t, f.user).query(api.tokens.listMcpTokens, {})).toEqual([])
+    expect(await myTokens(t, f.user)).toEqual([])
     expect(await activityFor(t, f.org.id)).toEqual([]) // token churn is private
   })
 })

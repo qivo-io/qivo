@@ -603,7 +603,7 @@ describe('apiAccess.page', () => {
     const f = await fixture(t)
     const claude = async () => ({
       state: (await ready(page(t, f))).rows.find((r) => r.name === 'Claude')?.state,
-      owner: (await as(t, f.admin).query(api.oauthConnections.list, {})).find(
+      owner: (await as(t, f.admin).query(api.connectedApps.list, {})).rows.find(
         (row) => row.id === f.ids.claude,
       ),
     })
@@ -1373,10 +1373,10 @@ describe('apiAccess.revoke', () => {
     expect(listed.find((r) => r.name === 'Cursor')?.revoked_by_admin).toBe(true)
 
     // the owners' own lists say who ended them; the connection stays listed
-    const mine = await as(t, f.user).query(api.tokens.listMcpTokens, {})
+    const mine = (await as(t, f.user).query(api.tokens.personalTokens, {})).rows
     expect(mine.find((row) => row.id === f.ids.cursor)).toMatchObject({ revokedByAdmin: true })
     expect(mine.find((row) => row.id === f.ids.old)).toMatchObject({ revokedByAdmin: false })
-    const apps = await as(t, f.admin).query(api.oauthConnections.list, {})
+    const apps = (await as(t, f.admin).query(api.connectedApps.list, {})).rows
     expect(apps.find((row) => row.id === f.ids.claude)).toMatchObject({ revokedByAdmin: true })
     expect(await t.mutation(internal.oauthAccess.touch, { id: f.ids.claude })).toBe(false)
 

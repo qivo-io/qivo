@@ -193,6 +193,7 @@ describe('the auth triggers, the demo start, the boot claim and the machine call
     ['../identity.ts', '../lib/authUser.ts'],
     ['../betterAuth/sessions.ts', '../betterAuth/_generated/server'],
     ['../oauthAccess.ts', '../lib/access.ts'],
+    ['../connectedApps.ts', '../model/connectedApps.ts'],
     ['../machine/auth.ts', '../lib/access.ts'],
     ['../betterAuth/lookups.ts', '../betterAuth/schema.ts'],
   ])('%s loads neither Better Auth nor auth.ts', (entry, uses) => {

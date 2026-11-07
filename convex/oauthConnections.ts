@@ -1,7 +1,9 @@
-/* OAuth connections: the consent screen, which calls Better Auth's API,
- * the login's connected apps and the checks of token issuance. The check
- * that each MCP and REST call with an access token runs is in
- * oauthAccess.ts, which loads no Better Auth. */
+/* OAuth connections, with the consent screen, which calls Better Auth's
+ * API, deletion from the login's connected apps and the checks of token
+ * issuance. MCP access lists the connected apps a batch at a time through
+ * connectedApps.ts, and the check that each MCP and REST call with an
+ * access token runs is in oauthAccess.ts, neither of which loads Better
+ * Auth. */
 
 import { v } from 'convex/values'
 import { internalMutation, internalQuery } from './_generated/server'
@@ -92,10 +94,18 @@ export const getContext = authedMutation({
   },
 })
 
-/* The login's connected apps. `appGone` marks one whose OAuth client Qivo
- * no longer has, which has ended although nothing revoked it, as when an
- * operator deletes the client's rows by hand (lib/access.ts
- * oauthClientLive). */
+/**
+ * @deprecated The app reads connectedApps.list since the release after
+ * v0.1.158. This query stays, with its arguments and its answer, through
+ * that release, so tabs and desktop windows loaded before it still list
+ * connected apps on MCP access, and a later release removes it and adds it
+ * to the Instant Rollback list in docs/deployment.md.
+ *
+ * Before then P.listOAuthConnections read every approved connection of the
+ * login in one fetch, newest created first. `appGone` marks one whose
+ * OAuth client Qivo no longer has, which has ended although nothing
+ * revoked it, as when an operator deletes the client's rows by hand
+ * (lib/access.ts oauthClientLive). */
 export const list = authedQuery({
   args: {},
   handler: async (ctx) => {
