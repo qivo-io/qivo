@@ -419,6 +419,36 @@ describe('opening the remembered project', { timeout: 60_000 }, () => {
     }
   })
 
+  /* An organization admin is judged by ordinary access, by resolve and by
+     the store alike (the admin access split), so a remembered project of
+     their organization that they manage but no longer take part in shows
+     the chooser with its note, also while the workspace still holds it.
+     This catches startup opening such a project without the check, or an
+     unavailable answer giving way to the admin's management. */
+  it('shows an admin the chooser for a remembered project they no longer take part in, and opens one they do', async () => {
+    const snap = world({ role: 'admin' })
+    const managed = meta(snap, 'Managed only', ORG, false)
+    await app(structuredClone(snap), '/app/testbed', remembering(managed))
+    await chooser('lost')
+    expect(note()).toBe('The project you opened last is no longer available to you.')
+    expect(asks.map((a) => a.args)).toEqual([{ project_id: managed }])
+    // the store agrees with resolve, and the list holds only their own
+    expect(store.P.canSee(managed)).toBe(false)
+    await until(() => picks().length === 2, 'the two seats’ projects')
+    expect(picks()).toEqual([LUMA, PORTAL])
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    expect(location.pathname).toBe('/app/testbed')
+    expect(store.P.loadUI().lastProject?.project_id).toBe(managed)
+    await leave()
+    await app(structuredClone(snap), '/app/testbed', remembering(LUMA))
+    await until(() => shown() === 'overview', 'the Overview')
+    expect(asks.map((a) => a.args)).toEqual([{ project_id: LUMA }])
+    expect(location.pathname).toBe('/app/testbed/overview/p/10')
+    await until(() => viewReads().length > 0, "the Overview's reads")
+    expect(viewReads()[0].at).toBeGreaterThan(answeredAt[0])
+  })
+
   it('says a check that could not finish with Retry, never the chooser or a view, and opens once Retry gets ok', async () => {
     const snap = world()
     force = { unchecked: NAV_UNCHECKED }
