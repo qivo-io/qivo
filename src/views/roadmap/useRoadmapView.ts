@@ -315,6 +315,10 @@ export function useRoadmapView(
     for (const uuid of own) {
       const it = P.ownOnScreen(ROADMAP_SLOT, uuid)
       if (!it || shown.has(uuid) || !passes(it) || !textOk(it)) continue
+      // the person's new task on its way, by the whole text its create sent
+      // (P.createText), as the Board checks it
+      const created = filters.search ? P.createText(uuid) : null
+      if (created !== null && !matchesAllWords(created, filters.search)) continue
       shown.add(uuid)
       let at = tasks.length
       while (at > 0 && before(it, tasks[at - 1] as IssueVM)) at--

@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
+import { getFunctionName } from 'convex/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Snapshot } from '../store/plannerFixture.setup'
 import { staleCutoff } from './board/boardArgs'
-import { BOARD_TEST_TIMEOUT, cell, dragEvent, loadBoard, taskRow } from './boardFixture.setup'
+import {
+  BOARD_TEST_TIMEOUT,
+  cell,
+  dragEvent,
+  loadBoard,
+  spread,
+  taskRow,
+} from './boardFixture.setup'
 
 /* The Board from the server's answer (board/useBoardView.ts): the answer
    decides which tasks show, each as the store's own card, or as its row
@@ -90,6 +98,46 @@ const plan = (snap: Snapshot) => {
   snap.projects.push({ ...base, id: 'two', key: 'TWO', num: 3, name: 'Two', parent_id: 'plan' })
   snap.issues.push(taskRow(snap, 'one-1', 'todo', 1))
   snap.issues.push({ ...taskRow(snap, 'two-1', 'todo', 2), project_id: 'two' })
+}
+
+/** Holds every create the store sends until the test accepts the newest
+    one, with the number the server gave it, or refuses it. Other writes
+    never answer, as in loadBoard. */
+function holdCreates() {
+  const held: {
+    args: Record<string, unknown>
+    resolve: (v: unknown) => void
+    reject: (e: unknown) => void
+  }[] = []
+  network.mutation.mockImplementation((ref, args) =>
+    getFunctionName(ref) === 'issues:create'
+      ? new Promise((resolve, reject) => held.push({ args, resolve, reject }))
+      : new Promise(() => {}),
+  )
+  return {
+    /** Accepts the newest create, answered with its stored number. */
+    accept: (num: number) => {
+      const create = held.pop()
+      create?.resolve({ ...create.args, num })
+    },
+    refuse: (error: unknown) => held.pop()?.reject(error),
+  }
+}
+
+/** Creates a task in the fixture's project, as the New task dialog does,
+    and answers what it opens by and its uuid. */
+async function addTask(
+  board: Awaited<ReturnType<typeof loadBoard>>,
+  input: Partial<Parameters<Awaited<ReturnType<typeof loadBoard>>['P']['addIssue']>[0]>,
+) {
+  let open: string | null = null
+  await act(async () => {
+    open = board.P.addIssue({ project: board.snapshot.projects[0].id, title: 'New', ...input })
+  })
+  const { refParts } = await import('../lib/taskReference')
+  const uuid = refParts(open)?.uuid
+  if (!open || !uuid) throw new Error('the create answered no reference')
+  return { open: open as string, uuid }
 }
 
 /** Makes the Board's row source bring no row for the tasks `uuids` (as a
@@ -255,30 +303,116 @@ describe('the Board from its answer', { timeout: BOARD_TEST_TIMEOUT }, () => {
     expect(order()).toEqual([...keys, created])
   })
 
-  it('takes a refused create away again', async () => {
+  it("shows the person's new task at once in its place, asking for no task, and from the answer once the server took it", async () => {
     const board = await loadBoard(network, three)
-    let refuse: (error: unknown) => void = () => {}
-    network.mutation.mockImplementation(
-      () =>
-        new Promise((_, reject) => {
-          refuse = reject
-        }),
-    )
+    const create = holdCreates()
     await board.render(root)
     board.server.hold = true
-    let created: string | null = null
+    const { P } = board
+    const made = await addTask(board, { title: 'New one', status: 'todo', priority: 'medium' })
+    // a reference: the workspace holds no task, and nothing asked for any
+    expect(P.handleOf(made.uuid)).toBeNull()
+    expect(board.probe?.asks()).toEqual([])
+    expect(P.taskLoad()).toEqual({ state: 'not_asked' })
+    const order = () =>
+      [...(cell('todo')?.querySelectorAll<HTMLElement>('[data-card]') ?? [])].map(
+        (card) => card.dataset.card,
+      )
+    // numbered after a, b and c, it lands last, by the handle it opens by
+    expect(order().at(-1)).toBe(P.handleOfOpen(made.open))
+    expect(count('todo')).toBe('4')
+    // the server stores it: the answer that holds it arrives, then the create answers
+    board.snapshot.issues.push({
+      ...taskRow(board.snapshot, made.uuid, 'todo', 4),
+      title: 'New one',
+    })
+    board.server.hold = false
+    await board.answer()
+    await act(async () => create.accept(4))
+    await wait(10)
+    expect(order().at(-1)).toBe(P.handleOfOpen(made.open))
+    expect(P.ownPaintedTasks().has(made.uuid)).toBe(false)
+    expect(count('todo')).toBe('4')
+  })
+
+  it('takes a refused create away again', async () => {
+    const board = await loadBoard(network, three)
+    const create = holdCreates()
+    await board.render(root)
+    board.server.hold = true
+    const made = await addTask(board, { title: 'Doomed', status: 'todo' })
+    expect(board.card(made.uuid)).not.toBeNull()
+    await act(async () => create.refuse(new Error('no write access')))
+    await wait(10)
+    expect(board.card(made.uuid)).toBeNull()
+  })
+
+  it("puts the person's new task in its place on a project's Board at its design size", async () => {
+    // 798 open tasks over the project's three sub-projects, 266 each, the
+    // design size of open tasks in a project; Done stays at everyday values
+    const board = await loadBoard(
+      network,
+      (snap) => {
+        spread(266)(snap)
+        snap.orgs[0].next_issue_num = 798
+      },
+      { scope: 'plan' },
+    )
+    holdCreates()
+    await board.render(root)
+    expect(state()).toBe('ok')
+    const cards = () => document.querySelectorAll('[data-card]').length
+    await vi.waitFor(() => expect(cards()).toBe(798), { timeout: 15_000 })
+    board.server.hold = true
+    let open: string | null = null
     await act(async () => {
-      created = board.P.addIssue({
-        project: board.snapshot.projects[0].id,
-        title: 'Doomed',
+      open = board.P.addIssue({
+        project: 'two',
+        title: 'Calibrate the second bench',
         status: 'todo',
       })
     })
-    const uuid = board.P.issueById[created ?? '']?.uuid ?? ''
-    expect(board.card(uuid)).not.toBeNull()
-    await act(async () => refuse(new Error('no write access')))
-    await wait(10)
-    expect(board.card(uuid)).toBeNull()
+    const { refParts } = await import('../lib/taskReference')
+    const uuid = refParts(open)?.uuid ?? ''
+    await vi.waitFor(() => expect(board.card(uuid)).not.toBeNull(), { timeout: 15_000 })
+    const lane = (card: HTMLElement | null) =>
+      card
+        ?.closest('[data-swimlane-panel]')
+        ?.querySelector('[data-lane]')
+        ?.getAttribute('data-lane')
+    // in sub-project Two's lane, after its last task by number
+    expect(lane(board.card(uuid))).toBe(lane(board.card('t532')))
+    const inCell = [
+      ...(board
+        .card(uuid)
+        ?.closest('[data-board-cell]')
+        ?.querySelectorAll<HTMLElement>('[data-card]') ?? []),
+    ]
+    expect(inCell.at(-1)).toBe(board.card(uuid))
+    expect(inCell.at(-2)).toBe(board.card('t532'))
+    expect(cards()).toBe(799)
+  })
+
+  it("checks the person's new task against the whole text filter, its description included, before the server holds it", async () => {
+    const board = await loadBoard(network, three)
+    holdCreates()
+    await board.render(root)
+    await board.search('harness')
+    await wait(300)
+    await board.answer()
+    board.server.hold = true
+    // the description holds the word, which no row of the Board sends
+    const found = await addTask(board, {
+      title: 'Wire the rack',
+      description: 'Use the spare harness.',
+      status: 'todo',
+    })
+    const missed = await addTask(board, { title: 'Paint the rack', status: 'todo' })
+    expect(board.card(found.uuid)).not.toBeNull()
+    expect(board.card(missed.uuid)).toBeNull()
+    // the counts know both, and do not wait
+    expect(count('todo')).toBe('1')
+    expect(busy()).toBe(false)
   })
 
   it('shows a parent heading the answer names before the store holds it', async () => {
