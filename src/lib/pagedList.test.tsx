@@ -677,7 +677,7 @@ describe('a list kept live a batch at a time', () => {
     expect(transport.state.n - made).toBe(asked.length)
     await publish(true)
     expect(now().refreshing).toBe(false)
-    // the page shows while the tab is still hidden: no read stays open
+    // the page shows while the tab is still hidden, and no read stays open
     // until the tab shows (its effects first run with the visibility it
     // last rendered, so its reads may open and stop at once, as a kept
     // view's do when its arguments changed while it hid, lib/liveView.ts)
@@ -1313,7 +1313,7 @@ describe('a list shown a page at a time', () => {
     expect(transport.state.n - made).toBe(1)
     await publish(true)
     expect(shown()[0]).toBe('a25')
-    // the page shows while the tab is still hidden: no read stays open
+    // the page shows while the tab is still hidden, and no read stays open
     // until the tab shows
     await kept('hidden')
     await setVisibility('hidden')

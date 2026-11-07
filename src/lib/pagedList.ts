@@ -32,9 +32,9 @@
    batch or page whose read failed reads again with them, and its failure
    goes once it answers. A failed Next or Previous keeps its note until
    Retry or another move, since its read stopped when it failed. Each
-   visit counts position refusals afresh: a list a second refusal failed
-   starts again from its first batch or page as the page shows, and its
-   next refusal starts it again rather than failing it. It imports nothing
+   visit counts position refusals afresh, so a list a second refusal
+   failed starts again from its first batch or page as the page shows, and
+   its next refusal starts it again rather than failing it. It imports nothing
    from the store.
 
    A list reads its batches from one of two sources (BatchSource):
