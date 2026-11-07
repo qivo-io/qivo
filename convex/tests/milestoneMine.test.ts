@@ -797,23 +797,31 @@ describe('refusals of a mine read', () => {
 describe('a mine read at the design size', () => {
   it("lists 200 top-level projects of one sub-project each, the caller's task in each, 100 rows with a next", async () => {
     // the 200 top-level projects and the 200 sub-projects one person can
-    // read, at their sum, through the shares of the person's three teams
+    // read, at their sum, 150 through the shares of the person's three
+    // teams, 50 each as a team's design size allows, and 50 through a
+    // grant on the top-level project
     const t = newT({ transactionLimits: true })
     const f = await withOrg(t)
     const me = await seatOf(t, f.org.id, { org_role: 'user' })
+    const shared = await plantShared(t, f.org.id, f.user, me, { tops: 150, subs: 1 })
     // TBED and SKNK are the organization's other two top-level projects;
     // TBED keeps FW alone and SKNK gets one sub-project
-    const shared = await plantShared(t, f.org.id, f.user, me, { tops: 198, subs: 1 })
     await t.run((ctx) => ctx.db.patch(f.sub2._id, { archived_at: NOW }))
     const skunk = await plantProject(t, {
       org_id: f.org.id,
       type: 'project',
       parent_id: f.hidden.id,
     })
-    await grant(t, f.meta, me)
-    await grant(t, f.hidden, me)
-    const subs = [...shared.subs, f.sub, skunk]
-    const tops = [...shared.tops, f.meta, f.hidden]
+    const granted = [f.meta, f.hidden]
+    const grantedSubs = [f.sub, skunk]
+    for (let i = 0; i < 48; i++) {
+      const p = await program(t, f.org.id, `Granted ${i}`)
+      granted.push(p.top)
+      grantedSubs.push(p.sub)
+    }
+    for (const top of granted) await grant(t, top, me)
+    const subs = [...shared.subs, ...grantedSubs]
+    const tops = [...shared.tops, ...granted]
     expect(tops).toHaveLength(200)
     for (const sub of subs)
       await plantTasks(t, sub, 1, () => ({
@@ -833,8 +841,13 @@ describe('a mine read at the design size', () => {
     const first = await as(t, me).query(api.milestones.section, mineAsk({ limit: 10 }))
     expect(first.rows).toHaveLength(10)
     expect(first.stopped).toBeNull()
-    await measureMine(t, me, '200 projects through team shares, limit 10', 10)
-    const got = await measureMine(t, me, '200 projects through team shares, limit 100', 100)
+    await measureMine(t, me, '200 projects through team shares and grants, limit 10', 10)
+    const got = await measureMine(
+      t,
+      me,
+      '200 projects through team shares and grants, limit 100',
+      100,
+    )
     expect(got).toMatchObject({ answer: { projects: 200, rows: 100, next: true, stopped: null } })
   })
 

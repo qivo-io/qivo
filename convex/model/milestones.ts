@@ -1117,10 +1117,11 @@ export async function milestoneProjects(
  * ranges, documents and MiB:
  *
  * - One open task of the caller in each of 200 top-level projects of one
- *   sub-project each, through the shares of the caller's three teams (the
- *   200 top-level projects and the 200 sub-projects one person can read at
- *   their sum), one upcoming milestone each. The finding takes 482, 827,
- *   0.31 and 2.49, the request 882, 1,027 and 0.35.
+ *   sub-project each, 150 through the shares of the caller's three teams,
+ *   50 a team, and 50 through a grant on the top-level project (the 200
+ *   top-level projects and the 200 sub-projects one person can read at
+ *   their sum), one upcoming milestone each. The finding takes 579, 860,
+ *   0.31 and 2.5, the request 979, 1,060 and 0.35.
  * - The same 200 projects where the caller's access comes through a grant
  *   on each sub-project alone, so every top-level project shows only for
  *   navigation. The finding takes 1,245, 1,566, 0.47 and 2.67, the request
