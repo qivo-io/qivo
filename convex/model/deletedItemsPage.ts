@@ -219,6 +219,24 @@ type Profile = Doc<'profiles'>
  * beside 1,000 people 1,011 and 0.32 MiB, and for a person whose team
  * shares 50 live and 150 archived sub-projects, three a top-level project,
  * 483 and 0.13 MiB.
+ *
+ * Timed on 7 November 2026 on a local backend (8 vCPU, one call at a time),
+ * in one quiet session and one beside 8 busy loops, an organization admin's
+ * page, which judges task items by the admin's own levels, cost about what
+ * a standard user's with the same rows cost, plus the items only an admin
+ * lists. Counted for the whole call with its sign-in, a browse beside the
+ * catalogue of 2,000 projects, with 25 task items the admin cannot read,
+ * reads 19 ranges, 2,044 documents and 0.87 MiB with 25 hidden rows (the
+ * standard user's 18, 2,019 and 0.85, with no items), and a search 67,
+ * 2,069 and 0.89 (the standard user's 42, 2,044 and 0.87), in 32 to 74 ms
+ * of JavaScript quiet and at most 149 ms busy. The admin's browse took
+ * 583 ms once in a further quiet session that had storage stalls and 965 ms
+ * once in a further busy session. A project item of 30 live and 40 archived
+ * sub-projects, for an admin in 3 teams, reads 23, 100 and 0.06 to browse
+ * and 279, 357 and 0.25 to search, which answers no entries with missing
+ * `matches`, in at most 30 ms quiet. An everyday project item, for an admin
+ * in 5 teams, reads 29, 43 and 0.01 to browse and 121, 134 and 0.08 to
+ * search, with 25 entries, in at most 30 ms quiet and 54 ms busy.
  */
 export const DELETED_PAGE = {
   rows: 25,
