@@ -37,13 +37,13 @@ that takes focus scrolls into view. Coming back from **Settings**, the tree
 shows the projects it held, where you left it.
 
 An organization admin's tree holds the projects they take part in, as
-anyone else's, while **Settings › Projects › All projects** lists every
-project of the organization. The Board, the Overview and the Roadmap still
-show an admin any project of the organization they open, also one the tree
-does not list.
+anyone else's, and the Board, the Overview and the Roadmap show them the
+same projects as the tree. **Settings › Projects › All projects** lists
+every project of the organization, and a project they only manage opens
+from there, on its settings page.
 
-A project row's **…** menu opens settings, **Archived tasks** and, for leads,
-**New sub-project…**. Sub-project rows have settings and **Archived tasks**.
+A project row's **…** menu opens settings, **Archived tasks** and, for its
+lead and organization admins, **New sub-project…**. Sub-project rows have settings and **Archived tasks**.
 The Projects header's **+** creates a project. It appears for organization
 admins, and for standard users when
 [Who can create projects](./organization-and-team-settings.md#who-can-create-projects)

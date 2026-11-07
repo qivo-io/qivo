@@ -3181,7 +3181,7 @@ authenticated request.
   `team_members`. These are the same grants used for every person, read through
   `canSeeProject` and `hasProjectLevel`
   (`convex/lib/access.ts`), the predicates every surface calls, which apply
-  the whole access model (org admin, project and sub-project leads, direct or
+  the whole access model (project and sub-project leads, direct or
   explicit team grant) under the organization-role ceiling. They are asked *as the
   caller's user*, inside the request's own transaction, so the answer this API gives, the
   answer MCP gives and the answer the app gives are one computation rather

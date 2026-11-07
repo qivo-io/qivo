@@ -91,7 +91,8 @@ read shows without its title. A project lead sees what they deleted and what
 was deleted in projects they lead.
 Everyone else sees what they deleted. Except for admins, an item stays in
 view only while you can still open the project it was in. Restoring needs
-edit access where the work goes back, or Lead access for a project. Only
+edit access where the work goes back, or for a project its lead or an
+organization admin. Only
 organization admins can delete an item for good before it expires.
 
 Each project and sub-project has one named lead. Choosing a new lead changes
