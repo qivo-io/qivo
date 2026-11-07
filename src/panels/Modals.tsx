@@ -2137,7 +2137,7 @@ function ArchiveOrDeleteTaskModal({
     ? ''
     : archiving
       ? readOnly
-        ? "At least one is in a project you can't edit. Keep the subtasks, or ask an organization admin."
+        ? "At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects."
         : hidden
           ? "If any of them is in a project you can't edit, the archive is refused."
           : ''

@@ -539,7 +539,7 @@ describe('changing the first day of the week', () => {
       'workdays cannot start on Sunday, because a project can have at most 1 milestone a week, ' +
         'and then Testbed platform (TBED) would have “Alpha” on 2026-05-10 and “Beta” on ' +
         `2026-05-11 in ${weekPhrase('2026-05-10', under(org, 0))}. ` +
-        'Move or delete milestones so that no project has two in one week, then change the first day again.',
+        "Move or delete milestones so that no project has two in one week, or ask the project's lead to, then change the first day again.",
     )
     // every start but Monday puts them together
     for (const start of [2, 3, 4, 5, 6])

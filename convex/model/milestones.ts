@@ -442,7 +442,7 @@ export async function assertWeekStartFits(
   // items only once it is back
   const shown = clashes.slice(0, NAMED_CLASHES)
   const steps = [
-    'Move or delete milestones so that no project has two in one week, then change the first day again.',
+    "Move or delete milestones so that no project has two in one week, or ask the project's lead to, then change the first day again.",
     ...(shown.some((c) => c.live?.archived_at !== undefined)
       ? ['Restore an archived project first to change its milestones.']
       : []),

@@ -164,7 +164,7 @@ describe('what a row says', () => {
       'You can only view Website now. Ask its lead, Aisha Khan, to restore it.',
     )
     expect(blockedText({ reason: 'view_only', project: 'Website' })).toBe(
-      'You can only view Website now. Ask an organization admin to restore it.',
+      'You can only view Website now. Ask someone who can edit it to restore it.',
     )
     expect(blockedText({ reason: 'not_lead', project: 'Specs', lead: 'Daniel Berg' })).toBe(
       'Specs has its own lead, Daniel Berg. Ask them or an organization admin to restore it.',

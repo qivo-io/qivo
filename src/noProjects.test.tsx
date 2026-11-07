@@ -42,7 +42,8 @@ vi.mock('./lib/auth', () => ({
 
 const MEMBER =
   'No active projects are shared with you. Ask an organization admin or a project lead for access.'
-const ADMIN = 'Your organization has no active projects.'
+const ADMIN =
+  'You take part in no active projects. Settings › Projects › All projects lists every project of your organization.'
 
 let container: HTMLDivElement
 let root: Root
@@ -382,7 +383,9 @@ describe('Team sync, which covers the home organization', () => {
     await act(async () => root.unmount())
     root = createRoot(container)
     await app(guestElsewhere('admin'), '/app/testbed/sync')
-    await shows('Team sync covers Testbed Labs, which has no active projects.')
+    await shows(
+      'Team sync covers Testbed Labs, where you take part in no active projects. Settings › Projects › All projects lists every project of your organization.',
+    )
   })
 
   it('leaves the other pages to the projects of every organization', async () => {

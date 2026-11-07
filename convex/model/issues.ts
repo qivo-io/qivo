@@ -2036,7 +2036,7 @@ export async function updateIssueCore(
 export const MOVE_SUBTASK_RULE =
   "a subtask stays in its parent task's project; to move it to another project, detach it from its parent in the same change"
 export const MOVE_SUBTREE_EDIT_RULE =
-  'moving this task would move a subtask in a project you cannot edit; an organization admin can move it'
+  'moving this task would move a subtask in a project you cannot edit; someone who can edit that project can move it'
 export const MOVE_SUBTREE_HOLDER_RULE =
   'someone assigned to or reviewing a subtask of this task cannot edit that sub-project; give them Edit access there, or change who works on that subtask first'
 /* A task moving to another top-level project may have at most
@@ -2407,12 +2407,13 @@ export async function moveIssueCore(
  * The reason-comment (early archive) is the mutation layer's job (comments
  * model, phase 5) — it must share this same `now`. */
 
-/* Both name who can finish the change: an organization admin edits every
- * project, so neither refusal is a dead end. */
+/* Both name who can finish the change: someone who can edit that project,
+ * so neither refusal is a dead end. Admin status gives no Edit, so they
+ * name no organization admin. */
 export const ARCHIVE_CASCADE_RULE =
-  'archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it'
+  'archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it'
 export const RESTORE_CASCADE_RULE =
-  'restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it'
+  'restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it'
 
 /* The refusals for a cascade that meets a subtask or parent whose project
  * Deleted items is moving (model/deletedItems.ts). The task still names the

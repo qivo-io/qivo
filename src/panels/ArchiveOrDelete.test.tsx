@@ -420,7 +420,7 @@ describe('Archive or delete a task', () => {
     answers['issues:archive'] = () => Promise.resolve(null)
     await openTask('mixed')
     expect(text('[data-fate-lead]')).toBe(
-      "QN-5 has 1 subtask, which is unfinished. At least one is in a project you can't edit. Keep the subtasks, or ask an organization admin.",
+      "QN-5 has 1 subtask, which is unfinished. At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects.",
     )
     expect(text('[data-fate-subtask="QN-6"]')).toContain('View only')
     expect(text('[data-fate-subtasks]')).toContain("More subtasks in projects you can't open")
@@ -655,7 +655,7 @@ describe('Archive or delete a task the window shows from its own answer', () => 
     await openFromAnswer()
     expect(text('[data-fate-lead]')).toContain('QN-40 has 2 subtasks, 1 of them unfinished.')
     expect(text('[data-task-fate]')).toContain(
-      "At least one is in a project you can't edit. Keep the subtasks, or ask an organization admin.",
+      "At least one is in a project you can't edit. Keep the subtasks, or ask someone who can edit those projects.",
     )
     expect(button('Archive').disabled).toBe(true)
     await choose('delete')

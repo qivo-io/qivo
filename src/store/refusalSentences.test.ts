@@ -92,11 +92,11 @@ describe('refusal sentences in restore and upload toasts', () => {
   it('capitalizes a task restore refusal and ends it with a period', async () => {
     answers['issues:unarchive'] = refuse(
       'rule',
-      'restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it',
+      'restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it',
     )
     expect(await P.unarchiveIssue('task-archived', 'Old task', snap.projects[0].id)).toBe(false)
     expect(showToast).toHaveBeenCalledExactlyOnceWith(
-      "Couldn't restore. Restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it.",
+      "Couldn't restore. Restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it.",
       'error',
     )
   })

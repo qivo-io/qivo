@@ -383,7 +383,7 @@ describe('issue scheduling and hierarchy', () => {
     const asGuest = as(t, f.guest)
     const archive = (id: string) => asGuest.mutation(api.issues.archive, { org_id: f.org.id, id })
     const ARCHIVE_RULE =
-      /^archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it$/
+      /^archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it$/
 
     // a hidden active subtask refuses the archive whole
     const root = await plantIssue(t, { org_id: f.org.id, project_id: f.sub.id })
@@ -459,7 +459,7 @@ describe('issue scheduling and hierarchy', () => {
     const restore = (id: string) =>
       as(t, f.guest).mutation(api.issues.unarchive, { org_id: f.org.id, id })
     const RESTORE_RULE =
-      /^restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it$/
+      /^restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it$/
     const top = await plantIssue(t, { org_id: f.org.id, project_id: hiddenSub.id })
     const child = await plantIssue(t, {
       org_id: f.org.id,
@@ -518,7 +518,7 @@ describe('issue scheduling and hierarchy', () => {
       parent_id: root.id,
     })
     const RULE =
-      /^archiving this task would change a subtask in a project you cannot edit; an organization admin can archive it$/
+      /^archiving this task would change a subtask in a project you cannot edit; someone who can edit that project can archive it$/
     await expectRefusal(
       t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.agent.id,
@@ -553,7 +553,7 @@ describe('issue scheduling and hierarchy', () => {
     })
     await as(t, f.admin).mutation(api.issues.archive, { org_id: f.org.id, id: hiddenTop.id })
     const RESTORE =
-      /^restoring this task would change a parent task in a project you cannot edit; an organization admin can restore it$/
+      /^restoring this task would change a parent task in a project you cannot edit; someone who can edit that project can restore it$/
     await expectRefusal(
       t.mutation(internal.machine.rest.updateIssue, {
         callerId: f.agent.id,
