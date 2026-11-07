@@ -636,13 +636,16 @@ export function createAvatarSources(overrides: Partial<Dependencies> = {}) {
     },
     /** The source to show for `key`, or null. A held picture past its
         lease and STALE_GRACE shows no more, and keeps its bytes: named
-        again, its renewal shows it with no download. Only expire() and a
+        again, its renewal shows it with no download. While the page is
+        hidden a named one still shows, until its renewal on return, and
+        one no view names does not, so a render while hidden leaves no
+        unrenewed picture on screen for the return. Only expire() and a
         failed renewal release it, never a render, which runs as soon as a
         view names the key, before its renewal can answer. */
     url(key: string) {
       const entry = entries.get(key)
       if (!entry) return null
-      if (!paused && !entry.restored && expired(entry)) return null
+      if (!entry.restored && expired(entry) && (!paused || !namedKeys.has(key))) return null
       return entry.source
     },
     /** Releases the named pictures past their grace whose renewal failed,

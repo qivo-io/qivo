@@ -829,7 +829,9 @@ describe('pictures only for what the open views name', () => {
     // past the lease at 600 s and its grace
     f.time(1_200_000)
     expect(f.cache.url(KEY)).toBeNull()
+    // hidden too while the page is, so a render then paints no picture
     f.cache.pause(true)
+    expect(f.cache.url(KEY)).toBeNull()
     f.cache.pause(false)
     // still hidden, and nothing renews it until a view names it
     expect(f.cache.url(KEY)).toBeNull()
