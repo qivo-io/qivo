@@ -24,8 +24,10 @@
    (components/projectNavRows.tsx useNavOpen): one the workspace holds at
    once, and one it does not hold yet through projectNav.resolve, while
    the palette stays open saying "Opening <name>…" and closes as it opens,
-   or says why it cannot (openProjectResult). A new search drops the
-   wait, and so does the palette closing. */
+   or says why it cannot (openProjectResult). Any change of the text, the
+   toggle or Search in drops the wait with its notice, a cleared field and
+   a text past the limit too, and so do another page of the results, a
+   navigation the person makes and the palette closing. */
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -270,6 +272,13 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     : overLimit(LIMITS.search, settled)
       ? TOO_LONG
       : searchKeyOf(settled, includeArchived, scope)
+  // any change of the search the field and the controls describe, a
+  // cleared field and a text past the limit too, drops a project's open
+  // that waits, and its notice, during the commit, before its answer lands
+  useLayoutEffect(() => {
+    nav.cancel()
+    setNotice(null)
+  }, [typed])
   useEffect(() => {
     if (text === settled) return
     if (searchKeyOf(text, false, null) === null) {
@@ -291,7 +300,8 @@ function SearchPalette({ ctx, searchIn = null, onClose }: SearchPaletteProps) {
     setRunning({ seq, key: search.key, move })
     setFailed(null)
     setRefusal(null)
-    // a new search, or another page of it, drops a project's open that waits
+    // each request, another page of the search and Retry included, drops
+    // a project's open that waits
     nav.cancel()
     setNotice(null)
     void P.fetchSearchPage(search.text, {
