@@ -93,11 +93,14 @@ export type ScopeMilestones = {
   nextId: string | null
 }
 
-/** The next milestone from Upcoming's view while it has not moved on. */
+/** The next milestone from Upcoming's view while it has not moved on. A
+    Load more that failed or was refused leaves the answer shown, whose
+    first row is still the next milestone; a failure, refusal or too-many of
+    the read shown makes it unavailable. */
 function nextFromUpcoming(view: SectionView<MilestoneVM>): NextMilestone {
   if (view.state === 'loading') return { state: 'loading' }
-  if (view.state === 'failed' || view.state === 'refused' || view.state === 'too_many')
-    return { state: 'unavailable' }
+  const { note } = view
+  if (note && (note.kind === 'too_many' || !note.more)) return { state: 'unavailable' }
   const row = view.rows[0]
   if (row) return { state: view.state === 'refreshing' ? 'refreshing' : 'ok', row }
   return view.whole ? { state: 'none' } : { state: 'unavailable' }

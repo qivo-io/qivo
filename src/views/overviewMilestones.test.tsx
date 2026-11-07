@@ -336,6 +336,19 @@ describe('the Next milestone cell and the section states', { timeout: BOARD_TEST
     board.server.milestones.force = {}
   })
 
+  it('keeps the next milestone and its emphasis while a failed Load more says so', async () => {
+    const { board } = await overview(plan({ up: 12 }))
+    board.server.milestones.force = { more: 'error' }
+    await click(sectionOf('upcoming')?.querySelector('[data-milestone-more]'))
+    expect(noteOf('upcoming').some((n) => n.startsWith('more-failed'))).toBe(true)
+    expect(rowsOf('upcoming')).toHaveLength(10)
+    // must fail for a cell that reads any failure as unavailable
+    expect(cell()?.dataset.ovFigureState).toBe('ok')
+    expect(cell()?.textContent).toContain('Step 1')
+    expect(q('[data-overview-milestone="u1"]')?.hasAttribute('data-next')).toBe(true)
+    board.server.milestones.force = {}
+  })
+
   it('shows a past milestone project as having history, and Retry asks again', async () => {
     const { board, render, store } = await overview(plan({ past: 1 }))
     expect(noteOf('upcoming')).toEqual(['empty: No upcoming milestones.'])
