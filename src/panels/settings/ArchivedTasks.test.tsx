@@ -426,7 +426,7 @@ const chips = () =>
   )
 /** What the page says when the project it opened on did not resolve. */
 const MISSED =
-  "Couldn't open this page on that project. The project list shows the projects you take part in."
+  "This page can't show the tasks of the project it was opened for. The project list shows the projects you take part in."
 /** The newest issues.archivedPage call. */
 const last = () => calls[calls.length - 1]
 /** The scope argument of the project `id` of Testbed Labs. */
@@ -996,18 +996,23 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
     expect(last().args).toEqual({ scope: project(META), search: 'task', cursor: '3~s2', limit: 25 })
   })
 
-  it('opens on no choice and reads nothing where its project does not resolve', async () => {
-    for (const answer of [
-      async () => ({ state: 'unavailable' }),
-      async () => ({
-        state: 'unavailable',
-        reason: 'access_unchecked',
-        message: 'Qivo could not finish checking which projects you can see.',
-      }),
-      async () => {
-        throw new Error('the read failed')
-      },
-    ]) {
+  it('opens on no choice and reads nothing where its project does not resolve, telling the three outcomes apart', async () => {
+    const UNCHECKED = 'Qivo could not finish checking which projects you can see.'
+    for (const [answer, says, retries] of [
+      [async () => ({ state: 'unavailable' }), MISSED, false],
+      [
+        async () => ({ state: 'unavailable', reason: 'access_unchecked', message: UNCHECKED }),
+        UNCHECKED,
+        true,
+      ],
+      [
+        async () => {
+          throw new Error('the read failed')
+        },
+        "Couldn't check that project.",
+        true,
+      ],
+    ] as const) {
       let release = () => {}
       const held = new Promise<void>((resolve) => {
         release = resolve
@@ -1030,7 +1035,18 @@ describe('Archived tasks', { timeout: 20_000 }, () => {
       expect(calls).toEqual([])
       expect(trigger()).toBe('Choose projects…')
       expect(has('[data-project-picker-busy]')).toBe(false)
-      expect(text('[data-archived-tasks]')).toContain(MISSED)
+      expect(text('[data-archived-tasks]')).toContain(says)
+      // only a check that could not finish, or failed, offers Retry
+      expect(has('[data-archive-retry]')).toBe(retries)
+      if (retries) {
+        // Retry resolves again, and opens on the project once it resolves
+        resolveAnswer = async () =>
+          queryProjectNav(snap, 'projectNav:resolve', { project_id: META })
+        await click(find('[data-archive-retry]'))
+        await settle()
+        expect(trigger()).toBe('Luma Sensor')
+        expect(text('[data-archived-tasks]')).not.toContain(says)
+      }
       await act(async () => root.unmount())
       root = createRoot(container)
     }
