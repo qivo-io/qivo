@@ -218,7 +218,9 @@ import { taskFields } from './workspaceParts'
  *   archived projects.
  *
  * Inside the design size the batch at its full `scan`, whose caller reads
- * 167 sub-projects, reads the most of these cases on every count. The Boat
+ * 167 sub-projects, reads the most documents and bytes of these cases, and
+ * a member's Search all your projects over 200 sub-projects the most
+ * ranges. The Boat
  * timing of its slowest calls (owner, 31 October 2026) took that batch and
  * a member's rare word over the project of 800 open tasks, as those cases
  * build them, beside a rare word over the catalogue's 700 live projects
