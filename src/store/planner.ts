@@ -668,6 +668,18 @@ let historyNewerAsk = 0
    page or the live window holds it again or no editor holds it. */
 const commentHolds = new Map<object, string>()
 const pinnedComments = new Map<string, Row<'comments'>>()
+/* The comments and changes a release passed over at an instant that only
+   the other kind's live rows hold (lib/threadBudget.ts KindAfter apart),
+   by id, oldest first. Their ids went into the gap, or above the oldest
+   kept row, like every row a release takes, so a page reads them back,
+   but the store keeps their rows, counted in the budget, so no instant is
+   split. They sit among rows the store let go, so the window shows none
+   of them (P.threadApart). Each goes once a run or the live rows hold it
+   again or no held row of the other kind shares its instant (syncApart),
+   and they go with their runs when the thread or the history starts
+   over. */
+const apartComments = new Map<string, Row<'comments'>>()
+const apartEvents = new Map<string, Row<'activity_events'>>()
 /* The first comment or change on screen in each window, by the window's own
    object, null while the window shows the thread's newest end
    (P.threadPlace). Every release keeps the rows on screen around each of
@@ -875,16 +887,23 @@ export type CommentsFailure = 'none' | 'failed' | 'retrying'
 /* Builds the watched thread's rows from its last deliveries and the rows
    loaded before them: the comments, empty while none are delivered (or
    nothing is watched), with the comments held apart for an editor
-   (pinnedComments), and the history, empty while it is not delivered. The
-   thread's layers paint over them (repaint). */
+   (pinnedComments) or at another kind's live instant (apartComments), and
+   the history, empty while it is not delivered, with its changes held
+   apart (apartEvents) between its runs, where thread order puts them
+   among the changes of their instant. The thread's layers paint over them
+   (repaint). */
 function buildThreadRows() {
   syncPinned()
+  syncApart()
   rows.threadEvents =
     historySnap === null
       ? []
       : structuredClone([
           ...new Map(
-            [...olderEvents, ...newerEvents, ...historySnap].map((r) => [r.id, r]),
+            [...olderEvents, ...apartEvents.values(), ...newerEvents, ...historySnap].map((r) => [
+              r.id,
+              r,
+            ]),
           ).values(),
         ])
   PLANNER.historyLoaded = historySnap !== null
@@ -893,7 +912,12 @@ function buildThreadRows() {
     return
   }
   rows.comments = new Map(
-    structuredClone([...olderComments, ...newerComments, ...commentsSnap]).map((r) => [r.id, r]),
+    structuredClone([
+      ...olderComments,
+      ...apartComments.values(),
+      ...newerComments,
+      ...commentsSnap,
+    ]).map((r) => [r.id, r]),
   )
   for (const [id, row] of pinnedComments)
     if (!rows.comments.has(id)) rows.comments.set(id, structuredClone(row))
@@ -910,6 +934,26 @@ function syncPinned() {
   )
   for (const id of pinnedComments.keys())
     if (held.has(id) || !editing.has(id)) pinnedComments.delete(id)
+}
+
+/* Lets go of the rows held apart at another kind's live instant
+   (apartComments, apartEvents) that a run or the live rows hold again, or
+   whose instant no held row of the other kind shares any more, so the
+   rest of their instant has gone too. The changes go once the history is
+   not held. */
+function syncApart() {
+  if (historySnap === null) apartEvents.clear()
+  if (apartComments.size === 0 && apartEvents.size === 0) return
+  const comments = [...olderComments, ...newerComments, ...(commentsSnap ?? [])]
+  const events = historySnap === null ? [] : [...olderEvents, ...newerEvents, ...historySnap]
+  const commentIds = new Set(comments.map((r) => r.id))
+  const eventIds = new Set(events.map((r) => r.id))
+  const commentAt = new Set(comments.map((r) => Date.parse(r.created_at)))
+  const eventAt = new Set(events.map((r) => Date.parse(r.ts)))
+  for (const [id, row] of apartComments)
+    if (commentIds.has(id) || !eventAt.has(Date.parse(row.created_at))) apartComments.delete(id)
+  for (const [id, row] of apartEvents)
+    if (eventIds.has(id) || !commentAt.has(Date.parse(row.ts))) apartEvents.delete(id)
 }
 
 /* Closes the watched thread's comment gap and drops the run below it,
@@ -966,16 +1010,18 @@ function joinEmptyRun() {
    id meets the run above, so the gap closes), and in the run above that
    run up to it with no gap. When the window no longer meets what was
    loaded, because more comments arrived between two deliveries than it
-   holds, the thread starts over from the window, with no gap, and a
-   comment open in an editor among the comments it lets go, the previous
-   window's included, is held apart (pinEditing). A comment held apart for
-   an editor stays through every one of these. */
+   holds, the thread starts over from the window, with no gap and no
+   comment held apart at a change's instant (apartComments), and a comment
+   open in an editor among the comments it lets go, the previous window's
+   included, is held apart (pinEditing). A comment held apart for an
+   editor stays through every one of these. */
 function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }): Row<'comments'>[] {
   const prev = commentsSnap
   const first = page.comments[0]
   let slid: Row<'comments'>[] = []
   if (first === undefined || !page.earlier) {
     olderComments = []
+    apartComments.clear()
     dropCommentsGap()
   } else if (prev !== null) {
     const at = prev.findIndex((r) => r.id === first.id)
@@ -1017,7 +1063,10 @@ function receiveThread(page: { comments: Row<'comments'>[]; earlier: boolean }):
           ])
         dropCommentsGap()
         olderComments = kept === -1 ? [] : olderComments.slice(0, kept)
-        if (kept === -1) threadStart = false
+        if (kept === -1) {
+          threadStart = false
+          apartComments.clear()
+        }
       }
     }
   }
@@ -1087,6 +1136,7 @@ function receiveHistory(page: {
 function restartHistory(page: { earlier: boolean; next: string | null }) {
   historyEpoch++
   olderEvents = []
+  apartEvents.clear()
   dropHistoryGap()
   historyStart = !page.earlier
   historyNext = page.next
@@ -1100,6 +1150,7 @@ function resetHistory() {
   historyEpoch++
   historySnap = null
   olderEvents = []
+  apartEvents.clear()
   dropHistoryGap()
   historyNext = null
   historyStart = false
@@ -1166,14 +1217,14 @@ async function checkSlidOut(
 
 /* Drops the comment `id` from the watched thread's server truth, for a
    comment the server says no longer exists: from its run, the live window,
-   the gap's ids and the comments held apart for an editor. A gap whose run
-   above it empties joins the thread's start (joinEmptyRun). The caller
-   repaints. */
+   the gap's ids and the comments held apart. A gap whose run above it
+   empties joins the thread's start (joinEmptyRun). The caller repaints. */
 function dropComment(id: string) {
   olderComments = olderComments.filter((r) => r.id !== id)
   newerComments = newerComments.filter((r) => r.id !== id)
   if (commentsGap?.includes(id)) commentsGap = commentsGap.filter((gone) => gone !== id)
   pinnedComments.delete(id)
+  apartComments.delete(id)
   if (commentsSnap) commentsSnap = commentsSnap.filter((r) => r.id !== id)
   joinEmptyRun()
 }
@@ -1314,15 +1365,21 @@ function arrivalMoves(
    keeps (pressKeep) after that press's page, or the rows on screen around
    any window's reported place (placesKept), it never splits an instant,
    and it passes over a comment open in an editor, which it holds apart
-   (pinnedComments). Released comments leave acceptedCommentChanges, since
+   (pinnedComments), and a row at an instant only the other kind's live
+   rows hold, which it holds apart within the budget (apartComments,
+   apartEvents). Released comments leave acceptedCommentChanges, since
    a read brings them back with the server's text, edits included. A
    release from the top unloads that kind's start, and the history then
    reads on before its oldest kept row (historyNext). The caller repaints.
    Answers whether rows went. */
 function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
   if (commentsSnap === null) return false
+  syncApart()
   const held = heldThread()
+  // the rows held apart from earlier releases count, outside the runs
+  const apart = apartComments.size + apartEvents.size
   const count =
+    apart +
     olderComments.length +
     newerComments.length +
     commentsSnap.length +
@@ -1341,7 +1398,7 @@ function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
     keep: why === 'arrival' ? places.keep : new Set([...pressKeep, ...places.keep]),
     pinned: new Set(commentHolds.values()),
     moves,
-    budget: THREAD_KEEP.rows,
+    budget: THREAD_KEEP.rows - apart,
   })
   if (!after) return false
   const c = after.comments
@@ -1351,10 +1408,12 @@ function keepThread(why: 'earlier' | 'newer' | 'arrival'): boolean {
   if (c.fromTop) threadStart = false
   for (const h of c.released) acceptedCommentChanges.delete(h.id)
   pinEditing(c.released.map((h) => h.row))
+  for (const h of c.apart) apartComments.set(h.id, h.row)
   const e = after.history
   if (e && historySnap !== null) {
     olderEvents = e.older.map((h) => h.row)
     newerEvents = e.newer.map((h) => h.row)
+    for (const h of e.apart) apartEvents.set(h.id, h.row)
     historyGap = e.gap
     if (e.fromTop) {
       historyStart = false
@@ -1626,6 +1685,7 @@ function threadNews(news: SideNews) {
     olderComments = []
     dropCommentsGap()
     pinnedComments.clear()
+    apartComments.clear()
     threadStart = true
     threadDelivered(issueUuid)
     return
@@ -3304,6 +3364,7 @@ function shownWorkspace() {
       P.historyNewer,
       P.threadGap,
       P.pinnedComments,
+      P.threadApart,
       P.sections,
       P.detail,
       P.reference,
@@ -6323,12 +6384,13 @@ async function refreshPinnedComment(
 }
 
 /** Whether comment `id` of the watched thread is held outside the live
-    window, in a run or apart for an editor, where no delivery reaches it. */
+    window, in a run or apart, where no delivery reaches it. */
 function heldBeforeWindow(id: string): boolean {
   return (
     olderComments.some((r) => r.id === id) ||
     newerComments.some((r) => r.id === id) ||
-    pinnedComments.has(id)
+    pinnedComments.has(id) ||
+    apartComments.has(id)
   )
 }
 
@@ -6343,10 +6405,11 @@ function patchHeldComment(id: string, edit: Partial<Row<'comments'>> | null, who
       : list.map((r) => (r.id === id ? (whole ? (edit as Row<'comments'>) : { ...r, ...edit }) : r))
   olderComments = patch(olderComments)
   newerComments = patch(newerComments)
-  const pinned = pinnedComments.get(id)
-  if (pinned && edit === null) pinnedComments.delete(id)
-  else if (pinned && edit)
-    pinnedComments.set(id, whole ? (edit as Row<'comments'>) : { ...pinned, ...edit })
+  for (const held of [pinnedComments, apartComments]) {
+    const row = held.get(id)
+    if (row && edit === null) held.delete(id)
+    else if (row && edit) held.set(id, whole ? (edit as Row<'comments'>) : { ...row, ...edit })
+  }
   joinEmptyRun()
 }
 
@@ -7803,6 +7866,7 @@ function rebuildComments() {
     PLANNER.pinnedComments,
     [...pinnedComments.keys()].filter((id) => rows.comments.has(id)),
   )
+  PLANNER.threadApart = keep(PLANNER.threadApart, [...apartComments.keys(), ...apartEvents.keys()])
 }
 
 /* Each kind's gap as the window places it (P.threadGap): the latest time
@@ -10572,6 +10636,10 @@ export const PLANNER = {
   // the comments held apart for an editor after a release passed over
   // them (P.holdComment), which only that editor's window shows
   pinnedComments: [] as string[],
+  // the comments and changes a release held apart at an instant only the
+  // other kind's live rows hold, which sit among the rows it let go, so no
+  // window shows them
+  threadApart: [] as string[],
   /* Changes whenever a rebuild changes anything a task's view reads besides
      the task's own view model and delay (store/taskIndex.ts): people (but not their
      Team sync stamps), organizations and their settings, projects and
@@ -14019,6 +14087,7 @@ export const PLANNER = {
     olderComments = []
     dropCommentsGap()
     pinnedComments.clear()
+    apartComments.clear()
     // the places and the press named rows of the task before
     threadPlaces.clear()
     pressKeep = new Set()
@@ -14516,6 +14585,7 @@ export const PLANNER = {
     // a gap the server did not prove.
     historyEpoch++
     olderEvents = newerEvents
+    apartEvents.clear()
     dropHistoryGap()
     historyNewerAsk = ask
     historyStart = false
@@ -17475,6 +17545,7 @@ export function disposeDemoStore() {
   dropCommentsGap()
   commentHolds.clear()
   pinnedComments.clear()
+  apartComments.clear()
   threadPlaces.clear()
   pressKeep = new Set()
   historyOwners.clear()

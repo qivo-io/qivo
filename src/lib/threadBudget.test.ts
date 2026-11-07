@@ -220,7 +220,7 @@ describe('the thread budget', () => {
     expect(after?.history?.gap).toEqual(['e59'])
   })
 
-  it('keeps a row inside a run that shares its instant with a live row of the other kind below the gap, so later presses still let rows go', () => {
+  it('holds apart a row inside a run that shares its instant with a live row of the other kind, so the release passes it', () => {
     // Under All, a task archived with a reason. The archive's change and its
     // reason comment share minute 160. More than 50 comments followed, so
     // the reason comment c160 sits inside the run above the live window
@@ -235,27 +235,29 @@ describe('the thread budget', () => {
       history,
       keep: ['c120', ...ids(rows('c', 70, 120)), 'e0'],
     })
-    // the gap opens above c160, which stays below it with the rows after it,
-    // and the walk up from it lets 20 rows go, which brings the store to its
-    // budget
+    // the gap opens just above the live window, and the walk up passes
+    // c160, which goes into the gap's ids but is held apart and counted, so
+    // 20 rows go for good and the store is at its budget
     expect(first?.comments).toMatchObject({
-      older: rows('c', 70, 140),
-      gap: ids(rows('c', 140, 160)),
-      newer: rows('c', 160, 170),
+      older: rows('c', 70, 149),
+      gap: ids(rows('c', 149, 170)),
+      newer: [],
+      apart: [row('c', 160)],
     })
-    // the next press, c20 to c69, lets the next 50 rows go above the gap
+    // the next press, c20 to c69, lets 50 rows go above the gap, its budget
+    // one less for the row held apart
     const before = first?.comments
     if (!before) throw new Error('the first press let nothing go')
     const second = release(
       kind([...rows('c', 20, 70), ...before.older], rows('c', 170, 220), before.gap, before.newer),
       ['down', 'up'],
-      150,
+      149,
       { history, keep: ['c70', ...ids(rows('c', 20, 70))] },
     )
     expect(second?.comments).toMatchObject({
-      older: rows('c', 20, 90),
-      gap: ids(rows('c', 90, 160)),
-      newer: rows('c', 160, 170),
+      older: rows('c', 20, 99),
+      gap: ids(rows('c', 99, 170)),
+      apart: [],
     })
     // and the mirror, with the reason comment live and the archive's change inside
     // the history's run, walked back with Show earlier activity
@@ -263,31 +265,122 @@ describe('the thread budget', () => {
       [],
       [row('c', 0, 160), ...Array.from({ length: 29 }, (_, i) => row('c', i + 1, 400 + i))],
     )
-    const firstChanges = release(comments, ['down', 'up'], 150, {
+    const changes = release(comments, ['down', 'up'], 150, {
       history: kind(rows('e', 70, 170), rows('e', 170, 220)),
       keep: ['e120', ...ids(rows('e', 70, 120)), 'c0'],
     })
-    expect(firstChanges?.history).toMatchObject({
-      older: rows('e', 70, 130),
-      gap: ids(rows('e', 130, 160)),
-      newer: rows('e', 160, 170),
+    expect(changes?.history).toMatchObject({
+      older: rows('e', 70, 139),
+      gap: ids(rows('e', 139, 170)),
+      apart: [row('e', 160)],
     })
-    const after = firstChanges?.history
-    if (!after) throw new Error('the first press let no change go')
-    const secondChanges = release(comments, ['down', 'up'], 150, {
-      history: kind(
-        [...rows('e', 20, 70), ...after.older],
-        rows('e', 170, 220),
-        after.gap,
-        after.newer,
-      ),
-      keep: ['e70', ...ids(rows('e', 20, 70))],
-    })
-    expect(secondChanges?.history).toMatchObject({
-      older: rows('e', 20, 80),
-      gap: ids(rows('e', 80, 160)),
-      newer: rows('e', 160, 170),
-    })
+    // walking down from a gap passes such a row the same way: c105, which
+    // slid below the gap, shares minute 105 with a live change
+    const down = release(
+      kind(rows('c', 0, 50), rows('c', 120, 170), ids(rows('c', 50, 100)), rows('c', 100, 120)),
+      ['down', 'up'],
+      130,
+      {
+        history: kind([], [row('e', 0, 105), ...rows('e', 1, 20).map((r) => ({ ...r, ts: 300 }))]),
+      },
+    )
+    expect(down?.comments).toMatchObject({ newer: rows('c', 111, 120), apart: [row('c', 105)] })
+    // a walk that can only hold rows apart lets nothing go: c160 is the
+    // newest above the gap and c159 is on a reader's screen
+    const stuck = release(
+      kind(rows('c', 150, 161), rows('c', 170, 220), ids(rows('c', 161, 170))),
+      ['up'],
+      70,
+      { history, keep: ['c159'] },
+    )
+    expect(stuck).toBeNull()
+  })
+
+  /* A thread of `count` comments at their own minutes, the newest 50 live,
+     under All with a history whose live page holds the change at minute
+     `twin`, the archive the reason comment c`twin` was posted with, and 19
+     changes after every comment. The store, as the release sees it: the
+     runs and gap of each kind, and the rows it holds apart, which count in
+     the budget and stay while the change is live. */
+  function archivedThread(count: number, twin: number) {
+    const history = kind(
+      [],
+      [row('e', 0, twin), ...Array.from({ length: 19 }, (_, i) => row('e', i + 1, 5000 + i))],
+    )
+    let comments = kind([], rows('c', count - 50, count))
+    let apart: HeldRow[] = []
+    const all = rows('c', 0, count)
+    const held = () =>
+      comments.older.length +
+      comments.newer.length +
+      comments.live.length +
+      history.live.length +
+      apart.length
+    /* Applies a release on `moves`, keeping `keep`, as keepThread does. */
+    function settle(moves: ReleaseMove[], keep: string[]) {
+      if (held() <= 150) return
+      const after = release(comments, moves, 150 - apart.length, { history, keep })
+      if (!after) return
+      const { older, gap, newer } = after.comments
+      comments = { ...comments, older, gap, newer }
+      apart = [...apart, ...after.comments.apart]
+    }
+    return {
+      held,
+      apart: () => ids(apart),
+      gap: () => comments.gap ?? [],
+      /* Show earlier comments: the page before the oldest held comment,
+         kept with the row it was read before. */
+      earlier() {
+        const oldest = comments.older[0] ?? comments.newer[0] ?? comments.live[0]
+        const at = all.findIndex((r) => r.id === oldest.id)
+        const page = all.slice(Math.max(0, at - 50), at)
+        comments = { ...comments, older: [...page, ...comments.older] }
+        settle(['down', 'up'], [oldest.id, ...ids(page)])
+      },
+      /* A comment arrives with the reader at the newest end: the oldest
+         live one slides into the run just above the live window. */
+      arrive() {
+        const [slid, ...rest] = comments.live
+        const live = [...rest, row('c', Number(slid.id.slice(1)) + 50)]
+        comments =
+          comments.gap === null
+            ? { ...comments, older: [...comments.older, slid], live }
+            : { ...comments, newer: [...comments.newer, slid], live }
+        settle(['top'], [])
+      },
+    }
+  }
+
+  it('keeps letting rows go on every Show earlier press past a row held apart that loaded above an existing gap', () => {
+    // 400 comments, the newest 50 live; the reason comment c200 loads with
+    // the third press, after the gap opened above the live window
+    const thread = archivedThread(400, 200)
+    for (let press = 1; press <= 4; press++) {
+      thread.earlier()
+      expect(thread.held()).toBeLessThanOrEqual(150)
+    }
+    expect(thread.apart()).toEqual([])
+    // the next three presses walk the gap up past c200
+    for (let press = 5; press <= 7; press++) {
+      thread.earlier()
+      expect(thread.held()).toBe(150)
+    }
+    expect(thread.apart()).toEqual(['c200'])
+    expect(thread.gap()).toContain('c200')
+  })
+
+  it('keeps letting rows go as comments arrive once a row held apart is the oldest held', () => {
+    // 100 comments, the newest 50 live with the reason comment c90 among
+    // them. Arrivals slide it into the run, and the oldest rows go until
+    // it is the oldest held comment
+    const thread = archivedThread(100, 90)
+    for (let n = 1; n <= 150; n++) {
+      thread.arrive()
+      expect(thread.held()).toBeLessThanOrEqual(150)
+    }
+    expect(thread.held()).toBe(150)
+    expect(thread.apart()).toEqual(['c90'])
   })
 
   it('stops a move before an instant it cannot take whole, so the next move still runs', () => {

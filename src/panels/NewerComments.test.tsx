@@ -422,6 +422,31 @@ describe('newer comments in the task window', { timeout: 20_000 }, () => {
     expect((await editorOf('Edit comment')).getText()).toBe('Check 230 rerun')
   })
 
+  it('shows no comment held apart at a live change, which sits above the comments the store let go, under Comments or All', async () => {
+    await load()
+    await open()
+    await deliver({ comments: range(50, 100), earlier: true })
+    // another window shows All, so the store holds the whole history, the
+    // task archived with the reason comment #90 among it at #90's instant
+    await act(async () => P.showHistory({}, true))
+    const before = Array.from({ length: 9 }, (_, i) => change(5 + 10 * i))
+    const after = Array.from({ length: 21 }, (_, i) => change(95 + 10 * i))
+    const archived = { ...change(90), id: 'event-archived', ts: comment(90).created_at }
+    await deliverHistory({ events: [...before, archived, ...after], earlier: false, next: null })
+    // Comments arrive while this window reads at its newest end. Once #90
+    // is the oldest comment held, the release passes it and lets #91 go,
+    // so the store stays at its 120, #90 held apart
+    for (let n = 60; n <= 140; n += 10) await deliver({ comments: range(n, n + 50), earlier: true })
+    expect(P.threadApart).toEqual([comment(90).id])
+    expect(P.comments.length + P.threadEvents.length).toBe(120)
+    // #91 went, so #90 stays out of sight, under Comments and under All
+    expect(thread()).toEqual(['[Show earlier comments]', ...comments(102, 190)])
+    await showAll()
+    expect(thread()).not.toContain('#90')
+    expect(thread().find((row) => row.startsWith('#'))).toBe('#102')
+    expect(document.querySelector('[data-event="event-archived"]')).toBeNull()
+  })
+
   it('puts the New line under Show newer comments when the unread part starts among released rows', async () => {
     await load({ unread: 230 })
     await walkBack(3)

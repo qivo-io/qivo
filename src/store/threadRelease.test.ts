@@ -787,6 +787,56 @@ describe('the task window keeps a bounded thread', () => {
       expect(P.commentsEarlier).toBe('more')
     })
 
+    /* Opens a thread of 400 comments under All at its newest 50, with the
+       whole history on its live page: the task archived with the reason
+       comment #200, whose change shares that comment's instant, and 19
+       changes after every comment. */
+    function openArchived() {
+      budget.THREAD_KEEP.rows = 150
+      serve = { comments: range(0, 400), history: [] }
+      publish({ comments: range(350, 400), earlier: true })
+      showAll()
+      const archived = { ...change(0), id: 'event-archived', ts: comment(200).created_at }
+      publishHistory({ events: [archived, ...changes(5000, 5019)], earlier: false, next: null })
+    }
+
+    it('holds apart a comment that shares its instant with a live change, so Show earlier keeps letting rows go, and Show newer reads it back into its run', async () => {
+      const { P } = store
+      openArchived()
+      for (let press = 1; press <= 7; press++) {
+        await earlier()
+        expect(held()).toBeLessThanOrEqual(150)
+        // the fifth press walks the gap up past #200, which stays held,
+        // counted in the budget, but out of the run above the gap
+        if (press >= 5) {
+          expect(held()).toBe(150)
+          expect(P.threadApart).toEqual(['comment-200'])
+          expect(shown()).toContain('comment-200')
+          expect(P.threadGap?.comments?.above.has('comment-200')).toBe(false)
+        }
+      }
+      // its id stayed in the gap, so Show newer reads it back into the run
+      // above, and it is no longer held apart
+      for (let press = 1; press <= 3; press++) await newer()
+      expect(P.threadApart).toEqual([])
+      expect(P.threadGap?.comments?.above.has('comment-200')).toBe(true)
+      expect(new Set(shown()).size).toBe(shown().length)
+      expect(held()).toBeLessThanOrEqual(150)
+    })
+
+    it('lets a comment held apart go once no held change shares its instant', async () => {
+      const { P } = store
+      openArchived()
+      for (let press = 1; press <= 5; press++) await earlier()
+      expect(P.threadApart).toEqual(['comment-200'])
+      // the history starts over without the archive's change, as when the
+      // person no longer receives it
+      publishHistory({ events: changes(5000, 5020), earlier: false, next: null })
+      expect(P.threadApart).toEqual([])
+      expect(shown()).not.toContain('comment-200')
+      expect(held()).toBeLessThanOrEqual(150)
+    })
+
     it('drops a gap when its side says not_found', async () => {
       const { P } = store
       openServed(300)

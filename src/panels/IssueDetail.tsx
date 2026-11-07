@@ -2541,17 +2541,26 @@ function IssueDetail({
   // History that has not arrived, or failed before it did, is no whole
   // history, so All then shows nothing beside it. A comment the store holds
   // apart for another window's editor (P.pinnedComments) shows only there.
+  // A row it holds apart at an instant only the other kind's live rows hold
+  // (P.threadApart) sits among the rows it let go, so it shows nowhere,
+  // unless this window has it open in its editor.
   const pinned = new Set(P.pinnedComments)
+  const apart = new Set(P.threadApart)
   const comments = it
     ? P.comments.filter(
-        (c) => c.issue === it.uuid && (!pinned.has(c.id) || c.id === editingComment),
+        (c) =>
+          c.issue === it.uuid &&
+          ((!pinned.has(c.id) && !apart.has(c.id)) || c.id === editingComment),
       )
     : []
   // a row names a task the workspace holds by its handle, and one it does
   // not hold by its uuid (store/viewModels.ts shapeActivity)
   const history = it
     ? P.threadEvents.filter(
-        (e) => e.targetType === 'issue' && (e.targetId === it.id || e.targetId === it.uuid),
+        (e) =>
+          !apart.has(e.id) &&
+          e.targetType === 'issue' &&
+          (e.targetId === it.id || e.targetId === it.uuid),
       )
     : []
   const all = actFilter === 'all'
@@ -2565,7 +2574,7 @@ function IssueDetail({
     : waitingComments
   const from = spineWindow(
     {
-      rows: comments.filter((c) => !pinned.has(c.id)),
+      rows: comments.filter((c) => !pinned.has(c.id) && !apart.has(c.id)),
       whole: P.commentsLoaded && P.commentsEarlier === 'none',
     },
     { rows: history, whole: P.historyLoaded && P.historyEarlier === 'none' },
