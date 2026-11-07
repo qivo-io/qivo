@@ -28,9 +28,22 @@ const LOAD_TIMEOUT = 15_000
     The store asks only for the pictures its open pages, pickers and views
     name (`named`, store/planner.ts). Measured on the benchmark page
     (scripts/perf, people=1000&pictures=1 at 1440 by 1000, each picture a
-    20 KB PNG answered after 150 ms) before that change, the whole roster's
-    1,000 pictures took 10 mint calls and 1,000 downloads and showed after
-    27 s; the figures of the named pictures are in PICTURES_MEASURED. */
+    20 KB PNG answered after 150 ms, 7 November 2026), against the store
+    that asked for every picture of its roster:
+    - The Board of 100 tasks: 1 mint call of 100 people, 100 downloads,
+      2.0 MB kept, 13.3 MiB of JS heap, the first 25 pictures 1.4 s after
+      the page opened; before, 10 mint calls, 1,000 downloads, 20.2 MB,
+      14.6 MiB and 6.7 s.
+    - Settings › Users' first page: 1 mint call of 25 people, 25 downloads,
+      0.5 MB kept, 15.3 MiB, the 25 pictures after 1.3 s; before, 10 mint
+      calls, 1,000 downloads, 20.2 MB, 16.4 MiB and 0.9 s, because that
+      store minted from boot, before the page's rows arrived.
+    - Leaving that page while each picture took 1.5 s: of the 22 people
+      only it showed, the 5 downloads already running finished and no other
+      was minted or downloaded until the page opened again.
+    - With keptBytes lowered to 600 KB, after Settings › Users kept 17
+      pictures, the Board took their room for 15 of its own and showed 14
+      pictures among its 84 people; before, it downloaded none and showed 2. */
 export const AVATAR_SOURCES = {
   downloads: 6,
   pictureBytes: 256 * 1024,

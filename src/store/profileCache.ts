@@ -47,8 +47,11 @@ import type { Visibility } from '../lib/viewVisibility'
     design size's 1,000 people of one organization fit, so an organization
     at the design size never drops a person a view shows. Tests lower it.
     Measured on the benchmark page (scripts/perf, people=1000 with
-    unheldpeople=1000, 1440 by 1000): naming the 1,000 people the workspace
-    did not hold read 10 chunks of 100 ids, each id once. */
+    unheldpeople=50 and pictures=1, 1440 by 1000, 7 November 2026): the
+    Board named 101 people and read the 2 the workspace did not hold in one
+    people.byIds read, and Settings › Users searched for "99" named 19 and
+    read the 10 it did not hold in one read. 1,000 people a view names are
+    read in 10 reads of 100 ids, each id once (profileCache.test.ts). */
 export const PROFILE_CACHE = { most: 1_000 }
 
 /** A person a view names: the organization to ask and the profile id. */
