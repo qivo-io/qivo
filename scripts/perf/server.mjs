@@ -489,9 +489,10 @@
 // So is files:mintUrls (mintFiles), with the server's caps of 100
 // attachments and 1,000 pictures a call: it answers https URLs on
 // perf.invalid for the files and pictures the workspace holds, each with
-// the picture's storage version as `v` as the gateway's are, which the
-// benchmark's page serves itself with the gateway's CORS answer
-// (scripts/perf/files.mjs routePerfFiles). A data: URL cannot carry `v`.
+// the picture's storage version as `v` as the gateway's are, which a page
+// scripts/benchmark-browser.mjs opens with --files serves itself with the
+// gateway's CORS answer (scripts/perf/files.mjs routePerfFiles). A data:
+// URL cannot carry `v`.
 import { chunkLists } from '../../convex/lib/arrayLimit'
 import { idWindows, startWindows } from '../../convex/lib/idWindows'
 import { creatorGrant } from '../../convex/lib/projectGrants'

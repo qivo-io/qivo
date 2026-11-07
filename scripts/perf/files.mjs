@@ -81,6 +81,18 @@ export function bytesFor(url) {
   return pngOf(1200, 800, 0.013, 3)
 }
 
+/** The page parameters that make the stand-in server mint perf.invalid files
+    (scripts/perf/server.mjs): description images and profile pictures. */
+const FILE_PARAMETERS = ['images', 'bigimages', 'pictures']
+
+/** Whether the benchmark page's `query` (its search part, with or without
+    the ?) asks for files the page must serve itself (routePerfFiles): any
+    of FILE_PARAMETERS above 0. */
+export function servesFiles(query) {
+  const parameters = new URLSearchParams(query)
+  return FILE_PARAMETERS.some((name) => Number(parameters.get(name)) > 0)
+}
+
 /** Serves `page`'s requests to perf.invalid with generated images and the
     gateway's CORS and cache headers, each after `delayMs`. Answers its
     counts: requests by kind, the most in flight at once of each kind and

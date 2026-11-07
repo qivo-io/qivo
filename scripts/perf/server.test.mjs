@@ -2169,4 +2169,29 @@ describe('files on the benchmark page', () => {
     const big = bytesFor('https://perf.invalid/files/f?size=big')
     expect(big.readUInt32BE(16)).toBe(4096)
   })
+
+  it('has the benchmark driver serve the files a page asks for, and report them', async () => {
+    const { servesFiles } = await import('./files.mjs')
+    expect(['images=100', '?people=1000&pictures=1', '&bigimages=6'].map(servesFiles)).toEqual([
+      true,
+      true,
+      true,
+    ])
+    expect(['', 'images=0', 'pictureskept=1000000&tasks=100'].map(servesFiles)).toEqual([
+      false,
+      false,
+      false,
+    ])
+    const { readFileSync } = await import('node:fs')
+    const driver = readFileSync(new URL('../benchmark-browser.mjs', import.meta.url), 'utf8')
+    // every page the driver opens takes --files and routes perf.invalid
+    // before it loads
+    const open = driver.slice(driver.indexOf('async function openPage('))
+    const routed = open.indexOf('servesFiles(query + filesQuery) ? await routePerfFiles(page)')
+    expect(routed).toBeGreaterThan(0)
+    expect(routed).toBeLessThan(open.indexOf('await page.goto('))
+    expect(open).toMatch(/\$\{query\}\$\{filesQuery\}`/)
+    // each sample records what the page served before it closes
+    expect(driver.match(/opened\.recordFiles\(\)\n {2}await context\.close\(\)/g)).toHaveLength(3)
+  })
 })
