@@ -4,9 +4,13 @@
    blob URL, its recorded size and its lease. The loader mints through the
    store's mint queue (lib/mintQueue.ts) behind the store's row gate, at
    most INLINE_IMAGES.downloads downloads run at once, and the bytes of
-   images out of reach stay within INLINE_IMAGES.cacheBytes. External
-   images take their source only near view, a few at a time in their own
-   pool. Nothing new starts while the page is hidden.
+   images out of reach stay within INLINE_IMAGES.cacheBytes. A download
+   that receives nothing for INLINE_IMAGES.stall gives its slot back and
+   tries again later, and one whose views all went far stops after
+   INLINE_IMAGES.leave, so a stalled or abandoned download never keeps a
+   slot a near image needs. External images take their source only near
+   view, a few at a time in their own pool. Nothing new starts while the
+   page is hidden.
 
    Access. A cached image shows again only after the store's row gate
    passes for it, and after a mint names it again once its lease is within
@@ -34,6 +38,16 @@ import type { MintOutcome } from './mintQueue'
       shows; a far one shows a placeholder of its recorded size.
     - `retry`: how long a failed mint or download waits before it tries
       again, while the image stays near.
+    - `stall`: how long a download may go without receiving a byte, or
+      its decode may take, before it stops, gives its slot back and tries
+      again later. It bounds the time without progress, not the whole
+      download, so a large image on a slow link that keeps arriving is
+      never cut off: a 20 MiB attachment at 256 kbit/s takes about 11
+      minutes and goes on. A plain-URL fallback, whose progress cannot be
+      seen, gives its slot back after the same time and goes on loading.
+    - `leave`: how long a download whose views all went far or unmounted
+      goes on before it stops and gives its slot to a near image, so a
+      quick scroll back keeps it.
     - `externalTimeout`: how long an external image may load before it
       shows as unavailable, with a retry.
     - `skew`: how long before its lease ends a cached image needs a mint
@@ -55,6 +69,8 @@ export const INLINE_IMAGES = {
   near: 1,
   far: 3,
   retry: 5_000,
+  stall: 30_000,
+  leave: 2_000,
   externalTimeout: 15_000,
   skew: 120_000,
 }
@@ -120,10 +136,15 @@ type Entry = {
   /** a gateway refusal took one fresh mint and no download has succeeded
       since, so the next refusal marks it gone */
   refusedOnce: boolean
-  /** the plain-URL fallback holds a slot until its view reports */
+  /** the plain-URL fallback waits for its view to report its <img> */
   fallbackSlot: boolean
+  /** gives back the download slot the entry holds, once: its download's,
+      or the plain-URL fallback's until its view reports */
+  slot: (() => void) | null
   controller: AbortController | null
   retry: unknown
+  /** the time left to a download whose views all went far (`leave`) */
+  leaving: unknown
   shown: InlineImage
   listeners: Set<() => void>
 }
@@ -137,6 +158,22 @@ function scrollRoot(element: Element): Element | null {
     if (overflow === 'auto' || overflow === 'scroll' || overflow === 'overlay') return at
   }
   return null
+}
+
+/* The body of `response` as a blob, calling `progress` as each part
+   arrives, so a download that keeps receiving bytes is never taken for a
+   stalled one. */
+async function readBody(response: Response, progress: () => void): Promise<Blob> {
+  const reader = response.body?.getReader()
+  if (!reader) return response.blob()
+  const parts: Uint8Array<ArrayBuffer>[] = []
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    parts.push(value)
+    progress()
+  }
+  return new Blob(parts, { type: response.headers.get('content-type') ?? '' })
 }
 
 async function measureImage(url: string): Promise<Size> {
@@ -214,8 +251,10 @@ export function createInlineImages(
         pins: 0,
         refusedOnce: false,
         fallbackSlot: false,
+        slot: null,
         controller: null,
         retry: null,
+        leaving: null,
         shown: WAITING,
         listeners: new Set(),
       }
@@ -247,19 +286,20 @@ export function createInlineImages(
     pumpSlots()
   }
   /* Stops what the entry has on its way: a mint is fenced, a download
-     aborts, a queued one leaves the queue and a retry is called off. */
+     aborts and gives its slot back, a queued one leaves the queue, a
+     plain-URL fallback gives its slot back, and a retry is called off. */
   const stop = (entry: Entry) => {
     entry.minting = false
     entry.controller?.abort()
     entry.controller = null
+    entry.slot?.()
+    entry.fallbackSlot = false
     const at = slotQueue.indexOf(entry)
     if (at >= 0) slotQueue.splice(at, 1)
-    if (entry.fallbackSlot) {
-      entry.fallbackSlot = false
-      freeSlot()
-    }
     if (entry.retry !== null) deps.clearTimer(entry.retry)
     entry.retry = null
+    if (entry.leaving !== null) deps.clearTimer(entry.leaving)
+    entry.leaving = null
     entry.leaseUrl = null
   }
   const gone = (entry: Entry) => {
@@ -355,10 +395,37 @@ export function createInlineImages(
     entry.controller = controller
     entry.phase = 'loading'
     publish(entry)
-    let slotHeld = true
     const current = () =>
       version === generation && entries.get(entry.id) === entry && entry.controller === controller
+    // The slot goes back once, whichever comes first: the end, an abort, a
+    // stall or the plain-URL fallback's report. A clear let every slot go.
+    let held = true
+    const slot = () => {
+      if (!held) return
+      held = false
+      if (entry.slot === slot) entry.slot = null
+      if (version === generation) freeSlot()
+    }
+    entry.slot = slot
+    // INLINE_IMAGES.stall without progress stops the download
+    let stall: unknown = null
+    const quiet = () => {
+      if (stall !== null) deps.clearTimer(stall)
+      stall = null
+    }
+    const arm = () => {
+      quiet()
+      stall = deps.setTimer(() => {
+        stall = null
+        if (!current()) return
+        controller.abort()
+        entry.controller = null
+        slot()
+        retryLater(entry)
+      }, INLINE_IMAGES.stall)
+    }
     try {
+      arm()
       let response: Response
       try {
         response = await deps.fetch(url, {
@@ -379,14 +446,24 @@ export function createInlineImages(
         }
         // A forwarded or local origin may show the gateway's no-cors image
         // even when fetch cannot read it. The view's <img> loads the URL
-        // and keeps the slot until it reports load or error. Its bytes
-        // cannot be read, so they are not counted.
+        // and keeps the slot until it reports load or error, or for
+        // INLINE_IMAGES.stall, after which it loads on uncounted. Its
+        // bytes cannot be read, so they are not counted.
         entry.controller = null
         entry.url = url
         entry.owned = false
         entry.phase = 'ready'
         entry.fallbackSlot = true
-        slotHeld = false
+        held = false
+        const fallback = () => {
+          if (entry.slot !== fallback) return
+          entry.slot = null
+          entry.fallbackSlot = false
+          deps.clearTimer(timer)
+          if (version === generation) freeSlot()
+        }
+        const timer = deps.setTimer(fallback, INLINE_IMAGES.stall)
+        entry.slot = fallback
         publish(entry)
         return
       }
@@ -396,11 +473,13 @@ export function createInlineImages(
         if ([401, 403, 404].includes(response.status)) return refused(entry)
         return retryLater(entry)
       }
-      const blob = await response.blob()
+      arm()
+      const blob = await readBody(response, arm)
       if (!current()) return
       const source = deps.createUrl(blob)
       let size: Size
       try {
+        arm()
         size = await deps.measure(source)
       } catch {
         deps.revokeUrl(source)
@@ -431,8 +510,8 @@ export function createInlineImages(
       entry.controller = null
       retryLater(entry)
     } finally {
-      // a clear let every slot go already
-      if (slotHeld && version === generation) freeSlot()
+      quiet()
+      slot()
     }
   }
   /* What a near entry needs next: nothing while it loads or shows within
@@ -535,11 +614,15 @@ export function createInlineImages(
     pin(id: string) {
       const entry = entryOf(id)
       entry.pins++
+      if (entry.leaving !== null) deps.clearTimer(entry.leaving)
+      entry.leaving = null
       if (unpinned.delete(id)) cachedBytes -= entry.bytes
       want(entry, true)
     },
     /** A view of attachment `id` went far or unmounted: once nothing shows
-        it, its bytes join the cache of images out of reach. */
+        it, its bytes join the cache of images out of reach, and a download
+        on its way stops after INLINE_IMAGES.leave unless a view comes near
+        again. */
     unpin(id: string) {
       const entry = entries.get(id)
       if (!entry || entry.pins === 0) return
@@ -547,10 +630,20 @@ export function createInlineImages(
       if (entry.pins > 0) return
       if (entry.fallbackSlot) {
         // nothing will report the plain-URL load any more
+        entry.slot?.()
         entry.fallbackSlot = false
-        freeSlot()
         entry.url = null
         entry.phase = 'idle'
+      } else if (entry.phase === 'loading' && entry.leaving === null) {
+        entry.leaving = deps.setTimer(() => {
+          entry.leaving = null
+          if (entry.pins > 0 || entry.phase !== 'loading') return
+          // its slot goes to a near image; the late answer is fenced
+          stop(entry)
+          entry.phase = 'idle'
+          publish(entry)
+          tidy(entry)
+        }, INLINE_IMAGES.leave)
       } else if (entry.phase === 'queued') {
         const at = slotQueue.indexOf(entry)
         if (at >= 0) slotQueue.splice(at, 1)
@@ -575,10 +668,7 @@ export function createInlineImages(
     loaded(id: string, size: Size | null) {
       const entry = entries.get(id)
       if (entry?.phase !== 'ready') return
-      if (entry.fallbackSlot) {
-        entry.fallbackSlot = false
-        freeSlot()
-      }
+      if (entry.fallbackSlot) entry.slot?.()
       if (size === null) return refused(entry)
       // the plain-URL fallback loaded, which ends a refusal's fresh mint
       entry.refusedOnce = false

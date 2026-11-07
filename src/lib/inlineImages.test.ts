@@ -399,6 +399,24 @@ describe('the inline image loader', () => {
     expect(b.shown().state).toBe('ready')
   })
 
+  it('gives a plain-URL fallback’s slot back after 30 s with no report, and keeps showing it', async () => {
+    INLINE_IMAGES.downloads = 1
+    const h = harness()
+    h.fetcher.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const a = h.view('a')
+    const b = h.view('b')
+    a.near()
+    b.near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.stall)
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    expect(a.shown()).toMatchObject({ state: 'ready', url: 'https://files.test/files/a' })
+    // its late report gives nothing back twice
+    h.loader.loaded('a', { width: 10, height: 10 })
+    expect(h.loader.stats().downloading).toBe(0)
+  })
+
   it('frees the slot of a download that fetch cannot read once nothing shows it', async () => {
     INLINE_IMAGES.downloads = 1
     const h = harness({ hold: true })
@@ -420,6 +438,94 @@ describe('the inline image loader', () => {
     back.near()
     await settle()
     expect(h.mint.mock.calls.filter(([id]) => id === 'a')).toHaveLength(2)
+  })
+
+  it('gives the slot of a download that receives nothing for 30 s back, and tries it again later', async () => {
+    INLINE_IMAGES.downloads = 1
+    const h = harness({ hold: true })
+    const a = h.view('a')
+    const b = h.view('b')
+    a.near()
+    b.near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.stall - 1)
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(1)
+    // the stalled one aborted and its slot went to b
+    expect(h.fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    expect(a.shown().state).toBe('waiting')
+    expect(h.loader.stats().downloading).toBe(1)
+    // its late answer is fenced and gives no slot back twice
+    h.downloads[0]?.answer.resolve(image(KIB))
+    h.downloads[1]?.answer.resolve(image(KIB))
+    await settle()
+    expect(a.shown().state).toBe('waiting')
+    expect(b.shown().state).toBe('ready')
+    expect(h.loader.stats().downloading).toBe(0)
+    // a tries again while near
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.retry)
+    expect(h.fetcher).toHaveBeenCalledTimes(3)
+    h.downloads[2]?.answer.resolve(image(KIB))
+    await settle()
+    expect(a.shown().state).toBe('ready')
+  })
+
+  it('never stops a download that keeps receiving bytes, however long it takes', async () => {
+    const h = harness({ hold: true })
+    const a = h.view('a')
+    a.near()
+    await settle()
+    // a slow link: a part every 20 s, the whole taking a minute
+    let sent = 0
+    const body = {
+      getReader: () => ({
+        read: async () => {
+          if (sent === 3) return { done: true, value: undefined }
+          await new Promise((r) => setTimeout(r, 20_000))
+          sent++
+          return { done: false, value: new Uint8Array(KIB) }
+        },
+      }),
+    }
+    h.downloads[0]?.answer.resolve({
+      ok: true,
+      status: 200,
+      body,
+      headers: new Headers({ 'content-type': 'image/png' }),
+    } as unknown as Response)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    expect(a.shown()).toMatchObject({ state: 'ready', url: 'blob:image-1' })
+    expect(h.loader.stats().pinnedBytes).toBe(3 * KIB)
+  })
+
+  it('stops a download whose views all went far after a short grace, and gives its slot to a near image', async () => {
+    INLINE_IMAGES.downloads = 1
+    const h = harness({ hold: true })
+    const a = h.view('a')
+    a.near()
+    await settle()
+    a.far()
+    const b = h.view('b')
+    b.near()
+    await settle()
+    expect(h.fetcher).toHaveBeenCalledOnce()
+    // a quick scroll back within the grace keeps it
+    a.near()
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.leave)
+    expect(h.fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(false)
+    a.far()
+    await vi.advanceTimersByTimeAsync(INLINE_IMAGES.leave)
+    expect(h.fetcher.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+    expect(h.fetcher).toHaveBeenCalledTimes(2)
+    expect(h.fetcher.mock.calls[1]?.[0]).toBe('https://files.test/files/b')
+    // the late answer of the stopped one is fenced
+    h.downloads[0]?.answer.resolve(image(KIB))
+    await settle()
+    expect(a.shown().state).toBe('waiting')
+    expect(h.loader.stats()).toMatchObject({ downloading: 1, cachedBytes: 0 })
   })
 
   it('treats every image as near without IntersectionObserver', async () => {
