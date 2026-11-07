@@ -17,9 +17,11 @@ import { endText } from '../src/lib/deletedItems'
 import { creatorPhrase } from '../src/lib/projectCreators'
 import {
   AGENDA_QUERY,
+  APP_BATCHES_MAX,
   ASSIGNEE_LOAD_QUERY,
   addDays,
   addsQuery,
+  appBatches,
   atProject,
   authCorsProblems,
   authRoutesStep,
@@ -53,8 +55,12 @@ import {
   LABELS_EXPECTED,
   LABELS_STEP,
   LIST_REFUSALS,
+  MCP_ACCESS_EXPECTED,
+  MCP_ACCESS_LISTS_STEP,
+  MCP_ACCESS_MARKS,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
+  mcpListSettled,
   NOT_LOADED_YET,
   newerWalk,
   ON_DEMAND_STEP,
@@ -120,6 +126,7 @@ import {
   WORKLOAD_REFUSALS,
   WRITE_CONFLICT,
   weekOf,
+  wholeBatchNames,
   withQuery,
   workloadPeople,
 } from './staging-check.mjs'
@@ -744,6 +751,106 @@ describe('staging check REST contract', () => {
     expect(step).toContain(`await app.locator(\`[\${m.search}]\`).fill(run.tag)`)
     expect(step).toContain(`await app.locator(\`[\${m.namesSearch}="billable"]\`).fill(run.tag)`)
     expect(step).toContain(`eq(await app.locator(\`[\${m.accessPeriod}]\`).inputValue(), period`)
+  })
+
+  it("checks MCP access's two lists on the run's connections and tokens, after the Billing accounts step", () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    const sources = [
+      read('../src/panels/ConnectedApps.tsx'),
+      read('../src/panels/settings/PersonalTokens.tsx'),
+    ].join('\n')
+    // every mark the step and the credential helpers read is on the page
+    for (const mark of Object.values(MCP_ACCESS_MARKS)) expect(sources).toContain(mark)
+    expect(sources).toContain(`line('${MCP_ACCESS_EXPECTED.none}')`)
+    expect(MCP_ACCESS_LISTS_STEP).toBe('ui/mcp-access-lists')
+    const check = read('./staging-check.mjs')
+    const at = check.indexOf('await mcpAccessListsCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await billingAccountsCheck()'))
+    // while the run's tokens and connections are still live
+    expect(at).toBeLessThan(check.indexOf("check('read-token/ui/revoke'"))
+    expect(at).toBeLessThan(check.indexOf("check('oauth-read/ui/delete'"))
+    // every read of the app's two lists names its search and its cursor,
+    // a batch at a time, and the sweep and its check for leftovers go on
+    // from each batch's cursor
+    const listReads =
+      check.match(/window\.PLANNER\.(?:connectedApps|personalTokens)\([^)]*\)/g) ?? []
+    for (const read of listReads) expect(read).toMatch(/\(search, (?:cursor|null)\)$/)
+    for (const list of ['connectedApps', 'personalTokens'])
+      expect(
+        listReads.filter((read) => read === `window.PLANNER.${list}(search, cursor)`),
+      ).toHaveLength(2)
+    const step = check.slice(
+      check.indexOf('async function mcpAccessListsCheck()'),
+      check.indexOf('export const SETTINGS_PROJECTS_STEP'),
+    )
+    // it writes nothing, and falls back to the store's read without the box
+    expect(step).not.toMatch(/restOk\(|\.mutation\(|\.click\(/)
+    expect(step).toContain('window.PLANNER.personalTokens(search, null)')
+    // a list without its box is also searched for the run tag through the
+    // store, which must answer the run's two rows alone
+    expect(step).toMatch(
+      /if \(!appsSearched\)\s+same\(\s+wholeBatchNames\(\s+await evaluate\(app, \(search\) => window\.PLANNER\.connectedApps\(search, null\), tag\),\s+\(row\) => row\.clientName,\s+\),\s+appNames,/,
+    )
+    expect(step).toMatch(
+      /if \(!tokensSearched\)\s+same\(\s+wholeBatchNames\(\s+await evaluate\(app, \(search\) => window\.PLANNER\.personalTokens\(search, null\), tag\),\s+\(row\) => row\.name,\s+\),\s+tokenNames,/,
+    )
+    const rows = [{ name: 'a' }, { name: 'b' }]
+    expect(wholeBatchNames({ rows, next: null, stopped: false }, (row) => row.name)).toEqual([
+      'a',
+      'b',
+    ])
+    // a batch that does not end the list, or a failed read, names nothing
+    expect(wholeBatchNames({ rows, next: 'more', stopped: true }, (row) => row.name)).toBeNull()
+    expect(wholeBatchNames(null, (row) => row.name)).toBeNull()
+  })
+
+  it("waits for an MCP access list to answer the typed search, never the earlier list's end", () => {
+    expect(mcpListSettled('end', 'tag', 'tag')).toBe(true)
+    expect(mcpListSettled('none', '', '')).toBe(true)
+    expect(mcpListSettled('more', 'tag', ' tag ')).toBe(true)
+    // the search is on its way
+    expect(mcpListSettled('loading', 'tag', 'tag')).toBe(false)
+    // typing has not rested, so the end line still answers the earlier search
+    expect(mcpListSettled('end', '', 'tag')).toBe(false)
+    expect(mcpListSettled('none', 'tag', 'tag no such token')).toBe(false)
+    expect(mcpListSettled(null, null, '')).toBe(false)
+    // the helper waits on that, not on a fixed time
+    const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
+    const helpers = check.slice(
+      check.indexOf('async function listSettled('),
+      check.indexOf('/** Creates a personal token through the New token dialog'),
+    )
+    expect(helpers).toContain('mcpListSettled(end, settled, text)')
+    expect(helpers).toContain('await listSettled(list, text)')
+    expect(helpers).not.toMatch(/sleep\(/)
+  })
+
+  it('reads every batch of an app list, going on after a stopped one and failing on a failed read', async () => {
+    const batches = [
+      { rows: ['a', 'b'], next: 'first', stopped: false },
+      { rows: [], next: 'second', stopped: true },
+      { rows: ['c'], next: null, stopped: false },
+    ]
+    const asked = []
+    const rows = await appBatches('personal tokens', async (cursor) => {
+      asked.push(cursor)
+      return batches[asked.length - 1]
+    })
+    expect(rows).toEqual(['a', 'b', 'c'])
+    expect(asked).toEqual([null, 'first', 'second'])
+    // a failed read fails the list, never reads as an empty one
+    await expect(
+      appBatches('OAuth connections', async (cursor) => (cursor === null ? batches[0] : null)),
+    ).rejects.toThrow('the app could not list OAuth connections')
+    // it stops at the cap rather than reading without end
+    let reads = 0
+    await expect(
+      appBatches('personal tokens', async () => {
+        reads++
+        return { rows: [], next: 'again', stopped: true }
+      }),
+    ).rejects.toThrow(`more than ${APP_BATCHES_MAX} batches`)
+    expect(reads).toBe(APP_BATCHES_MAX)
   })
 
   it("loads a description's images near view at phone size, after the upload step", () => {

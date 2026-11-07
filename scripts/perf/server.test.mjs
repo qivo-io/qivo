@@ -1058,6 +1058,53 @@ describe('the benchmark server', () => {
     )
   }, 60_000)
 
+  it("answers MCP access's two lists from its stand-in, with the tokens, apps and states the page asks for", async () => {
+    /** What `name` answers with `args` for page parameters `params`. */
+    const read = async (params, name, args = {}) => {
+      const { posted, send } = await server(`tasks=20&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'read', name, args })
+      const answer = posted.find((m) => m.to === 'read')
+      return answer.error ? { error: answer.error } : JSON.parse(answer.text)
+    }
+    // two of each by default, the oldest token revoked, the second app by an admin
+    const tokens = await read('', 'tokens:personalTokens')
+    expect(tokens.rows.map((t) => [t.name, t.revokedAt !== null])).toEqual([
+      ['Raycast on my Mac', false],
+      ['Old laptop', true],
+    ])
+    expect(tokens).toMatchObject({ next: null, stopped: false })
+    const apps = await read('', 'connectedApps:list')
+    expect(apps.rows.map((a) => [a.clientName, a.revokedByAdmin])).toEqual([
+      ['ChatGPT', true],
+      ['Claude Desktop', false],
+    ])
+    // 30 of each reach Load more and the search
+    const many = await read('tokens=30&apps=30', 'tokens:personalTokens')
+    expect(many.rows).toHaveLength(25)
+    expect(
+      (await read('tokens=30&apps=30', 'tokens:personalTokens', { cursor: many.next })).rows,
+    ).toHaveLength(5)
+    expect(
+      (await read('tokens=30&apps=30', 'connectedApps:list', { search: 'claude' })).rows.map(
+        (a) => a.clientName,
+      ),
+    ).toEqual([
+      'Claude Desktop 5',
+      'Claude Desktop 4',
+      'Claude Desktop 3',
+      'Claude Desktop 2',
+      'Claude Desktop',
+    ])
+    expect((await read('tokens=0&apps=0', 'connectedApps:list')).rows).toEqual([])
+    // the forced states, which hold for both lists
+    const stopped = await read('tokens=30&credlists=stopped', 'tokens:personalTokens')
+    expect(stopped).toMatchObject({ stopped: true })
+    expect(stopped.rows).toHaveLength(3)
+    expect((await read('apps=30&credlists=small', 'connectedApps:list')).rows).toHaveLength(5)
+    expect((await read('credlists=error', 'tokens:personalTokens')).error).toContain('fails')
+    expect((await read('credlists=error', 'connectedApps:list')).error).toContain('fails')
+  }, 60_000)
+
   it('answers the milestone reads from the workspace, with the states the page asks for', async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */

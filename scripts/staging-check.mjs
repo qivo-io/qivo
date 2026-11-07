@@ -136,7 +136,15 @@
  * alone with their calls (billing.apiAccounts); the Standard agent's View
  * credentials must open API access on that agent and Billing's period,
  * and Who counts toward your bill, searched for the run tag, must list
- * both agents (billing.accountList) (ui/billing-accounts). It makes a
+ * both agents (billing.accountList) (ui/billing-accounts). It opens MCP
+ * access, where Connected apps and Personal access tokens, searched for
+ * its run tag when a list shows its search and read from its first batch
+ * when not, must list the run's two connections and two tokens newest
+ * first, and nothing else when it searched, from the deployment's batches
+ * (connectedApps.list and tokens.personalTokens); a list without its
+ * search must also answer those two rows alone to the store's read for
+ * the run tag, and a token search that matches nothing must say so
+ * (ui/mcp-access-lists). It makes a
  * project of its own with two sub-projects, finds it by its run tag in
  * Settings › Projects from the deployment's list (projectSettings.projects)
  * and opens its sub-projects (subProjects), archives one sub-project alone
@@ -1549,6 +1557,46 @@ async function confirmTwice(first, armed) {
   await armed.click()
 }
 
+/** The marks MCP access's two lists carry (src/panels/ConnectedApps.tsx
+ *  and src/panels/settings/PersonalTokens.tsx), which ui/mcp-access-lists
+ *  and the credential helpers read. */
+export const MCP_ACCESS_MARKS = {
+  app: 'data-oauth-connection',
+  appsSearch: 'data-connected-apps-search',
+  appsEnd: 'data-connected-apps-end',
+  appsSettledSearch: 'data-connected-apps-settled-search',
+  token: 'data-mcp-token',
+  tokensSearch: 'data-mcp-tokens-search',
+  tokensEnd: 'data-mcp-tokens-end',
+  tokensSettledSearch: 'data-mcp-tokens-settled-search',
+  tokensNote: 'data-mcp-tokens-note',
+  newToken: 'data-mcp-new-token',
+}
+
+/** Each MCP access list's search box, its end line, and the mark on the
+ *  end line that names the search the list on screen answers. */
+const MCP_LISTS = {
+  apps: {
+    box: MCP_ACCESS_MARKS.appsSearch,
+    end: MCP_ACCESS_MARKS.appsEnd,
+    settled: MCP_ACCESS_MARKS.appsSettledSearch,
+  },
+  tokens: {
+    box: MCP_ACCESS_MARKS.tokensSearch,
+    end: MCP_ACCESS_MARKS.tokensEnd,
+    settled: MCP_ACCESS_MARKS.tokensSettledSearch,
+  },
+}
+
+/** Whether an MCP access list whose end line says `end` and names the
+ *  search `settled` has answered the search `text`: the list on screen is
+ *  the one for `text`, and it says anything but loading. Until a typed
+ *  search rests and its list opens, the end line still names the earlier
+ *  search, whose list may have ended. */
+export const mcpListSettled = (end, settled, text) =>
+  end !== null && end !== 'loading' && settled === text.trim()
+
+/** Opens MCP access and waits until both lists hold their first batch. */
 async function openAccountMcp() {
   await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/settings/account`, {
     waitUntil: 'domcontentloaded',
@@ -1556,7 +1604,38 @@ async function openAccountMcp() {
   await app.getByRole('heading', { name: 'Your account', exact: true }).waitFor({ timeout: 45_000 })
   const section = app.locator('[data-settings-account-section="mcp"]')
   if (await section.count()) await section.first().click()
-  await app.locator('[data-mcp-new-token]').waitFor()
+  await app.locator(`[${MCP_ACCESS_MARKS.newToken}]`).waitFor()
+  await listSettled(MCP_LISTS.apps)
+}
+
+/** Waits until MCP access's list `list` (MCP_LISTS) has answered the
+ *  search `text` (mcpListSettled), reading its end line's two marks at
+ *  once. */
+async function listSettled(list, text = '') {
+  const line = app.locator(`[${list.end}]`)
+  expect(
+    await until(async () => {
+      const [end, settled] = await evaluate(
+        line,
+        (element, marks) => marks.map((mark) => element.getAttribute(mark)),
+        [list.end, list.settled],
+      )
+      return mcpListSettled(end, settled, text)
+    }, 30_000),
+    'an MCP access list is still loading',
+  )
+}
+
+/** Searches MCP access's list `list` (MCP_LISTS) for `text` when its box
+ *  shows, and waits until the list on screen answers that search. A list
+ *  shows its box only once it holds more than one batch, so a list
+ *  without one holds every row on screen. Answers whether it searched. */
+async function searchMcpList(list, text) {
+  const box = app.locator(`[${list.box}]`)
+  if (!(await box.count())) return false
+  await box.fill(text)
+  await listSettled(list, text)
+  return true
 }
 
 /** Creates a personal token through the New token dialog and returns its
@@ -1592,6 +1671,7 @@ async function createTokenInUi(name, allowChanges) {
   expect(/^qvt_[0-9a-f]{20,}$/.test(secret), 'the revealed token has the qvt_ shape')
   await dialog.getByRole('button', { name: 'Done', exact: true }).click()
   await shown.waitFor({ state: 'detached' })
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await row.waitFor()
   eq(
@@ -1607,6 +1687,7 @@ async function createTokenInUi(name, allowChanges) {
 /** Revokes a personal token on MCP access and waits for the revoked mark. */
 async function revokeTokenInUi(name) {
   await openAccountMcp()
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await confirmTwice(
     row.getByRole('button', { name: 'Revoke this token', exact: true }),
@@ -1617,6 +1698,7 @@ async function revokeTokenInUi(name) {
 
 async function deleteTokenInUi(name) {
   await openAccountMcp()
+  await searchMcpList(MCP_LISTS.tokens, name)
   const row = app.locator('[data-mcp-token]').filter({ hasText: name })
   await confirmTwice(
     row.getByRole('button', { name: 'Delete revoked token', exact: true }),
@@ -1771,9 +1853,11 @@ async function removeAgentInUi(agent) {
   )
 }
 
-/** Deletes one OAuth connection on Connected apps. */
+/** Deletes one OAuth connection on Connected apps, searching for it
+ *  first when the list shows its search. */
 async function deleteConnectionInUi(clientName) {
   await openAccountMcp()
+  await searchMcpList(MCP_LISTS.apps, clientName)
   await app.getByRole('group', { name: 'Connected apps', exact: true }).scrollIntoViewIfNeeded()
   const rows = app.locator('[data-oauth-connection]').filter({ hasText: clientName })
   await rows.first().waitFor()
@@ -1844,6 +1928,29 @@ async function appMessages(call, arg) {
 
 /* --------------------------------------------------------------- cleanup */
 
+/** The most batches appBatches reads of one list, MCP access's cap of
+ *  2,000 rows (src/lib/credentialLists.ts). */
+export const APP_BATCHES_MAX = 80
+
+/** Every row of `what`, a list the app reads a batch at a time, such as
+ *  MCP access's personal tokens and connected apps, from its first batch
+ *  to its end. `read(cursor)` answers one batch, the first for a null
+ *  cursor, or null when the app could not read it, which fails the list,
+ *  never reads as an empty one. A stopped batch goes on from its `next`. It
+ *  reads at most APP_BATCHES_MAX batches. */
+export async function appBatches(what, read) {
+  const rows = []
+  let cursor = null
+  for (let n = 0; n < APP_BATCHES_MAX; n++) {
+    const batch = await read(cursor)
+    expect(batch && Array.isArray(batch.rows), `the app could not list ${what}`)
+    rows.push(...batch.rows)
+    if (batch.next === null) return rows
+    cursor = batch.next
+  }
+  return fail(`the app listed more than ${APP_BATCHES_MAX} batches of ${what}`)
+}
+
 /** Finds and removes everything whose name carries `tag` (a run's tag, or
  *  TAG_ANY for every run), in phases that each run whatever an earlier one
  *  did:
@@ -1878,12 +1985,11 @@ async function sweep(tag, label) {
       say('NOTE', `${label}/problem`, `${what}: ${describe(error)}`)
     }
   }
-  /** A list the app reads on demand; null (a failed read) is a failure. */
-  const appList = async (what, call) => {
-    const rows = await evaluate(app, call)
-    expect(Array.isArray(rows), `the app could not list ${what}`)
-    return rows
-  }
+  /** The rows of `what`, an MCP access list `call` reads a batch at a time
+   *  in the page for a search and a cursor, searched for the sweep's tag
+   *  (appBatches); a failed read is a failure. */
+  const appList = (what, call) =>
+    appBatches(what, (cursor) => evaluate(app, call, [searchOf(tag), cursor]))
   const taggedAgents = async () =>
     (
       await evaluate(app, () =>
@@ -1911,7 +2017,9 @@ async function sweep(tag, label) {
 
   // 1. credentials, through the app alone
   await step('OAuth connections', async () => {
-    const rows = await appList('OAuth connections', () => window.PLANNER.listOAuthConnections())
+    const rows = await appList('OAuth connections', ([search, cursor]) =>
+      window.PLANNER.connectedApps(search, cursor),
+    )
     for (const c of rows.filter((c) => matches(c.clientName)))
       await step(`OAuth connection ${c.clientName}`, async () => {
         expect(
@@ -1922,7 +2030,9 @@ async function sweep(tag, label) {
       })
   })
   await step('personal tokens', async () => {
-    const rows = await appList('personal tokens', () => window.PLANNER.listMcpTokens())
+    const rows = await appList('personal tokens', ([search, cursor]) =>
+      window.PLANNER.personalTokens(search, cursor),
+    )
     for (const t of rows.filter((t) => matches(t.name)))
       await step(`personal token ${t.name}`, async () => {
         expect(
@@ -2108,11 +2218,15 @@ async function sweep(tag, label) {
   await step('the check for leftovers in the app', async () => {
     // a cold reload, so no list comes from what this page painted
     await openUsers()
-    const tokens = (await appList('personal tokens', () => window.PLANNER.listMcpTokens())).filter(
-      (t) => matches(t.name),
-    )
+    const tokens = (
+      await appList('personal tokens', ([search, cursor]) =>
+        window.PLANNER.personalTokens(search, cursor),
+      )
+    ).filter((t) => matches(t.name))
     const connections = (
-      await appList('OAuth connections', () => window.PLANNER.listOAuthConnections())
+      await appList('OAuth connections', ([search, cursor]) =>
+        window.PLANNER.connectedApps(search, cursor),
+      )
     ).filter((c) => matches(c.clientName))
     const agents = await taggedAgents()
     const keys = (await agentKeysOf(agents)).filter((k) => agentIds.has(k.agentId))
@@ -6661,6 +6775,106 @@ async function billingAccountsCheck() {
   })
 }
 
+/** The step that checks MCP access's two lists (mcpAccessListsCheck). */
+export const MCP_ACCESS_LISTS_STEP = 'ui/mcp-access-lists'
+
+/** What MCP access says when a token search matches nothing. */
+export const MCP_ACCESS_EXPECTED = { none: 'No tokens match.' }
+
+/** The names of the rows a batch `batch` answered, as `name` reads them,
+ *  when it is the whole answer (no `next`), else null. A failed read
+ *  answers null too. */
+export const wholeBatchNames = (batch, name) =>
+  batch && Array.isArray(batch.rows) && batch.next === null ? batch.rows.map(name) : null
+
+/** Checks MCP access's Connected apps and Personal access tokens on the
+ *  deployment's batches (connectedApps.list and tokens.personalTokens)
+ *  while the run's two OAuth connections and two personal tokens are live.
+ *  Each list is searched for the run tag when it shows its search, which
+ *  it does once it holds more than one batch, and is read from its first
+ *  batch when it does not. Either way it must hold the run's two rows
+ *  alone among the rows with its tag, newest first: the read-only
+ *  connection, approved second, before the one that may make changes,
+ *  and `<tag> read token`, made second, before `<tag> write token`. A
+ *  list that shows no search is also asked through the store's read for
+ *  the run tag, which must answer those two rows alone, so every run
+ *  checks the server's search with a match, on which the cleanup's sweep
+ *  and its check for leftovers rely. A token search that matches nothing
+ *  must say so, in the page when the box shows, else in the store's read
+ *  of the same batch. It writes nothing, and needs a backend from the
+ *  release that ships these reads; against an older one the lists cannot
+ *  load. */
+async function mcpAccessListsCheck() {
+  const m = MCP_ACCESS_MARKS
+  const tag = run.tag
+  await check(MCP_ACCESS_LISTS_STEP, async () => {
+    await openAccountMcp()
+    /** The texts of the rows marked `mark` that start with the run's tag,
+     *  and whether every row on screen does. */
+    const tagged = async (mark) => {
+      const texts = (await app.locator(`[${mark}]`).allTextContents()).map((t) => t.trim())
+      const mine = texts.filter((text) => hasTag(tag, text))
+      return { mine, alone: mine.length === texts.length }
+    }
+    const appNames = [`${tag} OAuth read client`, `${tag} OAuth write client`]
+    const appsSearched = await searchMcpList(MCP_LISTS.apps, tag)
+    const apps = await tagged(m.app)
+    expect(
+      apps.mine.length === 2 &&
+        apps.mine[0].startsWith(appNames[0]) &&
+        apps.mine[1].startsWith(appNames[1]) &&
+        (!appsSearched || apps.alone),
+      `Connected apps lists ${short(apps.mine.map((t) => t.slice(0, 40)))} for the run`,
+    )
+    if (!appsSearched)
+      same(
+        wholeBatchNames(
+          await evaluate(app, (search) => window.PLANNER.connectedApps(search, null), tag),
+          (row) => row.clientName,
+        ),
+        appNames,
+        'the connected apps batch for the run tag',
+      )
+    const tokenNames = [`${tag} read token`, `${tag} write token`]
+    const tokensSearched = await searchMcpList(MCP_LISTS.tokens, tag)
+    const tokens = await tagged(m.token)
+    expect(
+      tokens.mine.length === 2 &&
+        tokens.mine[0].startsWith(tokenNames[0]) &&
+        tokens.mine[1].startsWith(tokenNames[1]) &&
+        (!tokensSearched || tokens.alone),
+      `Personal access tokens lists ${short(tokens.mine.map((t) => t.slice(0, 40)))} for the run`,
+    )
+    if (!tokensSearched)
+      same(
+        wholeBatchNames(
+          await evaluate(app, (search) => window.PLANNER.personalTokens(search, null), tag),
+          (row) => row.name,
+        ),
+        tokenNames,
+        'the personal tokens batch for the run tag',
+      )
+    const nothing = `${tag} no such token`
+    if (await searchMcpList(MCP_LISTS.tokens, nothing)) {
+      eq(await app.locator(`[${m.token}]`).count(), 0, 'token rows for a search with no match')
+      eq(
+        ((await app.locator(`[${m.tokensNote}]`).textContent()) ?? '').trim(),
+        MCP_ACCESS_EXPECTED.none,
+        'the token search with no match',
+      )
+    } else
+      same(
+        await evaluate(app, (search) => window.PLANNER.personalTokens(search, null), nothing),
+        { rows: [], next: null, stopped: false },
+        'the token batch for a search with no match',
+      )
+    /** How the step found a list's two rows. */
+    const how = (searched) =>
+      searched ? 'by its search' : "in its first batch and the store's batch for the run tag"
+    return `found the run's two connections ${how(appsSearched)} and two tokens ${how(tokensSearched)}, newest first, and a token search with no match`
+  })
+}
+
 /** The step that checks Settings › Projects and Archived projects
  *  (settingsProjectsCheck). */
 export const SETTINGS_PROJECTS_STEP = 'ui/settings-projects'
@@ -8800,6 +9014,9 @@ async function main() {
   // Billing's API calls by account and Who counts toward your bill, with
   // the run's agents
   await billingAccountsCheck()
+  // MCP access's two lists on the server's batches, with the run's two
+  // connections and two tokens
+  await mcpAccessListsCheck()
   // a file attached through the task window, on an upload ticket
   await attachmentUploadCheck()
   // a description's images loaded near view through fetch, with a task of

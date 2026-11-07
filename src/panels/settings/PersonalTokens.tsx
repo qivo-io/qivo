@@ -1,27 +1,36 @@
 /* Personal access tokens on Settings → Your preferences → MCP access. The
-   list shows each token's access, expiry and last use. New token opens a
-   dialog that asks for a name, access and an optional last day, then shows
-   the secret once. The browser mints the secret (P.createMcpToken), and
-   nothing keeps it after the dialog closes. Access and expiry are fixed at
-   creation; the server alone decides whether a token still works. */
-import type { FunctionReturnType } from 'convex/server'
+   list shows each token's access, expiry and last use, newest first, 25 a
+   batch from the server (tokens.personalTokens) with Load more, read once
+   a batch through the shared paged list's `once` source (lib/pagedList.ts)
+   and never subscribed, since every call made with a token stamps its last
+   use. A search over the whole list, by name or by the start of the token
+   the row shows, appears once a list without a search has more than one
+   batch in this visit, or while it holds text. A create, revoke or delete
+   reads the list again from its first batch with its search kept, while
+   the rows it holds stay on screen; past TOKEN_LIST.most rows the list
+   asks for a search, and leaving the page drops every row. New token opens
+   a dialog that asks for a name, access and an optional last day, then
+   shows the secret once. The browser mints the secret (P.createMcpToken),
+   and nothing keeps it after the dialog closes. Access and expiry are fixed
+   at creation; the server alone decides whether a token still works. */
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
-import type { api } from '../../../convex/_generated/api'
 import { LIMITS } from '../../../convex/lib/limits'
 import { CopyValue } from '../../components/CopyValue'
 import { LimitedInput } from '../../components/LimitedField'
 import { Icon } from '../../components/qivo'
 import { SettingsGroup } from '../../components/settingsPage'
+import { TOKEN_LIST } from '../../lib/credentialLists'
 import { isoFromDate } from '../../lib/dates'
-import { overLimit } from '../../lib/fieldLimits'
+import { limitSentence, overLimit } from '../../lib/fieldLimits'
 import { focusAround, useFocusWhenGone } from '../../lib/focusWhenGone'
 import { watchLocalDay } from '../../lib/localDay'
 import { connectionScopeLabel } from '../../lib/oauthConnection'
+import { type ListEnd, listEnd, usePagedList, useSettledSearch } from '../../lib/pagedList'
 import {
   expiryFromDay,
   expiryLabel,
@@ -30,10 +39,11 @@ import {
   msUntilNextExpiry,
 } from '../../lib/tokenExpiry'
 import { useConfirmArm } from '../../lib/useConfirmArm'
-import { type McpTokenChoice, P } from '../../store/planner'
+import { type McpTokenChoice, P, type PersonalTokenBatch } from '../../store/planner'
 import { MField, ModalShell } from '../Modals'
 
-type Token = FunctionReturnType<typeof api.tokens.listMcpTokens>[number]
+/** One token as the list shows it (tokens.personalTokens). */
+type Token = PersonalTokenBatch['rows'][number]
 
 const ACCESS_LABEL: Record<McpTokenChoice['access'], string> = {
   read: 'Read only',
@@ -49,49 +59,128 @@ const EXPIRES_COL = 'w-[82px]'
 const USED_COL = 'w-[60px]'
 const HEADING = 'shrink-0 text-xs leading-none font-semibold text-text-2'
 const CELL = 'shrink-0 text-sm'
+const noteClass = 'px-0.5 py-1 text-sm text-text-2'
 
 /** The Claude Code command that adds Qivo's MCP server with this secret. */
 const claudeCommand = (mcpUrl: string, secret: string) =>
   `claude mcp add --transport http qivo "${mcpUrl}" --header "Authorization: Bearer ${secret}"`
 
-/** The Personal access tokens group: the token list and New token. */
+const tokenId = (t: Token) => t.id
+/** The button of the token row with id `id`, its revoke or delete. */
+const rowButton = (id: string) =>
+  [...document.querySelectorAll<HTMLElement>('[data-mcp-token]')]
+    .find((row) => row.dataset.mcpToken === id)
+    ?.querySelector<HTMLElement>('button') ?? null
+const newTokenButton = () => document.querySelector<HTMLElement>('[data-mcp-new-token]')
+
+/** The Personal access tokens group: the search, the token list with its
+    end line, and New token. */
 export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
-  const [tokens, setTokens] = useState<Token[] | false | null>(null)
+  const [text, setText] = useState('')
+  const search = useSettledSearch(text, LIMITS.search)
+  const key = JSON.stringify([search.settled])
+  const list = usePagedList({
+    key,
+    source: { kind: 'once', read: (at) => P.personalTokens(search.settled, at.after) },
+    batch: (answer: PersonalTokenBatch) => answer,
+    id: tokenId,
+    most: TOKEN_LIST.most,
+  })
+  const end: ListEnd | 'too_long' = search.tooLong
+    ? 'too_long'
+    : listEnd(list, search.settled !== '')
+  // The search the list on screen answers, which the end line carries for
+  // the staging check (scripts/staging-check.mjs listSettled). It follows
+  // the settled search in the effect after the one that opens its list, so
+  // it changes in the same render as the list's state.
+  const [listed, setListed] = useState(search.settled)
+  useEffect(() => setListed(search.settled), [search.settled])
+  // The search shows once the list without a search answered more than
+  // one batch's worth in this visit, and stays for the rest of it.
+  const [searchShown, setSearchShown] = useState(false)
+  const showSearch = searchShown || text !== '' || (search.settled === '' && list.next)
+  useEffect(() => {
+    if (showSearch) setSearchShown(true)
+  }, [showSearch])
   const confirm = useConfirmArm<string>()
   const [creating, setCreating] = useState(false)
   // Labels such as "Today" follow the calendar day without a reload.
   const [now, setNow] = useState(() => new Date())
   useEffect(() => watchLocalDay(setNow), [])
+  // A batch that lands renews the clock, so the rows it brings are labeled
+  // now. The last answer is the same object until another batch lands.
+  const lastAnswer = list.answers.at(-1)
+  useEffect(() => {
+    if (lastAnswer !== undefined) setNow(new Date())
+  }, [lastAnswer])
   // A token created in another time zone expires during this viewer's day,
   // so the clock also moves when the next listed token expires. The delay is
   // measured from the clock, not from `now`, which can be hours old when the
-  // list reloads.
+  // list reads again.
   useEffect(() => {
-    if (!Array.isArray(tokens)) return
-    const delay = msUntilNextExpiry(tokens, new Date())
+    const delay = msUntilNextExpiry(list.rows, new Date())
     if (delay === null) return
     const timer = setTimeout(() => setNow(new Date()), delay)
     return () => clearTimeout(timer)
-  }, [tokens, now])
-
-  // A reload also renews the clock, so the rows it brings are labeled now.
-  const reload = () => {
-    P.listMcpTokens().then((ts) => {
-      setNow(new Date())
-      setTokens(ts === null ? false : ts)
-    })
-  }
-  useEffect(() => {
-    reload()
-  }, [])
+  }, [lastAnswer, list.answers.length, now])
   /* The token whose Delete or Revoke was confirmed last, with where focus
-     goes once a delete has taken its row away: the next row's button, the
-     previous row's, or New token. A revoked token keeps its row. */
+     goes once its row has left: the next row's button, the previous row's,
+     the Retry of a refresh that failed and took every row, or New token. A
+     revoked token keeps its row and its button keeps focus through the
+     list's refresh, unless it sat past the first batch. */
   const [acted, setActed] = useState<{ id: string; focus: () => HTMLElement | null }>()
   useFocusWhenGone(
-    !!acted && Array.isArray(tokens) && tokens.some((t) => t.id === acted.id),
+    !!acted && list.rows.some((t) => t.id === acted.id),
     () => acted?.focus() ?? null,
   )
+  // A refresh that failed took every row away; focus goes to its Retry.
+  const endLine = useRef<HTMLDivElement>(null)
+  const retryButton = () =>
+    endLine.current?.querySelector<HTMLElement>('[data-mcp-tokens-retry]') ?? null
+  useFocusWhenGone(list.rows.length > 0, () => (end === 'failed' ? retryButton() : null))
+  // Load more keeps focus while it reads, and its Retry is the same button;
+  // once it goes, focus moves to the first new row's button, else to the
+  // search or New token.
+  const searchBox = useRef<HTMLInputElement>(null)
+  const moreFrom = useRef<number | null>(null)
+  useFocusWhenGone(end === 'more', () => {
+    if (end === 'loading') return null
+    const row = moreFrom.current === null ? undefined : list.rows[moreFrom.current]
+    return (row ? rowButton(row.id) : null) ?? searchBox.current ?? newTokenButton()
+  })
+  const more = () => {
+    if (list.phase === 'more' || list.refreshing) return
+    moreFrom.current = list.rows.length
+    list.more()
+  }
+  // A first batch's Retry leaves before anything it could give focus to
+  // shows, so focus moves once the batch it reads again has ended: to the
+  // search, else the first row's button, else New token, or to the new
+  // Retry when it failed again.
+  const retried = useRef<string | null>(null)
+  useFocusWhenGone(end === 'loading' && list.batches.length === 0, () => {
+    if (retried.current !== key) return null
+    retried.current = null
+    if (end === 'failed') return retryButton()
+    return (
+      searchBox.current ?? (list.rows[0] ? rowButton(list.rows[0].id) : null) ?? newTokenButton()
+    )
+  })
+  const retry = () => {
+    retried.current = list.batches.length === 0 ? key : null
+    list.retry()
+  }
+  const refresh = () => void list.refresh()
+  // New token shows once the list has answered in this visit, and stays
+  // while a search reads its first batch and after a search or a refresh
+  // failed; it waits only while the first batch is on its way or failed.
+  const [answered, setAnswered] = useState(false)
+  const loaded = answered || list.answers.length > 0
+  useEffect(() => {
+    if (loaded) setAnswered(true)
+  }, [loaded])
+  // the list or its end line shows, so New token keeps its space below them
+  const shows = list.rows.length > 0 || !['end', 'partial', 'held'].includes(end)
 
   return (
     <SettingsGroup legend="Personal access tokens" data-mcp-tokens="">
@@ -99,53 +188,83 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
         Use a token when your client needs one or you want to configure access manually. Revoke it
         here when you no longer need it.
       </p>
-      {tokens === null && (
-        <div className="[color:var(--text-2)] [font-size:var(--fs-base)]">Loading…</div>
+      {showSearch && (
+        <LimitedInput
+          ref={searchBox}
+          limit={LIMITS.search}
+          aria-label="Search tokens"
+          data-mcp-tokens-search=""
+          placeholder="Search tokens"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Escape clears a typed search first
+            if (e.key === 'Escape' && text) {
+              e.stopPropagation()
+              setText('')
+            }
+          }}
+          wrapperClassName="mb-3"
+          className="h-control w-full bg-surface-1 px-2.5 text-base font-sans"
+        />
       )}
-      {tokens === false && (
-        <div className="[color:var(--danger)] [font-size:var(--fs-base)]">
-          Couldn't load MCP tokens.
-        </div>
-      )}
-      {Array.isArray(tokens) && tokens.length > 0 && (
-        <div data-mcp-token-list="" className="mb-6 flex flex-col gap-1.5">
-          <div
-            aria-hidden="true"
-            data-mcp-token-columns=""
-            className="-mb-0.5 flex items-end gap-2 px-[9px]"
-          >
-            <div className="min-w-0 flex-1" />
-            <div className={cn(HEADING, ACCESS_COL)}>Access</div>
-            <div className={cn(HEADING, EXPIRES_COL)}>Expires</div>
-            <div className={cn(HEADING, USED_COL)}>Last used</div>
-            <div className="w-control-sm shrink-0" />
-          </div>
-          {tokens.map((t) => (
-            <TokenRow
-              key={t.id}
-              token={t}
-              now={now}
-              armed={confirm.armed === t.id}
-              onPress={(action) =>
-                confirm.press(t.id, () => {
-                  setActed({
-                    id: t.id,
-                    focus: focusAround(
-                      'data-mcp-token',
-                      t.id,
-                      (row) => row.querySelector<HTMLElement>('button'),
-                      () => document.querySelector<HTMLElement>('[data-mcp-new-token]'),
-                    ),
+      <div
+        ref={endLine}
+        data-mcp-tokens-end={end}
+        data-mcp-tokens-settled-search={listed}
+        aria-busy={end === 'loading' || list.phase === 'more' || list.refreshing || undefined}
+        className={cn(shows && 'mb-6')}
+      >
+        {list.rows.length > 0 && (
+          <div data-mcp-token-list="" className="flex flex-col gap-1.5">
+            <div
+              aria-hidden="true"
+              data-mcp-token-columns=""
+              className="-mb-0.5 flex items-end gap-2 px-[9px]"
+            >
+              <div className="min-w-0 flex-1" />
+              <div className={cn(HEADING, ACCESS_COL)}>Access</div>
+              <div className={cn(HEADING, EXPIRES_COL)}>Expires</div>
+              <div className={cn(HEADING, USED_COL)}>Last used</div>
+              <div className="w-control-sm shrink-0" />
+            </div>
+            {list.rows.map((t) => (
+              <TokenRow
+                key={t.id}
+                token={t}
+                now={now}
+                armed={confirm.armed === t.id}
+                onPress={(action) =>
+                  confirm.press(t.id, () => {
+                    setActed({
+                      id: t.id,
+                      focus: focusAround(
+                        'data-mcp-token',
+                        t.id,
+                        (row) => row.querySelector<HTMLElement>('button'),
+                        () => retryButton() ?? newTokenButton(),
+                      ),
+                    })
+                    action()
                   })
-                  action()
-                })
-              }
-              onChanged={reload}
-            />
-          ))}
-        </div>
-      )}
-      {Array.isArray(tokens) && (
+                }
+                onChanged={refresh}
+              />
+            ))}
+          </div>
+        )}
+        <TokensEnd
+          end={end}
+          stopped={list.stopped}
+          none={list.rows.length === 0}
+          first={list.batches.length === 0}
+          loading={list.phase === 'more'}
+          refreshing={list.refreshing}
+          onMore={more}
+          onRetry={retry}
+        />
+      </div>
+      {loaded && (
         <Button
           type="button"
           data-mcp-new-token=""
@@ -160,10 +279,98 @@ export function PersonalTokens({ mcpUrl }: { mcpUrl: string }) {
         </Button>
       )}
       {creating && (
-        <NewTokenDialog mcpUrl={mcpUrl} onCreated={reload} onClose={() => setCreating(false)} />
+        <NewTokenDialog mcpUrl={mcpUrl} onCreated={refresh} onClose={() => setCreating(false)} />
       )}
     </SettingsGroup>
   )
+}
+
+/* The line that ends the token list (lib/pagedList.ts listEnd), with its
+   Load more and Retry. The failure's Retry is the same button as Load
+   more, in the same place, so focus stays on it when a Load more fails.
+   While a refresh reads, Load more stays but reads nothing. The end of a
+   list without a search says nothing, as an empty list says nothing. */
+function TokensEnd({
+  end,
+  stopped,
+  none,
+  first,
+  loading,
+  refreshing,
+  onMore,
+  onRetry,
+}: {
+  end: ListEnd | 'too_long'
+  stopped: boolean
+  /** whether no loaded batch holds a row */
+  none: boolean
+  /** whether no batch answered yet, so a failure is the list's, not a
+      Load more's */
+  first: boolean
+  /** whether a Load more is on its way */
+  loading: boolean
+  /** whether the list reads its first batch again */
+  refreshing: boolean
+  onMore: () => void
+  onRetry: () => void
+}) {
+  const busy = loading || refreshing
+  const line = (text: string, status = false) => (
+    <p data-mcp-tokens-note={end} role={status ? 'status' : undefined} className={noteClass}>
+      {text}
+    </p>
+  )
+  const button = (label: string, onClick: () => void, more = false) => (
+    <Button
+      type="button"
+      variant="ghost"
+      data-mcp-tokens-more={more ? '' : undefined}
+      data-mcp-tokens-retry={more ? undefined : ''}
+      aria-disabled={busy || undefined}
+      onClick={() => !busy && onClick()}
+      className="h-control-sm text-sm"
+    >
+      {label}
+    </Button>
+  )
+  switch (end) {
+    case 'too_long':
+      return line(limitSentence(LIMITS.search))
+    case 'loading':
+      return line('Loading…', true)
+    case 'failed':
+      return (
+        <div
+          role="alert"
+          data-mcp-tokens-note={end}
+          className="flex flex-wrap items-center gap-2 px-0.5 py-1 text-sm text-danger"
+        >
+          {first ? "Couldn't load MCP tokens." : "Couldn't load more tokens."}
+          {button('Retry', onRetry)}
+        </div>
+      )
+    case 'full':
+      return line('Search to find more tokens.')
+    case 'more':
+      return (
+        <div data-mcp-tokens-note={end} className="mt-1 flex flex-col items-start gap-1">
+          {stopped && (
+            <p className={noteClass}>
+              {none
+                ? 'Qivo checked part of the list and found no matches there. Load more continues.'
+                : 'Qivo checked part of the list. Load more continues.'}
+            </p>
+          )}
+          {button(loading ? 'Loading…' : 'Load more', onMore, true)}
+        </div>
+      )
+    case 'none':
+      return line('No tokens match.')
+    case 'held':
+    case 'partial':
+    case 'end':
+      return null
+  }
 }
 
 /* One token. A revoked or expired token is dimmed and offers Delete, an

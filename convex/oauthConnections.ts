@@ -1,15 +1,17 @@
-/* OAuth connections: the consent screen, which calls Better Auth's API,
- * the login's connected apps and the checks of token issuance. The check
- * that each MCP and REST call with an access token runs is in
- * oauthAccess.ts, which loads no Better Auth. */
+/* OAuth connections, with the consent screen, which calls Better Auth's
+ * API, deletion from the login's connected apps and the checks of token
+ * issuance. MCP access lists the connected apps a batch at a time through
+ * connectedApps.ts, and the check that each MCP and REST call with an
+ * access token runs is in oauthAccess.ts, neither of which loads Better
+ * Auth. */
 
 import { v } from 'convex/values'
 import { internalMutation, internalQuery } from './_generated/server'
 import { createAuth } from './auth'
-import { findAuthUser, findOAuthClient, loginBanned } from './lib/access'
+import { findAuthUser, loginBanned } from './lib/access'
 import { byId } from './lib/db'
 import { refuseDemoFeature } from './lib/demo'
-import { authedMutation, authedQuery, badRequest, forbidden, notFound } from './lib/functions'
+import { authedMutation, badRequest, forbidden, notFound } from './lib/functions'
 import { nameKey } from './lib/nameKey'
 import {
   canonicalOAuthQuery,
@@ -89,42 +91,6 @@ export const getContext = authedMutation({
       scopes: (query.get('scope') || '').split(' ').filter(Boolean),
       resource: mcpResource(),
     }
-  },
-})
-
-/* The login's connected apps. `appGone` marks one whose OAuth client Qivo
- * no longer has, which has ended although nothing revoked it, as when an
- * operator deletes the client's rows by hand (lib/access.ts
- * oauthClientLive). */
-export const list = authedQuery({
-  args: {},
-  handler: async (ctx) => {
-    const rows = await ctx.db
-      .query('oauth_connections')
-      .withIndex('by_auth_user', (q) => q.eq('auth_user_id', ctx.authUserId))
-      .collect()
-    return Promise.all(
-      rows
-        .filter((row) => row.approved_at && row.revocation_reason !== 'deleted')
-        .sort((a, b) => b.created_at.localeCompare(a.created_at))
-        .map(async (row) => ({
-          id: row.id,
-          clientId: row.client_id,
-          clientName: row.client_name,
-          profileId: row.profile_id,
-          profileName: (await byId(ctx, 'profiles', row.profile_id))?.name || 'Removed member',
-          orgId: row.org_id,
-          orgName: (await byId(ctx, 'organizations', row.org_id))?.name || 'Removed organization',
-          scopes: row.scopes,
-          createdAt: row.created_at,
-          lastUsedAt: row.last_used_at ?? null,
-          revokedAt: row.revoked_at ?? null,
-          // an organization admin revoked it on API access (apiAccess.ts)
-          revokedByAdmin: row.revocation_reason === 'admin',
-          appGone:
-            row.revoked_at === undefined && (await findOAuthClient(ctx, row.client_id)) === null,
-        })),
-    )
   },
 })
 

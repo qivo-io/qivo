@@ -228,6 +228,7 @@ comments:countThread mutation public {"type":"object","value":{"issue_id":{"fiel
 comments:create mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"issue_id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:remove mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 comments:update mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"body":{"fieldType":{"type":"string"},"optional":false},"expected":{"fieldType":{"type":"object","value":{"body":{"fieldType":{"type":"string"},"optional":false}}},"optional":true},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
+connectedApps:list query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 deletedItems:detachArchived mutation internal {"type":"object","value":{"job_id":{"fieldType":{"type":"id","tableName":"archived_detaches"},"optional":false}}}
 deletedItems:expire mutation internal {"type":"object","value":{"cursor":{"fieldType":{"type":"string"},"optional":true},"now":{"fieldType":{"type":"number"},"optional":true}}}
 deletedItems:item query public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
@@ -598,7 +599,6 @@ oauthConnections:ensure mutation internal {"type":"object","value":{"authorizati
 oauthConnections:forgetEndedSession mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"id","tableName":"oauth_ended_sessions"},"optional":false}}}
 oauthConnections:getContext mutation public {"type":"object","value":{"oauth_query":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:hasHome query internal {"type":"object","value":{"authUserId":{"fieldType":{"type":"string"},"optional":false}}}
-oauthConnections:list query public {"type":"object","value":{}}
 oauthConnections:registerCode mutation internal {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:revoke mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 oauthConnections:revokeReplay mutation internal {"type":"object","value":{"kind":{"fieldType":{"type":"union","value":[{"type":"literal","value":"authorization_code"},{"type":"literal","value":"refresh_token"}]},"optional":false},"credentialHash":{"fieldType":{"type":"string"},"optional":false},"clientId":{"fieldType":{"type":"string"},"optional":false}}}
@@ -773,8 +773,7 @@ tokens:createAgentKey mutation public {"type":"object","value":{"id":{"fieldType
 tokens:createMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"profile_id":{"fieldType":{"type":"string"},"optional":false},"name":{"fieldType":{"type":"string"},"optional":false},"token_prefix":{"fieldType":{"type":"string"},"optional":false},"token_hash":{"fieldType":{"type":"string"},"optional":false},"access":{"fieldType":{"type":"union","value":[{"type":"literal","value":"read"},{"type":"literal","value":"write"}]},"optional":false},"expires_at":{"fieldType":{"type":"string"},"optional":true}}}
 tokens:deleteAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:deleteMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
-tokens:listAgentKeys query public {"type":"object","value":{}}
-tokens:listMcpTokens query public {"type":"object","value":{}}
+tokens:personalTokens query public {"type":"object","value":{"search":{"fieldType":{"type":"string"},"optional":true},"cursor":{"fieldType":{"type":"string"},"optional":true}}}
 tokens:revokeAgentKey mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false},"org_id":{"fieldType":{"type":"string"},"optional":false}}}
 tokens:revokeMcpToken mutation public {"type":"object","value":{"id":{"fieldType":{"type":"string"},"optional":false}}}
 usage:activity query internal {"type":"object","value":{"org_id":{"fieldType":{"type":"string"},"optional":false},"month":{"fieldType":{"type":"string"},"optional":false},"cursor":{"fieldType":{"type":"union","value":[{"type":"string"},{"type":"null"}]},"optional":false}}}
@@ -932,12 +931,15 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // authenticated owner's receipts, rechecking current rights per project.
   roadmap: { change: 'authedMutation', undo: 'authedMutation' },
   // Self-service OAuth consent preparation freezes the displayed home seat;
-  // listing and disconnection expose only the signed-in person's connections.
+  // disconnection reaches only the signed-in person's connections.
   oauthConnections: {
     getContext: 'authedMutation',
-    list: 'authedQuery',
     revoke: 'authedMutation',
   },
+  // MCP access's connected apps, a batch at a time, only the signed-in
+  // login's approved connections, refused in the demo in the handler. The
+  // module loads no Better Auth (authTriggers.test.ts).
+  connectedApps: { list: 'authedQuery' },
   // Operator photo review and recurring calendar controls. These are
   // platform-wide editorial operations, never org-admin or ordinary-user doors.
   panoramaImages: {
@@ -1345,15 +1347,15 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
   // Revoking and deleting an agent key stay open to org admins during a
   // billing pause; creating one does not. agentKeys reads the keys of up to
   // 25 agents of one organization for an org admin (checked in the
-  // handler), for Settings › Users; listAgentKeys is deprecated for one
-  // release.
+  // handler), for Settings › Users. personalTokens reads a batch of the
+  // signed-in login's own tokens across its active seats for MCP access,
+  // refused in the demo in the handler.
   tokens: {
     agentKeys: 'orgQuery',
-    listAgentKeys: 'authedQuery',
     createAgentKey: 'orgMutation',
     revokeAgentKey: 'accessRemovalMutation',
     deleteAgentKey: 'accessRemovalMutation',
-    listMcpTokens: 'authedQuery',
+    personalTokens: 'authedQuery',
     createMcpToken: 'authedMutation',
     revokeMcpToken: 'authedMutation',
     deleteMcpToken: 'authedMutation',
@@ -1372,7 +1374,7 @@ const PUBLIC: Record<string, Record<string, Wrapper>> = {
 }
 
 /* Public entries are counted from the pinned manifest below. */
-const PUBLIC_COUNT = 257
+const PUBLIC_COUNT = 256
 
 describe('the public surface', () => {
   const publicRows = rows.filter((r) => r.vis === 'public')

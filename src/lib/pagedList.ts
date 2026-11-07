@@ -40,15 +40,27 @@
    A list reads its batches from one of two sources (BatchSource):
 
    - `once`: each batch is one read on demand, never subscribed to, as API
-     access, Billing's lists, the removal window's Reassign picker and
-     Deleted items' people read everything. Load
+     access, Billing's lists, the removal window's Reassign picker, Deleted
+     items' people and MCP access's Connected apps and Personal access
+     tokens (panels/ConnectedApps.tsx, panels/settings/PersonalTokens.tsx)
+     read everything. Load
      more reads after the last batch's `next`; one read runs at a time, so a
      second press or a Retry while one runs reads nothing. A failed batch
      keeps the rows and the place, and Retry reads it again, or starts again
      when the first batch failed. A first answer with no rows stays in
      `answers`, as the live engine keeps it, and a later one, which fails
      the list, in `failure`, so a page can say why. Nothing is subscribed,
-     so a hidden tab has nothing to pause.
+     so a hidden tab has nothing to pause. A page that changed what the
+     list holds, as MCP access's lists do after a create, revoke or
+     delete, calls `refresh`, which reads the first batch again under the
+     same key. Until it answers the list shows the rows, batches and `next`
+     it holds, `refreshing`, in phase `ready`, and Load more and Retry read
+     nothing. Its answer then replaces every batch, as a fresh start would.
+     A refresh that fails fails the list as a failed first batch does,
+     with no rows, and Retry starts again. A refresh while the first batch
+     is on its way, or after it failed, starts the list again. Once the
+     page has stopped the list, by leaving or by `stop`, a refresh, Load
+     more or Retry reads nothing until it opens again.
    - `live`: each batch is a live read (lib/liveView.ts watchLive) that
      runs again whenever what it read changes, on the rules of the
      Overview's lists (store/overviewLists.ts):
@@ -192,8 +204,9 @@ export type PagedList<A, Row> = {
   /** whether a live batch waits for the halves it splits into, so the
       list shows older answers and claims no end */
   settling: boolean
-  /** whether a live list waits for fresh answers to what it shows, after
-      the page showed again or the socket reconnected */
+  /** whether the list shows older answers while it reads them again: a
+      live list after the page showed again or the socket reconnected, or a
+      list read once while `refresh` reads its first batch again */
   refreshing: boolean
   /** Load more: one batch after the last, while `next` and not `full`,
       and none while one is on its way */
@@ -202,6 +215,13 @@ export type PagedList<A, Row> = {
       batch, or the whole list from its start when it failed as a whole or
       its first batch did */
   retry: (id?: number) => void
+  /** For a list read once, reads its first batch again under the same key
+      while the list shows what it holds, `refreshing`, on the rules in the
+      module header. The answer settles once that read lands or fails, or
+      when a key change, `stop`, leaving the page or another refresh drops
+      it, so a page can move focus after it. For a live list it reads
+      nothing, since its batches follow what they read. */
+  refresh: () => Promise<void>
 }
 
 /** Which line ends a list, one of:
@@ -275,8 +295,8 @@ export function useSettledSearch(
 
 /* ------------------------------------------------------------ the engines */
 
-/** What both engines show, before the hook adds its two calls. */
-type ListState<A, Row> = Omit<PagedList<A, Row>, 'more' | 'retry'>
+/** What both engines show, before the hook adds its calls. */
+type ListState<A, Row> = Omit<PagedList<A, Row>, 'more' | 'retry' | 'refresh'>
 
 /** One engine under usePagedList: `open` starts it for a key (again after
     `stop`), `show` follows the tab's visibility, `stop` drops every read
@@ -296,6 +316,8 @@ type Engine<A, Row> = {
   view(): ListState<A, Row>
   more(): void
   retry(id?: number): void
+  /** PagedList's refresh */
+  refresh(): Promise<void>
 }
 
 /** A list that reads nothing. */
@@ -344,27 +366,47 @@ function onceEngine<A, Row>(
   let phase: PagedList<A, Row>['phase'] = 'first'
   // a read on its way, so a second press or a Retry reads nothing
   let reading = false
+  // whether the page has the list open, so nothing reads after it stopped
+  let opened = false
+  // a refresh of the first batch on its way, while the rows stay on screen
+  let refreshing = false
+  // settles the promise of the refresh on its way
+  let landed: (() => void) | null = null
 
   const last = () => reads[reads.length - 1]
   const place = () => last()?.batch.next ?? null
+  /** Settles the refresh on its way, whose read landed or was dropped. */
+  const settleRefresh = () => {
+    const done = landed
+    landed = null
+    done?.()
+  }
 
-  /** Reads the batch after `after`, the first when null. */
-  function read(after: string | null) {
+  /** Reads the batch after `after`, the first when null; `fresh` replaces
+      every batch the list holds with its answer. */
+  function read(after: string | null, fresh = false) {
     const o = options()
     if (o.source.kind !== 'once') return
     const n = sequence
     reading = true
     void o.source.read({ after, through: null }).then(
-      (answer) => land(n, after, answer),
-      () => land(n, after, null),
+      (answer) => land(n, after, answer, fresh),
+      () => land(n, after, null, fresh),
     )
   }
 
-  function land(n: number, after: string | null, answer: A | null) {
+  function land(n: number, after: string | null, answer: A | null, fresh: boolean) {
     if (n !== sequence) return
     reading = false
+    refreshing = false
     const batch = answer === null ? null : options().batch(answer)
     failure = null
+    // a refresh's answer replaces what the list held, and its failure
+    // leaves no rows, as a failed first batch does
+    if (fresh) {
+      reads = []
+      held = null
+    }
     if (answer === null || batch === null) {
       // a first answer with no rows is held; a later one is a failure that
       // keeps the rows and the place, and the answer for `failure`
@@ -375,41 +417,84 @@ function onceEngine<A, Row>(
       reads = [...reads, { answer, batch }]
       phase = 'ready'
     }
+    // the refresh this read answers settles after the view changed, and a
+    // refresh started while it changes keeps its own promise
+    const done = landed
+    landed = null
     changed()
+    done?.()
   }
 
+  /** Starts the list again from its first batch, dropping the refresh on
+      its way. */
   function start() {
+    settleRefresh()
+    begin()
+  }
+
+  /** Starts the list again from its first batch, leaving `landed` to the
+      read it starts. */
+  function begin() {
     sequence++
     reads = []
     held = null
     failure = null
     phase = 'first'
     reading = false
+    refreshing = false
     if (key !== null) read(null)
     changed()
   }
 
   function more() {
     const at = place()
-    if (key === null || at === null || reading) return
+    if (key === null || !opened || at === null || reading) return
     if (phase !== 'ready' && phase !== 'failed') return
     phase = 'more'
     read(at)
     changed()
   }
 
+  function refresh(): Promise<void> {
+    if (key === null || !opened) return Promise.resolve()
+    // a refresh on its way is dropped, so its promise settles now; this
+    // one's is set before anything reads or changes, so a refresh started
+    // while the view changes takes it over and this one settles once
+    settleRefresh()
+    const done = new Promise<void>((resolve) => {
+      landed = resolve
+    })
+    // with no batch to keep, a refresh starts the list again
+    if (reads.length === 0) begin()
+    else {
+      sequence++
+      // a Load more on its way is dropped, a failed one's note goes, and
+      // the rows stay
+      phase = 'ready'
+      failure = null
+      refreshing = true
+      read(null, true)
+      changed()
+    }
+    return done
+  }
+
   return {
     open(next) {
       key = next
+      opened = true
       start()
     },
     show() {},
     stop() {
       sequence++
+      settleRefresh()
       reads = []
       held = null
       failure = null
       reading = false
+      refreshing = false
+      opened = false
     },
     keep(kept) {
       if (kept) this.stop()
@@ -437,12 +522,13 @@ function onceEngine<A, Row>(
         full: rows.length >= o.most,
         partial: false,
         settling: false,
-        refreshing: false,
+        refreshing,
       }
     },
     more,
+    refresh,
     retry() {
-      if (key === null || reading) return
+      if (key === null || !opened || reading) return
       // a failed first batch, or one with no rows, starts again; a failed
       // Load more reads its place again
       if (phase === 'held' || (phase === 'failed' && reads.length === 0)) start()
@@ -454,7 +540,7 @@ function onceEngine<A, Row>(
 /** A list read once a batch, without React: the `once` engine under
     usePagedList, its rules unchanged. `open` starts it for a key (null
     reads nothing), `stop` drops every read and answer, `view` is what it
-    holds now, and `more` and `retry` are the list's. */
+    holds now, and `more`, `retry` and `refresh` are the list's. */
 export type OnceList<A, Row> = Omit<Engine<A, Row>, 'show'>
 
 /**
@@ -862,6 +948,8 @@ function liveEngine<A, Row>(
     },
     keeps: true,
     view,
+    // a live list's batches already follow what they read
+    refresh: () => Promise.resolve(),
     more() {
       const last = shown[shown.length - 1]
       const now = view()
@@ -933,7 +1021,12 @@ export function usePagedList<A, Row>(o: PagedListOptions<A, Row>): PagedList<A, 
     }
   }, [o.key, visible])
   useKept(e, opened)
-  return { ...e.view(), more: () => e.more(), retry: (id) => e.retry(id) }
+  return {
+    ...e.view(),
+    more: () => e.more(),
+    retry: (id) => e.retry(id),
+    refresh: () => e.refresh(),
+  }
 }
 
 /** Follows the page's own effects with engine `e`'s `keep`: React stops

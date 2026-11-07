@@ -175,6 +175,19 @@
 //   creators             a state Organization › General's creators line
 //                        answers (orgs:projectCreators): unavailable (the
 //                        server could not count) and error (the read fails)
+//   tokens (2)           the signed-in person's personal tokens on MCP
+//                        access, which tokens:personalTokens answers, the
+//                        oldest revoked
+//   apps (2)             the signed-in person's connected apps on MCP
+//                        access, which connectedApps:list answers, the
+//                        second revoked by an admin
+//   credlists            a state both MCP access lists answer whatever the
+//                        rows say (src/store/credentialListsStandIn.setup.ts),
+//                        for screenshots of states a seeded backend cannot
+//                        reach: stopped (a batch stops after three rows
+//                        looked at), error (every read fails) and small
+//                        (batches of five); several joined by commas.
+//                        tokens=30&apps=30 reaches Load more and the search
 //   shownload=1          also send the load rows of the tasks the person is
 //                        shown, as the server did before the app derived
 //                        them from the task rows (an older baseline)
@@ -457,7 +470,11 @@
 // tokens:agentKeys, orgs:projectCreators and invites:deliveries), through
 // src/store/peopleSettingsStandIn.setup.ts, which keeps the server's
 // audiences, order and search and reads no budget. The profile and key
-// writes those pages send get no answer here. So are the project picker's
+// writes those pages send get no answer here. So are MCP access's personal
+// tokens and connected apps (tokens:personalTokens and connectedApps:list),
+// through src/store/credentialListsStandIn.setup.ts, over the rows the
+// `tokens` and `apps` parameters plant; the credential writes get no answer
+// here either. So are the project picker's
 // navigation reads (projectNav:page, children, search and resolve), through
 // src/store/projectNavStandIn.setup.ts, which judges the signed-in person by
 // ordinary access, reads no budget and has no favorites unless
@@ -513,6 +530,10 @@ import { parseIssueRef } from '../../convex/lib/taskRefs'
 import { nextSyncStamp } from '../../convex/lib/teamSync'
 import { splitWorkspace } from '../../convex/lib/workspaceJoin'
 import { boardStandIn } from '../../src/store/boardStandIn.setup'
+import {
+  credentialListsStandIn,
+  isCredentialListRead,
+} from '../../src/store/credentialListsStandIn.setup'
 import {
   DELETED_READS,
   deletedFixtureOf,
@@ -646,6 +667,17 @@ const forcedPeople = (() => {
     else if (state === 'error') fail.push('projectCreators')
   }
   if (fail.length) force.fail = fail
+  return force
+})()
+/* MCP access's forced states (the `credlists` parameter), as the
+   stand-in's `force` takes them. */
+const forcedCredentials = (() => {
+  const force = {}
+  for (const state of (parameters.get('credlists') ?? '').split(',').filter(Boolean)) {
+    if (state === 'stopped') force.stop = 3
+    else if (state === 'error') force.fail = true
+    else if (state === 'small') force.batch = 5
+  }
   return force
 })()
 /* Settings › Labels' forced states (the `labelpage` parameter), as the
@@ -967,6 +999,59 @@ const agentKeys = agentRows.flatMap((agent, n) =>
     revokedAt: k === 1 ? '2026-04-01T08:00:00.000Z' : null,
   })),
 )
+/* The names MCP access's rows take in turn, numbered past the first round. */
+const TOKEN_NAMES = [
+  'Old laptop',
+  'Raycast on my Mac',
+  'Weekly report script',
+  'Cursor',
+  'CI deploy',
+]
+const APP_NAMES = ['Claude Desktop', 'ChatGPT', 'Cursor', 'Raycast', 'Zed', 'Windsurf']
+const rowName = (names, n) =>
+  n < names.length ? names[n] : `${names[n % names.length]} ${Math.floor(n / names.length) + 1}`
+/* An hour before the fixture's time, `n` hours on from `back` hours ago. */
+const hoursAgo = (back, n) => new Date(fixtureTime.getTime() - (back - n) * 3_600_000).toISOString()
+/* The signed-in person's personal tokens (the `tokens` parameter) as
+   tokens:personalTokens lists them, made an hour apart, the oldest revoked,
+   with read-only, expiring and used ones among them, which the server
+   holds outside the workspace. */
+const tokenCount = Math.max(0, option('tokens', 2))
+const tokenRows = Array.from({ length: tokenCount }, (_, n) => ({
+  seat: me.id,
+  id: id('e', n),
+  name: rowName(TOKEN_NAMES, n),
+  prefix: `qvt_${n.toString(16).padStart(7, '0')}`,
+  access: n % 3 === 2 ? 'read' : 'write',
+  createdAt: hoursAgo(tokenCount + 2, n),
+  expiresAt: n % 4 === 3 ? new Date(fixtureTime.getTime() + 30 * 86_400_000).toISOString() : null,
+  lastUsedAt: n % 2 === 1 ? now : null,
+  revokedAt: n === 0 && tokenCount > 1 ? now : null,
+  revokedByAdmin: false,
+}))
+/* The signed-in person's connected apps (the `apps` parameter) as
+   connectedApps:list lists them, approved an hour apart, the second
+   revoked by an admin, each acting as the signed-in person's seat. */
+const appCount = Math.max(0, option('apps', 2))
+const appRows = Array.from({ length: appCount }, (_, n) => ({
+  id: id('f', n),
+  clientId: `client-${n}`,
+  clientName: rowName(APP_NAMES, n),
+  profileId: me.id,
+  orgId: org,
+  scopes: n % 2 === 0 ? ['qivo:read', 'qivo:write'] : ['qivo:read'],
+  createdAt: hoursAgo(appCount + 2, n),
+  lastUsedAt: n % 3 === 0 ? now : null,
+  revokedAt: n === 1 ? now : null,
+  login: 'perf-account',
+  approvedAt: hoursAgo(appCount + 2, n),
+  revocationReason: n === 1 ? 'admin' : null,
+  created: n,
+  docId: `perf-connection-${n}`,
+  profileName: me.name,
+  orgName: 'Testbed Labs',
+  clientGone: false,
+}))
 /** The key of project number `num`: unique, as no two projects share a
     number, and at most five characters, as the schema asks. */
 const projectKey = (num) => `P${num.toString(36).toUpperCase()}`
@@ -2112,6 +2197,14 @@ const read = (name, args = {}) => {
     return projectListsStandIn(serverWorld(), name, { org_id: org, ...args }, forcedLists)
   if (name.startsWith('projectSettings:')) return readSettings(name, args)
   if (isTeamSettingsRead(name)) return readTeams(name, args)
+  // MCP access's two lists (src/store/credentialListsStandIn.setup.ts)
+  if (isCredentialListRead(name))
+    return credentialListsStandIn(
+      name,
+      args,
+      { login: 'perf-account', seats: [me.id], tokens: tokenRows, connections: appRows },
+      forcedCredentials,
+    )
   // Settings › Users and the creators line (src/store/peopleSettingsStandIn.setup.ts)
   if (isPeopleSettingsRead(name))
     return peopleSettingsStandIn(snapshot, name, { org_id: org, ...args }, forcedPeople, {

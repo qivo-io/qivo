@@ -696,7 +696,7 @@ describe('access ends in the removal transaction', () => {
         tokenHash: grantHash,
         resource: mcpResource(),
       }),
-      connections: (await session.query(api.oauthConnections.list, {})).length,
+      connections: (await session.query(api.connectedApps.list, {})).rows.length,
       roster: ((await workspaceOf(as(t, f.admin)))?.profiles ?? []).map((p) => p.id),
     })
 

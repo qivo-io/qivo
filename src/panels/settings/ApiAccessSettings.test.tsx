@@ -1098,33 +1098,39 @@ describe('what the owner sees after an admin revoked their credential', () => {
         lastUsedAt: null,
         revokedAt: local(2026, 10, 6),
       }
-      if (name === 'tokens:listMcpTokens')
-        return Promise.resolve([
-          { ...token, id: 'by-admin', revokedByAdmin: true },
-          { ...token, id: 'by-me', revokedByAdmin: false },
-        ])
-      if (name === 'oauthConnections:list')
-        return Promise.resolve([
-          { ...app, id: 'by-admin', clientName: 'ChatGPT', revokedByAdmin: true, appGone: false },
-          { ...app, id: 'replayed', clientName: 'Claude', revokedByAdmin: false, appGone: false },
-          // an app no longer in Qivo, which nothing revoked, and a live one
-          {
-            ...app,
-            id: 'app-gone',
-            clientName: 'Raycast',
-            revokedAt: null,
-            revokedByAdmin: false,
-            appGone: true,
-          },
-          {
-            ...app,
-            id: 'live',
-            clientName: 'Zed',
-            revokedAt: null,
-            revokedByAdmin: false,
-            appGone: false,
-          },
-        ])
+      // one batch of each list, as the server answers a short one
+      const batch = (rows: unknown[]) => ({ rows, next: null, stopped: false })
+      if (name === 'tokens:personalTokens')
+        return Promise.resolve(
+          batch([
+            { ...token, id: 'by-admin', revokedByAdmin: true },
+            { ...token, id: 'by-me', revokedByAdmin: false },
+          ]),
+        )
+      if (name === 'connectedApps:list')
+        return Promise.resolve(
+          batch([
+            { ...app, id: 'by-admin', clientName: 'ChatGPT', revokedByAdmin: true, appGone: false },
+            { ...app, id: 'replayed', clientName: 'Claude', revokedByAdmin: false, appGone: false },
+            // an app no longer in Qivo, which nothing revoked, and a live one
+            {
+              ...app,
+              id: 'app-gone',
+              clientName: 'Raycast',
+              revokedAt: null,
+              revokedByAdmin: false,
+              appGone: true,
+            },
+            {
+              ...app,
+              id: 'live',
+              clientName: 'Zed',
+              revokedAt: null,
+              revokedByAdmin: false,
+              appGone: false,
+            },
+          ]),
+        )
       return Promise.resolve(null)
     })
     await render(

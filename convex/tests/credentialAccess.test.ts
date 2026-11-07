@@ -209,7 +209,7 @@ describe('personal tokens', () => {
         created_at: NOW,
       })
     })
-    const listed = await as(t, f.user).query(api.tokens.listMcpTokens, {})
+    const listed = (await as(t, f.user).query(api.tokens.personalTokens, {})).rows
     expect(
       listed
         .map((row) => [row.name, row.access, row.expiresAt])

@@ -183,8 +183,11 @@ only a connection you started in the intended assistant; the client supplies
 its displayed app name, and Qivo shows at most its first 80 characters.
 
 Manage connections in **Settings → Your preferences → MCP access → Connected
-apps**. **Delete** asks for confirmation, stops further access and renewal,
-and removes that connection. Reconnecting requires new approval.
+apps**. The list shows your newest connections first, 25 at a time, and
+**Load more** shows more. Once you have more than 25, a search finds a
+connection by its app, organization or account name. **Delete** asks for
+confirmation, stops further access and renewal, and removes that connection.
+Reconnecting requires new approval.
 OAuth clients need authorization code with PKCE and dynamic client
 registration. Client ID Metadata Documents and device-code flows are not
 supported.
@@ -197,7 +200,13 @@ access or expiry after you create the token; create another one instead. Copy
 the token when it is created; it cannot be shown again. Qivo also supplies a
 `claude mcp add …` command.
 
-The list shows each token's access, expiry and last use. An expired token is
+The list shows each token's access, expiry and last use, newest first, 25 at
+a time, and **Load more** shows more. Once you have more than 25 tokens, a
+search finds a token by its name or by the start of the token the list
+shows. After 2,000 tokens the list asks you to search. Each list is read
+when you open the page, and again after a change you make in that list:
+creating, revoking or deleting a token, or deleting a connection. A token's
+or connection's last use shows as of the list's last read. An expired token is
 refused like a revoked one and stays in the list until you delete it. Revoke a
 token when you no longer need it. Every personal token also works with the
 REST API. Tokens created before Qivo recorded access never expire and can

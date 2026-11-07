@@ -3106,12 +3106,19 @@ export default defineSchema({
     revoked_by_admin: v.optional(v.literal(true)),
   })
     .index('by_uuid', ['id'])
-    // also the owner's own list, newest first: insertion order is created_at order
+    // a seat's tokens, for the cascade, an organization's deletion, the demo
+    // cleanup, the admin access report, the operator's retirement of legacy
+    // fixtures (internal/operator.ts) and the contract tests' credential
+    // activation and sweeps (machine/testing.ts profileCredentials)
     .index('by_profile', ['profile_id'])
     .index('by_hash', ['token_hash'])
     // API access: the organization's tokens, or one person's, in name order
     .index('by_org_name', ['org_id', 'name_key', 'id'])
-    .index('by_profile_name', ['profile_id', 'name_key', 'id']),
+    .index('by_profile_name', ['profile_id', 'name_key', 'id'])
+    // MCP access lists one seat's tokens newest first by created_at, the id
+    // breaking ties (tokens.ts personalTokens). last_used_at is not in it,
+    // so machine auth's stamp on every call writes no entry of it.
+    .index('by_profile_created', ['profile_id', 'created_at', 'id']),
 
   // One immutable authorization transaction, bound to the consenting home seat.
   // Revocation is permanent; reconnecting creates a different transaction/id.
@@ -3158,9 +3165,10 @@ export default defineSchema({
     // the rows without approved_at.
     .index('by_org_name', ['org_id', 'name_key', 'id'])
     .index('by_profile_name', ['profile_id', 'name_key', 'id'])
-    // The login's connected apps, newest approval first. A range from
-    // approved_at '' reads approved connections only, so the unfinished
-    // authorizations every consent attempt leaves are never read.
+    // The login's connected apps, newest approval first (connectedApps.ts
+    // list). A range above approved_at '' reads approved connections only,
+    // so the unfinished authorizations every consent attempt leaves are
+    // never read.
     .index('by_auth_user_approved', ['auth_user_id', 'approved_at']),
 
   // Retained hash tombstones catch replay even after the provider deletes its

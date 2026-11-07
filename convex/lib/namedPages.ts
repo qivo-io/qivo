@@ -38,10 +38,13 @@
  * archive time, newest first, through the same functions, and Billing's
  * Storage by project (model/billingStorage.ts) and API calls by account
  * (model/billingLists.ts apiAccountsBatch) one each with a constant key and
- * a tie of stored bytes or of calls, largest first. The direction is
- * an option of indexAfter,
- * inGroup, mergeNamed, readBatch and listBatch, ascending by default, and
- * each compares positions with compareIn. readBatch throws when a stream
+ * a tie of stored bytes or of calls, largest first. MCP access's personal
+ * tokens (tokens.ts personalTokensOf) read one keyed by created_at, merged
+ * across the login's seats, and its connected apps
+ * (model/connectedApps.ts) one keyed by approval time, each newest first.
+ * The direction is an option of indexAfter, inGroup, mergeNamed, readBatch
+ * and listBatch, ascending by default, and each compares positions with
+ * compareIn. readBatch throws when a stream
  * hands out a position that does not move in the batch's direction, so a
  * stream read one way and batched the other fails at its second row
  * instead of skipping rows.
@@ -74,7 +77,8 @@
  * run again on every change of what they read, so one call keeps to
  * NAMED_READ. Lists the app reads once keep to a share of their own, API
  * access's person filter to its page's, and Storage by project, API calls
- * by account and Billing's name lists each to NAMED_READ's. Past it
+ * by account, Billing's name lists and MCP access's personal tokens and
+ * connected apps each to NAMED_READ's. Past it
  * the batch stops at the position it reached: a search that matches little
  * answers part of the list and goes on from there, and a batch never answers
  * an end of list it did not reach.
@@ -698,7 +702,9 @@ export type ListBatch<Row> = { rows: Row[]; next: string | null; stopped: boolea
  * (model/peopleSettings.ts), the REST and MCP lists in name order
  * (lib/listCursor.ts namedListPage), Billing's Storage by project
  * (model/billingStorage.ts) and its API calls by account and name lists
- * (model/billingLists.ts) answer through it. `o.order` is the direction
+ * (model/billingLists.ts), and MCP access's personal tokens (tokens.ts
+ * personalTokensOf) and connected apps (model/connectedApps.ts) answer
+ * through it. `o.order` is the direction
  * `stream` reads in, ascending by default (readBatch). */
 export async function listBatch<Row extends GenericDocument, Out>(
   ctx: QueryCtx,
