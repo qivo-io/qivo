@@ -566,9 +566,9 @@ let itemHold = freeHold()
    out before it (P.readItem). */
 let holdWrites = 0
 
-/* Whether hold `hold` holds off the read on open: an unread choice that
-   went out after the last accepted row read still waits, or the server
-   accepted one. */
+/* Whether hold `hold` holds off the read on open, as an unread choice
+   that went out after the last accepted row read does while it waits and
+   once the server accepted it. */
 function heldBack(hold: ReturnType<typeof freeHold>): boolean {
   if (hold.accepted > hold.readThrough) return true
   for (const n of hold.waiting) if (n > hold.readThrough) return true
@@ -1501,14 +1501,14 @@ function watchedRow(): Row<'issues'> | undefined {
   return row && (!watchedOrg || row.org_id === watchedOrg) ? row : undefined
 }
 
-/* The organization of the watched task: the one kept for it (watchedOrg),
+/* The organization of the watched task, the one kept for it (watchedOrg),
    else its row's while the workspace holds it, or undefined. */
 function watchedOrgOf(): string | undefined {
   if (!watchedComments) return undefined
   return watchedOrg ?? watchedRow()?.org_id
 }
 
-/* The organization of task `uuid` for a comment write or read: the
+/* The organization of task `uuid` for a comment write or read. It is the
    watched task's kept one (watchedOrg) when it is the watched task, so a
    comment never goes to another organization's task of the same id that
    the workspace holds, else its row's while the workspace holds it, else
