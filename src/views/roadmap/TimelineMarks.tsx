@@ -329,7 +329,9 @@ export function FlagBand({
    layoutTrackFlags (flagLanes.ts) gave it, its diamond nudged right of its
    week's line where the place says (`shift`). The flag is as
    wide as its label, so only the diamond and the name it shows take the
-   pointer, and Enter or Space opens it as a click does. A label cut short
+   pointer, also inside a box that takes none, as a track row's does so
+   its Today line keeps its tooltip, and Enter or Space opens it as a click
+   does. A label cut short
    still has the full name as its accessible name, and the tooltip shows it
    with the week on hover and on keyboard focus. A flag whose label runs left
    is placed from the band's left edge too, so a scrollbar that narrows the
@@ -422,7 +424,7 @@ export function MilestoneFlag({
           bottom: place.bottom,
         }}
         className={cn(
-          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none]',
+          '[position:absolute] [display:flex] [align-items:center] [gap:8px] [touch-action:none] [user-select:none] [pointer-events:auto]',
           // a flag being dragged passes over the others, hiding what it covers
           week === m.week ? '[z-index:2]' : '[z-index:3] bg-surface-1',
           left ? '[flex-direction:row-reverse] [padding:0_0_0_4px]' : '[padding:0_4px_0_0]',

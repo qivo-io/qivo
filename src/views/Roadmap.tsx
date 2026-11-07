@@ -2035,7 +2035,9 @@ function Roadmap({
      not scrolling, drawn in the order the layout gives them, so a crowded
      week's nudged diamonds each draw over the one before. A flag rides with
      its row, so a pinned heading keeps it in sight and a folded track keeps
-     it. A drag stays in its row. */
+     it. A drag stays in its row. The box takes no pointer, so the row's
+     Today line keeps its tooltip under it, and only the flags take it
+     (MilestoneFlag). */
   const trackFlagsKeyOf = (track: string) =>
     JSON.stringify([
       P.gridEpoch,
@@ -2055,7 +2057,7 @@ function Roadmap({
       <div
         data-msrow={track}
         style={{ height: TRACK_FLAGS_H }}
-        className="[position:absolute] [left:0] [right:0] [bottom:0]"
+        className="[position:absolute] [left:0] [right:0] [bottom:0] [pointer-events:none]"
       >
         {[...places].map(([id, place]) => {
           const m = byId.get(id)

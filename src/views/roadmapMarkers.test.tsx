@@ -377,6 +377,20 @@ describe("My view's milestones", { timeout: 30_000 }, () => {
     expect(flag('m-cloud')).toBeNull()
   })
 
+  it("leaves the pointer to a track row's Today line under its flags, and to each flag", async () => {
+    await app(world(), '/app/~/roadmap/mine')
+    await roadmap()
+    const plan = await waitFor(() => flag('m-plan'), "Plan's flag")
+    const box = plan.closest<HTMLElement>('[data-msrow]')
+    // the box spans the row's lower part, over the Today line beside it
+    expect(box?.parentElement?.querySelector('[data-today]')).not.toBeNull()
+    // jsdom does no hit testing, so the rules that decide it: must fail, a
+    // box that takes the pointer over the Today line's tooltip
+    expect(box?.className).toContain('[pointer-events:none]')
+    for (const each of box?.querySelectorAll<HTMLElement>('[data-msflag]') ?? [])
+      expect(each.className).toContain('[pointer-events:auto]')
+  })
+
   it("runs each guide through its own project's rows and no other", async () => {
     await app(world(), '/app/~/roadmap/mine')
     await roadmap()
