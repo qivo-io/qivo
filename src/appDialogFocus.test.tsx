@@ -771,6 +771,8 @@ describe("the sidebar's tree across Settings", { timeout: 30_000 }, () => {
     expect(row.isConnected).toBe(true)
     expect(row.closest('[data-hidden-view]')).toBeNull()
     expect(tree()?.dataset.sidebarProjectsState).toBe('refreshing')
+    // with focus nowhere as the answers come, nothing in the tree takes it
+    await act(async () => (document.activeElement as HTMLElement | null)?.blur())
     await act(async () => {
       for (const read of opened())
         answerProjectNav(server, read.name as never, read.args, read.next, read.fail)
@@ -787,6 +789,6 @@ describe("the sidebar's tree across Settings", { timeout: 30_000 }, () => {
       "the tree's Docs row",
     )
     expect(docs.getAttribute('aria-current')).toBe('page')
-    expect(document.activeElement).not.toBe(docs)
+    expect(document.activeElement).toBe(document.body)
   })
 })

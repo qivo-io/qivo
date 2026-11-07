@@ -134,9 +134,10 @@ const focusOutOfUse = () => {
 }
 
 /** Whether a list reads now or is about to: its first batch or a split on
-    their way, or Load more. */
-const reading = (list: Pick<PagedList<unknown, unknown>, 'phase'>, end: ListEnd) =>
-  end === 'loading' || list.phase === 'more'
+    their way, Load more, or the same batches again after it showed again,
+    whose answers may hold what the earlier ones did not. */
+const reading = (list: Pick<PagedList<unknown, unknown>, 'phase' | 'refreshing'>, end: ListEnd) =>
+  end === 'loading' || list.phase === 'more' || list.refreshing
 
 /**
  * The sidebar's project tree, on the rules in the module header. `scope`

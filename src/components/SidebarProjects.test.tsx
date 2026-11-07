@@ -361,6 +361,31 @@ describe('the order', { timeout: 60_000 }, () => {
     ]
     expect(rowIds()).toEqual([ids[3], partner, ids[12], ...rest])
     expect(new Set(rowIds()).size).toBe(rowIds().length)
+    // the rows keep the server's order, whatever it is: an answer that puts
+    // the rest in reverse shows them so, as the browser sorts nothing
+    const page = open('projectNav:page')[0] as Sub
+    const reversed = [ids[3], partner, ids[12], ...[...rest].reverse()]
+    await act(async () =>
+      page.next({
+        state: 'ok',
+        rows: reversed.map((id) => {
+          const p = snap.projects.find((x) => x.id === id)
+          return {
+            id,
+            org_id: p?.org_id,
+            name: p?.name,
+            num: p?.num,
+            favorite: [ids[3], partner, ids[12]].includes(id),
+          }
+        }),
+        next: null,
+        stopped: false,
+      }),
+    )
+    await settle()
+    expect(rowIds()).toEqual(reversed)
+    await republish()
+    expect(rowIds()).toEqual([ids[3], partner, ids[12], ...rest])
     // the favorites in a group a screen reader names, each with its mark
     // beside the name button, never inside it
     const group = find('[data-sidebar-group="favorites"]')
@@ -496,14 +521,20 @@ describe('the projects figure', { timeout: 60_000 }, () => {
     expect(lit()).toEqual([ids[149]])
     // its row, the 150th, came into the 320px tree once
     expect(scrolled).toEqual([40 + 150 * 32 - 320])
-    // a later answer and render scroll nothing
+    // once the person scrolled away, a later answer and render scroll
+    // nothing
+    const list = find('[data-sidebar-projects]')
+    tops.set(list, 0)
     await republish()
     await render(ids[149])
     expect(scrolled).toHaveLength(1)
-    // a scope change scrolls to the new scope's row once
+    expect(tops.get(list)).toBe(0)
+    // a scope change scrolls to the new scope's row once, which is in view
     await render(ids[2])
-    expect(scrolled).toEqual([40 + 150 * 32 - 320, 40 + 2 * 32])
-    expect(lit()).toEqual([ids[2]])
+    expect(scrolled).toHaveLength(1)
+    await render(ids[20])
+    expect(scrolled).toEqual([40 + 150 * 32 - 320, 40 + 21 * 32 - 320])
+    expect(lit()).toEqual([ids[20]])
   })
 
   it('stops the scope rule at the bound, at the end, and once the rows passed its place', async () => {
