@@ -926,6 +926,83 @@ describe('the benchmark server', () => {
     expect((await read('mentions=error', 'pickers:mentions')).answer.error).toContain('fail')
   }, 60_000)
 
+  it("answers a task's owner lists, its Mention window and its checks, with the states and unheld people the page asks for", async () => {
+    /** What `name` answers with `args(snap)` on a workspace with page
+        parameters `params`, and the snapshot. */
+    const read = async (params, name, args = () => ({})) => {
+      const { posted, send } = await server(`tasks=100&latency=0&mbps=100000&${params}`)
+      await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
+      const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
+      const task = snap.issues[0]
+      await send({
+        type: 'query',
+        id: 'read',
+        name,
+        args: { org_id: snap.orgs[0].id, issue_id: task.id, ...args(snap) },
+      })
+      const answer = posted.find((m) => m.to === 'read')
+      return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
+    }
+    const owners = await read('people=1000', 'pickers:taskOwners', () => ({ field: 'assignee' }))
+    expect(owners.answer).toMatchObject({ state: 'ready', stopped: false })
+    expect(owners.answer.rows).toHaveLength(25)
+    expect(Object.keys(owners.answer.rows[0]).sort()).toEqual([
+      'active',
+      'id',
+      'kind',
+      'name',
+      'org_role',
+      'pending',
+    ])
+    const recipients = await read('', 'pickers:syncRecipients')
+    expect(recipients.answer.rows.map((row) => row.id)).not.toContain(
+      recipients.snap.myProfileIds[0],
+    )
+    const zoe = await read('', 'pickers:taskOwners', () => ({ field: 'reviewer', search: 'zoe' }))
+    expect(zoe.answer.rows.length).toBeGreaterThan(0)
+    expect(zoe.answer.rows.every((row) => row.name.startsWith('Zoë'))).toBe(true)
+    const checked = await read('owners=check-ineligible', 'pickers:canOwn', (snap) => ({
+      field: 'assignee',
+      ids: [snap.profiles[1].id],
+    }))
+    expect(checked.answer).toMatchObject({ state: 'ready', rows: [{ eligible: false }] })
+    const list = (params) => read(params, 'pickers:taskOwners', () => ({ field: 'assignee' }))
+    expect((await list('owners=not-ready')).answer).toEqual({ state: 'not_ready' })
+    expect((await list('owners=unavailable')).answer).toEqual({ state: 'unavailable' })
+    expect((await list('owners=over-budget')).answer).toEqual({ state: 'over_budget' })
+    expect((await list('owners=refused')).answer).toMatchObject({ state: 'refused' })
+    expect((await list('owners=stopped&people=100')).answer.stopped).toBe(true)
+    expect((await list('owners=small')).answer.rows).toHaveLength(5)
+    expect((await list('owners=error')).answer.error).toContain('fails')
+    expect(
+      (await read('owners=group', 'pickers:taskOwners', () => ({ field: 'reviewer' }))).answer,
+    ).toMatchObject({ state: 'refused' })
+    expect(
+      (
+        await read('owners=check-error', 'pickers:canOwn', (snap) => ({
+          field: 'assignee',
+          ids: [snap.profiles[0].id],
+        }))
+      ).answer.error,
+    ).toContain('fails')
+    // the people part leaves the unheld people out; the pickers and byIds
+    // answer them, and the two hold the first open task without subtasks
+    const unheld = await read('people=50&unheldpeople=2', 'people:byIds', () => ({
+      ids: [id('1', 48), id('1', 49)],
+    }))
+    const ids = unheld.snap.profiles.map((p) => p.id)
+    expect(ids).toHaveLength(48)
+    expect(ids).not.toContain(id('1', 49))
+    expect(unheld.answer.rows.map((row) => row.id).sort()).toEqual([id('1', 48), id('1', 49)])
+    const held = unheld.snap.issues.find((t) => t.assignee_id === id('1', 49))
+    expect(held?.reviewer_id).toBe(id('1', 48))
+    const listed = await read('people=50&unheldpeople=2', 'pickers:taskOwners', () => ({
+      field: 'assignee',
+      search: 'asa 50',
+    }))
+    expect(listed.answer.rows.map((row) => row.id)).toEqual([id('1', 49)])
+  }, 60_000)
+
   it("answers Settings › Teams and a team's page from the workspace, with the states the page asks for", async () => {
     /** What `name` answers with `args` on a workspace with page parameters
         `params`, and the workspace. */

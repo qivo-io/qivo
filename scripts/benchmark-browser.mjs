@@ -44,9 +44,13 @@
 // saved as Team sync's scope (scripts/perf/server.mjs syncscope=program),
 // and measures Team sync: opening it from the sidebar until the opening's
 // facts show (syncOpen, with the longest frame after they first showed,
-// syncLongestFrameMs), Next to the first person's columns (syncNext) and a
+// syncLongestFrameMs), Next to the first person's columns (syncNext), a
 // Remaining typed on that person's first card and Enter until the person's
-// load moves (syncEdit). On this branch the meeting is the server's agenda
+// load moves (syncEdit), a press on that card's owner until its list shows
+// its first person (syncOwnerOpen), and a press on its @ until the Mention
+// window shows its first person (syncMentionOpen); on this branch both
+// lists read their people from the server as they open, on a build before
+// the owner pickers from the workspace's roster. On this branch the meeting is the server's agenda
 // and the card is one only the agenda brings; a build whose Team sync asks
 // for every task first (--baseline before the agenda view) loads every
 // task inside syncOpen and edits a task the workspace holds, so its
@@ -215,6 +219,8 @@ const PHASES = [
         'syncOpen',
         'syncNext',
         'syncEdit',
+        'syncOwnerOpen',
+        'syncMentionOpen',
       ]
     : []),
 ]
@@ -283,6 +289,8 @@ const COMPARED = [
         'syncOpen',
         'syncNext',
         'syncEdit',
+        'syncOwnerOpen',
+        'syncMentionOpen',
         'syncLongestFrameMs',
         'syncOpenWireBytes',
       ]
@@ -1360,6 +1368,39 @@ async function runSyncSample(origin, metrics, query = '') {
       )
     }),
   )
+  await settle()
+  // the card's owner list, until it shows a person: a row other than the
+  // clear row and the list's end, from the roster on a build before the
+  // owner pickers, from the server's first batch or check on this branch
+  const personShown = (within) =>
+    page.waitForFunction(
+      (selector) =>
+        [...document.querySelectorAll(selector)].some(
+          (item) => !/^(Unassigned|No reviewer|Load more|Loading…)$/.test(item.textContent.trim()),
+        ),
+      within,
+      { timeout: timeout * 10 },
+    )
+  const owner = await handle(page.locator(`[data-sync-card="${card}"] [data-assignee-edit]`))
+  phase('syncOwnerOpen')
+  metrics.syncOwnerOpen.push(
+    await timed(async () => {
+      await owner.click({ timeout: timeout * 10 })
+      await personShown('[data-slot="popover-content"] [cmdk-item]')
+    }),
+  )
+  await page.keyboard.press('Escape')
+  await page.locator('[data-slot="popover-content"] [cmdk-root]').waitFor({ state: 'detached' })
+  await settle()
+  const mention = await handle(page.locator(`[data-sync-mention="${card}"]`))
+  phase('syncMentionOpen')
+  metrics.syncMentionOpen.push(
+    await timed(async () => {
+      await mention.click({ timeout: timeout * 10 })
+      await personShown('[data-sync-mention-window] [data-sync-mention-person]')
+    }),
+  )
+  await page.keyboard.press('Escape')
   assert.deepEqual(errors, [], 'Browser errors on Team sync')
   opened.recordFiles()
   await context.close()

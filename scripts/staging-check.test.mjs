@@ -68,6 +68,7 @@ import {
   MCP_ACCESS_EXPECTED,
   MCP_ACCESS_LISTS_STEP,
   MCP_ACCESS_MARKS,
+  MENTION_GONE,
   MILESTONE_STEP,
   MILESTONES_BETWEEN_QUERY,
   MILESTONES_SECTION_QUERY,
@@ -81,6 +82,9 @@ import {
   OVERVIEW_HEALTH_EXPECTED,
   OVERVIEW_MILESTONES_STEP,
   OVERVIEW_OVERDUE_DAYS,
+  OWNER_PICKERS_NAMES,
+  OWNER_PICKERS_PERSON,
+  OWNER_PICKERS_STEP,
   PEOPLE_PAGE,
   PEOPLE_REFUSALS,
   PICKER_EXPECTED,
@@ -772,6 +776,53 @@ describe('staging check REST contract', () => {
     expect(addsQuery(JSON.stringify(add(AGENDA_QUERY)), AGENDA_QUERY)).toBe(true)
     expect(addsQuery(JSON.stringify(add('teamSync:lastComments')), AGENDA_QUERY)).toBe(false)
   })
+  it('drives the owner lists and the Mention window through their own marks, and posts nothing', () => {
+    const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8')
+    expect(OWNER_PICKERS_STEP).toBe('ui/owner-pickers')
+    expect(OWNER_PICKERS_PERSON).toBe('Leo Martins')
+    expect(OWNER_PICKERS_NAMES).toEqual({ project: 'Owners', task: 'owner pickers' })
+    // the marks the step finds, in the app
+    const owners = read('../src/components/AssigneeAvatar.tsx')
+    for (const mark of [
+      'data-owner-list={shown}',
+      "const OWNER_SEARCH = 'data-owner-search'",
+      'data-owner-choice={person.id}',
+      'data-fieldselect',
+    ])
+      expect(owners).toContain(mark)
+    const card = read('../src/views/teamSync/SyncCard.tsx')
+    for (const mark of [
+      "const MENTION_SEARCH = 'data-sync-mention-search'",
+      'data-sync-mention-person={person.id}',
+      'data-sync-mention-line=""',
+      'data-sync-mention-window={it.id}',
+      'data-sync-mention-send',
+    ])
+      expect(card).toContain(mark)
+    // the line Send shows for a person who lost sight of the task
+    expect(card).toContain(`can no longer be mentioned on this task. Pick someone else.`)
+    expect(card).toContain(MENTION_GONE)
+    const check = read('./staging-check.mjs')
+    // it runs after Team sync's step and before the Inbox badge's, while M
+    // is active
+    const at = check.indexOf('await ownerPickersCheck()')
+    expect(at).toBeGreaterThan(check.indexOf('await teamSyncCheck()'))
+    expect(at).toBeLessThan(check.indexOf('await inboxBadgeCheck()'))
+    const step = check.slice(
+      check.indexOf('async function ownerPickersCheck()'),
+      check.indexOf('export const INBOX_BADGE_STEP'),
+    )
+    // Leo loses sight over REST before Send, which must post nothing
+    const lost = step.indexOf('await until(async () => !(await reaches()))')
+    expect(lost).toBeGreaterThan(0)
+    expect(step).toContain("'users')).some((u) => u.id === leo.id)")
+    expect(lost).toBeLessThan(step.indexOf("'[data-sync-mention-send]'"))
+    expect(step).toContain('eq(await comments(), before')
+    // it assigns only the run's agent and Nora, and posts no comment
+    expect(step).not.toMatch(/'POST', `\/tasks\/[^`]*\/comments`/)
+    expect(step).toContain("pick(field('Assignee'), std.name, std.id)")
+  })
+
   it("names the Inbox badge's step, and reads the store's summary and item the app keeps", () => {
     expect(INBOX_BADGE_STEP).toBe('ui/inbox-badge')
     // the step reads these from the page, and the top bar's hooks

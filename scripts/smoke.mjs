@@ -2380,6 +2380,20 @@ try {
   // review time. The signed-in user reviews it, so nobody else is messaged.
   const taskWindow = pageA.locator('[data-task-scrim]')
   const picker = (name) => taskWindow.getByRole('combobox', { name, exact: true })
+  // Assignee and Reviewer open the shared owner list in a popover, which
+  // reads its people from the server and searches them there
+  const ownerField = (name) => taskWindow.locator(`[data-fieldselect][aria-label="${name}"]`)
+  const pickOwner = async (name, label) => {
+    await ownerField(name).click()
+    const list = pageA.locator(`[data-owner-list="${name.toLowerCase()}"]`)
+    await list.locator('[data-owner-search]').fill(label)
+    await list
+      .locator('[data-owner-choice], [data-owner-holder]')
+      .filter({ hasText: label })
+      .first()
+      .click()
+    await list.waitFor({ state: 'detached', timeout: 5000 })
+  }
   // A menu row's accessible name repeats its glyph's label, so pick by the
   // row's visible text instead.
   const pickFieldOption = async (name, label) => {
@@ -2391,20 +2405,23 @@ try {
       .click()
     await menu.waitFor({ state: 'detached', timeout: 5000 })
   }
-  if ((await picker('Assignee').count()) !== 1 || (await picker('Reviewer').count()) !== 1) {
+  if (
+    (await ownerField('Assignee').count()) !== 1 ||
+    (await ownerField('Reviewer').count()) !== 1
+  ) {
     await fail('Task details do not show one Assignee and one Reviewer picker')
   }
   const reviewerFollowsAssignee = await pageA.evaluate(() => {
     const field = (name) =>
       document
-        .querySelector(`[data-task-scrim] [role="combobox"][aria-label="${name}"]`)
+        .querySelector(`[data-task-scrim] [data-fieldselect][aria-label="${name}"]`)
         ?.closest('.task-field')
     const assignee = field('Assignee')
     return !!assignee && assignee.nextElementSibling === field('Reviewer')
   })
   if (!reviewerFollowsAssignee) await fail('The Reviewer row does not directly follow Assignee')
   log('A: Reviewer picker sits directly under Assignee')
-  await pickFieldOption('Reviewer', savedReporter.name)
+  await pickOwner('Reviewer', savedReporter.name)
   log(`A: picked ${savedReporter.name} as reviewer`)
   await pickFieldOption('Status', 'In Review')
   log('A: moved the task to In Review')

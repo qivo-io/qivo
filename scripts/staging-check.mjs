@@ -204,6 +204,13 @@
  * REST and opens Team sync on its project in a fresh load, which must
  * subscribe Team sync's agenda (teamSync.agenda) and no task window, and
  * show the task's card on the agent's line from the rail (ui/team-sync).
+ * It makes a sub-project under M led by Leo Martins, with a task in it, and
+ * picks the task's assignee, reviewer and No reviewer in its window and its
+ * owner on its Team sync card from the deployment's people pickers, each
+ * checked over REST; then the card's Mention window picks Leo, the lead
+ * goes back to Nora over REST until GET /projects/{ref}/users drops Leo,
+ * and Send must post nothing and say Leo can no longer be mentioned
+ * (ui/owner-pickers).
  * It checks the top bar's Inbox badge against the deployment's unread
  * summary (inbox.summary), has the Standard agent mention Nora in a comment
  * on t0 over REST, which the badge must count, opens t0 at its address,
@@ -5630,6 +5637,157 @@ async function teamSyncCheck() {
   })
 }
 
+/** The step that drives a task's owner lists and Team sync's Mention
+ *  window on the deployment's people pickers (ownerPickersCheck). */
+export const OWNER_PICKERS_STEP = 'ui/owner-pickers'
+
+/** The fixture person the step hands a sub-project's lead to and back. */
+export const OWNER_PICKERS_PERSON = 'Leo Martins'
+
+/** What the step's sub-project and task are called after the run tag. */
+export const OWNER_PICKERS_NAMES = { project: 'Owners', task: 'owner pickers' }
+
+/** The line the Mention window shows when Send finds that the chosen person
+ *  can no longer be mentioned. */
+export const MENTION_GONE = 'can no longer be mentioned on this task'
+
+/** A task's owner lists and Team sync's Mention window read their people
+ *  from the deployment (pickers.taskOwners, syncRecipients and canOwn).
+ *  Over REST as Nora the step makes `<tag> Owners` under the run project M
+ *  with Leo Martins as its lead, grants the Standard agent User on it, and
+ *  makes `<tag> owner pickers` there, In Progress and unassigned. In the
+ *  task's window, Assignee searches the agent's name and picks the agent
+ *  from the deployment's batch, Reviewer searches Nora's and picks her,
+ *  then No reviewer clears it, each checked with GET /tasks/{ref}. In Team
+ *  sync for M by its address, the task's card on the agent's line opens
+ *  its owner list, which finds and picks Nora, also checked over REST. On
+ *  the card, now on Nora's line, the Mention window searches "Leo", picks
+ *  him from the deployment's recipients and takes a note. The sub-project's
+ *  lead then goes back to Nora over REST, and GET /projects/{ref}/users
+ *  must stop listing Leo, so he can no longer see the task. Send must then
+ *  show that Leo can no longer be mentioned, keep the note and post
+ *  nothing (GET /tasks/{ref}/comments unchanged), and Cancel closes the
+ *  window. It assigns only the run's own agent and Nora, who does the
+ *  picking, and posts no comment, so nobody is notified; a project's lead
+ *  sends no Inbox message. The cleanup, which deletes M, removes the
+ *  sub-project and the task. It needs a backend from v0.1.147 on, which
+ *  answers the pickers and people.byIds. */
+async function ownerPickersCheck() {
+  const w = run.creds.writeToken
+  const { M } = run.projects
+  const std = run.agents.std
+  const nora = run.nora
+  await check(OWNER_PICKERS_STEP, async () => {
+    const leo = (await restRows(w, '/users', 'users', { search: OWNER_PICKERS_PERSON })).find(
+      (u) => u.name === OWNER_PICKERS_PERSON,
+    )
+    expect(leo, `the organization has no ${OWNER_PICKERS_PERSON}`)
+    const sub = await restOk(w, 'POST', '/projects', {
+      name: `${run.tag} ${OWNER_PICKERS_NAMES.project}`,
+      parent: M.id,
+      lead_id: leo.id,
+    })
+    eq(sub.lead_id, leo.id, "the sub-project's lead")
+    await restOk(w, 'PUT', `/projects/${sub.id}/access/users/${std.id}`, { level: 'user' })
+    const t = await restOk(w, 'POST', '/tasks', {
+      project: sub.id,
+      title: `${run.tag} ${OWNER_PICKERS_NAMES.task}`,
+      status: 'progress',
+    })
+    run.created.push(t)
+    const task = async () => restOk(w, 'GET', `/tasks/${t.key}`)
+    /** Opens list `list`'s trigger `trigger`, searches `text` and picks
+     *  `id` from the deployment's batch. */
+    const pick = async (trigger, text, id) => {
+      await trigger.click()
+      const list = app.locator('[data-owner-list]')
+      await list.waitFor({ timeout: 20_000 })
+      await list.locator('[data-owner-search]').fill(text)
+      const row = list.locator(`[data-owner-choice="${id}"]`)
+      await row.waitFor({ timeout: 30_000 })
+      await row.click()
+      await list.waitFor({ state: 'detached', timeout: 10_000 })
+    }
+    // the task window's Assignee and Reviewer
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/tasks/${t.key.toLowerCase()}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const dialog = app.locator('[role="dialog"]')
+    await dialog.locator('[data-task-title]').waitFor({ timeout: 60_000 })
+    const field = (label) => dialog.locator(`[data-fieldselect][aria-label="${label}"]`)
+    await pick(field('Assignee'), std.name, std.id)
+    expect(
+      await until(async () => (await task()).assignee_id === std.id),
+      `GET /tasks/${t.key} does not name ${std.name} as the assignee`,
+    )
+    await pick(field('Reviewer'), nora.name.split(' ')[0], nora.id)
+    expect(
+      await until(async () => (await task()).reviewer_id === nora.id),
+      `GET /tasks/${t.key} does not name ${nora.name} as the reviewer`,
+    )
+    await field('Reviewer').click()
+    const clear = app.locator('[data-owner-list] [cmdk-item]', { hasText: 'No reviewer' })
+    await clear.first().click()
+    expect(
+      await until(async () => !(await task()).reviewer_id),
+      `GET /tasks/${t.key} still names a reviewer`,
+    )
+    // Team sync's card owner
+    await app.goto(`${cfg.appOrigin}/app/${ORG_SLUG}/sync/p/${M.num}`, {
+      waitUntil: 'domcontentloaded',
+    })
+    const page = app.locator('[data-workspace-view] [data-sync-page][data-sync-state="ok"]')
+    await page.waitFor({ timeout: 60_000 })
+    await page.locator(`[data-sync-rail] [data-sync-jump="${std.id}"]`).click()
+    const card = page.locator(`[data-sync-card="${t.key}"]`)
+    await card.waitFor({ timeout: 60_000 })
+    await pick(card.locator('[data-assignee-edit]'), nora.name.split(' ')[0], nora.id)
+    expect(
+      await until(async () => (await task()).assignee_id === nora.id),
+      `GET /tasks/${t.key} does not name ${nora.name} as the assignee`,
+    )
+    // the Mention window on the card, now on Nora's line
+    await page.locator(`[data-sync-rail] [data-sync-jump="${nora.id}"]`).click()
+    await card.waitFor({ timeout: 60_000 })
+    const comments = async () => (await restRows(w, `/tasks/${t.key}/comments`, 'comments')).length
+    const before = await comments()
+    await card.locator(`[data-sync-mention="${t.key}"]`).click()
+    const mention = app.locator(`[data-sync-mention-window="${t.key}"]`)
+    await mention.waitFor({ timeout: 20_000 })
+    await mention.locator('[data-sync-mention-search]').fill('Leo')
+    const person = mention.locator(`[data-sync-mention-person="${leo.id}"]`)
+    await person.waitFor({ timeout: 30_000 })
+    await person.click()
+    eq(await person.getAttribute('aria-pressed'), 'true', 'Leo is not chosen')
+    const note = `${run.tag} never sent`
+    await mention.locator('textarea[aria-label="Note"]').fill(note)
+    // Leo loses sight of the task before Send
+    await restOk(w, 'PATCH', `/projects/${sub.id}`, { lead_id: nora.id })
+    const reaches = async () =>
+      (await restRows(w, `/projects/${sub.id}/users`, 'users')).some((u) => u.id === leo.id)
+    expect(
+      await until(async () => !(await reaches())),
+      `GET /projects/${sub.key}/users still lists ${leo.name}`,
+    )
+    await mention.locator('[data-sync-mention-send]').click()
+    const line = mention.locator('[data-sync-mention-line]')
+    await line.waitFor({ timeout: 30_000 })
+    expect(
+      (await line.textContent())?.includes(MENTION_GONE),
+      `Send said "${await line.textContent()}"`,
+    )
+    eq(
+      await mention.locator('textarea[aria-label="Note"]').inputValue(),
+      note,
+      'the note after a refused Send',
+    )
+    eq(await comments(), before, `comments on ${t.key} after the refused Send`)
+    await mention.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await mention.waitFor({ state: 'detached', timeout: 10_000 })
+    return `picked ${std.name}, ${nora.name} and No reviewer in ${t.key}'s window and ${nora.name} on its Team sync card from the deployment's lists, and Send posted nothing once ${leo.name} lost sight of the task`
+  })
+}
+
 /** The step that holds the Inbox badge to the deployment's unread summary
  *  and reads a mentioned task on opening it (inboxBadgeCheck). */
 export const INBOX_BADGE_STEP = 'ui/inbox-badge'
@@ -9756,6 +9914,9 @@ async function main() {
   // Team sync on the deployment's agenda, with a task of its own, while
   // the project is active
   await teamSyncCheck()
+  // a task's owner lists and Team sync's Mention window on the deployment's
+  // people pickers, with a sub-project and a task of its own under M
+  await ownerPickersCheck()
   // the Inbox badge from the deployment's unread summary, and the read of
   // a mentioned task on opening it, while t0 is active
   await inboxBadgeCheck()
