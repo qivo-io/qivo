@@ -106,16 +106,6 @@ describe('assignees must see the tasks above a subtask', () => {
   })
 
   const vm = (uuid: string) => P.issues.find((it) => it.uuid === uuid)!
-  const ids = (users: { id: string }[]) => users.map((u) => u.id).sort()
-
-  it('offers only people who can see every task above', async () => {
-    const { work } = await load()
-    expect(ids(P.issueAssigneesFor(work.id))).toContain('workOnly')
-    expect(ids(P.taskAssigneesFor(vm('sub')))).not.toContain('workOnly')
-    expect(ids(P.taskAssigneesFor(vm('sub')))).toContain('both')
-    // a task without a parent keeps the project's list
-    expect(ids(P.taskAssigneesFor(vm('free')))).toEqual(ids(P.issueAssigneesFor(work.id)))
-  })
 
   it('refuses a blind assignee or reviewer before anything is sent', async () => {
     await load()

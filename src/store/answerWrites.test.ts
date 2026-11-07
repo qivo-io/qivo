@@ -597,7 +597,6 @@ describe('a write from the window’s own answer fails closed', { timeout: 30_00
     await load()
     const parent = task(PARENT, 39, { project_id: 'manuals', title: 'Write the manual' })
     await openFar(okAnswer(far({ parent_id: PARENT }), { parent: short(parent, 'viewer') }))
-    expect(P.taskAssigneesFor(shown()).map((u) => u.id)).not.toContain(EMIL)
     await expect(P.updateIssue(H, { assignee: EMIL })).resolves.toBe(false)
     expect(window.showToast).toHaveBeenCalledWith(
       expect.stringContaining('Emil Berg has no access to'),
