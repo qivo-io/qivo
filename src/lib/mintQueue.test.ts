@@ -16,8 +16,8 @@ type Call = {
 }
 
 /* A queue over a stand-in mint that records each call and leaves it
-   waiting until the test answers it. */
-function harness() {
+   waiting until the test answers it, wanting the requests `wanted` says. */
+function harness(wanted?: (request: MintRequest) => boolean) {
   const calls: Call[] = []
   let running = 0
   let most = 0
@@ -47,7 +47,7 @@ function harness() {
       })
     })
   }
-  const queue = createMintQueue(mint, { refused: (e) => e instanceof Refusal })
+  const queue = createMintQueue(mint, { refused: (e) => e instanceof Refusal, wanted })
   return { calls, queue, most: () => most }
 }
 
@@ -207,6 +207,42 @@ describe('the mint queue', () => {
     ;(h.calls[3] as Call).reject(new Refusal('forbidden'))
     expect(await Promise.all(refusedOnes)).toEqual([{ state: 'refused' }, { state: 'refused' }])
     expect(h.calls).toHaveLength(4)
+  })
+
+  it('answers dropped for a waiting request no longer wanted, a failed call’s half included, and fills the call with the rest', async () => {
+    MINT_QUEUE.batch = 2
+    MINT_QUEUE.inFlight = 1
+    const wanted = new Set([0, 1, 2, 3, 4, 5].map((i) => `avatar:${i}`))
+    const h = harness((request) => wanted.has(request.key))
+    const answers = [0, 1, 2, 3, 4, 5].map((i) => h.queue.request(item('avatar', i)))
+    await flush()
+    expect(h.calls.map((c) => c.ids)).toEqual([['avatar-0', 'avatar-1']])
+    // the call fails, so its halves wait, and the store lets 1 to 3 go
+    for (const i of [1, 2, 3]) wanted.delete(`avatar:${i}`)
+    ;(h.calls[0] as Call).reject(new Error('Too many reads'))
+    await flush()
+    answer(h.calls[1] as Call)
+    await flush()
+    expect(h.calls.map((c) => c.ids)).toEqual([
+      ['avatar-0', 'avatar-1'],
+      ['avatar-0'],
+      ['avatar-4', 'avatar-5'],
+    ])
+    answer(h.calls[2] as Call)
+    expect((await Promise.all(answers)).map((o) => o.state)).toEqual([
+      'lease',
+      'dropped',
+      'dropped',
+      'dropped',
+      'lease',
+      'lease',
+    ])
+    // a dropped key is asked anew, not shared with its old answer
+    wanted.add('avatar:1')
+    const again = h.queue.request(item('avatar', 1))
+    expect(again).not.toBe(answers[1])
+    await flush()
+    expect(h.calls.at(-1)?.ids).toEqual(['avatar-1'])
   })
 
   it('answers a call whose answer holds no leases failed, never missing', async () => {

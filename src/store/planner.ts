@@ -8112,9 +8112,10 @@ async function mintCredential(scheme: 'qva' | 'qvt') {
    portrait checks access without dropping its source or downloading its
    bytes again. The store mints, renews and downloads only the caller's own
    pictures and those of the people its open pages, pickers and views name
-   (wantPictures), in that order; a held picture nobody names keeps its
-   bytes within the budget and shows again on one renewal
-   (lib/avatarSources.ts).
+   (wantPictures), in that order; a picture's mint still waiting in the
+   queue when no view names it any more is dropped before its call goes,
+   and a held picture nobody names keeps its bytes within the budget and
+   shows again on one renewal (lib/avatarSources.ts).
 
    Every mint of the store goes through one queue (lib/mintQueue.ts): at
    most 100 ids a call, two calls at once, attachments and pictures never
@@ -8144,7 +8145,12 @@ const minted = new Map<string, { url: string; exp: number }>() // exp: unix SECO
 const mintingKeys = new Set<string>()
 const mintQueue = createMintQueue(
   (org, ids) => convex.query(api.files.mintUrls, { org_id: org, ...ids }),
-  { refused: (error) => error instanceof ConvexError },
+  {
+    refused: (error) => error instanceof ConvexError,
+    // a picture no open view names any more, and that is not one of the
+    // caller's own, leaves the queue before its call goes (wantPictures)
+    wanted: (request) => request.kind !== 'avatar' || namedPictureKeys.has(request.key),
+  },
 )
 // a picture that waited for room and started by itself repaints as any does
 const avatarSources = createAvatarSources({ changed: () => showPortraits() })
@@ -8205,6 +8211,7 @@ function clearAvatarSources() {
   personViews = new Map()
   personStates.clear()
   namedPictures = []
+  namedPictureKeys = new Set()
   avatarSources.clear()
   avatarSources.setPersistent(null)
   portraitFrame.cancel()
@@ -8343,7 +8350,9 @@ async function primeMint(items: MintItem[]): Promise<boolean> {
         // prepare marks the key pending before its first await, so no
         // rebuild can ask for it again in between
         mintingKeys.delete(key)
-        if (epoch !== storeEpoch) return false
+        // no view names it any more: no failure, and a view that names it
+        // again mints it at once
+        if (epoch !== storeEpoch || outcome.state === 'dropped') return false
         if (outcome.state === 'refused' || outcome.state === 'failed') {
           if (outcome.state === 'failed') console.warn('[qivo] url mint failed:', key)
           return avatarSources.failure(key, outcome.state === 'refused', ticket)
@@ -8399,8 +8408,11 @@ function pictureKey(id: string): string | null {
 
 /* The picture keys the store mints, renews and downloads, in order: the
    caller's own seats first, then the people the open views name
-   (profileCache named). */
+   (profileCache named), and the same keys as a set, which the mint queue
+   asks before each call so a picture no view names any more is not
+   minted. */
 let namedPictures: { id: string; key: string }[] = []
+let namedPictureKeys: ReadonlySet<string> = new Set()
 
 /* Follows the people the open views name with the wanted pictures: hands
    their keys to the picture source in order and mints the due ones. The
@@ -8419,7 +8431,10 @@ function wantPictures() {
   const same =
     next.length === namedPictures.length && next.every((p, i) => p.key === namedPictures[i]?.key)
   namedPictures = next
-  if (!same) avatarSources.named(next.map((p) => p.key))
+  if (!same) {
+    namedPictureKeys = new Set(next.map((p) => p.key))
+    avatarSources.named(next.map((p) => p.key))
+  }
   if (next.length > 0) startMintSweep()
   const need = picturesDue()
   if (need.length)

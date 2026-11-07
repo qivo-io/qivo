@@ -406,6 +406,63 @@ describe('uploaded profile pictures through the planner store', () => {
     expect(asked).toEqual([[two.id]])
   })
 
+  it('mints no queued picture of a closed page once a call slot frees, but one another view still names', async () => {
+    const { MINT_QUEUE } = await import('../lib/mintQueue')
+    const bounds = { ...MINT_QUEUE }
+    // calls of two, so seven pictures fill the two call slots and wait
+    MINT_QUEUE.batch = 2
+    try {
+      const base = snap.profiles[0] as Snapshot['profiles'][number]
+      for (let i = 0; i < 5; i++)
+        snap.profiles.push({
+          ...base,
+          id: crypto.randomUUID(),
+          auth_user_id: `extra-${i}-account`,
+          name: `Extra ${i}`,
+          created_at: new Date(NOW.getTime() + 10 + i).toISOString(),
+          avatar_storage_id: `storage-extra-${i}` as Id<'_storage'>,
+        })
+      const calls: { ids: string[]; answer: ReturnType<typeof deferred<Minted>> }[] = []
+      network.query.mockImplementation((ref, args: { profile_ids?: string[] }) => {
+        if (getFunctionName(ref) !== 'files:mintUrls') return Promise.resolve(null)
+        const answer = deferred<Minted>()
+        calls.push({ ids: args.profile_ids ?? [], answer })
+        return answer.promise
+      })
+      await store.initStore()
+      const pictured = snap.profiles.filter((p) => p.avatar_storage_id)
+      expect(pictured).toHaveLength(7)
+      const ids = pictured.map((p) => p.id)
+      const named = (list: typeof pictured) => list.map((p) => ({ org: p.org_id, id: p.id }))
+      // the page names all seven, and another view the page's last person
+      store.P.namePeople('page', named(pictured))
+      store.P.namePeople('other', named(pictured.slice(6)))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls.map((c) => c.ids)).toEqual([ids.slice(0, 2), ids.slice(2, 4)])
+      // the page closes while three of its pictures wait for a call
+      store.P.namePeople('page', [])
+      calls[0]?.answer.resolve(response())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls.map((c) => c.ids)).toEqual([ids.slice(0, 2), ids.slice(2, 4), ids.slice(6)])
+      calls[1]?.answer.resolve(response())
+      calls[2]?.answer.resolve(response())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toHaveLength(3)
+      // the dropped ones count as no failure: named again, they mint at
+      // once, with no retry delay, beside the ones whose leases came while
+      // the page was closed
+      store.P.namePeople('page', named(pictured))
+      await vi.advanceTimersByTimeAsync(0)
+      for (let answered = 3; answered < calls.length; answered++) {
+        calls[answered]?.answer.resolve(response())
+        await vi.advanceTimersByTimeAsync(0)
+      }
+      expect(calls.slice(3).flatMap((c) => c.ids)).toEqual(expect.arrayContaining(ids.slice(4, 6)))
+    } finally {
+      Object.assign(MINT_QUEUE, bounds)
+    }
+  })
+
   it('mints the caller’s own new picture with no view naming anyone, as Settings › Account shows it', async () => {
     await store.initStore()
     await vi.advanceTimersByTimeAsync(20)

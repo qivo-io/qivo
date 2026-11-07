@@ -10,8 +10,10 @@
    backend from before the cap reads each image's project on its own and
    can pass its read limit on a call of 100 (docs/deployment.md). While the page is hidden no call starts
    (pause); the calls on their way finish, and the waiting requests go once
-   it shows. The planner builds one queue a store, with its query
-   injected, so the tests need no store. */
+   it shows. A waiting request the store no longer wants when its call is
+   about to go (`wanted`) answers `dropped` and stays out of the call. The
+   planner builds one queue a store, with its query injected, so the tests
+   need no store. */
 
 /** The queue's bounds, an object the tests lower. A call that has not
     answered after `timeout` ms answers failed for its ids and keeps its
@@ -29,14 +31,17 @@ export type MintLease = { url: string; exp: number }
 
 /** What a request answers: its lease, `missing` when the answer omitted
     the id (missing, foreign and invisible alike), `refused` when the call
-    was refused (a ConvexError), or `failed` for any other failure (after
+    was refused (a ConvexError), `failed` for any other failure (after
     the half of the call it was in failed too), the call's timeout, or a
-    queue cleared before the answer. */
+    queue cleared before the answer, or `dropped` when the store no longer
+    wanted it before its call went (Options `wanted`), which says nothing
+    of the file. */
 export type MintOutcome =
   | { state: 'lease'; lease: MintLease }
   | { state: 'missing' }
   | { state: 'refused' }
   | { state: 'failed' }
+  | { state: 'dropped' }
 
 /** The call the queue makes, files.mintUrls through organization `org`. */
 export type MintCall = (
@@ -57,6 +62,10 @@ type Chunk = { kind: MintRequest['kind']; org: string; items: Waiting[]; half?: 
 type Options = {
   /** whether a failed call's error is a refusal (a ConvexError) */
   refused: (error: unknown) => boolean
+  /** whether the store still wants a waiting request, asked as its call is
+      about to go, a half of a failed call included; one it does not want
+      answers `dropped`. Every request is wanted without it. */
+  wanted?: (request: MintRequest) => boolean
   setTimer?: (run: () => void, ms: number) => unknown
   clearTimer?: (timer: unknown) => void
   /** runs a task once the current synchronous run ends, by default in a
@@ -86,15 +95,38 @@ export function createMintQueue(mint: MintCall, options: Options) {
   let pumping = false
   let paused = false
 
+  /* The requests of `items` the store still wants (Options `wanted`); the
+     others answer `dropped`, and a new request with their key asks again. */
+  const stillWanted = (items: Waiting[]): Waiting[] => {
+    const wanted = options.wanted
+    if (!wanted) return items
+    const kept: Waiting[] = []
+    for (const w of items) {
+      if (wanted(w.request)) {
+        kept.push(w)
+        continue
+      }
+      if (known.get(w.request.key) === w) known.delete(w.request.key)
+      w.settle({ state: 'dropped' })
+    }
+    return kept
+  }
+
   /* The next chunk to send: attachments first, then pictures, each a half
      of a failed call first, else the longest-waiting organization's first
-     `batch` requests. */
+     `batch` requests the store still wants. */
   const nextChunk = (): Chunk | null => {
     for (const kind of ['attachment', 'avatar'] as const) {
-      const half = halves.findIndex((chunk) => chunk.kind === kind)
-      if (half >= 0) return halves.splice(half, 1)[0] as Chunk
+      for (let at = halves.findIndex((c) => c.kind === kind); at >= 0; ) {
+        const half = halves.splice(at, 1)[0] as Chunk
+        const items = stillWanted(half.items)
+        if (items.length) return { ...half, items }
+        at = halves.findIndex((c) => c.kind === kind)
+      }
       for (const [org, list] of waiting[kind]) {
-        const items = list.splice(0, MINT_QUEUE.batch)
+        const items: Waiting[] = []
+        while (items.length < MINT_QUEUE.batch && list.length)
+          items.push(...stillWanted(list.splice(0, MINT_QUEUE.batch - items.length)))
         if (list.length === 0) waiting[kind].delete(org)
         if (items.length) return { kind, org, items }
       }
