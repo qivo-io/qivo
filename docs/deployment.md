@@ -1836,12 +1836,10 @@ since its delivery stops at the end. A charge delivered before the
 subscription ended stays, as the charge of a sample at the start, sent
 minutes after the start, always did. `billing.usageFigures` answers the
 basis and the average, which this release's app shows only for a daily
-period, with how many days were estimated. An app from v0.1.145 up to this
-release says "Not measured yet for this period." for a daily period until
-it reloads. Switching it on also changes what the pricing page and the
-administration and organization guides say about storage, so a docs change
-goes out before or with it; qivo-internal `docs/billing-operations.md`
-keeps the texts.
+period, with how many days were estimated. Switching it on also changes
+what the pricing page and the administration and organization guides say
+about storage, so a docs change goes out before or with it; qivo-internal
+`docs/billing-operations.md` keeps the texts.
 
 The release adds the optional fields `storage_basis`, `storage_days`,
 `storage_unavailable` and `storage_finalized_at` and the index
@@ -1850,15 +1848,14 @@ row holds the new fields, a commit before the release deploys, and Convex
 drops the index, which the deploy forward builds again. Once the switch is
 set and a daily period is recorded, a backend before the release does not
 deploy, since its schema validation refuses the period row for the field
-`storage_basis`, and that code would also sample the period at its start.
-A disposable local backend showed both on 2026-11-07. So from the first
-daily period on never return the backend to a commit before this release;
-roll forward instead. Until then the floors above stand, and the
-release sets none. Returning the app alone is safe, since an earlier app
-reads only the sample fields. For the owner's cost reading, each daily
-period costs one `billingSync:finalizeStorage` call when it is recorded,
-reading its period row, its days' samples (at most 31) and a few documents
-more, 37 documents and 8 index ranges for 31 days at 1,000 people in
+`storage_basis`, and that code would also sample the period at its start. A
+disposable local backend showed both on 2026-11-07. So from the first daily
+period on never return the backend to a commit before this release; roll
+forward instead. Until then the floors above stand, and the release sets
+none. For the owner's cost reading, each daily period costs one
+`billingSync:finalizeStorage` call when it is recorded, reading its period
+row, its days' samples (at most 31) and a few documents more, 37 documents
+and 8 index ranges for 31 days at 1,000 people in
 `convex/tests/billing.test.ts`, and writing the period and its charge, one
 more call each time a day's run finds it waiting for its last day, and one
 `billingSync:finalizeDue` call for each 25 periods a run or call lists. A
