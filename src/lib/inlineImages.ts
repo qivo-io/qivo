@@ -384,7 +384,8 @@ export function createInlineImages(
       pumpSlots()
     })
   }
-  /* A gateway refusal: one fresh mint, then gone. */
+  /* A gateway refusal: one fresh mint, then gone. With no view near or
+     the page hidden, the fresh mint waits for the next view (want). */
   const refused = (entry: Entry) => {
     forgetBytes(entry)
     entry.exp = 0
@@ -523,7 +524,9 @@ export function createInlineImages(
   }
   /* What a near entry needs next: nothing while it loads or shows within
      its lease, a mint before it shows held bytes past their lease, else a
-     mint and a download. `gate` asks the store's row gate first. */
+     mint and a download, a fresh one while a refusal waits for it, so the
+     store's lease the gateway refused is never taken again. `gate` asks
+     the store's row gate first. */
   function want(entry: Entry, gate: boolean) {
     if (entry.phase === 'gone') return
     if (gate && !deps.held(entry.id)) {
@@ -544,7 +547,7 @@ export function createInlineImages(
       entry.url = null
       entry.phase = 'idle'
     }
-    lease(entry, false)
+    lease(entry, entry.refusedOnce)
   }
   /* The store forgot attachment `id`. */
   const drop = (id: string) => {

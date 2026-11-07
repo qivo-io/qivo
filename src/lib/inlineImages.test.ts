@@ -400,6 +400,34 @@ describe('the inline image loader', () => {
     expect(v.shown().state).toBe('gone')
   })
 
+  it('takes the fresh mint a refusal asks for when the image comes near again after it went far or the page hid', async () => {
+    const h = harness({ hold: true })
+    const v = h.view('a')
+    v.near()
+    await settle()
+    v.far()
+    h.downloads[0]?.answer.resolve(image(0, 404))
+    await settle()
+    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false])
+    v.near()
+    await settle()
+    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true])
+    // the same while the page is hidden
+    h.downloads[1]?.answer.resolve(image(KIB))
+    await settle()
+    INLINE_IMAGES.cacheBytes = 0
+    v.far()
+    v.near()
+    await settle()
+    h.loader.pause(true)
+    h.downloads[2]?.answer.resolve(image(0, 404))
+    await settle()
+    expect(h.mint).toHaveBeenCalledTimes(3)
+    h.loader.pause(false)
+    await settle()
+    expect(h.mint.mock.calls.map(([, fresh]) => fresh)).toEqual([false, true, false, true])
+  })
+
   it('keeps "Loading image…" and tries again after a failed mint', async () => {
     const h = harness()
     h.mint.mockResolvedValueOnce({ state: 'failed' })
