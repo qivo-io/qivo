@@ -2,10 +2,11 @@
  * part (lib/workspaceParts.ts readInbox) and the machine inbox
  * (machine/discussion.ts inboxItems). Both read with INBOX_LIMIT, so they
  * walk the same rows in the same order and keep the same ones. The machine
- * inbox folds all of them into items, and the app shows the first
- * LIMITS.inboxShown (lib/limits.ts) across a person's seats, unread rows
- * first (blendInbox), so the messages the app lists for a seat are always
- * among the ones the machine inbox lists for that profile.
+ * inbox folds all of them into items, and the app's inbox part keeps the
+ * first INBOX_LIMIT (lib/limits.ts) across a person's seats, unread rows
+ * first (blendInbox), for the desktop alerts, so the messages the part
+ * sends for a seat are always among the ones the machine inbox lists for
+ * that profile. The app's Inbox list reads inbox.page instead.
  *
  * Unread rows are never retired by retention, and read rows stay while a
  * person keeps retention at Never, so an inbox nobody clears grows without

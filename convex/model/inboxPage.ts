@@ -80,7 +80,7 @@ import type { MessageKind } from '../lib/enums'
 import { badRequest } from '../lib/functions'
 import { inboxSearchText, itemKinds, kindsMatch, messageLine } from '../lib/inbox'
 import { limitedText } from '../lib/limitRules'
-import { LIMITS } from '../lib/limits'
+import { INBOX_PAGE_ROWS, LIMITS } from '../lib/limits'
 import { filtersKey } from '../lib/listCursor'
 import {
   compareIn,
@@ -104,7 +104,8 @@ import { inboxScope, unreadChange } from './inboxReads'
 
 /**
  * The bounds of one Inbox page, which tests lower and set back with
- * structuredClone. `rows`: the groups a page holds, the owner's 50.
+ * structuredClone. `rows`: the groups a page holds, the owner's 50
+ * (lib/limits.ts INBOX_PAGE_ROWS, the registry's inboxPage).
  * `reads`: what one call may read, NAMED_READ's share (2,000 index ranges,
  * 8,000 documents and 4 MiB) for a subscription list that runs again on
  * every change of what it read, which lib/namedPages.ts namedCeiling also
@@ -160,7 +161,7 @@ import { inboxScope, unreadChange } from './inboxReads'
  * `next`.
  */
 export const INBOX_PAGE: { rows: number; reads: ReadCeiling } = {
-  rows: 50,
+  rows: INBOX_PAGE_ROWS,
   reads: { ...NAMED_READ },
 }
 
