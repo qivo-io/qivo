@@ -572,6 +572,55 @@ describe('the owner list’s search', () => {
     })
     await act(async () => held.find((h) => h.args.search === 'Edw')?.release())
   })
+
+  it('keeps Enter on the person when a trailing space or a quick correction keeps the search', async () => {
+    await load({ edward: true })
+    await openList()
+    await type('Ed')
+    await rest()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    // cmdk moves the highlight to the first enabled row, here the clear
+    // row, on each change of the text, though the list's search stays "Ed"
+    await type('Ed ')
+    await settle()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    await type('Edx')
+    await type('Ed')
+    await settle()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    expect(reads('pickers:taskOwners').map((a) => a.args.search)).toEqual([undefined, 'Ed'])
+    await press('Enter')
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
+      patch: { assignee_id: 'edward' },
+    })
+  })
+
+  it('lets the pointer and the arrow keys move the highlight to the clear row under a search', async () => {
+    await load({ edward: true })
+    await openList()
+    await type('Ed')
+    await rest()
+    const hover = (row: HTMLElement | undefined) =>
+      act(async () => row?.dispatchEvent(new PointerEvent('pointermove', { bubbles: true })))
+    await hover(unassigned())
+    expect(selected()).toBe(unassigned())
+    await hover(choices()[0])
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    // a change of the text hands the highlight back to the list
+    await type('Ed ')
+    await settle()
+    expect(selected()?.dataset.ownerChoice).toBe('edward')
+    await press('ArrowUp')
+    expect(selected()).toBe(unassigned())
+    await press('Enter')
+    await settle()
+    expect(writes).toHaveLength(1)
+    expect(network.mutation.mock.calls.at(-1)?.[1]).toMatchObject({
+      patch: { assignee_id: null },
+    })
+  })
 })
 
 describe('the owner list’s batches and states', () => {

@@ -38,6 +38,9 @@ const OWNER_SEARCH = 'data-owner-search'
 /** The value of the Unassigned or No reviewer row, which no id takes. */
 const NONE = '\u0000none'
 
+/** The keys with which a person moves the highlight through cmdk. */
+const MOVE_KEYS = new Set(['ArrowUp', 'ArrowDown', 'Home', 'End'])
+
 /** The task an owner list writes: the workspace's, a view's answer's, or
     the one the task window shows from its own answer. */
 const liveTask = (id: string) => P.anyTask(id) ?? P.taskShown(id)
@@ -73,19 +76,24 @@ function OwnerFace({ id }: { id: string }) {
  *
  * Rows of an older text read dimmed and take no pick until the list
  * answers the typed text, which moves the highlight to its first row;
- * Enter acts only then. Under a search that first row is a person
- * whenever the list shows one, the holder first, so Enter after a name
- * never clears the field, even when the clear row's label also holds the
- * typed words. The highlight moves this way each time the list comes to
- * answer the typed text: its first answer, a failed or held first read,
- * the answer Try again brings, and the answer for a text typed again
- * after another. Load more moves the highlight to the first new row. A
- * held, refused, unavailable, over-budget, stopped or failed list says so
- * in the field's words (CommandChoiceEnd), never as an empty or ended
- * list. An unavailable list and a refused assignee list also disable the
- * clear row, which the write would refuse. A refused reviewer list keeps
- * it, since the write still clears the reviewer a task with subtasks kept
- * from before (REVIEWER_ON_GROUP), though it refuses a clear below Edit.
+ * Enter acts only then. Under a search that first row is a person whenever
+ * the list shows one, the holder first, so Enter after a name never clears
+ * the field, even when the clear row's label also holds the typed words.
+ * The highlight moves this way each time the list comes to answer the
+ * typed text: its first answer, a failed or held first read, the answer
+ * Try again brings, and the answer for a text typed again after another.
+ * cmdk moves the highlight to the first enabled row on every change of the
+ * text, which under a search can be the clear row, also when the settled
+ * text stays the same, as after a trailing space. The list then puts the
+ * first person back, unless the person moved the highlight by a key or the
+ * pointer since the text changed. Load more moves the highlight to the
+ * first new row. A held, refused, unavailable, over-budget, stopped or
+ * failed list says so in the field's words (CommandChoiceEnd), never as an
+ * empty or ended list. An unavailable list and a refused assignee list
+ * also disable the clear row, which the write would refuse. A refused
+ * reviewer list keeps it, since the write still clears the reviewer a task
+ * with subtasks kept from before (REVIEWER_ON_GROUP), though it refuses a
+ * clear below Edit.
  *
  * Picking writes `field` when the pick changes it through P.updateIssue,
  * whose refusal toasts the server's sentence and is the only check of the
@@ -198,8 +206,10 @@ export function OwnerPickList({
   // comes before the clear row, whose label may also hold the typed words
   // ("Ed" is in "Unassigned"), so Enter after a name never clears the field.
   const [value, setValue] = useState('')
+  // the first row of a person the list shows and may pick, the holder first
+  const firstPerson = () => (showHolder && !ineligible && holder ? holder : people[0]?.id)
   const firstValue = () => {
-    const person = showHolder && !ineligible && holder ? holder : people[0]?.id
+    const person = firstPerson()
     if (typed !== '' && person) return person
     return showNone && !closed ? NONE : (person ?? '')
   }
@@ -213,6 +223,23 @@ export function OwnerPickList({
     const lands = answered && !wasAnswered.current
     wasAnswered.current = answered
     if (lands) setValue(firstValue())
+  })
+  // whether the person moved the highlight, by a key or the pointer, since
+  // the text last changed, and whether cmdk's own last move of it is still
+  // to be judged. cmdk moves it to the first enabled row on every change
+  // of the text and when the row it was on goes, which under a search can
+  // be the clear row. Such a move to the clear row, once the list answered
+  // the typed text, puts the first person back; before that the answer
+  // moves the highlight. The move is judged in the first render that shows
+  // it, so cmdk, which follows `value` only when it changes, takes the
+  // person back, and before the browser paints the clear row.
+  const moved = useRef(false)
+  const reselect = useRef(false)
+  useLayoutEffect(() => {
+    if (!reselect.current || value !== NONE) return
+    reselect.current = false
+    const person = firstPerson()
+    if (answered && typed !== '' && person) setValue(person)
   })
   const input = useRef<HTMLInputElement>(null)
   const from = useRef<number | null>(null)
@@ -253,7 +280,13 @@ export function OwnerPickList({
       aria-label={`Choose ${shown}`}
       shouldFilter={false}
       value={value}
-      onValueChange={setValue}
+      onValueChange={(next) => {
+        reselect.current = !moved.current
+        setValue(next)
+      }}
+      onKeyDown={(event) => {
+        if (MOVE_KEYS.has(event.key)) moved.current = true
+      }}
       onClick={(event) => event.stopPropagation()}
       data-owner-list={shown}
       data-picker-state={stale ? 'loading' : list.phase}
@@ -262,7 +295,10 @@ export function OwnerPickList({
       <CommandInput
         ref={input}
         value={text}
-        onValueChange={setText}
+        onValueChange={(next) => {
+          moved.current = false
+          setText(next)
+        }}
         placeholder={`${find}…`}
         aria-label={find}
         {...{ [OWNER_SEARCH]: '', [ESCAPE_CLEARS]: '' }}
@@ -274,7 +310,15 @@ export function OwnerPickList({
           if (event.key === 'Escape' && text !== '') setText('')
         }}
       />
-      <CommandList className="max-h-60">
+      <CommandList
+        className="max-h-60"
+        onPointerMoveCapture={() => {
+          moved.current = true
+        }}
+        onPointerDownCapture={() => {
+          moved.current = true
+        }}
+      >
         {showNone && (
           <CommandItem
             value={NONE}
