@@ -431,6 +431,70 @@ describe('the Canvas background and its preview', () => {
     )
   })
 
+  it('shows a custom preview whose lease ended after a failed renewal as unavailable with Reload preview, which asks for the lease again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const lease = () => ({
+        image_id: 'image-1',
+        url: `https://site.test/backgrounds/image-1?t=${Date.now()}`,
+        preview_url: `https://site.test/background-previews/image-1?t=${Date.now()}`,
+        expires_at: Date.now() + 600_000,
+      })
+      store.mint.mockImplementation(async () => lease())
+      const open = (settings: boolean) =>
+        act(async () =>
+          root.render(
+            <TooltipProvider>
+              <AppearanceProvider accountId="account-1">
+                {settings ? <AppearanceSettings /> : null}
+              </AppearanceProvider>
+            </TooltipProvider>,
+          ),
+        )
+      await open(false)
+      await act(async () => store.deliver(preferences('custom')))
+      await settle()
+      fetched('/backgrounds/')[0]?.answer()
+      await settle()
+      const painted = background()
+      expect(painted).toMatch(/^blob:/)
+      // the renewal a minute before the end fails, and so does its retry
+      // at the end; the background stays
+      store.mint.mockRejectedValue(new Error('offline'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(540_000)
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000)
+      })
+      expect(store.mint).toHaveBeenCalledTimes(3)
+      expect(background()).toBe(painted)
+      // Settings opens once the lease has ended
+      await open(true)
+      await act(async () => store.deliver(preferences('custom')))
+      await settle()
+      const text = () => container.querySelector('.aspect-video')?.textContent ?? ''
+      expect(text()).toBe('Preview unavailable.')
+      const reload = () =>
+        [...container.querySelectorAll('button')].find((b) => b.textContent === 'Reload preview')
+      expect(reload()).toBeDefined()
+      expect(fetched('/background-previews/')).toEqual([])
+      // Reload asks for the lease again, and the preview reads its derivative
+      store.mint.mockImplementation(async () => lease())
+      await act(async () => reload()?.click())
+      await settle()
+      expect(store.mint).toHaveBeenCalledTimes(4)
+      fetched('/background-previews/')[0]?.answer()
+      await settle()
+      expect(container.querySelector('[data-appearance-preview]')?.getAttribute('src')).toMatch(
+        /^blob:/,
+      )
+      expect(background()).toBe(painted)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('hands the demo’s derivative URL to the preview and pauses its public feed while hidden', async () => {
     demo.on = true
     await render(true)

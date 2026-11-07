@@ -115,7 +115,7 @@ async function inspectFile(file: File) {
    lease and shared background cache serve the canvas and this preview
    alike, and the preview's read stops when the page closes. Reload preview
    asks the provider again, which also asks again for a lease it was
-   refused or failed to get. */
+   refused, failed to get or failed to renew. */
 function PrivatePreview({ image }: { image: NonNullable<AppearancePreferences['custom_image']> }) {
   const { preview, retry } = usePreview()
   const [error, setError] = useState('')

@@ -38,15 +38,19 @@ type ImageLease = NonNullable<FunctionReturnType<typeof api.appearance.mintCusto
    already shown stays for display while its renewal is due or on its way,
    past its end too, so the background never goes away for a renewal, and
    the provider starts no new fetch with its URL once it has ended. A
-   refusal, no image or another image, drops it. A new `attempt` asks for
-   the lease again at once, as Settings' Reload preview does after a
-   refusal or a failure. */
+   failed renewal keeps it too and sets `renewalFailed` until a renewal
+   answers, so Settings can show its preview as unavailable once it has
+   ended. A refusal, no image or another image, drops it. A new `attempt`
+   asks for the lease again at once, as Settings' Reload preview does
+   after a refusal or a failure. */
 function usePrivateImage(imageId: string | null, previewVersion: number | null, attempt: number) {
   const [lease, setLease] = useState<(ImageLease & { previewVersion: number | null }) | null>(null)
   const [failed, setFailed] = useState(false)
+  const [renewalFailed, setRenewalFailed] = useState(false)
   const shown = useRef<string | null>(null)
   useEffect(() => {
     setFailed(false)
+    setRenewalFailed(false)
     if (!imageId) {
       shown.current = null
       setLease(null)
@@ -82,6 +86,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
         shown.current = imageId
         setLease({ ...result, previewVersion })
         setFailed(false)
+        setRenewalFailed(false)
         schedule(Math.max(1000, expiresAt - Date.now() - 60_000))
       } catch {
         if (!active) return
@@ -89,7 +94,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
           setLease(null)
           setFailed(true)
           expiresAt = 0
-        }
+        } else setRenewalFailed(true)
         schedule(60_000)
       } finally {
         renewing = false
@@ -108,7 +113,7 @@ function usePrivateImage(imageId: string | null, previewVersion: number | null, 
     }
     // attempt asks again after a refusal or a failure
   }, [imageId, previewVersion, attempt])
-  return { lease: lease?.image_id === imageId ? lease : null, failed }
+  return { lease: lease?.image_id === imageId ? lease : null, failed, renewalFailed }
 }
 
 /** Mounted after socket authentication, before workspace initialization, and
@@ -271,13 +276,14 @@ export function AppearanceProvider({
     !preferencesFailed && preferences?.image_source === 'custom'
       ? (preferences.custom_image?.id ?? null)
       : null
-  // Settings' Reload preview after the custom lease was refused or failed
+  // Settings' Reload preview after the custom lease was refused or failed,
+  // or its renewal failed
   const [leaseAttempt, setLeaseAttempt] = useState(0)
-  const { lease: privateImage, failed: privateFailed } = usePrivateImage(
-    customId,
-    preferences?.custom_image?.preview_version ?? null,
-    leaseAttempt,
-  )
+  const {
+    lease: privateImage,
+    failed: privateFailed,
+    renewalFailed,
+  } = usePrivateImage(customId, preferences?.custom_image?.preview_version ?? null, leaseAttempt)
   // the custom image the preferences name, whether or not its lease came
   const customSelection = useMemo<BackgroundSelection | null>(
     () =>
@@ -381,9 +387,10 @@ export function AppearanceProvider({
     setPreviewAsks((n) => n + 1)
     return () => setPreviewAsks((n) => n - 1)
   }, [])
-  // a refused or failed custom lease is asked for again too
+  // a refused or failed custom lease, or one whose renewal failed, is
+  // asked for again too
   const leaseFailed = useRef(false)
-  leaseFailed.current = privateFailed
+  leaseFailed.current = privateFailed || renewalFailed
   const retryPreview = useCallback(() => {
     setPreviewAttempt((n) => n + 1)
     if (leaseFailed.current) setLeaseAttempt((n) => n + 1)
@@ -442,8 +449,11 @@ export function AppearanceProvider({
       setPreview({ status, url, key: previewKey, previewVersion })
     const derivativeUrl = plan.read
     if (!derivativeUrl || !previewKey) return show(plan.status, plan.url)
-    // a custom lease whose renewal is due reads nothing with its URL
-    if (leaseEnd !== null && leaseEnd <= Date.now()) return show('loading', null)
+    // A custom lease that has ended reads nothing with its URL. Its preview
+    // loads while its renewal is due, and is unavailable, with Reload
+    // preview, once the renewal failed.
+    if (leaseEnd !== null && leaseEnd <= Date.now())
+      return show(renewalFailed ? 'unavailable' : 'loading', null)
     // the demo keeps no cache: the derivative itself
     if (!cache) return show('ready', derivativeUrl)
     const selected = { key: previewKey, previewVersion }
@@ -479,6 +489,7 @@ export function AppearanceProvider({
     plan.status,
     plan.url,
     leaseEnd,
+    renewalFailed,
     cache,
   ])
   useLayoutEffect(() => {
