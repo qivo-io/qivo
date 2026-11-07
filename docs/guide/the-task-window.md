@@ -287,19 +287,23 @@ it as it last loaded and says so, with **Retry**. Its changes then wait with
 **Available once Qivo can check this task for changes**, and a title,
 description, hours or comment you are typing stays until you can save it.
 
-A task you create, from **New task**, a status column's **+**, a new
-sub-project's first task or a picker's **Create new** row, opens at once
-from what you typed, before Qivo has saved it. Its title, description,
-status, priority, dates, hours, due date, pause, labels, files, comments
-and the eye take changes at once, and Qivo saves each of them after the
-task. Its assignee and reviewer, **Parent**, **Subtasks** and **Linked
-tasks**, **Subscribers**, **Move to sub-project…** and **Archive or
-delete…** read the task on the server, so they wait with **Available once
+A task you create from **New task** or a status column's **+** opens at
+once from what you typed, before Qivo has saved it. A task you create as a
+new sub-project's first task or from a picker's **Create new** row shows at
+once on the Board, a new subtask or parent shows at once in the window you
+created it from, and a new linked task shows in **Linked tasks** once Qivo
+has saved it. Each opens the same way from there. A new task's title,
+description, status, priority, dates, hours, due date, pause, labels,
+files, comments and the eye take changes at once, and Qivo saves each of
+them after the task. Its assignee and reviewer, **Parent**, **Subtasks**
+and **Linked tasks**, **Subscribers**, **Move to sub-project…** and
+**Archive or delete…** read the task on the server, so they wait with **Available once
 this task is saved** until Qivo has saved it and the window has read it,
 a moment later. The owner's portrait on its card waits the same way. If
 Qivo cannot save the task, as when you no longer have access to its
-sub-project, the task leaves the Board, its window closes and a message
-says why, and the changes you made in it meanwhile go with it.
+sub-project, the task leaves the Board, the window Qivo opened for it
+closes and a message says why, and the changes you made in it meanwhile go
+with it.
 
 The **×** button removes a relationship without deleting the task.
 **Remove subtask** clears the child's parent and keeps the task.
