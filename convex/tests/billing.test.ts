@@ -2984,6 +2984,13 @@ describe('storage charged on the daily average', () => {
       expect(next).toMatchObject({ storage_bytes: 6 * GB, storage_blocks: 1 })
       expect(next).not.toHaveProperty('storage_basis')
       expect((await storageEvents(t)).map((e) => e.period_start)).toEqual([S, E])
+      // a finalize of the period sampled at its start, as by a wrong id, does
+      // nothing, also past its deadline, when a daily period would record
+      if (next === null) throw new Error('no period')
+      vi.setSystemTime(Date.parse(NEXT) - 60 * 60_000)
+      expect(await t.mutation(finalizeRef, { period: next._id })).toBeNull()
+      expect(await periodAt(t, E)).toEqual(next)
+      expect((await storageEvents(t)).map((e) => e.period_start)).toEqual([S, E])
     })
   })
 
