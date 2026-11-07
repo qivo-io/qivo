@@ -1,7 +1,8 @@
 /* Roadmap undo regression against the Northstar development demo.
  * Usage: node scripts/roadmap-undo-smoke.mjs [baseURL]
  * Requires the matching backend and a running dev server. Creates only
- * temporary tasks/milestones; finally removes them, never seeds or resets.
+ * temporary tasks/milestones; finally removes them and reads the milestones
+ * again to check none is left, never seeds or resets.
  * It asks for every task (P.askTasks, reason script) and looks its tasks up
  * in the workspace, so it drives the Roadmap's writes of held tasks; the
  * writes of tasks only the Roadmap's answer brings are the jsdom suites'
@@ -247,7 +248,13 @@ async function cleanup() {
       demo,
       tasks.map(({ id }) => id),
     )
+    // read the run's milestones again, in its weeks and by the first one's
+    // id, so a milestone the cleanup missed fails the run instead of staying
+    // in Northstar, whose counts hold no milestones
+    const left = fixture ? await runMilestones(client, fixture.project, fixture.weeks) : []
+    left.push(...(await firstMilestone(client)))
     await cleanupPage.evaluate(() => window.PLANNER?.signOut()).catch(() => {})
+    assert.deepEqual(left, [], 'A temporary milestone was left in Northstar')
   } finally {
     await context.close()
   }
