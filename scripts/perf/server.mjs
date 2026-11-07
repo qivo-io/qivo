@@ -2660,7 +2660,7 @@ async function mutate(name, args) {
     name === 'messages:snoozeItem'
   ) {
     // the Inbox row's item writes, as convex/messages.ts runs them on the
-    // caller's messages of one task: unread marks every one unread,
+    // caller's messages of one task. unreadItem marks every one unread,
     // removeItem removes those stored up to `through` (created_at stands
     // for _creationTime here), and snoozeItem stamps every one, unread,
     // with the snooze, or wakes the item with null

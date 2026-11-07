@@ -8,7 +8,7 @@
  * page as the list shows them (src/panels/Inbox.tsx), each by its task and
  * organization, and acts on an item as the row does (messages.snoozeItem,
  * readItem). Touches only Nora's own inbox rows and puts every one of them
- * back: unsnoozed, and read again if it was read. */
+ * back, unsnoozed and read again if it was read. */
 import { mkdirSync } from 'node:fs'
 import { chromium } from 'playwright'
 import { loadBrowserDemo, signInBrowser, signInDemo } from './browser-demo.mjs'
