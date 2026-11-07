@@ -6,6 +6,7 @@ import type { Doc, Id } from '../_generated/dataModel'
 import {
   CHECKOUT_POLL_GRACE_MS,
   DUNNING_POLL_MS,
+  finalizeDue,
   finalizeStorage,
   PAYMENT_POLL_MS,
   PAYMENT_POLL_WINDOW_MS,
@@ -3470,6 +3471,56 @@ describe('storage charged on the daily average', () => {
       ])
     })
 
+    it('lists a page of due periods with one index range, and reads each row again only for the page it stops', async () => {
+      STORAGE_FINALIZE_PAGE.periods = 2
+      const { t } = await fixture()
+      const orgs: string[] = []
+      for (let i = 0; i < 3; i++) orgs.push(await payingOrg(t, 6 * GB))
+      await tickAt(t, '2026-09-28')
+      vi.setSystemTime(Date.parse(S))
+      const periods: Doc<'billing_periods'>[] = []
+      for (const orgId of orgs) periods.push(await record(t, orgId, S, E, { id: uuid() }))
+      const rows = () => t.run(async (ctx) => Promise.all(periods.map((p) => ctx.db.get(p._id))))
+      /* finalizeDue's first page, inside one transaction, with what that
+       * transaction read and wrote. */
+      const firstPage = () =>
+        t.run(async (ctx) => {
+          await (
+            finalizeDue as unknown as {
+              _handler: (ctx: unknown, args: { until: string; cursor: null }) => Promise<null>
+            }
+          )._handler(ctx, { until: E, cursor: null })
+          const m = await ctx.meta.getTransactionMetrics()
+          return {
+            ranges: m.databaseQueries.used,
+            documents: m.documentsRead.used,
+            written: m.documentsWritten.used,
+          }
+        })
+      // within two hours of their end, the page reads its 2 rows in one
+      // range and writes nothing, scheduling a finalize of each of its
+      // periods and the next page
+      vi.setSystemTime(at('2026-10-01', '10:01'))
+      const open = await rows()
+      expect(await firstPage()).toEqual({ ranges: 1, documents: 2, written: 0 })
+      expect(await rows()).toEqual(open)
+      expect(await queued(t, 'billingSync:finalizeStorage')).toHaveLength(2)
+      expect(await queued(t, 'billingSync:finalizeDue')).toHaveLength(1)
+      // past STORAGE_FINALIZE_RETRY_MS after their end, it stops them, and
+      // each patch reads its row again, so it reads 4 documents and writes
+      // the 2 rows and 2 audit rows
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      vi.setSystemTime(Date.parse(E) + STORAGE_FINALIZE_RETRY_MS + 60_000)
+      expect(await firstPage()).toEqual({ ranges: 1, documents: 4, written: 4 })
+      expect((await rows()).map((row) => row?.storage_failed_at !== undefined)).toEqual([
+        true,
+        true,
+        false,
+      ])
+      expect(await auditsOf(t, 'billing.storage_finalize_stopped')).toHaveLength(2)
+      expect(errors).toHaveBeenCalledTimes(2)
+    })
+
     it('finalizes every due period a page at a time, and one whose finalize throws fails alone and is tried again', async () => {
       STORAGE_FINALIZE_PAGE.periods = 2
       const { t, operatorId } = await fixture()
@@ -3704,11 +3755,15 @@ describe('storage charged on the daily average', () => {
       expect(await storageEvents(t)).toMatchObject([{ units: 452 }])
       // the period, 30 samples, the next one and the run row, then the
       // plan, the subscription and the charge's id, and the period again
-      // for the next reconciliation
-      expect(read.documents).toBeLessThanOrEqual(31 + 8)
-      // the period and the charge, and at most the subscription's next
-      // reconciliation
+      // for the next reconciliation, over 8 index ranges, about 122 KB,
+      // most of it the period row with its 1,000 profile ids
+      expect(read.ranges).toBeLessThanOrEqual(8)
+      expect(read.documents).toBeLessThanOrEqual(37)
+      expect(read.bytes).toBeLessThanOrEqual(128_000)
+      // the period and the charge, about 39 KB, and at most the
+      // subscription's next reconciliation
       expect(read.written).toBeLessThanOrEqual(3)
+      expect(read.written_bytes).toBeLessThanOrEqual(41_000)
     })
   })
 })

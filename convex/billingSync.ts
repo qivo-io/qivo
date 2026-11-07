@@ -911,13 +911,17 @@ async function finishStorageSample(
  * on. A period that ended STORAGE_FINALIZE_RETRY_MS or more ago is not
  * tried again (stopFinalize). The daily samples' run, when it finishes,
  * and their hourly tick schedule it, and only while billing is on
- * (storageSamples.ts). It reads only the period rows it lists. For a full
- * page of 25 periods of 1,000 people each that it schedules, convex-test
- * measured one index range, 25 documents read, about 960 KB, and no
- * document written besides the 25 scheduled calls. For a full page that it
- * stops, its heaviest shape, it measured 50 documents read, about 1.9 MB,
- * since each patch reads its row again, and the 25 rows and 25 audit rows
- * written, about 970 KB. */
+ * (storageSamples.ts). It reads only the period rows it lists, in one
+ * index range. convex/tests/billing.test.ts ("lists a page of due periods
+ * with one index range") pins both shapes with the page lowered to 2
+ * everyday periods. A page it schedules reads its rows and writes nothing
+ * besides the scheduled calls, and a page it stops, its heaviest shape,
+ * reads each row again for its patch and writes the rows and an audit row
+ * each. A one-off convex-test measurement of this build on 2026-11-07, of
+ * a full page of 25 periods of 1,000 people each, read 25 documents,
+ * about 960 KB, when it scheduled them, and 50 documents, about 1.9 MB,
+ * when it stopped them, writing the 25 rows and 25 audit rows, about
+ * 970 KB. */
 export const finalizeDue = internalMutation({
   args: { until: v.string(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, { until, cursor }): Promise<null> => {
