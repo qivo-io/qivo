@@ -139,10 +139,10 @@
  * both agents (billing.accountList) (ui/billing-accounts). It opens MCP
  * access, where Connected apps and Personal access tokens, searched for
  * its run tag when a list shows its search and read from its first batch
- * when not, must list the run's two connections and two tokens alone,
- * newest first, from the deployment's batches (connectedApps.list and
- * tokens.personalTokens), and a token search that matches nothing must say
- * so (ui/mcp-access-lists). It makes a
+ * when not, must list the run's two connections and two tokens newest
+ * first, and nothing else when it searched, from the deployment's batches
+ * (connectedApps.list and tokens.personalTokens), and a token search that
+ * matches nothing must say so (ui/mcp-access-lists). It makes a
  * project of its own with two sub-projects, finds it by its run tag in
  * Settings › Projects from the deployment's list (projectSettings.projects)
  * and opens its sub-projects (subProjects), archives one sub-project alone
