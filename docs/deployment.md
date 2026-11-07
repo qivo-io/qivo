@@ -2077,7 +2077,8 @@ schema change, no backfill and no release step. The staging check's step
 backend from v0.1.126 on.
 
 From the release after v0.1.159, the app asks for pictures only for the
-people its open pages, pickers and views show, names and paints a person
+signed-in person's own seats and the people its open pages, pickers and
+views show, names and paints a person
 the workspace does not hold from `people.byIds` through a bounded profile
 cache, sends the writes of Settings › Users, a team's page, Settings ›
 Teams and Settings › Labels with the values the page showed, whether or
