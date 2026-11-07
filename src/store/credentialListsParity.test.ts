@@ -5,8 +5,9 @@
  * reads. It compares every batch from the start to the end, and with
  * searches, cursors compared by where they lead, over everyday rows, 26
  * tokens of one seat, 26 tokens over three seats, 26 approved connections
- * interleaved with 26 deleted ones and 20 unfinished authorizations, and
- * equal creation and approval times. It also compares the refusals, and
+ * interleaved with 26 deleted ones and 20 unfinished authorizations,
+ * equal creation and approval times, and connections that show "Removed
+ * member" and "Removed organization". It also compares the refusals, and
  * holds the stand-in's own forced states. No design-size figure covers
  * these lists, so no case raises one. */
 
@@ -39,7 +40,11 @@ vi.hoisted(() => {
 })
 
 type Args = { search?: string; cursor?: string }
-type Batch = { rows: { id: string }[]; next: string | null; stopped: boolean }
+type Batch = {
+  rows: ({ id: string } & Record<string, unknown>)[]
+  next: string | null
+  stopped: boolean
+}
 
 /** What both answer, with each cursor replaced by whether it is there. */
 const shape = (b: Batch) => ({ ...b, next: b.next !== null })
@@ -59,6 +64,24 @@ async function caller() {
     org_role: 'guest',
   })
   return { t, f, login, seats: [f.user, guest] }
+}
+
+/** Plants an organization named `name` and answers it. */
+async function plantOrganization(t: T, name: string) {
+  return await t.run(async (ctx) => {
+    const id = uuid()
+    await ctx.db.insert('organizations', {
+      id,
+      name,
+      slug: nameKey(name).replace(/\s+/g, '-'),
+      created_at: at(0),
+      date_format: 'iso',
+      week_start: 1,
+      week_one_rule: 'first4day',
+      default_plannable_hours: 40,
+    })
+    return { id }
+  })
 }
 
 let minted = 0
@@ -284,22 +307,7 @@ describe("MCP access's stand-in", () => {
   it('answers 26 tokens of one seat and 26 over three seats, with ties, batch by batch and searched', async () => {
     const { t, f, login, seats } = await caller()
     const third = await plantSeat(t, {
-      org_id: (
-        await t.run(async (ctx) => {
-          const id = uuid()
-          await ctx.db.insert('organizations', {
-            id,
-            name: 'Third',
-            slug: 'third',
-            created_at: at(0),
-            date_format: 'iso',
-            week_start: 1,
-            week_one_rule: 'first4day',
-            default_plannable_hours: 40,
-          })
-          return { id }
-        })
-      ).id,
+      org_id: (await plantOrganization(t, 'Third')).id,
       auth_user_id: login,
       name: 'user',
     })
@@ -386,6 +394,42 @@ describe("MCP access's stand-in", () => {
     const batches = await same(t, login, world, 'connectedApps:list')
     expect(batches.map((b) => b.rows.length)).toEqual([LIST_BATCH, 1])
     await same(t, login, world, 'connectedApps:list', 'same')
+  })
+
+  it("answers a connection on another login's seat and one whose organization is gone, and searches by the names they show", async () => {
+    const { t, f, login, seats } = await caller()
+    const gone = await plantOrganization(t, 'Gone Labs')
+    const orphan = await plantSeat(t, { org_id: gone.id, auth_user_id: login, name: 'Nora Berg' })
+    await runInAuth(t, (ctx) =>
+      ctx.db.insert('oauthClient', { clientId: 'client-Claude', redirectUris: [] }),
+    )
+    await plantConnections(t, login, seats[0], [
+      { client: 'Claude', approved_at: at(1) },
+      // a seat of another login names nothing of this one
+      { client: 'Stranger', approved_at: at(2), seat: f.admin },
+      { client: 'Orphan', approved_at: at(3), seat: orphan },
+    ])
+    await t.run(async (ctx) => {
+      const org = await ctx.db
+        .query('organizations')
+        .withIndex('by_uuid', (q) => q.eq('id', gone.id))
+        .unique()
+      if (org) await ctx.db.delete(org._id)
+    })
+    const world = await worldOf(t, login, seats)
+    const apps = await same(t, login, world, 'connectedApps:list')
+    expect(apps[0].rows.map((row) => [row.clientName, row.profileName, row.orgName])).toEqual([
+      ['Orphan', 'Nora Berg', 'Removed organization'],
+      ['Stranger', 'Removed member', f.org.name],
+      ['Claude', 'user', f.org.name],
+    ])
+    const found = async (search: string) =>
+      (await same(t, login, world, 'connectedApps:list', search)).flatMap((b) =>
+        b.rows.map((row) => row.clientName),
+      )
+    expect(await found('removed member')).toEqual(['Stranger'])
+    expect(await found('removed organization')).toEqual(['Orphan'])
+    expect(await found('removed')).toEqual(['Orphan', 'Stranger'])
   })
 
   it('refuses a long search and foreign cursors as the server does', async () => {
