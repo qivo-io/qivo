@@ -1021,48 +1021,51 @@ describe('the benchmark server', () => {
       const answer = posted.find((m) => m.to === 'read')
       return { snap, answer: answer.error ? { error: answer.error } : JSON.parse(answer.text) }
     }
-    const unheld = [id('1', 48), id('1', 49)]
+    // the server's ids exist once a test loaded it
+    const unheld = () => [id('1', 48), id('1', 49)]
     const faces = await read('people=50&unheldpeople=2&pictures=1', 'people:byIds', () => ({
-      ids: unheld,
+      ids: unheld(),
     }))
     // each unheld person comes with a picture's version and hours
     expect(faces.answer.rows.map((row) => typeof row.avatar)).toEqual(['string', 'string'])
     expect(faces.answer.rows.every((row) => 'plannable_hours' in row)).toBe(true)
     // and files:mintUrls answers their pictures by that version
     const minted = await read('people=50&unheldpeople=2&pictures=1', 'files:mintUrls', () => ({
-      profile_ids: unheld,
+      profile_ids: unheld(),
     }))
     for (const row of faces.answer.rows)
       expect(minted.answer.avatars[row.id].url).toContain(`v=${row.avatar}`)
     expect(
       (
         await read('people=50&unheldpeople=2&peoplebyids=byids-error', 'people:byIds', () => ({
-          ids: unheld,
+          ids: unheld(),
         }))
       ).answer.error,
     ).toContain('fails')
     expect(
       (
         await read('people=50&unheldpeople=2&peoplebyids=byids-gone', 'people:byIds', () => ({
-          ids: unheld,
+          ids: unheld(),
         }))
       ).answer,
     ).toEqual({ rows: [] })
-    // byids-slow holds a live read's answer two seconds
+    // byids-slow holds a live read's answer two seconds, as a subscription
+    // and as the watched part the app's profile cache reads
     const { posted, send } = await server(
       'tasks=20&latency=0&mbps=100000&people=50&unheldpeople=2&peoplebyids=byids-slow',
     )
     await send({ type: 'query', id: 'snap', name: 'snapshot:forMe', args: {} })
     const snap = JSON.parse(posted.find((m) => m.to === 'snap').text)
-    await send({
-      type: 'subscribe',
-      id: 'faces',
-      name: 'people:byIds',
-      args: { org_id: snap.orgs[0].id, ids: unheld },
-    })
+    const args = { org_id: snap.orgs[0].id, ids: unheld() }
+    await send({ type: 'subscribe', id: 'faces', name: 'people:byIds', args })
+    await send({ type: 'watch', id: 'watched', name: 'people:byIds', args })
+    const answered = (to) =>
+      posted.some(
+        (m) => m.to === to || (m.type === 'transition' && m.results.some((r) => r.to === to)),
+      )
     await new Promise((resolve) => setTimeout(resolve, 500))
-    expect(posted.some((m) => m.to === 'faces')).toBe(false)
-    await vi.waitFor(() => expect(posted.some((m) => m.to === 'faces')).toBe(true), {
+    expect([answered('faces'), answered('watched')]).toEqual([false, false])
+    await vi.waitFor(() => expect([answered('faces'), answered('watched')]).toEqual([true, true]), {
       timeout: 4000,
     })
   }, 60_000)

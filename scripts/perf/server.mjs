@@ -771,7 +771,9 @@ const forcedPeople = (() => {
   if (fail.length) force.fail = fail
   return force
 })()
-/* Whether people:byIds answers two seconds late (`peoplebyids=byids-slow`). */
+/* Whether people:byIds answers two seconds late (`peoplebyids=byids-slow`),
+   as a subscription and as a watched part, which the app's profile cache
+   reads it through. */
 const slowByIds = (parameters.get('peoplebyids') ?? '').split(',').includes('byids-slow')
 /* How long people:byIds waits before it answers. */
 const BY_IDS_SLOW_MS = 2000
@@ -2618,6 +2620,15 @@ function transition() {
     const results = []
     let bytes = 0
     for (const [to, part] of watchedParts) {
+      // byids-slow: a watched people:byIds answers two seconds after its
+      // watch began, in a transition of its own
+      if (slowByIds && part.name === 'people:byIds' && part.sent === null) {
+        const wait = part.since + BY_IDS_SLOW_MS - Date.now()
+        if (wait > 0) {
+          setTimeout(() => void transition(), wait)
+          continue
+        }
+      }
       let encoded
       try {
         const value = read(part.name, part.args)
@@ -3308,7 +3319,12 @@ port.onmessage = async ({ data }) => {
       return
     }
     case 'watch': {
-      watchedParts.set(data.id, { name: data.name, args: data.args, sent: null })
+      watchedParts.set(data.id, {
+        name: data.name,
+        args: data.args,
+        sent: null,
+        since: Date.now(),
+      })
       // the parts watched in one task are answered in one transition
       if (!watchPending) {
         watchPending = true
