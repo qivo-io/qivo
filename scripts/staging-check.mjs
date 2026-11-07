@@ -1912,33 +1912,37 @@ async function deleteConnectionInUi(clientName) {
   }
 }
 
+/** How deleteProjectInApp deletes a project of the run, from `current`,
+ *  the server's answer to GET /v1/projects/{id}: one the caller reads
+ *  ('archive') is archived over REST first and deleted once the store
+ *  lists it archived, which it does for a project the caller reads, and
+ *  any other ('direct'), one Nora only manages, which the store does not
+ *  hold since the admin access split, is deleted as it is, live or
+ *  archived. The store's own copy never decides, as it can still hold a
+ *  project whose access was just taken away. */
+export const projectDeleteRoute = (current) =>
+  current?.json?.access?.read === true ? 'archive' : 'direct'
+
 /** Deletes a project of the run with the app's own store, which takes its
  *  sub-projects, tasks, comments, files, grants and milestones, then waits
- *  until REST no longer finds it. A project the store holds, one Nora
- *  takes part in, is archived over REST first and the delete waits for
- *  its archived row. One she only manages, which the store does not hold
- *  since the admin access split, is deleted live at once by the
- *  organization `shown` names (P.removeProject's third argument), Nora's
- *  home one unless it says another, so a delete that fails leaves it live,
- *  where the sweep's managed projects find it; REST's archived list leaves
- *  it out. */
+ *  until REST no longer finds it. It goes the way projectDeleteRoute
+ *  answers, by the organization `shown` names (P.removeProject's third
+ *  argument), Nora's home one unless it says another. A direct delete that
+ *  fails leaves the project as it was, live or archived, where the
+ *  sweep's managed projects and managed archived projects find it; REST's
+ *  lists leave it out. */
 async function deleteProjectInApp(cred, project, shown) {
   const current = await rest(cred, 'GET', `/projects/${project.id}`)
   if (current.status === 404) return
-  const held = await evaluate(
-    app,
-    (id) =>
-      !!window.PLANNER.project(id) || !!window.PLANNER.archivedProjects?.some((x) => x.id === id),
-    project.id,
-  )
-  if (held && !current.json?.archived)
-    await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
-  if (held)
+  if (projectDeleteRoute(current) === 'archive') {
+    if (!current.json?.archived)
+      await restOk(cred, 'PATCH', `/projects/${project.id}`, { archived: true })
     await app.waitForFunction(
       (id) => window.PLANNER.archivedProjects?.some((x) => x.id === id),
       project.id,
       { timeout: 30_000 },
     )
+  }
   const removed = await evaluate(
     app,
     ([id, orgId]) =>
@@ -2017,12 +2021,14 @@ export async function appBatches(what, read) {
  *  1. OAuth connections, personal tokens and agent keys, which need only
  *     the signed-in app, so no credential of a run outlives a REST outage;
  *  2. with a temporary token for REST reads, projects (with their tasks,
- *     comments, files, grants and milestones), tasks elsewhere and teams;
- *     then, with or without that token, labels, which only the app
- *     deletes;
+ *     comments, files, grants and milestones), those REST lists and those
+ *     Nora only manages, live and archived, from Settings' lists, tasks
+ *     elsewhere and teams; then, with or without that token, labels,
+ *     which only the app deletes;
  *  3. the agents, each confirmed gone;
- *  4. the temporary token, then a fresh read of every list to prove that
- *     nothing with the tag is left.
+ *  4. the temporary token, then a fresh read of every list, Settings'
+ *     project lists included, to prove that nothing with the tag is
+ *     left.
  *
  *  OAuth client registrations cannot be deleted and stay. Answers how many
  *  records it removed and the problems it met, each one line that is safe
@@ -2049,6 +2055,36 @@ async function sweep(tag, label) {
    *  (appBatches); a failed read is a failure. */
   const appList = (what, call) =>
     appBatches(what, (cursor) => evaluate(app, call, [searchOf(tag), cursor]))
+  /** The live top-level projects with the tag that Nora manages, from
+   *  Settings' list of the parents she manages (projectSettings.projects
+   *  with sub_project_parents), which also holds those she only manages; a
+   *  failed read is a failure. */
+  const managedLive = async () =>
+    (
+      await appBatches('managed projects', (cursor) =>
+        evaluate(
+          app,
+          ([search, after]) =>
+            window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after),
+          [searchOf(tag), cursor],
+        ),
+      )
+    ).filter((p) => matches(p.name))
+  /** The archived projects with the tag that Nora manages, from Settings ›
+   *  Archived projects (projectSettings.archived), its entries alone, as a
+   *  row beneath an archived parent goes with that parent; a failed read
+   *  is a failure. */
+  const managedArchived = async () =>
+    (
+      await appBatches('managed archived projects', (cursor) =>
+        evaluate(
+          app,
+          ([search, after]) =>
+            window.PLANNER.settingsArchivedProjects(window.PLANNER.homeOrg, search, after),
+          [searchOf(tag), cursor],
+        ),
+      )
+    ).filter((p) => !p.under && matches(p.name))
   const taggedAgents = async () =>
     (
       await evaluate(app, () =>
@@ -2164,16 +2200,18 @@ async function sweep(tag, label) {
       // access split, from Settings' list of the parents she manages
       // (projectSettings.projects with sub_project_parents)
       await step('managed projects', async () => {
-        const managed = await appBatches('managed projects', (cursor) =>
-          evaluate(
-            app,
-            ([search, after]) =>
-              window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after),
-            [searchOf(tag), cursor],
-          ),
-        )
-        for (const p of managed.filter((p) => matches(p.name)))
+        for (const p of await managedLive())
           await step(`managed project ${p.name}`, async () => {
+            await deleteProjectInApp(cleaner, p)
+            note(`project ${p.name}`)
+          })
+      })
+      // an archived project Nora only manages, such as one a cleanup left
+      // archived after her access went, which REST's archived list and the
+      // store leave out, from Settings › Archived projects
+      await step('managed archived projects', async () => {
+        for (const p of await managedArchived())
+          await step(`managed archived project ${p.name}`, async () => {
             await deleteProjectInApp(cleaner, p)
             note(`project ${p.name}`)
           })
@@ -2308,11 +2346,14 @@ async function sweep(tag, label) {
     ).filter((c) => matches(c.clientName))
     const agents = await taggedAgents()
     const keys = (await agentKeysOf(agents)).filter((k) => agentIds.has(k.agentId))
+    // the projects Nora only manages, which no REST list holds
+    const managed = [...(await managedLive()), ...(await managedArchived())]
     const left = [
       [tokens.length, 'personal token'],
       [connections.length, 'OAuth connection'],
       [agents.length, 'agent'],
       [keys.length, 'agent key'],
+      [managed.length, 'managed project'],
     ].filter(([n]) => n > 0)
     expect(!left.length, `still there: ${left.map(([n, what]) => `${n} ${what}(s)`).join(', ')}`)
   })

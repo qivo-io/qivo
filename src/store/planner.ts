@@ -9212,6 +9212,8 @@ export type LeadChoices = FunctionReturnType<typeof api.projectSettings.leadCand
 /** One answer of the New sub-project dialog's Project list
     (projectSettings.projects with sub_project_parents). */
 export type SubProjectParents = FunctionReturnType<typeof api.projectSettings.projects>
+/** One batch of Settings › Archived projects (projectSettings.archived). */
+export type ArchivedProjectEntries = FunctionReturnType<typeof api.projectSettings.archived>
 /** The invite form's lookup of an address (projectSettings.inviteTarget). */
 export type InviteLookup = FunctionReturnType<typeof api.projectSettings.inviteTarget>
 /** One answer of Settings › Teams (teams.settingsPage). */
@@ -12305,6 +12307,30 @@ export const PLANNER = {
       })
     } catch (e) {
       console.error('[qivo] sub-project parents failed:', e)
+      return null
+    }
+  },
+
+  /** One batch of Settings › Archived projects (projectSettings.archived)
+      in organization `orgId`: its archived projects for an organization
+      admin and else the ones I see, newest archived first, matching
+      `search`, after `after` or from the start. The page reads its own live batches; this one-shot read is the
+      staging check's, whose sweep finds there an archived project its
+      signed-in admin only manages, which no REST list and no store list
+      holds. Never subscribed to; null when the read failed. */
+  settingsArchivedProjects: async (
+    orgId: string,
+    search: string,
+    after: string | null,
+  ): Promise<ArchivedProjectEntries | null> => {
+    try {
+      return await convex.query(api.projectSettings.archived, {
+        org_id: orgId,
+        ...(search === '' ? {} : { search }),
+        ...(after === null ? {} : { after }),
+      })
+    } catch (e) {
+      console.error('[qivo] archived projects failed:', e)
       return null
     }
   },

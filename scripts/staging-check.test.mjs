@@ -101,6 +101,7 @@ import {
   parseArgs,
   peoplePagesMax,
   pressSettled,
+  projectDeleteRoute,
   RATE_BUDGET,
   REGROUP_WAIT,
   RELATION_EXPECTED,
@@ -516,17 +517,28 @@ describe('staging check REST contract', () => {
     expect(step).toContain('if (project) await deleteProjectInApp(w, project)')
   })
 
-  it('deletes a project the store does not hold by its organization, and sweeps the projects Nora only manages', () => {
+  it('archives first only a project the server says the caller reads, and deletes any other as it is', () => {
+    const read = (json) => projectDeleteRoute({ status: 200, json })
+    expect(read({ access: { read: true, write: true }, archived: false })).toBe('archive')
+    expect(read({ access: { read: true, write: false }, archived: true })).toBe('archive')
+    // a project Nora only manages, live or archived
+    expect(read({ access: { read: false, write: false }, archived: false })).toBe('direct')
+    expect(read({ access: { read: false, write: false }, archived: true })).toBe('direct')
+    // an answer that says nothing of reading never archives
+    expect(read({ archived: false })).toBe('direct')
+    expect(projectDeleteRoute({ status: 500, json: null })).toBe('direct')
+    expect(projectDeleteRoute(undefined)).toBe('direct')
+  })
+
+  it("deletes a project by the server's answer through the store, and sweeps the projects Nora only manages, live and archived", () => {
     const check = readFileSync(new URL('./staging-check.mjs', import.meta.url), 'utf8')
     const remove = check.slice(
       check.indexOf('async function deleteProjectInApp('),
       check.indexOf('async function appMessages('),
     )
-    // only a project the store holds is archived first, so one Nora only
-    // manages stays live, where the sweep finds it, if its delete fails
-    expect(remove).toContain('if (held && !current.json?.archived)')
-    // the archived row is waited for only for a project the store holds
-    expect(remove.indexOf('if (held)')).toBeLessThan(
+    // the server's answer decides, never the store's copy
+    expect(remove).not.toContain('window.PLANNER.project(id)')
+    expect(remove.indexOf("if (projectDeleteRoute(current) === 'archive') {")).toBeLessThan(
       remove.indexOf(
         'window.PLANNER.archivedProjects?.some((x) => x.id === id),\n      project.id',
       ),
@@ -534,11 +546,22 @@ describe('staging check REST contract', () => {
     expect(remove).toContain('window.PLANNER.removeProject(id, undefined, {')
     const sweep = check.slice(
       check.indexOf('async function sweep('),
-      check.indexOf('// labels, which only the app deletes'),
+      check.indexOf('async function removeTokenInApp('),
     )
     expect(sweep).toContain(
       'window.PLANNER.subProjectParents(window.PLANNER.homeOrg, search, after)',
     )
+    expect(sweep).toContain(
+      'window.PLANNER.settingsArchivedProjects(window.PLANNER.homeOrg, search, after)',
+    )
+    // an archived entry alone, as a row beneath an archived parent goes
+    // with it
+    expect(sweep).toContain('.filter((p) => !p.under && matches(p.name))')
+    for (const pass of ["step('managed projects'", "step('managed archived projects'"])
+      expect(sweep.indexOf(pass)).toBeLessThan(sweep.indexOf("step('tasks'"))
+    // and the check for leftovers in the app reads both
+    const left = sweep.slice(sweep.indexOf("step('the check for leftovers in the app'"))
+    expect(left).toContain('[...(await managedLive()), ...(await managedArchived())]')
   })
   it("checks Settings › Projects and Archived projects on the pages' own marks, after a project's Settings page", () => {
     const pages = readFileSync(
