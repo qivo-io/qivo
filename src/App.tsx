@@ -707,6 +707,14 @@ function chooserShows(opening: Exclude<Opening, { kind: 'task' }>): ChooserShows
   return { kind: 'checking', line }
 }
 
+/** The project address `opening` checks on page `page` (pageKey), or
+    checked there for Retry, as one comparable string; null where it
+    checks no address on that page. */
+function checkedOn(opening: Opening, page: string): string | null {
+  if (opening.kind !== 'checking' && opening.kind !== 'retry') return null
+  return opening.check.address?.page === page ? JSON.stringify(opening.check.ask) : null
+}
+
 /** Says politely, through the page's announcer (lib/announce), which modal
     layers leave audible, when every task starts loading for a page or
     action that needs them, when every task has loaded, and when the load
@@ -935,6 +943,9 @@ function App() {
     openingN.current += 1
     setOpening(next(openingN.current))
   }
+  // the opening on screen, for the popstate handler and startup's check
+  const openingRef = useRef(opening)
+  openingRef.current = opening
   // The scope row can vanish mid-session (deleted by another member, or over
   // REST/MCP). The access guard below re-scopes one commit later, but THIS
   // render still runs with the dead id — and an uncaught render error would
@@ -1482,10 +1493,20 @@ function App() {
          marker unheard (lib/pageHistory holdLayers). */
       if (holdLayers(event)) return
       refusal.accepted()
-      // a move to another page drops every open that waits and startup's
-      // check (navMoved); one that stays on its page, as a phone layer's
-      // Back does, moves nothing
-      if (pageKey(next) !== pageKey(was) || next.openIssue !== was.openIssue) navMoved()
+      /* A move to another page or task drops every open that waits and
+         startup's check (navMoved), and so does one to another project
+         address the workspace does not hold on the same page, as from the
+         chooser to an earlier project's address in the same view. One
+         that stays on its page and the address it checks, as a phone
+         layer's Back does, moves nothing. */
+      const page = pageKey(was)
+      const target = unheld ? JSON.stringify(r.unheld ?? null) : null
+      if (
+        pageKey(next) !== page ||
+        next.openIssue !== was.openIssue ||
+        target !== checkedOn(openingRef.current, page)
+      )
+        navMoved()
       /* An address that is not the page's own, such as one to a project
          that is gone, gives way to the page's in place, as on a boot: the
          url-sync effect would leave it when the page stays the same. A task
@@ -1593,8 +1614,6 @@ function App() {
      projects. */
   const askedCheck = useRef(-1)
   const stopCheck = useRef<(() => void) | null>(null)
-  const openingRef = useRef(opening)
-  openingRef.current = opening
   useEffect(() => () => stopCheck.current?.(), [])
   useEffect(
     () =>

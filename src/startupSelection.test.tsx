@@ -1163,6 +1163,44 @@ describe('an open or a check that waits, and the person’s next move', { timeou
     expect(sentProjects()).not.toContain(late)
   })
 
+  it('drops a sidebar open once Back or Forward reaches a project address the workspace does not hold on the same view, so that address’s answer alone decides', async () => {
+    const { snap, held, late } = lateWorld()
+    // the server's ok for Late programme, with the delivery that brings
+    // it, and unavailable for number 99
+    resolveWith = (args) => {
+      if ((args as { project_id?: string }).project_id === late) deliver(held)
+      return queryProjectNav(held, 'projectNav:resolve', args)
+    }
+    await app(snap, '/app/testbed', {}, () => {
+      server = held
+    })
+    // the chooser on the Overview, with no project
+    await chooser('choose')
+    expect(store.P.project(late)).toBeUndefined()
+    const release = holdResolve()
+    await until(() => q(`aside [data-project-row="${late}"] button`), 'the row')
+    await click(q(`aside [data-project-row="${late}"] button`))
+    expect(toast()).toContain('Opening Late programme…')
+    // an earlier project's address on the Overview, with no scope and no
+    // task on either side
+    await go('/app/testbed/overview/p/99')
+    await settle()
+    expect(toast()).not.toContain('Opening Late programme…')
+    await chooser('checking')
+    expect(line()).toBe('Opening that project…')
+    expect(asks.map((a) => a.args)).toEqual([{ project_id: late }, { org_id: ORG, num: 99 }])
+    expect(location.pathname).toBe('/app/testbed/overview/p/99')
+    await release()
+    // the sidebar's answer brought its project and opened nothing
+    expect(store.P.project(late)).toBeDefined()
+    await chooser('lost')
+    expect(note()).toBe('That project is not available to you.')
+    expect(shown()).toBeUndefined()
+    expect(viewReads()).toEqual([])
+    expect(toast()).not.toContain('Late programme')
+    expect(sentProjects()).toEqual([])
+  })
+
   it('drops a sidebar open once the person picks another Team sync scope, so its answer leaves Team sync shown', async () => {
     const { snap, held, late } = lateWorld()
     resolveWith = (args) => {
