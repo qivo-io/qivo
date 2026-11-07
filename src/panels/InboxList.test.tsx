@@ -18,7 +18,8 @@ import type { Row } from '../store/rows'
    the page's cursors with only the page on screen held, and notes that
    say only what the answer says. Row actions name their item by
    organization and task with the row's cutoff and show at once through
-   the store's marks, which end once a current answer holds the write. The
+   the store's marks, which end once a current answer holds the write, or
+   once an Inbox mounts afresh for a write settled while none showed. The
    server here answers a write after it sent the page the write changed,
    as Convex does, unless a case holds the write. Each case raises at most
    one figure to its design size. An everyday Inbox is 60 groups over 3
@@ -70,6 +71,9 @@ let boardOpens: { project: string; open: string }[]
 let opened: (string | null)[]
 // shows or hides the kept Inbox
 let showKept: (shown: boolean) => void
+// renders the Inbox openInbox rendered, on the same store, as into a fresh
+// root after remount()
+let mountInbox: () => Promise<void> = async () => {}
 // the live double's own watch, which the spy below wraps
 let realWatch: Double['watch'] | null = null
 
@@ -270,9 +274,11 @@ async function openInbox(
       </KeptView>
     )
   }
-  await act(async () =>
-    root.render(<TooltipProvider>{kept ? <KeptHost /> : <InboxHost />}</TooltipProvider>),
-  )
+  mountInbox = () =>
+    act(async () =>
+      root.render(<TooltipProvider>{kept ? <KeptHost /> : <InboxHost />}</TooltipProvider>),
+    )
+  await mountInbox()
   await settle()
 }
 
@@ -1002,6 +1008,28 @@ describe('the Inbox list around its page', { timeout: 30_000 }, () => {
       ).toBe('ok'),
     )
     expect(rows()).toHaveLength(4)
+    expect(store.P.inboxMarks.size).toBe(0)
+  })
+
+  it('ends a mark settled while no Inbox showed once one mounts, before its first page answers', async () => {
+    await openInbox(() => {
+      project('firmware', 'Firmware', { parent_id: 'atlas' })
+      for (let n = 0; n < 5; n++) group(n, 'firmware')
+    })
+    await until(() => expect(rows()).toHaveLength(5))
+    holding = true
+    await rowMenu(key('task-a-0000'))
+    await press(item('Mark as read'))
+    // the Inbox goes, then the server accepts the read
+    await remount()
+    await act(async () => held.at(-1)?.answer())
+    await settle()
+    expect(store.P.inboxMarks.get(key('task-a-0000'))).toMatchObject({ read: true, settled: true })
+    // an Inbox mounted afresh reads afresh, so the mark ends before its
+    // first page answers
+    double.live?.forceInbox('loading', 'inbox:page')
+    await mountInbox()
+    expect(rows()).toHaveLength(0)
     expect(store.P.inboxMarks.size).toBe(0)
   })
 

@@ -16,14 +16,28 @@ import type { Row } from './rows'
    row's accepted Mark as read frees the hold of every unread choice that
    went out before it, while a newer one holds until the server refuses
    it. Mark all as read and Remove all read mark the rows the Inbox showed
-   at the press, by seat, and a long one runs on the lanes every large
-   action shares. */
+   at the press, by seat, end the marks of a run a fault stops, and a long
+   one runs on the lanes every large action shares. */
 
 const network = vi.hoisted(() => ({ mutation: vi.fn(), query: vi.fn(), onUpdate: vi.fn() }))
 vi.mock('../lib/convex', async () => ({
   convex: network,
   live: (await import('./guard/liveDouble.setup')).liveOver(network),
 }))
+/* A run of a bulk action's lanes that rejects as a fault once the case
+   that sets `fault` lets it, else the real one (lib/batchRunner.ts). */
+const lanes = vi.hoisted(() => ({ fault: null as Promise<void> | null }))
+vi.mock('../lib/batchRunner', async (original) => {
+  const real = await original<typeof import('../lib/batchRunner')>()
+  return {
+    ...real,
+    runLanes: async (...args: Parameters<typeof real.runLanes>) => {
+      if (!lanes.fault) return real.runLanes(...args)
+      await lanes.fault
+      throw new Error('a fault in a lane')
+    },
+  }
+})
 vi.mock('../lib/auth', () => ({
   armConvexAuth: async () => true,
   authClient: { getSession: async () => ({ data: { session: {}, user: { id: 'test-account' } } }) },
@@ -106,6 +120,7 @@ beforeEach(async () => {
   message('b-1', 'task-b', 1, { read_at: at(2) })
   sent = []
   reach = 'one'
+  lanes.fault = null
   network.query.mockImplementation(async (ref) =>
     getFunctionName(ref) === 'messages:bulkReach'
       ? { seats: snapshot.orgs.map((o) => ({ org_id: o.id, reach, before: 1 })) }
@@ -358,6 +373,25 @@ describe('Mark all as read and Remove all read', () => {
     await settle()
     expect(markOf('task-a')).toEqual({ through: 100, read: true, settled: true })
     expect(markOf('task-c', OTHER)).toBeUndefined()
+  })
+
+  it('ends the marks of a run a fault stops', async () => {
+    let fault = () => {}
+    lanes.fault = new Promise<void>((resolve) => {
+      fault = resolve
+    })
+    void P().markAllMessagesRead(false, [shown(org(), 'task-a', false)])
+    await settle()
+    expect(markOf('task-a')).toEqual({ through: 100, read: true, settled: false })
+    // the run rejects with a fault
+    fault()
+    await settle()
+    expect(P().inboxMarks.size).toBe(0)
+    expect(P().inboxBulk).toBeNull()
+    expect(showToast).toHaveBeenCalledWith(
+      'Mark all as read stopped after a fault in Qivo. What it already did stays done.',
+      'error',
+    )
   })
 
   it('marks the read rows that are not snoozed removed', async () => {
