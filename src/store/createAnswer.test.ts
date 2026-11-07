@@ -622,6 +622,36 @@ describe('a create in a store that never asked for every task', () => {
     expect(toasts).toEqual(["You don't have permission for that. Change reverted."])
   })
 
+  it("shows a new parent's number from its create's answer in a window opened on it, before the window's own read", async () => {
+    await boot()
+    await openBoard([...THREE(), viewRow('task-w', 80)])
+    P().watchComments('task-w', ORG)
+    await settle()
+    open('taskWindow:task')
+      .find((s) => s.args.ref === 'task-w')
+      ?.deliver({
+        state: 'ok',
+        task: { ...viewRow('task-w', 80), description: '' },
+        level: 'lead',
+        labels: [],
+        follow: null,
+        parent: null,
+        subtasks: { rows: [], complete: true },
+      })
+    await settle()
+    void P().createParent(P().taskDetail('task-w')?.view?.id ?? '', 'Build the rig')
+    await settle()
+    const request = take('issues:createParent')
+    const parentId = String(request.args.parent_id)
+    P().watchComments(parentId, ORG)
+    await settle()
+    expect(P().taskDetail(parentId)).toMatchObject({ state: 'ok', saving: true, num: 4 })
+    // someone else took number 4 meanwhile
+    request.resolve({ ...viewRow('task-w', 80, { parent_id: parentId }), parent_num: 5 })
+    await settle()
+    expect(P().taskDetail(parentId)).toMatchObject({ state: 'ok', saving: true, num: 5 })
+  })
+
   it("moves the reference to the server's number when someone else took the preview", async () => {
     await boot()
     const board = await openBoard()

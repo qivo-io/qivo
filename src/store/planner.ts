@@ -1576,8 +1576,9 @@ type PendingCreate = {
   parent: ShortRow | null
   child: ShortRow | null
   taken: boolean
-  /** the creating answer last built, kept while `created` is the same */
-  answer: { from: Created['row']; answer: TaskOk } | null
+  /** the creating answer last built, kept while `created` holds the same
+      row and number: issues.createParent answers a number alone */
+  answer: { from: Created['row']; num: Created['num']; answer: TaskOk } | null
 }
 
 /** A create's answer, captured for its paints (store/layers.ts rule 2):
@@ -1624,12 +1625,14 @@ function answeredRow(row: Row<'issues'>, created: Created): Row<'issues'> {
 /** The creating answer of task `uuid` (store/taskDetail.ts creatingAnswer),
     while it is a create of the person's own the server has not taken or
     whose window has not read it yet, and the workspace does not hold it;
-    else null. The same object while the create's answer is the same, so
-    the window's painted answer is built again only when it changes. */
+    else null. The same object while the create's answer is the same, its
+    row and its number, so the window's painted answer is built again only
+    when it changes. */
 function creatingAnswerOf(uuid: string): TaskOk | null {
   const pending = pendingCreates.get(uuid)
   if (!pending || holdsIn(uuid, pending.org)) return null
-  if (pending.answer?.from === pending.created.row) return pending.answer.answer
+  const { row, num } = pending.created
+  if (pending.answer?.from === row && pending.answer.num === num) return pending.answer.answer
   const answer = anchor(
     creatingAnswer({
       row: pendingRow(pending),
@@ -1640,7 +1643,7 @@ function creatingAnswerOf(uuid: string): TaskOk | null {
     }),
   )
   creatingAnswers.add(answer)
-  pending.answer = { from: pending.created.row, answer }
+  pending.answer = { from: row, num, answer }
   return answer
 }
 
