@@ -911,13 +911,29 @@ describe('a mine read at the design size', () => {
     const trees = await plantTrees(t, f.org.id, me, 200, (i) => (i < 100 ? 3 : 2))
     expect(trees.live).toHaveLength(200)
     expect(trees.archived).toHaveLength(500)
-    // FW, PCB and SKNK are the fixture's own and hold none of the
-    // caller's work
+    // TBED and SKNK, the fixture's own top-level projects, are archived with
+    // FW and PCB, so the organization holds the design size's 200 live
+    // top-level projects; the caller reads none of them
+    await t.run(async (ctx) => {
+      for (const p of [f.meta, f.sub, f.sub2, f.hidden])
+        await ctx.db.patch(p._id, { archived_at: NOW })
+    })
     await plantMany(
       t,
       trees.tops.map((p, i) => ({ project: p.id, week: plus(MONDAY, i % 60), name: `Gate ${i}` })),
     )
     await withReach(t)
+    const liveTops = await t.run(async (ctx) =>
+      (
+        await ctx.db
+          .query('projects')
+          .withIndex('by_org_state_name', (q) =>
+            q.eq('org_id', f.org.id).eq('archive_state', 'live'),
+          )
+          .collect()
+      ).filter((p) => p.type === 'meta'),
+    )
+    expect(liveTops).toHaveLength(200)
     const got = await measureMine(
       t,
       me,
