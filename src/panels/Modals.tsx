@@ -27,7 +27,7 @@ import { ChoiceEnd, PickerSearch } from '../components/pickerParts'
 import { type ChoiceWords, escapeClearsFirst } from '../components/pickerWords'
 import { Avatar, DateSelect, Icon, MenuItem, Popover } from '../components/qivo'
 import { WAITS_FOR_SAVE } from '../components/rowElements'
-import { usePeople } from '../components/usePeople'
+import { useOrgPeople, usePeople } from '../components/usePeople'
 import { ACCESS_CAPS } from '../lib/accessCaps'
 import { copyText } from '../lib/clipboard'
 import { relativeWeek, weekToISO } from '../lib/dates'
@@ -1661,6 +1661,9 @@ function ReassignPicker({
   onPick: (taker: Taker) => void
 }) {
   const label = to?.name ?? 'Unassigned'
+  // the chosen person, named while the button shows them after the list
+  // closes, so their portrait loads
+  useOrgPeople(change.orgId ?? P.homeOrg, [to?.id])
   return (
     <Popover
       width={280}
@@ -1771,7 +1774,11 @@ function ReassignChoiceList({
           <MenuItem
             key={person.id}
             active={to?.id === person.id}
-            onClick={() => onPick({ id: person.id, name: person.name })}
+            onClick={() => {
+              // a pick outlives the list, so its row is kept as a name
+              P.takePeople(change.orgId ?? P.homeOrg, [person])
+              onPick({ id: person.id, name: person.name })
+            }}
             data-reassign-choice={person.id}
           >
             <Avatar id={person.id} size={20} />

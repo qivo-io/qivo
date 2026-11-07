@@ -874,6 +874,9 @@ function AddMember({
 }) {
   const [target, setTarget] = useState<{ id: string; name: string } | null>(null)
   useUpdateBlocker(!!target)
+  // the chosen person, named while the button shows them after the picker
+  // closes, so their portrait loads
+  usePeople(target ? [{ org, id: target.id }] : [])
   return (
     <SettingsGroup legend="Add a member">
       <div className="[display:flex] [gap:8px]">
@@ -982,7 +985,11 @@ function MemberChoiceList({
             <MenuItem
               key={person.id}
               active={target?.id === person.id}
-              onClick={() => onPick({ id: person.id, name: person.name })}
+              onClick={() => {
+                // a pick outlives the picker, so its row is kept as a name
+                P.takePeople(org, [person])
+                onPick({ id: person.id, name: person.name })
+              }}
               data-team-member-choice={person.id}
             >
               <Avatar id={person.id} size={20} />

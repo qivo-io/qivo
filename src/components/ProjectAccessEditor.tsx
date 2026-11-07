@@ -392,14 +392,16 @@ export function ProjectAccessEditor({
   // the levels chosen and on their way, by kind and id
   const [pending, setPending] = useState<ReadonlyMap<string, AccessLevel>>(() => new Map())
   const [kept, setKept] = useState<readonly Kept[]>([])
+  const [target, setTarget] = useState<AccessTarget | null>(null)
   // the people the editor shows, named while it shows: the lead, the kept
-  // people and the users list's loaded rows, in that order
+  // people, the users list's loaded rows and the person chosen in Add team
+  // or user, whom its button shows after the picker closes, in that order
   usePeople([
     ...(lead ? [{ org: project.org_id, id: lead.id }] : []),
     ...kept.flatMap((k) => (k.kind === 'user' ? [{ org: project.org_id, id: k.id }] : [])),
     ...users.list.rows.map((row) => ({ org: project.org_id, id: row.id })),
+    ...(target?.type === 'user' ? [{ org: project.org_id, id: target.id }] : []),
   ])
-  const [target, setTarget] = useState<AccessTarget | null>(null)
   const [adding, setAdding] = useState(false)
   useUpdateBlocker(!!target)
   const teamSearch = useRef<HTMLInputElement>(null)
@@ -873,7 +875,9 @@ function AccessChoiceList({
     <MenuItem
       key={`${row.type}:${row.id}`}
       active={target?.type === row.type && target.id === row.id}
-      onClick={() =>
+      onClick={() => {
+        // a person picked outlives the picker, so their row is kept as a name
+        if (row.type === 'user') P.takePeople(project.org_id, [row])
         onPick(
           row.type === 'team'
             ? {
@@ -891,7 +895,7 @@ function AccessChoiceList({
                 can_lead: row.can_lead,
               },
         )
-      }
+      }}
       data-project-access-choice={row.id}
       data-project-access-choice-type={row.type}
     >
