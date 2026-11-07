@@ -12868,16 +12868,25 @@ export const PLANNER = {
   /** The task handle or uuid `id` names as the window shows it: the
       workspace's view, else the window's view from its own answer while
       the workspace does not hold the task in its organization
-      (P.taskDetail), or undefined. While the workspace holds another
-      organization's task of the same id, the window's handle names the
-      window's task and the uuid alone names neither (answerTaskOf). */
+      (P.taskDetail), the person's own new task on its way among them
+      before a window watches it, or undefined. While the workspace holds
+      another organization's task of the same id, the window's handle names
+      the window's task and the uuid alone names neither (answerTaskOf). A
+      window's editors are built for the task this names
+      (components/descEditor.tsx), so naming the new task from the window's
+      first render builds them once. */
   taskShown: (id: string): IssueVM | undefined => {
     const held = PLANNER.issueById[id]
     if (held) return held
     const detail = PLANNER.detail
     const view = detail?.answered === 'ok' ? detail.view : null
-    if (!view || holdsIn(view.uuid, view.org)) return undefined
-    return view.id === id || (view.uuid === id && !rows.issues.has(id)) ? view : undefined
+    const names = (it: IssueVM) => it.id === id || (it.uuid === id && !rows.issues.has(id))
+    if (view && !holdsIn(view.uuid, view.org) && names(view)) return view
+    for (const uuid of pendingCreates.keys()) {
+      const creating = PLANNER.taskDetail(uuid)?.view
+      if (creating && detail?.task !== uuid && names(creating)) return creating
+    }
+    return undefined
   },
   /** The watched task the workspace does not hold, as a window names it,
       when handle `id` is the one it opens by now (P.handleNow): its uuid,

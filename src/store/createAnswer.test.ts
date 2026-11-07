@@ -444,6 +444,27 @@ describe('a create in a store that never asked for every task', () => {
     expect(P().createOnItsWay(uuid)).toBe(true)
   })
 
+  it('names the new task from its creating answer before a window watches it, as the window renders before its effect watches', async () => {
+    await boot()
+    const { uuid } = create({ description: 'Check the north bench first.' })
+    const detail = P().taskDetail(uuid)
+    expect(detail).toMatchObject({ state: 'ok', saving: true, num: 4 })
+    expect(detail?.view).toMatchObject({
+      title: TITLE,
+      description: 'Check the north bench first.',
+    })
+    // the same object while its creating answer holds, as a render reads it
+    expect(P().taskDetail(uuid)).toBe(detail)
+    // the window's editors name the task by its handle from the first
+    // render on, so the watch builds none of them again
+    const handle = detail?.view?.id ?? ''
+    expect(P().taskShown(handle)?.uuid).toBe(uuid)
+    P().watchComments(uuid, ORG)
+    await settle()
+    expect(P().taskDetail(uuid)?.view?.id).toBe(handle)
+    expect(P().taskShown(handle)?.uuid).toBe(uuid)
+  })
+
   it("starts the window's reads once the server took it, shows the answer's number and stamps, and its own first answer ends saving", async () => {
     await boot()
     const watch = vi.spyOn(double.live as Double, 'watch')
