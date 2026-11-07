@@ -5681,14 +5681,14 @@ export const MILESTONES_BETWEEN_QUERY = 'milestones:between'
 /** Whether `week` (a YYYY-MM-DD day) is in the Roadmap's default window,
  *  two weeks before the week of `today` to six weeks after it, in an
  *  organization whose weeks start on `weekStart`, with a week to spare at
- *  either end: the browser places weeks by the runner's local day, whose
- *  week can be one away from the UTC day's. */
+ *  either end, since the browser places weeks by the runner's local day,
+ *  whose week can be one away from the UTC day's. */
 export function inDefaultWindow(week, today, weekStart) {
   const now = weekOf(today, weekStart)
   return week >= addDays(now, -7) && week <= addDays(now, 35)
 }
 
-/** The Roadmap's flags on the deployment's range read: the run makes
+/** The Roadmap's flags on the deployment's range read. The run makes
  *  `<tag> Roadmap milestone` over REST on M in the first week from three
  *  weeks on that M leaves free (freeMilestoneWeek), which must be in the
  *  default window, and a To Do task of Nora's in Alpha, which she owns by
