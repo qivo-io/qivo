@@ -203,9 +203,10 @@ the token when it is created; it cannot be shown again. Qivo also supplies a
 The list shows each token's access, expiry and last use, newest first, 25 at
 a time, and **Load more** shows more. Once you have more than 25 tokens, a
 search finds a token by its name or by the start of the token the list
-shows. After 2,000 tokens the list asks you to search. Both lists are read
-when you open the page and again after you create, revoke or delete, so a
-token's or connection's last use shows as of then. An expired token is
+shows. After 2,000 tokens the list asks you to search. Each list is read
+when you open the page, and again after a change you make in that list:
+creating, revoking or deleting a token, or deleting a connection. A token's
+or connection's last use shows as of the list's last read. An expired token is
 refused like a revoked one and stays in the list until you delete it. Revoke a
 token when you no longer need it. Every personal token also works with the
 REST API. Tokens created before Qivo recorded access never expire and can
