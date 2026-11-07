@@ -2,7 +2,10 @@
    (views/board/useBoardView.ts), the Overview (views/Overview.tsx), the
    Roadmap (views/roadmap/useRoadmapView.ts), the Milestones window's reads
    of a milestone (panels/Modals.tsx useMilestoneGet) and of its sections
-   (views/useMilestoneSection.ts), and Team sync's opening and agenda
+   (views/useMilestoneSection.ts), the Overview's and the phone agenda's
+   milestone sections (views/useScopeMilestones.ts), each answer taken in
+   a task of its own with no throttle, as one holds at most 100 rows, and
+   Team sync's opening and agenda
    (views/teamSync/TeamOpening.tsx useSyncMilestoneReads,
    views/teamSync/useSyncMeeting.ts). */
 

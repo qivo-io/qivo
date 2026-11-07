@@ -4,7 +4,8 @@
    views/roadmap/useRoadmapView.ts, the milestone reads, P.watchMilestones,
    of the Milestones window, panels/Modals.tsx useMilestoneGet for the
    milestone it opened on and a kept editor's, and its Upcoming and Past
-   sections, views/useMilestoneSection.ts, of Team sync's opening,
+   sections, views/useMilestoneSection.ts, of the Overview's and the phone
+   agenda's sections, views/useScopeMilestones.ts, of Team sync's opening,
    views/teamSync/TeamOpening.tsx useSyncMilestoneReads, and of the
    Roadmap's flags, views/roadmap/useRoadmapMilestones.ts, and Team sync's
    agenda and last comments, views/teamSync/useSyncMeeting.ts and
