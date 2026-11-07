@@ -32,12 +32,12 @@
  *   stale_copies      its name_key or live is not its project's
  *                     (copiesOf). Patched, its created_at kept.
  *   ok                left as it is.
- * A row whose seat lost access to its project is ok here: the readers skip
+ * A row whose seat lost access to its project is ok here. The readers skip
  * it, and it shows again when the access returns. Every writer of this
- * release stamps a row no earlier than its seat (model/projectFavorites.ts):
- * a star, also one that resets a row an earlier seat left, writes the
- * star's time, and the Northstar seed the later of its own time and the
- * seat's. So only the earlier code leaves a row its seat's created_at
+ * release stamps a row no earlier than its seat (model/projectFavorites.ts).
+ * A star, also one that resets a row an earlier seat left, writes the
+ * star's time, and the Northstar seed writes the later of its own time and
+ * the seat's. So only the earlier code leaves a row its seat's created_at
  * follows, which is what profile_newer deletes. A Northstar reset under
  * the earlier code that wrote projects with the same ids leaves rows this
  * check cannot tell from real ones.
