@@ -231,8 +231,8 @@ or open Organization settings or billing. They appear in the separate
 
 An invitation waits until the person signs in with its email address.
 Existing users see the project on their next visit, without a second account
-or acceptance step. Shared projects appear in their sidebar under the
-inviting organization's name, alongside their own work. Revoking access
+or acceptance step. Shared projects appear in their sidebar among their own
+projects, each with the inviting organization's name. Revoking access
 removes the project unless another grant still gives access.
 
 An active guest is billable to the inviting organization only if they have no
