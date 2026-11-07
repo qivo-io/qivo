@@ -282,7 +282,9 @@ project access** you cannot change it or comment on it, but you can link it
 to a task you can edit, and you can still edit or delete your own comments. Anyone who can see the task can
 follow it and open **Subscribers**, and plan it on the roadmap, which opens
 at once and highlights the task once its timeline holds it, unless you have
-left the roadmap meanwhile. If Qivo cannot check such a task for changes, the window keeps showing
+left the roadmap meanwhile. Once every task has loaded for a search in the
+Inbox, the window shows the task from the workspace in place, and a title,
+hours or a comment you were typing stay. If Qivo cannot check such a task for changes, the window keeps showing
 it as it last loaded and says so, with **Retry**. Its changes then wait with
 **Available once Qivo can check this task for changes**, and a title,
 description, hours or comment you are typing stays until you can save it.

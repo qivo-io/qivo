@@ -14,8 +14,10 @@ and flags projected delays. Other users see saved changes live.
 
 Views and dialogs may show **Loading…** the first time you open them.
 
-Qivo never loads every task for a page or an action. The Board, the task
-list, the Overview, the Roadmap, Team sync, Search and the task window
+Qivo loads every task only when you search the Inbox on a desktop. While
+they load, a note at the bottom of the page says **Loading tasks…**, and if
+loading stops, the note says why and offers **Try again**. The Board, the
+task list, the Overview, the Roadmap, Team sync, Search and the task window
 show what the server answers for them. A task you open from
 Search, a link, a bookmark, Back or Forward, an Inbox row, or a task's
 subtasks or linked tasks shows at once, and you can change it at once, its
