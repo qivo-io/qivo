@@ -21,7 +21,7 @@ import type { Row } from '../store/rows'
    the store's marks, which end once a current answer holds the write. The
    server here answers a write after it sent the page the write changed,
    as Convex does, unless a case holds the write. Each case raises at most
-   one figure to its design size: an everyday Inbox is 60 groups over 3
+   one figure to its design size. An everyday Inbox is 60 groups over 3
    sub-projects, and the figures are one sub-project's 300 open and 150
    Done tasks and one project's 800 open and 200 Done tasks over 3
    sub-projects, a group each; stops and bounds come from lowering the

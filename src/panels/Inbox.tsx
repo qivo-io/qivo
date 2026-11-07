@@ -368,9 +368,9 @@ type ListedRows = { id: string | null; ids: string[] }
     live page moves or drops the row while the menu is open. */
 type RowMenu = { x: number; y: number; row: InboxRowVM | null }
 
-/** The task a row opens: its handle where the workspace holds the task in
-    the row's organization, else a reference with the organization, the
-    number and the uuid, as two organizations can hold one task id. */
+/** The task a row opens, by its handle where the workspace holds the task
+    in the row's organization, else by a reference with the organization,
+    the number and the uuid, as two organizations can hold one task id. */
 function rowTask(row: InboxRowVM): string {
   const open = P.openTask(row.uuid, row.org, row.num)
   const held = P.issueById[open]
@@ -653,8 +653,8 @@ export function Inbox({ showOnBoard, onExit, openTask, openIssue, onPlanOnRoadma
     return () => window.removeEventListener('keydown', k)
   }, [onExit, paneId, openTask])
 
-  // which row is lit: the one whose organization and task the pane holds,
-  // by uuid alone while the pane's reference names no organization yet
+  // the lit row is the one whose organization and task the pane holds, by
+  // uuid alone while the pane's reference names no organization yet
   const facts = taskFacts(paneId)
   const lit = (row: InboxRowVM) =>
     !!facts?.uuid && facts.uuid === row.uuid && (!facts.org || facts.org === row.org)

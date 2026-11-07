@@ -8,7 +8,7 @@ import type { Row } from './rows'
    P.removeItem, P.snoozeItem), which name a row's item by its organization
    and task, read and remove with the row's cutoff, paint the workspace
    inbox part's loaded messages of that item, and mark the row
-   (P.inboxMarks) from the moment the write goes out: a refusal ends its
+   (P.inboxMarks) from the moment the write goes out. A refusal ends its
    mark at once, an acceptance keeps it until an Inbox ends it
    (P.endInboxMarks), and each write settles only its own. The pause
    refuses a write first, with no mark. Mark as unread and a snooze of the

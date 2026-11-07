@@ -4,7 +4,7 @@
    (lib/pagedList.ts usePagedPages), and the sentences of the notes and of
    the line that ends a page (components/pageFold.tsx PageFold), each only
    where the answer says it (convex/model/inboxPage.ts header). Nothing
-   here filters, searches, sorts or counts rows: the server applies the
+   here filters, searches, sorts or counts rows. The server applies the
    order, the filters and the search before it cuts the page. Types come
    from inbox.page, so the list follows the server's answer. It imports
    nothing from the store. */
@@ -30,10 +30,10 @@ export type InboxFilters = {
 }
 
 /** inbox.page's arguments for the page after `after` (null for the first)
-    under `f`, in a fixed key order with empty fields left out: the kinds
-    sorted and each once, the search only when it is not blank. It never
-    sends `through`: the list reads the page on screen open and moves Next
-    at its live `next`. */
+    under `f`, in a fixed key order with empty fields left out, the kinds
+    sorted and each once and the search only when it is not blank. It
+    never sends `through`, since the list reads the page on screen open
+    and moves Next at its live `next`. */
 export function inboxArgs(f: InboxFilters, after: string | null) {
   const search = f.search.trim()
   return {

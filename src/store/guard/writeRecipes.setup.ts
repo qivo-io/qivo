@@ -1182,7 +1182,7 @@ export const recipes: Recipe[] = [
     },
   },
   {
-    // the Inbox row's Mark as unread (P.unreadItem): the server marks every
+    // the Inbox row's Mark as unread (P.unreadItem). The server marks every
     // message of the item unread, msg-2 here
     mutation: 'messages:unreadItem',
     mutator: 'unreadItem',
@@ -1196,7 +1196,7 @@ export const recipes: Recipe[] = [
     },
   },
   {
-    // the Inbox row's Remove notification (P.removeItem): the server removes
+    // the Inbox row's Remove notification (P.removeItem). The server removes
     // every message of the item stored up to `through`, msg-2 here
     mutation: 'messages:removeItem',
     mutator: 'removeItem',
@@ -1215,7 +1215,7 @@ export const recipes: Recipe[] = [
     },
   },
   {
-    // the Inbox row's Snooze (P.snoozeItem): the server stamps every message
+    // the Inbox row's Snooze (P.snoozeItem). The server stamps every message
     // of the item, msg-1 here
     mutation: 'messages:snoozeItem',
     mutator: 'snoozeItem',

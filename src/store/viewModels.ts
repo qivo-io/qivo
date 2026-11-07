@@ -449,7 +449,7 @@ export const shapeMessageGroup = (issueUuid: string, newestFirst: MessageVM[]) =
 export type MessageGroupVM = ReturnType<typeof shapeMessageGroup>
 
 /** The key of the Inbox row, and of its mark, of task `task` in
-    organization `org`: two organizations can hold one task id
+    organization `org`. Two organizations can hold one task id
     (convex/model/inboxPage.ts), so a row is never named by its task alone. */
 export const inboxMarkKey = (org: string, task: string) => `${org}:${task}`
 
